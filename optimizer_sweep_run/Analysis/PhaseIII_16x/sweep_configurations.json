@@ -1,62 +1,139 @@
 {
-  "soape": {
+  "muon": {
+    "300m": {
+      "16": [
+        {
+          "sweep_grids": {},
+          "baseline_config": {
+            "learning_rate": 0.008,
+            "weight_decay": 0.1,
+            "min_lr_ratio": 0,
+            "warmup": 0,
+            "momentum": 0.98,
+            "beta1": 0.8,
+            "beta2": 0.98,
+            "epsilon": 1e-15,
+            "muon_epsilon": 1e-05,
+            "max_grad_norm": 1,
+            "lr_schedule": "linear",
+            "muon_to_adam_lr": 0.3,
+            "decay": 1.0,
+            "train_batch_size": 128
+          },
+          "model_size": "300m",
+          "target_chinchilla": 16,
+          "optimizer": "muon",
+          "source_file": "exp725_muonsweep_300M_16.py"
+        }
+      ]
+    },
     "130m": {
       "16": [
         {
-          "sweep_grids": {
-            "learning_rate": [
-              0.004,
-              0.008,
-              0.016
-            ],
-            "weight_decay": [
-              0,
-              0.1,
-              0.2,
-              0.3
-            ],
-            "warmup": [
-              500,
-              1000,
-              2000
-            ],
-            "beta1": [
-              0.8,
-              0.9,
-              0.95
-            ],
-            "beta2": [
-              0.9,
-              0.95,
-              0.98,
-              0.99
-            ],
-            "shampoo_beta": [
-              0.9,
-              0.95,
-              0.98,
-              0.99
-            ],
-            "precondition_frequency": [
-              10
-            ],
-            "block_size": [
-              128,
-              256,
-              512
-            ],
-            "epsilon": [
-              1e-20,
-              1e-15,
-              1e-10
-            ],
-            "train_batch_size": [
-              128,
-              256,
-              512,
-              1024
-            ]
+          "sweep_grids": {},
+          "baseline_config": {
+            "learning_rate": 0.008,
+            "weight_decay": 0.1,
+            "min_lr_ratio": 0,
+            "warmup": 0,
+            "momentum": 0.98,
+            "beta1": 0.8,
+            "beta2": 0.98,
+            "epsilon": 9.999999999999999e-26,
+            "muon_epsilon": 1e-05,
+            "max_grad_norm": 1,
+            "lr_schedule": "linear",
+            "muon_to_adam_lr": 0.3,
+            "decay": 1,
+            "train_batch_size": 128
           },
+          "model_size": "130m",
+          "target_chinchilla": 16,
+          "optimizer": "muon",
+          "source_file": "exp725_muonsweep_130M_16.py"
+        }
+      ]
+    }
+  },
+  "nadamw": {
+    "130m": {
+      "16": [
+        {
+          "sweep_grids": {},
+          "baseline_config": {
+            "learning_rate": 0.008,
+            "weight_decay": 0.1,
+            "min_lr_ratio": 0,
+            "warmup": 2000,
+            "beta1": 0.95,
+            "beta2": 0.98,
+            "epsilon": 1e-10,
+            "max_grad_norm": 1,
+            "nesterov": true,
+            "train_batch_size": 256
+          },
+          "model_size": "130m",
+          "target_chinchilla": 16,
+          "optimizer": "nadamw",
+          "source_file": "exp725_nadamwsweep_130M_16.py"
+        }
+      ]
+    },
+    "300m": {
+      "16": [
+        {
+          "sweep_grids": {},
+          "baseline_config": {
+            "learning_rate": 0.004,
+            "weight_decay": 0.1,
+            "min_lr_ratio": 0,
+            "warmup": 2000,
+            "beta1": 0.95,
+            "beta2": 0.98,
+            "epsilon": 1e-10,
+            "max_grad_norm": 1,
+            "nesterov": true,
+            "train_batch_size": 256
+          },
+          "model_size": "300m",
+          "target_chinchilla": 16,
+          "optimizer": "nadamw",
+          "source_file": "exp725_nadamwsweep_300M_16.py"
+        }
+      ]
+    }
+  },
+  "soape": {
+    "300m": {
+      "16": [
+        {
+          "sweep_grids": {},
+          "baseline_config": {
+            "learning_rate": 0.004,
+            "weight_decay": 0.1,
+            "min_lr_ratio": 0,
+            "warmup": 1000,
+            "beta1": 0.95,
+            "beta2": 0.99,
+            "shampoo_beta": 0.9,
+            "precondition_frequency": 10,
+            "partition_grads_into_blocks": true,
+            "block_size": 512,
+            "epsilon": 1e-10,
+            "max_grad_norm": 1,
+            "train_batch_size": 256
+          },
+          "model_size": "300m",
+          "target_chinchilla": 16,
+          "optimizer": "soape",
+          "source_file": "exp725_soapesweep_300M_16.py"
+        }
+      ]
+    },
+    "130m": {
+      "16": [
+        {
+          "sweep_grids": {},
           "baseline_config": {
             "learning_rate": 0.008,
             "weight_decay": 0.1,
@@ -124,222 +201,6 @@
           "target_chinchilla": 16,
           "optimizer": "adamw",
           "source_file": "exp725_adamwsweep_300M_16.py"
-        }
-      ]
-    }
-  },
-  "soap": {
-    "300m": {
-      "16": [
-        {
-          "sweep_grids": {},
-          "baseline_config": {
-            "learning_rate": 0.004,
-            "weight_decay": 0.1,
-            "min_lr_ratio": 0,
-            "warmup": 1000,
-            "beta1": 0.95,
-            "beta2": 0.99,
-            "shampoo_beta": 0.9,
-            "precondition_frequency": 10,
-            "partition_grads_into_blocks": true,
-            "block_size": 512,
-            "epsilon": 1e-10,
-            "max_grad_norm": 1,
-            "train_batch_size": 256
-          },
-          "model_size": "300m",
-          "target_chinchilla": 16,
-          "optimizer": "soap",
-          "source_file": "exp725_soapsweep_300M_16.py"
-        }
-      ]
-    }
-  },
-  "muon": {
-    "130m": {
-      "16": [
-        {
-          "sweep_grids": {
-            "learning_rate": [
-              0.008,
-              0.016,
-              0.032,
-              0.064,
-              0.128
-            ],
-            "weight_decay": [
-              0,
-              0.1,
-              0.2
-            ],
-            "momentum": [
-              0.8,
-              0.9,
-              0.95,
-              0.98
-            ],
-            "beta1": [
-              0.8,
-              0.9,
-              0.95,
-              0.98
-            ],
-            "beta2": [
-              0.9,
-              0.95,
-              0.98
-            ],
-            "epsilon": [
-              1e-25,
-              1e-20,
-              1e-15,
-              1e-10
-            ],
-            "muon_epsilon": [
-              1e-25,
-              1e-20,
-              1e-15,
-              1e-10,
-              1e-05
-            ],
-            "max_grad_norm": [
-              0,
-              1.0,
-              2.0
-            ],
-            "decay": [
-              0.2,
-              0.4,
-              0.6,
-              0.8,
-              1.0
-            ],
-            "muon_to_adam_lr": [
-              0.1,
-              0.2,
-              0.3
-            ],
-            "train_batch_size": [
-              128,
-              256,
-              512,
-              1024
-            ]
-          },
-          "baseline_config": {
-            "learning_rate": 0.008,
-            "weight_decay": 0.1,
-            "min_lr_ratio": 0,
-            "warmup": 0,
-            "momentum": 0.98,
-            "beta1": 0.8,
-            "beta2": 0.98,
-            "epsilon": 9.999999999999999e-26,
-            "muon_epsilon": 1e-05,
-            "max_grad_norm": 1,
-            "lr_schedule": "linear",
-            "muon_to_adam_lr": 0.3,
-            "decay": 1,
-            "train_batch_size": 128
-          },
-          "model_size": "130m",
-          "target_chinchilla": 16,
-          "optimizer": "muon",
-          "source_file": "exp725_muonsweep_130M_16.py"
-        }
-      ]
-    }
-  },
-  "nadamw": {
-    "300m": {
-      "16": [
-        {
-          "sweep_grids": {},
-          "baseline_config": {
-            "learning_rate": 0.004,
-            "weight_decay": 0.1,
-            "min_lr_ratio": 0,
-            "warmup": 2000,
-            "beta1": 0.95,
-            "beta2": 0.98,
-            "epsilon": 1e-10,
-            "max_grad_norm": 1,
-            "nesterov": true,
-            "train_batch_size": 256
-          },
-          "model_size": "300m",
-          "target_chinchilla": 16,
-          "optimizer": "nadamw",
-          "source_file": "exp725_nadamwsweep_300M_16.py"
-        }
-      ]
-    },
-    "130m": {
-      "16": [
-        {
-          "sweep_grids": {
-            "learning_rate": [
-              0.008,
-              0.016,
-              0.032
-            ],
-            "weight_decay": [
-              0,
-              0.1,
-              0.2
-            ],
-            "warmup": [
-              500,
-              1000,
-              2000,
-              4000
-            ],
-            "beta1": [
-              0.8,
-              0.9,
-              0.95,
-              0.98
-            ],
-            "beta2": [
-              0.9,
-              0.95,
-              0.98
-            ],
-            "epsilon": [
-              1e-25,
-              1e-20,
-              1e-15,
-              1e-10
-            ],
-            "max_grad_norm": [
-              0,
-              1.0,
-              2.0
-            ],
-            "train_batch_size": [
-              128,
-              256,
-              512,
-              1024
-            ]
-          },
-          "baseline_config": {
-            "learning_rate": 0.008,
-            "weight_decay": 0.1,
-            "min_lr_ratio": 0,
-            "warmup": 2000,
-            "beta1": 0.95,
-            "beta2": 0.98,
-            "epsilon": 1e-10,
-            "max_grad_norm": 1,
-            "nesterov": true,
-            "train_batch_size": 256
-          },
-          "model_size": "130m",
-          "target_chinchilla": 16,
-          "optimizer": "nadamw",
-          "source_file": "exp725_nadamwsweep_130M_16.py"
         }
       ]
     }

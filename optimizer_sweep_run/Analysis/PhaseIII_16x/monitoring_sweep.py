@@ -137,7 +137,7 @@ if __name__ == '__main__':
     with open('optimizer_sweep_run/Analysis/PhaseIII_16x/sweep_configurations.json', 'r') as f:
         sweep_configs = json.load(f)
     
-    model_and_data_size = [('130m', '42B', 16), ('520m', '171B', 16)]
+    model_and_data_size = [('130m', '42B', 16), ('300m', '96B', 16)]
 
     monitoring_results = {}
     
