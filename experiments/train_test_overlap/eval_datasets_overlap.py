@@ -104,13 +104,13 @@ musr_raw = ExecutorStep(
     name="raw/musr",
     fn=download_hf,
     config=DownloadConfig(
-        hf_dataset_id="TAUR-Lab/MuSR",
-        revision=versioned("7c365b4"),
+        hf_dataset_id="WillHeld/MuSRDecontam",
+        revision=versioned("39b4f56"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_urls_glob=["**/*.csv", "*.csv"],
+        hf_urls_glob=["**/*.parquet", "*.parquet"],
     ),
-    override_output_path="raw/TAUR-Lab/MuSRhf",
+    override_output_path="raw/WillHeld/MuSRDecontamhf",
 )
 
 
@@ -263,39 +263,39 @@ humaneval_convert_dolma = ExecutorStep(
     ),
 )
 
-# Convert instruction_following to dolma format
-# TODO: ahmed: this doesn't have reference answers
-# / they don't make sense, really only for inputs
+# Convert instruction_following to dolma format (load remotely, no answers)
 instruction_following_convert_dolma = ExecutorStep(
     name="decontamination/instruction_following",
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="wis-k/instruction-following-eval",
         subsets=["*"],
-        splits=["test"],
-        input_path=instruction_following_raw,
+        splits=["train"],
+        input_path="wis-k/instruction-following-eval",
         hf_path="wis-k/instruction-following-eval",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("decontamination"),
         prompt_key="prompt",
         options_key="instruction_id_list",
+        answer_text_ignore=True,
     ),
 )
 
+# Convert gpqa to dolma format (load from HF hub, single split)
 gpqa_convert_dolma = ExecutorStep(
     name="decontamination/gpqa",
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="Idavidrein/gpqa",
-        subsets=["default"],
-        splits=["*"],
-        input_path=gpqa_raw,
+        subsets=["gpqa_main", "gpqa_extended", "gpqa_diamond"],
+        splits=["train"],
+        input_path="Idavidrein/gpqa",
         hf_path="Idavidrein/gpqa",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("decontamination"),
-        prompt_key="question",
+        prompt_key="Question",
         answer_text_key="Correct Answer",
-        options_key="choices",
+        options_keys=["Correct Answer", "Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3"],
     ),
 )
 
@@ -306,36 +306,34 @@ mmlu_pro_convert_dolma = ExecutorStep(
     config=DatasetConversionConfig(
         dataset_name="TIGER-Lab/MMLU-Pro",
         subsets=["*"],
-        splits=["*"],
+        splits=["test"],
         input_path=mmlu_pro_raw,
         hf_path="TIGER-Lab/MMLU-Pro",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("decontamination"),
         prompt_key="question",
-        answer_text_key="answer",
         options_key="options",
+        answer_idx_key="answer_index",
+        answer_labels=["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"],
     ),
 )
 
 # Convert musr to dolma format
-# TODO: ahmed: this is a bit of a hack, we should probably have a better way to handle this
-# technically 'question' is the question but narrative has the actual details
-# so if there is contamination that's what will get us a hit. Ideally we can
-# pass two fields that can be collated for a single prompt_key
 musr_convert_dolma = ExecutorStep(
     name="decontamination/musr",
     fn=raw2json,
     config=DatasetConversionConfig(
-        dataset_name="TAUR-Lab/MuSR",
-        subsets=["*"],
-        splits=["*"],
+        dataset_name="WillHeld/MuSRDecontam",
+        subsets=[""],
+        splits=["test"],
         input_path=musr_raw,
-        hf_path="TAUR-Lab/MuSR",
+        hf_path="WillHeld/MuSRDecontam",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("decontamination"),
         prompt_key="narrative",
-        answer_text_key="answer",
         options_key="choices",
+        answer_idx_key="answer_index",
+        answer_text_key="answer_choice",
     ),
 )
 ############################################################
@@ -343,7 +341,6 @@ musr_convert_dolma = ExecutorStep(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            # Download steps
             gsm8k_raw,
             math_raw,
             truthful_qa_raw,
@@ -354,7 +351,6 @@ if __name__ == "__main__":
             instruction_following_raw,
             musr_raw,
             mmlu_pro_raw,
-            # Decontamination conversion steps
             gsm8k_convert_dolma,
             math_convert_dolma,
             truthful_qa_convert_dolma,

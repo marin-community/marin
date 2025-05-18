@@ -81,14 +81,16 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
                     "references": references,
                 }
 
-    # Find all aggregated_metrics JSONL files under the consolidated root
-    pattern = f"{root}/**/aggregated_metrics_*.jsonl"
-    metric_paths = fsspec_glob(pattern)
+    # Find all aggregated_metrics files under the root (both consolidated and raw shards)
+    pattern1 = f"{root}/**/aggregated_metrics_*.jsonl"
+    pattern2 = f"{root}/**/aggregate_metrics_*/aggregate_metrics_*"
+    metric_paths = fsspec_glob(pattern1) + fsspec_glob(pattern2)
+    metric_paths = sorted(set(metric_paths))
     if not metric_paths:
-        logger.warning("No aggregated_metrics files found under %s", root)
+        logger.warning("No aggregated or raw aggregate metrics files found under %s", root)
     # Show progress on discovered files
     total_metrics = len(metric_paths)
-    print(f"Discovered {total_metrics} aggregated_metrics files under {root}", flush=True)
+    print(f"Discovered {total_metrics} metrics files under {root}", flush=True)
 
     # summary for partial JSONL
     summary = {}
@@ -99,8 +101,8 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
 
     for idx, path in enumerate(metric_paths, start=1):
         print(f"Processing file {idx}/{total_metrics}: {path}", flush=True)
-        # Extract the n-gram size from the filename
-        m = re.search(r"aggregated_metrics_(\d+)\.jsonl$", path)
+        # Extract the n-gram size from the filename (supports both aggregated_ and aggregate_ forms)
+        m = re.search(r"aggregated?_metrics_(\d+)(?:\.jsonl)?$", path)
         if not m:
             continue
         n_val = int(m.group(1))
@@ -324,13 +326,13 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
 n_values_list = []  # empty means all
 n_values_list = [10, 15]
 config = AggregateTestOverlapConfig(
-    consolidated_root="gs://marin-us-central2/train_test_overlap/consolidated/",
+    consolidated_root="gs://marin-us-central2/train_test_overlap/ngrams/",
     output_base=this_output_path(),
     scenario_jsonl="gs://marin-us-central2/scenarios/consolidated_eval_scenarios-d3f040/consolidated_scenarios.jsonl",
     n_values=n_values_list,
 )
 aggregate_step = ExecutorStep(
-    name="train_test_overlap/aggregated",
+    name="train_test_overlap/aggregated_retry",
     fn=aggregate_test_overlap,
     config=config,
 )
