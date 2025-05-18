@@ -271,3 +271,28 @@ When the system finds an overlap like:
 ```
 
 This means the 5-gram "is most likely to be" appears 16 times in the training data, and also appears in at least one test instance. High frequency counts can indicate more significant data contamination.
+
+## Aggregate Test-Overlap Script
+
+A companion tool `aggregate_test_overlap.py` (located in `experiments/train_test_overlap/train_test`) lets you scan an entire consolidated output directory and summarize n-gram overlap at scale. It:
+
+1. Reads all `aggregated_metrics_{N}.jsonl` files under a given consolidated root.
+2. Filters by chosen `partial_overlap_spec` (binary, jaccard, token) and optional n-gram sizes (via the `N_VALUES` env var).
+3. Produces per-dataset, per-n-gram JSONL files (`binary.jsonl`, `jaccard.jsonl`, etc.) containing:
+   - `instance_ids`: overlapping instance IDs
+   - `metrics_input_paths`: sources of overlapping training shards
+   - `instance_id_mapping`: the original test inputs and reference answers for each ID
+4. Writes per-subset/​per-split summary files under each `ngram_{N}` folder:
+   - `summary_input.jsonl` and `summary_references.jsonl`: overlap counts and fractions for each subset and split
+   - `summary_input_total.jsonl` and `summary_reference_total.jsonl`: dataset-level totals (across all subsets) for split `test`
+
+Usage example (as an Executor step):
+```bash
+python aggregate_test_overlap.py \
+  --consolidated_root gs://my-bucket/train_test_overlap/consolidated/ \
+  --output_base    gs://my-bucket/train_test_overlap/aggregated/ \
+  --partial_overlap_spec binary
+```
+Or set `N_VALUES="10,15"` to restrict to 10- and 15-gram runs for speed.
+
+The JSONL summaries let you quickly gauge what fraction of your test sets share n-grams with the training data, both at the granular (per-subset) and overall dataset level.

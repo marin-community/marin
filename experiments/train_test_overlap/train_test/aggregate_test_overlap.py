@@ -39,8 +39,8 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
 
     # Load scenario counts for total instances per dataset/subset/split
     scenario_counts: dict = {}
-    # Also build mapping from instance_id to input text
-    instance_text_map: dict = {}
+    # Also build mapping from instance_id to its input text and references
+    instance_data_map: dict = {}
     with fsspec.open(cfg.scenario_jsonl, "rt") as sf:
         for line in sf:
             rec = json.loads(line)
@@ -54,11 +54,15 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
             # Count total instances
             inst_list = rec.get("instances", [])
             scenario_counts.setdefault(dataset, {}).setdefault(subset, {})[split] = len(inst_list)
-            # Record text for each instance
+            # Record input text and references for each instance
             for inst in inst_list:
                 inst_id = inst.get("id")
-                text = inst.get("input", "")
-                instance_text_map.setdefault(dataset, {}).setdefault(subset, {}).setdefault(split, {})[inst_id] = text
+                input_text = inst.get("input", "")
+                references = inst.get("references", [])
+                instance_data_map.setdefault(dataset, {}).setdefault(subset, {}).setdefault(split, {})[inst_id] = {
+                    "input": input_text,
+                    "references": references,
+                }
 
     # Find all aggregated_metrics JSONL files under the consolidated root
     pattern = f"{root}/**/aggregated_metrics_*.jsonl"
@@ -102,7 +106,7 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
                 class_name = scenario.get("class_name", "")
                 dataset = class_name.split(".")[-1]
                 args = scenario.get("args", {}) or {}
-                subset = args.get("subset", "")
+                subset = args.get("subset") or args.get("subject") or ""
                 split = stats_key["light_scenario_key"]["split"]
 
                 inst_ids = rec.get("instance_ids", [])
@@ -148,9 +152,9 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
                             "metrics_input_paths": {
                                 inst: sorted(list(paths)) for inst, paths in data["metrics_input_paths"].items()
                             },
-                            # Map each instance ID to its input text
+                            # Map each instance ID to its input text and references
                             "instance_id_mapping": {
-                                inst: instance_text_map.get(dataset, {}).get(subset, {}).get(split, {}).get(inst, "")
+                                inst: instance_data_map.get(dataset, {}).get(subset, {}).get(split, {}).get(inst, {})
                                 for inst in data["instance_ids"]
                             },
                         }
@@ -179,20 +183,30 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
                                 "overlap_fraction": fraction,
                             }
                             sum_f.write(json.dumps(sum_rec) + "\n")
-                        # overall across all splits for this subset
-                        total_all = sum(scenario_counts.get(dataset, {}).get(subset, {}).values())
-                        overlap_all = sum(len(s) for s in splitmap.values())
-                        overall_rec = {
-                            "dataset": dataset,
-                            "n_val": n_val,
-                            "part": part,
-                            "subset": subset,
-                            "split": "all",
-                            "total_instances": total_all,
-                            "overlap_count": overlap_all,
-                            "overlap_fraction": (overlap_all / total_all) if total_all else None,
-                        }
-                        sum_f.write(json.dumps(overall_rec) + "\n")
+                        # end of summary_{part}.jsonl writing
+                # After per-subset summaries, write total for this part
+                total_filename = "summary_input_total.jsonl" if part == "input" else "summary_reference_total.jsonl"
+                total_file = os.path.join(out_dir, total_filename)
+                print(f"  Writing {total_filename} for n-gram {n_val}", flush=True)
+                # Compute total_instances and overlap_count across all subsets for split 'test'
+                total_instances = sum(
+                    scenario_counts.get(dataset, {}).get(subset_key, {}).get("test", 0)
+                    for subset_key in scenario_counts.get(dataset, {})
+                )
+                stats_all = summary_by_part.get(part, {}).get(dataset, {}).get(n_val, {})
+                overlap_count = sum(len(stats_all.get(subset_key, {}).get("test", set())) for subset_key in stats_all)
+                fraction = (overlap_count / total_instances) if total_instances else None
+                with fsspec.open(total_file, "wt") as tot_f:
+                    total_rec = {
+                        "dataset": dataset,
+                        "n_val": n_val,
+                        "part": part,
+                        "split": "test",
+                        "total_instances": total_instances,
+                        "overlap_count": overlap_count,
+                        "overlap_fraction": fraction,
+                    }
+                    tot_f.write(json.dumps(total_rec) + "\n")
 
     logger.info("Wrote aggregate summaries to %s", out_base)
     return "Aggregate test overlap completed!"
