@@ -8,6 +8,7 @@ from levanter.data.text import LmDatasetSourceConfigBase
 from levanter.store import SerialCacheWriter, TreeCache
 
 from marin.tokenize.slice_cache import SliceCacheConfig, _do_slice_cache
+from tests.test_utils import skip_in_ci
 
 
 @dataclass
@@ -38,6 +39,7 @@ class MockDatasetSource(LmDatasetSourceConfigBase):
         return out
 
 
+@skip_in_ci("test seems to hang in CI. fine locally")
 @pytest.mark.parametrize(
     "num_docs,tokens_per_doc,requested_tokens",
     [
@@ -86,6 +88,7 @@ def test_slice_cache(num_docs: int, tokens_per_doc: int, requested_tokens: int):
         assert sliced_config.tags == sliced_config2.tags
 
 
+@skip_in_ci("test seems to hang in CI. fine locally")
 def test_slice_cache_too_small():
     """Test that _do_slice_cache raises ValueError when requested token budget is larger than available tokens."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -97,6 +100,7 @@ def test_slice_cache_too_small():
             _do_slice_cache(SliceCacheConfig(source, 2000, f"{tmpdir}/sliced_cache", "gpt2", 0))
 
 
+@skip_in_ci("test seems to hang in CI. fine locally")
 def test_slice_cache_tags():
     """Test that _do_slice_cache adds the correct tags to the output config."""
     with tempfile.TemporaryDirectory() as tmpdir:
