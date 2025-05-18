@@ -174,20 +174,12 @@ function renderTransferStep({step, steps}) {
 }
 
 function renderRaw2JsonStep({step, steps}) {
-  const description = <table>
-    <tbody>
-      <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
-    </tbody>
-  </table>;
+  const description = renderPath({path: step.config.input_path, steps});
   return {name: "raw2json", description};
 }
 
 function renderFastTextTransformStep({step, steps}) {
-  const description = <table>
-    <tbody>
-      <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
-    </tbody>
-  </table>;
+  const description = renderPath({path: step.config.input_path, steps});
   return {name: "fasttext2json", description};
 }
 
@@ -204,7 +196,7 @@ function renderRunClassificationInferenceStep({step, steps}) {
   const description = <table>
     <tbody>
       <tr><td>Model:</td><td>{step.config.model_type}</td></tr>
-      <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
+      <tr><td>Input data:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
       <tr><td>Output attribute:</td><td>{step.config.attribute_name}</td></tr>
     </tbody>
   </table>;
@@ -216,7 +208,7 @@ function renderRunGenerationInferenceStep({step, steps}) {
     <tbody>
       <tr><td>Model:</td><td>{getBasename(step.config.model_name)}</td></tr>
       <tr><td>Prompt:</td><td>{step.config.template.substring(0, 80)}... <span title={step.config.template}>{infoIcon}</span></td></tr>
-      <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
+      <tr><td>Input data:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
     </tbody>
   </table>;
   return {name: "run_inference", description};
@@ -225,7 +217,7 @@ function renderRunGenerationInferenceStep({step, steps}) {
 function renderMeduSampleStep({step, steps}) {
   const description = <table>
     <tbody>
-      <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
+      <tr><td>Input data:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
       <tr><td>Processor:</td><td>{step.config.processor_type}</td></tr>
     </tbody>
   </table>;
