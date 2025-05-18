@@ -29,15 +29,10 @@ speedrun_config = SpeedrunConfig(
     ),
 )
 
-speedrun_config.print_flops_info()
+speedrun_config.print_run_info()
 
 if __name__ == "__main__":
-    # Debug info about devices
-    print(f"Number of devices: {speedrun_config.num_devices}")
-    print(f"Device FLOPs: {speedrun_config.device_flops}")
-    print(f"Total peak FLOPs: {speedrun_config.device_flops * speedrun_config.num_devices}")
-
-    print(f"Estimated model flops: {speedrun_config.estimate_model_flops()}")
-
     # Comment out the actual run for now
     # executor_main(steps=default_speedrun("75M_llama_fineweb_edu", speedrun_config))
+
+    print(speedrun_config.as_json_dict())
