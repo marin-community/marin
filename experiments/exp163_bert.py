@@ -109,16 +109,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             val_frac=versioned(0.1),
             seed=versioned(0),
         ),
-        pip_dependency_groups=[
-            "--find-links https://storage.googleapis.com/libtpu-releases/index.html",
-            "--find-links https://storage.googleapis.com/libtpu-wheels/index.html",
-            "fasttext",
-            "datasets",
-            "filelock",
-            "torch",
-            "torch_xla[tpu]",
-            "accelerate",
-        ],
+        pip_dependency_groups=["bert_quality"],
     )
 
     for input_data_source, input_data_path in config.input_data_source_to_path.items():
@@ -157,16 +148,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                 ),
                 task=TaskConfig(max_in_flight=500),
             ),
-            pip_dependency_groups=[
-                "--find-links https://storage.googleapis.com/libtpu-releases/index.html",
-                "--find-links https://storage.googleapis.com/libtpu-wheels/index.html",
-                "fasttext",
-                "datasets",
-                "filelock",
-                "torch",
-                "torch_xla[tpu]",
-                "accelerate",
-            ],
+            pip_dependency_groups=["bert_quality"],
         )
 
         fasttext_consolidate_steps, bert_consolidate_steps = [], []
@@ -216,13 +198,9 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             fasttext_consolidate_steps.append(fasttext_consolidate_step)
             bert_consolidate_steps.append(bert_consolidate_step)
 
-        steps.extend(fasttext_consolidate_steps)
-        steps.extend(bert_consolidate_steps)
+            steps.append(fasttext_consolidate_step)
+            steps.append(bert_consolidate_step)
 
-        # dolmino_dclm = get_dolmino_step_llama3("dclm")
-        for fasttext_consolidate_step, bert_consolidate_step in zip(
-            fasttext_consolidate_steps, bert_consolidate_steps, strict=False
-        ):
             fasttext_tokenize_step = default_tokenize(
                 name=f"tokenized/quality_filtering/{config.experiment_name}/fasttext/{input_data_source}",
                 dataset=fasttext_consolidate_step,
