@@ -4,6 +4,7 @@ site_url: https://marin.community
 
 theme:
   name: material
+  custom_dir: docs/overrides
   features:
     - search.highlight
     - search.share
@@ -11,7 +12,27 @@ theme:
     - content.code.annotation
     - content.code.copy
     - navigation.footer
-  custom_dir: docs/overrides
+  language: en
+  palette:
+      - scheme: slate
+        toggle:
+          icon: material/weather-sunny
+          name: Switch to light mode
+        primary: black
+        accent: white
+      - scheme: default
+        toggle:
+          icon: material/weather-night
+          name: Switch to dark mode
+        primary: black
+        accent: white
+  icon:
+      repo: fontawesome/brands/git-alt
+      edit: material/pencil
+      view: material/eye
+  logo: static/logo.png
+  favicon: static/favicon.ico
+
 
 repo_url: https://github.com/marin-community/marin
 repo_name: marin-community/marin
@@ -24,6 +45,13 @@ extra_css:
   - css/mkdocstrings.css
   - css/custom.css
   - css/friendly.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/marin-community/marin
+    - icon: fontawesome/brands/discord
+      link: https://discord.gg/DhbGDq3jv4
 
 nav:
   - Home: index.md
