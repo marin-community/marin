@@ -90,7 +90,7 @@ class SpeedrunConfig:
 
         # Print simplified config info
         logger.info("Speedrun Configuration:")
-        logger.info(json.dumps(self.as_json_dict(), indent=2))
+        logger.info(json.dumps(self.as_json_dict(), indent=4))
 
         model_flops = self.compute_model_flops()
 
@@ -254,8 +254,8 @@ def default_speedrun(
         ValueError: If the configuration is invalid
     """
 
-    logger.info(f"Running speedrun {name} with config {config}")
-    logger.info(f"Estimated FLOPs: {config.estimate_flops_before_speedrun()}")
+    logger.info(f"Running speedrun {name}")
+    config.print_run_info()
 
     run_tags = ["speedrun"] + (tags or [])
 
