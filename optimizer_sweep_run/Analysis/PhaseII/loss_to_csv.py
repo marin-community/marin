@@ -5,6 +5,22 @@ import numpy as np
 import seaborn as sns
 from scipy.optimize import curve_fit
 
+color_map = {
+    'mars': '#1f77b4',    # blue
+    'muon': '#ff7f0e',    # orange
+    'lion': '#2ca02c',    # green
+    'adamw': '#d62728',   # red
+    'nadamw': '#9467bd',  # purple
+    'kron': '#8c564b',    # brown
+    'scion': '#e377c2',   # pink
+    'cautious': '#7f7f7f', # gray
+    'soape': '#bcbd22',    # yellow-green
+    'mini': '#aec7e8',    # light blue
+}
+
+import os
+
+
 with open("optimizer_sweep_run/Analysis/PhaseI/wandb_cache.json", "r") as f:
     cache_phase_I = json.load(f)
 
@@ -56,20 +72,6 @@ for idx, model_size in enumerate(model_sizes):
                 optimizer_loss_list.append(actual_list[(optimizer, model_size, chinchilla)]["min_loss"])
             else:
                 optimizer_loss_list.append(None)
-        # linewidth = 2
-        plt.plot([0, 1, 2, 3], optimizer_loss_list, label=optimizer if idx == 0 else None, color=color_map[optimizer])
-
-    plt.title(f'{model_size} Model', fontsize=20)
-    plt.xlabel('Chinchilla Ratio', fontsize=20)
-    plt.ylabel('Loss', fontsize=20)
-    # ax.set_xscale('log')
-    plt.xticks([0, 1, 2, 3], [1, 2, 4, 8], fontsize=20)
-    # plt.xscale('log')
-    # ax.tick_params(axis='both', which='major', labelsize=18)
-    plt.legend(loc='upper right', fontsize=18)
-    plt.tight_layout()
-    plt.savefig(f'optimizer_loss_scaling_{model_size}.pdf', bbox_inches='tight')
-    plt.close()
 
 
-
+df.to_csv('optimizer_sweep_run/Analysis/PhaseII/loss_to_csv.csv', index=False)
