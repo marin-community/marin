@@ -52,6 +52,17 @@ from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 dolmino_dclm = get_dolmino_step_llama3("dclm")
 
+BERT_DEPENDENCIES = [
+    "--find-links https://storage.googleapis.com/libtpu-releases/index.html",
+    "--find-links https://storage.googleapis.com/libtpu-wheels/index.html",
+    "fasttext",
+    "datasets",
+    "filelock",
+    "torch",
+    "torch_xla[tpu]",
+    "accelerate",
+]
+
 
 @dataclass
 class ExperimentConfig:
@@ -109,7 +120,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             val_frac=versioned(0.1),
             seed=versioned(0),
         ),
-        pip_dependency_groups=["bert_quality"],
+        pip_dependency_groups=BERT_DEPENDENCIES,
     )
 
     for input_data_source, input_data_path in config.input_data_source_to_path.items():
@@ -148,7 +159,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                 ),
                 task=TaskConfig(max_in_flight=500),
             ),
-            pip_dependency_groups=["bert_quality"],
+            pip_dependency_groups=BERT_DEPENDENCIES,
         )
 
         fasttext_consolidate_steps, bert_consolidate_steps = [], []
