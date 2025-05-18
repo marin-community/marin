@@ -46,6 +46,12 @@ def plot_weblinx_comparison():
     
     # Plot replay ratio
     plt.figure(figsize=(5, 4), dpi=300)
+    
+    # Add baseline dotted line first (so it's behind other elements)
+    plt.axhline(y=32.860, color='black', linestyle=':', alpha=0.7, 
+                label='Standard fine-tuning')
+    
+    # Plot main lines
     plt.plot(replay_ratios_weblinx, weblinx_performance, color=LIGHT_BLUE, marker='o', 
             linewidth=2, markersize=6, label='OpenHermes')
     plt.plot(ultrachat_ratios, ultrachat_performance, color=PURPLE, marker='o', 
@@ -53,11 +59,23 @@ def plot_weblinx_comparison():
     plt.plot(mind2web_ratios, mind2web_performance, color=RED, marker='o',
             linewidth=2, markersize=6, label='Mind2Web')
     
-    plt.xlabel('Replay Ratio')
+    # Add stars at maxima
+    weblinx_max_idx = np.argmax(weblinx_performance)
+    ultrachat_max_idx = np.argmax(ultrachat_performance)
+    mind2web_max_idx = np.argmax(mind2web_performance)
+    
+    plt.scatter(replay_ratios_weblinx[weblinx_max_idx], weblinx_performance[weblinx_max_idx], 
+                color=LIGHT_BLUE, marker='*', s=200, zorder=10)
+    plt.scatter(ultrachat_ratios[ultrachat_max_idx], ultrachat_performance[ultrachat_max_idx], 
+                color=PURPLE, marker='*', s=200, zorder=10)
+    plt.scatter(mind2web_ratios[mind2web_max_idx], mind2web_performance[mind2web_max_idx], 
+                color=RED, marker='*', s=200, zorder=10)
+    
+    plt.xlabel('Replay Fraction $\\rho$')
     plt.ylabel('Performance')
-    plt.title('WebLinx Performance vs Replay Ratio')
+    plt.title('WebLinx Performance vs Replay Fraction')
     plt.ylim(y_min, y_max)
-    plt.legend()
+    plt.legend(fontsize=10, loc='center right')
     plt.tight_layout()
     
     plt.savefig('plotting/plots/weblinx_replay.png', bbox_inches='tight')
@@ -65,8 +83,18 @@ def plot_weblinx_comparison():
     
     # Plot weight decay
     plt.figure(figsize=(5, 4), dpi=300)
+    
+    # Add baseline dotted line
+    plt.axhline(y=32.860, color='black', linestyle=':', alpha=0.7,
+                label='Standard fine-tuning')
+    
     plt.plot(weight_decays, weight_decay_performance, color=ORANGE, marker='o',
             linewidth=2, markersize=6, label='Weight Decay')
+    
+    # Add star at maximum
+    wd_max_idx = np.argmax(weight_decay_performance)
+    plt.scatter(weight_decays[wd_max_idx], weight_decay_performance[wd_max_idx],
+                color=ORANGE, marker='*', s=200, zorder=10)
     
     plt.xlabel('Weight Decay')
     plt.ylabel('Performance')

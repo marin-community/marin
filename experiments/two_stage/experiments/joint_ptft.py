@@ -26,6 +26,8 @@ def finetuning_with_replay(
     replay_multiplier: int,
     num_total_steps: int,
     lr: float,
+    nametag: str,
+    wandb_additional_tags: list[str],
 ):
     num_fine_tuning_steps = int(num_rare_steps * rare_data_epochs * replay_multiplier)
     assert num_fine_tuning_steps <= num_total_steps
@@ -44,15 +46,15 @@ def finetuning_with_replay(
             lr_schedule="cosine",
             lr=lr,
             wandb_project_name="suhas-two-stage",
-            wandb_additional_tags=["joint-ft-5-12", f"{rare_data_name}-c4-fine-tuning-v4"],
+            wandb_additional_tags=wandb_additional_tags,
             model_name="150m4k",
             initialize_from_hf=output_path_of(pretraining_step).cd(f"hf/step-{num_pretraining_steps - 1}"),
-            nametag="-j"
+            nametag=nametag
         )
     )
 
 if __name__ == "__main__":
-    NUM_RARE_STEPS = 4
+    NUM_RARE_STEPS = 1
     TOTAL_STEPS = 1024
     train_steps = [
         finetuning_with_replay(
@@ -62,15 +64,18 @@ if __name__ == "__main__":
             num_rare_steps=NUM_RARE_STEPS,
             num_total_steps=TOTAL_STEPS,
             lr=lr,
+            nametag="-j",
+            wandb_additional_tags=["joint-ft-5-12-v5", f"{rare_data_name}-c4-fine-tuning-v5"],
         )
-        for replay_multiplier in [1, 1.5, 2, 3, 4]
-        for lr in [1e-3, 3e-4]
-        for rare_data_name, rare_data_epochs in [
-            ("finemath", 32),
-            ("spj", 32),
-            ("flan", 32),
-            ("starcoder", 32),
+        for replay_multiplier in [1.125, 1.25]
+        for lr in [3e-4]
+        for rare_data_name in [
+            "finemath",
+            "flan",
+            "starcoder",
+            "spj",
         ]
+        for rare_data_epochs in [64]
     ]
 
     executor_main(

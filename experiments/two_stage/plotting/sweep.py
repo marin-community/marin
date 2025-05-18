@@ -30,10 +30,11 @@ pretty_name_dict = {
 
 key_pretty_name_dict = {
     "rare_data_epochs": "Rare Repetitions",
-    "replay_ratio": "Replay Ratio",
-    "stage2_allocation": "Stage 2 Allocation",
+    "replay_ratio": "Replay Fraction $\\rho$",
+    "stage2_allocation": "Stage 2 Allocation $\\alpha$",
     "model_name": "Parameter Count",
     "lr_cooldown_duration": "LR Cooldown Duration",
+    "weight_decay": "Weight Decay",
 }
 
 value_pretty_name_dict = {
@@ -60,17 +61,29 @@ def parse_run(run):
     run_dict["replay_ratio"] = float(run_id.split("-rr")[-1][:4])
     run_dict["stage2_allocation"] = float(run_id.split("-rs")[-1][:4])
     run_dict["lr_schedule"] = "wsd" if "wsd" in run_id else "cos"
-    run_dict["lr"] = float(run_id.split(f"{run_dict['lr_schedule']}-")[-1][:5])
-    run_dict["lr_cooldown_duration"] = float(run_id.split(f"{run_dict['lr']}-")[-1][:4])
+
+    lr_str = run_id.split(f"{run_dict['lr_schedule']}-")[-1][:5]
+    lr_str = lr_str if lr_str[-1] != "-" else lr_str[:-1]
+    run_dict["lr"] = float(lr_str)
+    run_dict["lr_cooldown_duration"] = "na" if "-na-" in run_id else float(run_id.split(f"{run_dict['lr']}-")[-1][:4])
     run_dict["rare_data_epochs"] = int(run_id.split("x")[-1].split("-")[0])
     run_dict["model_name"] = run_id.split("-")[0]
 
-    run_history_loss_keys = [f"eval/{rare_data_name}/loss", f"eval/{common_data_name}/loss"]
+    if "-w" in run_id:
+        weight_decay_str = run_id.split("-w")[-1]
+        if weight_decay_str == "":
+            weight_decay_str = "16"
+        run_dict["weight_decay"] = float(weight_decay_str) / 10.0
+
+    run_history_loss_keys = [f"eval/{rare_data_name}/loss"]
 
     history_loss = run.history(keys=run_history_loss_keys)
 
     run_dict["loss_history"] = history_loss
 
+    if f"eval/{rare_data_name}/loss" not in history_loss.columns:
+        return None
+    
     run_dict[f"final_{rare_data_name}_loss"] = history_loss[f"eval/{rare_data_name}/loss"].iloc[-1]
 
     return run_dict
@@ -245,10 +258,21 @@ def create_scatter_plot(run_list, x_axis_key, y_axis_key, rare_data_name, common
     print(f"Final {pretty_name_dict[rare_data_name]} Loss: {best_run[f'final_{rare_data_name}_loss']:.4f}")
     print(f"Run ID: {best_run['run_id']}")
 
-def create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=True, baseline=None, label='Data Points'):
+def create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=True, baseline=None, title_stub="", ylims=None, show_best=False):
     """
     Creates a simple scatter plot with x_axis_key on x-axis and loss on y-axis.
+    Only keeps the best (lowest loss) run for each x-axis value.
     """
+    # Get unique x values and find best run for each
+    unique_x_values = sorted(list(set([run[x_axis_key] for run in run_list])))
+    best_runs = []
+    for x in unique_x_values:
+        matching_runs = [run for run in run_list if run[x_axis_key] == x]
+        best_run = min(matching_runs, key=lambda r: r[f'final_{rare_data_name}_loss'])
+        best_runs.append(best_run)
+    
+    run_list = best_runs
+
     def transform_x(x):
         if x_axis_key == "replay_ratio":
             return -np.log(1 - x)
@@ -257,6 +281,8 @@ def create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name
             return np.log(x)
         elif x_axis_key == "rare_data_epochs":
             return np.log(x)
+        elif x_axis_key == "weight_decay":
+            return np.log(x + 0.05)
         return x
 
     def get_tick_labels(x):
@@ -269,8 +295,7 @@ def create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name
     losses = [run[f'final_{rare_data_name}_loss'] for run in run_list]
     
     # Plot the actual points first
-    scatter = plt.scatter(x_values_transformed, losses, color=LIGHT_BLUE, 
-                         label=label, zorder=5)
+    scatter = plt.scatter(x_values_transformed, losses, color=LIGHT_BLUE, zorder=5)
     
     # Plot quadratic fit
     if fit:
@@ -284,26 +309,41 @@ def create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name
 
     if baseline:
         baseline_point = plt.scatter([transform_x(1.0)], [baseline], color=PURPLE, zorder=10)
-        plt.axhline(y=baseline, color=PURPLE, linestyle='--', label='Uniform Ordering')
+        plt.axhline(y=baseline, color='black', linestyle=':', alpha=0.7)
     else:
         baseline_point = None
-    
-    # Find best point for printing stats
-    best_run = min(run_list, key=lambda x: x[f'final_{rare_data_name}_loss'])
+
+    if show_best:
+        # Add star at the best point
+        best_idx = np.argmin(losses)
+        plt.scatter(x_values_transformed[best_idx], losses[best_idx], 
+                   marker='*', color=LIGHT_BLUE, s=200, zorder=6)
+        
+        # Print stats for best point
+        print(f"\nBest point:")
+        print(f"{key_pretty_name_dict[x_axis_key]}: {x_values[best_idx]}")
+        print(f"Loss: {losses[best_idx]:.4f}")
+        print(f"Run ID: {run_list[best_idx]['run_id']}")
     
     plt.xlabel(f'{key_pretty_name_dict[x_axis_key]}')
     plt.ylabel(f'{pretty_name_dict[rare_data_name]} Loss')
-    plt.title(f'{pretty_name_dict[rare_data_name]} Loss vs {key_pretty_name_dict[x_axis_key]}')
+    plt.title(f'{pretty_name_dict[rare_data_name]} Loss vs {key_pretty_name_dict[x_axis_key]}{title_stub}')
     
     unique_x_values = sorted(list(set(x_values)))
     x_ticks = [transform_x(x) for x in unique_x_values]
     plt.xticks(x_ticks, [get_tick_labels(x) for x in unique_x_values])
+
+    if ylims:
+        plt.ylim(ylims)
     
     # Order legend with data points first
-    plt.legend([scatter, fit_line, baseline_point], ['Data Points', 'Quadratic Fit', 'Uniform Ordering'], 
-              bbox_to_anchor=(1.05, 1), loc='upper left')
+    # print(fit, baseline)
+    # if fit or baseline:
+    #     plt.legend([scatter, fit_line, baseline_point], ['Data Points', 'Quadratic Fit', 'Uniform Ordering'], 
+    #             bbox_to_anchor=(1.05, 1), loc='upper left')
     
-    output_path = f'plotting/plots/{key}_loss_simple.png'
+    file_stub = title_stub.replace(" ", "_").replace("\\", "_").replace("%", "")
+    output_path = f'plotting/plots/{key}_loss_simple{file_stub}.png'
     plt.savefig(output_path, bbox_inches='tight')
     plt.close()
     
@@ -311,6 +351,87 @@ def create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name
     print(f"{key_pretty_name_dict[x_axis_key]}: {best_run[x_axis_key]}")
     print(f"Final {pretty_name_dict[rare_data_name]} Loss: {best_run[f'final_{rare_data_name}_loss']:.4f}")
     print(f"Run ID: {best_run['run_id']}")
+
+def create_double_scatter(run_lists, x_axis_key, rare_data_name, common_data_name, key, labels, ylims=None):
+    """
+    Creates a scatter plot with two series of data points.
+    
+    Args:
+        run_lists: List of two run lists, each containing run dictionaries
+        x_axis_key: Key for x-axis values
+        rare_data_name: Name of rare dataset
+        common_data_name: Name of common dataset
+        key: String identifier for the experiment
+        labels: List of two labels for the legend
+        ylims: Optional tuple of (ymin, ymax) for setting y-axis limits
+    """
+    def transform_x(x):
+        if x_axis_key == "replay_ratio":
+            return -np.log(1 - x)
+        elif x_axis_key == "lr_cooldown_duration":
+            x = np.clip(x, 0.01, 0.99)
+            return np.log(x)
+        elif x_axis_key == "rare_data_epochs":
+            return np.log(x)
+        elif x_axis_key == "weight_decay":
+            return np.log(x + 0.05)
+        return x
+
+    def get_tick_labels(x):
+        return str(x)
+    
+    plt.figure(figsize=(5, 3), dpi=300)
+    
+    colors = [LIGHT_BLUE, PURPLE]  # Use our custom colors for the two series
+    scatter_handles = []
+    
+    for runs, label, color in zip(run_lists, labels, colors):
+        # Get unique x values and find best run for each
+        unique_x_values = sorted(list(set([run[x_axis_key] for run in runs])))
+        best_runs = []
+        for x in unique_x_values:
+            matching_runs = [run for run in runs if run[x_axis_key] == x]
+            best_run = min(matching_runs, key=lambda r: r[f'final_{rare_data_name}_loss'])
+            best_runs.append(best_run)
+        
+        x_values = [run[x_axis_key] for run in best_runs]
+        x_values_transformed = [transform_x(x) for x in x_values]
+        losses = [run[f'final_{rare_data_name}_loss'] for run in best_runs]
+        
+        # Plot points and line
+        scatter = plt.scatter(x_values_transformed, losses, color=color, label=label, zorder=5)
+        plt.plot(x_values_transformed, losses, color=color, alpha=0.5, zorder=4)
+        scatter_handles.append(scatter)
+
+        # Add star at the best point
+        best_idx = np.argmin(losses)
+        plt.scatter(x_values_transformed[best_idx], losses[best_idx], 
+                   marker='*', color=color, s=200, zorder=6)
+        
+        # Print stats for best point
+        print(f"\nBest point for {label}:")
+        print(f"{key_pretty_name_dict[x_axis_key]}: {x_values[best_idx]}")
+        print(f"Loss: {losses[best_idx]:.4f}")
+        print(f"Run ID: {best_runs[best_idx]['run_id']}")
+    
+    plt.xlabel(f'{key_pretty_name_dict[x_axis_key]}')
+    plt.ylabel(f'{pretty_name_dict[rare_data_name]} Loss')
+    plt.title(f'{pretty_name_dict[rare_data_name]} Loss vs {key_pretty_name_dict[x_axis_key]}')
+    
+    # Set x-axis ticks using all runs to get complete range
+    all_runs = run_lists[0] + run_lists[1]
+    unique_x_values = sorted(list(set([run[x_axis_key] for run in all_runs])))
+    x_ticks = [transform_x(x) for x in unique_x_values]
+    plt.xticks(x_ticks, [get_tick_labels(x) for x in unique_x_values])
+
+    if ylims:
+        plt.ylim(ylims)
+    
+    plt.legend(handles=scatter_handles, bbox_to_anchor=(1.05, 1), loc='upper left')
+    
+    output_path = f'plotting/plots/{key}_loss_double.png'
+    plt.savefig(output_path, bbox_inches='tight')
+    plt.close()
 
 # Main execution
 if __name__ == "__main__":
@@ -331,10 +452,16 @@ if __name__ == "__main__":
 
     key = {
         "repetition": f"{rare_data_name}-{common_data_name}-finding-repetitions",
+        "repetition_v2": f"{rare_data_name}-{common_data_name}-finding-repetitions-0.1",
+        "repetition_ft": f"{rare_data_name}-{common_data_name}-fine-tuning-epochs-v3",
         "schedule": f"{rare_data_name}-{common_data_name}-repetition-trial-v9",
         "schedule_v2": f"{rare_data_name}-{common_data_name}-repetition-trial-v10",
+        "schedule_v3": f"{rare_data_name}-{common_data_name}-repetition-trial-v11",
+        "sft": f"{rare_data_name}-{common_data_name}-fine-tuning-v5",
         "model": f"{rare_data_name}-{common_data_name}-model-scaling",
         "lr_schedule": f"{rare_data_name}-{common_data_name}-finding-lr-schedule",
+        "lr_schedule_v2": f"{rare_data_name}-{common_data_name}-finding-lr-schedule-v2",
+        "weight_decay": f"{rare_data_name}-{common_data_name}-finding-weight-decay",
     }[args.mode]
 
     if args.build_cache:
@@ -354,16 +481,32 @@ if __name__ == "__main__":
 
     print("Total runs: ", len(run_list))
     if x_axis_key == "rare_data_epochs":
-        create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=False, label='Repetitions')
+        create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=False)
     elif x_axis_key == "lr_cooldown_duration":
-        baseline_run = [run for run in run_list if run["replay_ratio"] != 0.0 and run["lr_cooldown_duration"] == 0.99][0]
-        run_list = [run for run in run_list if run["replay_ratio"] == 0.0 and run["lr_cooldown_duration"] != 1.0]
-        create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=False, label='Fine-tuning', baseline=baseline_run[f"final_{rare_data_name}_loss"])
+        # baseline_run = [run for run in run_list if run["replay_ratio"] != 0.0 and run["lr_cooldown_duration"] == 0.99 and run["lr"] == 3e-3][0]
+        run_list = [run for run in run_list if run["replay_ratio"] == 0.0 and run["lr_cooldown_duration"] != 1.0 and run["lr"] == 3e-3]
+        create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=False)
+    elif args.mode == "sft":
+        run_list = [run for run in run_list if run["lr"] == 3e-4 and run["rare_data_epochs"] == 64 and run["replay_ratio"] < 0.8]
+        baseline_run = [run for run in run_list if run["replay_ratio"] == 0.0][0]
+        assert x_axis_key == "replay_ratio"
+        create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=False, baseline=baseline_run[f"final_{rare_data_name}_loss"], show_best=True)
+    elif args.mode == "weight_decay":
+        assert x_axis_key == "weight_decay"
+        run_list = [run for run in run_list if run["rare_data_epochs"] == 32]
+        print(run_list)
+        create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=False)
     else:
+        run_list = [run for run in run_list if run["replay_ratio"] < 0.9]
         create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key)
         create_scatter_plot(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key)
 
-
+        if args.mode == "schedule_v3" and rare_data_name == "starcoder":
+            run_list_no_early = [run for run in run_list if run["stage2_allocation"] == 1.0]
+            run_list_most_early = [run for run in run_list if run["stage2_allocation"] == 0.25]
+            create_double_scatter([run_list_no_early, run_list_most_early], 
+                                 "replay_ratio", rare_data_name, common_data_name,
+                                 key, ["All at end", "25% at end"], ylims=(2.9, 3.8))
 
 
     

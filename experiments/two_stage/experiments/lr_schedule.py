@@ -13,30 +13,28 @@ if __name__ == "__main__":
                 rare_data_epochs=rare_data_epochs,
                 num_train_steps=1024,
                 lr_schedule=lr_schedule,
-                lr=3e-3,
+                lr=lr,
                 lr_cooldown_duration=lr_cooldown_duration,
                 wandb_project_name="suhas-two-stage",
-                wandb_additional_tags=[f"finding-lr-schedule", f"{rare_data_name}-c4-finding-lr-schedule"],
+                wandb_additional_tags=[f"finding-lr-schedule-v2", f"{rare_data_name}-c4-finding-lr-schedule-v2"],
                 model_name="150m4k",
                 nametag="-fl",
             )
         )
         for lr_schedule, lr_cooldown_duration in [
-            # ("linear", 0.0),
-            # ("linear", 0.05),
-            # ("linear", 0.1),
-            # ("linear", 0.2),
-            # ("linear", 0.5),
+            ("linear", 0.0),
+            ("linear", 0.05),
+            ("linear", 0.1),
+            ("linear", 0.2),
+            ("linear", 0.5),
             ("linear", 0.99),
-            # ("linear", 1.0),
         ]
-        for rare_fraction in [4.0/1024.0]
+        for lr in [1e-3, 3e-3]
+        for rare_fraction in [1.0/1024.0]
         for rare_stage2_allocation in [1.0]
-        for all_at_end in [False]
+        for all_at_end in [True]
         for rare_data_name, rare_data_epochs in [
-            ("flan", 8),
-            ("finemath", 16),
-            ("starcoder", 16),
+            ("finemath", 32)
         ]
     ]
 
