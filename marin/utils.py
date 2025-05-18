@@ -4,6 +4,7 @@ import os
 import re
 from contextlib import contextmanager
 from datetime import datetime
+from dataclasses import fields, is_dataclass
 
 import braceexpand
 import fsspec
@@ -341,3 +342,32 @@ def is_in_ci() -> bool:
 def get_directory_friendly_name(name: str) -> str:
     """Convert a huggingface repo name to a directory friendly name."""
     return name.replace("/", "--").replace(".", "-").replace("#", "-")
+
+
+
+# 
+def asdict_excluding(obj, exclude: set[str]) -> dict:
+    """
+    Convert a dataclass to a dictionary, excluding specified fields.
+    Useful when you have not easily serailizable fields, such as `RuntimeEnv` in ResourceConfig. 
+    
+    Args:
+        obj: The dataclass object to convert.
+        exclude: A set of field names to exclude from the dictionary.
+    
+    Returns:
+        A dictionary representation of the dataclass, excluding the specified fields.
+    """
+    if not is_dataclass(obj):
+        raise ValueError("Only dataclasses are supported")
+
+    result = {}
+    for f in fields(obj):
+        if f.name not in exclude:
+            value = getattr(obj, f.name)
+            if is_dataclass(value):
+                result[f.name] = asdict_excluding(value, exclude=set())  # nested objects
+            else:
+                result[f.name] = value
+    return result
+
