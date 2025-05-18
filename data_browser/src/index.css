@@ -53,15 +53,6 @@ tr {
   vertical-align: top;
 }
 
-/* Alternate colors */
-.item-table tr:nth-child(even) {
-  background-color: #eeeeee;
-}
-
-.item-table tr:nth-child(odd) {
-  background-color: #ffffff;
-}
-
 .items-table {
   border-collapse: collapse;
 }
@@ -134,5 +125,5 @@ tr {
 }
 
 .highlight, .path-link:hover {
-  background-color: lightblue;
+  background-color: #e6f3ff;
 }

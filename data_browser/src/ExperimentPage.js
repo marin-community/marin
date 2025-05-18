@@ -71,7 +71,7 @@ function ExperimentPage() {
   return renderExperiment({experiment, path, auxiliaryData});
 }
 
-function getAllPretchUrls(experiment) {
+function getAllPrefetchUrls(experiment) {
   // Return a list of paths that we need to fetch async to render different aspects of the experiments
   const paths = [];
   experiment.steps.forEach((step) => {
@@ -135,163 +135,145 @@ function renderExperimentSteps({experiment, auxiliaryData}) {
     const info = <a href={viewInfoUrl(step)} target="_blank" title="View raw JSON specification of this step">{infoIcon}</a>;
     row.push(<td className="experiment-step-table-cell" key="info">{info}</td>);
 
-    const stepName = <a href={viewOutputPathUrl(step)} target="_blank" title="View raw output path produced by this step">[{step.name}]</a>;
+    const stepName = <a href={viewOutputPathUrl(step)} target="_blank" title={`View raw output path produced by this step:\n${step.output_path}`}>[{step.name}]</a>;
     row.push(<td className="experiment-step-table-cell" key="step-name">{stepName}</td>);
 
     row.push(<td className="experiment-step-table-cell" key="equals">:=</td>);
 
-    const {name, description} = renderStepDescription({step, steps: experiment.steps, auxiliaryData});
-    row.push(<td className="experiment-step-table-cell" key="name" title={step.fn_name}>{name}</td>);
-    row.push(<td className="experiment-step-table-cell" key="description">{description}</td>);
+    try {
+      const {name, description} = renderStepDescription({step, steps: experiment.steps, auxiliaryData});
+      row.push(<td className="experiment-step-table-cell" key="name" title={step.fn_name}>{name}</td>);
+      row.push(<td className="experiment-step-table-cell" key="description">{description}</td>);
+    } catch (error) {
+      console.error(error);
+      row.push(<td className="experiment-step-table-cell" key="name" title={step.fn_name}>{step.fn_name}</td>);
+      row.push(<td className="experiment-step-table-cell" key="description"><span className="error">{error.message}</span></td>);
+    }
 
-    rows.push(<tr key={index} id={step.name}>{row}</tr>);
+    rows.push(<tr key={index} id={step.output_path}>{row}</tr>);
   });
   return (<table className="experiment-steps-table"><tbody>{rows}</tbody></table>);
 }
 
-function renderStepDescription({step, steps, auxiliaryData}) {
-  // Downloading datasets
-  if (step.fn_name === "operations.download.huggingface.download.download" ||
-      step.fn_name === "operations.download.huggingface.download_hf.download_hf" ||
-      step.fn_name === "operations.download.huggingface.download_gated_manual.download_and_upload_to_store") {
-    const hfDatasetId = step.config.hf_dataset_id;
-    const revision = step.config.revision;
-    const hfUrl = `https://huggingface.co/datasets/${hfDatasetId}/tree/${revision}`;
-    return {name: "download", description: <a href={hfUrl} target="_blank">{huggingfaceIcon}{hfDatasetId}</a>};
-  }
-  if (step.fn_name === "operations.download.nemotron_cc.download_nemotron_cc.download_nemotron_cc") {
-    const url = "https://data.commoncrawl.org/contrib/Nemotron/Nemotron-CC/index.html";
-    const description = "Nemotron-CC from Common Crawl";
-    return {name: "download", description: <a href={url} target="_blank">{description}</a>};
-  }
-
-  if (step.fn_name === "operations.download.filesystem.transfer.transfer_files") {
-    const description = renderPath({path: step.config.input_path, steps});
-    return {name: "copy", description};
-  }
-
-  // Tokenize
-  if (step.fn_name === "marin.processing.tokenize.tokenize.tokenize") {
-    return renderTokenizeStepDescription({step, steps});
-  }
-
-  // Run inference (e.g., for quality filtering)
-  if (step.fn_name === "marin.processing.classification.inference.run_inference") {
-    const description = <table>
-      <tbody>
-        <tr><td>Model:</td><td>{step.config.model_type}</td></tr>
-        <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
-        <tr><td>Output attribute:</td><td>{step.config.attribute_name}</td></tr>
-      </tbody>
-    </table>;
-    return {name: "run_inference", description};
-  }
-
-  if (step.fn_name === "marin.generation.inference.run_inference") {
-    const description = <table>
-      <tbody>
-        <tr><td>Model:</td><td>{getBasename(step.config.model_name)}</td></tr>
-        <tr><td>Prompt:</td><td>{step.config.template.substring(0, 80)}... <span title={step.config.template}>{infoIcon}</span></td></tr>
-        <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
-      </tbody>
-    </table>;
-    return {name: "run_inference", description};
-  }
-
-  if (step.fn_name === "marin.datashop.pipeline.run_medu_dataset_sampling_pipeline") {
-    const description = <table>
-      <tbody>
-        <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
-        <tr><td>Processor:</td><td>{step.config.processor_type}</td></tr>
-      </tbody>
-    </table>;
-    return {name: "sample", description};
-  }
-
-  if (step.fn_name === "marin.classifiers.hf.launch_ray_training.launch_training_with_ray") {
-    const resources = step.config.resource_config;
-    const hardwareSummary = `${resources.num_tpu} * ${resources.tpu_type}`;
-    const trainingConfig = step.config.training_config;
-    const modelName = trainingConfig.model_name;
-    const modelLink = <a href={`https://huggingface.co/${modelName}`} target="_blank">{huggingfaceIcon}{modelName}</a>;
-    const description = <table>
-      <tbody>
-        <tr><td>Base model:</td><td>{modelLink}</td></tr>
-        <tr><td>Input data:</td><td>{renderPath({path: trainingConfig.train_dataset, steps})}</td></tr>
-        <tr><td>Hardware:</td><td>{hardwareSummary}</td></tr>
-      </tbody>
-    </table>;
-    return {name: "train", description};
-  }
-
-  // Consolidate (e.g., filter)
-  if (step.fn_name === "marin.processing.classification.consolidate.consolidate") {
-    const filters = step.config.filters.map((filter) => {
-      return <div key={filter.name}>{renderPath({path: filter.attribute_path, steps})}.{filter.name}.{filter.label} (keep {filter.keep_fraction})</div>;
-    });
-    const description = <table>
-      <tbody>
-        <tr><td>Input data:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
-        <tr><td>Filters:</td><td>{filters}</td></tr>
-      </tbody>
-    </table>;
-    return {name: "consolidate", description};
-  }
-
-  // Train
-  if (step.fn_name === "marin.training.training.run_levanter_train_lm") {
-    return renderTrainStepDescription({step, steps});
-  }
-
-  // Evaluate
-  if (step.fn_name === "marin.evaluation.run.evaluate") {
-    return renderEvaluateStepDescription({step, steps, auxiliaryData});
-  }
-
-  return {name: step.fn_name, description: step.description};
+function renderDownloadStep({step}) {
+  const hfDatasetId = step.config.hf_dataset_id;
+  const revision = step.config.revision;
+  const hfUrl = `https://huggingface.co/datasets/${hfDatasetId}/tree/${revision}`;
+  return {name: "download", description: <a href={hfUrl} target="_blank">{huggingfaceIcon}{hfDatasetId}</a>};
 }
 
-function renderPath({path, steps}) {
-  // If path contains a pattern (e.g., gs://marin-us-central2/.../val*.jsonl.gz), strip those out
-  // This is what we link to since the data browser can't handle patterns
-  let linkedPath = path;
-  while (linkedPath.includes("*") || linkedPath.includes("{")) {
-    // Go up to the parent
-    const basename = linkedPath.split("/").pop();
-    linkedPath = linkedPath.substring(0, linkedPath.length - basename.length - 1);
-  }
-
-  // What to show
-  const {step, replacedPath} = replacePath({path, steps});
-
-  function onMouseEnter(step) {
-    console.log("onMouseEnter", step);
-    document.getElementById(step.name).classList.add("highlight");
-  }
-
-  function onMouseLeave(step) {
-    console.log("onMouseLeave", step);
-    document.getElementById(step.name).classList.remove("highlight");
-  }
-
-  const link = <a href={viewSingleUrl(linkedPath)} target="_blank"
-      className={step && "path-link"}
-      onMouseEnter={step && (() => onMouseEnter(step))}
-      onMouseLeave={step && (() => onMouseLeave(step))}>
-    {replacedPath}
-  </a>;
-
-  return link;
+function renderDownloadNemotronCCStep({step}) {
+  const url = "https://data.commoncrawl.org/contrib/Nemotron/Nemotron-CC/index.html";
+  const description = "Nemotron-CC from Common Crawl";
+  return {name: "download", description: <a href={url} target="_blank">{description}</a>};
 }
 
-function replacePath({path, steps}) {
-  // If the path is under an output path of some step, then link to the name of that step
-  for (const step of steps) {
-    if (path.startsWith(step.output_path)) {
-      return {step, replacedPath: path.replace(step.output_path, `[${step.name}]`)};
-    }
-  }
-  return {step: null, replacedPath: path};
+function renderTransferStep({step, steps}) {
+  const description = renderPath({path: step.config.input_path, steps});
+  return {name: "copy", description};
+}
+
+function renderRaw2JsonStep({step, steps}) {
+  const description = <table>
+    <tbody>
+      <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
+    </tbody>
+  </table>;
+  return {name: "raw2json", description};
+}
+
+function renderFastTextTransformStep({step, steps}) {
+  const description = <table>
+    <tbody>
+      <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
+    </tbody>
+  </table>;
+  return {name: "fasttext2json", description};
+}
+
+function renderConvertEvalToDolmaStep({step, steps}) {
+  const description = <table>
+    <tbody>
+        <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
+    </tbody>
+  </table>;
+  return {name: "eval2dolma", description};
+}
+
+function renderRunClassificationInferenceStep({step, steps}) {
+  const description = <table>
+    <tbody>
+      <tr><td>Model:</td><td>{step.config.model_type}</td></tr>
+      <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
+      <tr><td>Output attribute:</td><td>{step.config.attribute_name}</td></tr>
+    </tbody>
+  </table>;
+  return {name: "run_inference", description};
+}
+
+function renderRunGenerationInferenceStep({step, steps}) {
+  const description = <table>
+    <tbody>
+      <tr><td>Model:</td><td>{getBasename(step.config.model_name)}</td></tr>
+      <tr><td>Prompt:</td><td>{step.config.template.substring(0, 80)}... <span title={step.config.template}>{infoIcon}</span></td></tr>
+      <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
+    </tbody>
+  </table>;
+  return {name: "run_inference", description};
+}
+
+function renderMeduSampleStep({step, steps}) {
+  const description = <table>
+    <tbody>
+      <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
+      <tr><td>Processor:</td><td>{step.config.processor_type}</td></tr>
+    </tbody>
+  </table>;
+  return {name: "sample", description};
+}
+
+function renderTrainClassifierStep({step, steps}) {
+  const rows = step.config.datasets.map((dataset, index) => {
+    return <tr key={index}>
+      <td>{renderPath({path: dataset.input_doc_path, steps})}</td>
+      <td>{dataset.label}</td>
+    </tr>;
+  });
+  const description = <table>
+    <tbody>
+      {rows}
+    </tbody>
+  </table>;
+  return {name: "train_classifier", description};
+}
+
+function renderHfLaunchTrainingStep({step, steps}) {
+  const resources = step.config.resource_config;
+  const hardwareSummary = `${resources.num_tpu} * ${resources.tpu_type}`;
+  const trainingConfig = step.config.training_config;
+  const modelName = trainingConfig.model_name;
+  const modelLink = <a href={`https://huggingface.co/${modelName}`} target="_blank">{huggingfaceIcon}{modelName}</a>;
+  const description = <table>
+    <tbody>
+      <tr><td>Base model:</td><td>{modelLink}</td></tr>
+      <tr><td>Input data:</td><td>{renderPath({path: trainingConfig.train_dataset, steps})}</td></tr>
+      <tr><td>Hardware:</td><td>{hardwareSummary}</td></tr>
+    </tbody>
+  </table>;
+  return {name: "train_lm", description};
+}
+
+function renderConsolidateStep({step, steps}) {
+  const filters = step.config.filters.map((filter) => {
+    return <div key={filter.name}>{renderPath({path: filter.attribute_path, steps})}.{filter.label} (keep {filter.keep_fraction})</div>;
+  });
+  const description = <table>
+    <tbody>
+      <tr><td>Input data:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
+      <tr><td>Filters:</td><td>{filters}</td></tr>
+    </tbody>
+  </table>;
+  return {name: "consolidate", description};
 }
 
 function renderTokenizeStepDescription({step, steps}) {
@@ -310,7 +292,7 @@ function renderTokenizeStepDescription({step, steps}) {
   return {name: "tokenize", description};
 }
 
-function renderTrainStepDescription({step, steps}) {
+function renderTrainStep({step, steps}) {
   const dataConfig = step.config.train_config.data;
   const datasetSummary = renderDatasetSummary({dataConfig, steps});
 
@@ -419,16 +401,28 @@ function getWandbUrl({step}) {
   return wandbUrl;
 }
 
-function renderEvaluateStepDescription({step, steps, auxiliaryData}) {
+function renderEvaluateStep({step, steps, auxiliaryData}) {
   const results = auxiliaryData[apiResultsUrl(step)];
-  const resultsSummary = step.config.evals.map(({task_alias}) => {
-    const score = results ? round(results.data.groups[task_alias]["acc,none"], 3) : loadingIcon;
-    return <div key={task_alias}>{task_alias}: {score}</div>;
-  });
+  function getScore(key) {
+    const score = results.data.results?.[key]?.["acc,none"];
+    return score ? round(score, 3) : "n/a";
+  }
+  const rows = step.config.evals.map(({name, task_alias}, index) => {
+    const key = task_alias || name;  // task_alias = hellaswag_0shot, name = hellaswag
+    return <tr key={index}>
+      <td>{key}</td>
+      <td>{results?.data ? getScore(key) : loadingIcon}</td>
+    </tr>;
+  })
+  const resultsSummary = <table>
+    <tbody>
+      {rows}
+    </tbody>
+  </table>;
   const description = <table>
     <tbody>
       <tr><td>Model:</td><td>{renderPath({path: step.config.model_path, steps})}</td></tr>
-      <tr><td>Results:</td><td>{resultsSummary}</td></tr>
+      <tr><td><a href={viewResultsUrl(step)} target="_blank">Results</a>:</td><td>{resultsSummary}</td></tr>
     </tbody>
   </table>;
   return {name: "evaluate", description};
@@ -461,6 +455,83 @@ function renderExperimentStatus({step, auxiliaryData}) {
   </span>;
 }
 
+const stepRenderers = {
+  // Download
+  "operations.download.huggingface.download.download": renderDownloadStep,
+  "operations.download.huggingface.download_hf.download_hf": renderDownloadStep,
+  "operations.download.huggingface.download_gated_manual.download_and_upload_to_store": renderDownloadStep,
+  "operations.download.nemotron_cc.download_nemotron_cc.download_nemotron_cc": renderDownloadNemotronCCStep,
+  "operations.download.filesystem.transfer.transfer_files": renderTransferStep,
+  "operations.raw2json.huggingface.qa.raw2json.raw2json": renderRaw2JsonStep,
+  "operations.transform.fasttext.transform.main": renderFastTextTransformStep,
+  "operations.transform.evaluation.eval_to_dolma.convert_eval_to_dolma": renderConvertEvalToDolmaStep,
+
+  // Inference for data filtering
+  "marin.processing.classification.inference.run_inference": renderRunClassificationInferenceStep,
+  "marin.generation.inference.run_inference": renderRunGenerationInferenceStep,
+  "marin.datashop.pipeline.run_medu_dataset_sampling_pipeline": renderMeduSampleStep,
+  "marin.processing.classification.fasttext.train_fasttext.train": renderTrainClassifierStep,
+  "marin.processing.classification.bert.train_bert.train": renderTrainClassifierStep,
+  "marin.classifiers.hf.launch_ray_training.launch_training_with_ray": renderHfLaunchTrainingStep,
+
+  "marin.processing.classification.consolidate.consolidate": renderConsolidateStep,
+
+  // Tokenize, train, eval
+  "marin.processing.tokenize.tokenize.tokenize": renderTokenizeStepDescription,
+  "marin.training.training.run_levanter_train_lm": renderTrainStep,
+  "marin.evaluation.run.evaluate": renderEvaluateStep,
+};
+
+function renderStepDescription({step, steps, auxiliaryData}) {
+  const renderer = stepRenderers[step.fn_name];
+  if (renderer) {
+    return renderer({step, steps, auxiliaryData});
+  }
+  return {name: step.fn_name, description: step.description};
+}
+
+function renderPath({path, steps}) {
+  // If path contains a pattern (e.g., gs://marin-us-central2/.../val*.jsonl.gz), strip those out
+  // This is what we link to since the data browser can't handle patterns
+  let linkedPath = path;
+  while (linkedPath.includes("*") || linkedPath.includes("{")) {
+    // Go up to the parent
+    const basename = linkedPath.split("/").pop();
+    linkedPath = linkedPath.substring(0, linkedPath.length - basename.length - 1);
+  }
+
+  // What path to show
+  const {step, replacedPath} = replacePath({path, steps});
+
+  function onMouseEnter(step) {
+    document.getElementById(step.output_path).classList.add("highlight");
+  }
+
+  function onMouseLeave(step) {
+    document.getElementById(step.output_path).classList.remove("highlight");
+  }
+
+  const link = <a href={viewSingleUrl(linkedPath)} target="_blank"
+      className={step && "path-link"}
+      title={`View raw path:\n${linkedPath}`}
+      onMouseEnter={step && (() => onMouseEnter(step))}
+      onMouseLeave={step && (() => onMouseLeave(step))}>
+    {replacedPath}
+  </a>;
+
+  return link;
+}
+
+function replacePath({path, steps}) {
+  // If the path is under an output path of some step, then link to the name of that step
+  for (const step of steps) {
+    if (path.startsWith(step.output_path)) {
+      return {step, replacedPath: path.replace(step.output_path, `[${step.name}]`)};
+    }
+  }
+  return {step: null, replacedPath: path};
+}
+
 function pathJoin(path, file) {
   return path + (path.endsWith("/") ? "" : "/") + file;
 }
@@ -478,6 +549,11 @@ function apiResultsUrl(step) {
 function viewStatusUrl(step) {
   const statusPath = pathJoin(step.output_path, ".executor_status");
   return viewSingleUrl(statusPath);
+}
+
+function viewResultsUrl(step) {
+  const resultsPath = pathJoin(step.output_path, "results.json");
+  return viewSingleUrl(resultsPath);
 }
 
 function viewInfoUrl(step) {
