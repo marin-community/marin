@@ -73,3 +73,14 @@ def skip_if_module_missing(module: str):
             return True
 
     return pytest.mark.skipif(not try_import_module(module), reason=f"{module} not installed")
+
+
+def skip_in_ci(fn_or_msg):
+    if isinstance(fn_or_msg, str):
+
+        def decorator(fn):
+            return pytest.mark.skipif("CI" in os.environ, reason=fn_or_msg)(fn)
+
+        return decorator
+
+    return pytest.mark.skipif("CI" in os.environ, reason="skipped in CI")(fn_or_msg)
