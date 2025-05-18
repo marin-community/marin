@@ -35,17 +35,45 @@ export function renderText(str) {
 }
 
 export function renderDate(date) {
-  return <span className="date">{new Date(date).toLocaleString()}</span>;
+  const options = {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  };
+  return new Date(date).toLocaleString('sv-SE', options);
+}
+
+export function round(value, precision) {
+  return Math.round(value * Math.pow(10, precision)) / Math.pow(10, precision);
 }
 
 export function renderDuration(seconds) {
-  const hours = Math.floor(seconds / 60 / 60);
-  seconds -= hours * 60 * 60;
-  const minutes = Math.floor(seconds / 60);
-  seconds -= minutes * 60;
-  return (hours > 0 ? hours + "h" : "") +
-         (minutes > 0 ? minutes + "m" : "") +
-         Math.round(seconds) + "s";
+  const secondsPerDay = 24 * 60 * 60;
+  if (seconds > secondsPerDay) {
+    return round(seconds / secondsPerDay, 1) + "d";
+  }
+  const secondsPerHour = 60 * 60;
+  if (seconds > secondsPerHour) {
+    return round(seconds / secondsPerHour, 1) + "h";
+  }
+  const secondsPerMinute = 60;
+  if (seconds > secondsPerMinute) {
+    return round(seconds / secondsPerMinute, 1) + "m";
+  }
+  return seconds + "s";
+}
+
+export function joinSpans(spans, separator) {
+  return spans.map((span, i) => <span key={i}>{span}{i < spans.length - 1 ? separator : ""}</span>);
+}
+
+export function renderSciNotation(value) {
+  // Render using scientific notation
+  return value.toExponential(1);
 }
 
 export function isUrl(str) {
