@@ -131,11 +131,11 @@ The run will be named based on the name you provided.
 For a complete example of training a DCLM 1B/1x model, see the implementation in:
 
 - Code: [experiments/howto/exp1077_reproduce_dclm_1b1x.py](https://github.com/marin-community/marin/blob/main/experiments/howto/exp1077_reproduce_dclm_1b1x.py)
-- WandB: [Dashboard](https://wandb.ai/stanford-mercury/marin/runs/dclm_1b_1x_how_to-58c8f0)
+- WandB: [Dashboard](https://wandb.ai/marin-community/marin/runs/dclm_1b_1x_how_to-58c8f0)
 
 This trains on the DCLM baseline mix with the same config as described in the original DCLM paper for 1X the compute optimal number of tokens!
 
 For a larger scale example of training a DCLM 7B/1x model, see the implementation in:
 
 - Code: [experiments/howto/exp1078_reproduce_dclm_7b1x.py](https://github.com/marin-community/marin/blob/main/experiments/howto/exp1078_reproduce_dclm_7b1x.py)
-- WandB: [Dashboard](https://wandb.ai/stanford-mercury/marin/runs/dclm_7b_1x_how_to-fefaab)
+- WandB: [Dashboard](https://wandb.ai/marin-community/marin/runs/dclm_7b_1x_how_to-fefaab)

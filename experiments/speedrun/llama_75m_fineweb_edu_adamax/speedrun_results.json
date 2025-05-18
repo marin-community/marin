@@ -102,7 +102,7 @@
           "weight_decay": 0.0,
           "z_loss_weight": null
         },
-        "wandb_run_link": "https://wandb.ai/stanford-mercury/marin/runs/75M_llama_adamax-380097"
+        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/75M_llama_adamax-380097"
       },
       "run_stats": {
         "eval/paloma/c4_en/bpb": 1.4074413776397705,
