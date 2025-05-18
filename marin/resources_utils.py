@@ -1,8 +1,8 @@
 
+# https://github.com/stanford-crfm/levanter/blob/162ef5f321cfc2e14b1b9c1652e2cffd42b395e2/src/levanter/utils/flop_utils.py#L40
 
-
-# SPDX-License-Identifier: Apache-2.0
-# Adapted from MosaicML Composer: https://github.com/mosaicml/composer/blob/dev/composer/callbacks/speed_monitor.py
+import logging
+logger = logging.getLogger("ray")
 
 # Base FLOPS for each device type (using mixed precision values where available)
 device_flops_map = {
@@ -17,7 +17,6 @@ device_flops_map = {
     # TPU base FLOPS per chip,
     "v4": 275e12,  # bf16, https://cloud.google.com/tpu/docs/v4
     "v5litepod": 197e12,  # bf16, https://cloud.google.com/tpu/docs/v5e
-    
     "v5": 459e12,  # bf16, https://cloud.google.com/tpu/docs/v5
     "v6e": 918e12,  # bf16, https://cloud.google.com/tpu/docs/v6e
 }
@@ -37,12 +36,10 @@ def get_tpu_type_and_chips(tpu_name: str) -> tuple[str, int]:
     """
     try:
         # split by first - since count is always at the end
-        tpu_type, count = tpu_name.lower().split("-", maxsplit=1)
-        count = int(count)
-        
-        # Handle aliases
-        tpu_type = device_flops_map.get(tpu_type, tpu_type)
-        
+        tpu_type, suffix = tpu_name.lower().split("-", maxsplit=1)    
+
+        logger.info(f"TPU type: {tpu_type}, suffix: {suffix}")
+    
         # Validate TPU type
         if tpu_type not in device_flops_map:
             raise ValueError(f"Unknown TPU type: {tpu_type}. Available types: {sorted(k for k in device_flops_map.keys() if k.startswith('v'))}")
@@ -50,9 +47,9 @@ def get_tpu_type_and_chips(tpu_name: str) -> tuple[str, int]:
         # Map size to actual chip count
         # For v4: size/2 gives chip count up to 256 chips
         if tpu_type == "v4":
-            num_chips = count // 2
+            num_chips = int(suffix) // 2
         else:
-            num_chips = count
+            num_chips = int(suffix)
                 
         return tpu_type, num_chips
         
