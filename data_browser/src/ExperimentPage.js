@@ -152,7 +152,7 @@ function renderExperimentSteps({experiment, auxiliaryData}) {
 function renderStepDescription({step, steps, auxiliaryData}) {
   // Downloading datasets
   if (step.fn_name === "operations.download.huggingface.download.download" ||
-      step.fn_name === "operations.download.huggingface.download_hf.download_hf" || 
+      step.fn_name === "operations.download.huggingface.download_hf.download_hf" ||
       step.fn_name === "operations.download.huggingface.download_gated_manual.download_and_upload_to_store") {
     const hfDatasetId = step.config.hf_dataset_id;
     const revision = step.config.revision;
@@ -283,7 +283,7 @@ function renderPath({path, steps}) {
 
   return link;
 }
-    
+
 function replacePath({path, steps}) {
   // If the path is under an output path of some step, then link to the name of that step
   for (const step of steps) {
@@ -479,12 +479,12 @@ function viewStatusUrl(step) {
   const statusPath = pathJoin(step.output_path, ".executor_status");
   return viewSingleUrl(statusPath);
 }
-          
+
 function viewInfoUrl(step) {
   const infoPath = pathJoin(step.output_path, ".executor_info");
   return viewSingleUrl(infoPath);
 }
-          
+
 function viewOutputPathUrl(step) {
   return viewSingleUrl(step.output_path);
 }
