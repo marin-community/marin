@@ -122,14 +122,6 @@ tr {
   border-top: 1px solid lightgray;
 }
 
-.experiment-steps-table tr:nth-child(even) {
-  background-color: #eeeeee;
-}
-
-.experiment-steps-table tr:nth-child(odd) {
-  background-color: #ffffff;
-}
-
 .experiment-step-table-cell {
   padding-right: 20px;
   padding-top: 10px;
