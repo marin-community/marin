@@ -73,7 +73,7 @@ class ExperimentConfig:
     classifier_training_datasets: list[DatasetConfig]
     input_data_source_to_path: dict[str, str] = field(
         default_factory=lambda: {
-            "fineweb_2024_18": output_path_of(transform_resiliparse_preserve_formatting, "md", "CC-MAIN-2024-18"),
+            "fineweb_2024_18": output_path_of(transform_resiliparse_preserve_formatting, "md/CC-MAIN-2024-18"),
         }
     )
     keep_fractions: list[float] = field(default_factory=lambda: [0.01, 0.05, 0.1, 0.2])
