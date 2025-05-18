@@ -1,7 +1,5 @@
 from optimizer_sweep.template import template
 
-
-
 if __name__ == "__main__":
     sweep_grids = {
         "learning_rate": [5e-4, 1e-3, 2e-3, 4e-3, 8e-3],
@@ -15,7 +13,7 @@ if __name__ == "__main__":
         "preconditioner_update_probability": [0.05, 0.1],
         "update_prob_flat_start": [500, 1000, 2000],
         "warmup": [1000, 2000, 4000],
-        'train_batch_size': [128, 256, 512, 1024]
+        "train_batch_size": [128, 256, 512, 1024],
     }
 
     baseline_config = {
@@ -32,12 +30,9 @@ if __name__ == "__main__":
         "update_prob_flat_start": 500,
         "warmup": 2000,
         "min_lr_ratio": 0,
-        'train_batch_size': 128
+        "train_batch_size": 128,
     }
     model_size = "130m"
-    target_chinchilla = 1 
-    my_suffix = None 
-    template(model_size, target_chinchilla, 'kron', baseline_config, sweep_grids, random_suffix=my_suffix)     
-
-                    
-        
+    target_chinchilla = 1
+    my_suffix = None
+    template(model_size, target_chinchilla, "kron", baseline_config, sweep_grids, random_suffix=my_suffix)

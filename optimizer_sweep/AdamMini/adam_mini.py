@@ -14,6 +14,7 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import MiniConfig
@@ -21,12 +22,10 @@ from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.main.train_lm import TrainLmConfig
 
 from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
-from optimizer_sweep.AdamMini.adam_mini_config import AdamMiniTrainConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -42,7 +41,8 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm, PodConfig
+from marin.training.training import PodConfig, TrainLmOnPodConfig, run_levanter_train_lm
+from optimizer_sweep.AdamMini.adam_mini_config import AdamMiniTrainConfig
 
 logger = logging.getLogger("ray")
 
@@ -193,7 +193,7 @@ def adam_mini_train(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                entity='stanford-mercury',
+                entity="stanford-mercury",
                 project="optimizer-scaling",
                 tags=[name, *tags],
             ),
@@ -214,45 +214,17 @@ def adam_mini_train(
         optimizer=MiniConfig(
             learning_rate=train_config.learning_rate,
             weight_decay=(
-                train_config.weight_decay
-                if train_config.weight_decay is not None
-                else MiniConfig().weight_decay
+                train_config.weight_decay if train_config.weight_decay is not None else MiniConfig().weight_decay
             ),
-            beta1=(
-                train_config.beta1
-                if train_config.beta1 is not None
-                else MiniConfig().beta1
-            ),
-            beta2=(
-                train_config.beta2
-                if train_config.beta2 is not None
-                else MiniConfig().beta2
-            ),
-            epsilon=(
-                train_config.epsilon
-                if train_config.epsilon is not None
-                else MiniConfig().epsilon
-            ),
+            beta1=(train_config.beta1 if train_config.beta1 is not None else MiniConfig().beta1),
+            beta2=(train_config.beta2 if train_config.beta2 is not None else MiniConfig().beta2),
+            epsilon=(train_config.epsilon if train_config.epsilon is not None else MiniConfig().epsilon),
             max_grad_norm=(
-                train_config.max_grad_norm
-                if train_config.max_grad_norm is not None
-                else MiniConfig().max_grad_norm
+                train_config.max_grad_norm if train_config.max_grad_norm is not None else MiniConfig().max_grad_norm
             ),
-            warmup=(
-                train_config.warmup
-                if train_config.warmup is not None
-                else MiniConfig().warmup
-            ),
-            decay=(
-                train_config.decay
-                if train_config.decay is not None
-                else MiniConfig().decay
-            ),
-            lr_schedule=(
-                train_config.lr_schedule
-                if train_config.lr_schedule is not None
-                else MiniConfig().lr_schedule
-            ),
+            warmup=(train_config.warmup if train_config.warmup is not None else MiniConfig().warmup),
+            decay=(train_config.decay if train_config.decay is not None else MiniConfig().decay),
+            lr_schedule=(train_config.lr_schedule if train_config.lr_schedule is not None else MiniConfig().lr_schedule),
             stable_lr_schedule=(
                 train_config.stable_lr_schedule
                 if train_config.stable_lr_schedule is not None
@@ -260,9 +232,7 @@ def adam_mini_train(
             ),
             cycle_length=train_config.cycle_length,  # can be int, list[int], or None
             min_lr_ratio=(
-                train_config.min_lr_ratio
-                if train_config.min_lr_ratio is not None
-                else MiniConfig().min_lr_ratio
+                train_config.min_lr_ratio if train_config.min_lr_ratio is not None else MiniConfig().min_lr_ratio
             ),
         ),
         hf_save_steps=steps_per_export_hf,
@@ -342,4 +312,4 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
         case _:
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 
-    return tokenizer 
+    return tokenizer

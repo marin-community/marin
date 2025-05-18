@@ -14,6 +14,7 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import CautiousConfig
@@ -21,7 +22,6 @@ from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.main.train_lm import TrainLmConfig
 
 from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
 from experiments.llama import compute_num_parameters
@@ -42,7 +42,7 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm, PodConfig
+from marin.training.training import PodConfig, TrainLmOnPodConfig, run_levanter_train_lm
 
 logger = logging.getLogger("ray")
 
@@ -195,7 +195,7 @@ def cautious_train(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                entity='stanford-mercury',
+                entity="stanford-mercury",
                 project="optimizer-scaling",
                 tags=[name, *tags],
             ),
@@ -216,44 +216,18 @@ def cautious_train(
         optimizer=CautiousConfig(
             learning_rate=train_config.learning_rate,
             weight_decay=(
-                train_config.weight_decay
-                if train_config.weight_decay is not None
-                else CautiousConfig().weight_decay
+                train_config.weight_decay if train_config.weight_decay is not None else CautiousConfig().weight_decay
             ),
-            beta1=(
-                train_config.beta1
-                if train_config.beta1 is not None
-                else CautiousConfig().beta1
-            ),
-            beta2=(
-                train_config.beta2
-                if train_config.beta2 is not None
-                else CautiousConfig().beta2
-            ),
-            epsilon=(
-                train_config.epsilon
-                if train_config.epsilon is not None
-                else CautiousConfig().epsilon
-            ),
+            beta1=(train_config.beta1 if train_config.beta1 is not None else CautiousConfig().beta1),
+            beta2=(train_config.beta2 if train_config.beta2 is not None else CautiousConfig().beta2),
+            epsilon=(train_config.epsilon if train_config.epsilon is not None else CautiousConfig().epsilon),
             max_grad_norm=(
-                train_config.max_grad_norm
-                if train_config.max_grad_norm is not None
-                else CautiousConfig().max_grad_norm
+                train_config.max_grad_norm if train_config.max_grad_norm is not None else CautiousConfig().max_grad_norm
             ),
-            warmup=(
-                train_config.warmup
-                if train_config.warmup is not None
-                else CautiousConfig().warmup
-            ),
-            decay=(
-                train_config.decay
-                if train_config.decay is not None
-                else CautiousConfig().decay
-            ),
+            warmup=(train_config.warmup if train_config.warmup is not None else CautiousConfig().warmup),
+            decay=(train_config.decay if train_config.decay is not None else CautiousConfig().decay),
             lr_schedule=(
-                train_config.lr_schedule
-                if train_config.lr_schedule is not None
-                else CautiousConfig().lr_schedule
+                train_config.lr_schedule if train_config.lr_schedule is not None else CautiousConfig().lr_schedule
             ),
             stable_lr_schedule=(
                 train_config.stable_lr_schedule
@@ -262,9 +236,7 @@ def cautious_train(
             ),
             cycle_length=train_config.cycle_length,  # can be int, list[int], or None
             min_lr_ratio=(
-                train_config.min_lr_ratio
-                if train_config.min_lr_ratio is not None
-                else CautiousConfig().min_lr_ratio
+                train_config.min_lr_ratio if train_config.min_lr_ratio is not None else CautiousConfig().min_lr_ratio
             ),
         ),
         hf_save_steps=steps_per_export_hf,

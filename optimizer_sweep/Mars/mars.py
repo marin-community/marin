@@ -26,7 +26,6 @@ from levanter.trainer import TrainerConfig
 from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
-from optimizer_sweep.Mars.mars_config import MarsTrainConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -43,6 +42,7 @@ from marin.processing.tokenize import (
     tokenize,
 )
 from marin.training.training import PodConfig, TrainLmOnPodConfig, run_levanter_train_lm
+from optimizer_sweep.Mars.mars_config import MarsTrainConfig
 
 logger = logging.getLogger("ray")
 
@@ -195,7 +195,7 @@ def mars_train(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                entity='stanford-mercury',
+                entity="stanford-mercury",
                 project="optimizer-scaling",
                 tags=[name, *tags],
             ),
@@ -216,50 +216,18 @@ def mars_train(
         optimizer=MarsConfig(
             learning_rate=train_config.learning_rate,
             weight_decay=(
-                train_config.weight_decay
-                if train_config.weight_decay is not None
-                else MarsConfig().weight_decay
+                train_config.weight_decay if train_config.weight_decay is not None else MarsConfig().weight_decay
             ),
-            beta1=(
-                train_config.beta1
-                if train_config.beta1 is not None
-                else MarsConfig().beta1
-            ),
-            beta2=(
-                train_config.beta2
-                if train_config.beta2 is not None
-                else MarsConfig().beta2
-            ),
-            epsilon=(
-                train_config.epsilon
-                if train_config.epsilon is not None
-                else MarsConfig().epsilon
-            ),
+            beta1=(train_config.beta1 if train_config.beta1 is not None else MarsConfig().beta1),
+            beta2=(train_config.beta2 if train_config.beta2 is not None else MarsConfig().beta2),
+            epsilon=(train_config.epsilon if train_config.epsilon is not None else MarsConfig().epsilon),
             max_grad_norm=(
-                train_config.max_grad_norm
-                if train_config.max_grad_norm is not None
-                else MarsConfig().max_grad_norm
+                train_config.max_grad_norm if train_config.max_grad_norm is not None else MarsConfig().max_grad_norm
             ),
-            gamma=(
-                train_config.gamma
-                if train_config.gamma is not None
-                else MarsConfig().gamma
-            ),
-            warmup=(
-                train_config.warmup
-                if train_config.warmup is not None
-                else MarsConfig().warmup
-            ),
-            decay=(
-                train_config.decay
-                if train_config.decay is not None
-                else MarsConfig().decay
-            ),
-            lr_schedule=(
-                train_config.lr_schedule
-                if train_config.lr_schedule is not None
-                else MarsConfig().lr_schedule
-            ),
+            gamma=(train_config.gamma if train_config.gamma is not None else MarsConfig().gamma),
+            warmup=(train_config.warmup if train_config.warmup is not None else MarsConfig().warmup),
+            decay=(train_config.decay if train_config.decay is not None else MarsConfig().decay),
+            lr_schedule=(train_config.lr_schedule if train_config.lr_schedule is not None else MarsConfig().lr_schedule),
             stable_lr_schedule=(
                 train_config.stable_lr_schedule
                 if train_config.stable_lr_schedule is not None
@@ -267,9 +235,7 @@ def mars_train(
             ),
             cycle_length=train_config.cycle_length,  # can be int, list[int], or None
             min_lr_ratio=(
-                train_config.min_lr_ratio
-                if train_config.min_lr_ratio is not None
-                else MarsConfig().min_lr_ratio
+                train_config.min_lr_ratio if train_config.min_lr_ratio is not None else MarsConfig().min_lr_ratio
             ),
         ),
         hf_save_steps=steps_per_export_hf,

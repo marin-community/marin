@@ -26,7 +26,6 @@ from levanter.trainer import TrainerConfig
 from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
-from optimizer_sweep.Scion.scion_config import ScionTrainConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -47,6 +46,7 @@ from marin.training.training import (
     TrainLmOnPodConfig,
     run_levanter_train_lm,
 )
+from optimizer_sweep.Scion.scion_config import ScionTrainConfig
 
 logger = logging.getLogger("ray")
 
@@ -199,7 +199,7 @@ def scion_train(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                entity='stanford-mercury',
+                entity="stanford-mercury",
                 project="optimizer-scaling",
                 tags=[name, *tags],
             ),
@@ -220,49 +220,25 @@ def scion_train(
         optimizer=ScionConfig(
             learning_rate=train_config.learning_rate,
             weight_decay=(
-                train_config.weight_decay
-                if train_config.weight_decay is not None
-                else ScionConfig().weight_decay
+                train_config.weight_decay if train_config.weight_decay is not None else ScionConfig().weight_decay
             ),
-            momentum=(
-                train_config.momentum
-                if train_config.momentum is not None
-                else ScionConfig().momentum
-            ),
-            beta1=(
-                train_config.beta1
-                if train_config.beta1 is not None
-                else ScionConfig().beta1
-            ),
+            momentum=(train_config.momentum if train_config.momentum is not None else ScionConfig().momentum),
+            beta1=(train_config.beta1 if train_config.beta1 is not None else ScionConfig().beta1),
             max_grad_norm=(
-                train_config.max_grad_norm
-                if train_config.max_grad_norm is not None
-                else ScionConfig().max_grad_norm
+                train_config.max_grad_norm if train_config.max_grad_norm is not None else ScionConfig().max_grad_norm
             ),
             scion_epsilon=(
-                train_config.scion_epsilon
-                if train_config.scion_epsilon is not None
-                else ScionConfig().scion_epsilon
+                train_config.scion_epsilon if train_config.scion_epsilon is not None else ScionConfig().scion_epsilon
             ),
             scion_to_signum_lr=(
                 train_config.scion_to_signum_lr
                 if train_config.scion_to_signum_lr is not None
                 else ScionConfig().scion_to_signum_lr
             ),
-            warmup=(
-                train_config.warmup
-                if train_config.warmup is not None
-                else ScionConfig().warmup
-            ),
-            decay=(
-                train_config.decay
-                if train_config.decay is not None
-                else ScionConfig().decay
-            ),
+            warmup=(train_config.warmup if train_config.warmup is not None else ScionConfig().warmup),
+            decay=(train_config.decay if train_config.decay is not None else ScionConfig().decay),
             lr_schedule=(
-                train_config.lr_schedule
-                if train_config.lr_schedule is not None
-                else ScionConfig().lr_schedule
+                train_config.lr_schedule if train_config.lr_schedule is not None else ScionConfig().lr_schedule
             ),
             stable_lr_schedule=(
                 train_config.stable_lr_schedule
@@ -271,9 +247,7 @@ def scion_train(
             ),
             cycle_length=train_config.cycle_length,  # can be int, list[int], or None
             min_lr_ratio=(
-                train_config.min_lr_ratio
-                if train_config.min_lr_ratio is not None
-                else ScionConfig().min_lr_ratio
+                train_config.min_lr_ratio if train_config.min_lr_ratio is not None else ScionConfig().min_lr_ratio
             ),
         ),
         hf_save_steps=steps_per_export_hf,

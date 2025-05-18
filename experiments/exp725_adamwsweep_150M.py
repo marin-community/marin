@@ -3,10 +3,8 @@
 import dataclasses
 import itertools
 import logging
-import math
 from collections.abc import Sequence
 
-import numpy as np
 import ray
 from levanter.models.llama import LlamaConfig
 
@@ -14,7 +12,7 @@ from experiments.defaults import default_train
 from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama_150m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, executor_main, versioned, unwrap_versioned_value
+from marin.execution.executor import ExecutorStep, executor_main, unwrap_versioned_value, versioned
 
 logger = logging.getLogger("ray")
 
@@ -23,35 +21,36 @@ BATCH_SIZE = 4096
 target_steps = [10000]
 TPU_TYPES_150m = ["v4-128"]
 
+
 def all_combos(**kwargs):
     keys = kwargs.keys()
     values = kwargs.values()
     for combo in itertools.product(*values):
         yield dict(zip(keys, combo, strict=False))
 
+
 sweep_grids = {
-    'learning_rate': [1e-3, 2e-3, 4e-3, 8e-3, 1.6e-2],
-    'weight_decay': [0, 0.1, 0.2],
-    'min_lr_ratio': [0, 0.05, 0.1],
-    'warmup': [1000, 2000, 4000, 8000],
-    'beta1': [0.9, 0.95, 0.98, 0.99],
-    'beta2': [0.9, 0.95, 0.98, 0.99],
-    'epsilon': [1e-15, 1e-10, 1e-5],
-    'max_grad_norm': [0, 1.0, 2.0],
+    "learning_rate": [1e-3, 2e-3, 4e-3, 8e-3, 1.6e-2],
+    "weight_decay": [0, 0.1, 0.2],
+    "min_lr_ratio": [0, 0.05, 0.1],
+    "warmup": [1000, 2000, 4000, 8000],
+    "beta1": [0.9, 0.95, 0.98, 0.99],
+    "beta2": [0.9, 0.95, 0.98, 0.99],
+    "epsilon": [1e-15, 1e-10, 1e-5],
+    "max_grad_norm": [0, 1.0, 2.0],
 }
 
-    
+
 baseline_config = {
-    'learning_rate': 8e-3, 
-    'weight_decay': 0.1,
-    'min_lr_ratio': 0,
-    'warmup': 2000,
-    'beta1': 0.9,
-    'beta2': 0.95,
-    'epsilon': 1e-15,
-    'max_grad_norm': 1.0
+    "learning_rate": 8e-3,
+    "weight_decay": 0.1,
+    "min_lr_ratio": 0,
+    "warmup": 2000,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "epsilon": 1e-15,
+    "max_grad_norm": 1.0,
 }
-
 
 
 train_configs_150m = []
@@ -61,17 +60,17 @@ import copy
 for step in target_steps:
     train_configs_150m.append(
         SimpleTrainConfig(
-                        tpu_type=versioned("v4-128"),
-                        train_batch_size=BATCH_SIZE,
-                        steps_per_eval=1000,
-                        num_train_steps=step,
-                        **baseline_config
-                    )
+            tpu_type=versioned("v4-128"),
+            train_batch_size=BATCH_SIZE,
+            steps_per_eval=1000,
+            num_train_steps=step,
+            **baseline_config,
+        )
     )
     for key in sweep_grids:
         for value in sweep_grids[key]:
-            new_config = copy.copy(baseline_config)     
-            if(baseline_config[key] != value):   
+            new_config = copy.copy(baseline_config)
+            if baseline_config[key] != value:
                 new_config[key] = value
                 train_configs_150m.append(
                     SimpleTrainConfig(
@@ -79,15 +78,14 @@ for step in target_steps:
                         train_batch_size=BATCH_SIZE,
                         steps_per_eval=1000,
                         num_train_steps=step,
-                        **new_config
+                        **new_config,
                     )
                 )
 
 
-
-
 def format_train_config(prefix: str, config: SimpleTrainConfig):
-    return (f"{prefix}-"
+    return (
+        f"{prefix}-"
         f"lr{unwrap_versioned_value(config.learning_rate)}-"
         f"wd{unwrap_versioned_value(config.weight_decay)}-"
         f"minlr{unwrap_versioned_value(config.min_lr_ratio)}-"
@@ -98,6 +96,7 @@ def format_train_config(prefix: str, config: SimpleTrainConfig):
         f"steps{unwrap_versioned_value(config.num_train_steps)}"
         f"eps{unwrap_versioned_value(config.epsilon)}-"
     )
+
 
 def _failure_ok_train(*args, **kwargs):
     """

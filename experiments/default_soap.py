@@ -16,7 +16,7 @@ from levanter.data.text import LMMixtureDatasetConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
-from levanter.optim import AdamConfig, SoapConfig
+from levanter.optim import SoapConfig
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -156,7 +156,7 @@ def default_train(
             data=pretraining_data,
             trainer=TrainerConfig(
                 tracker=WandbConfig(
-                    entity='stanford-mercury',
+                    entity="stanford-mercury",
                     project="optimizer-scaling",
                     tags=[name, *tags],
                 ),
@@ -176,44 +176,18 @@ def default_train(
             optimizer=SoapConfig(
                 learning_rate=train_config.learning_rate,
                 weight_decay=(
-                    train_config.weight_decay
-                    if train_config.weight_decay is not None
-                    else SoapConfig().weight_decay
+                    train_config.weight_decay if train_config.weight_decay is not None else SoapConfig().weight_decay
                 ),
-                beta1=(
-                    train_config.beta1
-                    if train_config.beta1 is not None
-                    else SoapConfig().beta1
-                ),
-                beta2=(
-                    train_config.beta2
-                    if train_config.beta2 is not None
-                    else SoapConfig().beta2
-                ),
-                eps=(
-                    train_config.epsilon
-                    if train_config.epsilon is not None
-                    else SoapConfig().eps
-                ),
+                beta1=(train_config.beta1 if train_config.beta1 is not None else SoapConfig().beta1),
+                beta2=(train_config.beta2 if train_config.beta2 is not None else SoapConfig().beta2),
+                eps=(train_config.epsilon if train_config.epsilon is not None else SoapConfig().eps),
                 max_grad_norm=(
-                    train_config.max_grad_norm
-                    if train_config.max_grad_norm is not None
-                    else SoapConfig().max_grad_norm
+                    train_config.max_grad_norm if train_config.max_grad_norm is not None else SoapConfig().max_grad_norm
                 ),
-                warmup=(
-                    train_config.warmup
-                    if train_config.warmup is not None
-                    else SoapConfig().warmup
-                ),
-                decay=(
-                    train_config.decay
-                    if train_config.decay is not None
-                    else SoapConfig().decay
-                ),
+                warmup=(train_config.warmup if train_config.warmup is not None else SoapConfig().warmup),
+                decay=(train_config.decay if train_config.decay is not None else SoapConfig().decay),
                 lr_schedule=(
-                    train_config.lr_schedule
-                    if train_config.lr_schedule is not None
-                    else SoapConfig().lr_schedule
+                    train_config.lr_schedule if train_config.lr_schedule is not None else SoapConfig().lr_schedule
                 ),
                 stable_lr_schedule=(
                     train_config.stable_lr_schedule
@@ -222,9 +196,7 @@ def default_train(
                 ),
                 cycle_length=train_config.cycle_length,  # can be int, list[int], or None
                 min_lr_ratio=(
-                    train_config.min_lr_ratio
-                    if train_config.min_lr_ratio is not None
-                    else SoapConfig().min_lr_ratio
+                    train_config.min_lr_ratio if train_config.min_lr_ratio is not None else SoapConfig().min_lr_ratio
                 ),
             ),
             hf_save_steps=steps_per_export_hf,

@@ -81,7 +81,10 @@ def _remove_problematic_deps(dependencies: list[str]):
         else:
             logger.debug(f"Skipping dependency: {dep}")
     return out
+
+
 import glob
+
 
 async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: dict, no_wait: bool):
     """Submit a job to Ray and optionally track logs."""
@@ -97,7 +100,7 @@ async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: di
         "working_dir": current_dir,
         "env_vars": env_vars,
         "config": {"setup_timeout_seconds": 1800},
-        "excludes": file_list
+        "excludes": file_list,
     }
 
     if len(dependencies) == 0:

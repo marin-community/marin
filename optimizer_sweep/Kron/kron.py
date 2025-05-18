@@ -14,6 +14,7 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import KronConfig
@@ -21,12 +22,10 @@ from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.main.train_lm import TrainLmConfig
 
 from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
-from optimizer_sweep.Kron.kron_config import KronTrainConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -42,8 +41,8 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
-from marin.training.training import PodConfig
+from marin.training.training import PodConfig, TrainLmOnPodConfig, run_levanter_train_lm
+from optimizer_sweep.Kron.kron_config import KronTrainConfig
 
 logger = logging.getLogger("ray")
 
@@ -196,7 +195,7 @@ def kron_train(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                entity='stanford-mercury',
+                entity="stanford-mercury",
                 project="optimizer-scaling",
                 tags=[name, *tags],
             ),
@@ -217,15 +216,9 @@ def kron_train(
         optimizer=KronConfig(
             learning_rate=train_config.learning_rate,
             weight_decay=(
-                train_config.weight_decay
-                if train_config.weight_decay is not None
-                else KronConfig().weight_decay
+                train_config.weight_decay if train_config.weight_decay is not None else KronConfig().weight_decay
             ),
-            beta1=(
-                train_config.beta1
-                if train_config.beta1 is not None
-                else KronConfig().beta1
-            ),
+            beta1=(train_config.beta1 if train_config.beta1 is not None else KronConfig().beta1),
             preconditioner_lr=(
                 train_config.preconditioner_lr
                 if train_config.preconditioner_lr is not None
@@ -237,9 +230,7 @@ def kron_train(
                 else KronConfig().preconditioner_init_scale
             ),
             max_grad_norm=(
-                train_config.max_grad_norm
-                if train_config.max_grad_norm is not None
-                else KronConfig().max_grad_norm
+                train_config.max_grad_norm if train_config.max_grad_norm is not None else KronConfig().max_grad_norm
             ),
             normalize_grads=(
                 train_config.normalize_grads
@@ -251,11 +242,7 @@ def kron_train(
                 if train_config.partition_grads_into_blocks is not None
                 else KronConfig().partition_grads_into_blocks
             ),
-            block_size=(
-                train_config.block_size
-                if train_config.block_size is not None
-                else KronConfig().block_size
-            ),
+            block_size=(train_config.block_size if train_config.block_size is not None else KronConfig().block_size),
             preconditioner_update_probability=(
                 train_config.preconditioner_update_probability
                 if train_config.preconditioner_update_probability is not None
@@ -266,21 +253,9 @@ def kron_train(
                 if train_config.update_prob_flat_start is not None
                 else KronConfig().update_prob_flat_start
             ),
-            warmup=(
-                train_config.warmup
-                if train_config.warmup is not None
-                else KronConfig().warmup
-            ),
-            decay=(
-                train_config.decay
-                if train_config.decay is not None
-                else KronConfig().decay
-            ),
-            lr_schedule=(
-                train_config.lr_schedule
-                if train_config.lr_schedule is not None
-                else KronConfig().lr_schedule
-            ),
+            warmup=(train_config.warmup if train_config.warmup is not None else KronConfig().warmup),
+            decay=(train_config.decay if train_config.decay is not None else KronConfig().decay),
+            lr_schedule=(train_config.lr_schedule if train_config.lr_schedule is not None else KronConfig().lr_schedule),
             stable_lr_schedule=(
                 train_config.stable_lr_schedule
                 if train_config.stable_lr_schedule is not None
@@ -288,9 +263,7 @@ def kron_train(
             ),
             cycle_length=train_config.cycle_length,  # can be int, list[int], or None
             min_lr_ratio=(
-                train_config.min_lr_ratio
-                if train_config.min_lr_ratio is not None
-                else KronConfig().min_lr_ratio
+                train_config.min_lr_ratio if train_config.min_lr_ratio is not None else KronConfig().min_lr_ratio
             ),
         ),
         hf_save_steps=steps_per_export_hf,

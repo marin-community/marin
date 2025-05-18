@@ -3,17 +3,15 @@
 import dataclasses
 import itertools
 import logging
-import math
 from collections.abc import Sequence
-from experiments.exp600_tootsie import dclm_mixture_config_llama3
 
-import numpy as np
 import ray
 from levanter.models.llama import LlamaConfig
 
 from experiments.defaults import default_train
+from experiments.exp600_tootsie import dclm_mixture_config_llama3
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, executor_main, versioned, unwrap_versioned_value
+from marin.execution.executor import ExecutorStep, executor_main, unwrap_versioned_value, versioned
 
 logger = logging.getLogger("ray")
 
@@ -23,14 +21,13 @@ target_steps = [5000]
 TPU_TYPES_130m = ["v4-128"]
 
 
-
-
 def all_combos(**kwargs):
     keys = kwargs.keys()
     values = kwargs.values()
     for combo in itertools.product(*values):
         yield dict(zip(keys, combo, strict=False))
-        
+
+
 def format_train_config(prefix: str, config: SimpleTrainConfig):
     name = (
         f"lr{unwrap_versioned_value(config.learning_rate)}-"
@@ -44,24 +41,24 @@ def format_train_config(prefix: str, config: SimpleTrainConfig):
         f"eps{unwrap_versioned_value(config.epsilon)}-"
     )
     hashed_name = str(hash(name))[:6]
-    return (prefix + '_' + hashed_name + name)[:64]
+    return (prefix + "_" + hashed_name + name)[:64]
 
 
 sweep_grids = {
-    'learning_rate': [8e-3, 1.6e-2, 3.2e-2, 6.4e-2],
-    'warmup': [500, 1000, 2000, 4000],
+    "learning_rate": [8e-3, 1.6e-2, 3.2e-2, 6.4e-2],
+    "warmup": [500, 1000, 2000, 4000],
 }
 
 
 baseline_config = {
-    'learning_rate': 1.6e-2, 
-    'weight_decay': 0.1,
-    'min_lr_ratio': 0,
-    'warmup': 2000,
-    'beta1': 0.9,
-    'beta2': 0.95,
-    'epsilon': 1e-15,
-    'max_grad_norm': 1.0
+    "learning_rate": 1.6e-2,
+    "weight_decay": 0.1,
+    "min_lr_ratio": 0,
+    "warmup": 2000,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "epsilon": 1e-15,
+    "max_grad_norm": 1.0,
 }
 
 
@@ -78,7 +75,6 @@ sweep_grids = versioned_sweep_grids
 baseline_config = versioned_baseline_config
 
 
-
 train_configs_130m = []
 
 import copy
@@ -86,17 +82,17 @@ import copy
 for step in target_steps:
     train_configs_130m.append(
         SimpleTrainConfig(
-                        tpu_type=versioned("v4-128"),
-                        train_batch_size=BATCH_SIZE,
-                        steps_per_eval=1000,
-                        num_train_steps=step,
-                        **baseline_config
-                    )
+            tpu_type=versioned("v4-128"),
+            train_batch_size=BATCH_SIZE,
+            steps_per_eval=1000,
+            num_train_steps=step,
+            **baseline_config,
+        )
     )
     for key in sweep_grids:
         for value in sweep_grids[key]:
-            new_config = copy.copy(baseline_config)     
-            if(baseline_config[key] != value):   
+            new_config = copy.copy(baseline_config)
+            if baseline_config[key] != value:
                 new_config[key] = value
                 train_configs_130m.append(
                     SimpleTrainConfig(
@@ -104,11 +100,10 @@ for step in target_steps:
                         train_batch_size=BATCH_SIZE,
                         steps_per_eval=1000,
                         num_train_steps=step,
-                        **new_config
+                        **new_config,
                     )
                 )
 
-from levanter.models.llama import LlamaConfig
 llama_130m = LlamaConfig(
     seq_len=1024,
     hidden_dim=512,
@@ -117,7 +112,6 @@ llama_130m = LlamaConfig(
     num_kv_heads=8,
     num_layers=32,
 )
-
 
 
 def _failure_ok_train(*args, **kwargs):

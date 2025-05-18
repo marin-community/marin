@@ -31,7 +31,7 @@ class AdamMiniTrainConfig:
     nesterov: bool | None = None
     id: str | None = None
     ckpt_path: str | None = None
-    
+
     steps_per_eval: int | None = None
     """how often to run validation losses"""
     steps_per_export: int = 10000
@@ -51,4 +51,4 @@ class AdamMiniTrainConfig:
     """Allow us to read data from other regions. On GCS, intra-continent bandwidth is roughly 1 month of storage,
     so sometimes it makes more sense to just read across regions."""
     allow_out_of_region_writes: bool = False
-    """This makes less sense than reading across regions, but for completeness.""" 
+    """This makes less sense than reading across regions, but for completeness."""

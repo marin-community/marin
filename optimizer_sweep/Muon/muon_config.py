@@ -35,10 +35,10 @@ class MuonTrainConfig:
     z_loss_weight: float | None = None
     ema_beta: float | None = None
     """exponential moving average beta"""
-    
+
     id: str | None = None
     ckpt_path: str | None = None
-    
+
     steps_per_eval: int | None = None
     """how often to run validation losses"""
     steps_per_export: int = 10000
