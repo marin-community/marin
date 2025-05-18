@@ -21,7 +21,7 @@ def get_cache_key(optimizer, model_size, data_size, target_chinchilla):
 model_and_data_size = [('130m', '2B', 1), ('130m', '5B', 2), ('130m', '10B', 4), 
                         ('130m', '21B', 8), ('300m', '6B', 1), ('520m', '10B', 1)]
 
-optimizers = ["mini", "lion", "sophia", "adamw", "nadamw", "mars", "cautious",  "soape","muon", "scion", "soape", "soapb", "kron"]
+optimizers = ["mini", "lion", "adamw", "nadamw", "mars", "cautious",  "soape","muon", "scion", "soape", "kron"]
 
 
 actual_list = {}
@@ -32,23 +32,11 @@ for optimizer in optimizers:
         if cache_key in cache:
             actual_list[(optimizer, model_size, target_chinchilla)] = cache[cache_key]
         else:
-            print(f"Cache key {cache_key} not found")
-
-for model_size, data_size, target_chinchilla in model_and_data_size:
-    if ('soapb', model_size, target_chinchilla) in actual_list:
-        actual_list.pop(('soapb', model_size, target_chinchilla))
-    if ('soape', model_size, target_chinchilla) in actual_list:
-        actual_list.pop(('soape', model_size, target_chinchilla))
-    
-
-optimizers.remove('soapb')
-optimizers.remove('soape')
+            print(f"optimizer: {optimizer}, model_size: {model_size}, data_size: {data_size}, target_chinchilla: {target_chinchilla} not found")
 
 
 import os
 import re
-root_dir = "optimizer_sweep"
-from optimizer_sweep.external_monitor import parse_command_file, calculate_data_tag
 optimizers = ['adamw', 'nadamw', 'lion', 'mini', 'cautious', 'mars', 'scion', 'muon', 'soape', 'kron']
 
 non_stable_keys_by_optimizer = {}
@@ -82,6 +70,7 @@ for optimizer in optimizers:
         else:
             non_stable_keys.append(key)
     non_stable_keys_by_optimizer[optimizer] = non_stable_keys
+    print(f"Optimizer: {optimizer} has the following non-stable keys: {non_stable_keys}")
 
 
 import json 

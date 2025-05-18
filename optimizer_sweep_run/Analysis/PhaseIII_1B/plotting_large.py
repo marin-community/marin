@@ -5,12 +5,16 @@ import numpy as np
 import seaborn as sns
 from scipy.optimize import curve_fit
 
-cache_file = "wandb_cache.json"
-
-with open(cache_file, "r") as f:
+with open("optimizer_sweep_run/Analysis/PhaseI/wandb_cache.json", "r") as f:
+    cache_phase_I = json.load(f)
+with open("optimizer_sweep_run/Analysis/PhaseI/wandb_cache.json", "r") as f:
+    cache_phase_II = json.load(f)
+with open("optimizer_sweep_run/Analysis/PhaseIII_1B/wandb_cache.json", "r") as f:
     cache = json.load(f)
 
-print(cache)
+cache.update(cache_phase_I)
+cache.update(cache_phase_II)
+
 
 def get_cache_key(optimizer, model_size, data_size, target_chinchilla):
     """Generate a unique cache key for the query"""
@@ -18,9 +22,10 @@ def get_cache_key(optimizer, model_size, data_size, target_chinchilla):
     return hashlib.md5(key_str.encode()).hexdigest()
 
 
-model_and_data_size = [('1.2b', '24B', 1), ('1.2b', '48B', 2), ('1.2b', '96B', 4), ('1.2b', '193B', 8)]
+model_and_data_size = [('130m', '2B', 1), ('130m', '5B', 2), ('130m', '10B', 4), 
+                        ('130m', '21B', 8), ('300m', '6B', 1), ('520m', '10B', 1)] + [('300m', '12B', 2), ('300m', '24B', 4), ('300m', '48B', 8), ('520m', '21B', 2), ('520m', '42B', 4), ('520m', '85B', 8)] + [('1.2b', '24B', 1), ('1.2b', '48B', 2), ('1.2b', '96B', 4), ('1.2b', '193B', 8)]
 
-optimizers = ["mini", "lion", "adamw", "nadamw", "mars", "cautious", "soap","muon", "scion", "kron", "soape", "soapb"]
+optimizers = ["mini", "lion", "adamw", "nadamw", "mars", "cautious", "muon", "scion", "kron", "soape"]
 
 # Define distinctive colors for each optimizer
 color_map = {
