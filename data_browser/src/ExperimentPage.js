@@ -12,9 +12,10 @@ const infoIcon = "ℹ️";
 const statusIcons = {
   "SUCCESS": "✅",
   "FAILED": "❌",
-  "WAITING": "⏳",
+  "WAITING": "🧍",
   "RUNNING": "🔄",
 };
+const loadingIcon = "⏳";
 
 function ExperimentPage() {
   // Get URL parameters
@@ -27,8 +28,7 @@ function ExperimentPage() {
   // State
   const [error, setError] = useState(null);
   const [experiment, setExperiment] = useState(null);
-  const [statuses, setStatuses] = useState({});  // output path -> status (list of events)
-  const [files, setFiles] = useState({});  // path -> contents (general file cache)
+  const [auxiliaryData, setAuxiliaryData] = useState({});  // url -> contents (general file cache)
 
   // Fetch data from backend
   useEffect(() => {
@@ -39,20 +39,19 @@ function ExperimentPage() {
         const experiment = response.data.data;
         setExperiment(experiment);
 
+        // Pretch all the urls (e.g., for status, results)
+        const urls = getAllPretchUrls(experiment);
+
         // Fetch the status (events) files for each step
-        const statusPromises = experiment.steps.map(async (step, index) => {
+        const promises = urls.map(async (url) => {
           try {
-            const response = await axios.get(apiStatusUrl(step));
-            const events = response.data.items;
-            setStatuses(statuses => Object.assign({}, statuses, {[step.output_path]: events}));
+            const response = await axios.get(url);
+            setAuxiliaryData(auxiliaryData => Object.assign({}, auxiliaryData, {[url]: response.data}));
           } catch (error) {
             console.error(error);
-            const events = [{status: "ERROR", message: error.message}];
-            setStatuses(statuses => Object.assign({}, statuses, {[step.output_path]: events}));
           }
         });
-
-        await Promise.all(statusPromises);
+        await Promise.all(promises);
       } catch (error) {
         console.error(error);
         setError(error.message);
@@ -69,7 +68,19 @@ function ExperimentPage() {
     return "Loading...";
   }
 
-  return renderExperiment({experiment, path, statuses});
+  return renderExperiment({experiment, path, auxiliaryData});
+}
+
+function getAllPretchUrls(experiment) {
+  // Return a list of paths that we need to fetch async to render different aspects of the experiments
+  const paths = [];
+  experiment.steps.forEach((step) => {
+    paths.push(apiStatusUrl(step));
+    if (step.fn_name === "marin.evaluation.run.evaluate") {
+      paths.push(apiResultsUrl(step));
+    }
+  });
+  return paths;
 }
 
 export default ExperimentPage;
@@ -79,9 +90,9 @@ export default ExperimentPage;
 /**
  * Render information about an experiment.
  */
-function renderExperiment({experiment, path, statuses}) {
+function renderExperiment({experiment, path, auxiliaryData}) {
   const header = renderExperimentHeader({experiment, path});
-  const steps = renderExperimentSteps({experiment, statuses});
+  const steps = renderExperimentSteps({experiment, auxiliaryData});
 
   return (<div>
     {header}
@@ -114,13 +125,12 @@ function renderExperimentHeader(args) {
   </div>);
 }
 
-function renderExperimentSteps({experiment, statuses}) {
+function renderExperimentSteps({experiment, auxiliaryData}) {
   const rows = [];
   experiment.steps.forEach((step, index) => {
     const row = [];
 
-    const events = statuses[step.output_path];
-    row.push(<td className="experiment-step-table-cell" key="status">{renderExperimentStatus({step, events})}</td>);
+    row.push(<td className="experiment-step-table-cell" key="status">{renderExperimentStatus({step, auxiliaryData})}</td>);
 
     const info = <a href={viewInfoUrl(step)} target="_blank" title="View raw JSON specification of this step">{infoIcon}</a>;
     row.push(<td className="experiment-step-table-cell" key="info">{info}</td>);
@@ -130,7 +140,7 @@ function renderExperimentSteps({experiment, statuses}) {
 
     row.push(<td className="experiment-step-table-cell" key="equals">:=</td>);
 
-    const {name, description} = renderStepDescription({step, steps: experiment.steps});
+    const {name, description} = renderStepDescription({step, steps: experiment.steps, auxiliaryData});
     row.push(<td className="experiment-step-table-cell" key="name">{name}</td>);
     row.push(<td className="experiment-step-table-cell" key="description">{description}</td>);
 
@@ -139,7 +149,7 @@ function renderExperimentSteps({experiment, statuses}) {
   return (<table className="experiment-steps-table"><tbody>{rows}</tbody></table>);
 }
 
-function renderStepDescription({step, steps}) {
+function renderStepDescription({step, steps, auxiliaryData}) {
   // Downloading datasets
   if (step.fn_name === "operations.download.huggingface.download.download" ||
       step.fn_name === "operations.download.huggingface.download_hf.download_hf" || 
@@ -167,7 +177,7 @@ function renderStepDescription({step, steps}) {
 
   // Evaluate
   if (step.fn_name === "marin.evaluation.run.evaluate") {
-    return renderEvaluateStepDescription({step, steps});
+    return renderEvaluateStepDescription({step, steps, auxiliaryData});
   }
 
   return {name: step.fn_name, description: step.description};
@@ -192,8 +202,6 @@ function renderPath({path, steps}) {
 function replacePath({path, steps}) {
   // If the path is under an output path of some step, then link to the name of that step
   for (const step of steps) {
-    if (!path || !step.output_path)
-      console.log(path, step);
     if (path.startsWith(step.output_path)) {
       return path.replace(step.output_path, `[${step.name}]`);
     }
@@ -208,9 +216,12 @@ function renderTokenizeStepDescription({step, steps}) {
   const links = paths.map((path, index) => {
     return <div key={index}>{renderPath({path, steps})}</div>;
   });
-  const description = <span>
-    <a href={hfUrl} target="_blank">{tokenizer}</a>, <span>{links}</span>
-  </span>;
+  const description = <table>
+    <tbody>
+      <tr><td>Tokenizer:</td><td><a href={hfUrl} target="_blank">{tokenizer}</a></td></tr>
+      <tr><td>Raw text:</td><td>{links}</td></tr>
+    </tbody>
+  </table>;
   return {name: "tokenize", description};
 }
 
@@ -258,16 +269,17 @@ function renderTrainStepDescription({step, steps}) {
   const resources = step.config.resources;
   const resourcesSummary = `${resources.slice_count || 1} * ${resources.tpu_type}`;
 
-  const wandbLink = <a href={getWandbUrl({step})} title="Go to the WandB page for this training run" target="_blank">{wandbIcon}</a>;
+  const wandbLink = <a href={getWandbUrl({step})} title="Go to the WandB page for this training run" target="_blank">[WandB {wandbIcon}]</a>;
   const description = (
     <table className="train-table">
       <tbody>
-        <tr><td>Dataset</td><td>{datasetSummary}</td></tr>
-        <tr><td>Architecture</td><td>{architectureSummary}</td></tr>
-        <tr><td>Optimizer</td><td>{optimizerSummary}</td></tr>
-        <tr><td>Initialization</td><td>{initializationSummary}</td></tr>
-        <tr><td>Training {wandbLink}</td><td>{trainerSummary}</td></tr>
-        <tr><td>Hardware</td><td>{resourcesSummary}</td></tr>
+        <tr><td>Dataset:</td><td>{datasetSummary}</td></tr>
+        <tr><td>Architecture:</td><td>{architectureSummary}</td></tr>
+        <tr><td>Optimizer:</td><td>{optimizerSummary}</td></tr>
+        <tr><td>Initialization:</td><td>{initializationSummary}</td></tr>
+        <tr><td>Training:</td><td>{trainerSummary}</td></tr>
+        <tr><td>Hardware:</td><td>{resourcesSummary}</td></tr>
+        <tr><td>{wandbLink}</td></tr>
       </tbody>
     </table>
   );
@@ -322,22 +334,27 @@ function getWandbUrl({step}) {
   return wandbUrl;
 }
 
-function renderEvaluateStepDescription({step, steps}) {
-  const evalsSummary = step.config.evals.map(({task_alias}) => {
-    const metric = 0.5;
-    return <span>{task_alias}: {metric}</span>;
+function renderEvaluateStepDescription({step, steps, auxiliaryData}) {
+  const results = auxiliaryData[apiResultsUrl(step)];
+  const resultsSummary = step.config.evals.map(({task_alias}) => {
+    const score = results ? round(results.data.groups[task_alias]["acc,none"], 3) : loadingIcon;
+    return <div key={task_alias}>{task_alias}: {score}</div>;
   });
-  const description = joinSpans([
-    renderPath({path: step.config.model_path, steps}),
-    evalsSummary,
-  ], ", ");
+  const description = <table>
+    <tbody>
+      <tr><td>Model:</td><td>{renderPath({path: step.config.model_path, steps})}</td></tr>
+      <tr><td>Results:</td><td>{resultsSummary}</td></tr>
+    </tbody>
+  </table>;
   return {name: "evaluate", description};
 }
 
-function renderExperimentStatus({step, events}) {
-  if (!events) {
-    return "??";
+function renderExperimentStatus({step, auxiliaryData}) {
+  const data = auxiliaryData[apiStatusUrl(step)];
+  if (!data) {
+    return loadingIcon;
   }
+  const events = data.items;
 
   const lastEvent = events[events.length - 1];
 
@@ -359,23 +376,27 @@ function renderExperimentStatus({step, events}) {
   </span>;
 }
 
+function pathJoin(path, file) {
+  return path + (path.endsWith("/") ? "" : "/") + file;
+}
+
 function apiStatusUrl(step) {
-  const statusPath = step.output_path + (step.output_path.endsWith("/") ? "" : "/") + ".executor_status";
+  const statusPath = pathJoin(step.output_path, ".executor_status");
   return apiViewUrl({path: statusPath, count: 100});
 }
 
 function apiResultsUrl(step) {
-  const resultsPath = step.output_path + (step.output_path.endsWith("/") ? "" : "/") + ".results.json";
+  const resultsPath = pathJoin(step.output_path, "results.json");
   return apiViewUrl({path: resultsPath, count: 100});
 }
 
 function viewStatusUrl(step) {
-  const statusPath = step.output_path + (step.output_path.endsWith("/") ? "" : "/") + ".executor_status";
+  const statusPath = pathJoin(step.output_path, ".executor_status");
   return viewSingleUrl(statusPath);
 }
           
 function viewInfoUrl(step) {
-  const infoPath = step.output_path + (step.output_path.endsWith("/") ? "" : "/") + ".executor_info";
+  const infoPath = pathJoin(step.output_path, ".executor_info");
   return viewSingleUrl(infoPath);
 }
           
