@@ -79,7 +79,10 @@ class ResourceConfig(Protocol):
 class CpuOnlyConfig(ResourceConfig):
     num_cpus: int = dataclasses.field(default_factory=lambda: logical_cpu_core_count())
     """Configuration for local training without specialized hardware."""
+    
     runtime_env: RuntimeEnv = dataclasses.field(default_factory=lambda: RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
+
+
     device_flops_override: float | None = None
     """Optional override for device FLOPS. If set, this value will be used instead of looking up in device_flops_map."""
 
@@ -101,7 +104,7 @@ class CpuOnlyConfig(ResourceConfig):
         )
 
     def total_device_count(self) -> int:
-        return self.num_cpus
+        return 1
 
 
 @dataclass(frozen=True)
@@ -203,32 +206,16 @@ class TpuPodConfig(ResourceConfig):
             logger.info(f"Using user-provided device FLOPS override: {self.device_flops_override} for TPU type {self.tpu_type}")
             return self.device_flops_override
 
-        from marin.resources_utils import device_flops_map
+        from marin.resources_utils import get_tpu_type_and_chips, device_flops_map
         
-        # Map TPU type to the corresponding key in device_flops_map
-        tpu_type = self.tpu_type.upper()
-        if "V4" in tpu_type:
-            key = "TPU-V4"
-        else:
-            raise ValueError(
-                f"Unknown TPU type: {self.tpu_type}. "
-                "Available types: " + ", ".join(sorted(k for k in device_flops_map.keys() if k.startswith("TPU"))) + "\n" +
-                "You can provide a custom FLOPS value using device_flops_override."
-            )
-        
-        flops = device_flops_map.get(key)
-        if flops is None:
-            raise ValueError(
-                f"No FLOPs data available for TPU type: {key}. "
-                "Available types: " + ", ".join(sorted(k for k in device_flops_map.keys() if k.startswith("TPU"))) + "\n" +
-                "You can provide a custom FLOPS value using device_flops_override."
-            )
-
-        return flops
+        # Get the base TPU type and validate it exists
+        tpu_type, _ = get_tpu_type_and_chips(self.tpu_type)
+        return device_flops_map[tpu_type]
 
     def total_device_count(self) -> int:
-        """Get the total number of TPU chips."""
-        tpu_type = self.tpu_type.upper()
-        if "V4-128" in tpu_type:
-            return self.slice_count * 64 # 64 chips in v4-128
-        return self.slice_count # this is incorrect at the moment
+        """Get the total number of TPU devices."""
+        from marin.resources_utils import get_tpu_type_and_chips
+        
+        # Get the number of devices for this TPU configuration
+        _, num_devices = get_tpu_type_and_chips(self.tpu_type)
+        return self.slice_count * num_devices

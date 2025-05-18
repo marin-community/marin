@@ -11,18 +11,32 @@ import fsspec
 
 
 @dataclass(frozen=True)
+class SpeedrunAuthor:
+    """Author information displayed in the leaderboard."""
+    name: str
+    affiliation: str
+    url: str | None = None
+
+
+@dataclass(frozen=True)
 class LeaderboardEntry:
+    # Run identification
     run_name: str
-    model_size: int
-    training_time_in_minutes: float
-    training_hardware_flops: float
-    model_flops: float
     results_filepath: str
-    wandb_link: str | None = None
+
+    # Model/hardware specs
+    model_size: int
+    training_hardware_flops: float
+
+    # Training metrics and FLOPs
+    training_time_in_minutes: float
+    model_flops: float
     eval_paloma_c4_en_bpb: float | None = None
+
+    # Metadata
+    author: SpeedrunAuthor
+    wandb_link: str | None = None
     run_timestamp: datetime.datetime | None = None
-    author: str | None = None
-    affiliation: str | None = None
     description: str | None = None
 
 
@@ -40,33 +54,48 @@ def load_results_file(path: str) -> dict:
 
 
 def create_entry_from_results(results: dict, results_filepath: str) -> LeaderboardEntry:
+    # Path information
     run_name = Path(results_filepath).parent.name
     filepath = Path(results_filepath)
     repo_root = Path(__file__).resolve().parent.parent.parent
     relative_path = filepath.relative_to(repo_root).parent
-    training_hardware_flops = results["run_info"]["training_hardware_flops"]
-    training_time_in_minutes = results["run_info"]["training_time_in_minutes"]
-    eval_paloma_c4_en_bpb = results["run_info"]["eval/paloma/c4_en/bpb"]
-    model_size = results["run_info"]["model_size"]
-    wandb_link = results["run_info"].get("wandb_run_link", None)
-    run_timestamp = results["run_info"].get("run_completion_timestamp", None)
-    model_flops = results["run_info"]["model_flops"]
-    author = results["run_info"]["author"]
-    affiliation = results["run_info"]["affiliation"]
-    description = results["run_info"]["description"]
+
+    # Get the run info which contains all the information
+    run_data = results["run_info"]
+
+    # Training metrics and FLOPs
+    training_hardware_flops = run_data["training_hardware_flops"]
+    training_time_in_minutes = run_data["training_time_in_minutes"]
+    eval_paloma_c4_en_bpb = run_data["eval/paloma/c4_en/bpb"]
+    model_flops = run_data["model_flops"]
+
+    # Model specification
+    model_size = run_data["model_size"]
+
+    # Run metadata
+    wandb_link = run_data.get("wandb_run_link")
+    run_timestamp = run_data.get("run_completion_timestamp")
+    description = run_data["description"]
+
+    # Author information
+    author_info = run_data["author"]
+    author = SpeedrunAuthor(
+        name=author_info["name"],
+        affiliation=author_info["affiliation"],
+        url=author_info.get("url")
+    )
 
     return LeaderboardEntry(
         run_name=run_name,
-        model_size=int(model_size) if model_size is not None else 0,  # ensure int, may change to str in future
-        training_time_in_minutes=float(training_time_in_minutes) if training_time_in_minutes is not None else 0.0,
-        training_hardware_flops=float(training_hardware_flops) if training_hardware_flops is not None else 0.0,
-        model_flops=model_flops,
         results_filepath=str(relative_path),
-        wandb_link=wandb_link,
+        model_size=int(model_size) if model_size is not None else 0,
+        training_hardware_flops=float(training_hardware_flops) if training_hardware_flops is not None else 0.0,
+        training_time_in_minutes=float(training_time_in_minutes) if training_time_in_minutes is not None else 0.0,
+        model_flops=model_flops,
         eval_paloma_c4_en_bpb=float(eval_paloma_c4_en_bpb) if eval_paloma_c4_en_bpb is not None else None,
-        run_timestamp=run_timestamp,
         author=author,
-        affiliation=affiliation,
+        wandb_link=wandb_link,
+        run_timestamp=run_timestamp,
         description=description,
     )
 
