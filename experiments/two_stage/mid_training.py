@@ -1,5 +1,7 @@
 """
-Searching for the best two-stage data schedule. Follows a mid-training setup where we have a single learning rate schedule and a different mixture for each stage. Hyperparameters are tuned for the baseline of all data at the end of training.
+Searching for the best two-stage data schedule.
+Mid-training setup where we have a single learning rate schedule and a different mixture for each stage.
+Hyperparameters are tuned for the baseline of all data at the end of training.
 """
 
 from experiments.two_stage.two_stage_config import TwoStageConfig, two_stage_train_step
@@ -20,12 +22,12 @@ if __name__ == "__main__":
                 lr=3e-3,
                 lr_cooldown_duration=lr_cooldown_duration,
                 wandb_project_name="suhas-two-stage",
-                wandb_additional_tags=[f"mid-training-data-schedule", f"{rare_data_name}-c4-mid-training-data-schedule"],
+                wandb_additional_tags=["mid-training-data-schedule", f"{rare_data_name}-c4-mid-training-data-schedule"],
                 model_name="150m4k",
                 nametag="",
             )
         )
-        for rare_fraction in [1.0/1024.0]
+        for rare_fraction in [1.0 / 1024.0]
         for replay_ratio in [0.0, 0.25, 0.5, 0.75, 0.875]
         for rare_stage2_allocation in [1.0, 0.5, 0.25, 0.125]
         for rare_data_name, rare_data_epochs, lr_schedule, lr_cooldown_duration in [
@@ -39,4 +41,3 @@ if __name__ == "__main__":
         steps=train_steps,
         description="Mid-training data schedule",
     )
-    

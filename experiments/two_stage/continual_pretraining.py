@@ -1,18 +1,16 @@
 """
-Example of continual pretraining under the two stage framework for Basque data. Simply load a pretrained model and do a single stage of training with choice of replay data.
+Example of continual pretraining under the two stage framework for Basque data.
+Simply load a pretrained model and do a single stage of training with choice of replay data.
 """
 
-from marin.execution.executor import executor_main
-from marin.evaluation.evaluation_config import EvalTaskConfig
-
 from experiments.two_stage.two_stage_config import TwoStageConfig, two_stage_train_step
+from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.execution.executor import executor_main
 
-BASQUE_TASKS = (
-    EvalTaskConfig("xcopa_eu", num_fewshot=0, task_alias="xcopa_eu"),
-)
+BASQUE_TASKS = (EvalTaskConfig("xcopa_eu", num_fewshot=0, task_alias="xcopa_eu"),)
 
 if __name__ == "__main__":
-    NUM_RARE_STEPS = 400.0 # 200M tokens
+    NUM_RARE_STEPS = 400.0  # 200M tokens
     train_steps = [
         two_stage_train_step(
             TwoStageConfig(
@@ -47,4 +45,3 @@ if __name__ == "__main__":
         steps=train_steps,
         description="Sanity check for lr data schedule",
     )
-    

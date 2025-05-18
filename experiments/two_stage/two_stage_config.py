@@ -1,29 +1,25 @@
 import os
-from datetime import timedelta
-from typing import Optional
 from dataclasses import dataclass, field
-import numpy as np
-import jmp
+from datetime import timedelta
 
-from levanter.main.train_lm import TrainLmConfig
+import jmp
+import numpy as np
 from levanter.checkpoint import CheckpointerConfig
+from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.main.train_lm import TrainLmConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.eval_harness import LmEvalHarnessConfig
 
 from experiments.defaults import _prepare_data_config
 from experiments.evals.task_configs import convert_to_levanter_task_config
-
-from marin.execution.executor import ExecutorStep, this_output_path
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
-from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig
-from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
-from marin.training.training import PodConfig
-
 from experiments.two_stage.data import data_dict
 from experiments.two_stage.models import model_dict
+from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.execution.executor import ExecutorStep, this_output_path
+from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig, lm_varying_mixture_data_config
+from marin.training.training import PodConfig, TrainLmOnPodConfig, run_levanter_train_lm
+
 
 @dataclass
 class TwoStageConfig:
@@ -37,16 +33,17 @@ class TwoStageConfig:
     rare_data_epochs: int = 1
 
     ### Data schedule
-    # Can specify any 2 of the following 3 since the 3rd is implied. If you specify all three, will ensure they are consistent.
-    replay_ratio: Optional[float] = None
-    rare_stage2_allocation: Optional[float] = None
-    stage2_duration: Optional[float] = None
+    # Can specify any 2 of the following 3 since the 3rd is implied.
+    # If you specify all three, will ensure they are consistent.
+    replay_ratio: float | None = None
+    rare_stage2_allocation: float | None = None
+    stage2_duration: float | None = None
     data_seed: int = 42
 
     ### Trainer config
     num_train_steps: int = 1000
-    train_batch_size: Optional[int] = 1024
-    steps_per_eval: Optional[int] = None
+    train_batch_size: int | None = 1024
+    steps_per_eval: int | None = None
     wandb_project_name: str = "suhas-two-stage"
     wandb_additional_tags: list[str] = field(default_factory=list)
     steps_to_export_list: list[int] = field(default_factory=list)
@@ -59,29 +56,31 @@ class TwoStageConfig:
     ### Optimizer config
     lr_schedule: str = "cosine"
     lr: float = 3e-3
-    lr_cooldown_duration: Optional[float] = None
+    lr_cooldown_duration: float | None = None
     weight_decay: float = 0.1
     min_lr_ratio: float = 0.0
 
     ### Model config
     model_name: str = "150m4k"
-    initialize_from_checkpoint_path: Optional[str] = None
-    initialize_from_hf: Optional[str] = None
+    initialize_from_checkpoint_path: str | None = None
+    initialize_from_hf: str | None = None
 
     ### Eval config
-    eval_harness_tasks: Optional[list[EvalTaskConfig]] = None
-    eval_harness_steps: Optional[int] = None
+    eval_harness_tasks: list[EvalTaskConfig] | None = None
+    eval_harness_steps: int | None = None
 
     def __post_init__(self):
         self.model_config = model_dict[self.model_name]
-        
+
         self.set_data_schedule_params()
 
-        assert self.initialize_from_checkpoint_path is None or self.initialize_from_hf is None, "Cannot specify both initialize_from_checkpoint_path and initialize_from_hf"
+        assert (
+            self.initialize_from_checkpoint_path is None or self.initialize_from_hf is None
+        ), "Cannot specify both initialize_from_checkpoint_path and initialize_from_hf"
 
         if self.steps_per_eval is None:
             self.steps_per_eval = self.num_train_steps // 20
-        
+
         self.steps_per_eval = min(self.steps_per_eval, self.num_train_steps // 2)
 
         if self.eval_harness_steps is None and self.eval_harness_tasks is not None:
@@ -93,29 +92,29 @@ class TwoStageConfig:
     def set_data_schedule_params(self):
         """
         ┌──────────────────────────┬──────────┐
-        │                          │ αγρ/(1-ρ)│ ← ρ (common data replay)
+        │                          │ agr/(1-r)│ ← r (common data replay)
         │         remainder        │──────────│
         │                          │ ████████ │
-        │──────────────────────────┤ ██ αγ ██ │ ← 1-ρ (rare data)
-        │ ████████ (1-α)γ ████████ | ████████ │  
+        │──────────────────────────┤ ██ ag ██ │ ← 1-r (rare data)
+        │ ████████ (1-a)g ████████ | ████████ │
         └──────────────────────────┴──────────┘
                    Stage 1            Stage 2
 
-        Key:  
+        Key:
         █ = rare data, blank = common data
 
-        α = self.rare_stage2_allocation
-        γ = self.rare_fraction * self.rare_data_epochs = self.rare_fraction_epoched
-        ρ = self.replay_ratio
-        δ = self.stage2_duration
+        a = self.rare_stage2_allocation
+        g = self.rare_fraction * self.rare_data_epochs = self.rare_fraction_epoched
+        r = self.replay_ratio
+        d = self.stage2_duration
 
-        total rare data = γ
-        rare data in stage 1 = γ * (1 - α)
-        rare data in stage 2 = γ * α
-        common data in stage 2 = γ * α * ρ / (1 - ρ)
-        total data in stage 2 = δ = γ * α * / (1 - ρ)
-            implies ρ = 1 - (γ * α * / δ)
-            implies α = δ / (γ * (1 - ρ))
+        total rare data = g
+        rare data in stage 1 = g * (1 - a)
+        rare data in stage 2 = g * a
+        common data in stage 2 = g * a * r / (1 - r)
+        total data in stage 2 = d = g * a * / (1 - r)
+            implies r = 1 - (g * a * / d)
+            implies a = d / (g * (1 - r))
         """
         self.rare_fraction_epoched = self.rare_fraction * self.rare_data_epochs
         assert self.rare_fraction_epoched <= 1.0, "Rare fraction * rare data epochs must be less than or equal to 1.0"
@@ -130,8 +129,22 @@ class TwoStageConfig:
         elif self.rare_stage2_allocation is None:
             assert self.stage2_duration is not None and self.replay_ratio is not None
             self.rare_stage2_allocation = self.stage2_duration / (self.rare_fraction_epoched * (1 - self.replay_ratio))
-        
-        assert np.isclose(self.stage2_duration * (1 - self.replay_ratio), self.rare_fraction_epoched * self.rare_stage2_allocation), f"Parameters are inconsistent: stage2_duration = {self.stage2_duration}, rare_fraction_epoched = {self.rare_fraction_epoched}, rare_stage2_allocation = {self.rare_stage2_allocation}, replay_ratio = {self.replay_ratio}. However, {self.stage2_duration} * (1 - {self.replay_ratio}) = {self.stage2_duration * (1 - self.replay_ratio)} != {self.rare_fraction_epoched} * {self.rare_stage2_allocation} = {self.rare_fraction_epoched * self.rare_stage2_allocation}"
+
+        # Check if parameters are consistent
+        if not np.isclose(
+            self.stage2_duration * (1 - self.replay_ratio), self.rare_fraction_epoched * self.rare_stage2_allocation
+        ):
+            raise ValueError(
+                f"Parameters are inconsistent: "
+                f"stage2_duration = {self.stage2_duration}, "
+                f"rare_fraction_epoched = {self.rare_fraction_epoched}, "
+                f"rare_stage2_allocation = {self.rare_stage2_allocation}, "
+                f"replay_ratio = {self.replay_ratio}. "
+                f"However, {self.stage2_duration} * (1 - {self.replay_ratio}) = "
+                f"{self.stage2_duration * (1 - self.replay_ratio)} != "
+                f"{self.rare_fraction_epoched} * {self.rare_stage2_allocation} = "
+                f"{self.rare_fraction_epoched * self.rare_stage2_allocation}"
+            )
 
         self.total_tokens = self.num_train_steps * self.train_batch_size * self.model_config.seq_len
         self.rare_batches = int(self.num_train_steps * self.rare_fraction)
@@ -139,34 +152,52 @@ class TwoStageConfig:
         self.stage1_duration = 1.0 - self.stage2_duration
 
         if self.stage1_duration != 0.0:
-            self.rare_weight_stage1 = self.rare_fraction_epoched * (1 - self.rare_stage2_allocation) / self.stage1_duration
+            self.rare_weight_stage1 = (
+                self.rare_fraction_epoched * (1 - self.rare_stage2_allocation) / self.stage1_duration
+            )
         else:
             self.rare_weight_stage1 = 0.0
         self.rare_weight_stage2 = 1 - self.replay_ratio
         self.common_weight_stage1 = 1 - self.rare_weight_stage1
         self.common_weight_stage2 = 1 - self.rare_weight_stage2
 
-        assert np.isclose(self.rare_weight_stage1 * self.stage1_duration + self.rare_weight_stage2 * self.stage2_duration, self.rare_fraction_epoched), f"Rare weight stage 1 * stage 1 duration + rare weight stage 2 * stage 2 duration = {self.rare_weight_stage1 * self.stage1_duration + self.rare_weight_stage2 * self.stage2_duration} != {self.rare_fraction_epoched}"
+        if not np.isclose(
+            self.rare_weight_stage1 * self.stage1_duration + self.rare_weight_stage2 * self.stage2_duration,
+            self.rare_fraction_epoched,
+        ):
+            raise ValueError(
+                f"Rare weight stage 1 * stage 1 duration + "
+                f"rare weight stage 2 * stage 2 duration = "
+                f"{self.rare_weight_stage1 * self.stage1_duration + self.rare_weight_stage2 * self.stage2_duration} != "
+                f"{self.rare_fraction_epoched}"
+            )
 
-        assert 0.0 <= self.rare_weight_stage1 <= 1.0, f"Rare weight stage 1 must be between 0.0 and 1.0, but is {self.rare_weight_stage1}"
-        assert 0.0 <= self.rare_weight_stage2 <= 1.0, f"Rare weight stage 2 must be between 0.0 and 1.0, but is {self.rare_weight_stage2}"
-        
+        assert (
+            0.0 <= self.rare_weight_stage1 <= 1.0
+        ), f"Rare weight stage 1 must be between 0.0 and 1.0, but is {self.rare_weight_stage1}"
+        assert (
+            0.0 <= self.rare_weight_stage2 <= 1.0
+        ), f"Rare weight stage 2 must be between 0.0 and 1.0, but is {self.rare_weight_stage2}"
+
     def build_name(self) -> str:
-        name = f"{self.model_name}-{self.format_num_tokens()}-{self.rare_data_name}x{self.format_rare_fraction()}x{self.rare_data_epochs}-{self.common_data_name}-rr{self.replay_ratio:.2f}-rs{self.rare_stage2_allocation:.2f}-{self.format_lr_schedule()}{self.nametag}"
+        rare_data_str = f"{self.rare_data_name}x{self.format_rare_fraction()}x{self.rare_data_epochs}"
+        data_str = f"{self.format_num_tokens()}-{rare_data_str}-{self.common_data_name}"
+        schedule_str = f"rr{self.replay_ratio:.2f}-rs{self.rare_stage2_allocation:.2f}"
+        name = f"{self.model_name}-{data_str}-{schedule_str}-{self.format_lr_schedule()}{self.nametag}"
         assert len(name) <= 64, f"Name is too long with length {len(name)}: {name}"
         return name
 
     def build_data_config(self) -> LMMixtureDatasetConfig:
-        components = {
-            self.rare_data_name: self.rare_data,
-            self.common_data_name: self.common_data
-        }
+        components = {self.rare_data_name: self.rare_data, self.common_data_name: self.common_data}
 
         transition_idx = int(self.stage1_duration * self.num_train_steps)
         # adjust by default block size
-        transition_idx = (transition_idx // 2) * 2 # TODO: fix this
+        transition_idx = (transition_idx // 2) * 2  # TODO: fix this
         stage1 = (0, {self.rare_data_name: self.rare_weight_stage1, self.common_data_name: self.common_weight_stage1})
-        stage2 = (transition_idx, {self.rare_data_name: self.rare_weight_stage2, self.common_data_name: self.common_weight_stage2})
+        stage2 = (
+            transition_idx,
+            {self.rare_data_name: self.rare_weight_stage2, self.common_data_name: self.common_weight_stage2},
+        )
 
         if transition_idx == 0:
             weights_list = [stage2]
@@ -210,10 +241,10 @@ class TwoStageConfig:
         elif tokens >= 1_000:
             return f"{tokens/1_000:.1f}K"
         return str(tokens)
-    
+
     def format_sci(self, val):
         return f"{val:.0e}".replace("e-0", "e-").replace("e+0", "e+")
-    
+
     def format_lr_schedule(self) -> str:
         schedule_short_name = {
             "cosine": "cos",
@@ -227,7 +258,7 @@ class TwoStageConfig:
 
         cooldown_str = f"{self.lr_cooldown_duration:.2f}" if self.lr_cooldown_duration is not None else "na"
         return f"{schedule_short_name[self.lr_schedule]}-{lr_str}-{cooldown_str}"
-    
+
     def format_rare_fraction(self) -> str:
         if self.rare_fraction >= 0.01:
             return f"{self.rare_fraction:.2f}"
@@ -246,11 +277,13 @@ class TwoStageConfig:
             steps_per_eval=self.steps_per_eval,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
-                keep=[dict(every=step_to_export, until=step_to_export+1) for step_to_export in self.steps_to_export_list],
+                keep=[
+                    dict(every=step_to_export, until=step_to_export + 1) for step_to_export in self.steps_to_export_list
+                ],
             ),
             replica_dcn_axis_size=-1,
         )
-    
+
     def build_optimizer_config(self) -> AdamConfig:
         return AdamConfig(
             learning_rate=self.lr,
@@ -259,18 +292,18 @@ class TwoStageConfig:
             decay=self.lr_cooldown_duration,
             min_lr_ratio=self.min_lr_ratio,
         )
-    
+
     def build_eval_harness_config(self) -> LmEvalHarnessConfig:
         if self.eval_harness_tasks is None:
             return None
         return LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(self.eval_harness_tasks))
-    
+
     def build_pod_config(self) -> PodConfig:
         return PodConfig(
             tpu_type=self.tpu_type,
             node_count=self.node_count,
         )
-    
+
     def build_train_lm_config(self) -> TrainLmConfig:
         return TrainLmConfig(
             data=self.build_data_config(),
@@ -284,7 +317,7 @@ class TwoStageConfig:
             eval_harness=self.build_eval_harness_config(),
             data_seed=self.data_seed,
         )
-    
+
     def build_train_lm_on_pod_config(self) -> TrainLmOnPodConfig:
         return TrainLmOnPodConfig(
             config=self.build_train_lm_config(),
@@ -300,6 +333,7 @@ class TwoStageConfig:
         if not isinstance(other, TwoStageConfig):
             return False
         return hash(self) == hash(other)
+
 
 def two_stage_train_step(two_stage_config: TwoStageConfig) -> ExecutorStep:
     train_lm_on_pod_config = two_stage_config.build_train_lm_on_pod_config()

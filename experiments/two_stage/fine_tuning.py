@@ -1,9 +1,14 @@
 """
-Searching for the best replay ratio for fine-tuning. Training proceeds in two stages, first is pre-training on only C4 data, second is fine-tuning on a mixture of C4 and the rare data. We cooldown/rewarmup the learning rate and reset the optimizer state in between checkpoints. For a fair comparison, we keep the total number of training steps fixed across replay ratio. When we increase the replay ratio, the second stage has more steps so we decrease the length of pre-training.
+Searching for the best replay ratio for fine-tuning.
+Two stage training: pre-training on only C4, followed by fine-tuning on rare + wC4.
+We cooldown/rewarmup the learning rate and reset the optimizer state in between checkpoints.
+For a fair comparison, we keep the total number of training steps fixed across replay ratio.
+When we increase the replay ratio, the second stage has more steps so we decrease the length of pre-training.
 """
 
-from marin.execution.executor import output_path_of, executor_main
 from experiments.two_stage.two_stage_config import TwoStageConfig, two_stage_train_step
+from marin.execution.executor import executor_main, output_path_of
+
 
 def pretraining_for_fixed_steps(steps: int):
     return two_stage_train_step(
@@ -19,9 +24,10 @@ def pretraining_for_fixed_steps(steps: int):
             wandb_project_name="suhas-two-stage",
             wandb_additional_tags=["pretraining-replay"],
             model_name="150m4k",
-            nametag=f"-{int(steps)}"
+            nametag=f"-{int(steps)}",
         )
     )
+
 
 def finetuning_with_replay(
     rare_data_name: str,
@@ -53,9 +59,10 @@ def finetuning_with_replay(
             wandb_additional_tags=wandb_additional_tags,
             model_name="150m4k",
             initialize_from_hf=output_path_of(pretraining_step).cd(f"hf/step-{num_pretraining_steps - 1}"),
-            nametag=nametag
+            nametag=nametag,
         )
     )
+
 
 if __name__ == "__main__":
     NUM_RARE_STEPS = 1
