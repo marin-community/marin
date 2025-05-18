@@ -47,36 +47,53 @@ def consolidate_sharded(cfg: ConsolidateShardedConfig) -> str:
     base = cfg.input_step.rstrip("/")
     only_stats = cfg.only_stats
     output_base = cfg.output_path.rstrip("/")
-    logger.info(f"Starting single-pass consolidation from {base} into {output_base}")
+    logger.info(f"Starting recursive consolidation from {base} into {output_base}")
 
-    # Find all leaf-level .SUCCESS markers under the base input
-    success_pattern = f"{base}/**/*.SUCCESS"
-    success_paths = fsspec_glob(success_pattern)
-    if not success_paths:
-        logger.warning(f"No .SUCCESS markers found under {base}")
-        return f"No shards to consolidate from {base}"
+    # We'll iteratively collapse the deepest .SUCCESS-marked directories up toward the root
+    current_input = base
+    while True:
+        # Find all leaf-level .SUCCESS markers under current input
+        success_pattern = f"{current_input}/**/*.SUCCESS"
+        success_paths = fsspec_glob(success_pattern)
+        if not success_paths:
+            break
+        success_dirs = sorted({p[: -len(".SUCCESS")] for p in success_paths})
 
-    # Map each shard directory (without the .SUCCESS suffix) to its parent
-    shard_dirs = sorted({p[: -len(".SUCCESS")] for p in success_paths})
-    parent_to_children: dict[str, list[str]] = defaultdict(list)
-    for shard in shard_dirs:
-        parent = os.path.dirname(shard)
-        parent_to_children[parent].append(shard)
+        # Compute relative depths to pick only the deepest directories
+        rels = [os.path.relpath(d, current_input) for d in success_dirs]
+        depths = [len(r.split(os.sep)) for r in rels]
+        max_depth = max(depths)
 
-    # Consolidate each group of siblings under its parent in one pass
-    for parent, child_dirs in parent_to_children.items():
-        rel_parent = os.path.relpath(parent, base)
-        if rel_parent == ".":
-            out_dir = output_base
-        else:
-            out_dir = os.path.join(output_base, rel_parent)
-        fsspec_mkdirs(out_dir)
-        consolidate_group_generic(out_dir, child_dirs, only_stats)
-        # Write a success marker at this consolidated directory
-        success_marker = os.path.join(out_dir, ".SUCCESS")
-        fsspec_mkdirs(os.path.dirname(success_marker))
-        with fsspec.open(success_marker, "w") as f:
-            f.write("")
+        # Group by parent directory at max depth
+        parent_to_children: dict[str, list[str]] = defaultdict(list)
+        for d, depth in zip(success_dirs, depths, strict=False):
+            if depth == max_depth:
+                parent = os.path.dirname(d)
+                parent_to_children[parent].append(d)
+        if not parent_to_children:
+            break
+
+        # Consolidate each group of siblings under its parent
+        for parent, child_dirs in parent_to_children.items():
+            rel_parent = os.path.relpath(parent, current_input)
+            if rel_parent == ".":
+                out_dir = output_base
+            else:
+                out_dir = os.path.join(output_base, rel_parent)
+            fsspec_mkdirs(out_dir)
+            consolidate_group_generic(out_dir, child_dirs, only_stats)
+            # Write a success marker at this consolidated directory
+            success_marker = os.path.join(out_dir, ".SUCCESS")
+            fsspec_mkdirs(os.path.dirname(success_marker))
+            with fsspec.open(success_marker, "w") as f:
+                f.write("")
+
+        # If we just collapsed the root-level directories, we're done
+        if len(parent_to_children) == 1 and list(parent_to_children.keys())[0] == current_input:
+            break
+
+        # Next iteration: consume consolidated output as new input
+        current_input = output_base
 
     return f"Consolidated shards from {base} to {output_base}"
 
