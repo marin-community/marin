@@ -1,0 +1,136 @@
+{
+  "ec8853ffe84df1b63cecbfa845d19f5d": {
+    "min_num": 20,
+    "min_loss": 3.200423002243042,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.95,
+      "beta2": 0.98,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "nesterov": true,
+      "train_batch_size": 256
+    },
+    "approximate_best_config_list": [
+      {
+        "learning_rate": 0.008,
+        "weight_decay": 0.1,
+        "min_lr_ratio": 0,
+        "warmup": 2000,
+        "beta1": 0.95,
+        "beta2": 0.98,
+        "epsilon": 1e-10,
+        "max_grad_norm": 1,
+        "nesterov": true,
+        "train_batch_size": 256
+      }
+    ]
+  },
+  "d8046bfece14e5d15b5dc1a5af051cf7": {
+    "min_num": 0,
+    "min_loss": 3.207158088684082,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 1000,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "nesterov": false,
+      "train_batch_size": 256
+    },
+    "approximate_best_config_list": [
+      {
+        "learning_rate": 0.008,
+        "weight_decay": 0.1,
+        "min_lr_ratio": 0,
+        "warmup": 1000,
+        "beta1": 0.9,
+        "beta2": 0.98,
+        "epsilon": 1e-10,
+        "max_grad_norm": 1,
+        "nesterov": false,
+        "train_batch_size": 256
+      }
+    ]
+  },
+  "236f491ef4f9fe2c7934ca7ac51873d0": {
+    "min_num": 32,
+    "min_loss": 3.2022271156311035,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 0,
+      "momentum": 0.98,
+      "beta1": 0.8,
+      "beta2": 0.98,
+      "epsilon": 9.999999999999999e-26,
+      "muon_epsilon": 1e-05,
+      "max_grad_norm": 1,
+      "lr_schedule": "linear",
+      "muon_to_adam_lr": 0.3,
+      "decay": 1,
+      "train_batch_size": 128
+    },
+    "approximate_best_config_list": [
+      {
+        "learning_rate": 0.008,
+        "weight_decay": 0.1,
+        "min_lr_ratio": 0,
+        "warmup": 0,
+        "momentum": 0.98,
+        "beta1": 0.8,
+        "beta2": 0.98,
+        "epsilon": 9.999999999999999e-26,
+        "muon_epsilon": 1e-05,
+        "max_grad_norm": 1,
+        "lr_schedule": "linear",
+        "muon_to_adam_lr": 0.3,
+        "decay": 1,
+        "train_batch_size": 128
+      }
+    ]
+  },
+  "bb5b5e4260e0c3f69608ebc08827eb80": {
+    "min_num": 22,
+    "min_loss": 3.1911556720733643,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 1000,
+      "beta1": 0.95,
+      "beta2": 0.99,
+      "shampoo_beta": 0.98,
+      "precondition_frequency": 10,
+      "partition_grads_into_blocks": true,
+      "block_size": 512,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "train_batch_size": 256
+    },
+    "approximate_best_config_list": [
+      {
+        "learning_rate": 0.008,
+        "weight_decay": 0.1,
+        "min_lr_ratio": 0,
+        "warmup": 1000,
+        "beta1": 0.95,
+        "beta2": 0.99,
+        "shampoo_beta": 0.98,
+        "precondition_frequency": 10,
+        "partition_grads_into_blocks": true,
+        "block_size": 512,
+        "epsilon": 1e-10,
+        "max_grad_norm": 1,
+        "train_batch_size": 256
+      }
+    ]
+  }
+}
