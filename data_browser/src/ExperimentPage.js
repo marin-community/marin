@@ -321,8 +321,8 @@ function renderTrainStepDescription({step, steps}) {
 
   // Initialization + training
   const trainerConfig = step.config.train_config.trainer;
-  const initializationSummary = trainerConfig.initalize_from ?
-    viewSingleUrl(trainerConfig.initialize_from) :
+  const initializationSummary = trainerConfig.initialize_from ?
+    renderPath({path: trainerConfig.initialize_from, steps}) :
     `random(${modelConfig.initializer_range})`;
 
   const numSteps = trainerConfig.num_train_steps;
