@@ -1,8 +1,10 @@
 """
-#1237 : Starling SFT
+#1237: Starling SFT
 
-SFT the Deeper Starling Iteration of Tootsie 8B Model using the Reasoning SFT Data Mixture
-Run
+SFT the Deeper Starling Iteration of Tootsie 8B Model using the Reasoning + Tulu SFT Mixture.
+This is to produce our release candidate for Marin's launch given the strength of the base model!
+
+GitHub Issue: https://github.com/marin-community/marin/issues/1237
 """
 
 import dataclasses
