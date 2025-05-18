@@ -46,7 +46,7 @@ stackexchange_text_resiliparse_custom_fork = ExecutorStep(
         ),
     ),
     pip_dependency_groups=["download_transform"],
-)
+).with_output_path("documents/stackexchange-resiliparse-custom-fork-ab41ad")
 
 
 if __name__ == "__main__":
