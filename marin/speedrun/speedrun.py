@@ -25,6 +25,7 @@ from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.training.training import TrainLmOnPodConfig
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
+from marin.utils import asdict_excluding
 
 logger = logging.getLogger("ray")
 
@@ -63,15 +64,8 @@ class SpeedrunConfig:
     def as_json_dict(self) -> dict:
         """Convert SpeedrunConfig to a JSON-serializable dictionary."""
 
-        # dataclasses.asdict() doesn't serialize the resources field, so we do it manually
-        resources = self.train_config.resources
-        resources_dict = {
-            "type": resources.__class__.__name__,
-            "config": resources.as_json_dict()
-        }
-
         # Create train_config dict excluding resources field
-        train_config_dict = {k: v for k, v in dataclasses.asdict(self.train_config).items() if k != 'resources'}
+        train_config_dict = asdict_excluding(self.train_config, exclude={"resources", "runtime_env"})
 
         return {
             "author": {
@@ -83,11 +77,12 @@ class SpeedrunConfig:
             "model_config": dataclasses.asdict(self.model_config),
             "train_config": train_config_dict,
             "tokenized_dataset": str(self.tokenized_dataset),
-            "resources": resources_dict
+            "resources": asdict_excluding(self.train_config.resources, exclude={"runtime_env"})
         }
 
-    def print_flops_info(self) -> None:
-        """Print information about device FLOPS, model FLOPS, and hardware configuration."""
+    def print_run_info(self) -> None:
+        """Print information about speedrun configuration, device FLOPS, model FLOPS, and hardware configuration.
+        Mainly to sanity-check runs by calling speedrun_config.print_run_info() before actually running it."""
 
         num_devices = self.num_devices
         device_flops = self.device_flops
@@ -100,13 +95,10 @@ class SpeedrunConfig:
         model_flops = self.compute_model_flops()
 
         logger.info("Hardware and Model FLOPS Information:")
-        logger.info(f"  Number of devices: {num_devices}")
-        logger.info(f"  Device FLOPs: {device_flops:.2e} FLOP/s")
-        logger.info(f"  Total peak hardware FLOPs: {total_peak_flops:.2e} FLOP/s")
-        logger.info(f"  Model FLOPs: {model_flops:.2e} FLOP")
-        if model_flops > 0 and total_peak_flops > 0:
-            estimated_time = model_flops / (total_peak_flops * 0.5)
-            logger.info(f"  Estimated training time at 50% MFU: {estimated_time/3600:.1f} hours")
+        logger.info(f"Number of devices: {num_devices}")
+        logger.info(f"Device FLOPs: {device_flops:.2e} FLOP/s")
+        logger.info(f"Total peak hardware FLOPs: {total_peak_flops:.2e} FLOP/s")
+        logger.info(f"Model FLOPs: {model_flops:.2e} FLOP")
 
 
     def compute_model_flops(self) -> float:
@@ -124,41 +116,17 @@ class SpeedrunConfig:
                 self.train_config.train_batch_size * self.model_config.seq_len * self.train_config.num_train_steps
             )
 
-        # Get MoE parameters if available, otherwise use defaults for dense models
-        num_experts = getattr(self.model_config, "n_routed_experts", 1)
-        num_shared_experts = getattr(self.model_config, "n_shared_experts", 0)
-        num_experts_per_tok = getattr(self.model_config, "num_experts_per_tok", 1)
-
-        logger.info(
-            f"num_experts: {num_experts}, num_shared_experts: {num_shared_experts}, num_experts_per_tok: {num_experts_per_tok}"
-        )
-        logger.info(f"total_tokens: {total_tokens}")
-        logger.info(f"num_shared_experts: {num_shared_experts}")
-        logger.info(f"num_experts_per_tok: {num_experts_per_tok}")
-
-        flops_per_token = lm_flops_per_token(
-            self.model_config.hidden_dim,
-            self.model_config.intermediate_dim,
-            self.model_config.num_layers,
-            self.model_config.num_kv_heads,
-            self.model_config.num_heads,
-            self.model_config.seq_len,
-            self.vocab_size,
-            glu=True,
-            num_experts=num_experts,
-            num_shared_experts=num_shared_experts,
-            num_experts_per_tok=num_experts_per_tok,
-        )  # only fwd flops
+        flops_per_token = self.model_config.flops_per_token(self.vocab_size)
 
         flops_per_token *= 3  # fwd + bwd
 
         estimated_model_flops = flops_per_token * total_tokens
 
         logger.info(
-            f"""The rough estimated compute (calculated as model FLOPs / (Estimate of MFU))
-            for your run is around {estimated_model_flops/0.5:.2e} FLOPs assuming an MFU of 0.5.
-            This is calculated based on plausible MFU values and can be used as a rough estimate to
-            guide your config/training setup."""
+            f"""The rough estimated compute (calculated as (total model FLOPs / Assumed MFU))
+            for your run is around {estimated_model_flops/0.5:.2e} FLOPs assuming an MFU of 0.5, and
+            {estimated_model_flops/0.2:.2e} FLOPs assuming an MFU of 0.2. This is calculated based 
+            on assumed MFU values and can be used as a rough estimate to guide your config/training setup."""
         )
 
         return estimated_model_flops
