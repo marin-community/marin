@@ -16,6 +16,7 @@ const statusIcons = {
   "RUNNING": "🔄",
 };
 const loadingIcon = "⏳";
+const errorIcon = "❌";
 
 function ExperimentPage() {
   // Get URL parameters
@@ -424,6 +425,9 @@ function renderExperimentStatus({step, auxiliaryData}) {
   const data = auxiliaryData[apiStatusUrl(step)];
   if (!data) {
     return loadingIcon;
+  }
+  if (data.error) {
+    return <span className="error" title={data.error}>{errorIcon}</span>;
   }
   const events = data.items;
 
