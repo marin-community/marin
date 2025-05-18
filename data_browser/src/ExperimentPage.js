@@ -39,8 +39,8 @@ function ExperimentPage() {
         const experiment = response.data.data;
         setExperiment(experiment);
 
-        // Pretch all the urls (e.g., for status, results)
-        const urls = getAllPretchUrls(experiment);
+        // Prefetch all the urls (e.g., for status, results)
+        const urls = getAllPrefetchUrls(experiment);
 
         // Fetch the status (events) files for each step
         const promises = urls.map(async (url) => {
@@ -506,7 +506,7 @@ function renderStagedValue(valueOrValues) {
     const content = joinSpans(valueOrValues.map((item) => <span><sub>{item.start}</sub>{item.value}</span>), "→");
     return <span>[{content}]</span>;
   }
-  return "???";
+  return "??";
 }
 
 function computeNumTokens({numSteps, batchSize, seqLen}) {
