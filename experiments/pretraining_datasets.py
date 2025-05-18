@@ -4,7 +4,7 @@ from operations.download.huggingface.download_gated_manual import download_and_u
 from operations.download.huggingface.download_hf import download_hf
 from operations.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
 
-# TODO: remove download and download_and_upload_to_store. Instead use download_hf instead
+# TODO: remove download and download_and_upload_to_store. Instead use default_download instead
 fineweb = ExecutorStep(
     name="raw/fineweb",
     fn=download,
@@ -129,18 +129,22 @@ starcoderdata = ExecutorStep(
         wait_for_completion=True,
     ),
     override_output_path="raw/starcoderdata-720c8c",
-).cd("9fc30b5")
+)
 
-dolmino = ExecutorStep(
-    name="raw/dolmino-mix-1124",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="allenai/dolmino-mix-1124",
-        revision="bb54cab",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
-).cd("bb54cab")
+dolmino = (
+    ExecutorStep(
+        name="raw/dolmino-mix-1124",
+        fn=download_hf,
+        config=DownloadConfig(
+            hf_dataset_id="allenai/dolmino-mix-1124",
+            revision="bb54cab",
+            gcs_output_path=this_output_path(),
+            wait_for_completion=True,
+        ),
+    )
+    .with_output_path("raw/dolmino-mix-1124-157960")
+    .cd("bb54cab")
+)
 
 nemotron_cc = ExecutorStep(
     name="raw/nemotro-cc",

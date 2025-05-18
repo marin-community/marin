@@ -1,7 +1,9 @@
 import dataclasses
 import logging
 import os
+from functools import lru_cache
 
+import transformers
 from levanter.data.text import LMDatasetSourceConfig, LMMixtureDatasetConfig
 
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
@@ -22,6 +24,18 @@ def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_r
         return step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
     else:
         return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
+
+
+def as_single_lm_data_source(
+    input: TokenizerStep | InputName,  # noqa: A002
+) -> LMDatasetSourceConfig:
+    """
+    Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
+
+    Args:
+        input: The training set to use
+    """
+    return step_to_lm_mixture_component(input, include_raw_paths=True)
 
 
 def lm_data_config(
@@ -84,14 +98,7 @@ def lm_mixture_data_config(
         missing_keys = {k: 0.0 for k in components if k not in weights}
         weights = {**weights, **missing_keys}
 
-    first_name, first_step = next(iter(components.items()))
-    tokenizer = first_step.config.tokenizer
-    for name, step in components.items():
-        if step.config.tokenizer != tokenizer:
-            raise ValueError(
-                "All components must have the same tokenizer, but got:"
-                f" {step.config.tokenizer} ({name}) vs {tokenizer} ({name})"
-            )
+    tokenizer = _verify_tokenizers_same(components)
 
     return LMMixtureDatasetConfig(
         configs=configs, train_weights=weights, tokenizer=tokenizer, cache_dir=None, shuffle=shuffle
@@ -142,15 +149,7 @@ def lm_varying_mixture_data_config(
             padded_weights_list.append((step_idx, {**weights, **missing_keys}))
         weights_list = padded_weights_list
 
-    # Validate tokenizer consistency
-    first_name, first_step = next(iter(components.items()))
-    tokenizer = first_step.config.tokenizer
-    for name, step in components.items():
-        if step.config.tokenizer != tokenizer:
-            raise ValueError(
-                "All components must have the same tokenizer, but got:"
-                f" {step.config.tokenizer} ({name}) vs {tokenizer} ({first_name})"
-            )
+    tokenizer = _verify_tokenizers_same(components)
 
     return LMMixtureDatasetConfig(
         configs=configs,
@@ -207,3 +206,55 @@ def add_validation_sets_to_mixture(
         raise ValueError(f"Invalid train_weights type: {type(config.train_weights)}")
 
     return dataclasses.replace(config, configs=new_configs, train_weights=new_weights)
+
+
+@lru_cache(maxsize=32)
+def _load_tokenizer(tokenizer_name: str) -> transformers.PreTrainedTokenizer:
+    """Load and cache a tokenizer by name"""
+    return transformers.AutoTokenizer.from_pretrained(tokenizer_name)
+
+
+def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
+    """Compare two tokenizers by loading them and comparing their vocabularies and token IDs"""
+    t1 = _load_tokenizer(tokenizer1)
+    t2 = _load_tokenizer(tokenizer2)
+
+    # Compare vocab sizes
+    if len(t1.get_vocab()) != len(t2.get_vocab()):
+        return False
+
+    # Compare vocab contents and IDs
+    vocab1 = t1.get_vocab()
+    vocab2 = t2.get_vocab()
+
+    # Check that all tokens exist in both vocabs with the same IDs
+    for token, id1 in vocab1.items():
+        if token not in vocab2:
+            return False
+        if vocab2[token] != id1:
+            return False
+
+    if getattr(t1, "chat_template", None) is not None and getattr(t2, "chat_template", None) is not None:
+        if t1.chat_template != t2.chat_template:
+            return False
+
+    return True
+
+
+def _verify_tokenizers_same(components: dict[str, TokenizerStep]):
+    first_name, first_step = next(iter(components.items()))
+    tokenizer = first_step.config.tokenizer
+    for name, step in components.items():
+        if step.config.tokenizer != tokenizer:
+            # If string comparison fails, try comparing loaded tokenizers
+            if not _are_tokenizers_equivalent(step.config.tokenizer, tokenizer):
+                raise ValueError(
+                    "All components must have the same tokenizer, but got:"
+                    f" {step.config.tokenizer} ({name}) vs {tokenizer} ({name})"
+                )
+            else:
+                logger.warning(
+                    f"Tokenizers ({name}) and {tokenizer} ({name}) have equivalent vocabularies but are not the same"
+                    f"tokenizer. This may cause issues with training."
+                )
+    return tokenizer

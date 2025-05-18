@@ -12,7 +12,7 @@ We prepare the text/markdown for use as a training dataset for a language model,
   passed to Markdownify to producing Markdown text that has less noise. We generate single variant for each without
   references and links.
 
-Reference Issue: https://github.com/stanford-crfm/marin/issues/579
+Reference Issue: https://github.com/marin-community/marin/issues/579
 """
 
 import logging
@@ -242,7 +242,9 @@ ar5iv_extraction_steps = get_ar5iv_extraction_step(
     ),
 )
 
-ar5iv_no_problem_resiliparse_custom_fork = ar5iv_extraction_steps["no-problem"]
+ar5iv_no_problem_resiliparse_custom_fork = ar5iv_extraction_steps["no-problem"].with_output_path(
+    "documents/ar5iv/ar5iv-04-2024-no-problem-3971f"
+)
 ar5iv_warnings_resiliparse_custom_fork = ar5iv_extraction_steps["warnings"]
 ar5iv_errors_resiliparse_custom_fork = ar5iv_extraction_steps["errors"]
 

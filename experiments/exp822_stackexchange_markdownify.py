@@ -17,7 +17,7 @@ Answer 2:
 Tags: <tags>
 ```
 
-Reference Issue: https://github.com/stanford-crfm/marin/issues/822
+Reference Issue: https://github.com/marin-community/marin/issues/822
 """
 
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
@@ -46,7 +46,7 @@ stackexchange_text_resiliparse_custom_fork = ExecutorStep(
         ),
     ),
     pip_dependency_groups=["download_transform"],
-)
+).with_output_path("documents/stackexchange-resiliparse-custom-fork-ab41ad")
 
 
 if __name__ == "__main__":

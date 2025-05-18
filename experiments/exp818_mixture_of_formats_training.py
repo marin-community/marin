@@ -11,7 +11,7 @@ for training language models. We evaluate four scenarios:
 The goal is to determine if exposing models to multiple formats of the same content source
 improves model performance.
 
-Reference Issue: https://github.com/stanford-crfm/marin/issues/818
+Reference Issue: https://github.com/marin-community/marin/issues/818
 
 """
 
@@ -69,9 +69,12 @@ wiki_markdownified_tokenized, wiki_only_subbed_dolma_model, wiki_only_subbed_dol
 )
 
 # WIKI AND ARXIV MIXING FOR MARKDOWNIFIED DATASETS
-wiki_and_arxiv_tokenization_steps = dict(wiki_markdownified_tokenized, arxiv_markdownified_tokenized)
+wiki_and_arxiv_tokenization_steps = {
+    "mixture-of-formats-1.4b-wiki-only-subbed": wiki_markdownified_tokenized,
+    "mixture-of-formats-1.4b-arxiv-only-subbed": arxiv_markdownified_tokenized,
+}
 wiki_and_arxiv_weights = {
-    **DOLMA_OLMO_MIXTURE_WEIGHTS,
+    # **DOLMA_OLMO_MIXTURE_WEIGHTS,
     "mixture-of-formats-1.4b-wiki-only-subbed": DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/wiki"],
     "mixture-of-formats-1.4b-arxiv-only-subbed": DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv"],
 }
@@ -92,12 +95,12 @@ wiki_and_arxiv_subbed_dolma_model = default_train(
 wiki_and_arxiv_subbed_dolma_evals = default_eval(step=wiki_and_arxiv_subbed_dolma_model)
 
 if __name__ == "__main__":
-    tokenize_steps = (
-        list(tokenized_dolma_steps.values())
-        + list(wiki_markdownified_tokenized.values())
-        + list(arxiv_markdownified_tokenized.values())
-        + list(wiki_and_arxiv_tokenization_steps.values())
-    )
+    tokenize_steps = [
+        *list(tokenized_dolma_steps.values()),
+        wiki_markdownified_tokenized,
+        arxiv_markdownified_tokenized,
+        *list(wiki_and_arxiv_tokenization_steps.values()),
+    ]
 
     executor_main(
         steps=[
