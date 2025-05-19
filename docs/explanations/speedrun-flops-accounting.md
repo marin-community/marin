@@ -15,7 +15,7 @@ where:
 - $t_i$ is the time taken by *training step* $i$ in seconds*
 - $n$ is the total number of training steps
 - $d$ is the number of accelerator devices (eg. 8 GPUs, or 64 chips in a v4-128 TPU pod)
-- $f_{peak}$ is the peak FLOPs/second per device. Example: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-us-nvidia-1758950-r4-web.pdf tells us that for an A100, $f_{peak} = 312 TFLOPS/s for BF16 precision.
+- $f_{peak}$ is the peak FLOPs/second per device. Example: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-us-nvidia-1758950-r4-web.pdf tells us that for an A100, $f_{peak}$ = 312 TFLOPS/s for BF16 precision.
 
 
 ## Model FLOPs
