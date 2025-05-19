@@ -31,7 +31,10 @@ speedrun_config = SpeedrunConfig(
         affiliation="Stanford University",
         url="https://www.linkedin.com/in/jason-wang-468117193/",
     ),
-    description="300M activated parameter MoE model based on the Mixtral architecture. Has 32 experts and only activates 4 of them.",
+    description=(
+        "300M activated parameter MoE model based on the Mixtral architecture. "
+        "Has 32 experts and only activates 4 of them."
+    ),
     model_config=moe_300m,
     train_config=SimpleTrainConfig(
         TpuPodConfig(tpu_type="v4-256"),
