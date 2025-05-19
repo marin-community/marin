@@ -10,18 +10,21 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-# Dolma was added before we had a proper versioning system, so we need to hardcode the path
-# We'll make a fake step for it.
-
 
 @dataclass(frozen=True)
 class _DummyConfig:
     pass
 
 
+def _legacy_dolma():
+    # Dolma was added before we had a proper versioning system, so we need to hardcode the path
+    # We'll make a fake step for it.
+    return
+
+
 dolma_fake_step = ExecutorStep(
     name="raw/dolma/v1.7",
-    fn=lambda x: None,
+    fn=_legacy_dolma,
     config=_DummyConfig(),
 ).with_output_path("raw/dolma/v1.7")
 

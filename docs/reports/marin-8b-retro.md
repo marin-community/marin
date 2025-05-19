@@ -31,7 +31,7 @@ We cover the data mix, hyperparameters, and other training details, along with o
 
 Reproducibility is a core principle of Marin. While this write-up was created post-run and may contain minor inaccuracies, we’ve done our best to be accurate. If you’re looking for more detail, you can also find supporting material here:
 
-- [Marin Data Browser](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp600_tootsie-151dff.json)
+- [Marin Data Browser](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp600_tootsie-9126ea.json)
 - [Experiment Pipeline Script](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp600_tootsie.py)
 - [GitHub issue thread](https://github.com/marin-community/marin/issues/600)
 - [WandB report](https://wandb.ai/stanford-mercury/marin/reports/Tootsie-8B---VmlldzoxMTY3MzU3OA)

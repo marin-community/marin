@@ -99,7 +99,7 @@ Main Page: [marin-community/marin-8b-base](https://huggingface.co/marin-communit
 | [`starling`](https://huggingface.co/marin-community/marin-8b-base/tree/starling)               | 12.4T           |
 | [`deeper-starling`](https://huggingface.co/marin-community/marin-8b-base/tree/deeper-starling) | 12.7T           |
 
-`main` currently refers to `deeper-starling`. main currently refers to deeper-starling.
+`main` currently refers to `deeper-starling`.
 This may change in the future, but we will maintain compatibility at the architecture and tokenizer level,
 so the model will remain drop-in compatible with existing tooling.
 If you require a specific checkpoint, please use the `revision` argument.
@@ -132,12 +132,13 @@ You can use Marin with the standard Hugging Face Transformers library:
 
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
-marin = AutoModelForCausalLM.from_pretrained("marin-community/marin-8b-base")
+marin = AutoModelForCausalLM.from_pretrained("marin-community/marin-8b-base", device_map="auto")
 tokenizer = AutoTokenizer.from_pretrained("marin-community/marin-8b-base")
 message = ["The Marin wind is"]
 inputs = tokenizer(message, return_tensors='pt', return_token_type_ids=False)
 response = marin.generate(**inputs, max_new_tokens=100, do_sample=True, top_k=50, top_p=0.95)
 print(tokenizer.batch_decode(response, skip_special_tokens=True)[0])
+"The Marin wind is blowing, which is a blessing for the residents and an opportunity for the city's ambitious plans of generating more and more clean and renewable energy from the local area."
 ```
 
 We released a number of checkpoints of this model. To load a specific checkpoint, add the argument `revision`:
@@ -150,7 +151,7 @@ marin = AutoModelForCausalLM.from_pretrained("marin-community/marin-8b-base", re
 
 - **Developed by:** The Marin team at Stanford CRFM.
 - **Model type:** a Transformer style autoregressive language model.
-- **Knowledge Cutoff:** ~July 2024
+- **Knowledge Cutoff:** To the best of our knowledge, the base model has no data from later than July 2024.
 - **Language(s) (NLP):** English
 - **License:** The code and model are released under Apache 2.0.
 - **Contact:** `dlwh at stanford.edu`
