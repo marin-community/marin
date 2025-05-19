@@ -37,8 +37,8 @@ base_input_dir = os.path.join(
 logger.info(f"Using base input dir for DCLM shards: {base_input_dir}")
 
 # Scenario data and parameters
-scenario_data = "gs://marin-us-central2/scenarios/consolidated_eval_scenarios-d3f040/consolidated_scenarios.jsonl"
-n_values = [5, 10, 15]
+scenario_data = "gs://marin-us-central2/scenarios/consolidated_eval_scenarios_final-50b720/consolidated_scenarios.jsonl"
+n_values = [10, 15]
 
 # Configure the sharded runner with backpressure (one at a time by default)
 config = ShardedOverlapConfig(

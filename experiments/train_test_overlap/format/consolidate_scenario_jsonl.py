@@ -74,7 +74,7 @@ consolidate_config = ConsolidateScenarioConfig(
 
 # Create the consolidation step using the proper config type
 consolidation_step = ExecutorStep(
-    name="scenarios/consolidated_eval_scenarios",
+    name="scenarios/consolidated_eval_scenarios_final",
     fn=lambda cfg: consolidate_scenario_files(cfg),
     config=consolidate_config,
 )

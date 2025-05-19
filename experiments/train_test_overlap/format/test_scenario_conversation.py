@@ -16,6 +16,15 @@ from experiments.train_test_overlap.eval_datasets_overlap import (
     mmlu_pro_convert_dolma,
     musr_convert_dolma,
     truthful_qa_convert_dolma,
+    winograd_wsc_convert_dolma,
+    commonsense_qa_convert_dolma,
+    lambada_openai_convert_dolma,
+    openbookqa_convert_dolma,
+    piqa_convert_dolma,
+    hellaswag_convert_dolma,
+    ai2_arc_convert_dolma,
+    boolq_convert_dolma,
+    piqa_convert_dolma,
 )
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.utils import fsspec_get_curr_subdirectories, fsspec_glob, fsspec_mkdirs
@@ -73,6 +82,34 @@ def get_scenario_class_name(dataset_name: str, prefix: str = "helm.benchmark.sce
         return f"{prefix}.truthful_qa_scenario.TruthfulQAScenario"
     elif "bbh" in dataset_name_lowered:
         return f"{prefix}.bbh_scenario.BBHScenario"
+    elif "gpqa" in dataset_name_lowered:
+        return f"{prefix}.gpqa_scenario.GpqaScenario"
+    elif "instruction_following" in dataset_name_lowered:
+        return f"{prefix}.instruction_following_scenario.InstructionFollowingScenario"
+    elif "musr" in dataset_name_lowered:
+        return f"{prefix}.musr_scenario.MusrScenario"
+    elif "winograd_wsc" in dataset_name_lowered:
+        return f"{prefix}.winograd_wsc_scenario.WinogradWscScenario"
+    elif "commonsense_qa" in dataset_name_lowered:
+        return f"{prefix}.commonsense_qa_scenario.CommonsenseQAScenario"
+    elif "lambada_openai" in dataset_name_lowered:
+        return f"{prefix}.lambada_openai_scenario.LambadaOpenaiScenario"
+    elif "openbookqa" in dataset_name_lowered:
+        return f"{prefix}.openbookqa_scenario.OpenbookqaScenario"
+    elif "piqa" in dataset_name_lowered:
+        return f"{prefix}.piqa_scenario.PiqaScenario"
+    elif "hellaswag" in dataset_name_lowered:
+        return f"{prefix}.hellaswag_scenario.HellaswagScenario"
+    elif "ai2_arc" in dataset_name_lowered:
+        return f"{prefix}.ai2_arc_scenario.Ai2ArcScenario"
+    elif "boolq" in dataset_name_lowered:
+        return f"{prefix}.boolq_scenario.BoolqScenario"
+    elif "mmlu_pro" in dataset_name_lowered:
+        return f"{prefix}.mmlu_pro_scenario.MmluProScenario"
+    elif "mmlu_pro" in dataset_name_lowered:
+        return f"{prefix}.mmlu_pro_scenario.MmluProScenario"
+        
+        
     else:
         return f"{prefix}.{dataset_name_lowered}_scenario.{dataset_name}Scenario"
 
@@ -252,15 +289,24 @@ def convert_datasets_to_scenarios(config: ScenarioConversionConfig) -> str:
 # Define the configuration with the executor steps
 scenario_conversion_config = ScenarioConversionConfig(
     input_steps=[
-        gsm8k_convert_dolma,
-        math_convert_dolma,
-        truthful_qa_convert_dolma,
         bbh_convert_dolma,
+        gpqa_convert_dolma,
+        gsm8k_convert_dolma,
+        instruction_following_convert_dolma,
+        math_convert_dolma,
         mmlu_convert_dolma,
         mmlu_pro_convert_dolma,
-        gpqa_convert_dolma,
-        instruction_following_convert_dolma,
         musr_convert_dolma,
+        truthful_qa_convert_dolma,
+        winograd_wsc_convert_dolma,
+        commonsense_qa_convert_dolma,
+        lambada_openai_convert_dolma,
+        openbookqa_convert_dolma,
+        piqa_convert_dolma,
+        hellaswag_convert_dolma,
+        ai2_arc_convert_dolma,
+        boolq_convert_dolma,
+        piqa_convert_dolma,
     ],
     output_path=this_output_path(),
     scenario_class_name_prefix="helm.benchmark.scenarios",

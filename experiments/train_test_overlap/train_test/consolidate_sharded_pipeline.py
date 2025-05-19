@@ -95,6 +95,14 @@ def consolidate_sharded(cfg: ConsolidateShardedConfig) -> str:
         # Next iteration: consume consolidated output as new input
         current_input = output_base
 
+    # Write overall .SUCCESS marker at the root output directory after consolidation
+    success_marker = os.path.join(output_base, ".SUCCESS")
+    # Ensure the output directory exists
+    fsspec_mkdirs(output_base)
+    with fsspec.open(success_marker, "w") as f:
+        f.write("")
+    logger.info(f"Wrote overall success marker at {success_marker}")
+
     return f"Consolidated shards from {base} to {output_base}"
 
 

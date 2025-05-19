@@ -131,7 +131,9 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
                 split = stats_key["light_scenario_key"]["split"]
 
                 inst_ids = rec.get("instance_ids", [])
-                mip = rec.get("metrics_input_paths", {}) or {}
+                # support both consolidated (plural) and raw-shard (singular) metrics input paths
+                raw_mip = rec.get("metrics_input_paths", None)
+                single = rec.get("metrics_input_path", None)
 
                 # accumulate for partial JSONL
                 ds = summary.setdefault(dataset, {})
@@ -141,9 +143,17 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
 
                 for inst in inst_ids:
                     ent["instance_ids"].add(inst)
-                    paths = mip.get(inst, [])
+                    # pick plural mapping if present, else fall back to single path
+                    if raw_mip is not None:
+                        paths = raw_mip.get(inst, [])
+                    elif single is not None:
+                        paths = [single]
+                    else:
+                        paths = []
                     ipaths = ent["metrics_input_paths"].setdefault(inst, set())
-                    ipaths.update(paths)
+                    for p in paths:
+                        if p is not None:
+                            ipaths.add(p)
                 # accumulate for summary stats by part
                 part_ds = summary_by_part[part].setdefault(dataset, {})
                 part_nmap = part_ds.setdefault(n_val, {})
@@ -153,7 +163,13 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
                     part_ent.add(inst)
 
                 # accumulate for training-dataset summary stats by part
-                training_paths = [p for inst_paths in mip.values() for p in inst_paths]
+                # Collect all input paths that contributed to these instance IDs
+                if raw_mip is not None:
+                    training_paths = [p for inst_paths in raw_mip.values() for p in inst_paths]
+                elif single is not None:
+                    training_paths = [single]
+                else:
+                    training_paths = []
                 training_ds = detect_training_dataset(training_paths)
                 train_part = summary_by_training[part]
                 tl1 = train_part.setdefault(training_ds, {})
@@ -326,13 +342,13 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
 n_values_list = []  # empty means all
 n_values_list = [10, 15]
 config = AggregateTestOverlapConfig(
-    consolidated_root="gs://marin-us-central2/train_test_overlap/ngrams/",
+    consolidated_root="gs://marin-us-central2/train_test_overlap/ngrams/finemath-3plus_data_overlap_sharded-1c437c",
     output_base=this_output_path(),
     scenario_jsonl="gs://marin-us-central2/scenarios/consolidated_eval_scenarios-d3f040/consolidated_scenarios.jsonl",
     n_values=n_values_list,
 )
 aggregate_step = ExecutorStep(
-    name="train_test_overlap/aggregated_retry",
+    name="train_test_overlap/aggregated_retry_finemath",
     fn=aggregate_test_overlap,
     config=config,
 )
