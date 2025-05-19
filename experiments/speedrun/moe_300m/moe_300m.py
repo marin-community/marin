@@ -10,7 +10,7 @@ from levanter.models.mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
-from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
+from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
 
@@ -26,6 +26,12 @@ moe_300m = MixtralConfig(
 )
 
 speedrun_config = SpeedrunConfig(
+    author=Author(
+        name="Jason Wang",
+        affiliation="Stanford University",
+        url="https://www.linkedin.com/in/jason-wang-468117193/",
+    ),
+    description="300M activated parameter MoE model based on the Mixtral architecture.",
     model_config=moe_300m,
     train_config=SimpleTrainConfig(
         TpuPodConfig(tpu_type="v4-256"),
@@ -35,12 +41,9 @@ speedrun_config = SpeedrunConfig(
         weight_decay=0.1,
         steps_per_eval=1000,
     ),
-    hardware_config=HardwareConfig(
-        device_type="v4-256",
-        num_devices=128,
-        device_flops=275e12,  # from https://cloud.google.com/tpu/docs/v4
-    ),
 )
 
+speedrun_config.print_run_info()
+
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("300M_moe-2", speedrun_config))
+    executor_main(steps=default_speedrun("300m_mixtral_moe", speedrun_config))
