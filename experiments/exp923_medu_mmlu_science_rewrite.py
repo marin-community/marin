@@ -1,4 +1,10 @@
-"""Synthetic data generation to rewrite high quality science data into QA format."""
+"""Synthetic data generation to rewrite high quality science data into QA format.
+
+We start with an LLM generated prompt from the MEDU process to filter out high quality science data.
+Then, we use a QA rephrasing prompt to convert the data into a QA format. We then anneal on this data
+to generate a high quality dataset. We observe that this dataset gives us +4 points on MMLU STEM categories.
+Issue: https://github.com/marin-community/marin/issues/923
+"""
 
 from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
 from experiments.datashop.default_configs import default_engine_kwargs
