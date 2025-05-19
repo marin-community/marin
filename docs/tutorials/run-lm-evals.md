@@ -41,10 +41,10 @@ from experiments.evals.resource_configs import SINGLE_TPU_V4_8
 from marin.execution.executor import executor_main
 
 # Example: evaluate a standalone checkpoint
-model_path = "gs://your-bucket/checkpoints/your_model/hf/step-12345"
+model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
 
 # This creates an ExecutorStep that runs CORE_TASKS
-mcqa_step = default_eval(
+core_evals_step = default_eval(
     step=model_path,
     resource_config=SINGLE_TPU_V4_8,
     # Optional: override the task set:
@@ -53,7 +53,7 @@ mcqa_step = default_eval(
 )
 
 if __name__ == "__main__":
-    executor_main(steps=[mcqa_step])
+    executor_main(steps=[core_evals_step])
 ```
 
 - `default_eval` wraps `evaluate_lm_evaluation_harness` with `CORE_TASKS` by default.
@@ -70,7 +70,7 @@ from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
 from marin.execution.executor import executor_main
 
 # Point to your checkpoint or a training ExecutorStep
-model_path = "gs://your-bucket/checkpoints/your_model/hf/step-12345"
+model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
 
 # This returns a list of three ExecutorSteps:
 #  1) generation tasks (e.g. gsm8k, humaneval)
@@ -114,7 +114,7 @@ alpaca_step = evaluate_alpaca_eval(
 
 ## 3. Custom Eval Harness (Advanced)
 
-If you want fine‐grained control over which MCQA tasks to run:
+If you want fine‐grained control over which tasks to run:
 
 ```python
 from experiments.evals.evals import evaluate_lm_evaluation_harness
