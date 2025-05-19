@@ -18,7 +18,7 @@ speedrun_config = SpeedrunConfig(
         affiliation="Marin Community",
         url="https://www.linkedin.com/in/nikilravi/",
     ),
-    description="75M parameter model based on LLaMA architecture.",
+    description="75M parameter model based on Llama architecture.",
     model_config=llama_75m,
     train_config=SimpleTrainConfig(
         resources=TpuPodConfig(tpu_type="v4-128", slice_count=2),
