@@ -344,12 +344,12 @@ def get_directory_friendly_name(name: str) -> str:
     return name.replace("/", "--").replace(".", "-").replace("#", "-")
 
 
-
-# 
 def asdict_excluding(obj, exclude: set[str]) -> dict:
     """
     Convert a dataclass to a dictionary, excluding specified fields.
-    Useful when you have not easily serailizable fields, such as `RuntimeEnv` in ResourceConfig. 
+    Useful when you have not easily serializable fields, such as `RuntimeEnv` in ResourceConfig. 
+    This does not check recursively for nested dataclasses- it checks only the top-level dataclass for
+    the specified fields to exclude.
     
     Args:
         obj: The dataclass object to convert.
