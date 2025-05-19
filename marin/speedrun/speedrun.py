@@ -93,6 +93,10 @@ class SpeedrunConfig:
         logger.info(f"Total peak hardware FLOPs: {total_peak_flops:.2e} FLOP/s")
         logger.info(f"Model FLOPs: {model_flops:.2e} FLOP")
 
+        # model size
+        model_size = self.model_config.total_trainable_params(self.vocab_size)
+        logger.info(f"Model size: {model_size/1e6:.2f} million parameters")
+
     def compute_model_flops(self) -> float:
         # TODO (Nikil): make this a helper and handle edge-cases
         if isinstance(self.train_config.train_batch_size, list) and len(self.train_config.train_batch_size) > 0:
