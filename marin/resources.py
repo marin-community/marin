@@ -2,27 +2,17 @@ import dataclasses
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, Protocol, TypeAlias
-
-logger = logging.getLogger(__name__)
+from typing import Any, Protocol
 
 import ray
-import ray.util.accelerators.accelerators as ray_accel_types
 from levanter.utils.py_utils import logical_cpu_core_count
 from levanter.utils.ray_utils import RayResources
 from ray.remote_function import RemoteFunction
 from ray.runtime_env import RuntimeEnv
 
-# ray just declares a bunch of constants, so we read them out via reflection
-_ACCEL_TYPES: list[str] = [
-    getattr(ray_accel_types, name) for name in dir(ray_accel_types) if name.isupper() and name != "TPU"
-]
-assert all(isinstance(x, str) for x in _ACCEL_TYPES), "Expected all accelerator types to be strings"
+from marin.resources_utils import AcceleratorType
 
-AcceleratorType: TypeAlias = Literal[tuple(_ACCEL_TYPES)]
-"""
-https://docs.ray.io/en/latest/ray-core/scheduling/accelerators.html
-"""
+logger = logging.getLogger(__name__)
 
 
 class ResourceConfig(Protocol):
@@ -38,8 +28,11 @@ class ResourceConfig(Protocol):
     """
 
     device_flops_override: float | None = None
-    """Optional override for device FLOPS. If set, this value will be used instead of looking up in device_flops_map."""
-    
+    """Optional override for device FLOPS.
+    If set, this value will be used instead of looking up in device_flops_map.
+
+    Currently, this is only used by speedrun and not forwarded to Levanter.
+    """
 
     def accelerator_descriptor(self) -> str | None:
         """Returns the accelerator type descriptor for this hardware configuration."""
@@ -79,9 +72,8 @@ class ResourceConfig(Protocol):
 class CpuOnlyConfig(ResourceConfig):
     num_cpus: int = dataclasses.field(default_factory=lambda: logical_cpu_core_count())
     """Configuration for local training without specialized hardware."""
-    
-    runtime_env: RuntimeEnv = dataclasses.field(default_factory=lambda: RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
 
+    runtime_env: RuntimeEnv = dataclasses.field(default_factory=lambda: RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
 
     device_flops_override: float | None = None
     """Optional override for device FLOPS. If set, this value will be used instead of looking up in device_flops_map."""
@@ -100,7 +92,8 @@ class CpuOnlyConfig(ResourceConfig):
             logger.info(f"Using user-provided device FLOPS override: {self.device_flops_override} for CPU")
             return self.device_flops_override
         raise NotImplementedError(
-            "CPU FLOPS are not available by default. Please provide a device_flops_override if you need to specify CPU FLOPS."
+            "CPU FLOPS are not available by default. "
+            "Please provide a device_flops_override to use a CPU with speedrun."
         )
 
     def total_device_count(self) -> int:
@@ -117,21 +110,18 @@ class GpuConfig(ResourceConfig):
     runtime_env: RuntimeEnv = dataclasses.field(default_factory=RuntimeEnv)
 
     accelerator_type: AcceleratorType | None = None
-    """Type of GPU to use. Must be one of the Ray accelerator types."""
+    """Type of GPU to use. Must be one of the Ray accelerator types. For instance, A100-40G, V100, etc.
+
+    The full list is available at https://docs.ray.io/en/latest/ray-core/accelerator-types.html#accelerator-types
+    """
 
     device_flops_override: float | None = None
     """Optional override for device FLOPS. If set, this value will be used instead of looking up in device_flops_map."""
 
     def __post_init__(self):
         if self.accelerator_type is not None:
-            upper = self.accelerator_type.upper()
-            if upper in _ACCEL_TYPES:
-                object.__setattr__(self, 'accelerator_type', upper)
-            else:
-                raise ValueError(
-                    f"Invalid accelerator_type: {self.accelerator_type}. "
-                    "Available types: " + ", ".join(_ACCEL_TYPES)
-                )
+            # Ray uses uppercase for accelerator types
+            object.__setattr__(self, "accelerator_type", self.accelerator_type.upper())
 
     def get_accelerator_type(self) -> AcceleratorType | None:
         """Get the accelerator type for Ray."""
@@ -142,7 +132,7 @@ class GpuConfig(ResourceConfig):
 
     # NB that Ray doesn't like resources={"GPU": 1} so we have to do this
     def as_remote_kwargs(self) -> dict:
-        out = dict(num_gpus=self.gpu_count, runtime_env=self.runtime_env)
+        out: dict[str, Any] = dict(num_gpus=self.gpu_count, runtime_env=self.runtime_env)
         if self.accelerator_type is not None:
             out["accelerator_type"] = self.accelerator_type
 
@@ -154,23 +144,23 @@ class GpuConfig(ResourceConfig):
     def device_flops(self) -> float:
         """Get the peak FLOPs/s for the GPU type."""
         if self.device_flops_override is not None:
-            logger.info(f"Using user-provided device FLOPS override: {self.device_flops_override} for GPU type {self.accelerator_type}")
+            logger.info(
+                f"Using user-provided device FLOPS override: {self.device_flops_override} for GPU type "
+                f"{self.accelerator_type}"
+            )
             return self.device_flops_override
 
-        from marin.resources_utils import device_flops_map
-        
-        if self.accelerator_type is None:
-            raise ValueError(
-                "accelerator_type must be explicitly specified in GpuConfig. "
-                "Available types: " + ", ".join(_ACCEL_TYPES)
-            )
-        
-        flops = device_flops_map.get(self.accelerator_type)
+        from marin.resources_utils import flop_count_per_device_from_accel_type, ray_device_name_to_jax_name_map
+
+        flops = flop_count_per_device_from_accel_type(self.accelerator_type)
+
         if flops is None:
             raise ValueError(
                 f"No FLOPs data available for accelerator type: {self.accelerator_type}. "
-                "Available types: " + ", ".join(_ACCEL_TYPES) + "\n" +
-                "You can provide a custom FLOPS value using device_flops_override."
+                "Available types: "
+                + ", ".join(ray_device_name_to_jax_name_map.keys())
+                + "\n"
+                + "You can provide a custom FLOPS value using device_flops_override."
             )
         return flops
 
@@ -182,7 +172,7 @@ class GpuConfig(ResourceConfig):
         return {
             "gpu_count": self.gpu_count,
             "accelerator_type": self.accelerator_type,
-            "device_flops_override": self.device_flops_override
+            "device_flops_override": self.device_flops_override,
         }
 
 
@@ -206,23 +196,29 @@ class TpuPodConfig(ResourceConfig):
         return self.tpu_type
 
     def as_ray_resources(self) -> RayResources:
+        """
+        Returns the resource bundle for this TPU configuration. We handle the TPU requirements separately
+        so don't need to specify them here.
+        """
         return RayResources(runtime_env=self.runtime_env, num_cpus=8)
 
     def device_flops(self) -> float:
-        """Get the peak FLOPs/s for the TPU type."""
+        """Get the peak FLOPs/s for *each* device of the given TPU type."""
         if self.device_flops_override is not None:
-            logger.info(f"Using user-provided device FLOPS override: {self.device_flops_override} for TPU type {self.tpu_type}")
+            logger.info(
+                f"Using user-provided device FLOPS override: "
+                f"{self.device_flops_override} for TPU type {self.tpu_type}"
+            )
             return self.device_flops_override
 
-        from marin.resources_utils import get_tpu_flops
-        return get_tpu_flops(self.tpu_type)
+        from marin.resources_utils import get_per_device_tpu_flops
+
+        return get_per_device_tpu_flops(self.tpu_type)
 
     def total_device_count(self) -> int:
         """Get the total number of TPU devices."""
         from marin.resources_utils import get_tpu_type_and_chips
 
-        logger.info(f"TPU type: {self.tpu_type}")
-        
         # Get the number of devices for this TPU configuration
         _, num_devices = get_tpu_type_and_chips(self.tpu_type)
         return self.slice_count * num_devices
@@ -232,5 +228,5 @@ class TpuPodConfig(ResourceConfig):
         return {
             "tpu_type": self.tpu_type,
             "slice_count": self.slice_count,
-            "device_flops_override": self.device_flops_override
+            "device_flops_override": self.device_flops_override,
         }
