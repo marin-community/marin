@@ -3,8 +3,8 @@ import logging
 import os
 import re
 from contextlib import contextmanager
-from datetime import datetime
 from dataclasses import fields, is_dataclass
+from datetime import datetime
 
 import braceexpand
 import fsspec
@@ -347,14 +347,12 @@ def get_directory_friendly_name(name: str) -> str:
 def asdict_excluding(obj, exclude: set[str]) -> dict:
     """
     Convert a dataclass to a dictionary, excluding specified fields.
-    Useful when you have not easily serializable fields, such as `RuntimeEnv` in ResourceConfig. 
+    Useful when you have not easily serializable fields, such as `RuntimeEnv` in ResourceConfig.
     This does not check recursively for nested dataclasses- it checks only the top-level dataclass for
     the specified fields to exclude.
-    
     Args:
         obj: The dataclass object to convert.
         exclude: A set of field names to exclude from the dictionary.
-    
     Returns:
         A dictionary representation of the dataclass, excluding the specified fields.
     """
@@ -370,4 +368,3 @@ def asdict_excluding(obj, exclude: set[str]) -> dict:
             else:
                 result[f.name] = value
     return result
-

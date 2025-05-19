@@ -7,7 +7,7 @@ import draccus
 import pytest
 import ray
 
-from marin.utils import remove_tpu_lockfile_on_exit, asdict_excluding
+from marin.utils import asdict_excluding, remove_tpu_lockfile_on_exit
 
 
 def setup_module(module):
