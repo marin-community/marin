@@ -25,17 +25,18 @@ Turns out mkdocs does a ToC
 
 ## Introduction
 
-This is a retrospective on our first generation Marin 8B run.
-We include details on the data mix, hyperparameters, and other details. We also include observations during the run and
-document some of the mistakes we made and lessons learned.
+This is a retrospective on the first-generation Marin 8B run.
 
-This retrospective was written post-run and may contain minor inaccuracies, though we’ve tried to be as accurate as possible.
+We cover the data mix, hyperparameters, and other training details, along with observations from the run itself—mistakes included. Our goal is to document what worked, what didn’t, and what we learned along the way.
 
-In addition, the [actual code](https://github.com/marin-community/marin/blob/852c53f9741b233549daf9f1649fe88c9c5a170c/experiments/tootsie/exp600_tootsie.py)
-for the run should be treated as more authoritative than this document. See also the [main issue on GitHub](https://github.com/marin-community/marin/issues/600)
-or the [WandB report](https://wandb.ai/stanford-mercury/marin/reports/Tootsie-8B---VmlldzoxMTY3MzU3OA)
+Reproducibility is a core principle of Marin. While this write-up was created post-run and may contain minor inaccuracies, we’ve done our best to be accurate. If you’re looking for more detail, you can also find supporting material here:
 
-We recommend reading this report on our [ReadTheDocs](https://marin.readthedocs.io/en/latest/reports/marin-8b-retro.html) if you aren't already there. There should be a table of contents on the right.
+- [Data browser](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp600_tootsie-151dff.json)
+- [Experiment config](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp600_tootsie.py)
+- [GitHub issue thread](https://github.com/marin-community/marin/issues/600)
+- [WandB report](https://wandb.ai/stanford-mercury/marin/reports/Tootsie-8B---VmlldzoxMTY3MzU3OA)
+
+If you’re not already reading this on [ReadTheDocs](https://marin.readthedocs.io/en/latest/reports/marin-8b-retro.html), we recommend viewing it there—there’s a table of contents on the right to help you navigate.
 
 ## The "Tootsie Roll" Process
 
@@ -51,7 +52,7 @@ This is admittedly a bit of a strained metaphor, but the idea was that we'd keep
 
 ### Model Size
 
-We decided to build an ~7-8B class model mostly out of pragmatism: we initially only had reserved capacity
+We decided to build a roughly 7-8 billion parameter model mostly out of pragmatism: we initially only had reserved capacity
 to train a model of that size for long enough.
 
 ### Architecture
@@ -80,8 +81,7 @@ We used the [AdamW](https://arxiv.org/abs/1711.05101) optimizer.
 
 ### Tokenizer
 
-In Marin, we also standardized on the Llama 3 tokenizer, after [an experiment](https://github.com/marin-community/marin/issues/524) showing it to be superior
-to both Llama 2 and NeoX in terms of bits-per-byte (bpb).
+In Marin, we also standardized on the Llama 3 tokenizer, after [an experiment](https://github.com/marin-community/marin/issues/524) showing it outperformed both Llama 2 and NeoX in terms of bits-per-byte (bpb).
 
 ### Batch Schedule
 
@@ -108,32 +108,39 @@ The first phase was run on the 2x v5e-256, while subsequent phases were run on t
 
 ![Training phases. See text for details.](../images/marin-timeline.png)
 
-Retrospectively, we can partition the 8b run into several different phases. We have given them animal names as monikers.  Here is a short summary:
+Retrospectively, we can partition the 8B run into several distinct phases—each nicknamed after an animal:
 
-- *Kestrel (DCLM WSD-S Phase)*: In the first phase, we used the "DCLM mix" and [WSD-S](https://arxiv.org/abs/2410.05192) for about 2.7T tokens. We used 2x TPU v5e-256 coordinated with multislice for this. (0->2.7T tokens)
-- *Ocelot (DCLM WSD Phase)*: We were given access to a v4-2048 slice and moved to that. To better utilize the hardware, we increased our batch size 50%. We also switched from WSD-S to WSD. We kept the learning rate high until 3.78T tokens.
-- *Jellyfish (First Cooldown)*: It was time to cooldown as we were starting to run low on DCLM. Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656)), we decided to fold in higher quality data during cooldown. (3.78T->4.78T tokens)
-- *Phoenix (Reheated)*: We had more time for training, so we rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC](https://arxiv.org/abs/2412.02595) (plus [StarCoder Data](https://huggingface.co/datasets/bigcode/starcoderdata)). (4.78T->11.1T tokens)
-- *Starling (Second Cooldown)*: Now we were running low on time, so we started another cooldown. We followed a similar process to the first cooldown, but added a few new datasets that we had created and also some that had dropped since our previous attempt. (11.1T->12.75T tokens)
+- *Kestrel (DCLM WSD-S Phase)*: In the first phase, we used the "DCLM mix" and [WSD-S](https://arxiv.org/abs/2410.05192) for about 2.7T tokens. We used 2x TPU v5e-256 coordinated with multislice for this. (0→2.7T tokens)
+- *Ocelot (DCLM WSD Phase)*: We were given access to a v4-2048 slice and moved to that. To better utilize the hardware, we increased our batch size 50%. We also switched from WSD-S to WSD. We kept the learning rate high through 3.78T tokens.
+- *Jellyfish (First Cooldown)*: It was time to cooldown as we were starting to run low on DCLM. Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656)), we decided to fold in higher quality data during cooldown. (3.78T→4.78T tokens)
+- *Phoenix (Reheated)*: We had more time for training, so we rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC](https://arxiv.org/abs/2412.02595) (plus [StarCoder Data](https://huggingface.co/datasets/bigcode/starcoderdata)). (4.78T→11.1T tokens)
+- *Starling (Second Cooldown)*: Now we were running low on time, so we started another cooldown. We followed a similar process to the first cooldown, but added a few new datasets that we had created and also some that had dropped since our previous attempt. (11.1T→12.75T tokens)
 
-We emphasize that these phases were not planned in advance. Decisions were made reactively based on changing timelines and data availability.
+These phases were not planned in advance. Decisions were made reactively based on changing timelines and data availability.
 
-Moreover, while there is a single straight-line set of phases that produced the final Marin 8B artifact,
-there were a number of short branches that did not make it into the final run. Many of these were by design: there were other trial
-[LLama 3](https://arxiv.org/abs/2302.13971) microannealing runs (see also [Olmo 2](https://arxiv.org/abs/2501.00656), [Yi](https://arxiv.org/html/2403.04652v1), [DBRX](https://www.databricks.com/blog/introducing-dbrx-new-state-art-open-llm)) that helped decide our cooldown mix, as well as attempts at "deeper cooldowns.
-We detail these [GH#784](https://github.com/marin-community/marin/issues/784), [GH#820](https://github.com/marin-community/marin/issues/820), and [GH#898](https://github.com/marin-community/marin/issues/898), though provide a summary later in this one.
-We also ran some experiments investigating issues with "SFT-ability,"
-documented in these issues:
+While the final Marin 8B model came from a single linear run, we also explored a number of side paths. Some of these were by design—for example, short microannealing experiments
+(inspired by [Olmo 2](https://arxiv.org/abs/2501.00656), [Yi](https://arxiv.org/html/2403.04652v1), [DBRX](https://www.databricks.com/blog/introducing-dbrx-new-state-art-open-llm)) that informed our cooldown mix.
+Others tested "deeper cooldown" strategies or addressed issues like "SFT-ability." We summarize these later, but you can find more detail in:
 
-- [#898 Raccoon](https://github.com/marin-community/marin/issues/898)
-- [#916 Spoonbill](https://github.com/marin-community/marin/issues/916)
+**Annealing Experiments:**
+* [GH#784](https://github.com/marin-community/marin/issues/784): High Quality Data Annealing Experiments on Dolma/Dolmino
+* [GH#820](https://github.com/marin-community/marin/issues/820): Evaluate High Quality Datasets for Cooldown Mix
+* [GH#934](https://github.com/marin-community/marin/issues/934): Comparing Cooldowns on Pretraining Data v.s. HQ Data
+
+**SFT-ability:**
+* [GH#898](https://github.com/marin-community/marin/issues/898): Raccoon: Try deepening the cooldown of "jellyfish" to see if it improves SFT
+* [GH#916](https://github.com/marin-community/marin/issues/916): Spoonbill: not-quite-so-deep cooldown
+
 
 ## Phase 1: Kestrel (WSD-S Phase)
 
-In the first phase, we trained from scratch using the best publicly available dataset at the time:
-[DCLM Baseline](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0).
-We decided to use [their best mixture](https://arxiv.org/abs/2406.11794): DCLM Baseline, [StarCoder Data](https://huggingface.co/datasets/bigcode/starcoderdata), and [Proofpile 2](https://huggingface.co/datasets/EleutherAI/proof-pile-2), though we did not use a curriculum
-as they did.
+In the first phase, we trained from scratch using what was, at the time, the best publicly available dataset:
+[DCLM Baseline](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0), from the [DCLM paper](https://arxiv.org/abs/2406.11794).
+We adopted their “best mixture”: DCLM Baseline, [StarCoder Data](https://huggingface.co/datasets/bigcode/starcoderdata), and [Proofpile 2](https://huggingface.co/datasets/EleutherAI/proof-pile-2).
+
+The DCLM paper used a curriculum, mixing in StarCoder and Proofpile only near the end of training.
+We did **not** start with a curriculum—though we ended up adding quite a bit of one later.
+
 
 ### Hardware
 
@@ -158,9 +165,9 @@ For evaluation, we initially tracked a large subset of Paloma (with a particular
 ### WSD-S
 
 Based on the success of [our work understanding cyclic warmup-stable-decay schedules (WSD-S)](https://arxiv.org/abs/2410.05192), we decided to use a
-WSD-S learning rate schedule. WSD-S is essentially cyclic warmup-(stable-decay)`*`, where you do a warmup, then a long
-plateau at peak learning rate, and then a decay phase, repeating the stable and decay phase. The decay phases allow you
-to measure how the model is performing.
+WSD-S learning rate schedule.
+WSD-S is essentially a cyclic warmup–stable–decay schedule, where you warm up, hold a long plateau at peak learning rate, and then decay—repeating the stable and decay phases.
+The decay phases allow you to measure how the model is performing.
 
 WSD-S has a number of appealing properties:
 
@@ -188,7 +195,7 @@ We initially opted to not use Z-loss because we didn't have problems with LR=1e-
 
 ### Specification
 
-The specification for the first phase is available on [Github here](https://github.com/marin-community/marin/blob/852c53f9741b233549daf9f1649fe88c9c5a170c/experiments/tootsie/exp600_tootsie.py#L51-L78).
+The specification for the first phase is available on [Github here](https://github.com/marin-community/marin/blob/1e713371b25b0d2a1fc90b917e954e460ebd6c2c/experiments/tootsie/exp600_tootsie.py#L55-L81).
 
 ### Notes
 
@@ -214,8 +221,8 @@ There is a noticeable drop in both the eval loss and the training loss during th
 ![graph depicting the drop in eval loss and training loss with the longer, less frequent decay phases](../images/tootsie-8b-wsd-s-loss-transition.png)
 
 Interestingly, not all eval losses dropped.  In fact, for some domains, the eval loss increased.
-We saw decreases in `mc4`, `c4en`, `m2d2 wikipedia`, `m2d2 s2orc`, and `refined web`, but marked increases in `100_subreddits`, `twitterAAE_HELM_fixed`, `manosphere`, `4chan`, among a fwe others.
-Interestingly, after this initial increase, almost all domains started to decrease again.
+We saw decreases in `mc4`, `c4en`, `m2d2 wikipedia`, `m2d2 s2orc`, and `refined web`, but marked increases in `100_subreddits`, `twitterAAE_HELM_fixed`, `manosphere`, `4chan`, among a few others.
+Interestingly, after the initial spike, most of those domains began trending downward as well.
 Subsequent analysis revealed that this was due to structural differences in preprocessing between the domains: some Paloma domains had texts that obligatorily ended with a space character (which we did not strip), which was not how our training data was formatted.
 The deeper cooldown allowed the model to "dislike" these final spaces more clearly.
 We investigated this behavior further in [this analysis](https://github.com/marin-community/marin/issues/826#issuecomment-2696496271).
@@ -225,8 +232,9 @@ We investigated this behavior further in [this analysis](https://github.com/mari
 
 ## Phase 2: Ocelot (EMA Phase)
 
-At around 2.7e12 tokens, we were given access to a v4-2048 reservation and immediately moved to that.
-All subsequent phases were run on that.
+At around 2.7e12 tokens, we gained access to a v4-2048 reservation and immediately transitioned over.
+All subsequent phases were run on that hardware.
+
 
 ### Adjusted Hyperparameters
 
@@ -239,7 +247,7 @@ Initially, I inadvertently got the direction of the EMA wrong, so early evals we
 
 We did not reset the optimizer state or do a rewarmup in this or any transition.
 
-To my continued embarrassment, I also realized that we were using Llama 2's settings for Rotary Embeddings rather than Llama 3's settings. We changed to Llama3-style at this point.
+To my continued embarrassment, I also realized we were still using Llama 2’s rotary embedding settings. We switched to Llama 3-style at this point.
 
 ### Specification
 
@@ -258,21 +266,21 @@ One of the most interesting things we saw during this phase was what we call the
 The EMA gap is the difference between the eval loss of the EMA model and the eval loss of the hot model. As expected, the EMA loss was better.
 Surprisingly, the gap was fairly stable over time, changing only with changes to the learning rate (or different datasets). For c4en, with the hot learning rate, the gap was consistently around 0.015 bits-per-byte (bpb). A stable gap of 0.017 was observed in the subsequent Phoenix phase. The EMA gap would of course shrink as the learning rate was cooled down (since, in the limit, the model freezes).
 
-This was not to say there was no deviation in the gap, but the fact that it did not seem to increase or decrease with time was surprising.
+That’s not to say the gap never shifted, but it didn’t appear to trend upward or downward over time, which surprised us.
 
 ![embed](../images/tootsie-8b-ema-gap.png)
 
 
-### Interlude: microannealing
+### Interlude: Microannealing
 
-Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656), [Yi](https://arxiv.org/html/2403.04652v1), [DBRX](https://www.databricks.com/blog/introducing-dbrx-new-state-art-open-llm)), we knew we would need to mix in higher quality data during our cooldowns. But, what constitutes higher quality data?
+Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656), [Yi](https://arxiv.org/html/2403.04652v1), [DBRX](https://www.databricks.com/blog/introducing-dbrx-new-state-art-open-llm)), we knew we would need to mix in higher quality data during our cooldowns. But what actually constitutes higher quality data?
 
 Llama 3 and Olmo 2 used small experiments (what Olmo calls "microannealing") to test the effect of different data sources. The basic idea is to take a model that has already been mostly trained, and then do a short cooldown with ~70% original data and ~30% a test high quality data source. (Olmo 2 uses 50/50.) We ran a series of microannealing runs to test the effect of different data sources.
 
 See [GH#784](https://github.com/marin-community/marin/issues/784) and [GH#820](https://github.com/marin-community/marin/issues/820) for the experiments and more details on our approach.
 
-The most important takeaway was that naively oversampling "High Quality" (HQ) data does not lead to improved task performance in
-microannealing experiments, though they do usually lead to improved loss on HQ validation sets (e.g. Paloma's various subsets).
+The most important takeaway was that, in microannealing experiments, naively oversampling “High Quality” (HQ) data did not improve task performance.
+It did, however, consistently improve loss on HQ validation sets (e.g., Paloma’s various subsets)—which isn’t surprising, since those eval sets often came from the same or similar domains as the HQ training data.
 
 We believe this is because typical "high quality" data sources (e.g. ArXiv, Wikipedia) don't have as much fewshot-learning-inducing data (e.g. multiple choice questions) as the broader web does. When you replace such a large fraction of the Pretraining (PT) mix with a HQ source, you lose out on this data and task performance suffers.
 
@@ -291,7 +299,7 @@ In summary:
 - Mixing all HQ sources together performed about at the average of the specific HQ sources.
 - Including FLAN alone (i.e. 70% PT / 30% FLAN) underperformed the PT baseline.
 
-So: FLAN helps in moderation, HQ alone didn't.
+So: FLAN helps in moderation. HQ alone didn't.
 
 
 ## Phase 3: Jellyfish (First Cooldown)
