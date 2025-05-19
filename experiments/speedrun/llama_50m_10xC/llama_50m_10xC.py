@@ -1,6 +1,6 @@
 """
 Speedrun code for a 50M parameter model based on the Llama architecture.
-It is trained for 10 times the Chinchilla-optimal number of tokens.
+It is trained for 10 times the Chinchilla-optimal number of tokens, i.e 10B tokens.
 """
 
 import logging
@@ -34,4 +34,4 @@ speedrun_config = SpeedrunConfig(
 speedrun_config.print_run_info()
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("llama_50m_10xC", speedrun_config, override_output_path="checkpoints/speedrun/llama_50m_10xC-a0bf1c"))
+    executor_main(steps=default_speedrun("llama_50m_10xC", speedrun_config))
