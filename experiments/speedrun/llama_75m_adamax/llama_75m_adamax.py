@@ -1,5 +1,5 @@
 """
-Speedrun code for a 75M parameter model based on the LLaMA architecture, and the AdaMax optimizer.
+Speedrun code for a 75M parameter model based on the Llama architecture, and the Adamax optimizer.
 """
 
 import logging
