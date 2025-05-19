@@ -205,14 +205,12 @@ def default_train_quality_model(
     return datashop_classifier
 
 
-def default_quality_filter_and_consolidate(
+def default_quality_filter(
     encoder_model: ExecutorStep | str,
     input_data_path: str | ExecutorStep,
     input_data_name: str,
     experiment_name: str,
     inference_config_kwargs: dict | None = None,
-    filter_config_kwargs: dict | None = None,
-    consolidate_config_kwargs: dict | None = None,
 ):
     """Runs quality filtering and consolidation on an input dataset given the quality filter model.
 
@@ -271,6 +269,34 @@ def default_quality_filter_and_consolidate(
         ],
     )
 
+    return attributes
+
+
+def default_consolidate(
+    attributes: ExecutorStep,
+    input_data_path: str | ExecutorStep,
+    input_data_name: str,
+    experiment_name: str,
+    filter_config_kwargs: dict | None = None,
+    consolidate_config_kwargs: dict | None = None,
+):
+    """Runs quality filtering and consolidation on an input dataset given the quality filter model.
+
+    Inputs:
+        encoder_model: The model to use for quality filtering.
+        input_data_path: The path to the input data, usually a large pretraining corpus to filter.
+        input_data_name: The name of the input data used for storage purposes.
+        experiment_name: The name of the experiment.
+        inference_config_kwargs: Keyword arguments for the inference config which uses the encoder
+            model to score documents based on their quality.
+        filter_config_kwargs: Keyword arguments for the filter config which is used to filter the
+            documents based on their quality.
+        consolidate_config_kwargs: Keyword arguments for the consolidate config which is used to
+            consolidate the filtered documents.
+
+    Outputs:
+        An ExecutorStep that represents the filtered documents.
+    """
     if filter_config_kwargs is None:
         filter_config_kwargs = default_consolidate_filter_config_kwargs
     else:
