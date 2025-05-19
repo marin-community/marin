@@ -36,4 +36,4 @@ speedrun_config = SpeedrunConfig(
 speedrun_config.print_run_info()
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("llama_50m_gpu_4xA100", speedrun_config))
+    executor_main(steps=default_speedrun("llama_50m_gpu_4xA100_run", speedrun_config))

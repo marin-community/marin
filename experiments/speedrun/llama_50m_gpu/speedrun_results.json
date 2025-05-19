@@ -5,10 +5,10 @@
         "author": {
           "affiliation": "Stanford University",
           "name": "Herumb Shandilya",
-          "url": "https://x.com/krypticmouse"
+          "url": "https://www.x.com/krypticmouse"
         },
-        "description": "50M param model based on Llama architecture.",
-        "eval/paloma/c4_en/bpb": 1.403339982032776,
+        "description": "50m model based on Llama architecture.",
+        "eval/paloma/c4_en/bpb": 1.4032597541809082,
         "model_config": {
           "activation_function": "silu",
           "attn_backend": null,
@@ -45,7 +45,7 @@
           "device_flops_override": null,
           "gpu_count": 4
         },
-        "run_completion_timestamp": "2025-05-19 05:41:32 UTC",
+        "run_completion_timestamp": "2025-05-19 08:02:06 UTC",
         "tokenized_dataset": "/juice4/scr4/herumbshandilya/50M_llama_chinchilla/tokenized/subcache/fineweb-edu-10B-6fbcbb",
         "total_tokens": 996147200,
         "train_config": {
@@ -90,9 +90,9 @@
           "weight_decay": 0.1,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 9.018110136432946e+16,
-        "training_time": 72.2604978880845,
-        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/llama_50m_gpu_4xA100-688984"
+        "training_hardware_flops": 1.4999205700146406e+18,
+        "training_time": 1201.859431101475,
+        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/llama_50m_gpu_4xA100_run-625275"
       }
     }
   ]
