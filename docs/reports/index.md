@@ -59,15 +59,15 @@ This page includes only experiments that have at least one run or report.
     - [WandB Report](https://wandb.ai/marin-community/marin-optimizer/reports/Deciding-the-optimal-lr-schedule-which-is-cosine---VmlldzoxMTIxNDk5NA)
     - Conclusion: Cosine is best. High LR is important. WSD isn't terrible.
 - Mixture of Experts [![#929](https://img.shields.io/github/issues/detail/state/marin-community/marin/929)](https://github.com/marin-community/marin/issues/929)
-  - [GitHub Issue #929](https://github.com/marin-community/marin/issues/929)
-  - [WandB Report](https://api.wandb.ai/links/marin-community/0lspgzn3)
+    - [GitHub Issue #929](https://github.com/marin-community/marin/issues/929)
+    - [WandB Report](https://api.wandb.ai/links/marin-community/0lspgzn3)
 - Hybrid Norm and Input Embedding Norm [![#961](https://img.shields.io/github/issues/detail/state/marin-community/marin/961)](https://github.com/marin-community/marin/issues/961)
-  - [GitHub Issue #961](https://github.com/marin-community/marin/issues/961)
-  - [WandB Report](https://wandb.ai/marin-community/hybrid-norm/reports/Hybrid-Norm--VmlldzoxMjY2MDgxMA)
+    - [GitHub Issue #961](https://github.com/marin-community/marin/issues/961)
+    - [WandB Report](https://wandb.ai/marin-community/hybrid-norm/reports/Hybrid-Norm--VmlldzoxMjY2MDgxMA)
 - OLMoE replication - MoE vs dense [![#1183](https://img.shields.io/github/issues/detail/state/marin-community/marin/1183)](https://github.com/marin-community/marin/issues/1183)
-  - [GitHub Issue #1183](https://github.com/marin-community/marin/issues/1183)
-  - [WandB Report](https://api.wandb.ai/links/marin-community/qi3u8nx7)
-  - Conclusion: Despite having a lower MFU, MoE outperforms similar sized dense model in both training and evaluation.
+    - [GitHub Issue #1183](https://github.com/marin-community/marin/issues/1183)
+    - [WandB Report](https://api.wandb.ai/links/marin-community/qi3u8nx7)
+    - Conclusion: Despite having a lower MFU, MoE outperforms similar sized dense model in both training and evaluation.
 
 ## Training and Performance
 
