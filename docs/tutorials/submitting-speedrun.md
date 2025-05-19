@@ -153,14 +153,7 @@ and having multiple scales allows us to fit scaling laws and extrapolate out to 
    ```
 
 !!! note "Speedrun Time Benchmarks"
-    We'll share some benchmark runs on two model sizes to help estimate training times:
-
-    | Model Size | Hardware | Training Time | Tokens Processed | Chinchilla Optimal ETA |
-    |------------|----------|---------------|------------------|----------------------|
-    | 50M params | 1× A100  | 900s/1000 steps | 33M tokens      | ~7.5 hours           |
-    | 75M params | 2× A100  | 1330s/1000 steps| 65M tokens      | ~8.5 hours           |
-
-    These benchmarks can help you estimate the total training time for your runs of similar scale. The Chinchilla Optimal ETA represents the estimated time to reach Chinchilla-optimal compute for each configuration `(20 * num_params)`.
+    We've run some benchmarks to give you a sense of expected training times. For example, a 50M parameter model trained on 4× A100 GPUs (80GB) takes about 33 minutes to complete 7600 steps, processing approximately 1 billion tokens. This should help you estimate the resources needed for your own speedrun experiments.
 
 ## Submitting Your Run
 
