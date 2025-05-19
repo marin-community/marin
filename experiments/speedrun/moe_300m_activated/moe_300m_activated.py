@@ -49,4 +49,4 @@ speedrun_config = SpeedrunConfig(
 speedrun_config.print_run_info()
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("300m_mixtral_moe", speedrun_config))
+    executor_main(steps=default_speedrun("moe_mixtral_300m_activated", speedrun_config))
