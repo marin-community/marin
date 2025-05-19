@@ -1,12 +1,13 @@
 import glob
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import draccus
 import pytest
 import ray
 
-from marin.utils import remove_tpu_lockfile_on_exit
+from marin.utils import remove_tpu_lockfile_on_exit, asdict_excluding
 
 
 def setup_module(module):
@@ -84,3 +85,31 @@ def skip_in_ci(fn_or_msg):
         return decorator
 
     return pytest.mark.skipif("CI" in os.environ, reason="skipped in CI")(fn_or_msg)
+
+
+@dataclass
+class NestedConfig:
+    name: str
+    value: int
+    runtime_env: str = "test"
+
+
+@dataclass
+class TestConfig:
+    nested: NestedConfig
+    description: str
+    runtime_env: str = "test"
+
+
+def test_asdict_excluding_simple():
+    """Test asdict_excluding with a simple dataclass."""
+    config = NestedConfig(name="test", value=42)
+    result = asdict_excluding(config, exclude={"runtime_env"})
+    assert result == {"name": "test", "value": 42}
+    assert "runtime_env" not in result
+
+
+def test_asdict_excluding_invalid():
+    """Test asdict_excluding with non-dataclass input."""
+    with pytest.raises(ValueError, match="Only dataclasses are supported"):
+        asdict_excluding({"key": "value"}, exclude=set())
