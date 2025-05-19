@@ -1,6 +1,6 @@
 """
 Speedrun code for a 75M parameter model based on the LLaMA architecture.
-The run experiments with setting z_loss_weight to 1e-4.
+We set z_loss_weight to 1e-4.
 """
 
 import logging
