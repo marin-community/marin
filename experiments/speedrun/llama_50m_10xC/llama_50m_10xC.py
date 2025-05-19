@@ -1,6 +1,6 @@
 """
 Speedrun code for a 50M parameter model based on the Llama architecture.
-It is trained for 10 times the Chinchilla-optimal number of tokens.
+It is trained for 10 times the Chinchilla-optimal number of tokens, i.e 10B tokens.
 """
 
 import logging
@@ -19,7 +19,7 @@ speedrun_config = SpeedrunConfig(
         affiliation="Stanford University",
         url="https://www.linkedin.com/in/nikilravi/",
     ),
-    description="50M parameter trained for 10 times Chinchilla-optimal number of tokens.",
+    description="50M parameter trained for 10 times Chinchilla-optimal number of tokens, i.e 10B tokens.",
     model_config=llama_50m,
     train_config=SimpleTrainConfig(
         TpuPodConfig(tpu_type="v4-128"),
