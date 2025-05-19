@@ -175,16 +175,21 @@ def speedrun_results(config: SpeedrunResultsConfig):
         return
 
     model_flops = config.speedrun_config.compute_model_flops()
-    model_size = compute_num_parameters(config.speedrun_config.model_config, config.speedrun_config.vocab_size)
+    model_size = config.speedrun_config.model_config.total_trainable_params(config.speedrun_config.vocab_size)
     total_tokens = (
         config.speedrun_config.train_config.train_batch_size
         * config.speedrun_config.model_config.seq_len
         * config.speedrun_config.train_config.num_train_steps
     )
 
-    training_time_seconds = sum(step_times)
-    training_time_in_minutes = training_time_seconds / 60
-    training_hardware_flops = training_time_seconds * config.speedrun_config.num_devices * config.speedrun_config.device_flops
+    training_time = sum(step_times)
+    training_hardware_flops = training_time * config.speedrun_config.num_devices * config.speedrun_config.device_flops
+    logger.info(f"Training time: {training_time:.2f} seconds")
+    # devices
+    logger.info(f"Number of devices: {config.speedrun_config.num_devices}")
+    logger.info(f"Device FLOPs: {config.speedrun_config.device_flops:.2e} FLOPs")
+    logger.info(f"Training hardware FLOPs: {training_hardware_flops:.2e} FLOPs")
+    
     # get wandb run and metrics
     run = wandb.Api().run(f"{config.wandb_entity}/{config.wandb_project}/{wandb_run_id}")
     wandb_metrics = {
@@ -196,7 +201,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
     runtime_seconds = run.summary["_runtime"]
     end_time = start_time + datetime.timedelta(seconds=runtime_seconds)
 
-    full_wandb_url = f"https://wandb.ai/{config.wandb_entity}/{config.wandb_project}/runs/{wandb_run_id}"
+    wandb_run_link = f"https://wandb.ai/{config.wandb_entity}/{config.wandb_project}/runs/{wandb_run_id}"
 
     # Start with the base config as a dictionary
     speedrun_dict = config.speedrun_config.as_json_dict()
@@ -210,13 +215,13 @@ def speedrun_results(config: SpeedrunResultsConfig):
         "model_flops": model_flops,
 
         # Training metrics
-        "training_time_in_minutes": training_time_in_minutes,
+        "training_time": training_time,
         "training_hardware_flops": training_hardware_flops,
         "eval/paloma/c4_en/bpb": float(wandb_metrics.get("eval/paloma/c4_en/bpb")) if wandb_metrics.get("eval/paloma/c4_en/bpb") is not None else None,
 
         # Run metadata
         "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
-        "wandb_run_link": full_wandb_url,
+        "wandb_run_link": wandb_run_link,
     }
 
     logger.info(f"Speedrun info and results: {run_info}")
@@ -299,7 +304,7 @@ def default_speedrun(
         fn=speedrun_results,
         config=SpeedrunResultsConfig(
             wandb_run_id=wandb_run_id,
-            wandb_entity=wandb_entity,
+            wandb_entity="stanford-mercury",
             wandb_project=wandb_project,
             speedrun_config=config,
             output_path=output_path_of(train_step, "speedrun_results.json"),
