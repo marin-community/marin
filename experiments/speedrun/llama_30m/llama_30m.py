@@ -15,7 +15,7 @@ logger = logging.getLogger("ray")
 speedrun_config = SpeedrunConfig(
     author=Author(
         name="Nikil Ravi",
-        affiliation="Marin Community",
+        affiliation="Stanford University",
         url="https://www.linkedin.com/in/nikilravi/",
     ),
     description="30M parameter model based on Llama architecture.",
