@@ -7,10 +7,10 @@ import logging
 
 from experiments.llama import llama_50m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorMainConfig, executor_main
+from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
+from marin.execution.executor import executor_main
 from marin.resources import GpuConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
-from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 
 logger = logging.getLogger("ray")
 
