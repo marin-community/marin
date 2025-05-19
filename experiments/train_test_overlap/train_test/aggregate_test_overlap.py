@@ -23,7 +23,19 @@ TRAINING_DATASET_MAP = {
     "mlfoundations/dclm-baseline": "DCLM",
     "dolmino": "DOLMINO",
     "proof-pile-2": "PROOFPILE",
-    "finemath-3plus": "FINEMATH3+",
+    "finemath": "FINEMATH3+",
+    # Add StarCoder
+    "starcoder": "STARCODER",
+    # Add SFT datasets
+    "acecode": "ACECODE",
+    "smoltalk": "SMOLTALK",
+    "verifiable_math": "VERIFIABLE_MATH",
+    # same string for both dolphin-r1 and cognitivecomputations/dolphin-r1-reasoning
+    "dolphin_r1": "DOLPHIN_R1",
+    "bespoke_stratos": "BESPOKE_STRATOS",
+    "openthoughts": "OPENTHOUGHTS_MATH",
+    "tulu_3_sft": "TULU3",
+    "natural_reasoning": "NATURAL_REASONING",
 }
 
 
@@ -235,21 +247,30 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
                 # After per-subset summaries, write total for this part
                 total_filename = "summary_input_total.jsonl" if part == "input" else "summary_reference_total.jsonl"
                 total_file = os.path.join(out_dir, total_filename)
-                print(f"  Writing {total_filename} for n-gram {n_val}", flush=True)
-                # Compute total_instances and overlap_count across all subsets for split 'test'
-                total_instances = sum(
-                    scenario_counts.get(dataset, {}).get(subset_key, {}).get("test", 0)
-                    for subset_key in scenario_counts.get(dataset, {})
-                )
+                # Find available splits and choose split (prefer 'test', else fallback to validation or first)
                 stats_all = summary_by_part.get(part, {}).get(dataset, {}).get(n_val, {})
-                overlap_count = sum(len(stats_all.get(subset_key, {}).get("test", set())) for subset_key in stats_all)
-                fraction = (overlap_count / total_instances) if total_instances else None
+                splits_present = set()
+                for subset_map in stats_all.values():
+                    splits_present.update(subset_map.keys())
+                split_to_use = "test" if "test" in splits_present else next(iter(splits_present), None)
+                print(f"  Writing {total_filename} for n-gram {n_val}, using split '{split_to_use}'", flush=True)
+                if split_to_use:
+                    total_instances = sum(
+                        scenario_counts.get(dataset, {}).get(subset_key, {}).get(split_to_use, 0)
+                        for subset_key in scenario_counts.get(dataset, {})
+                    )
+                    overlap_count = sum(
+                        len(stats_all.get(subset_key, {}).get(split_to_use, set())) for subset_key in stats_all
+                    )
+                    fraction = (overlap_count / total_instances) if total_instances else None
+                else:
+                    total_instances, overlap_count, fraction = 0, 0, None
                 with fsspec.open(total_file, "wt") as tot_f:
                     total_rec = {
                         "dataset": dataset,
                         "n_val": n_val,
                         "part": part,
-                        "split": "test",
+                        "split": split_to_use,
                         "total_instances": total_instances,
                         "overlap_count": overlap_count,
                         "overlap_fraction": fraction,
@@ -301,37 +322,47 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
         test_ds_list = sorted(test_ds_set)
         training_ds_list = sorted(summary_by_training[part].keys())
 
-        # CSV header
-        csv_file = os.path.join(out_base, f"matrix_overlap_{label}.csv")
-        print(f"Writing matrix CSV {csv_file}", flush=True)
-        with fsspec.open(csv_file, "wt") as mf:
-            mf.write("training_dataset," + ",".join(test_ds_list) + "\n")
-            for training_ds in training_ds_list:
-                row_vals = []
-                nmap = summary_by_training[part].get(training_ds, {})
-                if not nmap:
-                    # no data for this training_ds
-                    row_vals = ["" for _ in test_ds_list]
-                else:
-                    first_n = next(iter(nmap))
-                    dsmap = nmap[first_n]
-                    for test_ds in test_ds_list:
-                        # total test instances across all subsets
-                        total_instances = sum(
-                            scenario_counts.get(test_ds, {}).get(sub, {}).get("test", 0)
-                            for sub in scenario_counts.get(test_ds, {})
-                        )
-                        # overlap count
-                        subset_map = dsmap.get(test_ds, {})
-                        overlap_count = sum(
-                            len(inst_set)
-                            for subset_key, split_map in subset_map.items()
-                            for split, inst_set in split_map.items()
-                            if split == "test"
-                        )
-                        frac = (overlap_count / total_instances) if total_instances else None
-                        row_vals.append(str(frac) if frac is not None else "")
-                mf.write(training_ds + "," + ",".join(row_vals) + "\n")
+        # Generate matrix for each n-gram value
+        for n_val in cfg.n_values:
+            # CSV header
+            csv_file = os.path.join(out_base, f"matrix_overlap_{label}_n{n_val}.csv")
+            print(f"Writing matrix CSV {csv_file}", flush=True)
+            with fsspec.open(csv_file, "wt") as mf:
+                mf.write("training_dataset," + ",".join(test_ds_list) + "\n")
+                for training_ds in training_ds_list:
+                    row_vals = []
+                    nmap = summary_by_training[part].get(training_ds, {})
+                    if not nmap or n_val not in nmap:
+                        # no data for this training_ds or n_val: leave blank
+                        row_vals = ["" for _ in test_ds_list]
+                    else:
+                        dsmap = nmap[n_val]
+                        for test_ds in test_ds_list:
+                            # Determine the split to use for this test dataset
+                            test_stats = summary_by_part.get(part, {}).get(test_ds, {}).get(n_val, {})
+                            splits_present = set()
+                            for sp_map in test_stats.values():
+                                splits_present.update(sp_map.keys())
+                            split_to_use = "test" if "test" in splits_present else next(iter(splits_present), None)
+                            # total instances for chosen split
+                            if split_to_use:
+                                total_instances = sum(
+                                    scenario_counts.get(test_ds, {}).get(subset_key, {}).get(split_to_use, 0)
+                                    for subset_key in scenario_counts.get(test_ds, {})
+                                )
+                                # overlap count for chosen split
+                                subset_map = dsmap.get(test_ds, {})
+                                overlap_count = sum(
+                                    len(sp_map.get(split_to_use, set())) for sp_map in subset_map.values()
+                                )
+                                frac = (overlap_count / total_instances) if total_instances else None
+                            else:
+                                total_instances = 0
+                                overlap_count = 0
+                                frac = None
+                            # write fraction or blank
+                            row_vals.append(str(frac) if frac is not None else "")
+                    mf.write(training_ds + "," + ",".join(row_vals) + "\n")
 
     return "Aggregate test overlap completed!"
 
@@ -339,15 +370,15 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
 # Optionally filter which n-gram sizes to process via the N_VALUES env var (e.g. "10,15")
 
 n_values_list = []  # empty means all
-n_values_list = [15]
+n_values_list = [10, 15]
 config = AggregateTestOverlapConfig(
-    consolidated_root="gs://marin-us-central2/train_test_overlap/ngrams/",
+    consolidated_root="gs://marin-us-central2/train_test_overlap/ngrams_final/",
     output_base=this_output_path(),
-    scenario_jsonl="gs://marin-us-central2/scenarios/consolidated_eval_scenarios-d3f040/consolidated_scenarios.jsonl",
+    scenario_jsonl="gs://marin-us-central2/scenarios/consolidated_eval_scenarios_final-50b720/consolidated_scenarios.jsonl",
     n_values=n_values_list,
 )
 aggregate_step = ExecutorStep(
-    name="train_test_overlap/aggregated_retry_full",
+    name="train_test_overlap/aggregated_final_for_real",
     fn=aggregate_test_overlap,
     config=config,
 )

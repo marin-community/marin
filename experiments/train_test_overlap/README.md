@@ -33,48 +33,29 @@ This script:
 - Downloads evaluation datasets (MMLU, GSM8K, Math, TruthfulQA, BBH) from Hugging Face
 - Converts each dataset to the "decontamination" format with proper text fields for overlap detection
 
-### 2. Convert to Scenario Format and Consolidate
+### 2. Run Overlap Pipeline to Generate N-grams
 
-Next, run `test_scenario_conversation.py` to convert the Dolma-formatted data to scenario files, and then use `consolidate_scenario_jsonl.py` to combine them into a single file:
+First, run a sharded overlap pipeline script to generate n-gram overlap data. For example, to use the DCLM pipeline:
 
 ```bash
-# Run conversion only
-python experiments/train_test_overlap/format/test_scenario_conversation.py
-
-# Run consolidation (this will automatically run conversion step first if needed)
-python experiments/train_test_overlap/format/consolidate_scenario_jsonl.py
+python experiments/train_test_overlap/train_test/overlap_pipeline_dclm_sharded.py
 ```
 
-Alternatively, you can run the entire pipeline at once:
+You can also use other pipeline scripts in the `train_test/` directory for different datasets (e.g., `overlap_pipeline_starcoder.py`).
+
+### 3. Aggregate N-gram Results
+
+Once the n-gram overlap data has been generated, run the aggregation script to combine results and compute summaries:
 
 ```bash
-python experiments/train_test_overlap/format/run_scenario_pipeline.py
+python experiments/train_test_overlap/train_test/aggregate_test_overlap.py
 ```
 
-These steps:
-1. Convert each dataset to standardized scenario JSONL files with input and reference fields
-2. Find all individual scenario files across datasets
-3. Consolidate them into a single file for easier processing by the overlap detection system
-4. The consolidated file can be directly passed to the overlap pipeline scripts
-
-### 3. Run Overlap Detection
-
-Finally, run the appropriate overlap pipeline script for the dataset you want to analyze. For example, to check StarCoder data:
+Optionally, filter which n-gram sizes to process by setting the `N_VALUES` environment variable:
 
 ```bash
-python experiments/train_test_overlap/train_test/overlap_pipeline_starcoder.py
-```
-
-Each pipeline script:
-- Processes the training data at n-gram level (with configurable N values)
-- Compares against the scenario data to identify overlaps
-- Calculates overlap metrics and statistics
-- Outputs detailed reports and raw overlap data for analysis
-
-For StarCoder data specifically, you may need to first convert from Parquet to JSONL format using:
-
-```bash
-python experiments/train_test_overlap/format/convert_starcoder_parquet2jsonl.py
+export N_VALUES="10,15"
+python experiments/train_test_overlap/train_test/aggregate_test_overlap.py
 ```
 
 ### 4. Analysis of Results
