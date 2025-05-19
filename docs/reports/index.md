@@ -64,6 +64,10 @@ This page includes only experiments that have at least one run or report.
 - Hybrid Norm and Input Embedding Norm [![#961](https://img.shields.io/github/issues/detail/state/marin-community/marin/961)](https://github.com/marin-community/marin/issues/961)
   - [GitHub Issue #961](https://github.com/marin-community/marin/issues/961)
   - [WandB Report](https://wandb.ai/marin-community/hybrid-norm/reports/Hybrid-Norm--VmlldzoxMjY2MDgxMA)
+- OLMoE replication - MoE vs dense [![#1183](https://img.shields.io/github/issues/detail/state/marin-community/marin/1183)](https://github.com/marin-community/marin/issues/1183)
+  - [GitHub Issue #1183](https://github.com/marin-community/marin/issues/1183)
+  - [WandB Report](https://api.wandb.ai/links/marin-community/qi3u8nx7)
+  - Conclusion: Despite having a lower MFU, MoE outperforms similar sized dense model in both training and evaluation.
 
 ## Training and Performance
 
@@ -88,12 +92,12 @@ This page includes only experiments that have at least one run or report.
 
 ### Datashop
 - MEDU filtering across MMLU subsets [![#923](https://img.shields.io/github/issues/detail/state/stanford-crfm/marin/923)](https://github.com/marin-community/marin/issues/923)
-  - [GitHub Issue #923](https://github.com/marin-community/marin/issues/923)
-  - [WandB Report](https://api.wandb.ai/links/marin-community/9b1v0zwa)
-  - [Data Browser](https://crfm.stanford.edu/marin/data_browser/experiment?path=gs%3A%2F%2Fmarin-us-east1%2Fexperiments%2Fmedu_mmlu-051285.json)
+   - [GitHub Issue #923](https://github.com/marin-community/marin/issues/923)
+   - [WandB Report](https://api.wandb.ai/links/marin-community/9b1v0zwa)
+   - [Data Browser](https://crfm.stanford.edu/marin/data_browser/experiment?path=gs%3A%2F%2Fmarin-us-east1%2Fexperiments%2Fmedu_mmlu-051285.json)
 - Reproduce Finemath performance using Datashop [![#939](https://img.shields.io/github/issues/detail/state/stanford-crfm/marin/939)](https://github.com/marin-community/marin/issues/939) [![#939](https://img.shields.io/github/issues/detail/state/stanford-crfm/marin/939)](https://github.com/marin-community/marin/issues/939)
-  - [GitHub Issue #939](https://github.com/marin-community/marin/issues/939)
-  - [WandB Report](https://wandb.ai/marin-community/marin/reports/Reproducing-Finemath--VmlldzoxMjc2NDMyNg?accessToken=xnwbosaz2es5lkoyjmtclq0xoqbbqzyyg7gjt8qkmjz7zs0vx1p4g8t5nloyx9ft)
+   - [GitHub Issue #939](https://github.com/marin-community/marin/issues/939)
+   - [WandB Report](https://wandb.ai/marin-community/marin/reports/Reproducing-Finemath--VmlldzoxMjc2NDMyNg?accessToken=xnwbosaz2es5lkoyjmtclq0xoqbbqzyyg7gjt8qkmjz7zs0vx1p4g8t5nloyx9ft)
 
 
 ### High Quality Data Ablations

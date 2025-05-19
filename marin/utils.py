@@ -350,9 +350,11 @@ def asdict_excluding(obj, exclude: set[str]) -> dict:
     Useful when you have not easily serializable fields, such as `RuntimeEnv` in ResourceConfig.
     This does not check recursively for nested dataclasses- it checks only the top-level dataclass for
     the specified fields to exclude.
+
     Args:
         obj: The dataclass object to convert.
         exclude: A set of field names to exclude from the dictionary.
+
     Returns:
         A dictionary representation of the dataclass, excluding the specified fields.
     """
