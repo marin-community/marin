@@ -101,7 +101,8 @@ jobs:
             --command='sudo gcloud auth configure-docker us-east5-docker.pkg.dev --quiet \
                           && sudo docker run --net host --shm-size=16G --privileged -v /tmp/repo:/opt/marin \
                             ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_SHA }} \
-                            /bin/bash -c "export TPU_CI=true \
+                            /bin/bash -c "gcsfuse --implicit-dirs --cache-dir /dev/shm --file-cache-max-size-mb 160000 --client-protocol grpc --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true \
+                                     && export TPU_CI=true \
                                      && export START_RAY_TPU_CLUSTER=true \
                                      && export WANDB_API_KEY=${{ secrets.WANDB_API_KEY }} \
                                      && export WANDB_ENTITY=stanford-mercury \
