@@ -96,6 +96,7 @@ class SpeedrunResultsConfig:
 
 ### Utils and analysis functions ###
 
+
 def get_step_times_from_wandb(run_id: str, entity: str = WANDB_ENTITY, project: str = WANDB_PROJECT) -> list[float]:
     try:
         run = wandb.Api().run(f"{entity}/{project}/{run_id}")
@@ -111,9 +112,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
     # get the last part of the path (i.e. last part of gs://.../checkpoints/speedrun/<wandb_run_id>)
     wandb_run_id = config.wandb_run_id.split("/")[-1]
 
-    step_times = get_step_times_from_wandb(
-        run_id=wandb_run_id, entity=config.wandb_entity, project=config.wandb_project
-    )
+    step_times = get_step_times_from_wandb(run_id=wandb_run_id, entity=config.wandb_entity, project=config.wandb_project)
     if not step_times:
         logger.error("No step times available; analysis aborted.")
         return
@@ -238,8 +237,8 @@ def default_speedrun(
         if override_output_path:
             wandb_run_id = override_output_path.split("/")[-1]
         else:
-            wandb_run_id = train_step # gets converted to output path when passing it into the results step
-            
+            wandb_run_id = train_step  # gets converted to output path when passing it into the results step
+
     assert wandb_run_id is not None, "Could not extract wandb run ID from train step"
 
     results_step = ExecutorStep(
