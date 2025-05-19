@@ -1,5 +1,5 @@
 """
-Example of continual pretraining under the two stage framework for Basque data.
+Example of continual pretraining under the two stage framework for Basque data (based on two_stage_config.py).
 Simply load a pretrained model and do a single stage of training with choice of replay data.
 """
 

@@ -1,5 +1,5 @@
 """
-Searching for the best two-stage data schedule.
+Searching for the best two-stage data schedule (based on two_stage_config.py).
 Mid-training setup where we have a single learning rate schedule and a different mixture for each stage.
 Hyperparameters are tuned for the baseline of all data at the end of training.
 """

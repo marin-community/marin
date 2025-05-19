@@ -18,21 +18,34 @@ from experiments.two_stage.models import model_dict
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import ExecutorStep, this_output_path
 from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig, lm_varying_mixture_data_config
-from marin.training.training import PodConfig, TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.training import TpuPodConfig, TrainLmOnPodConfig, run_levanter_train_lm
 
 
 @dataclass
 class TwoStageConfig:
-    """Configuration for two-stage training."""
+    """
+    Configuration for two-stage training.
 
-    ### Data quantity
+    We are interested in the problem setting where there is 
+        (1) high-quality rare data for a task of interest (i.e. math, instruction following)
+        (2) a large amount of common web data that's only generally helpful for task
+    We study how to best order your data to maximize performance on the rare task.
+
+    Our experimental approach:
+        - Define two pools of data: common (effectively infinite) and rare (limited)
+        - Define two stages of training (akin to pre-training and fine-tuning)
+        - Select a data mixture for each stage (via `set_data_schedule_params` parameterization)
+    This config defines this search space alongside lr schedule, epochs, model size, etc.
+    """
+
+    ### Data distribution (dists defined in data.py)
     rare_data_name: str
     common_data_name: str
 
     rare_fraction: float = 0.01
     rare_data_epochs: int = 1
 
-    ### Data schedule
+    ### Data schedule (defined in set_data_schedule_params)
     # Can specify any 2 of the following 3 since the 3rd is implied.
     # If you specify all three, will ensure they are consistent.
     replay_ratio: float | None = None
@@ -51,7 +64,7 @@ class TwoStageConfig:
 
     ### Hardware
     tpu_type: str = "v4-128"
-    node_count: int = 1
+    slice_count: int = 1
 
     ### Optimizer config
     lr_schedule: str = "cosine"
@@ -79,11 +92,13 @@ class TwoStageConfig:
         ), "Cannot specify both initialize_from_checkpoint_path and initialize_from_hf"
 
         if self.steps_per_eval is None:
+            print(f"steps_per_eval not specified, defaulting to {self.num_train_steps // 20}")
             self.steps_per_eval = self.num_train_steps // 20
 
         self.steps_per_eval = min(self.steps_per_eval, self.num_train_steps // 2)
 
         if self.eval_harness_steps is None and self.eval_harness_tasks is not None:
+            print(f"eval_harness_steps not specified, defaulting to {self.num_train_steps // 4}")
             self.eval_harness_steps = self.num_train_steps // 4
 
         self.rare_data = data_dict[self.rare_data_name]
@@ -91,6 +106,9 @@ class TwoStageConfig:
 
     def set_data_schedule_params(self):
         """
+        A data schedule represents two stages of training subject to a constraint on rare steps.
+        Though there are many equivalent ways to parameterize this, we use the following
+        
         ┌──────────────────────────┬──────────┐
         │                          │ agr/(1-r)│ ← r (common data replay)
         │         remainder        │──────────│
@@ -298,10 +316,10 @@ class TwoStageConfig:
             return None
         return LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(self.eval_harness_tasks))
 
-    def build_pod_config(self) -> PodConfig:
-        return PodConfig(
+    def build_pod_config(self) -> TpuPodConfig:
+        return TpuPodConfig(
             tpu_type=self.tpu_type,
-            node_count=self.node_count,
+            slice_count=self.slice_count,
         )
 
     def build_train_lm_config(self) -> TrainLmConfig:
@@ -320,8 +338,8 @@ class TwoStageConfig:
 
     def build_train_lm_on_pod_config(self) -> TrainLmOnPodConfig:
         return TrainLmOnPodConfig(
-            config=self.build_train_lm_config(),
-            pod_config=self.build_pod_config(),
+            train_config=self.build_train_lm_config(),
+            resources=self.build_pod_config(),
             output_path=this_output_path(),
         )
 

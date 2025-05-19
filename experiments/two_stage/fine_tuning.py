@@ -1,5 +1,5 @@
 """
-Searching for the best replay ratio for fine-tuning.
+Searching for the best replay ratio for fine-tuning (based on two_stage_config.py).
 Two stage training: pre-training on only C4, followed by fine-tuning on rare + wC4.
 We cooldown/rewarmup the learning rate and reset the optimizer state in between checkpoints.
 For a fair comparison, we keep the total number of training steps fixed across replay ratio.
