@@ -46,26 +46,47 @@ jobs:
           echo "TPU_NAME=${TPU_NAME}" >> $GITHUB_ENV
           echo "Creating TPU VM: ${TPU_NAME}"
 
-          # Attempt to create a Spot TPU VM for cost savings
-          gcloud compute tpus tpu-vm create ${TPU_NAME} \
-            --zone=us-east5-b \
-            --accelerator-type=v6e-8 \
-            --version=v2-alpha-tpuv6e \
-            --project=${{ secrets.GCP_PROJECT_ID }} \
-            --preemptible
-
-          # Wait for the VM to initialize (adjust time as needed)
-          echo "Waiting for TPU VM to become ready..."
-          sleep 90
+          # Retry TPU creation up to 5 times with 30 second delays
+          for i in {1..5}; do
+            if gcloud compute tpus tpu-vm create ${TPU_NAME} \
+              --zone=us-east5-b \
+              --accelerator-type=v6e-8 \
+              --version=v2-alpha-tpuv6e \
+              --project=${{ secrets.GCP_PROJECT_ID }} \
+              --preemptible; then
+              echo "Successfully created TPU on attempt $i"
+              break
+            else
+              if [ $i -eq 5 ]; then
+                echo "Failed to create TPU after 5 attempts"
+                exit 1
+              fi
+              echo "Attempt $i failed, waiting 30 seconds before retry..."
+              sleep 30
+            fi
+          done
 
       - name: Copy current branch code to TPU VM
         run: |
           echo "Copying code from runner workspace to TPU VM at /tmp/repo"
           # Create a target directory on the TPU VM first
-          gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} \
-            --zone=${{ env.TPU_ZONE }} \
-            --project=${{ secrets.GCP_PROJECT_ID }} \
-            --command="mkdir -p /tmp/repo"
+          # Retry SSH command up to 5 times with 30 second delays
+          for i in {1..5}; do
+            if gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} \
+              --zone=${{ env.TPU_ZONE }} \
+              --project=${{ secrets.GCP_PROJECT_ID }} \
+              --command="mkdir -p /tmp/repo"; then
+              echo "Successfully created directory on TPU on attempt $i"
+              break
+            else
+              if [ $i -eq 5 ]; then
+                echo "Failed to create directory on TPU after 5 attempts"
+                exit 1
+              fi
+              echo "Attempt $i failed, waiting 30 seconds before retry..."
+              sleep 30
+            fi
+          done
 
           # Copy the checked-out code (entire workspace '.') to the target directory
           gcloud compute tpus tpu-vm scp . ${{ env.TPU_NAME }}:/tmp/repo \
@@ -80,12 +101,14 @@ jobs:
             --command='sudo gcloud auth configure-docker us-east5-docker.pkg.dev --quiet \
                           && sudo docker run --net host --shm-size=16G --privileged -v /tmp/repo:/opt/marin \
                             ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_SHA }} \
-                            /bin/bash -c "export TPU_CI=true \
+                            /bin/bash -c "gcsfuse --implicit-dirs --cache-dir /dev/shm --file-cache-max-size-mb 160000 --client-protocol grpc --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true \
+                                     && export TPU_CI=true \
+                                     && export START_RAY_TPU_CLUSTER=true \
                                      && export WANDB_API_KEY=${{ secrets.WANDB_API_KEY }} \
                                      && export WANDB_ENTITY=stanford-mercury \
                                      && export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
                                      && export HF_TOKEN=${{ secrets.HF_TOKEN }} \
-                                     && export TF_CPP_MIN_LOG_LEVEL=1 \
+                                     && export START_RAY_TPU_CLUSTER=true \
                                      && python scripts/install_all_pip_dep.py \
                                      && pip list \
                                      && echo TPU_TEST \
@@ -93,7 +116,9 @@ jobs:
                                      && echo VLLM_TEST \
                                      && pytest tests/vllm -s -v \
                                      && echo EVALS_TEST \
-                                     && pytest tests/evals -s -v"'
+                                     && pytest tests/evals -s -v \
+                                     && echo RAY_DATA_TEST \
+                                     && pytest tests/ray-data -s -v"'
 
       # - name: Configure Docker for Artifact Registry
       #   run: |

@@ -26,10 +26,24 @@ def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_r
         return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
 
 
+def as_single_lm_data_source(
+    input: TokenizerStep | InputName,  # noqa: A002
+) -> LMDatasetSourceConfig:
+    """
+    Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
+
+    Args:
+        input: The training set to use
+    """
+    return step_to_lm_mixture_component(input, include_raw_paths=True)
+
+
 def lm_data_config(
     training_set: TokenizerStep | InputName,
     validation_sets: dict[str, TokenizerStep] | None = None,
     shuffle: bool | int = True,
+    max_train_batches: dict[str, int] | None = None,
+    num_validation_sequences: dict[str, int] | None = None,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
@@ -38,6 +52,8 @@ def lm_data_config(
         training_set: The training set to use
         validation_sets: A sequence of validation sets to use
         shuffle: Whether to shuffle the data. If int, uses era shuffling.
+        max_train_batches: Maximum number of batches to use for the training set per dataset.
+        num_validation_sequences: Number of validation sequences to take from the training set per dataset.
     """
     tokenizer = training_set.config.tokenizer
 
@@ -56,6 +72,8 @@ def lm_data_config(
         {train_set_name: 1.0},
         shuffle=shuffle,
         missing_weights_are_validation=True,
+        max_train_batches=max_train_batches,
+        num_validation_sequences=num_validation_sequences,
     )
 
 
@@ -66,6 +84,8 @@ def lm_mixture_data_config(
     shuffle: bool | int = True,
     missing_weights_are_validation: bool = True,
     include_raw_paths: bool = True,
+    max_train_batches: dict[str, int] | None = None,
+    num_validation_sequences: dict[str, int] | None = None,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources.
@@ -76,6 +96,8 @@ def lm_mixture_data_config(
         shuffle: shuffling policy. int means era shuffling (~shuffle buffer).
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
         include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
+        max_train_batches: Maximum number of batches to use for the training set per dataset.
+        num_validation_sequences: Number of validation sequences to take from the training set per dataset.
     """
     configs = {
         name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)
@@ -89,7 +111,13 @@ def lm_mixture_data_config(
     tokenizer = _verify_tokenizers_same(components)
 
     return LMMixtureDatasetConfig(
-        configs=configs, train_weights=weights, tokenizer=tokenizer, cache_dir=None, shuffle=shuffle
+        configs=configs,
+        train_weights=weights,
+        tokenizer=tokenizer,
+        cache_dir=None,
+        shuffle=shuffle,
+        max_train_batches=max_train_batches,
+        num_validation_sequences=num_validation_sequences,
     )
 
 
@@ -101,6 +129,8 @@ def lm_varying_mixture_data_config(
     missing_weights_are_validation: bool = True,
     include_raw_paths: bool = True,
     mixture_block_size: int | None = None,
+    max_train_batches: dict[str, int] | None = None,
+    num_validation_sequences: dict[str, int] | None = None,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources with varying weights.
@@ -113,6 +143,10 @@ def lm_varying_mixture_data_config(
             Note that start_seq_index should be the index of the sequence (not batch) where the transition should occur.
         shuffle: shuffling policy. int means era shuffling (~shuffle buffer).
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
+        include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
+        mixture_block_size: The block size to use for the mixture.
+        max_train_batches: Maximum number of batches to use for the training set per dataset.
+        num_validation_sequences: Number of validation sequences to take from the training set per dataset.
 
     Returns:
         LMMixtureDatasetConfig configured with the varying weights
@@ -146,6 +180,8 @@ def lm_varying_mixture_data_config(
         cache_dir=None,
         shuffle=shuffle,
         mixture_block_size=mixture_block_size or 2048,
+        max_train_batches=max_train_batches,
+        num_validation_sequences=num_validation_sequences,
     )
 
 
