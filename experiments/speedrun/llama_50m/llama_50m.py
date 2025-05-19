@@ -1,8 +1,9 @@
 """
-Speedrun code for a 30M parameter model based on the LLaMA architecture.
+Speedrun code for a 50M parameter model based on the Llama architecture. The model is trained on the Fineweb-Edu dataset
+(the default dataset for speedruns).
 """
 import logging
-from experiments.llama import llama_30m
+from experiments.llama import llama_50m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
@@ -16,20 +17,20 @@ speedrun_config = SpeedrunConfig(
         affiliation="Marin Community",
         url="https://www.linkedin.com/in/nikilravi/",
     ),
-    description="Sanity check for 30M parameter model based on LLaMA architecture.",
-    model_config=llama_30m,
+    description="50M parameter model based on Llama architecture.",
+    model_config=llama_50m,
     train_config=SimpleTrainConfig(
-        TpuPodConfig(tpu_type="v4-128", slice_count=2),
+        TpuPodConfig(tpu_type="v4-128"),
         train_batch_size=512,
-        num_train_steps=100,
+        num_train_steps=4500,
         learning_rate=3e-3,
         weight_decay=0.1,
-        steps_per_eval=50,
-        steps_per_task_eval=50,
+        steps_per_eval=1500,
+        steps_per_task_eval=1500,
     ),
 )
 
 speedrun_config.print_run_info()
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("30M_llama_fineweb_sanity", speedrun_config))
+    executor_main(steps=default_speedrun("llama_50m", speedrun_config))
