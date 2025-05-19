@@ -339,15 +339,15 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
 # Optionally filter which n-gram sizes to process via the N_VALUES env var (e.g. "10,15")
 
 n_values_list = []  # empty means all
-n_values_list = [10, 15]
+n_values_list = [15]
 config = AggregateTestOverlapConfig(
-    consolidated_root="gs://marin-us-central2/train_test_overlap/ngrams/dolmino*",
+    consolidated_root="gs://marin-us-central2/train_test_overlap/ngrams/",
     output_base=this_output_path(),
     scenario_jsonl="gs://marin-us-central2/scenarios/consolidated_eval_scenarios-d3f040/consolidated_scenarios.jsonl",
     n_values=n_values_list,
 )
 aggregate_step = ExecutorStep(
-    name="train_test_overlap/aggregated_retry_dolmino",
+    name="train_test_overlap/aggregated_retry_full",
     fn=aggregate_test_overlap,
     config=config,
 )

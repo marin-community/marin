@@ -56,7 +56,7 @@ for _idx, (short_name, dolma_step) in enumerate(dolma_datasets.items()):
         max_in_flight=512,
     )
     overlap_step = ExecutorStep(
-        name=f"train_test_overlap/ngrams/{short_name}",
+        name=f"train_test_overlap/ngrams_final/{short_name}",
         fn=run_all_shards,
         config=overlap_config,
     )
