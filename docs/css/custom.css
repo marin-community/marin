@@ -88,7 +88,7 @@ html {
 
 @media screen and (max-width: 2560px) {
     .md-main__inner.md-grid {
-        max-width: 66%;
+        max-width: 90%;
     }
 }
 
