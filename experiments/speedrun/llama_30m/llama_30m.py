@@ -33,4 +33,4 @@ speedrun_config = SpeedrunConfig(
 speedrun_config.print_run_info()
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("llama_30m", speedrun_config))
+    executor_main(steps=default_speedrun("llama_30m_run", speedrun_config))
