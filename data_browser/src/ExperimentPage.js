@@ -333,8 +333,9 @@ function renderTrainLmStep({step, steps}) {
 
   // Initialization + training
   const trainerConfig = trainConfig.trainer;
-  const initializationSummary = trainerConfig.initialize_from ?
-    renderPath({path: trainerConfig.initialize_from, steps}) :
+  const initializeFrom = trainConfig.initialize_from_checkpoint || trainConfig.initialize_from_hf || trainerConfig.initialize_from;
+  const initializationSummary = initializeFrom ?
+    renderPath({path: initializeFrom, steps}) :
     `random(${modelConfig.initializer_range})`;
 
   const numSteps = trainerConfig.num_train_steps;

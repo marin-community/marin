@@ -1,19 +1,30 @@
-export function apiConfigUrl() {
-  return "/api/config";
+function getPrefix() {
+  // When we deploy the app, we have an iframe relationship between:
+  // - parent: marin.community/data-browser
+  // - child: Google Cloud Run app (marin-data-browser-*.run.app)
+  // If we detect we are running in this environment, use the parent URL.
+  if (/^marin-data-browser-.*\.run\.app$/.test(window.location.hostname)) {
+    return "https://marin.community/data-browser";
+  }
+  return "";
 }
 
-export function viewUrl(params) {
-  // Encode arrays (e.g., `paths`) as JSON
-  params = {...params, paths: JSON.stringify(params.paths)};
-  return "/view?" + new URLSearchParams(params);
+export function apiConfigUrl() {
+  return "/api/config";
 }
 
 export function apiViewUrl(params) {
   return "/api/view?" + new URLSearchParams(params);
 }
 
+export function viewUrl(params) {
+  // Encode arrays (e.g., `paths`) as JSON
+  params = {...params, paths: JSON.stringify(params.paths)};
+  return getPrefix() + "/view?" + new URLSearchParams(params);
+}
+
 export function experimentUrl(params) {
-  return "/experiment?" + new URLSearchParams(params);
+  return getPrefix() + "/experiment?" + new URLSearchParams(params);
 }
 
 export function viewSingleUrl(path) {
