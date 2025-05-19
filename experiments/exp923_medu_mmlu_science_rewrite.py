@@ -1,3 +1,4 @@
+# nodryrun
 """Synthetic data generation to rewrite high quality science data into QA format.
 
 We start with an LLM generated prompt from the MEDU process to filter out high quality science data.
