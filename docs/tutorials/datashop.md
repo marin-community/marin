@@ -27,15 +27,23 @@ ray up infra/marin-{region}-vllm.yaml
 
 ## Running a data filtering prompt
 A common workload in data filtering is to use a rubric prompt that describes the desired documents and then filter a data pool for documents that match the rubric. This often requires multiple steps:
+
 1. a large language model will first annotate a pool of documents to create a supervised training set
+
 2. this training set is used to train a smaller model (e.g. BERT, Fasttext)
+
 3. the smaller model is used to filter the data pool.
 
 To run the datashop filtering process, there are five main attributes to know:
+
 1. `annotator_model_name`: this is the model used to annotate the large data pool to create the supervised training set. We default to using Llama-3.3-70B-Instruct which is used commonly for this task (e.g. FineWebEdu, FineMath).
+
 2. `pretraining_data_path`: this is the path to the large data pool that you would like to filter. We provide some defaults such as the first shard of the DCLM-Baseline pretraining dataset.
+
 3. `annotator_data_path`: this is the path to a small set of documents that will be used for creating the supervised training set. We provide a default which is some randomly sampled documents from the pretraining data pool roughly totaling 500K documents.
+
 4. `data_filter_prompt`: This is the prompt that will be used to annotate the documents from the annotator data path to develop the supervised training set.
+
 5. `dataset_output_processor_config_kwargs`: These are keyword arguments passed into the dataset output processor, which can be helpful with processor initialization such as defining custom ways of parsing the final score from the LLM's generated text.
 
 
@@ -83,8 +91,8 @@ datashop_runner = DatashopRunner(
 
 We then run the datashop steps in the vLLM cluster to obtain the encoder model.
 
-Expected runtime: 20 minutes
-```python
+```python title="Expected runtime: 20 minutes"
+
 datashop_runner.run_eval_cluster_steps()
 ```
 
