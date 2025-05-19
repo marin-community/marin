@@ -13,6 +13,7 @@ import fsspec
 @dataclass(frozen=True)
 class SpeedrunAuthor:
     """Author information displayed in the leaderboard."""
+
     name: str
     affiliation: str
     url: str | None = None
@@ -29,7 +30,7 @@ class LeaderboardEntry:
     training_hardware_flops: float
 
     # Training metrics and FLOPs
-    training_time: float # in seconds
+    training_time: float  # in seconds
     model_flops: float
     eval_paloma_c4_en_bpb: float | None = None
 
@@ -79,11 +80,7 @@ def create_entry_from_results(results: dict, results_filepath: str) -> Leaderboa
 
     # Author information
     author_info = run_data["author"]
-    author = SpeedrunAuthor(
-        name=author_info["name"],
-        affiliation=author_info["affiliation"],
-        url=author_info.get("url")
-    )
+    author = SpeedrunAuthor(name=author_info["name"], affiliation=author_info["affiliation"], url=author_info.get("url"))
 
     return LeaderboardEntry(
         run_name=run_name,

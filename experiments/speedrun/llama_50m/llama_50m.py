@@ -2,7 +2,9 @@
 Speedrun code for a 50M parameter model based on the Llama architecture. The model is trained on the Fineweb-Edu dataset
 (the default dataset for speedruns).
 """
+
 import logging
+
 from experiments.llama import llama_50m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
