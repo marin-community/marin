@@ -13,10 +13,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import fsspec
+import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 
-import wandb
 from experiments.defaults import default_train
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
