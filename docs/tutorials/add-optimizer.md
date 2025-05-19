@@ -85,7 +85,7 @@ In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs
 
         You should also register your optimizer class with an identifier, as shown above.
 
-4. Use the optimizer in your training script: You can instantiate and pass it directly into your training config:
+4. Use the optimizer in your training script. You can instantiate and pass it directly into your training config:
 
     ```python
     optimizer = AdamaxConfig(
