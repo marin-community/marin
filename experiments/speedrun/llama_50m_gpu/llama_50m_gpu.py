@@ -17,14 +17,14 @@ speedrun_config = SpeedrunConfig(
     author=Author(
         name="Herumb Shandilya",
         affiliation="Stanford University",
-        url="https://www.linkedin.com/in/herumb-shandilya/",
+        url="https://x.com/krypticmouse",
     ),
     description="50M param model based on Llama architecture.",
     model_config=llama_50m,
     train_config=SimpleTrainConfig(
-        GpuConfig(gpu_count=1, accelerator_type="A100"),
-        train_batch_size=64,
-        num_train_steps=1000,
+        GpuConfig(gpu_count=4, accelerator_type="A100"),
+        train_batch_size=128,
+        num_train_steps=7600,
         learning_rate=3e-3,
         weight_decay=0.1,
         steps_per_eval=500,
@@ -34,4 +34,4 @@ speedrun_config = SpeedrunConfig(
 speedrun_config.print_run_info()
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("llama_50m_gpu", speedrun_config))
+    executor_main(steps=default_speedrun("llama_50m_gpu_4xA100_run", speedrun_config))
