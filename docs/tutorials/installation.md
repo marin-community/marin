@@ -13,7 +13,7 @@ Before you begin, ensure you have the following installed:
 
 This document focuses on basic setup and usage of Marin.
 If you're on a GPU, see [Local GPU Setup](local-gpu.md) for a GPU-specific walkthrough for getting started.
-If you want to set up a TPU cluster, see TPU Setup (../tutorials/tpu-cluster-setup.md). XXX TODO
+If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
 
 ## Installation
 
