@@ -40,15 +40,13 @@ for short_name, hf_name in DATASETS.items():
 # 2) Define overlap settings
 # --------------------------
 # TODO: set this to your evaluation scenarios JSONL path
-scenario_data = "gs://marin-us-central2/scenarios/consolidated_eval_scenarios-d3f040/consolidated_scenarios.jsonl"
+scenario_data = "gs://marin-us-central2/scenarios/consolidated_eval_scenarios_final-50b720/consolidated_scenarios.jsonl"
 n_values = [10, 15]
 
 # 3) Create sharded overlap & consolidation steps
 # -----------------------------------------------
 overlap_steps = []
-for idx, (short_name, dolma_step) in enumerate(dolma_datasets.items()):
-    if idx > 0:
-        continue
+for _idx, (short_name, dolma_step) in enumerate(dolma_datasets.items()):
     # Sharded overlap computation
     overlap_config = ShardedOverlapConfig(
         base_input_dir=output_path_of(dolma_step),
