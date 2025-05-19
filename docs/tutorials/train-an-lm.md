@@ -103,10 +103,15 @@ if __name__ == "__main__":
 ```
 
 The `default_train` function creates a training pipeline that:
+
 1. Loads and processes the dataset
+
 2. Initializes the model according to the configuration
+
 3. Executes the training loop with the specified hyperparameters
+
 4. Handles distributed training across your hardware
+
 5. Manages checkpointing and logging
 
 ## Launching the Training Job
