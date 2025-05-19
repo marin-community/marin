@@ -67,7 +67,7 @@ speedrun_config = SpeedrunConfig(
         affiliation="Stanford University",
         url="https://www.linkedin.com/in/nikilravi/",
     ),
-    description="75M param model with Adamax optimizer",
+    description="75M parameter model with Adamax optimizer",
     model_config=llama_75m,
     train_config=SimpleTrainConfig(
         TpuPodConfig(tpu_type="v4-128"),
