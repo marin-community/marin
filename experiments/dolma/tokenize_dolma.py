@@ -3,13 +3,30 @@ Tokenizes the Dolma 1.7 datasets.
 """
 
 import os.path
+from dataclasses import dataclass
 
 from experiments.llama import llama3_tokenizer
-from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-BASE_DIR_DOLMA = InputName.hardcoded("raw/dolma/v1.7")
+# Dolma was added before we had a proper versioning system, so we need to hardcode the path
+# We'll make a fake step for it.
+
+
+@dataclass(frozen=True)
+class _DummyConfig:
+    pass
+
+
+dolma_fake_step = ExecutorStep(
+    name="raw/dolma/v1.7",
+    fn=lambda x: None,
+    config=_DummyConfig(),
+).with_output_path("raw/dolma/v1.7")
+
+BASE_DIR_DOLMA = dolma_fake_step
+
 
 # sampling proportion comes from https://huggingface.co/datasets/allenai/dolma
 DOLMA_OLMO_MIXTURE_WEIGHTS = {

@@ -58,7 +58,12 @@ And some new datasets:
 - [Marin Markdownified Ar5iv (Warnings)](https://huggingface.co/datasets/marin-community/ar5iv-warning-markdown)
 - [Marin Datashop Science QA](https://huggingface.co/datasets/marin-community/datashop-science-qa)
 
-The first three are licensed per their original licenses. The fourth is licensed under CC-BY-SA 4.0.
+The `Markdownified` datasets are licensed under the original licenses of the individual documents.
+Please refer to [StackExchange](https://stackoverflow.com/help/licensing),
+[Wikipedia](https://en.wikipedia.org/wiki/Wikipedia:Database_download),
+and [arXiv](https://arxiv.org/help/license) for more information.
+
+The Datashop Science QA dataset is licensed under [CC-BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
 
 ### Datasets used in Marin 8B Instruct
 
@@ -84,15 +89,15 @@ We release a large number of checkpoints.
 
 Main Page: [marin-community/marin-8b-base](https://huggingface.co/marin-community/marin-8b-base)
 
-| Name              | Training Tokens | Link                                                                                                       |
-|-------------------|-----------------|------------------------------------------------------------------------------------------------------------|
-| `main`            | 12.7T           | [marin-community/marin-8b-base](https://huggingface.co/marin-community/marin-8b-base/tree/main)            |
-| `kestrel`         | 2.7T            | [kestrel](https://huggingface.co/marin-community/marin-8b-base/tree/kestrel)                               |
-| `ocelot`          | 3.78T           | [kestrel](https://huggingface.co/marin-community/marin-8b-base/tree/ocelot)                                |
-| `jellyfish`       | 4.78T           | [marin-community/marin-8b-base](https://huggingface.co/marin-community/marin-8b-base/tree/jellyfish)       |
-| `phoenix`         | 11.1T           | [marin-community/marin-8b-base](https://huggingface.co/marin-community/marin-8b-base/tree/phoenix)         |
-| `starling`        | 12.4T           | [marin-community/marin-8b-base](https://huggingface.co/marin-community/marin-8b-base/tree/starling)        |
-| `deeper-starling` | 12.7T           | [marin-community/marin-8b-base](https://huggingface.co/marin-community/marin-8b-base/tree/deeper-starling) |
+| Name/Link                                                                                      | Training Tokens |
+|------------------------------------------------------------------------------------------------|-----------------|
+| [`main`](https://huggingface.co/marin-community/marin-8b-base/tree/main)                       | 12.7T           |
+| [`kestrel`](https://huggingface.co/marin-community/marin-8b-base/tree/kestrel)                 | 2.7T            |
+| [`ocelot`](https://huggingface.co/marin-community/marin-8b-base/tree/ocelot)                   | 3.78T           |
+| [`jellyfish`](https://huggingface.co/marin-community/marin-8b-base/tree/jellyfish)             | 4.78T           |
+| [`phoenix`](https://huggingface.co/marin-community/marin-8b-base/tree/phoenix)                 | 11.1T           |
+| [`starling`](https://huggingface.co/marin-community/marin-8b-base/tree/starling)               | 12.4T           |
+| [`deeper-starling`](https://huggingface.co/marin-community/marin-8b-base/tree/deeper-starling) | 12.7T           |
 
 `main` currently refers to `deeper-starling`. main currently refers to deeper-starling.
 This may change in the future, but we will maintain compatibility at the architecture and tokenizer level,
@@ -105,10 +110,12 @@ Main Page: [marin-community/marin-8b-instruct](https://huggingface.co/marin-comm
 
 | Name                    | SFT Tokens | Link                                                                                                                     |
 |-------------------------|------------|--------------------------------------------------------------------------------------------------------------------------|
-| `main`                 | 5.3B       | [marin-community/marin-8b-instruct](https://huggingface.co/marin-community/marin-8b-instruct/tree/deeper-starling-05-15) |
+| `main`                  | 5.3B       | [marin-community/marin-8b-instruct](https://huggingface.co/marin-community/marin-8b-instruct/tree/deeper-starling-05-15) |
 | `deeper-starling-05-15` | 5.3B       | [marin-community/marin-8b-instruct](https://huggingface.co/marin-community/marin-8b-instruct/tree/deeper-starling-05-15) |
 
-`main` currently refers to `deeper-starling-05-15`. This may change in the future, though we will maintain model compatibility. If you require a specific checkpoint, please use the `revision` argument.
+`main` currently refers to `deeper-starling-05-15`. This will (probably) change in the future, though we will maintain
+architecture and tokenizer compatibility.
+If you require a specific checkpoint, please use the `revision` argument.
 
 ## Installation
 
@@ -121,7 +128,7 @@ We use a variant of the Llama 3 tokenizer: [stanford-crfm/marin-tokenizer](https
 
 ## Inference
 
-You can use Marin with the standard HuggingFace Transformers library:
+You can use Marin with the standard Hugging Face Transformers library:
 
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -133,7 +140,7 @@ response = marin.generate(**inputs, max_new_tokens=100, do_sample=True, top_k=50
 print(tokenizer.batch_decode(response, skip_special_tokens=True)[0])
 ```
 
-We released a number of checkpoints of this model. To load a specific checkpoint, simply add the argument `revision`:
+We released a number of checkpoints of this model. To load a specific checkpoint, add the argument `revision`:
 
 ```bash
 marin = AutoModelForCausalLM.from_pretrained("marin-community/marin-8b-base", revision="deeper-starling")

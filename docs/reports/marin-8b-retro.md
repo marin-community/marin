@@ -31,8 +31,8 @@ We cover the data mix, hyperparameters, and other training details, along with o
 
 Reproducibility is a core principle of Marin. While this write-up was created post-run and may contain minor inaccuracies, we’ve done our best to be accurate. If you’re looking for more detail, you can also find supporting material here:
 
-- [Data browser](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp600_tootsie-151dff.json)
-- [Experiment config](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp600_tootsie.py)
+- [Marin Data Browser](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp600_tootsie-151dff.json)
+- [Experiment Pipeline Script](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp600_tootsie.py)
 - [GitHub issue thread](https://github.com/marin-community/marin/issues/600)
 - [WandB report](https://wandb.ai/stanford-mercury/marin/reports/Tootsie-8B---VmlldzoxMTY3MzU3OA)
 
@@ -57,7 +57,7 @@ to train a model of that size for long enough.
 
 ### Architecture
 
-We settled on the "[Llama architecture](https://arxiv.org/abs/2302.13971)" for the usual reasons: it has been shown to work well,
+We settled on the [Llama architecture](https://arxiv.org/abs/2302.13971) for the usual reasons: it has been shown to work well,
 easier to plug into existing inference stacks, no one ever got fired for buying IBM, etc.
 
 We used the same settings as Llama 3.1 8B. More specifically:
@@ -77,7 +77,7 @@ We used JAX's TPU Splash Attention kernel.
 
 We used mixed float32/bfloat16 precision, with parameters and optimizer states in float32 and compute in bfloat16
 (except for the final softmax over the vocabulary.)
-We used the [AdamW](https://arxiv.org/abs/1711.05101) optimizer.
+We used the [AdamW](https://arxiv.org/abs/1711.05101) optimizer. We do not weight decay input embeddings or layer norm parameters.
 
 ### Tokenizer
 
@@ -134,13 +134,14 @@ Others tested "deeper cooldown" strategies or addressed issues like "SFT-ability
 
 ## Phase 1: Kestrel (WSD-S Phase)
 
-In the first phase, we trained from scratch using what was, at the time, the best publicly available dataset:
+In the first phase, we trained from scratch using what was, at the time, the best publicly available dataset (according
+to standard benchmarks like MMLU):
 [DCLM Baseline](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0), from the [DCLM paper](https://arxiv.org/abs/2406.11794).
 We adopted their “best mixture”: DCLM Baseline, [StarCoder Data](https://huggingface.co/datasets/bigcode/starcoderdata), and [Proofpile 2](https://huggingface.co/datasets/EleutherAI/proof-pile-2).
 
 The DCLM paper used a curriculum, mixing in StarCoder and Proofpile only near the end of training.
 We did **not** start with a curriculum—though we ended up adding quite a bit of one later.
-
+(We intended to add new datasets as we trained, but they were still being produced.)
 
 ### Hardware
 
@@ -156,7 +157,7 @@ Specifically, this meant:
 | Dataset                                                                          | Percentage |
 |----------------------------------------------------------------------------------|------------|
 | [DCLM Baseline](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0) | 92.6%      |
-| [StarCoder Data](https://huggingface.co/datasets/bigcode/starcoderdata)         | 6.1%       |
+| [StarCoder Data](https://huggingface.co/datasets/bigcode/starcoderdata)          | 6.1%       |
 | [Proofpile 2](https://huggingface.co/datasets/EleutherAI/proof-pile-2)           | 1.3%       |
 
 We planned on adding new datasets as we (and others!) developed them.
@@ -191,11 +192,12 @@ At 1e-3, our LR was roughly 3x higher than [Olmo 2 7B](https://arxiv.org/abs/250
 We used a weight decay of 0.05. These are roughly consistent with Table 12 of the [DCLM paper](https://arxiv.org/abs/2406.11794).
 (They recommend 2e-3, but we encountered instability at that rate.)
 
-We initially opted to not use Z-loss because we didn't have problems with LR=1e-3. In retrospect, we should have used it and have since made it the default for future Marin runs.
+We initially opted to not use Z-loss because we didn't have problems with LR=1e-3 and wanted to keep things as simple
+as possible. In retrospect, we should have used it and have since made it the default for future Marin runs.
 
 ### Specification
 
-The specification for the first phase is available on [Github here](https://github.com/marin-community/marin/blob/1e713371b25b0d2a1fc90b917e954e460ebd6c2c/experiments/tootsie/exp600_tootsie.py#L55-L81).
+The specification for the first phase is available on [GitHub](https://github.com/marin-community/marin/blob/1e713371b25b0d2a1fc90b917e954e460ebd6c2c/experiments/tootsie/exp600_tootsie.py#L55-L81).
 
 ### Notes
 
@@ -314,16 +316,16 @@ Specifically, we included all sources from our ablations that outperformed the 1
 
 | Dataset               | Percentage |
 |-----------------------|------------|
-| Dolmino DCLM HQ       | 67.8% |
-| Dolma peS2o           | 10.8% |
-| FineMath 3+           | 6.3% |
-| Dolma Arxiv           | 5.2% |
-| Dolma StackExchange   | 3.2% |
-| StarCoder             | 2.2% |
-| Dolma Algebraic Stack | 2.1% |
-| Dolma Open Web Math   | 0.9% |
-| Dolma Megawika        | 0.8% |
-| Dolma Wikipedia       | 0.7% |
+| Dolmino DCLM HQ       | 67.8%      |
+| Dolma peS2o           | 10.8%      |
+| FineMath 3+           | 6.3%       |
+| Dolma Arxiv           | 5.2%       |
+| Dolma StackExchange   | 3.2%       |
+| StarCoder             | 2.2%       |
+| Dolma Algebraic Stack | 2.1%       |
+| Dolma Open Web Math   | 0.9%       |
+| Dolma Megawika        | 0.8%       |
+| Dolma Wikipedia       | 0.7%       |
 
 
 The HQ sources were weighted roughly proportional to token count and then upweighted to be 30% of the total.
@@ -331,8 +333,8 @@ The HQ sources were weighted roughly proportional to token count and then upweig
 The main deviations from the Dolmino mixture were:
 
 - We included datasets that [Olmo 2](https://arxiv.org/abs/2501.00656) used in its Phase 1 (e.g. wikipedia) that we did not.
-- We did not include [FLAN](https://arxiv.org/abs/2109.01652).
-- We did not include the other synthetic math datasets in Dolmino. (This was a mistake.)
+- We did not include [FLAN](https://arxiv.org/abs/2109.01652). (We were suspicious of its fairly repetitive templating.)
+- We did not include the other synthetic math datasets in Dolmino. (Similarly, but this was a mistake.)
 - We added [FineMath-3+](https://huggingface.co/datasets/HuggingFaceTB/finemath).
 
 ### Learning rate schedule
@@ -343,14 +345,14 @@ We decayed the learning rate from 1.7e-3 to 1.7e-4 over 1e12 tokens (79500 steps
 
 Results for this model are pretty good for "base model" tasks, though predictably not great for math and instruction following.
 
-| Task | Score (%) |
-|------|-----------|
-| MMLU (5-shot) | 65.3 |
-| MMLU (0-shot) | 62.5 |
-| GSM8K (8-shot) | 50.9 |
-| HumanEval (pass@1) | 24.4 |
-| MATH (4-shot) | 18.5 |
-| IFEval (prompt-level loose) | 9.2 |
+| Task                        | Score (%) |
+|-----------------------------|-----------|
+| MMLU (5-shot)               | 65.3      |
+| MMLU (0-shot)               | 62.5      |
+| GSM8K (8-shot)              | 50.9      |
+| HumanEval (pass@1)          | 24.4      |
+| MATH (4-shot)               | 18.5      |
+| IFEval (prompt-level loose) | 9.2       |
 
 A 5-shot MMLU of 65.3 was better than both Olmo 2 7B (63.9) and DCLM (64.4), and not too far behind Llama 3.1 8B (66.4).[^MMLU scores] But we can do better.
 
@@ -534,7 +536,11 @@ We create three new datasets by Markdownifying a few different "high-quality sou
 - [Marin StackExchange Markdown](https://huggingface.co/datasets/marin-community/stackexchange-markdown) similarly is a version of StackExchange markdownified from HTML5-formatted versions.
 - [Marin Wikipedia Markdown](https://huggingface.co/datasets/marin-community/wikipedia-markdown) is a new dataset of [Wikipedia](https://wikipedia.org/) articles that have been markdownified from their HTML5-formatted versions, which are available through the now deprecated [Wikipedia Enterprise HTML Dumps](https://dumps.wikimedia.org/other/enterprise_html/).
 
-These datasets are licensed under the original licenses of the sources.
+These datasets are licensed under the original licenses of the individual documents.[^license]
+
+[^license]: Please refer to [StackExchange](https://stackoverflow.com/help/licensing),
+[Wikipedia](https://en.wikipedia.org/wiki/Wikipedia:Database_download),
+and [arXiv](https://arxiv.org/help/license) for more information.
 
 
 ### Learning Rate Schedule and Other Hyperparameters
@@ -621,7 +627,7 @@ We also incorporate key benchmarks from the OLMo 2 technical report for instruct
 
 For code generation, we use [HumanEval](https://github.com/openai/human-eval) - which continues to be the standard benchmark for simpler non-agentic coding validation.
 
-For all tasks aside from AlpacaEval, we utilize the [EleutherAI Lm Evaluation Harness](https://github.com/EleutherAI/lm-evaluation-harness) with chat templates turned -- a standardized evaluation harness from an independent party from all models evaluated.
+For all tasks aside from AlpacaEval, we utilize the [EleutherAI LM Evaluation Harness](https://github.com/EleutherAI/lm-evaluation-harness) with chat templates turned -- a standardized evaluation harness from an independent party from all models evaluated.
 For AlpacaEval, we use the [AlpacaEval](https://github.com/tatsu-lab/alpaca_eval) harness.
 
 As we noted earlier, LM Eval Harness can be quite strict, leading to extremely low performance due to systematic failures to follow the strict templates.
@@ -637,7 +643,9 @@ Therefore, we report both the average score and the average score excluding thos
 | Llama 3.1 Tulu | **50.0** | **51.9** | **34.9** | **87.5** | **88.1** | 43.9 | 60.7 | 28.7 | 29.4 | **42.2** | **24.7** | **60.4** |
 | Marin 8B SFT | 43.8 | 46.2 | 18.3 | 78.3 | 68.9 | **46.0** | 61.6 | **29.5** | **31.2** | 35.9 | 21.2 | 47.0 |
 
-We see an unfortunate degradation in "base model" tasks like MMLU, not dissimilar to [what Olmo 2 reported in their own results](https://arxiv.org/abs/2501.00656). We are working to mitigate this (e.g. by mixing in pretraining data and FLAN into SFT).
+We see an unfortunate degradation in "base model" tasks like MMLU, not dissimilar to [what Olmo 2 reported in their own results](https://arxiv.org/abs/2501.00656).
+We are working to mitigate this (e.g. by mixing in pretraining data and FLAN into SFT). Please see [this detailed report](https://github.com/marin-community/marin/issues/702)
+on how mixing in pretraining data into later stages is important for retaining performance.
 
 If we look at ranks:
 
@@ -668,9 +676,10 @@ We will continue to improve our SFT pipeline and will release a new checkpoint w
 
 Future work will focus on:
 
-- **Bigger models.** We have a 32B model that is performing quite well at 1T tokens.
-- **SFT/RL.** We're still improving our Instruct model. In addition to making the model genenerally better, we would like to reduce degradation on tasks like MMLU.
+- **Bigger models.** We have a [32B model](https://wandb.ai/marin-community/marin/runs/llama-32b-tootsie-2/workspace?nw=nwuserdlwh) that is performing quite well at 1.3T tokens.
+- **SFT/RL.** We're still improving our Instruct model. In addition to making the model generally better, we would like to reduce degradation on tasks like MMLU.
 - **Format diversity.** We will continue to pursue formatting diversity as a way to improve performance on tasks like MMLU.
+- **Improved filtering and synthetic data.** [Marin Datashop](../explanations/datashop.md) is a our project that aims to find and create high-quality datasets for LLMs.
 
 
 ## Glossary
