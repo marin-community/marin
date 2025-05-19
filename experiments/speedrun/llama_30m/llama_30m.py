@@ -1,5 +1,5 @@
 """
-Speedrun code for a 30M parameter model based on the LLaMA architecture.
+Speedrun code for a 30M parameter model based on the Llama architecture.
 """
 
 import logging
@@ -15,10 +15,10 @@ logger = logging.getLogger("ray")
 speedrun_config = SpeedrunConfig(
     author=Author(
         name="Nikil Ravi",
-        affiliation="Marin Community",
+        affiliation="Stanford University",
         url="https://www.linkedin.com/in/nikilravi/",
     ),
-    description="Sanity check for 30M parameter model based on Llama architecture.",
+    description="30M parameter model based on Llama architecture.",
     model_config=llama_30m,
     train_config=SimpleTrainConfig(
         TpuPodConfig(tpu_type="v4-128"),
@@ -33,4 +33,8 @@ speedrun_config = SpeedrunConfig(
 speedrun_config.print_run_info()
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("llama_30m", speedrun_config))
+    executor_main(
+        steps=default_speedrun(
+            "llama_30m_run", speedrun_config, override_output_path="checkpoints/speedrun/llama_30m_run-65262c"
+        )
+    )

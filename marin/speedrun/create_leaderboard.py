@@ -24,6 +24,7 @@ class LeaderboardEntry:
     # Run identification
     run_name: str
     results_filepath: str
+    author: SpeedrunAuthor
 
     # Model/hardware specs
     model_size: int
@@ -32,10 +33,9 @@ class LeaderboardEntry:
     # Training metrics and FLOPs
     training_time: float  # in seconds
     model_flops: float
-    eval_paloma_c4_en_bpb: float | None = None
 
-    # Metadata
-    author: SpeedrunAuthor
+    # Optional fields
+    eval_paloma_c4_en_bpb: float | None = None
     wandb_link: str | None = None
     run_completion_timestamp: datetime.datetime | None = None
     description: str | None = None
