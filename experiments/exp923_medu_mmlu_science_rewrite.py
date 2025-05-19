@@ -1,64 +1,68 @@
-"""Synthetic data generation for the GSM8K dataset in the style of MIND.
-
-Inspiration from the Olmo-2 paper where they utilize the MIND rewrite technique to generate
-synthetic math datasets from existing datasets.
-"""
+"""Synthetic data generation to rewrite high quality science data into QA format."""
 
 from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
 from experiments.datashop.default_configs import default_engine_kwargs
-from experiments.datashop.defaults import default_synthetic_data_generation
+from experiments.datashop.defaults import default_consolidate, default_synthetic_data_generation
 from experiments.defaults import default_tokenize
+from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
 from experiments.exp923_medu_mmlu import mmlu_science_pipeline
 from experiments.llama import llama3_tokenizer
 from marin.execution.executor import executor_main, output_path_of
+from marin.resources import TpuPodConfig
 
 REPHRASE_THE_WEB_QA_TEMPLATE = """
 {example}\n\nConvert the context above into a conversational format between a user and an assistant
 with multiple tags of "Question:" followed by "Answer:"
 """
 
+mmlu_science_pipeline.attributes = mmlu_science_pipeline.attributes.with_output_path(
+    "attributes/quality_filtering/medu/medu-dclm-pretraining-subset-mmlu-science-91cfaa"
+)
+# NOTE(chris): Since the executor hash has changed, we need to re-run the consolidate step with the attributes
+# from an overriden output path here.
+mmlu_science_pipeline.filtered_documents = default_consolidate(
+    mmlu_science_pipeline.attributes,
+    mmlu_science_pipeline.config.pretraining_data_path,
+    mmlu_science_pipeline.config.pretraining_data_path_name,
+    mmlu_science_pipeline.config.experiment_name,
+    mmlu_science_pipeline.config.filter_config_kwargs,
+    mmlu_science_pipeline.config.consolidate_config_kwargs,
+).with_output_path("documents/quality_filtering/medu/medu-dclm-pretraining-subset-mmlu-science-217322")
+
 single_tpu_inference_engine_kwargs = {
     **default_engine_kwargs,
     "tensor_parallel_size": 1,
 }
 mmlu_science_qa = default_synthetic_data_generation(
-    input_path=mmlu_science_pipeline.filtered_documents,
+    input_path=output_path_of(mmlu_science_pipeline.filtered_documents),
     model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
-    document_name="medu-mmlu-science-llama8b-mind-qa",
-    template=REPHRASE_THE_WEB_QA_TEMPLATE,
+    data_generation_template=REPHRASE_THE_WEB_QA_TEMPLATE,
     input_filetype="jsonl.zst",
     prompt_column="text",
     engine_kwargs=single_tpu_inference_engine_kwargs,
     output_path="documents/medu-mmlu-science-llama8b-qa-whole",
-)
+    resource_config=SINGLE_TPU_V6E_8,
+).with_output_path("documents/medu-mmlu-science-llama8b-qa-whole-1a419d")
 
 mmlu_science_qa_whole_shard_tokenized = default_tokenize(
     name="medu-candidate-mmlu-science-llama-8b-qa",
     dataset=output_path_of(mmlu_science_qa),
     tokenizer=llama3_tokenizer,
-)
-
-mmlu_science_og_tokenized = default_tokenize(
-    name="medu-candidate-mmlu-science",
-    dataset=output_path_of(mmlu_science_pipeline.filtered_documents),
-    tokenizer=llama3_tokenizer,
-)
+).with_output_path("tokenized/medu-candidate-mmlu-science-llama-8b-qa-c92546")
 
 mmlu_science_qa_model = default_quality_ablation(
     candidate_tokenized=mmlu_science_qa_whole_shard_tokenized,
     config=QualityAblationConfig(
         mcq_component=mmlu_science_qa_whole_shard_tokenized,
-        tpu_type="v6e-128",
+        resources=TpuPodConfig(tpu_type="v6e-128"),
         mcq_weight=0.30,
         candidate_weight=0.0,
         num_anneal_tokens=50_000_000_000,
         model_name_prefix="8b-dclm-70-qa-30-50b",
     ),
-)
+).with_output_path("checkpoints/8b-dclm-70-qa-30-50b-tokenized-medu-candidate-mmlu-science-ll-qa-7d2930")
 
-steps = [
-    mmlu_science_qa_model,
-]
+steps = [mmlu_science_qa_model]
 
 if __name__ == "__main__":
     executor_main(steps)
