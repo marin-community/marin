@@ -13,13 +13,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import fsspec
-import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 
+import wandb
 from experiments.defaults import default_train
 from experiments.exp72_baselines import fineweb_edu_tokenized
-from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
+from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.training.training import TrainLmOnPodConfig
@@ -63,14 +63,12 @@ class SpeedrunConfig:
     def as_json_dict(self) -> dict:
         """Convert SpeedrunConfig to a JSON-serializable dictionary."""
 
-        # Create train_config dict excluding resources field
-        train_config_dict = asdict_excluding(self.train_config, exclude={"resources", "runtime_env"})
-
+        # runtimeenv is not serializable, so we exclude it by calling `asdict_excluding()`
         return {
             "author": {"name": self.author.name, "affiliation": self.author.affiliation, "url": self.author.url},
             "description": self.description,
             "model_config": dataclasses.asdict(self.model_config),
-            "train_config": train_config_dict,
+            "train_config": asdict_excluding(self.train_config, exclude={"resources", "runtime_env"}),
             "tokenized_dataset": str(self.tokenized_dataset),
             "resources": asdict_excluding(self.train_config.resources, exclude={"runtime_env"}),
         }
@@ -186,7 +184,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
     logger.info(f"Number of devices: {config.speedrun_config.num_devices}")
     logger.info(f"Device FLOPs: {config.speedrun_config.device_flops:.2e} FLOPs")
     logger.info(f"Training hardware FLOPs: {training_hardware_flops:.2e} FLOPs")
-    
+
     # get wandb run and metrics
     run = wandb.Api().run(f"{config.wandb_entity}/{config.wandb_project}/{wandb_run_id}")
     wandb_metrics = {
@@ -242,7 +240,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
 
     logger.info(f"Speedrun info and results: {run_info}")
 
-    output_data = {"runs": [run_info]}
+    output_data = {"runs": [{"run_info": run_info}]}
     with fsspec.open(config.output_path, "w") as f:
         json.dump(output_data, f, indent=2, sort_keys=True)
     logger.info(f"Speedrun info and results written to {config.output_path}")
@@ -320,7 +318,7 @@ def default_speedrun(
         fn=speedrun_results,
         config=SpeedrunResultsConfig(
             wandb_run_id=wandb_run_id,
-            wandb_entity="stanford-mercury",
+            wandb_entity=wandb_entity,
             wandb_project=wandb_project,
             speedrun_config=config,
             output_path=output_path_of(train_step, "speedrun_results.json"),
