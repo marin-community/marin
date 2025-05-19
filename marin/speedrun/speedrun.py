@@ -1,8 +1,8 @@
 """
 Default functions, configurations and utilities for Marin speedruns to use.
 
-default_speedrun() is the function a user should call to run a speedrun; example is
-in experiments/speedrun/sample_run.py
+NOTE: If you are submitting a speedrun, you shouldn't modify this code (unless there is a very strong reason to do so).
+You should just call default_speedrun() to run a speedrun; examples can be found in marin/experiments/speedrun/.
 """
 
 import dataclasses
@@ -18,47 +18,86 @@ from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 
 from experiments.defaults import default_train
-from experiments.exp72_baselines import fineweb_edu_tokenized
-from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
+from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
+from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.training.training import TrainLmOnPodConfig
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
+from marin.utils import asdict_excluding
 
 logger = logging.getLogger("ray")
 
 
-### Configuration classes ###
+@dataclass(frozen=True)
+class Author:
+    """Author information for a speedrun."""
 
+    name: str
+    """Name of the author/individual submitting the speedrun."""
 
-@dataclass
-class HardwareConfig:
-    device_type: str  # a string describing the device e.g. "v4-128", or "h100"
-    num_devices: int
-    device_flops: float  # Peak FLOPs/s per device
+    affiliation: str
+    """Affiliation/institution of the contributor."""
+
+    url: str | None = None
+    """Optional URL to author's profile/website."""
 
 
 @dataclass
 class SpeedrunConfig:
+    author: Author
+    """Author information for the speedrun."""
+    description: str
+    """Brief (~1 sentence) description of the speedrun."""
+
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
-    hardware_config: HardwareConfig
-    mfu_estimate: float = 0.5
 
-    # by default, this is fineweb_edu_tokenized
-    tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_tokenized
+    # by default, this is fineweb_edu_subcache_10B
+    tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_subcache_10B
 
     @property
     def vocab_size(self) -> int:
-
-        # TODO (Nikil): this doesn't interact well with different types (InputName, LMMixtureDatasetConfig, ExecutorStep)
-        # Need to change this to automatically figure out vocab size
-        # return load_tokenizer(unwrap_versioned_value(self.tokenized_dataset.tokenizer)).vocab_size
         return llama3_tokenizer_vocab_size
 
-    def estimate_flops_via_6nd(self) -> float:
-        N = compute_num_parameters(self.model_config, self.vocab_size)
+    def as_json_dict(self) -> dict:
+        """Convert SpeedrunConfig to a JSON-serializable dictionary."""
 
+        # runtimeenv is not serializable, so we exclude it by calling `asdict_excluding()`
+        return {
+            "author": {"name": self.author.name, "affiliation": self.author.affiliation, "url": self.author.url},
+            "description": self.description,
+            "model_config": dataclasses.asdict(self.model_config),
+            "train_config": asdict_excluding(self.train_config, exclude={"resources", "runtime_env"}),
+            "tokenized_dataset": str(self.tokenized_dataset),
+            "resources": asdict_excluding(self.train_config.resources, exclude={"runtime_env"}),
+        }
+
+    def print_run_info(self) -> None:
+        """Print information about speedrun configuration, device FLOPS, model FLOPS, and hardware configuration.
+        Mainly to sanity-check runs by calling speedrun_config.print_run_info() before actually running it."""
+
+        num_devices = self.num_devices
+        device_flops = self.device_flops
+        total_peak_flops = device_flops * num_devices
+
+        # Print simplified config info
+        logger.info("Speedrun Configuration:")
+        logger.info(json.dumps(self.as_json_dict(), indent=4))
+
+        model_flops = self.compute_model_flops()
+
+        logger.info("Hardware and Model FLOPS Information:")
+        logger.info(f"Number of devices: {num_devices}")
+        logger.info(f"Device FLOPs: {device_flops:.2e} FLOP/s")
+        logger.info(f"Total peak hardware FLOPs: {total_peak_flops:.2e} FLOP/s")
+        logger.info(f"Model FLOPs: {model_flops:.2e} FLOP")
+
+        # model size
+        model_size = self.model_config.total_trainable_params(self.vocab_size)
+        logger.info(f"Model size: {model_size/1e6:.2f} million parameters")
+
+    def compute_model_flops(self) -> float:
         # TODO (Nikil): make this a helper and handle edge-cases
         if isinstance(self.train_config.train_batch_size, list) and len(self.train_config.train_batch_size) > 0:
             from levanter.schedule import BatchSchedule
@@ -73,16 +112,33 @@ class SpeedrunConfig:
                 self.train_config.train_batch_size * self.model_config.seq_len * self.train_config.num_train_steps
             )
 
-        return 6.0 * N * total_tokens
+        flops_per_token = self.model_config.flops_per_token(self.vocab_size)
 
-    def estimate_flops_before_speedrun(self) -> tuple[bool, str]:
+        flops_per_token *= 3  # fwd + bwd
 
-        # estimate model FLOPs as 6*N*D, and calculate estimated compute using this and (a reasonable estimate of) MFU
-        model_flops = self.estimate_flops_via_6nd()
-        estimated_compute = model_flops / self.mfu_estimate
+        estimated_model_flops = flops_per_token * total_tokens
 
-        logger.info(f"Estimated {estimated_compute:.2e} FLOPs")
-        return estimated_compute
+        logger.info(
+            f"""
+The rough estimated compute (calculated as (total model FLOPs / Assumed MFU)) for your run is probably between:
+      * {estimated_model_flops/0.5:.2e} FLOPs assuming an MFU of 0.5, and
+      * {estimated_model_flops/0.2:.2e} FLOPs assuming an MFU of 0.2.
+
+This is calculated based on assumed MFU values and can be used as a rough estimate to guide your config/training setup.
+""".strip()
+        )
+
+        return estimated_model_flops
+
+    @property
+    def device_flops(self) -> float:
+        """Get the peak FLOPs/s for the device type."""
+        return self.train_config.resources.device_flops()
+
+    @property
+    def num_devices(self) -> int:
+        """Get the number of devices."""
+        return self.train_config.resources.total_device_count()
 
 
 @dataclass
@@ -97,29 +153,14 @@ class SpeedrunResultsConfig:
 ### Utils and analysis functions ###
 
 
-def get_wandb_run_info_from_step(step: ExecutorStep) -> tuple[str, str, str]:
-    """
-    Get the wandb entity, project, and run id from a given ExecutorStep.
-    """
-
-    if (
-        step.config
-        and step.config.train_config
-        and step.config.train_config.trainer
-        and step.config.train_config.trainer.tracker
-    ):
-        logger.info(f"Found wandb run info in step: {step}")
-        wandb_entity = step.config.train_config.trainer.tracker.entity or WANDB_ENTITY
-        wandb_project = step.config.train_config.trainer.tracker.project or WANDB_PROJECT
-        return wandb_entity, wandb_project, step.config.train_config.trainer.id
-
-    return wandb_entity, wandb_project, None
-
-
 def get_step_times_from_wandb(run_id: str, entity: str = WANDB_ENTITY, project: str = WANDB_PROJECT) -> list[float]:
     try:
         run = wandb.Api().run(f"{entity}/{project}/{run_id}")
-        return run.history(keys=["throughput/duration"])["throughput/duration"].tolist()
+        return [
+            row["throughput/duration"]
+            for row in run.scan_history(keys=["throughput/duration"])
+            if "throughput/duration" in row
+        ]
     except Exception as e:
         logger.error(f"Failed to fetch step times: {e}")
         return []
@@ -128,69 +169,89 @@ def get_step_times_from_wandb(run_id: str, entity: str = WANDB_ENTITY, project: 
 def speedrun_results(config: SpeedrunResultsConfig):
     """Compute and store metrics and stats for the speedrun."""
 
-    step_times = get_step_times_from_wandb(
-        run_id=config.wandb_run_id, entity=config.wandb_entity, project=config.wandb_project
-    )
+    # get the last part of the path (i.e. last part of gs://.../checkpoints/speedrun/<wandb_run_id>)
+    wandb_run_id = config.wandb_run_id.split("/")[-1]
+
+    step_times = get_step_times_from_wandb(run_id=wandb_run_id, entity=config.wandb_entity, project=config.wandb_project)
     if not step_times:
         logger.error("No step times available; analysis aborted.")
         return
 
-    six_nd_flops = config.speedrun_config.estimate_flops_via_6nd()
-    num_params = compute_num_parameters(config.speedrun_config.model_config, config.speedrun_config.vocab_size)
+    model_flops = config.speedrun_config.compute_model_flops()
+    model_size = config.speedrun_config.model_config.total_trainable_params(config.speedrun_config.vocab_size)
     total_tokens = (
         config.speedrun_config.train_config.train_batch_size
         * config.speedrun_config.model_config.seq_len
         * config.speedrun_config.train_config.num_train_steps
     )
-    total_time = sum(step_times)
-    total_training_flops = (
-        total_time
-        * config.speedrun_config.hardware_config.num_devices
-        * config.speedrun_config.hardware_config.device_flops
-    )
+
+    training_time = sum(step_times)
+    training_hardware_flops = training_time * config.speedrun_config.num_devices * config.speedrun_config.device_flops
+    logger.info(f"Training time: {training_time:.2f} seconds")
+    # devices
+    logger.info(f"Number of devices: {config.speedrun_config.num_devices}")
+    logger.info(f"Device FLOPs: {config.speedrun_config.device_flops:.2e} FLOPs")
+    logger.info(f"Training hardware FLOPs: {training_hardware_flops:.2e} FLOPs")
 
     # get wandb run and metrics
-    run = wandb.Api().run(f"{config.wandb_entity}/{config.wandb_project}/{config.wandb_run_id}")
+    run = wandb.Api().run(f"{config.wandb_entity}/{config.wandb_project}/{wandb_run_id}")
     wandb_metrics = {
         "eval/paloma/c4_en/bpb": run.summary.get("eval/paloma/c4_en/bpb", None),
     }
+
+    wandb_num_devices = run.summary.get("num_devices", None)
+    if wandb_num_devices is not None:
+        if wandb_num_devices != config.speedrun_config.num_devices:
+            logger.warning(
+                f"Number of devices in wandb ({wandb_num_devices}) does not match number of devices in config"
+                f"({config.speedrun_config.num_devices}). Going with config value."
+            )
+
+    wandb_device_flops = run.summary.get("throughput/theoretical_flops_per_device", None)
+    if wandb_device_flops is not None:
+        if wandb_device_flops != config.speedrun_config.device_flops:
+            logger.warning(
+                f"Device FLOPS in wandb ({wandb_device_flops}) does not match device FLOPS in config "
+                f"({config.speedrun_config.device_flops})."
+                f"Going with config value."
+            )
 
     # Get timestamps in UTC
     start_time = datetime.datetime.fromisoformat(run.createdAt.replace("Z", "+00:00"))  # Convert ISO string to datetime
     runtime_seconds = run.summary["_runtime"]
     end_time = start_time + datetime.timedelta(seconds=runtime_seconds)
 
-    full_wandb_url = f"https://wandb.ai/{config.wandb_entity}/{config.wandb_project}/runs/{config.wandb_run_id}"
+    wandb_run_link = f"https://wandb.ai/{config.wandb_entity}/{config.wandb_project}/runs/{wandb_run_id}"
 
-    run_stats = {
-        "run_related_info": {
-            "num_parameters": num_params,
-            "total_tokens": total_tokens,
-            "model_config": dataclasses.asdict(config.speedrun_config.model_config),
-            "train_config": dataclasses.asdict(config.speedrun_config.train_config),
-            "tokenized_dataset": str(config.speedrun_config.tokenized_dataset),
-            "hardware_config": dataclasses.asdict(config.speedrun_config.hardware_config),
-            "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
-            "wandb_run_link": full_wandb_url,
-        },
-        "run_stats": {
-            "pre_run_flops_estimate": six_nd_flops,
-            "training_time_in_minutes": total_time,
-            "total_training_flops": total_training_flops,
-            "eval/paloma/c4_en/bpb": (
-                float(wandb_metrics.get("eval/paloma/c4_en/bpb"))
-                if wandb_metrics.get("eval/paloma/c4_en/bpb") is not None
-                else None
-            ),
-        },
+    # Start with the base config as a dictionary
+    speedrun_dict = config.speedrun_config.as_json_dict()
+
+    # Add computed values and results
+    run_info = {
+        **speedrun_dict,
+        # Model metrics
+        "model_size": model_size,
+        "total_tokens": total_tokens,
+        "model_flops": model_flops,
+        # Training metrics
+        "training_time": training_time,
+        "training_hardware_flops": training_hardware_flops,
+        "eval/paloma/c4_en/bpb": (
+            float(wandb_metrics.get("eval/paloma/c4_en/bpb"))
+            if wandb_metrics.get("eval/paloma/c4_en/bpb") is not None
+            else None
+        ),
+        # Run metadata
+        "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "wandb_run_link": wandb_run_link,
     }
 
-    logger.info(f"Speedrun stats: {run_stats}")
+    logger.info(f"Speedrun info and results: {run_info}")
 
-    output_data = {"runs": [run_stats]}
+    output_data = {"runs": [{"run_info": run_info}]}
     with fsspec.open(config.output_path, "w") as f:
         json.dump(output_data, f, indent=2, sort_keys=True)
-    logger.info(f"Speedrun stats written to {config.output_path}")
+    logger.info(f"Speedrun info and results written to {config.output_path}")
 
 
 ### Default speedrun function ###
@@ -220,8 +281,8 @@ def default_speedrun(
         ValueError: If the configuration is invalid
     """
 
-    logger.info(f"Running speedrun {name} with config {config}")
-    logger.info(f"Estimated FLOPs: {config.estimate_flops_before_speedrun()}")
+    logger.info(f"Running speedrun {name}")
+    config.print_run_info()
 
     run_tags = ["speedrun"] + (tags or [])
 
@@ -252,7 +313,10 @@ def default_speedrun(
         # (Nikil) this is a hack (the ExecutorStep isn't populated when using an override path, so can't get configs when
         # we do an override or if it is None for some reason, but after some investigation found that in those cases we
         # can fall back to the fact that we set the wandb run ID as the last part of the path anyway, so can use that)
-        wandb_run_id = train_step.config.train_config.trainer.id or str(output_path_of(train_step)).split("/")[-1]
+        if override_output_path:
+            wandb_run_id = override_output_path.split("/")[-1]
+        else:
+            wandb_run_id = train_step  # gets converted to output path when passing it into the results step
 
     assert wandb_run_id is not None, "Could not extract wandb run ID from train step"
 

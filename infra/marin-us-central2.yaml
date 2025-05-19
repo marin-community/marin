@@ -24,7 +24,7 @@ provider:
 
 
 docker:
-    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:4a47ffc0"
+    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:8b035b60"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
