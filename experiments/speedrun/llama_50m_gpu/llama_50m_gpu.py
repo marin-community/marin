@@ -7,7 +7,6 @@ import logging
 
 from experiments.llama import llama_50m
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 from marin.execution.executor import executor_main
 from marin.resources import GpuConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
@@ -30,7 +29,6 @@ speedrun_config = SpeedrunConfig(
         weight_decay=0.1,
         steps_per_eval=500,
     ),
-    tokenized_dataset=fineweb_edu_subcache_10B,
 )
 
 speedrun_config.print_run_info()
