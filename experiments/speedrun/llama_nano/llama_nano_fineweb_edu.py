@@ -1,0 +1,35 @@
+"""
+Speedrun code for a nano model based on the LLaMA architecture.
+"""
+
+import logging
+
+from experiments.exp72_baselines import fineweb_edu_tokenized
+from experiments.llama import llama_nano
+from experiments.simple_train_config import SimpleTrainConfig
+from marin.execution.executor import executor_main
+from marin.resources import TpuPodConfig
+from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
+
+logger = logging.getLogger("ray")
+
+speedrun_config = SpeedrunConfig(
+    model_config=llama_nano,
+    train_config=SimpleTrainConfig(
+        TpuPodConfig(tpu_type="v4-128"),
+        train_batch_size=512,
+        num_train_steps=3000,
+        learning_rate=3e-3,
+        weight_decay=0.1,
+        steps_per_eval=1000,
+    ),
+    tokenized_dataset=fineweb_edu_tokenized,
+    hardware_config=HardwareConfig(
+        device_type="v4-128",
+        num_devices=64,
+        device_flops=275e12,  # from https://cloud.google.com/tpu/docs/v4
+    ),
+)
+
+if __name__ == "__main__":
+    executor_main(steps=default_speedrun("nano_llama_fineweb_edu", speedrun_config))
