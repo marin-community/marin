@@ -20,7 +20,7 @@ if __name__ == "__main__":
                 rare_stage2_allocation=1.0,
                 stage2_duration=1.0,
                 rare_data_epochs=rare_data_epochs,
-                num_train_steps=NUM_RARE_STEPS / replay_ratio,
+                num_train_steps=NUM_RARE_STEPS / (1 - replay_ratio),
                 lr_schedule=lr_schedule,
                 lr=lr,
                 lr_cooldown_duration=lr_cooldown_duration,
