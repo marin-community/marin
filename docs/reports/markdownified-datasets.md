@@ -9,7 +9,7 @@ This dataset collection consists of several large-scale text corpora that have b
 | Wiki | 8587224558 | 8.59B tokens | [Wikipedia Dump](https://dumps.wikimedia.org/other/enterprise_html/runs/20241201/enwiki-NS0-20241201-ENTERPRISE-HTML.json.tar.gz) |
 | Ar5iv No Problem | 2742463924 | 2.74B tokens | [Ar5iv Dump](https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/) |
 | Ar5iv Warning | 19552307274 | 19.6B tokens | [Ar5iv Dump](https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/) |
-| Stack Exchange | 20413785853 | 20.4B tokens | [Stack Exchange Dump] |
+| Stack Exchange | 20413785853 | 20.4B tokens | [Stack Exchange Dump](https://archive.org/details/stackexchange) |
 
 ## Processing Methodology
 
@@ -53,8 +53,6 @@ The Ar5iv dataset uses specialized filters for academic papers:
 
 The Stack Exchange dataset applies several specific filters:
 
-- **Vote Threshold Filtering**: Only includes posts with a minimum vote threshold (typically ≥8 votes) to ensure quality.
-- **Duplicate Question Removal**: Removes duplicate questions, keeping only the first instance.
 - **Q&A Structure Preservation**: Special processing to maintain the question-answer structure of posts.
 - **Markup Formatting**: Proper conversion of Stack Exchange markup to markdown, preserving code blocks, lists, and other formatting.
 - **Separator Addition**: Adds separators between questions and answers for better readability.
@@ -87,21 +85,31 @@ This fork extends the original **Resiliparse** HTML-to-text extractor with a new
 The core enhancement is the implementation of `extract_simplified_dom` which leverages [Lexbor's](https://github.com/lexbor/lexbor) DOM serialization capabilities to maintain HTML structure while still applying the filtering and content extraction logic from the original `extract_plain_text` function.
 
 1. **DOM Serialization**:
-   - Added `serialize_node` function that converts DOM nodes to their HTML string representation
-   - Utilizes Lexbor's `lxb_html_serialize_tree_str` to create a faithful representation of the DOM structure
+      - Added `serialize_node` function that converts DOM nodes to their HTML string representation
+      - Utilizes Lexbor's `lxb_html_serialize_tree_str` to create a faithful representation of the DOM structure
 
 2. **Modified Extraction Logic**:
-   - Preserves important semantic HTML tags rather than stripping all markup
-   - Follows the same element filtering rules as `extract_plain_text` (skipping script, style, etc.)
-   - Maintains structural relationships between elements
+      - Preserves important semantic HTML tags rather than stripping all markup
+      - Follows the same element filtering rules as `extract_plain_text` (skipping script, style, etc.)
+      - Maintains structural relationships between elements
 
 3. **Configuration Options**:
-   - Maintains the same parameter interface as `extract_plain_text` for consistency
-   - Allows for the same customization of content extraction (links, alt texts, form fields, etc.)
+      - Maintains the same parameter interface as `extract_plain_text` for consistency
+      - Allows for the same customization of content extraction (links, alt texts, form fields, etc.)
 
 This enhancement maintains full backward compatibility with the existing Resiliparse API while extending its capabilities for applications that need more structure than plain text extraction provides.
 
-### Acknowledgements
+## Examples
+
+We have several "snapshot tests" as quality control. You can see some of them in our GitHub repo:
+
+- [Ar5iv](https://github.com/marin-community/marin/blob/main/tests/snapshots/ar5iv/expected/arxiv_4.md)
+- [Stack Exchange](https://github.com/marin-community/marin/blob/main/tests/snapshots/stackexchange/expected/stackoverflow.md)
+- [Wikipedia](https://github.com/marin-community/marin/blob/main/tests/snapshots/wiki/expected/aquila.md)
+
+While the conversion is by no means perfect, we believe the datasets are of high quality and a useful resource for the community.
+
+### ### Acknowledgements
 
 We would like to express our sincere gratitude to:
 
