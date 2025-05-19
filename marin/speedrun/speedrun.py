@@ -18,7 +18,7 @@ from levanter.models.lm_model import LmConfig
 
 import wandb
 from experiments.defaults import default_train
-from experiments.exp72_baselines import fineweb_edu_tokenized
+from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
@@ -53,8 +53,8 @@ class SpeedrunConfig:
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
 
-    # by default, this is fineweb_edu_tokenized
-    tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_tokenized
+    # by default, this is fineweb_edu_subcache_10B
+    tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_subcache_10B
 
     @property
     def vocab_size(self) -> int:
@@ -152,7 +152,7 @@ class SpeedrunResultsConfig:
 def get_step_times_from_wandb(run_id: str, entity: str = WANDB_ENTITY, project: str = WANDB_PROJECT) -> list[float]:
     try:
         run = wandb.Api().run(f"{entity}/{project}/{run_id}")
-        return run.history(keys=["throughput/duration"])["throughput/duration"].tolist()
+        return [row["throughput/duration"] for row in run.scan_history(keys=["throughput/duration"]) if "throughput/duration" in row]
     except Exception as e:
         logger.error(f"Failed to fetch step times: {e}")
         return []
