@@ -476,6 +476,8 @@ At around 11.1e12 tokens, we decided to start another cooldown. Building on less
 - We added a small z-loss penalty of 1e-4.
 - We increased the batch size to 16Mi tokens rather than 12Mi.
 
+This cooldown ran for 1.34T tokens.
+
 ### Data
 
 We switched to a mix that was 70% [Nemotron-CC](https://arxiv.org/abs/2412.02595) and 30% high-quality sources, including some new sources we created.
@@ -578,18 +580,15 @@ For all benchmarks, we used [LM Eval Harness](https://github.com/EleutherAI/lm-e
 For other evaluations, you can see [Olmo 2's technical report](https://allenai.org/blog/olmo2) which includes results using [OLMES](https://github.com/allenai/olmes).
 
 
-|                          | Average  | AGI Eval LSAT-AR | ARC Easy | ARC Challenge | BBH      | BoolQ    | CommonSense QA | COPA     | GPQA     | HellaSwag 0-shot | HellaSwag 10-shot | lambada_openai |  MMLU 5-shot | MMLU 0-shot | MMLU Pro |OpenBookQA | PIQA     | WinoGrande | WSC      | GSM8K |
-|--------------------------|----------|------------------|----------|---------------|----------|----------|----------------|----------|----------|------------------|-------------------|----------------|--------------|-------------|----------|-----------|----------|------------|----------|-------|
-| Marin 8B Base <br/>(Deeper Starling) | **66.6** | 20.9             | **86.5** | **63.1**      | **50.6** | **85.9** | 79.1           | **92.0** | 30.3     | **82.3**         | **83.6**          | **74.7**       |  **67.6**    | **65.9**    | **36.5** |44.2       | **84.4** | **74.5**   | 82.1     | 61.3 |
-| Llama 3.1 Base           | 65.3     | 20.4             | 85.8     | 58.9          | 46.4     | 84.2     | 75.2           | **92.0** | **32.3** | 79.4             | 81.9              | **74.7**       |  66.4        | 65.5        | 33.3     |45.8       | 82.9     | 74.4       | 83.5     | 56.8 |
-| OLMo 2 Base              | 64.9     | 17.4             | 85.0     | 60.7          | 44.4     | 85.5     | 75.4           | 89.0     | 26.8     | 80.5             | 81.7              | 73.1           |  63.9        | 61.9        | 30.6     |**46.2**   | 82.5     | 74.3       | **86.1** | 67.6 |
-| MAP NEO 7B               | 59.5     | **23.0**         | 81.1     | 52.0          | 42.4     | 84.7     | **81.7**       | 82.0     | 27.8     | 72.5             | 73.3              | 64.6           |  58.2        | 56.4        | 25.2     |39.4       | 79.0     | 66.1       | 73.3     | 48.0
-| Amber 7B                 | 48.1     | 19.1             | 74.7     | 41.6          | 41.6     | 68.8     | 20.6           | 87.0     | 26.3     | 72.4             | 73.9              | 66.8           |  26.6        | 26.7        | 11.6     |39.2       | 79.8     | 65.3       | 76.9     | 4.4 |
+|                                      | Average  | AGI Eval LSAT-AR | ARC Easy | ARC Challenge | BBH      | BoolQ    | CommonSense QA | COPA     | GPQA     | HellaSwag 0-shot | HellaSwag 10-shot | lambada_openai | MMLU 5-shot | MMLU 0-shot | MMLU Pro | OpenBookQA | PIQA     | WinoGrande | WSC      | GSM8K |
+|--------------------------------------|----------|------------------|----------|---------------|----------|----------|----------------|----------|----------|------------------|-------------------|----------------|-------------|-------------|----------|------------|----------|------------|----------|-------|
+| Marin 8B Base <br/>(Deeper Starling) | **66.6** | 20.9             | **86.5** | **63.1**      | **50.6** | **85.9** | 79.1           | **92.0** | 30.3     | **82.3**         | **83.6**          | **74.7**       | **67.6**    | **65.9**    | **36.5** | 44.2       | **84.4** | **74.5**   | 82.1     | 61.3  |
+| Llama 3.1 Base                       | 65.3     | 20.4             | 85.8     | 58.9          | 46.4     | 84.2     | 75.2           | **92.0** | **32.3** | 79.4             | 81.9              | **74.7**       | 66.4        | 65.5        | 33.3     | 45.8       | 82.9     | 74.4       | 83.5     | 56.8  |
+| OLMo 2 Base                          | 64.9     | 17.4             | 85.0     | 60.7          | 44.4     | 85.5     | 75.4           | 89.0     | 26.8     | 80.5             | 81.7              | 73.1           | 63.9        | 61.9        | 30.6     | **46.2**   | 82.5     | 74.3       | **86.1** | 67.6  |
+| MAP NEO 7B                           | 59.5     | **23.0**         | 81.1     | 52.0          | 42.4     | 84.7     | **81.7**       | 82.0     | 27.8     | 72.5             | 73.3              | 64.6           | 58.2        | 56.4        | 25.2     | 39.4       | 79.0     | 66.1       | 73.3     | 48.0  |
+| Amber 7B                             | 48.1     | 19.1             | 74.7     | 41.6          | 41.6     | 68.8     | 20.6           | 87.0     | 26.3     | 72.4             | 73.9              | 66.8           | 26.6        | 26.7        | 11.6     | 39.2       | 79.8     | 65.3       | 76.9     | 4.4   |
 
-Marin 8B Base (Starling) is the best performing 7-8B model on the majority of tasks. We can't claim any particular standout performance on any one task (though MMLU Pro is nice), just a general improvement.
-
-(Models like Gemma 2 9B )
-
+Marin 8B Base (Deeper Starling) is the best performing 7-8B model on the majority of tasks. We can't claim any particular standout performance on any one task (though MMLU Pro is nice), just a general improvement.
 
 ## Supervised Fine-Tuning
 
@@ -626,7 +625,8 @@ For all tasks aside from AlpacaEval, we utilize the [EleutherAI Lm Evaluation Ha
 For AlpacaEval, we use the [AlpacaEval](https://github.com/tatsu-lab/alpaca_eval) harness.
 
 As we noted earlier, LM Eval Harness can be quite strict, leading to extremely low performance due to systematic failures to follow the strict templates.
-In this case, Olmo 2 SFT suffered on MATH, and Llama 3.1 Instruct suffered on HumanEval. Therefore, we report both the average score and the average score excluding those two tasks.
+In this case, Olmo 2 SFT suffered on MATH, and Llama 3.1 Instruct suffered on HumanEval.
+Therefore, we report both the average score and the average score excluding those two tasks.
 
 
 | Model | Average | Average w/o <br/> outliers | AlpacaEval | IFEval | Gsm8k_cot | BigBenchHard | MMLU | GPQA | MMLU-Pro | MuSR | MATH Hard | HumanEval |
@@ -641,15 +641,16 @@ We see an unfortunate degradation in "base model" tasks like MMLU, not dissimila
 
 If we look at ranks:
 
-| Model | Average Rank | Average Rank<br/>w/o outliers |
-|-------|---------|---------------------|
-| OLMo 2 SFT | 4.1 | 4.125 |
-| OLMo 2 Instruct | 3.8 | 3.75 |
-| Llama 3.1 Instruct | 2.9 | 2.75 |
-| Llama 3.1 Tulu | 1.6 | 1.75 |
-| Marin 8B SFT | 2.6 | 2.625 |
+| Model              | Average Rank | Average Rank<br/>w/o outliers |
+|--------------------|--------------|-------------------------------|
+| OLMo 2 SFT         | 4.1          | 4.125                         |
+| OLMo 2 Instruct    | 3.8          | 3.75                          |
+| Llama 3.1 Instruct | 2.9          | 2.75                          |
+| Llama 3.1 Tulu     | 1.6          | 1.75                          |
+| Marin 8B SFT       | 2.6          | 2.625                         |
 
-So we still haven't surpassed Llama 3.1 Tulu, bu
+So we still haven't surpassed Llama 3.1 Tulu, but performance is not bad.
+We will continue to improve our SFT pipeline and will release a new checkpoint when we have one.
 
 # Conclusion
 

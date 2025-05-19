@@ -16,6 +16,8 @@ datasets:
 # REMINDER: when the instruct model should add dependencies on the instruct datasets and the base model.
 language:
 - en
+tags:
+- text-generation
 ---
 
 <img alt="Marin Logo" src="https://huggingface.co/datasets/marin-community/blog-images/resolve/main/marin-boat.jpg" width="96" style="margin-left:'auto' margin-right:'auto' display:'block'">
@@ -82,24 +84,31 @@ We release a large number of checkpoints.
 
 Main Page: [marin-community/marin-8b-base](https://huggingface.co/marin-community/marin-8b-base)
 
-(More checkpoints are being uploaded right now.)
+| Name              | Training Tokens | Link                                                                                                       |
+|-------------------|-----------------|------------------------------------------------------------------------------------------------------------|
+| `main`            | 12.7T           | [marin-community/marin-8b-base](https://huggingface.co/marin-community/marin-8b-base/tree/main)            |
+| `kestrel`         | 2.7T            | [kestrel](https://huggingface.co/marin-community/marin-8b-base/tree/kestrel)                               |
+| `ocelot`          | 3.78T           | [kestrel](https://huggingface.co/marin-community/marin-8b-base/tree/ocelot)                                |
+| `jellyfish`       | 4.78T           | [marin-community/marin-8b-base](https://huggingface.co/marin-community/marin-8b-base/tree/jellyfish)       |
+| `phoenix`         | 11.1T           | [marin-community/marin-8b-base](https://huggingface.co/marin-community/marin-8b-base/tree/phoenix)         |
+| `starling`        | 12.4T           | [marin-community/marin-8b-base](https://huggingface.co/marin-community/marin-8b-base/tree/starling)        |
+| `deeper-starling` | 12.7T           | [marin-community/marin-8b-base](https://huggingface.co/marin-community/marin-8b-base/tree/deeper-starling) |
 
-| Name | Training Tokens | Link |
-|------|--------|-------------|
-| `deeper-starling` | 13.7T | [marin-community/marin-8b-base](https://huggingface.co/marin-community/marin-8b-base/tree/deeper-starling) |
-
-`main` currently refers to `deeper-starling`. This may change in the future, though we will maintain model compatibility. If you require a specific checkpoint, please use the `revision` argument.
+`main` currently refers to `deeper-starling`. main currently refers to deeper-starling.
+This may change in the future, but we will maintain compatibility at the architecture and tokenizer level,
+so the model will remain drop-in compatible with existing tooling.
+If you require a specific checkpoint, please use the `revision` argument.
 
 ### Instruct Model Checkpoints
 
 Main Page: [marin-community/marin-8b-instruct](https://huggingface.co/marin-community/marin-8b-instruct)
 
-| Name | Training Tokens | Link |
-|------|--------|-------------|
-| `deeper-starling-05-15` | 5.3B | [marin-community/marin-8b-instruct](https://huggingface.co/marin-community/marin-8b-instruct/) |
+| Name                    | SFT Tokens | Link                                                                                                                     |
+|-------------------------|------------|--------------------------------------------------------------------------------------------------------------------------|
+| `main`                 | 5.3B       | [marin-community/marin-8b-instruct](https://huggingface.co/marin-community/marin-8b-instruct/tree/deeper-starling-05-15) |
+| `deeper-starling-05-15` | 5.3B       | [marin-community/marin-8b-instruct](https://huggingface.co/marin-community/marin-8b-instruct/tree/deeper-starling-05-15) |
 
 `main` currently refers to `deeper-starling-05-15`. This may change in the future, though we will maintain model compatibility. If you require a specific checkpoint, please use the `revision` argument.
-
 
 ## Installation
 
@@ -157,16 +166,15 @@ marin = AutoModelForCausalLM.from_pretrained("marin-community/marin-8b-base", re
 We ran a suite of standard benchmarks to compare our model with [Llama 3.1 8B](https://huggingface.co/meta-llama/Meta-Llama-3.1-8B), and the open source 7-8B models [Olmo 2 7B](https://huggingface.co/allenai/OLMo-2-1124-7B), and [MAP NEO 7B](https://huggingface.co/m-a-p/neo_7b).
 For all benchmarks, we used [LM Eval Harness](https://github.com/EleutherAI/lm-evaluation-harness) with the default setup for each task. (These numbers may differ from reported results due to differences in setup. LM Eval Harness is usually somewhat stricter than other harnesses.)
 
+|                                      | Average  | AGI Eval LSAT-AR | ARC Easy | ARC Challenge | BBH      | BoolQ    | CommonSense QA | COPA     | GPQA     | HellaSwag 0-shot | HellaSwag 10-shot | lambada_openai |  MMLU 5-shot | MMLU 0-shot | MMLU Pro |OpenBookQA | PIQA     | WinoGrande | WSC      |
+|--------------------------------------|----------|------------------|----------|---------------|----------|----------|----------------|----------|----------|------------------|-------------------|----------------|--------------|-------------|----------|-----------|----------|------------|----------|
+| Marin 8B Base <br/>(Deeper Starling) | **68.3** | 20.9             | **86.5** | **63.1**      | **50.6** | **85.9** | 79.1           | **92.0** | 30.3     | **82.3**         | **83.6**          | **74.7**       |  **67.6**    | **65.9**    | **36.5** |44.2       | **84.4** | **74.5**   | 82.1     |
+| Llama 3.1 Base                       | 67.0     | 20.4             | 85.8     | 58.9          | 46.4     | 84.2     | 75.2           | **92.0** | **32.3** | 79.4             | 81.9              | **74.7**       |  66.4        | 65.5        | 33.3     |45.8       | 82.9     | 74.4       | 83.5     |
+| OLMo 2 Base                          | 66.7     | 17.4             | 85.0     | 60.7          | 44.4     | 85.5     | 75.4           | 89.0     | 26.8     | 80.5             | 81.7              | 73.1           |  63.9        | 61.9        | 30.6     |**46.2**   | 82.5     | 74.3       | **86.1** |
+| MAP NEO 7B                           | 62.2     | **23.0**         | 81.1     | 52.0          | 42.4     | 84.7     | **81.7**       | 82.0     | 27.8     | 72.5             | 73.3              | 64.6           |  58.2        | 56.4        | 25.2     |39.4       | 79.0     | 66.1       | 73.3     |
 
-|                          | Average  | AGI Eval LSAT-AR | ARC Easy | ARC Challenge | BBH      | BoolQ    | CommonSense QA | COPA     | GPQA     | HellaSwag 0-shot | HellaSwag 10-shot | lambada_openai |  MMLU 5-shot | MMLU 0-shot | MMLU Pro |OpenBookQA | PIQA     | WinoGrande | WSC      |
-|--------------------------|----------|------------------|----------|---------------|----------|----------|----------------|----------|----------|------------------|-------------------|----------------|--------------|-------------|----------|-----------|----------|------------|----------|
-| Marin 8B Base (Starling) | **68.3** | 20.9             | **86.5** | **63.1**      | **50.6** | **85.9** | 79.1           | **92.0** | 30.3     | **82.3**         | **83.6**          | **74.7**       |  **67.6**    | **65.9**    | **36.5** |44.2       | **84.4** | **74.5**   | 82.1     |
-| Llama 3.1 Base           | 67.0     | 20.4             | 85.8     | 58.9          | 46.4     | 84.2     | 75.2           | **92.0** | **32.3** | 79.4             | 81.9              | **74.7**       |  66.4        | 65.5        | 33.3     |45.8       | 82.9     | 74.4       | 83.5     |
-| OLMo 2 Base              | 66.7     | 17.4             | 85.0     | 60.7          | 44.4     | 85.5     | 75.4           | 89.0     | 26.8     | 80.5             | 81.7              | 73.1           |  63.9        | 61.9        | 30.6     |**46.2**   | 82.5     | 74.3       | **86.1** |
-| MAP NEO 7B               | 62.2     | **23.0**         | 81.1     | 52.0          | 42.4     | 84.7     | **81.7**       | 82.0     | 27.8     | 72.5             | 73.3              | 64.6           |  58.2        | 56.4        | 25.2     |39.4       | 79.0     | 66.1       | 73.3     |
 
-
-Marin 8B Base fares well on most tasks.
+Marin 8B Base fares well on most of these tasks.
 
 
 ## Model Details
@@ -194,8 +202,8 @@ Marin 8B uses a variant of the Llama 3 tokenizer: [stanford-crfm/marin-tokenizer
 - *Ocelot (DCLM WSD Phase)*: Increased batch size, using WSD. (2.7T->3.78T tokens)
 - *Jellyfish (First Cooldown)*: Higher quality data (~Dolmino+Fine Math). (3.78T->4.78T tokens)
 - *Phoenix (Reheated)*: Rapid rewarming + [Nemotron-CC](https://arxiv.org/abs/2412.02595) (plus [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata)). (4.78T->11.1T tokens)
-- *Starling (Second Cooldown)*: Another cooldown. We followed a similar process to the first cooldown, but added a few new datasets. (11.1T->12.75T tokens)
-- *Deeper Starling*: Somewhat more pretraining. (12.75T->13.7T tokens)
+- *Starling (Second Cooldown)*: Another cooldown. We followed a similar process to the first cooldown, but added a few new datasets. (11.1T->12.4 tokens)
+- *Deeper Starling*: Somewhat more pretraining. (12.4->12.7T tokens)
 
 All released pre-training checkpoints except Kestrel use an exponential moving average of the model weights.
 
@@ -216,5 +224,3 @@ For errors in this model card, please open an issue in this repository. For tech
 ## Acknowledgements
 
 The compute for this model was generously provided by Google's [TPU Research Cloud](https://sites.research.google/trc/about/).
-
-(We based this model card on Olmo 2's.)
