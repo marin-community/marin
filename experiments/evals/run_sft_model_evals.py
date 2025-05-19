@@ -8,14 +8,14 @@ as dedicated MMLU 0-shot and 5-shot configurations.
 
 from experiments.evals.evals import default_sft_eval
 from experiments.models import llama_3_1_8b_instruct, tulu_3_1_8b_instruct
-from experiments.tootsie.exp1237_starling_sft import deeper_mixture_experiment
+from experiments.tootsie.exp1237_starling_sft import mixture_sft_deeper_starling
 from marin.execution.executor import executor_main
 
 if __name__ == "__main__":
     # Run all evaluations on all models
     executor_main(
         steps=[
-            *default_sft_eval(deeper_mixture_experiment),
+            *default_sft_eval(mixture_sft_deeper_starling),
             *default_sft_eval(llama_3_1_8b_instruct),
             *default_sft_eval(tulu_3_1_8b_instruct),
         ]
