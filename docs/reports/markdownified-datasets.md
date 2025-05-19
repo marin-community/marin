@@ -99,7 +99,17 @@ The core enhancement is the implementation of `extract_simplified_dom` which lev
 
 This enhancement maintains full backward compatibility with the existing Resiliparse API while extending its capabilities for applications that need more structure than plain text extraction provides.
 
-### Acknowledgements
+## Examples
+
+We have several "snapshot tests" as quality control. You can see some of them in our GitHub repo:
+
+- [Ar5iv](https://github.com/marin-community/marin/blob/main/tests/snapshots/ar5iv/expected/arxiv_4.md)
+- [Stack Exchange](https://github.com/marin-community/marin/blob/main/tests/snapshots/stackexchange/expected/stackoverflow.md)
+- [Wikipedia](https://github.com/marin-community/marin/blob/main/tests/snapshots/wiki/expected/aquila.md)
+
+While the conversion is by no means perfect, we believe the datasets are of high quality and a useful resource for the community.
+
+### ### Acknowledgements
 
 We would like to express our sincere gratitude to:
 

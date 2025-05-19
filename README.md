@@ -22,7 +22,7 @@ Notably, this includes data curation, transformation, filtering, tokenization, t
 
 We used Marin to train the first open-source 8B parameter model to outperform Llama 3.1 8B.
 You can see the [training script](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp600_tootsie.py)
-or read the [retrospective](docs/reports/tootsie-retrospective.md).
+or read the [retrospective](docs/reports/marin-8b-retro.md).
 
 <!--marin-intro-end-->
 
