@@ -29,14 +29,14 @@ class LeaderboardEntry:
     training_hardware_flops: float
 
     # Training metrics and FLOPs
-    training_time_in_minutes: float
+    training_time: float # in seconds
     model_flops: float
     eval_paloma_c4_en_bpb: float | None = None
 
     # Metadata
     author: SpeedrunAuthor
     wandb_link: str | None = None
-    run_timestamp: datetime.datetime | None = None
+    run_completion_timestamp: datetime.datetime | None = None
     description: str | None = None
 
 
@@ -65,7 +65,7 @@ def create_entry_from_results(results: dict, results_filepath: str) -> Leaderboa
 
     # Training metrics and FLOPs
     training_hardware_flops = run_data["training_hardware_flops"]
-    training_time_in_minutes = run_data["training_time_in_minutes"]
+    training_time = run_data["training_time"]
     eval_paloma_c4_en_bpb = run_data["eval/paloma/c4_en/bpb"]
     model_flops = run_data["model_flops"]
 
@@ -74,7 +74,7 @@ def create_entry_from_results(results: dict, results_filepath: str) -> Leaderboa
 
     # Run metadata
     wandb_link = run_data.get("wandb_run_link")
-    run_timestamp = run_data.get("run_completion_timestamp")
+    run_completion_timestamp = run_data.get("run_completion_timestamp")
     description = run_data["description"]
 
     # Author information
@@ -88,14 +88,14 @@ def create_entry_from_results(results: dict, results_filepath: str) -> Leaderboa
     return LeaderboardEntry(
         run_name=run_name,
         results_filepath=str(relative_path),
-        model_size=int(model_size) if model_size is not None else 0,
-        training_hardware_flops=float(training_hardware_flops) if training_hardware_flops is not None else 0.0,
-        training_time_in_minutes=float(training_time_in_minutes) if training_time_in_minutes is not None else 0.0,
+        model_size=model_size or 0,
+        training_hardware_flops=training_hardware_flops or 0.0,
+        training_time=training_time or 0.0,
         model_flops=model_flops,
-        eval_paloma_c4_en_bpb=float(eval_paloma_c4_en_bpb) if eval_paloma_c4_en_bpb is not None else None,
+        eval_paloma_c4_en_bpb=eval_paloma_c4_en_bpb,
         author=author,
         wandb_link=wandb_link,
-        run_timestamp=run_timestamp,
+        run_completion_timestamp=run_completion_timestamp,
         description=description,
     )
 
