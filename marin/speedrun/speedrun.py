@@ -13,11 +13,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import fsspec
+import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
-from levanter.utils.flop_utils import lm_flops_per_token
 
-import wandb
 from experiments.defaults import default_train
 from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
@@ -68,16 +67,12 @@ class SpeedrunConfig:
         train_config_dict = asdict_excluding(self.train_config, exclude={"resources", "runtime_env"})
 
         return {
-            "author": {
-                "name": self.author.name,
-                "affiliation": self.author.affiliation,
-                "url": self.author.url
-            },
+            "author": {"name": self.author.name, "affiliation": self.author.affiliation, "url": self.author.url},
             "description": self.description,
             "model_config": dataclasses.asdict(self.model_config),
             "train_config": train_config_dict,
             "tokenized_dataset": str(self.tokenized_dataset),
-            "resources": asdict_excluding(self.train_config.resources, exclude={"runtime_env"})
+            "resources": asdict_excluding(self.train_config.resources, exclude={"runtime_env"}),
         }
 
     def print_run_info(self) -> None:
@@ -99,7 +94,6 @@ class SpeedrunConfig:
         logger.info(f"Device FLOPs: {device_flops:.2e} FLOP/s")
         logger.info(f"Total peak hardware FLOPs: {total_peak_flops:.2e} FLOP/s")
         logger.info(f"Model FLOPs: {model_flops:.2e} FLOP")
-
 
     def compute_model_flops(self) -> float:
         # TODO (Nikil): make this a helper and handle edge-cases
@@ -123,10 +117,13 @@ class SpeedrunConfig:
         estimated_model_flops = flops_per_token * total_tokens
 
         logger.info(
-            f"""The rough estimated compute (calculated as (total model FLOPs / Assumed MFU))
-            for your run is around {estimated_model_flops/0.5:.2e} FLOPs assuming an MFU of 0.5, and
-            {estimated_model_flops/0.2:.2e} FLOPs assuming an MFU of 0.2. This is calculated based 
-            on assumed MFU values and can be used as a rough estimate to guide your config/training setup."""
+            f"""
+The rough estimated compute (calculated as (total model FLOPs / Assumed MFU)) for your run is probably between:
+      * {estimated_model_flops/0.5:.2e} FLOPs assuming an MFU of 0.5, and
+      * {estimated_model_flops/0.2:.2e} FLOPs assuming an MFU of 0.2.
+
+This is calculated based on assumed MFU values and can be used as a rough estimate to guide your config/training setup.
+""".strip()
         )
 
         return estimated_model_flops
@@ -196,6 +193,23 @@ def speedrun_results(config: SpeedrunResultsConfig):
         "eval/paloma/c4_en/bpb": run.summary.get("eval/paloma/c4_en/bpb", None),
     }
 
+    wandb_num_devices = run.summary.get("num_devices", None)
+    if wandb_num_devices is not None:
+        if wandb_num_devices != config.speedrun_config.num_devices:
+            logger.warning(
+                f"Number of devices in wandb ({wandb_num_devices}) does not match number of devices in config"
+                f"({config.speedrun_config.num_devices}). Going with config value."
+            )
+
+    wandb_device_flops = run.summary.get("throughput/theoretical_flops_per_device", None)
+    if wandb_device_flops is not None:
+        if wandb_device_flops != config.speedrun_config.device_flops:
+            logger.warning(
+                f"Device FLOPS in wandb ({wandb_device_flops}) does not match device FLOPS in config "
+                f"({config.speedrun_config.device_flops})."
+                f"Going with config value."
+            )
+
     # Get timestamps in UTC
     start_time = datetime.datetime.fromisoformat(run.createdAt.replace("Z", "+00:00"))  # Convert ISO string to datetime
     runtime_seconds = run.summary["_runtime"]
@@ -213,12 +227,14 @@ def speedrun_results(config: SpeedrunResultsConfig):
         "model_size": model_size,
         "total_tokens": total_tokens,
         "model_flops": model_flops,
-
         # Training metrics
         "training_time": training_time,
         "training_hardware_flops": training_hardware_flops,
-        "eval/paloma/c4_en/bpb": float(wandb_metrics.get("eval/paloma/c4_en/bpb")) if wandb_metrics.get("eval/paloma/c4_en/bpb") is not None else None,
-
+        "eval/paloma/c4_en/bpb": (
+            float(wandb_metrics.get("eval/paloma/c4_en/bpb"))
+            if wandb_metrics.get("eval/paloma/c4_en/bpb") is not None
+            else None
+        ),
         # Run metadata
         "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
         "wandb_run_link": wandb_run_link,
