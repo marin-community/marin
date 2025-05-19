@@ -26,7 +26,7 @@ class TwoStageConfig:
     """
     Configuration for two-stage training.
 
-    We are interested in the problem setting where there is 
+    We are interested in the problem setting where there is
         (1) high-quality rare data for a task of interest (i.e. math, instruction following)
         (2) a large amount of common web data that's only generally helpful for task
     We study how to best order your data to maximize performance on the rare task.
@@ -108,7 +108,7 @@ class TwoStageConfig:
         """
         A data schedule represents two stages of training subject to a constraint on rare steps.
         Though there are many equivalent ways to parameterize this, we use the following
-        
+
         ┌──────────────────────────┬──────────┐
         │                          │ agr/(1-r)│ ← r (common data replay)
         │         remainder        │──────────│
