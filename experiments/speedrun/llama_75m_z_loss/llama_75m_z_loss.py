@@ -35,4 +35,8 @@ speedrun_config = SpeedrunConfig(
 speedrun_config.print_run_info()
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("llama_75m_z_loss", speedrun_config, override_output_path="checkpoints/speedrun/llama_75m_z_loss-5aac14"))
+    executor_main(
+        steps=default_speedrun(
+            "llama_75m_z_loss", speedrun_config, override_output_path="checkpoints/speedrun/llama_75m_z_loss-5aac14"
+        )
+    )
