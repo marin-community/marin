@@ -743,7 +743,7 @@ class Executor:
         """Return the URL where the experiment can be viewed."""
         # TODO: remove hardcoding
         if self.prefix.startswith("gs://"):
-            host = "https://crfm.stanford.edu/marin/data_browser"
+            host = "https://marin.community/data-browser"
         else:
             host = "http://localhost:5000"
 
