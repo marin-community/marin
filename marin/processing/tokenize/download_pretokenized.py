@@ -93,7 +93,7 @@ def download_pretokenized_cache(
     """
     config = PretokenizedCacheDownloadConfig(
         cache_path=THIS_OUTPUT_PATH,  # ExecutorStep will resolve this to the actual output path
-        tokenizer=tokenizer,
+        tokenizer=ensure_versioned(tokenizer),
         hf_repo_id=ensure_versioned(hf_repo_id),  # type: ignore[call-arg]
         hf_revision=ensure_versioned(hf_revision),  # type: ignore[call-arg]
         hf_repo_type_prefix="datasets",  # Default for Hugging Face datasets
