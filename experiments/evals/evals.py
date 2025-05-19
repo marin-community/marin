@@ -250,6 +250,7 @@ def default_eval(
     resource_config: ResourceConfig = SINGLE_TPU_V4_8,
     evals: list[EvalTaskConfig] | None = None,
     max_eval_instances: int | None = None,
+    apply_chat_template: bool = False,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness on a step.
@@ -272,7 +273,12 @@ def default_eval(
     logger.info(f"Running evals on the following tasks: {evals}")
 
     return evaluate_levanter_lm_evaluation_harness(
-        name, model_step_path, evals, resource_config, max_eval_instances=max_eval_instances
+        name,
+        model_step_path,
+        evals,
+        resource_config,
+        max_eval_instances=max_eval_instances,
+        apply_chat_template=apply_chat_template,
     )
 
 
@@ -333,25 +339,27 @@ def default_sft_eval(
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
     run_generation_evals: bool = True,
+    apply_chat_template: bool = True,
 ):
     # Set up evaluations for core tasks (including GPQA)
     eval_jobs = []
-    leaderboard_grouped = default_eval(step=step, resource_config=resource_config, evals=OPEN_LM_LEADERBOARD_MCQ)
+    leaderboard_grouped = default_eval(
+        step=step,
+        resource_config=resource_config,
+        evals=OPEN_LM_LEADERBOARD_MCQ,
+        apply_chat_template=apply_chat_template,
+    )
     eval_jobs.append(leaderboard_grouped)
 
     # Run tasks where we report Macro_Avg separately to make sure the macro avg gets computed correctly.
 
     mmlu_5shot = default_eval(
-        step=step,
-        resource_config=resource_config,
-        evals=(MMLU_5_SHOT,),
+        step=step, resource_config=resource_config, evals=(MMLU_5_SHOT,), apply_chat_template=apply_chat_template
     )
     eval_jobs.append(mmlu_5shot)
 
     mmlu_pro_5shot = default_eval(
-        step=step,
-        resource_config=resource_config,
-        evals=(MMLU_PRO_5_SHOT,),
+        step=step, resource_config=resource_config, evals=(MMLU_PRO_5_SHOT,), apply_chat_template=apply_chat_template
     )
     eval_jobs.append(mmlu_pro_5shot)
 
@@ -364,6 +372,7 @@ def default_sft_eval(
             max_eval_instances=max_eval_instances,
             engine_kwargs=engine_kwargs,
             resource_config=resource_config,
+            apply_chat_template=apply_chat_template,
         )
 
         eval_jobs.append(leaderboard_generation)
@@ -375,6 +384,7 @@ def default_sft_eval(
             max_eval_instances=max_eval_instances,
             engine_kwargs=engine_kwargs,
             resource_config=resource_config,
+            apply_chat_template=apply_chat_template,
         )
         eval_jobs.append(olmo_generation)
     return eval_jobs
