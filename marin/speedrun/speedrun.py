@@ -18,9 +18,9 @@ from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 
 from experiments.defaults import default_train
-from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
+from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.training.training import TrainLmOnPodConfig
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
@@ -53,8 +53,8 @@ class SpeedrunConfig:
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
 
-    # by default, this is fineweb_edu_tokenized
-    tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_tokenized
+    # by default, this is fineweb_edu_subcache_10B
+    tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_subcache_10B
 
     @property
     def vocab_size(self) -> int:
@@ -92,6 +92,10 @@ class SpeedrunConfig:
         logger.info(f"Device FLOPs: {device_flops:.2e} FLOP/s")
         logger.info(f"Total peak hardware FLOPs: {total_peak_flops:.2e} FLOP/s")
         logger.info(f"Model FLOPs: {model_flops:.2e} FLOP")
+
+        # model size
+        model_size = self.model_config.total_trainable_params(self.vocab_size)
+        logger.info(f"Model size: {model_size/1e6:.2f} million parameters")
 
     def compute_model_flops(self) -> float:
         # TODO (Nikil): make this a helper and handle edge-cases
@@ -152,7 +156,11 @@ class SpeedrunResultsConfig:
 def get_step_times_from_wandb(run_id: str, entity: str = WANDB_ENTITY, project: str = WANDB_PROJECT) -> list[float]:
     try:
         run = wandb.Api().run(f"{entity}/{project}/{run_id}")
-        return run.history(keys=["throughput/duration"])["throughput/duration"].tolist()
+        return [
+            row["throughput/duration"]
+            for row in run.scan_history(keys=["throughput/duration"])
+            if "throughput/duration" in row
+        ]
     except Exception as e:
         logger.error(f"Failed to fetch step times: {e}")
         return []

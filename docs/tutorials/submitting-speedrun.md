@@ -152,6 +152,9 @@ and having multiple scales allows us to fit scaling laws and extrapolate out to 
    python marin/run/ray_run.py -- python experiments/speedrun/llama_75m_fineweb_edu/llama_75m_fineweb_edu.py
    ```
 
+!!! note "Speedrun Time Benchmarks"
+    To give you a sense of training times on GPU, a 50M parameter model trained on 4× A100 GPUs (80GB) takes about 33 minutes to complete 7600 steps, processing approximately 1 billion tokens. This should help you estimate the resources needed for your own speedrun experiments.
+
 ## Submitting Your Run
 
 1. Add the resulting `speedrun_results.json` file to your run directory:
