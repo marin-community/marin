@@ -34,7 +34,7 @@ You are given the [FineWeb-Edu dataset](https://huggingface.co/datasets/HuggingF
 Each speedrun submission will generate the following key metrics:
 
 - **C4-EN BPB (Bits per Byte)** (quality): Bits-per-byte on the validation portion of the `c4-en` (English portion of the C4) dataset; lower values are better.
-- **FLOPs Used** (compute): Floating point operations used to train the model; lower values are better.
+- **FLOPs Used** (compute): Floating point operations used to train the model; lower values are better. See [here](../explanations/speedrun-flops-accounting.md) for more details on how we calculate FLOPs.
 
 We also define the **Pareto frontier**, the set of submissions that are not outperformed in both metrics by any other submission. In other words, a submission is Pareto-optimal if no other model achieves better BPB and uses fewer FLOPs.
 
