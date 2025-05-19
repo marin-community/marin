@@ -33,4 +33,4 @@ speedrun_config = SpeedrunConfig(
 speedrun_config.print_run_info()
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("llama_300m", speedrun_config))
+    executor_main(steps=default_speedrun("llama_300m_run", config=speedrun_config, override_output_path="checkpoints/speedrun/llama_300m_run-e76a8f"))
