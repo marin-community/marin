@@ -19,8 +19,9 @@ from dataclasses import dataclass, field
 
 from experiments.datashop.defaults import (
     default_candidate_anneal,
+    default_consolidate,
     default_label,
-    default_quality_filter_and_consolidate,
+    default_quality_filter,
     default_train_quality_model,
 )
 from experiments.evals.evals import default_eval
@@ -109,12 +110,18 @@ class DatashopRunner:
             self.config.dataset_output_processor_config_kwargs,
             self.config.quality_train_config_kwargs,
         )
-        self.filtered_documents = default_quality_filter_and_consolidate(
+        self.attributes = default_quality_filter(
             self.encoder_model,
             self.config.pretraining_data_path,
             self.config.pretraining_data_path_name,
             self.config.experiment_name,
             self.config.inference_config_kwargs,
+        )
+        self.filtered_documents = default_consolidate(
+            self.attributes,
+            self.config.pretraining_data_path,
+            self.config.pretraining_data_path_name,
+            self.config.experiment_name,
             self.config.filter_config_kwargs,
             self.config.consolidate_config_kwargs,
         )
