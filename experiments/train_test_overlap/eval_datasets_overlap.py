@@ -481,7 +481,7 @@ ai2_arc_convert_dolma = ExecutorStep(
         prompt_key="question",
         options_key="choices.text",
         answer_label_key="answerKey",
-        answer_labels=["A","B","C","D"],
+        answer_labels=["A", "B", "C", "D"],
         answer_text_ignore=True,
     ),
 )
@@ -518,7 +518,7 @@ commonsense_qa_convert_dolma = ExecutorStep(
         prompt_key="question",
         options_key="choices.text",
         answer_label_key="answerKey",
-        answer_labels=["A","B","C","D","E"],
+        answer_labels=["A", "B", "C", "D", "E"],
         answer_text_ignore=True,
     ),
 )
@@ -555,7 +555,7 @@ openbookqa_convert_dolma = ExecutorStep(
         prompt_key="question_stem",
         options_key="choices.text",
         answer_label_key="answerKey",
-        answer_labels=["A","B","C","D"],
+        answer_labels=["A", "B", "C", "D"],
         answer_text_ignore=True,
     ),
 )
@@ -595,7 +595,7 @@ winograd_wsc_convert_dolma = ExecutorStep(
         prompt_key="rendered_input",
         options_key="options",
         answer_label_key="label",
-        answer_labels=["0","1"],
+        answer_labels=["0", "1"],
         answer_text_ignore=True,
     ),
 )

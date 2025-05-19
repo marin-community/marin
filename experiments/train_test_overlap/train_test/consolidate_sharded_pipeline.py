@@ -7,7 +7,8 @@ by their parent directories, then at each parent:
   1) merge overlap_stats.jsonl into consolidated overlap_stats.jsonl
   2) concatenate raw_ngrams
   3) merge instance_mapping.json
-  4) merge aggregated_metrics.jsonl (if present), keeping metric_scores aligned with instance_ids and recording all metrics_input_paths
+  4) merge aggregated_metrics.jsonl (if present), keeping metric_scores aligned with instance_ids and
+  recording all metrics_input_paths
 
 Usage:
   from this file import ConsolidateShardedConfig, consolidate_sharded

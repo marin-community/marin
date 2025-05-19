@@ -2,10 +2,6 @@ import logging
 import os
 
 from experiments.pretraining_datasets import dclm_baseline  # InputName for DCLM download step
-from experiments.train_test_overlap.train_test.consolidate_sharded_pipeline import (
-    ConsolidateShardedConfig,
-    consolidate_sharded,
-)
 from marin.execution.executor import ExecutorStep, executor_main, get_executor_step, this_output_path
 from train_test_overlap.run_overlap_shards import ShardedOverlapConfig, run_all_shards
 
@@ -49,22 +45,13 @@ config = ShardedOverlapConfig(
     max_in_flight=2048,
 )
 dclm_sharded_step = ExecutorStep(
-    name="train_test_overlap/ngrams/dclm_data_overlap_sharded",
+    name="train_test_overlap/ngrams_final/dclm_data_overlap_sharded",
     fn=run_all_shards,
     config=config,
-)
-consolidate_sharded_config = ConsolidateShardedConfig(
-    input_step=dclm_sharded_step,
-    output_path=this_output_path(),
-)
-consolidate_dclm_sharded_step = ExecutorStep(
-    name="train_test_overlap/consolidated/consolidate_sharded_dclm",
-    fn=lambda cfg: consolidate_sharded(cfg),
-    config=consolidate_sharded_config,
 )
 
 if __name__ == "__main__":
     executor_main(
-        steps=[dclm_sharded_step, consolidate_dclm_sharded_step],
+        steps=[dclm_sharded_step],
         description="Run sharded n-gram data overlap pipeline on DCLM dataset",
     )

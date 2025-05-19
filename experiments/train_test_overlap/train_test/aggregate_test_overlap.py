@@ -273,9 +273,7 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
                             for subset_key in scenario_counts.get(test_dataset, {})
                         )
                         overlap_count = sum(
-                            len(inst_set)
-                            for subset_key, split_map in subset_map.items()
-                            if split == "test"
+                            len(inst_set) for subset_key, split_map in subset_map.items() if split == "test"
                         )
                         fraction = (overlap_count / total_instances) if total_instances else None
                         rec = {
@@ -294,7 +292,7 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
         # Collect test datasets for the matrix
         test_ds_set = set()
         # For simplicity, use the first n_val for each training_ds
-        for training_ds, nmap in summary_by_training[part].items():
+        for _training_ds, nmap in summary_by_training[part].items():
             if not nmap:
                 continue
             first_n = next(iter(nmap))
@@ -307,7 +305,7 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
         csv_file = os.path.join(out_base, f"matrix_overlap_{label}.csv")
         print(f"Writing matrix CSV {csv_file}", flush=True)
         with fsspec.open(csv_file, "wt") as mf:
-            mf.write('training_dataset,' + ','.join(test_ds_list) + "\n")
+            mf.write("training_dataset," + ",".join(test_ds_list) + "\n")
             for training_ds in training_ds_list:
                 row_vals = []
                 nmap = summary_by_training[part].get(training_ds, {})
@@ -328,11 +326,12 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
                         overlap_count = sum(
                             len(inst_set)
                             for subset_key, split_map in subset_map.items()
-                            for split, inst_set in split_map.items() if split == "test"
+                            for split, inst_set in split_map.items()
+                            if split == "test"
                         )
                         frac = (overlap_count / total_instances) if total_instances else None
                         row_vals.append(str(frac) if frac is not None else "")
-                mf.write(training_ds + ',' + ','.join(row_vals) + "\n")
+                mf.write(training_ds + "," + ",".join(row_vals) + "\n")
 
     return "Aggregate test overlap completed!"
 
@@ -342,13 +341,13 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
 n_values_list = []  # empty means all
 n_values_list = [10, 15]
 config = AggregateTestOverlapConfig(
-    consolidated_root="gs://marin-us-central2/train_test_overlap/ngrams/finemath-3plus_data_overlap_sharded-1c437c",
+    consolidated_root="gs://marin-us-central2/train_test_overlap/ngrams/dolmino*",
     output_base=this_output_path(),
     scenario_jsonl="gs://marin-us-central2/scenarios/consolidated_eval_scenarios-d3f040/consolidated_scenarios.jsonl",
     n_values=n_values_list,
 )
 aggregate_step = ExecutorStep(
-    name="train_test_overlap/aggregated_retry_finemath",
+    name="train_test_overlap/aggregated_retry_dolmino",
     fn=aggregate_test_overlap,
     config=config,
 )

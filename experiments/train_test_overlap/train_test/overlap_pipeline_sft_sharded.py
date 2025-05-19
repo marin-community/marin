@@ -10,18 +10,14 @@ import logging
 
 from experiments.exp808_sft_mixture import DATASETS
 from experiments.instruction_datasets import get_instruction_dataset
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, output_path_of
-from train_test_overlap.run_overlap_shards import ShardedOverlapConfig, run_all_shards
-from experiments.train_test_overlap.train_test.consolidate_sharded_pipeline import (
-    ConsolidateShardedConfig,
-    consolidate_sharded,
-)
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 
 # Add imports for Dolma conversion
 from operations.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
     convert_conversation_to_dolma,
 )
+from train_test_overlap.run_overlap_shards import ShardedOverlapConfig, run_all_shards
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -68,20 +64,8 @@ for idx, (short_name, dolma_step) in enumerate(dolma_datasets.items()):
     )
     overlap_steps.append(overlap_step)
 
-    # Consolidate shard outputs
-    cons_config = ConsolidateShardedConfig(
-        input_step=overlap_step,
-        output_path=this_output_path(),
-    )
-    cons_step = ExecutorStep(
-        name=f"train_test_overlap/consolidated/{short_name}",
-        fn=lambda cfg: consolidate_sharded(cfg),
-        config=cons_config,
-    )
-    overlap_steps.append(cons_step)
-
 if __name__ == "__main__":
     executor_main(
         steps=overlap_steps,
         description="Sharded n-gram overlap pipeline for SFT instruction datasets",
-    ) 
+    )

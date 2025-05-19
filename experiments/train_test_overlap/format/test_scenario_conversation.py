@@ -7,24 +7,23 @@ from typing import Any
 import fsspec
 
 from experiments.train_test_overlap.eval_datasets_overlap import (
+    ai2_arc_convert_dolma,
     bbh_convert_dolma,
+    boolq_convert_dolma,
+    commonsense_qa_convert_dolma,
     gpqa_convert_dolma,
     gsm8k_convert_dolma,
+    hellaswag_convert_dolma,
     instruction_following_convert_dolma,
+    lambada_openai_convert_dolma,
     math_convert_dolma,
     mmlu_convert_dolma,
     mmlu_pro_convert_dolma,
     musr_convert_dolma,
-    truthful_qa_convert_dolma,
-    winograd_wsc_convert_dolma,
-    commonsense_qa_convert_dolma,
-    lambada_openai_convert_dolma,
     openbookqa_convert_dolma,
     piqa_convert_dolma,
-    hellaswag_convert_dolma,
-    ai2_arc_convert_dolma,
-    boolq_convert_dolma,
-    piqa_convert_dolma,
+    truthful_qa_convert_dolma,
+    winograd_wsc_convert_dolma,
 )
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.utils import fsspec_get_curr_subdirectories, fsspec_glob, fsspec_mkdirs
@@ -108,8 +107,7 @@ def get_scenario_class_name(dataset_name: str, prefix: str = "helm.benchmark.sce
         return f"{prefix}.mmlu_pro_scenario.MmluProScenario"
     elif "mmlu_pro" in dataset_name_lowered:
         return f"{prefix}.mmlu_pro_scenario.MmluProScenario"
-        
-        
+
     else:
         return f"{prefix}.{dataset_name_lowered}_scenario.{dataset_name}Scenario"
 
