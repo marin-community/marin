@@ -9,7 +9,6 @@ import logging
 
 from experiments.llama import llama_nano
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 from marin.execution.executor import executor_main
 from marin.resources import GpuConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
@@ -32,9 +31,13 @@ speedrun_config = SpeedrunConfig(
         weight_decay=0.1,
         steps_per_eval=500,
     ),
-    tokenized_dataset=fineweb_edu_subcache_10B,
+    # tokenized_dataset need not be set here; by default it will be set to a FineWeb-Edu 10B token dataset
+    # that we have pre-tokenized and shuffled, available at https://huggingface.co/datasets/marin-community/fineweb-edu-pretokenized-10B
+    # tokenized_dataset=fineweb_edu_subcache_10B,
 )
 
+# Shows your speedrun configuration, model FLOPs, model size and (training) hardware FLOPs- you
+# can use this before actually kicking off a run to validate your setup
 speedrun_config.print_run_info()
 
 if __name__ == "__main__":

@@ -321,7 +321,7 @@ def default_speedrun(
     assert wandb_run_id is not None, "Could not extract wandb run ID from train step"
 
     results_step = ExecutorStep(
-        name=f"speedrun/{name}-speedrun_results-new",
+        name=f"speedrun/{name}-speedrun_results",
         description=f"compute and store metrics and stats for the speedrun {name}.",
         fn=speedrun_results,
         config=SpeedrunResultsConfig(
