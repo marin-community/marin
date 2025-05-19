@@ -27,7 +27,7 @@ deeper_sft_config = dataclasses.replace(
 )
 
 
-deeper_mixture_experiment = default_sft(
+mixture_sft_deeper_starling = default_sft(
     name="sft/mixture_sft_deeper_starling",
     tokenized=sft_mixture_llama3,
     model_config=llama_8b,
@@ -46,8 +46,8 @@ deeper_mixture_experiment = default_sft(
 if __name__ == "__main__":
     executor_main(
         [
-            deeper_mixture_experiment,
-            *default_sft_eval(deeper_mixture_experiment),
+            mixture_sft_deeper_starling,
+            *default_sft_eval(mixture_sft_deeper_starling),
         ],
         description="SFT for Deeper Starling Model",
     )
