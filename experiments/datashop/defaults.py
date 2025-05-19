@@ -309,6 +309,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
                 components={"dclm": dclm_components_llama3["dclm_baseline"]}, weights={"dclm": 1.0}
             ),
             resources=TpuPodConfig(tpu_type=tpu_type),
+            use_default_validation=True,
         )
     else:
         return AnnealConfig(
@@ -317,6 +318,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
                 weights={"dclm": 0.70, "candidate": 0.30},
             ),
             resources=TpuPodConfig(tpu_type=tpu_type),
+            use_default_validation=True,
         )
 
 
