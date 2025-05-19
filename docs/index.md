@@ -8,20 +8,17 @@ end="<!--marin-intro-end-->"
 
 ## Quick Links
 
-- [Getting Started](tutorials/getting-started.md)
+- [Installation](tutorials/installation.md)
 - [First Experiment](tutorials/first-experiment.md)
 - [Local GPU Setup](tutorials/local-gpu.md)
-- [Overview](lm/overview.md)
+- [The Language Modeling Pipeline](explanations/lm-pipeline.md)
 - [Experiment Reports](reports/index.md)
-<!-- - [Architecture Overview](reference/architecture.md) TODO -->
-
 
 ## Documentation Structure
 
-Our documentation is organized into six main sections:
+Our documentation is organized into the following main sections:
 
 - **Tutorials**: Step-by-step guides to help you get started with Marin, including installation, basic usage, and local GPU setup
-- **How-to Guides**: Practical guides for specific tasks and common operations
 - **Explanation**: Background information and context about the project
 - **Experiment Reports**: Reports from our experiments
 - **Developer Guide**: Information for developers who want to contribute to Marin
@@ -33,8 +30,8 @@ These sections are available on the left side bar (or hamburger menu).
 
 {%
 include-markdown "../README.md"
-start="<!--marin-get-involved-start-->"
-end="<!--marin-get-involved-end-->"
+start="<!--marin-first-steps-start-->"
+end="<!--marin-first-steps-end-->"
 %}
 
 

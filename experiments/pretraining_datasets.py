@@ -4,7 +4,7 @@ from operations.download.huggingface.download_gated_manual import download_and_u
 from operations.download.huggingface.download_hf import download_hf
 from operations.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
 
-# TODO: remove download and download_and_upload_to_store. Instead use download_hf instead
+# TODO: remove download and download_and_upload_to_store. Instead use default_download instead
 fineweb = ExecutorStep(
     name="raw/fineweb",
     fn=download,
