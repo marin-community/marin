@@ -3,7 +3,7 @@
 Marin Speedrun, inspired by the [nanogpt Speedrun](https://github.com/KellerJordan/modded-nanogpt), is a benchmark
 aimed at improving the compute efficiency of language model training, by
 incentivizing researchers to develop new model architectures, optimizers, and
-training strategies. The idea is to allow participants to experiment at a smaller scale, where compute is less of a bottleneck, before scaling things up. See [the explanation](../explanations/speedrun.md) for more details on Marin Speedrun. This tutorial will show you how to submit a speedrun to the leaderboard.
+training strategies. The idea is to allow participants to experiment at a smaller scale, where compute is less of a bottleneck, before scaling things up. See [the overview of Marin Speedrun](../explanations/speedrun.md) for more details; this tutorial will show you how to submit a speedrun to the leaderboard.
 
 Submitting to the Speedrun Leaderboard consists of the following steps:
 
