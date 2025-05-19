@@ -58,24 +58,44 @@ You can also use pre-defined model configurations from [`experiments.llama`](htt
 
 Set up your training configuration by calculating the number of training steps and defining hyperparameters:
 
-```python
-# Calculate training steps based on desired token count
-NUM_TRAIN_TOKENS = int(30e9)  # Example: 30 billion tokens
-BATCH_SIZE = 256
-SEQ_LEN = 2048
-NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
+=== "GPU"
+    ```python
+    # Calculate training steps based on desired token count
+    NUM_TRAIN_TOKENS = int(30e9)  # Example: 30 billion tokens
+    BATCH_SIZE = 256
+    SEQ_LEN = 2048
+    NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
 
-training_config = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v4-128"),  # Hardware configuration: 128 v4 TPU cores, can be swapped for GpuConfig
-    train_batch_size=BATCH_SIZE,                # Sequences processed per step
-    num_train_steps=NUM_TRAIN_STEPS,            # Total optimization steps
-    learning_rate=3e-3,                         # Peak learning rate
-    weight_decay=0.033,                         # L2 regularization
-    min_lr_ratio=0.1,                           # Minimum learning rate ratio (for decay)
-    warmup=5000,                                # Steps for learning rate warmup
-    z_loss_weight=1e-4,                         # Optional stabilization technique
-)
-```
+    training_config = SimpleTrainConfig(
+        resources=GpuConfig(gpu_count=4),           # Hardware configuration: 4 GPUs
+        train_batch_size=BATCH_SIZE,                # Sequences processed per step
+        num_train_steps=NUM_TRAIN_STEPS,            # Total optimization steps
+        learning_rate=3e-3,                         # Peak learning rate
+        weight_decay=0.033,                         # L2 regularization
+        min_lr_ratio=0.1,                           # Minimum learning rate ratio (for decay)
+        warmup=5000,                                # Steps for learning rate warmup
+        z_loss_weight=1e-4,                         # Optional stabilization technique
+    )
+    ```
+=== "TPU"
+    ```python
+    # Calculate training steps based on desired token count
+    NUM_TRAIN_TOKENS = int(30e9)  # Example: 30 billion tokens
+    BATCH_SIZE = 256
+    SEQ_LEN = 2048
+    NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
+
+    training_config = SimpleTrainConfig(
+        resources=TpuPodConfig(tpu_type="v4-128"),  # Hardware configuration: 128 v4 TPU cores
+        train_batch_size=BATCH_SIZE,                # Sequences processed per step
+        num_train_steps=NUM_TRAIN_STEPS,            # Total optimization steps
+        learning_rate=3e-3,                         # Peak learning rate
+        weight_decay=0.033,                         # L2 regularization
+        min_lr_ratio=0.1,                           # Minimum learning rate ratio (for decay)
+        warmup=5000,                                # Steps for learning rate warmup
+        z_loss_weight=1e-4,                         # Optional stabilization technique
+    )
+    ```
 
 ## Creating the Training Pipeline
 
