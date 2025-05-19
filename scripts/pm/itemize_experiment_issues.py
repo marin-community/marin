@@ -58,9 +58,7 @@ def get_existing_reports():
     # Extract report URLs using regex
     report_urls = set(
         # TODO: move this once we replace
-        re.findall(
-            r"https://(?:crfm\.stanford\.edu/marin/data_browser/|wandb\.ai/[^)]+|api\.wandb\.ai/links/[^)]+)", content
-        )
+        re.findall(r"https://(?:marin\.community/data-browser/|wandb\.ai/[^)]+|api\.wandb\.ai/links/[^)]+)", content)
     )
     return report_urls
 
@@ -82,7 +80,7 @@ def get_github_issues():
         # Find all experiment URLs
         urls = {
             "wandb": re.findall(r"https://(?:wandb\.ai/[^\s)]+|api\.wandb\.ai/links/[^\s)]+)", description),
-            "data_browser": re.findall(r"https://crfm\.stanford\.edu/marin/data_browser/[^\s)]+", description),
+            "data_browser": re.findall(r"https://marin\.community/data-browser/[^\s)]+", description),
         }
 
         if any(urls.values()):  # If we found any experiment links

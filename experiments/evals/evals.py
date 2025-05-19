@@ -197,10 +197,10 @@ def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[s
     Extract the model name and path from a step.
     """
     if isinstance(step, ExecutorStep):
-        model_step_path = output_path_of(step)
+        model_step_path = output_path_of(step, "hf")
         name = step.name
     elif isinstance(step, InputName):
-        model_step_path = output_path_of(step.step)
+        model_step_path = output_path_of(step.step, "hf")
         if step.step is None:
             raise ValueError(f"Hardcoded path {step.name} is not part of the pipeline")
         name = step.step.name
