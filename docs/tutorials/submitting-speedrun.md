@@ -153,7 +153,7 @@ and having multiple scales allows us to fit scaling laws and extrapolate out to 
    ```
 
 !!! note "Speedrun Time Benchmarks"
-    We've run some benchmarks to give you a sense of expected training times. For example, a 50M parameter model trained on 4× A100 GPUs (80GB) takes about 33 minutes to complete 7600 steps, processing approximately 1 billion tokens. This should help you estimate the resources needed for your own speedrun experiments.
+    To give you a sense of training times on GPU, a 50M parameter model trained on 4× A100 GPUs (80GB) takes about 33 minutes to complete 7600 steps, processing approximately 1 billion tokens. This should help you estimate the resources needed for your own speedrun experiments.
 
 ## Submitting Your Run
 
