@@ -1,12 +1,14 @@
 {
   "runs": [
     {
-      "run_related_info": {
-        "hardware_config": {
-          "device_flops": 275000000000000.0,
-          "device_type": "v4-128",
-          "num_devices": 64
+      "run_info": {
+        "author": {
+          "affiliation": "Stanford University",
+          "name": "Nikil Ravi",
+          "url": "https://www.linkedin.com/in/nikilravi/"
         },
+        "description": "75M parameter model with Adamax optimizer",
+        "eval/paloma/c4_en/bpb": 1.4082849025726318,
         "model_config": {
           "activation_function": "silu",
           "attn_backend": null,
@@ -14,7 +16,9 @@
           "flash_attention_block_size": null,
           "gradient_checkpointing": true,
           "hidden_dim": 256,
+          "hybrid_norm": false,
           "initializer_range": 0.02,
+          "input_embedding_norm": false,
           "intermediate_dim": 896,
           "layer_norm_epsilon": 1e-05,
           "num_heads": 4,
@@ -34,9 +38,15 @@
           "use_flash_attention": true,
           "use_layer_norm_weight": true
         },
-        "num_parameters": 73273344,
-        "run_completion_timestamp": "2025-04-28 08:58:16 UTC",
-        "tokenized_dataset": "gs://marin-us-central2/tokenized/fineweb-edu-24698d",
+        "model_flops": 8.43291058765824e+17,
+        "model_size": 73273600,
+        "resources": {
+          "device_flops_override": null,
+          "slice_count": 1,
+          "tpu_type": "v4-128"
+        },
+        "run_completion_timestamp": "2025-05-19 06:15:45 UTC",
+        "tokenized_dataset": "gs://marin-us-central2/tokenized/subcache/fineweb-edu-10B-6fbcbb",
         "total_tokens": 3145728000,
         "train_config": {
           "allow_partial_checkpoint": false,
@@ -52,6 +62,7 @@
           "int8": false,
           "learning_rate": 0.003,
           "lr_schedule": null,
+          "max_eval_batches": null,
           "max_grad_norm": null,
           "min_lr_ratio": null,
           "num_train_steps": 6000,
@@ -76,16 +87,11 @@
           },
           "per_device_eval_parallelism": null,
           "reset_data_loader_on_init": true,
-          "resources": {
-            "node_count": 1,
-            "runtime_env": {},
-            "tpu_type": "v4-128"
-          },
           "rewarmup": null,
           "steps_per_eval": 2000,
           "steps_per_export": 10000,
           "steps_per_hf_export": null,
-          "steps_per_task_eval": 2000,
+          "steps_per_task_eval": null,
           "train_batch_size": 512,
           "warmup": null,
           "watch": {
@@ -102,13 +108,9 @@
           "weight_decay": 0.0,
           "z_loss_weight": null
         },
-        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/75M_llama_adamax-380097"
-      },
-      "run_stats": {
-        "eval/paloma/c4_en/bpb": 1.4074413776397705,
-        "pre_run_flops_estimate": 1.382988059246592e+18,
-        "total_training_flops": 6.597962520687954e+17,
-        "training_time_in_minutes": 37.48842341299974
+        "training_hardware_flops": 7.925062938443093e+18,
+        "training_time": 450.2876669569939,
+        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/llama_75m_adamax-befc25"
       }
     }
   ]
