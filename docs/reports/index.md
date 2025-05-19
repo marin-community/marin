@@ -67,7 +67,7 @@ This page includes only experiments that have at least one run or report.
 - OLMoE replication - MoE vs dense [![#1183](https://img.shields.io/github/issues/detail/state/marin-community/marin/1183)](https://github.com/marin-community/marin/issues/1183)
   - [GitHub Issue #1183](https://github.com/marin-community/marin/issues/1183)
   - [WandB Report](https://api.wandb.ai/links/marin-community/qi3u8nx7)
-  - Conclusion: MoE is slower but outperforms similar sized dense model in both training and evaluation.
+  - Conclusion: Despite having a lower MFU, MoE outperforms similar sized dense model in both training and evaluation.
 
 ## Training and Performance
 
