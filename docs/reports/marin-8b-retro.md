@@ -596,6 +596,11 @@ For other evaluations, you can see [Olmo 2's technical report](https://allenai.o
 
 Marin 8B Base (Deeper Starling) is the best performing 7-8B model on the majority of tasks. We can't claim any particular standout performance on any one task (though MMLU Pro is nice), just a general improvement.
 
+However, all these results are contaminated. It is well known that many of these tasks are highly contaminated, with
+questions found in the pre-training sets. They can be found in DCLM, Dolmino, Nemotron-CC, and others. We are tracking
+this in [GH#1321](https://github.com/marin-community/marin/issues/1321) to get a full picture of the contamination.
+Llama 3 is likewise contaminated. See Section 5.1.4 in the [Llama 3.1 paper](https://arxiv.org/pdf/2407.21783) for more details.
+
 ## Supervised Fine-Tuning
 
 We're still improving our instruction tuning pipeline, but we are also releasing our current best checkpoint.
