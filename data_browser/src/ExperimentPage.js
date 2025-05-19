@@ -312,7 +312,7 @@ function renderTrainLmStep({step, steps}) {
   // Model
   const modelConfig = trainConfig.model;
   const architectureSummary = [
-    modelConfig.n_routed_experts && `${modelConfig.n_routed_experts} experts (${modelConfig.n_shared_experts} shared, ${modelConfig.num_experts_per_tok} active)`,
+    modelConfig.n_routed_experts && `${modelConfig.n_routed_experts} experts (${modelConfig.num_experts_per_tok} active) + ${modelConfig.n_shared_experts} shared experts`,
     `d_model = ${modelConfig.hidden_dim}`,
     `d_ff = ${modelConfig.intermediate_dim}`,
     `n_heads = ${modelConfig.num_heads} (${modelConfig.num_kv_heads} kv)`,
