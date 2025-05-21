@@ -264,8 +264,6 @@ def default_train(
                 name = prefix[: 63 - len(suffix)] + "-" + suffix
         logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
 
-    # TODO: right now, assume architecture is a LlamaConfig, generalize this
-    assert isinstance(model_config, LlamaConfig)
     if eval_harness_tasks:
         harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
     else:
