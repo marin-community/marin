@@ -27,8 +27,8 @@ DEFAULT_PIP_DEPS = []
 # SLURM specific defaults
 DEFAULT_SLURM_ARGS = {
     "job-name": "marin_run",
-    "output": "logs/marin_%A_%a.out",
-    "error": "logs/marin_%A_%a.err",
+    "output": "logs/marin-%j.out",
+    "error": "logs/marin-%j.err",
     "time": "48:00:00",
     "mem": "200G",
     "gres": "gpu:1",
@@ -71,17 +71,15 @@ def create_sbatch_script(
     script += f"#SBATCH --job-name={job_name}\n"
     for key, value in slurm_args.items():
         script += f"#SBATCH --{key}={value}\n"
-    script += "#SBATCH --output=marin-%j.out\n"
-    script += "#SBATCH --error=marin-%j.err\n"
     script += "\n"
     for key, value in env_vars.items():
         script += f"export {key}=\"{value}\"\n"
     current_dir = os.getcwd()
     wandb_api = wandb.Api()
     if "WANDB_ENTITY" not in env_vars:
-        script += f"export WANDB_ENTITY={wandb_api.default_entity}"
+        script += f"export WANDB_ENTITY={wandb_api.default_entity}\n"
     if "HF_TOKEN" not in env_vars:
-        script += f"export HF_TOKEN={HfFolder.get_token()}"
+        script += f"export HF_TOKEN={HfFolder.get_token()}\n"
     script += f"\n# Set working directory\ncd {current_dir}\n"
     script += "\n# Activate virtual environment\n"
     script += f"if [ -f {venv_path}/bin/activate ]; then\n"
