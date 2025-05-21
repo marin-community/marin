@@ -57,6 +57,8 @@ Now you can run an experiment.
 Let's start by running the tiny model training script (GPU version) [`experiments/tutorials/train_tiny_model_gpu.py`](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model_gpu.py):
 
 ```bash
+export MARIN_PREFIX=local_store
+export WANDB_ENTITY=...
 python3 experiments/tutorials/train_tiny_model_gpu.py --prefix local_store
 ```
 

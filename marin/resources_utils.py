@@ -28,6 +28,7 @@ ray_device_name_to_jax_name_map: dict[AcceleratorType, str] = {
     "A100-40G": "a100",
     "A100-80G": "a100",
     "A10G": "a10",
+    "A40": "a40",
     "V100": "v100-pcie",
     "V100-SXM": "v100-sxm",
     "V100S-PCIE": "v100s-pcie",
