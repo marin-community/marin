@@ -142,7 +142,7 @@ It is important that the Speedrun leaderboard span multiple compute scales, sinc
 
     `MARIN_PREFIX` tells Marin where to put artifacts generated during the execution of any steps.
     For examples, training checkpoints usually will be written to `${MARIN_PREFIX}/checkpoints/`.
-    You can set this to an fsspec-recognizable path eg. a GCS bucket, or a directory on your machine.
+    You can set this to an fsspec-recognizable path eg. a GCS bucket, or a directory on your machine. (For a detailed explanation of `MARIN_PREFIX` and other ways to specify the output path, see [Understanding `MARIN_PREFIX` and `--prefix`](../explanations/marin-prefix.md).)
 
 5. Train your model:
    ```bash
