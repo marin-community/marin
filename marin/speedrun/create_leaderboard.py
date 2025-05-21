@@ -41,20 +41,10 @@ class LeaderboardEntry:
     description: str | None = None
 
 
-# Speedruns to exclude from the leaderboard (used for tutorials, etc.,
-# or generally when, we for some reason don't want to include a run)
-EXCLUDED_SPEEDRUNS = {
-    'hello_world_gpu_speedrun',
-}
-
 def find_speedrun_results(base_path: str) -> list[str]:
     fs = fsspec.filesystem(base_path.split("://", 1)[0] if "://" in base_path else "file")
     pattern = f"{base_path}/**/speedrun_results.json"
-    all_results = fs.glob(pattern)
-    
-    # Filter out excluded speedruns
-    return [path for path in all_results 
-            if not any(excluded in path for excluded in EXCLUDED_SPEEDRUNS)]
+    return fs.glob(pattern)
 
 
 def load_results_file(path: str) -> dict:

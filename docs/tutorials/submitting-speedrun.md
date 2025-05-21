@@ -47,7 +47,7 @@ It is important that the Speedrun leaderboard span multiple compute scales, sinc
    mkdir -p experiments/speedrun/YOUR_RUN_NAME
    ```
 
-2. Create your training script in this directory- you'll need to specify congfigs related to author/affiliation, model configuration, and training configuration (as part of which you should also specify what kind of hardware you're using via `GpuConfig` or `TpuPodConfig`):
+2. Create your training script in this directory- you'll need to specify congfigs related to author/affiliation, model configuration, and training configuration (as part of which you should also specify what kind of hardware you're using via `GpuConfig` or `TpuPodConfig`:
 
     === "GPU"
         ```python
@@ -128,9 +128,7 @@ It is important that the Speedrun leaderboard span multiple compute scales, sinc
             executor_main(steps=default_speedrun("llama_nano_tpu_speedrun", speedrun_config))
         ```
 
-    Feel free to go through each of the configuration classes' definitions to get an idea of the design space here. The training configuration can either be a `SimpleTrainConfig` or `TrainLmOnPodConfig`. Also, note that in this example, you only have one Python file, but if your submission is more complex, you can split it into multiple files. 
-    
-    To see examples of other speedruns and configurations, check out the [speedrun directory](https://github.com/marin-community/marin/tree/main/experiments/speedrun). You can also [add new optimizers](https://github.com/marin-community/marin/blob/main/docs/tutorials/add-optimizer.md), change learning rate schedules, play with hyperparameters, etc.
+    Feel free to go through each of the configuration classes' definitions to get an idea of the design space here. The training configuration can either be a `SimpleTrainConfig` or `TrainLmOnPodConfig`. Also, note that in this example, you only have one Python file, but if your submission is more complex, you can split it into multiple files. To see examples of other speedruns and configurations, check out the [speedrun directory](https://github.com/marin-community/marin/tree/main/experiments/speedrun). You can also [add new optimizers](https://github.com/marin-community/marin/blob/main/docs/tutorials/add-optimizer.md), change learning rate schedules, play with hyperparameters, etc.
 
 3. Before running your speedrun, you may find it helpful to call [speedrun_config.print_run_info()](https://github.com/marin-community/marin/blob/main/marin/speedrun/speedrun.py#L76) to see the estimated training HW FLOPs, model FLOPs, model size, and your speedrun configs displayed. This will help you sanity-check your run, and also can be helpful in estimating the resources needed for your run.
 
@@ -140,15 +138,11 @@ It is important that the Speedrun leaderboard span multiple compute scales, sinc
     export WANDB_API_KEY=...
     export HF_TOKEN=...
     export MARIN_PREFIX=...
-    export WANDB_ENTITY=...
-    export WANDB_PROJECT=...
     ```
 
     `MARIN_PREFIX` tells Marin where to put artifacts generated during the execution of any steps.
     For examples, training checkpoints usually will be written to `${MARIN_PREFIX}/checkpoints/`.
     You can set this to an fsspec-recognizable path eg. a GCS bucket, or a directory on your machine.
-
-    `WANDB_ENTITY` and `WANDB_PROJECT` are used to specify the Weights and Biases team/entity and project names. You may use your own organization and project identifiers, but we ask that the run link corresponding to your speedrun is publicly accessible when submitting to the leaderboard.
 
 5. Train your model:
    ```bash
@@ -161,7 +155,7 @@ This is just a hello-world example, but if you do want to submit your run, follo
 
 1. Add the resulting `speedrun_results.json` file to your run directory:
    ```bash
-   cp ${MARIN_PREFIX}/checkpoints/speedrun/speedrun_results.json experiments/speedrun/<your_run_name>/
+   cp ${MARIN_PREFIX}/speedrun_results.json experiments/speedrun/<your_run_name>/
    ```
 
 2. Create a pull request including:
