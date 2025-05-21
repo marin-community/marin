@@ -7,16 +7,16 @@ Usage:
 Examples:
     # Basic usage
     python slurm_run.py python train.py --dataset imagenet
-    
+
     # Custom SLURM configuration
     python slurm_run.py --slurm time 24:00:00 --slurm mem 128G python train.py
-    
+
     # Environment variables
     python slurm_run.py -e WANDB_ENTITY my_entity python train.py
-    
+
     # Custom job name and no monitoring
     python slurm_run.py --job_name training_run --no_wait python train.py
-    
+
     # Dry run to preview the generated SLURM script
     python slurm_run.py --dry_run python train.py
 
