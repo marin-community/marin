@@ -7,12 +7,10 @@ import subprocess
 import sys
 import tempfile
 import time
-from pathlib import Path
-from huggingface_hub import HfFolder
-import wandb
-from typing import Dict, List, Optional
 
-import toml
+from huggingface_hub import HfFolder
+
+import wandb
 
 # Setup logger
 logger = logging.getLogger("slurm")
@@ -31,18 +29,20 @@ DEFAULT_SLURM_ARGS = {
     "error": "logs/marin-%j.err",
     "time": "48:00:00",
     "mem": "200G",
-    "gres": "gpu:1",
+    "gres": "gpu:h200:1",
     "account": "nlp",
     "partition": "sc-loprio",
     "constraint": "[40G|48G|80G|141G]",
-    "nodes": "1", 
+    "nodes": "1",
     "ntasks-per-node": "1",
-    "cpus-per-task": "64", 
+    "cpus-per-task": "64",
 }
 
-def parse_pip_requirements(line: str) -> List[str]:
+
+def parse_pip_requirements(line: str) -> list[str]:
     pattern = r"(?:\[[^\]]*\]|[^,])+"
     return re.findall(pattern, line)
+
 
 def generate_pythonpath(base_dir="submodules"):
     paths = []
@@ -58,11 +58,12 @@ def generate_pythonpath(base_dir="submodules"):
                 paths.append(src_path)
     return ":".join(paths)
 
+
 def create_sbatch_script(
     command: str,
-    env_vars: Dict[str, str],
-    slurm_args: Dict[str, str],
-    job_name: Optional[str] = None,
+    env_vars: dict[str, str],
+    slurm_args: dict[str, str],
+    job_name: str | None = None,
     venv_path: str = ".venv",
 ) -> str:
     if not job_name:
@@ -73,7 +74,7 @@ def create_sbatch_script(
         script += f"#SBATCH --{key}={value}\n"
     script += "\n"
     for key, value in env_vars.items():
-        script += f"export {key}=\"{value}\"\n"
+        script += f'export {key}="{value}"\n'
     current_dir = os.getcwd()
     wandb_api = wandb.Api()
     if "WANDB_ENTITY" not in env_vars:
@@ -84,15 +85,16 @@ def create_sbatch_script(
     script += "\n# Activate virtual environment\n"
     script += f"if [ -f {venv_path}/bin/activate ]; then\n"
     script += f"  source {venv_path}/bin/activate\n"
-    script += f"else\n"
+    script += "else\n"
     script += f"  echo 'Warning: Virtual environment {venv_path} not found. Continuing without activation.'\n"
-    script += f"fi\n\n"
+    script += "fi\n\n"
     script += "# Run the command\n"
     script += f"srun {command}\n"
     return script
 
-def submit_slurm_job(sbatch_script: str, no_wait: bool, slurm_args: Dict[str, str]) -> str:
-    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.sh') as temp_file:
+
+def submit_slurm_job(sbatch_script: str, no_wait: bool, slurm_args: dict[str, str]) -> str:
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".sh") as temp_file:
         temp_file.write(sbatch_script)
         script_path = temp_file.name
     try:
@@ -107,35 +109,35 @@ def submit_slurm_job(sbatch_script: str, no_wait: bool, slurm_args: Dict[str, st
         logger.info(f"Job submitted with ID: {job_id}")
         if no_wait:
             return job_id
-                
+
         # Get the output log file path
         output_log_path = slurm_args.get("output", "slurm-%j.out").replace("%j", job_id).replace("%A", job_id)
         error_log_path = slurm_args.get("error", "slurm-%j.err").replace("%j", job_id).replace("%A", job_id)
-        
+
         # Also replace array job placeholder with the main job ID if it exists
         output_log_path = output_log_path.replace("%a", "0")
         error_log_path = error_log_path.replace("%a", "0")
-        
+
         logger.info(f"Job output will be written to: {output_log_path}")
         logger.info(f"Job errors will be written to: {error_log_path}")
-        
+
         # Wait for the log file to be created
         while not os.path.exists(output_log_path):
             logger.info(f"Waiting for log file to be created: {output_log_path}")
             time.sleep(2)
-            
+
             # Check if the job is still in the queue
             check_cmd = ["squeue", "-j", job_id, "-h"]
             check_result = subprocess.run(check_cmd, capture_output=True, text=True)
             if not check_result.stdout.strip():
                 logger.warning(f"Job {job_id} completed or failed before log file was created")
                 break
-        
+
         # Start tailing the log file
         if os.path.exists(output_log_path):
             logger.info(f"Tailing log file: {output_log_path}")
             tail_process = subprocess.Popen(["tail", "-f", output_log_path])
-            
+
             # Monitor job until completion
             try:
                 while True:
@@ -145,17 +147,17 @@ def submit_slurm_job(sbatch_script: str, no_wait: bool, slurm_args: Dict[str, st
                     if not check_result.stdout.strip():
                         logger.info(f"Job {job_id} completed")
                         break
-                    
+
                     # Wait before checking again
                     time.sleep(5)
-                
+
                 # Wait a few more seconds to catch any remaining output
                 time.sleep(3)
-                
+
             finally:
                 # Terminate the tail process
                 tail_process.terminate()
-                
+
             # Output final job status
             output_cmd = ["sacct", "-j", job_id, "--format=JobID,JobName,State,ExitCode,Elapsed"]
             subprocess.run(output_cmd)
@@ -169,16 +171,17 @@ def submit_slurm_job(sbatch_script: str, no_wait: bool, slurm_args: Dict[str, st
                     logger.info(f"Job {job_id} completed")
                     break
                 time.sleep(5)
-                
+
             # Output final job status
             output_cmd = ["sacct", "-j", job_id, "--format=JobID,JobName,State,ExitCode,Elapsed"]
             subprocess.run(output_cmd)
-            
+
         return job_id
     finally:
         os.unlink(script_path)
 
-def parse_slurm_args(args_list: List[List[str]]) -> Dict[str, str]:
+
+def parse_slurm_args(args_list: list[list[str]]) -> dict[str, str]:
     slurm_args = DEFAULT_SLURM_ARGS.copy()
     if not args_list:
         return slurm_args
@@ -190,13 +193,18 @@ def parse_slurm_args(args_list: List[List[str]]) -> Dict[str, str]:
         slurm_args[key] = value
     return slurm_args
 
+
 def main():
     parser = argparse.ArgumentParser(description="Submit SLURM jobs using the command-line.")
     parser.add_argument("--no_wait", action="store_true", help="Do not wait for the job to finish.")
     parser.add_argument("--dry_run", action="store_true", help="Print the SLURM script without submitting the job.")
     parser.add_argument("--venv_path", type=str, default=".venv", help="Path to the virtual environment to activate.")
-    parser.add_argument("--env_vars", "-e", action="append", nargs="+", metavar=("KEY", "VALUE"), help="Set environment variables.")
-    parser.add_argument("--slurm", "-s", action="append", nargs=2, metavar=("OPTION", "VALUE"), help="Set SLURM options.")
+    parser.add_argument(
+        "--env_vars", "-e", action="append", nargs="+", metavar=("KEY", "VALUE"), help="Set environment variables."
+    )
+    parser.add_argument(
+        "--slurm", "-s", action="append", nargs=2, metavar=("OPTION", "VALUE"), help="Set SLURM options."
+    )
     parser.add_argument("--job_name", type=str, help="Set the name of the SLURM job")
     parser.add_argument("cmd", help="The command to run in the SLURM cluster.", nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -214,12 +222,12 @@ def main():
                 sys.exit(1)
             elif len(item) == 1:
                 if "=" in item[0]:
-                    logger.error(f"Invalid format. Use -e KEY VALUE, not -e KEY=VALUE")
+                    logger.error("Invalid format. Use -e KEY VALUE, not -e KEY=VALUE")
                     sys.exit(1)
                 env_vars[item[0]] = ""
             else:
                 if "=" in item[0]:
-                    logger.error(f"Invalid format. Use -e KEY VALUE, not -e KEY=VALUE")
+                    logger.error("Invalid format. Use -e KEY VALUE, not -e KEY=VALUE")
                     sys.exit(1)
                 env_vars[item[0]] = item[1]
     existing_path = env_vars.get("PYTHONPATH", "")
@@ -240,7 +248,7 @@ def main():
         print(sbatch_script)
         return
     logger.info("Generated SLURM script:")
-    for i, line in enumerate(sbatch_script.split('\n')):
+    for i, line in enumerate(sbatch_script.split("\n")):
         logger.info(f"{i+1}: {line}")
     job_id = submit_slurm_job(sbatch_script, args.no_wait, slurm_args)
     if job_id:
@@ -250,6 +258,7 @@ def main():
     else:
         logger.error("Failed to submit job")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
