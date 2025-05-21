@@ -1,3 +1,37 @@
+"""
+A wrapper for submitting and monitoring Marin jobs on SLURM clusters.
+
+Usage:
+    python slurm_run.py [options] your_command args
+
+Examples:
+    # Basic usage
+    python slurm_run.py python train.py --dataset imagenet
+    
+    # Custom SLURM configuration
+    python slurm_run.py --slurm time 24:00:00 --slurm mem 128G python train.py
+    
+    # Environment variables
+    python slurm_run.py -e WANDB_ENTITY my_entity python train.py
+    
+    # Custom job name and no monitoring
+    python slurm_run.py --job_name training_run --no_wait python train.py
+    
+    # Dry run to preview the generated SLURM script
+    python slurm_run.py --dry_run python train.py
+
+Arguments:
+    cmd                       The command to run on the SLURM cluster
+
+Options:
+    --no_wait                 Submit the job and return immediately without waiting for completion
+    --dry_run                 Print the generated SLURM script without submitting
+    --venv_path PATH          Path to the virtual environment to activate (default: .venv)
+    --env_vars, -e KEY VALUE  Set environment variables for the job
+    --slurm, -s KEY VALUE     Set SLURM options, overriding defaults
+    --job_name NAME           Set a custom name for the SLURM job
+"""
+
 import argparse
 import logging
 import os
@@ -28,7 +62,7 @@ DEFAULT_SLURM_ARGS = {
     "error": "logs/marin-%j.err",
     "time": "48:00:00",
     "mem": "200G",
-    "gres": "gpu:h200:1",
+    "gres": "gpu:1",
     "account": "nlp",
     "partition": "sc-loprio",
     "constraint": "[40G|48G|80G|141G]",
