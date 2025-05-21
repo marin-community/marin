@@ -202,6 +202,31 @@ To run the experiment locally, we can run the script directly:
 The `--prefix` argument specifies the output directory for the experiment. It can be a local directory or anything [fsspec](https://filesystem-spec.readthedocs.io/en/latest/) supports,
 such as `s3://` or `gs://`.
 
+### Using the `MARIN_PREFIX` Environment Variable
+
+As an alternative to the `--prefix` command-line argument, you can use the `MARIN_PREFIX` environment variable to specify the root output directory for your experiments. This is particularly useful if you prefer to set this path once for your environment rather than specifying it for each command.
+
+Here's how you can set the `MARIN_PREFIX` environment variable:
+
+*   For a local directory:
+    ```bash
+    export MARIN_PREFIX=./local_store
+    ```
+    or
+    ```bash
+    export MARIN_PREFIX=/path/to/your/output_directory
+    ```
+*   For an S3 bucket:
+    ```bash
+    export MARIN_PREFIX=s3://your-bucket-name/path/to/output
+    ```
+*   For a Google Cloud Storage bucket:
+    ```bash
+    export MARIN_PREFIX=gs://your-bucket-name/path/to/output
+    ```
+
+If both the `--prefix` command-line argument is provided and the `MARIN_PREFIX` environment variable is set, the `--prefix` argument will take precedence.
+
 This will take a few minutes to run. (Marin isn't optimized for low latency and Ray can take a while to schedule tasks initially...)
 
 At the end, you should see a message like this:
