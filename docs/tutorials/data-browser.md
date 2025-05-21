@@ -23,7 +23,9 @@ The data browser takes a configuration file that specifies the root directory (i
 or `../local_store` if we're in the `data_browser` directory).  This is what's defined in `conf/local.conf`.
 
 The data browser has two pieces:
+
 - Frontend server (React)
+
 - Backend server (Flask)
 
 To start the data browser, we need to run both servers, in different shells:
