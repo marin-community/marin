@@ -9,6 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 from huggingface_hub import HfFolder
+import wandb
 from typing import Dict, List, Optional
 
 import toml
@@ -76,7 +77,11 @@ def create_sbatch_script(
     for key, value in env_vars.items():
         script += f"export {key}=\"{value}\"\n"
     current_dir = os.getcwd()
-    script += f"export HF_TOKEN={HfFolder.get_token()}"
+    wandb_api = wandb.Api()
+    if "WANDB_ENTITY" not in env_vars:
+        script += f"export WANDB_ENTITY={wandb_api.default_entity}"
+    if "HF_TOKEN" not in env_vars:
+        script += f"export HF_TOKEN={HfFolder.get_token()}"
     script += f"\n# Set working directory\ncd {current_dir}\n"
     script += "\n# Activate virtual environment\n"
     script += f"if [ -f {venv_path}/bin/activate ]; then\n"
