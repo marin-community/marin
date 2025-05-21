@@ -1,6 +1,6 @@
 """
-Speedrun code for a 50M parameter model based on the Llama architecture. The model is trained on the Fineweb-Edu dataset
-(the default dataset for speedruns) on one A100.
+Speedrun code for a 50M parameter model based on the OLMo architecture. The model is trained on the Fineweb-Edu dataset
+(the default dataset for speedruns) on one H200.
 """
 
 import logging

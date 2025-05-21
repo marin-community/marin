@@ -102,7 +102,8 @@ def create_sbatch_script(
     if not job_name:
         job_name = f"job_{int(time.time())}"
     script = "#!/bin/bash\n\n"
-    script += f"#SBATCH --job-name={job_name}\n"
+    if "job-name" not in slurm_args:
+        script += f"#SBATCH --job-name={job_name}\n"
     for key, value in slurm_args.items():
         script += f"#SBATCH --{key}={value}\n"
     script += "\n"
@@ -133,7 +134,17 @@ def submit_slurm_job(sbatch_script: str, no_wait: bool, slurm_args: dict[str, st
     try:
         logger.info(f"Submitting job with script: {script_path}")
         submit_cmd = ["sbatch", script_path]
-        result = subprocess.run(submit_cmd, capture_output=True, text=True, check=True)
+        try:
+            result = subprocess.run(submit_cmd, capture_output=True, text=True, check=True)
+            # Process successful result
+            print("Job submitted successfully!")
+            print(f"Output: {result.stdout}")
+        except subprocess.CalledProcessError as e:
+            # The command failed (non-zero return code)
+            print(f"Command failed with return code {e.returncode}")
+            print(f"Error output: {e.stderr}")
+            print(f"Standard output: {e.stdout}")
+            raise e
         job_id_match = re.search(r"Submitted batch job (\d+)", result.stdout)
         if not job_id_match:
             logger.error(f"Failed to parse job ID from output: {result.stdout}")
@@ -167,9 +178,9 @@ def submit_slurm_job(sbatch_script: str, no_wait: bool, slurm_args: dict[str, st
                 break
 
         # Start tailing the log file
-        if os.path.exists(output_log_path):
-            logger.info(f"Tailing log file: {output_log_path}")
-            tail_process = subprocess.Popen(["tail", "-f", output_log_path])
+        if os.path.exists(error_log_path):
+            logger.info(f"Tailing log file: {error_log_path}")
+            tail_process = subprocess.Popen(["tail", "-f", error_log_path])
 
             # Monitor job until completion
             try:
