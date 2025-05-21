@@ -91,7 +91,9 @@ async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: di
     # Define the pattern to match the desired files
     pattern = "logs/*"
     # Use glob to get a list of all files matching the pattern
-    file_list = glob.glob(pattern)
+    file_list = glob.glob(pattern) 
+    pattern = ".git/*"
+    file_list.extend(glob.glob(pattern))
     print(file_list)
     current_dir = os.getcwd()
     client = JobSubmissionClient(REMOTE_DASHBOARD_URL)

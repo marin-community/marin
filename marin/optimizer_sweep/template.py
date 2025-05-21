@@ -4,7 +4,7 @@ from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from marin.execution.executor import executor_main
 from marin.optimizer_sweep.config import map_tag_to_config
 from marin.optimizer_sweep.format import map_tag_to_format
-from marin.optimizer_sweep.method import map_tag_to_train
+from experiments.optimizer_sweep.defaults import default_train
 from marin.optimizer_sweep.models import calculate_chinchilla, map_tag_to_model
 from marin.optimizer_sweep.utils import (
     approximate,
@@ -32,14 +32,14 @@ def template(
     llama_model = map_tag_to_model[model_size]
     target_data = target_chinchilla * calculate_chinchilla(llama_model)
     data_size = f"{target_data//1_000_000_000}B"
-    config_class = map_tag_to_config[optimizer]
+    optimizer_config_generator = map_tag_to_config[optimizer]
     tags = (model_size, data_size, optimizer)
     approximate_best_config_list = []
 
     def optimal_run_set(baseline_config):
         target_steps, config_in_dict = create_configs(baseline_config, sweep_grids, target_data=target_data)
         train_configs = config_to_train_config(
-            config_in_dict, target_steps, config_class=config_class, tpu_type=tpu_type
+            config_in_dict, target_steps, config_generator=optimizer_config_generator, tpu_type=tpu_type
         )
         # use wandb to avoid rerunning
         new_train_configs = []
@@ -53,7 +53,7 @@ def template(
         # For force run, just create a single train config from baseline
         target_steps, _ = create_configs(baseline_config, {}, target_data=target_data)  # Empty sweep grid
         train_configs = config_to_train_config(
-            [baseline_config], target_steps, config_class=config_class, tpu_type=tpu_type
+            [baseline_config], target_steps, config_generator=optimizer_config_generator, tpu_type=tpu_type
         )
         tags = ("debug",) + tags
     else:
@@ -93,7 +93,7 @@ def template(
             train_configs=train_configs,
             tokenized_data=dclm_mixture_config_llama3,
             format_train_config=map_tag_to_format[optimizer],
-            default_train=map_tag_to_train[optimizer],
+            default_train=default_train,
             tags=("llama", "dclm") + tags,
         )
         executor_main(steps)

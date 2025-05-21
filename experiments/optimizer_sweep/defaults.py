@@ -8,14 +8,15 @@ import os
 from collections.abc import Sequence
 from datetime import timedelta
 from functools import lru_cache
+from typing import Any
 
 import jmp
+from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
-from levanter.data.text import LMMixtureDatasetConfig, LMSupervisedDatasetConfig, SupervisedUrlSourceConfig
+from levanter.data.text import LmDatasetFormatBase, LMMixtureDatasetConfig, TextLmDatasetFormat
 from levanter.eval_harness import LmEvalHarnessConfig
-from levanter.main import sft, sft_mixture
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
@@ -24,6 +25,7 @@ from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils import fsspec_utils
 
 from experiments.anneal_config import AnnealConfig
 from experiments.evals.task_configs import (
@@ -40,11 +42,11 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
+    VersionedValue,
+    ensure_versioned,
     get_executor_step,
-    output_path_of,
     this_output_path,
     unwrap_versioned_value,
-    versioned,
 )
 from marin.processing.tokenize import (
     TokenizeConfig,
@@ -53,18 +55,59 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
+from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
 from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import (
-    PodConfig,
     TrainLmOnPodConfig,
-    TrainSFTMixturePodConfig,
-    TrainSFTOnPodConfig,
-    run_levanter_sft,
-    run_levanter_sft_mixture,
     run_levanter_train_lm,
 )
+from operations.download.huggingface.download import DownloadConfig
+from operations.download.huggingface.download_hf import download_hf
 
 logger = logging.getLogger("ray")
+
+
+def default_download(
+    name: str,
+    hf_dataset_id: str,
+    revision: str,
+    override_output_path: str | None = None,
+    **kwargs: Any,
+) -> InputName:
+    """
+    Download a HuggingFace dataset and upload it to a specified path with default configuration.
+
+    Args:
+        name: The name of the Download step. It forms the basis of the output path
+            unless override_output_path is explicitly specified.
+        hf_dataset_id: The HuggingFace dataset ID to download. As `$ORG/$DATASET` on HF Hub
+        revision: The revision of the dataset to download.
+            Short Commit Hash from HF Dataset Repo (7 characters)
+        override_output_path: Optional. The output path for the dataset.
+        **kwargs: Additional keyword arguments that are passed to the download config.
+
+    The final output data will reside in '{output_path}/{revision}'.
+    """
+
+    step = ExecutorStep(
+        name=name,
+        description=f"Download {hf_dataset_id} revision {revision}",
+        fn=download_hf,
+        config=DownloadConfig(
+            hf_dataset_id=hf_dataset_id,
+            revision=revision,
+            gcs_output_path=this_output_path(),
+            wait_for_completion=True,
+            **kwargs,
+        ),
+        override_output_path=override_output_path,
+    )
+
+    cd_path = revision
+    if isinstance(cd_path, VersionedValue):
+        cd_path = cd_path.value
+
+    return step.cd(cd_path)
 
 
 def default_tokenize(
@@ -72,17 +115,47 @@ def default_tokenize(
     dataset: InputName | ExecutorStep | str,
     tokenizer: str,
     options: CacheOptions | None = None,
-    text_key: str = "text",
+    format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa
     *,
     is_validation: bool = False,
 ) -> ExecutorStep:
-    config = TokenizeConfig(
-        train_paths=[dataset] if not is_validation else [],
-        validation_paths=[dataset] if is_validation else [],
-        cache_path=this_output_path(),
-        tokenizer=versioned(tokenizer),
-        text_key=text_key,
-    )
+    """
+    Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
+
+    Args:
+        name: The name of the tokenized dataset. This is used to form the output path for the executor step.
+            `tokenized/` will be prepended to the name.
+        dataset:  The dataset to tokenize. This can be an InputName, ExecutorStep, or a string as a
+            path to the dataset or a HuggingFace dataset ID.
+        tokenizer: string HuggingFace tokenizer name. Should be the same as you intend to use in the tokenizer
+            spec for the training run.
+        options: CacheOptions to use for tokenization. You typically don't need to set this.
+        format: The format of the dataset. This is used to determine how to tokenize the data.
+
+            See [Levanter's documentation](https://levanter.readthedocs.io/en/latest/reference/Data-Formats/)
+            for more details.
+        is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
+    Returns:
+        An ExecutorStep that represents the tokenized dataset.
+    """
+
+    # sniff out if it's a HuggingFace dataset
+    if isinstance(dataset, str) and "/" in dataset and not fsspec_utils.exists(dataset):
+        config = HfTokenizeConfig(
+            id=dataset,
+            cache_path=this_output_path(),
+            tokenizer=ensure_versioned(tokenizer),
+            format=format,
+        )
+    else:
+        config = TokenizeConfig(
+            train_paths=[dataset] if not is_validation else [],
+            validation_paths=[dataset] if is_validation else [],
+            cache_path=this_output_path(),
+            tokenizer=ensure_versioned(tokenizer),
+            format=format,
+        )
+
     if options is not None:
         config = dataclasses.replace(config, cache_options=options)
 
@@ -154,6 +227,7 @@ def default_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+    override_output_path: str | None = None,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -219,6 +293,10 @@ def default_train(
     total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
 
     checkpoint_path_to_load_from = train_config.initialize_from_checkpoint_path
+    hf_checkpoint_path_to_load_from = train_config.initialize_from_hf
+
+    if hf_checkpoint_path_to_load_from is not None and checkpoint_path_to_load_from is not None:
+        raise ValueError("Cannot specify both initialize_from_checkpoint_path and initialize_from_hf")
 
     # Create the inner config
     inner_config = TrainLmConfig(
@@ -226,7 +304,7 @@ def default_train(
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project="optimizer-scaling",
-                entity="stanford-mercury",
+                entity="marin-community",
                 tags=[*tags],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -234,43 +312,55 @@ def default_train(
             num_train_steps=train_config.num_train_steps,
             steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
             checkpointer=CheckpointerConfig(
-                save_interval=timedelta(minutes=30),
+                save_interval=timedelta(minutes=10),
                 keep=[dict(every=steps_per_export)],
             ),
             model_averaging=model_averaging,
             replica_dcn_axis_size=-1,
             allow_partial_checkpoint=train_config.allow_partial_checkpoint,
             per_device_eval_parallelism=per_device_eval_parallelism,
+            max_eval_batches=train_config.max_eval_batches,
             allow_nondivisible_batch_size=True,
             quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
             initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
             watch=train_config.watch,
+            axis_resources={
+                # Special axes for MoEs
+                "token": (ResourceAxis.REPLICA, ResourceAxis.DATA),
+                "token_repeat": (ResourceAxis.REPLICA, ResourceAxis.DATA),
+            },
         ),
         initialize_from_checkpoint_path=(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
         ),
+        initialize_from_hf=hf_checkpoint_path_to_load_from or False,
         z_loss_weight=train_config.z_loss_weight,
         model=model_config,
-        optimizer=AdamConfig(
-            learning_rate=train_config.learning_rate,
-            weight_decay=(
-                train_config.weight_decay if train_config.weight_decay is not None else AdamConfig().weight_decay
-            ),
-            beta1=(train_config.beta1 if train_config.beta1 is not None else AdamConfig().beta1),
-            beta2=(train_config.beta2 if train_config.beta2 is not None else AdamConfig().beta2),
-            epsilon=(train_config.epsilon if train_config.epsilon is not None else AdamConfig().epsilon),
-            max_grad_norm=(
-                train_config.max_grad_norm if train_config.max_grad_norm is not None else AdamConfig().max_grad_norm
-            ),
-            warmup=(train_config.warmup if train_config.warmup is not None else AdamConfig().warmup),
-            rewarmup=(train_config.rewarmup if train_config.rewarmup is not None else AdamConfig().rewarmup),
-            decay=(train_config.decay if train_config.decay is not None else AdamConfig().decay),
-            lr_schedule=(train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig().lr_schedule),
-            cycle_length=train_config.cycle_length,  # can be int, list[int], or None
-            min_lr_ratio=(
-                train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
-            ),
-            nesterov=(train_config.nesterov if train_config.nesterov is not None else AdamConfig().nesterov),
+        optimizer=(
+            train_config.optimizer_config
+            if getattr(train_config, "optimizer_config", None) is not None
+            else AdamConfig(
+                learning_rate=train_config.learning_rate,
+                weight_decay=(
+                    train_config.weight_decay if train_config.weight_decay is not None else AdamConfig().weight_decay
+                ),
+                beta1=(train_config.beta1 if train_config.beta1 is not None else AdamConfig().beta1),
+                beta2=(train_config.beta2 if train_config.beta2 is not None else AdamConfig().beta2),
+                epsilon=(train_config.epsilon if train_config.epsilon is not None else AdamConfig().epsilon),
+                max_grad_norm=(
+                    train_config.max_grad_norm if train_config.max_grad_norm is not None else AdamConfig().max_grad_norm
+                ),
+                warmup=(train_config.warmup if train_config.warmup is not None else AdamConfig().warmup),
+                rewarmup=(train_config.rewarmup if train_config.rewarmup is not None else AdamConfig().rewarmup),
+                decay=(train_config.decay if train_config.decay is not None else AdamConfig().decay),
+                lr_schedule=(
+                    train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig().lr_schedule
+                ),
+                cycle_length=train_config.cycle_length,  # can be int, list[int], or None
+                min_lr_ratio=(
+                    train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
+                ),
+            )
         ),
         hf_save_steps=steps_per_export_hf,
         data_seed=train_config.data_seed,
@@ -279,15 +369,12 @@ def default_train(
     )
 
     # Create the pod config
-    pod_config = PodConfig(
-        tpu_type=train_config.tpu_type,
-        node_count=train_config.node_count,
-    )
+    pod_config = train_config.resources
 
     # Create the full config
     config = TrainLmOnPodConfig(
-        config=inner_config,
-        pod_config=pod_config,
+        train_config=inner_config,
+        resources=pod_config,
         output_path=this_output_path(),
     )
 
@@ -303,15 +390,15 @@ def default_train(
         fn=run_levanter_train_lm,
         config=config,
         pip_dependency_groups=["tokenize_train"],
+        override_output_path=override_output_path,
     )
 
 
 def default_sft(
     name: str,
-    tokenized: InputName | ExecutorStep | LMSupervisedDatasetConfig | dict[str, SupervisedUrlSourceConfig],
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     model_config: LlamaConfig,
     sft_config: SimpleSFTConfig,
-    mixture_weights: dict[str, int] | None = None,
     tags: Sequence[str] = (),
 ) -> ExecutorStep:
     """
@@ -323,12 +410,10 @@ def default_sft(
     Args:
         name: The name of the training run, forms the basis of the output path.
         tokenized: The tokenized data to train on:
-                  - For single dataset: an InputName, ExecutorStep, or LMSupervisedDatasetConfig
-                  - For mixture: a Dict[str, SupervisedUrlSourceConfig] mapping dataset names to configs
+                  - For single dataset: an InputName or ExecutorStep for a tokenized dataset.
+                  - For mixture: a LMMixtureDatasetConfig with multiple datasets.
         model_config: Levanter LlamaConfig for the model architecture to train.
         sft_config: Configuration for the SFT training process.
-        mixture_weights: Dict mapping datasets within mixture to weight to sample with. If provided,
-                       enables mixture-based training.
         tags: Additional tags for WandB logging. Default: ().
 
     Returns:
@@ -338,125 +423,69 @@ def default_sft(
     if "sft" not in tags:
         tags = [*tags, "sft"]
 
-    tracker_config = WandbConfig(
-        project="optimizer-scaling",
-        tags=[*tags],
-    )
+    initialize_from_hf = sft_config.initialize_from_hf
 
-    checkpointer_config = CheckpointerConfig(
-        keep=[dict(every=sft_config.steps_per_checkpoint)],
-    )
+    if initialize_from_hf is None:
+        initialize_from_hf = (
+            sft_config.model_name_or_path is not None and sft_config.initialize_from_checkpoint_path is None
+        )
+    elif initialize_from_hf is True and sft_config.model_name_or_path is None:
+        raise ValueError("initialize_from_hf is True but model_name_or_path is not set")
+    elif initialize_from_hf is False and sft_config.initialize_from_checkpoint_path is None:
+        raise ValueError("initialize_from_hf is False but initialize_from_checkpoint_path is not set")
 
-    trainer_config = TrainerConfig(
-        tracker=tracker_config,
-        mp=jmp.get_policy("p=f32,c=bfloat16"),
+    # now we just shell out to default_train
+    normal_train_config = SimpleTrainConfig(
+        resources=sft_config.resources,
         train_batch_size=sft_config.train_batch_size,
         num_train_steps=sft_config.num_train_steps,
-        steps_per_eval=sft_config.steps_per_eval,
-        checkpointer=checkpointer_config,
-        seed=sft_config.seed,
-    )
-
-    optimizer_config = AdamConfig(
         learning_rate=sft_config.learning_rate,
-        weight_decay=sft_config.weight_decay,
-        warmup=sft_config.warmup,
-        cooldown=sft_config.cooldown,
-        min_lr_ratio=sft_config.min_lr_ratio,
         lr_schedule=sft_config.lr_schedule,
+        decay=sft_config.cooldown,
+        weight_decay=sft_config.weight_decay,
+        min_lr_ratio=sft_config.min_lr_ratio,
         max_grad_norm=sft_config.max_grad_norm,
+        warmup=sft_config.warmup,
+        steps_per_eval=sft_config.steps_per_eval,
+        steps_per_export=sft_config.steps_per_checkpoint,
+        int8=sft_config.int8,
+        steps_per_hf_export=sft_config.steps_per_hf_export,
+        initialize_from_hf=sft_config.model_name_or_path if initialize_from_hf else None,
+        initialize_from_checkpoint_path=sft_config.initialize_from_checkpoint_path,
+        data_seed=sft_config.seed,
+        z_loss_weight=sft_config.z_loss_weight,
     )
 
-    # Create the pod config
-    pod_config = PodConfig(
-        tpu_type=sft_config.tpu_type,
-        node_count=sft_config.node_count,
-    )
-
-    # Infer whether we're using mixture based on mixture_weights
-    if mixture_weights is not None:
-        if not isinstance(tokenized, dict):
-            raise ValueError("If mixture_weights is given tokenized should be a Dict[str, SupervisedUrlSourceConfig]")
-
-        # Configure the mixture-based SFT
-        inner_config = sft_mixture.SFTMixtureConfig(
-            trainer=trainer_config,
-            model=model_config,
-            optimizer=optimizer_config,
-            supervised_data=tokenized,
-            mixture_weights=mixture_weights,
-            mixture_block_size=sft_config.mixture_block_size,
-            tokenizer=sft_config.tokenizer,
-            model_name_or_path=sft_config.model_name_or_path,
-            initialize_from_hf=sft_config.initialize_from_hf,
-            max_seq_len=sft_config.max_seq_len,
-            hf_save_steps=sft_config.steps_per_hf_export,
-            messages_field="messages",
-            input_role=sft_config.input_role,
-            output_role=sft_config.output_role,
-            stop_strategy=sft_config.stop_strategy,
-        )
-
-        config = TrainSFTMixturePodConfig(
-            config=inner_config,
-            pod_config=pod_config,
-            output_path=this_output_path(),
-            bypass_path_checks=sft_config.bypass_path_checks,
-        )
-        fn = run_levanter_sft_mixture
-
-    else:
-        # Handle the case of a single dataset
-        if isinstance(tokenized, InputName | ExecutorStep):
-            supervised_data = LMSupervisedDatasetConfig(
-                cache_dir=output_path_of(tokenized),
-                input_field=sft_config.input_role,
-                output_field=sft_config.output_role,
-            )
-            chat_train_urls = [output_path_of(tokenized, "**/*.jsonl.gz")]
-        elif isinstance(tokenized, LMSupervisedDatasetConfig):
-            supervised_data = tokenized
-            chat_train_urls = None
-        else:
-            raise ValueError(
-                "For non-mixture SFT, tokenized should be an InputName, ExecutorStep, or LMSupervisedDatasetConfig"
-            )
-
-        # Configure the single-dataset SFT
-        inner_config = sft.SFTConfig(
-            trainer=trainer_config,
-            model=model_config,
-            optimizer=optimizer_config,
-            supervised_data=supervised_data,
-            chat_train_urls=chat_train_urls,
-            tokenizer=sft_config.tokenizer,
-            model_name_or_path=sft_config.model_name_or_path,
-            initialize_from_hf=sft_config.initialize_from_hf,
-            max_seq_len=sft_config.max_seq_len,
-            hf_save_steps=sft_config.steps_per_hf_export,
-            messages_field="messages",
-            input_role=sft_config.input_role,
-            output_role=sft_config.output_role,
-        )
-
-        config = TrainSFTOnPodConfig(
-            config=inner_config,
-            pod_config=pod_config,
-            output_path=this_output_path(),
-        )
-        fn = run_levanter_sft
+    if sft_config.reinit_tokens:
+        raise NotImplementedError("reinit_tokens is not supported by default_train")
 
     # Create and return the ExecutorStep
-    return ExecutorStep(
-        name=f"checkpoints/{name}_seed{sft_config.seed}",
-        fn=fn,
-        config=config,
-        description=f"SFT {'mixture' if mixture_weights is not None else 'single'}",
-        pip_dependency_groups=["tokenize_train"],
+    return default_train(
+        name=name,
+        tokenized=tokenized,
+        model_config=model_config,
+        train_config=normal_train_config,
+        tags=tags,
+        eval_harness_tasks=[],
+        use_default_validation=False,
     )
 
 
-def default_anneal(name: str, anneal_config: AnnealConfig):
+def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
+    """
+
+    Runs an annealing training run. This is a kind of continued pre-training intended
+    to replicate Llama 3-style data ablations (or XXX databricks microannealing)
+
+    Args:
+        name: The name of the training run. Will form the basis of the output path for the executor step.
+              `checkpoints/` will be prepended to the name.
+        anneal_config: Configuration for the annealing run.
+    Returns:
+
+        An ExecutorStep configured for annealing.
+
+    """
     imputed_checkpoint_steps = anneal_config.initialize_from_checkpoint_path.index("step-")
     imputed_checkpoint_step = int(
         anneal_config.initialize_from_checkpoint_path[imputed_checkpoint_steps + len("step-") :]
@@ -478,8 +507,7 @@ def default_anneal(name: str, anneal_config: AnnealConfig):
     learning_rate = num_train_steps * (anneal_config.learning_rate / num_anneal_steps)
 
     anneal_stage_train_config = SimpleTrainConfig(
-        tpu_type=anneal_config.tpu_type,
-        node_count=anneal_config.node_count,
+        resources=anneal_config.resources,
         train_batch_size=anneal_config.train_batch_size,
         num_train_steps=num_train_steps,
         learning_rate=learning_rate,
@@ -499,9 +527,14 @@ def default_anneal(name: str, anneal_config: AnnealConfig):
     )
 
 
+@lru_cache
+def _cached_load_tokenizer(tokenizer_name: str):
+    return load_tokenizer(tokenizer_name)
+
+
 def _get_vocab_size(pretraining_data):
     tokenizer = unwrap_versioned_value(pretraining_data.tokenizer)
-    vocab_size = load_tokenizer(tokenizer).vocab_size
+    vocab_size = _cached_load_tokenizer(tokenizer).vocab_size
     return vocab_size
 
 
@@ -521,7 +554,7 @@ def _prepare_data_config(
     if use_default_validation:
         validation_sets = default_validation_sets(tokenizer=tokenizer)
     else:
-        validation_sets = []
+        validation_sets = {}
 
     if isinstance(tokenized, InputName | ExecutorStep):
         pretraining_data = lm_data_config(training_set=tokenized, validation_sets=validation_sets)
@@ -537,10 +570,12 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
     match tokenized:
         case LMMixtureDatasetConfig(tokenizer=tokenizer):
             pass
-        case ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer)):
+        case ExecutorStep(config=config) if isinstance(config, TokenizeConfigBase):
+            tokenizer = config.tokenizer
+        case ExecutorStep(config=HfTokenizeConfig(tokenizer=tokenizer)):
             pass
-        case InputName(step=ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer))):
-            pass
+        case InputName(step=ExecutorStep(config)) if isinstance(config, TokenizeConfigBase):
+            tokenizer = config.tokenizer
         case _:
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 

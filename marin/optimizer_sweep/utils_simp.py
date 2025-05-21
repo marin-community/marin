@@ -5,7 +5,7 @@ import wandb
 # Initialize the WandB API
 api = wandb.Api()
 # Define your details
-username = "stanford-mercury"
+username = "marin-community"
 project = "optimizer-scaling"
 
 
