@@ -201,6 +201,7 @@ To run the experiment locally, we can run the script directly:
 
 The `--prefix` argument specifies the output directory for the experiment. It can be a local directory or anything [fsspec](https://filesystem-spec.readthedocs.io/en/latest/) supports,
 such as `s3://` or `gs://`.
+Alternatively, you can set the `MARIN_PREFIX` environment variable to achieve the same. For a detailed explanation of both methods and important considerations for choosing your output path, please see [Understanding `MARIN_PREFIX` and `--prefix`](../explanations/marin-prefix.md).
 
 This will take a few minutes to run. (Marin isn't optimized for low latency and Ray can take a while to schedule tasks initially...)
 
