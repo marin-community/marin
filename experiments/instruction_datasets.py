@@ -4,7 +4,7 @@ format which can be used for SFT.
 
 How to add a new instruction dataset:
 1. Add the dataset config to INSTRUCTION_DATASET_NAME_TO_CONFIG
-2. Register an adapter for the dataset in operations/transform/conversation/adapters.py
+2. Register an adapter for the dataset in marin/transform/conversation/adapters.py
 
 How to retrieve an instruction dataset:
 1. Use the function `get_instruction_dataset` with the HF repo id.
@@ -42,13 +42,13 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-from operations.download.huggingface.download import DownloadConfig
-from operations.download.huggingface.download_hf import download_hf
-from operations.transform.conversation.conversation_to_dolma import (
+from marin.download.huggingface.download import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf
+from marin.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
     convert_conversation_to_dolma,
 )
-from operations.transform.conversation.transform_conversation import (
+from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
     transform_hf_dataset,
 )

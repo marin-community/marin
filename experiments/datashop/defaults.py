@@ -33,7 +33,7 @@ from marin.processing.classification.consolidate import ConsolidateConfig, Filte
 from marin.processing.classification.inference import run_inference
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
 from marin.resources import TpuPodConfig
-from operations.download.filesystem.transfer import TransferConfig, transfer_files
+from marin.download.filesystem.transfer import TransferConfig, transfer_files
 
 
 def default_label(

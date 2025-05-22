@@ -21,8 +21,8 @@ from dataclasses import dataclass
 
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.utils import get_directory_friendly_name
-from operations.download.huggingface.download import DownloadConfig
-from operations.download.huggingface.download_hf import download_hf
+from marin.download.huggingface.download import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf
 
 
 @dataclass(frozen=True)

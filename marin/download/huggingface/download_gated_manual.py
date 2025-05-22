@@ -4,7 +4,7 @@ A script to download a gated HuggingFace dataset and upload it to a specified fs
 preserving directory structures and handling different file types.
 
 Run with (after setting HF_TOKEN as an environment variable):
-    - [Local] python operations/download/huggingface/download_gated_manual.py \
+    - [Local] python marin/download/huggingface/download_gated_manual.py \
           --hf_dataset_id EleutherAI/proof-pile-2 --revision main \
           --output_path fsspec://mybucket/raw/proof-pile-manual
 """
@@ -23,7 +23,7 @@ from huggingface_hub import HfApi, hf_hub_download
 from tqdm_loggable.auto import tqdm
 
 from marin.utilities.validation_utils import write_provenance_json
-from operations.download.huggingface.download import DownloadConfig
+from marin.download.huggingface.download import DownloadConfig
 
 # Set up logging
 logger = logging.getLogger(__name__)

@@ -11,7 +11,7 @@ import os.path
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
-from operations.download import HfDownloadConfig, download_hf_gated_manual
+from marin.download import HfDownloadConfig, download_hf_gated_manual
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 

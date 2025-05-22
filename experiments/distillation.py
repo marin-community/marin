@@ -10,8 +10,8 @@ from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK
 from experiments.models import get_model_local_path, llama_3_1_8b_instruct
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.utils import get_directory_friendly_name
-from operations.download.huggingface.download import DownloadConfig
-from operations.download.huggingface.download_hf import download_hf
+from marin.download.huggingface.download import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf
 
 huggingface_dataset_id = "HuggingFaceH4/MATH-500"
 tensor_parallel_size = 1

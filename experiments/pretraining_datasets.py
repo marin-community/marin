@@ -1,8 +1,8 @@
 from marin.execution.executor import ExecutorStep, this_output_path
-from operations.download.huggingface.download import DownloadConfig, download
-from operations.download.huggingface.download_gated_manual import download_and_upload_to_store
-from operations.download.huggingface.download_hf import download_hf
-from operations.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
+from marin.download.huggingface.download import DownloadConfig, download
+from marin.download.huggingface.download_gated_manual import download_and_upload_to_store
+from marin.download.huggingface.download_hf import download_hf
+from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
 
 # TODO: remove download and download_and_upload_to_store. Instead use default_download instead
 fineweb = ExecutorStep(

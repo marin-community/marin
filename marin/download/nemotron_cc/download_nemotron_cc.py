@@ -10,7 +10,7 @@ import requests
 
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_exists
-from operations.download.nemotron_cc.utils import decompress_zstd_stream
+from marin.download.nemotron_cc.utils import decompress_zstd_stream
 
 logger = logging.getLogger("ray")
 

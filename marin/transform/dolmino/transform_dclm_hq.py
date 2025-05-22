@@ -1,5 +1,5 @@
 """
-operations/transform/dolmino/transform_dclm_hq.py
+marin/transform/dolmino/transform_dclm_hq.py
 
 Performs HTML->Text/MD conversion using the specified tools over a DCLM HQ dump save in DOLMA format.
 """
@@ -17,8 +17,8 @@ from tqdm import tqdm
 from marin.core.runtime import cached_or_construct_output
 from marin.schemas.web.convert import ExtractionConfig
 from marin.web.convert import convert_page
-from operations.download.dclm_hq.download_dclm_hq_html import find_html_in_cc
-from operations.download.huggingface.stream_remove_columns import hf_fs
+from marin.download.dclm_hq.download_dclm_hq_html import find_html_in_cc
+from marin.download.huggingface.stream_remove_columns import hf_fs
 
 logger = logging.getLogger("ray")
 

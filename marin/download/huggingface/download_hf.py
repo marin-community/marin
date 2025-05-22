@@ -14,7 +14,7 @@ from tqdm_loggable.tqdm_logging import tqdm_logging
 
 from marin.core.runtime import simple_backpressure
 from marin.utilities.validation_utils import write_provenance_json
-from operations.download.huggingface.download import DownloadConfig
+from marin.download.huggingface.download import DownloadConfig
 
 # Set up logging
 logger = logging.getLogger("ray")

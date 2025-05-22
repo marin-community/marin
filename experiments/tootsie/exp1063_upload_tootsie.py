@@ -23,7 +23,7 @@ executor_main([upload_step])
 from dataclasses import dataclass, field
 
 from marin.execution.executor import ExecutorStep, executor_main
-from operations.download.huggingface.upload_gcs_to_hf import UploadConfig, upload_gcs_to_hf
+from marin.download.huggingface.upload_gcs_to_hf import UploadConfig, upload_gcs_to_hf
 
 
 @dataclass(frozen=True)

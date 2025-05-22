@@ -1,7 +1,7 @@
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, this_output_path
-from operations.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 
 finemath_commit_hash = "8f233cf"
 finemath = ExecutorStep(
