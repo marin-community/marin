@@ -18,8 +18,6 @@ from tqdm_loggable.auto import tqdm
 
 from marin.core.runtime import cached_or_construct_output
 from marin.schemas.web.convert import ExtractionConfig
-from marin.utils import fsspec_glob
-from marin.web.convert import convert_page
 from marin.transform.ar5iv.transform import (
     clean_li,
     deconstruct_eqn,
@@ -36,6 +34,8 @@ from marin.transform.ar5iv.transform import (
     transform_abstract,
     unwrap_eqn,
 )
+from marin.utils import fsspec_glob
+from marin.web.convert import convert_page
 
 logger = logging.getLogger("ray")
 

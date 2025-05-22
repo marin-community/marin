@@ -22,8 +22,8 @@ import fsspec
 from huggingface_hub import HfApi, hf_hub_download
 from tqdm_loggable.auto import tqdm
 
-from marin.utilities.validation_utils import write_provenance_json
 from marin.download.huggingface.download import DownloadConfig
+from marin.utilities.validation_utils import write_provenance_json
 
 # Set up logging
 logger = logging.getLogger(__name__)

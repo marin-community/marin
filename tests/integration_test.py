@@ -29,9 +29,9 @@ from marin.processing.tokenize import lm_data_config
 from marin.resources import CpuOnlyConfig, TpuPodConfig
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, transform
 from marin.utilities.ray_utils import is_local_ray_cluster
 from marin.utils import is_in_ci
-from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, transform
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)

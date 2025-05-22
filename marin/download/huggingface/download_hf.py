@@ -13,8 +13,8 @@ from huggingface_hub import HfFileSystem
 from tqdm_loggable.tqdm_logging import tqdm_logging
 
 from marin.core.runtime import simple_backpressure
-from marin.utilities.validation_utils import write_provenance_json
 from marin.download.huggingface.download import DownloadConfig
+from marin.utilities.validation_utils import write_provenance_json
 
 # Set up logging
 logger = logging.getLogger("ray")

@@ -4,8 +4,8 @@ Downloads the open-web-math dataset
 (https://huggingface.co/datasets/open-web-math/open-web-math) to GCS.
 """
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.download.huggingface.download import DownloadConfig, download
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
 ############################################################
 # download open-web-math dataset

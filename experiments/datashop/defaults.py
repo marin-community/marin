@@ -25,6 +25,7 @@ from marin.datashop.pipeline import (
     run_data_filter_prompt_generation_pipeline,
     run_medu_dataset_sampling_pipeline,
 )
+from marin.download.filesystem.transfer import TransferConfig, transfer_files
 from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
 from marin.generation.inference import TextGenerationInferenceConfig
 from marin.generation.inference import run_inference as run_generation_inference
@@ -33,7 +34,6 @@ from marin.processing.classification.consolidate import ConsolidateConfig, Filte
 from marin.processing.classification.inference import run_inference
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
 from marin.resources import TpuPodConfig
-from marin.download.filesystem.transfer import TransferConfig, transfer_files
 
 
 def default_label(
