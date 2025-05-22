@@ -951,6 +951,9 @@ def should_run(
         return False
 
 
+import sys
+
+
 @ray.remote
 def execute_after_dependencies(
     fn: ExecutorFunction,
@@ -965,7 +968,11 @@ def execute_after_dependencies(
     Run a function `fn` with the given `config`, after all the `dependencies` have finished.
 
     """
-
+    try:
+        print(ray.get_runtime_context().runtime_env.get("pip", {}).get("packages", []))
+        print(sys.path)
+    except:
+        print("Couldn't get dependency")
     ray_task_id = ray.get_runtime_context().get_task_id()
 
     status_path = get_status_path(output_path)
@@ -1108,6 +1115,8 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     # print json path again so it's easy to copy
     logger.info(f"Executor info written to {executor.executor_info_path}")
     logger.info(f"View the experiment at {executor.get_experiment_url()}")
+
+    ray.shutdown()
 
 
 def _is_relative_path(url_or_path):

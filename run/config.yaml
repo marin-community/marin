@@ -1,0 +1,572 @@
+_wandb:
+    value:
+        cli_version: 0.19.1
+        m: []
+        python_version: 3.12.10
+        t:
+            "1":
+                - 55
+            "2":
+                - 55
+            "3":
+                - 2
+                - 5
+                - 14
+                - 23
+                - 55
+                - 62
+            "4": 3.12.10
+            "5": 0.19.1
+            "8":
+                - 3
+                - 5
+            "12": 0.19.1
+            "13": windows-amd64
+data:
+    value:
+        cache_dir: null
+        cache_options:
+            batch_size: 128
+            num_shard_groups: 128
+            target_size_per_flush: 512MB
+        configs:
+            dclm_baseline:
+                cache_dir: gs://marin-us-central2/tokenized/dclm_baseline-0206f1/
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls:
+                    - gs://marin-us-central2/raw/dclm/a3b142c
+                validation_urls: []
+            paloma/4chan:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/4chan-48513a
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz
+            paloma/c4_100_domains:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/c4_100_domains-96277e
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/c4_100_domains/val/val*.jsonl.gz
+            paloma/c4_en:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/c4_en-21e708
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/c4_en/val/val*.jsonl.gz
+            paloma/dolma-v1_5:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/dolma-v1_5-ed8c0b
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/dolma-v1_5/val/val*.jsonl.gz
+            paloma/dolma_100_programing_languages:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-3eb825
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz
+            paloma/dolma_100_subreddits:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/dolma_100_subreddits-2381a1
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz
+            paloma/falcon-refinedweb:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/falcon-refinedweb-fea8c8
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz
+            paloma/gab:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/gab-487af2
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/gab/val/val*.jsonl.gz
+            paloma/m2d2_s2orc_unsplit:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-9fb6dc
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz
+            paloma/m2d2_wikipedia_unsplit:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/m2d2_wikipedia_unsplit-0fdb36
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz
+            paloma/manosphere_meta_sep:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/manosphere_meta_sep-bb4a78
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz
+            paloma/mc4:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/mc4-8ead3d
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/mc4/val/val*.jsonl.gz
+            paloma/ptb:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/ptb-4559d1
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/ptb/val/val*.jsonl.gz
+            paloma/redpajama:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/redpajama-f43c27
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/redpajama/val/val*.jsonl.gz
+            paloma/twitterAAE_HELM_fixed:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/twitterAAE_HELM_fixed-b346ca
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz
+            paloma/wikitext_103:
+                cache_dir: gs://marin-us-central2/tokenized/paloma/wikitext_103-631615
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls: []
+                validation_urls:
+                    - gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/wikitext_103/val/val*.jsonl.gz
+            proofpile_2:
+                cache_dir: gs://marin-us-central2/tokenized/proofpile_2-4a35c7
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls:
+                    - gs://marin-us-central2/raw/proof-pile-2-f1b1d8/901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927
+                validation_urls: []
+            starcoderdata:
+                cache_dir: gs://marin-us-central2/tokenized/starcoderdata-12f018
+                id: null
+                name: null
+                plaintext: false
+                stream: true
+                tags: []
+                text_key: text
+                train_urls:
+                    - gs://marin-us-central2/raw/starcoderdata-720c8c/9fc30b5
+                validation_urls: []
+        enforce_eos: true
+        experiment_budget: null
+        ignore_token_id: -100
+        mixture_block_size: 2048
+        permutation_type: null
+        shuffle: true
+        stop_strategy: restart
+        target_budget: null
+        tokenizer: meta-llama/Meta-Llama-3.1-8B
+        train_weights:
+            dclm_baseline: 3.8
+            paloma/4chan: 0
+            paloma/c4_100_domains: 0
+            paloma/c4_en: 0
+            paloma/dolma-v1_5: 0
+            paloma/dolma_100_programing_languages: 0
+            paloma/dolma_100_subreddits: 0
+            paloma/falcon-refinedweb: 0
+            paloma/gab: 0
+            paloma/m2d2_s2orc_unsplit: 0
+            paloma/m2d2_wikipedia_unsplit: 0
+            paloma/manosphere_meta_sep: 0
+            paloma/mc4: 0
+            paloma/ptb: 0
+            paloma/redpajama: 0
+            paloma/twitterAAE_HELM_fixed: 0
+            paloma/wikitext_103: 0
+            proofpile_2: 0.055
+            starcoderdata: 0.25
+        vocab_size: null
+data_seed:
+    value: null
+decayed_weights:
+    value:
+        - lm_head.weight
+        - transformer.layers.stacked.mlp.down_proj.weight
+        - transformer.layers.stacked.mlp.gate_proj.weight
+        - transformer.layers.stacked.mlp.up_proj.weight
+        - transformer.layers.stacked.self_attn.k_proj.weight
+        - transformer.layers.stacked.self_attn.o_proj.weight
+        - transformer.layers.stacked.self_attn.q_proj.weight
+        - transformer.layers.stacked.self_attn.v_proj.weight
+epoch:
+    value: 0
+eval_harness:
+    value:
+        bootstrap_iters: 0
+        log_samples: false
+        max_eval_length: null
+        max_examples: null
+        task_spec:
+            - description: null
+              doc_to_choice: null
+              doc_to_text: null
+              doct_to_target: null
+              fewshot_delimiter: null
+              num_fewshot: 3
+              target_delimiter: null
+              task: agieval_lsat_ar
+              task_alias: null
+              use_prompt: null
+            - description: null
+              doc_to_choice: null
+              doc_to_text: null
+              doct_to_target: null
+              fewshot_delimiter: null
+              num_fewshot: 10
+              target_delimiter: null
+              task: arc_easy
+              task_alias: null
+              use_prompt: null
+            - description: null
+              doc_to_choice: null
+              doc_to_text: null
+              doct_to_target: null
+              fewshot_delimiter: null
+              num_fewshot: 10
+              target_delimiter: null
+              task: arc_challenge
+              task_alias: null
+              use_prompt: null
+            - description: null
+              doc_to_choice: null
+              doc_to_text: null
+              doct_to_target: null
+              fewshot_delimiter: null
+              num_fewshot: 10
+              target_delimiter: null
+              task: boolq
+              task_alias: null
+              use_prompt: null
+            - description: null
+              doc_to_choice: null
+              doc_to_text: null
+              doct_to_target: null
+              fewshot_delimiter: null
+              num_fewshot: 10
+              target_delimiter: null
+              task: commonsense_qa
+              task_alias: null
+              use_prompt: null
+            - description: null
+              doc_to_choice: null
+              doc_to_text: null
+              doct_to_target: null
+              fewshot_delimiter: null
+              num_fewshot: 0
+              target_delimiter: null
+              task: copa
+              task_alias: null
+              use_prompt: null
+            - description: null
+              doc_to_choice: null
+              doc_to_text: null
+              doct_to_target: null
+              fewshot_delimiter: null
+              num_fewshot: 0
+              target_delimiter: null
+              task: hellaswag
+              task_alias: hellaswag_0shot
+              use_prompt: null
+            - description: null
+              doc_to_choice: null
+              doc_to_text: null
+              doct_to_target: null
+              fewshot_delimiter: null
+              num_fewshot: 10
+              target_delimiter: null
+              task: hellaswag
+              task_alias: hellaswag_10shot
+              use_prompt: null
+            - description: null
+              doc_to_choice: null
+              doc_to_text: null
+              doct_to_target: null
+              fewshot_delimiter: null
+              num_fewshot: 0
+              target_delimiter: null
+              task: lambada_openai
+              task_alias: null
+              use_prompt: null
+            - description: null
+              doc_to_choice: null
+              doc_to_text: null
+              doct_to_target: null
+              fewshot_delimiter: null
+              num_fewshot: 0
+              target_delimiter: null
+              task: openbookqa
+              task_alias: null
+              use_prompt: null
+            - description: null
+              doc_to_choice: null
+              doc_to_text: null
+              doct_to_target: null
+              fewshot_delimiter: null
+              num_fewshot: 10
+              target_delimiter: null
+              task: piqa
+              task_alias: null
+              use_prompt: null
+            - description: null
+              doc_to_choice: null
+              doc_to_text: null
+              doct_to_target: null
+              fewshot_delimiter: null
+              num_fewshot: 0
+              target_delimiter: null
+              task: wsc273
+              task_alias: null
+              use_prompt: null
+            - description: null
+              doc_to_choice: null
+              doc_to_text: null
+              doct_to_target: null
+              fewshot_delimiter: null
+              num_fewshot: 0
+              target_delimiter: null
+              task: winogrande
+              task_alias: null
+              use_prompt: null
+eval_harness_steps:
+    value: 10000
+git_commit:
+    value: cd48edb3fee434a8146815443680ff20370136c8
+hf_save_path:
+    value: gs://marin-us-central2/checkpoints/norm_ablation_combined-d82ece/hf
+hf_save_steps:
+    value: 10000
+hf_upload:
+    value: null
+initialize_from_checkpoint_path:
+    value: null
+initialize_from_hf:
+    value: false
+log_entropy:
+    value: false
+model:
+    value:
+        activation_function: silu
+        attn_backend: null
+        cross_entropy_block_size: null
+        flash_attention_block_size: null
+        gradient_checkpointing: true
+        hidden_dim: 2048
+        hybrid_norm: true
+        initializer_range: 0.02
+        input_embedding_norm: true
+        intermediate_dim: 7168
+        layer_norm_epsilon: 1e-05
+        num_heads: 16
+        num_kv_heads: 8
+        num_layers: 16
+        reference_checkpoint: meta-llama/Llama-2-7b-hf
+        rope:
+            factor: 1
+            theta: 10000
+        scan_layers: true
+        seq_len: 4096
+        tie_word_embeddings: false
+        tokenizer: null
+        upcast_attn: false
+        use_bias: false
+        use_flash_attention: true
+        use_layer_norm_weight: true
+optimizer:
+    value:
+        beta1: 0.9
+        beta2: 0.95
+        cooldown: null
+        cycle_length: null
+        cycles: null
+        decay: null
+        default_weight_decay_mask: null
+        epsilon: 1e-08
+        haps: null
+        learning_rate: 0.001
+        lr_schedule: cosine
+        max_grad_norm: 1
+        min_lr_ratio: 0.1
+        nesterov: true
+        rewarmup: 0
+        stable_lr_schedule: constant
+        warmup: 0.01
+        weight_decay: 0.05
+        weight_decay_modules: null
+supervised_data:
+    value: null
+trainer:
+    value:
+        allow_nondivisible_batch_size: true
+        allow_partial_checkpoint: false
+        batch_axis: batch
+        checkpointer:
+            append_run_id_to_base_path: false
+            base_path: gs://marin-us-central2/checkpoints/norm_ablation_combined-d82ece/checkpoints
+            delete_old_temp_checkpoints: true
+            keep:
+                - every: 10000
+            save_interval: "0:30:00"
+        crash_on_inf: true
+        crash_on_nan: true
+        distributed:
+            coordinator_address: null
+            local_device_ids: null
+            num_processes: null
+            process_id: null
+        fsdp_axis: embed
+        id: norm_ablation_combined-d82ece
+        initialize_from: null
+        jax_config:
+            jax_softmax_custom_jvp: true
+            jax_threefry_partitionable: true
+        load_checkpoint: null
+        load_checkpoint_path: null
+        log_dir: logs
+        log_jaxprs: true
+        log_xla_hlo: true
+        max_eval_batches: null
+        model_averaging:
+            beta: 0.995
+        model_axis_size: 1
+        mp:
+            compute_dtype: jax.numpy.bfloat16
+            output_dtype: jax.numpy.bfloat16
+            param_dtype: jax.numpy.float32
+        num_train_steps: 238418
+        per_device_eval_parallelism: 16
+        per_device_parallelism: 16
+        profiler: false
+        profiler_num_steps: 100
+        profiler_perfetto_link: false
+        profiler_start_step: 5
+        quantization: null
+        ray:
+            address: null
+            auto_start_cluster: false
+            start_workers: false
+        replica_dcn_axis_size: 1
+        replica_ici_axis_size: 1
+        require_accelerator: true
+        seed: 0
+        shutdown_at_exit: false
+        steps_per_eval: 1000
+        tensor_parallel_axes: null
+        tracker:
+            entity: null
+            group: null
+            id: null
+            mode: null
+            name: null
+            project: marin
+            resume: allow
+            save_code: true
+            save_xla_dumps: false
+            tags: []
+        train_batch_size: 1024
+        wandb: null
+        watch:
+            include_histograms: false
+            include_norms: true
+            include_per_parameter_norms: true
+            interval: 10
+            split_scan_layers: true
+            watch_targets:
+                - grads
+                - params
+use_hf_model_config:
+    value: false
+z_loss_weight:
+    value: 0.0001

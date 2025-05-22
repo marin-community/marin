@@ -17,7 +17,7 @@ class SimpleTrainConfig:
     varied according to the schedule.
     """
     num_train_steps: int
-    learning_rate: float
+    learning_rate: float | None = None
     data_seed: int | None = None
     weight_decay: float | None = None
     beta1: float | None = None
@@ -31,11 +31,16 @@ class SimpleTrainConfig:
     The rewarmup parameter is used to re-warmup the learning rate after a decay cycles
     """
     lr_schedule: str | None = None
+    stable_lr_schedule: str | None = None
     min_lr_ratio: float | None = None
     cycle_length: int | list[int] | None = None
     z_loss_weight: float | None = None
     ema_beta: float | None = None
+    nesterov: bool | None = None
     """exponential moving average beta"""
+
+    id: str | None = None
+    ckpt_path: str | None = None
 
     steps_per_eval: int | None = None
     """how often to run validation losses"""
