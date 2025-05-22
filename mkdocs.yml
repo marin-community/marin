@@ -57,7 +57,7 @@ nav:
   - Home: index.md
   - Tutorials:
     - Installation: tutorials/installation.md
-    - Marin on Single TPU Node: tutorials/marin-on-single-tpu.md
+    - Single TPU Node: tutorials/marin-on-single-tpu.md
     - First Experiment: tutorials/first-experiment.md
     - Setting up a Local GPU Environment: tutorials/local-gpu.md
     - Executor 101: tutorials/executor-101.md

@@ -1,20 +1,22 @@
 # Running Marin on a Single TPU Node (e.g., v4-8 using Levanter)
 
-Welcome to this guide on setting up and running Marin experiments on a single Google Cloud TPU node (like a v4-8)! This tutorial is the TPU equivalent of our "Setting up a Local GPU Environment" guide. Here, we'll focus on leveraging Levanter's `launch.py` script to configure the TPU environment and execute your Marin tasks. This guide will walk you through the necessary prerequisites, configuration, and common commands to get you started.
+Welcome to this guide on setting up and running Marin experiments on a single Google Cloud TPU node (like a v4-8)! This tutorial is the TPU equivalent of our "Setting up a Local GPU Environment" guide. Here, we'll focus on leveraging [Levanter's `launch.py`](https://levanter.readthedocs.io/en/latest/Getting-Started-TPU-VM/#using-launchpy) script to configure the TPU environment and execute your Marin tasks. 
+
+This guide will walk you through the necessary prerequisites, configuration, and common commands to get you started.
 
 # Prerequisites
 
 ## Levanter Installation
 
-Marin uses Levanter for its core functionalities, especially for TPU interaction via `launch.py`. It's assumed that Levanter is cloned into `submodules/levanter` relative to your Marin project root.
+Marin uses Levanter for its core functionality, especially for TPU interaction via `launch.py`.
 
 1.  **Clone Levanter (if not already present):**
     If you haven't cloned Levanter into the `submodules/` directory yet, you can do so using:
     ```bash
     # From the root of your Marin project directory
+    mkdir -p submodules
     git clone https://github.com/stanford-crfm/levanter.git submodules/levanter
     ```
-    If you previously used `git submodule` for Levanter and wish to switch to this direct clone method, ensure the old submodule is removed first (e.g., `git submodule deinit submodules/levanter` and remove the entry from `.gitmodules`).
 
 2.  **Install Levanter:**
     After ensuring Levanter is cloned into `submodules/levanter`, install it:
@@ -41,7 +43,7 @@ Marin uses Weights & Biases (WandB) for logging experiment metrics, results, and
     2.  **Entity:** This is typically your WandB username or the name of the organization/team you're working under.
     3.  **Project Name:** You can decide on a project name (e.g., "marin-tpu-experiments") where your runs will be logged. This project will be created in WandB if it doesn't exist.
 
-These values (`WANDB_API_KEY`, `WANDB_ENTITY`, `WANDB_PROJECT`) will be configured in the `submodules/levanter/.levanter.yaml` file later in this guide.
+These values (`WANDB_API_KEY`, `WANDB_ENTITY`, `WANDB_PROJECT`) will be configured in the `.levanter.yaml` file later in this guide.
 
 ## Hugging Face Token (Optional but Recommended)
 
@@ -49,7 +51,7 @@ A Hugging Face token allows you to download models and datasets that might be ga
 
 *   **Get your Token:** You can find or create a Hugging Face token in your account settings: [https://huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). A "read" token is usually sufficient.
 
-This token (`HF_TOKEN`) will also be configured in the `submodules/levanter/.levanter.yaml` file.
+This token (`HF_TOKEN`) will also be configured in the `.levanter.yaml` file.
 
 ## Google Cloud SDK Installation and Configuration
 
@@ -70,13 +72,13 @@ gcloud config set project YOUR_PROJECT_ID   # Your GCP Project ID
 
 *   **SSH Key Setup for GCP:** You will also need to set up SSH keys to connect to your GCP resources. Follow Google's guide for adding SSH keys: [https://cloud.google.com/compute/docs/connect/add-ssh-keys#metadata](https://cloud.google.com/compute/docs/connect/add-ssh-keys#metadata).
 
-# Levanter Configuration (`submodules/levanter/.levanter.yaml`)
+# Levanter Configuration (`.levanter.yaml`)
 
-Levanter's `launch.py` script (located at `submodules/levanter/infra/launch.py`) requires a configuration file named `.levanter.yaml` to function. This file **must be placed in the root of your Levanter clone directory** (i.e., `submodules/levanter/.levanter.yaml`). When you run `python submodules/levanter/infra/launch.py ...` from your Marin project root, `launch.py` will look for this YAML file in its own directory's parent (`submodules/levanter/`).
+Levanter's `launch.py` script (located at `submodules/levanter/infra/launch.py`) requires a configuration file named `.levanter.yaml` to function. This file **must be placed in root of your Marin repo**. When you run `python submodules/levanter/infra/launch.py ...` from your Marin project root, `launch.py` will look for this YAML file in the current working directory.
 
-This tutorial focuses on the environment variables essential for Marin. For a comprehensive guide to all `.levanter.yaml` options (like `zone`, `tpu` name, `capacity_type`, Docker settings, etc.), please refer to **Levanter's official documentation:** [https://levanter.readthedocs.io/en/latest/Getting-Started-TPU-VM/](https://levanter.readthedocs.io/en/latest/Getting-Started-TPU-VM/).
+This tutorial focuses on the environment variables essential for Marin. For a comprehensive guide to all `.levanter.yaml` options (like `zone`, `tpu` name, `capacity_type`, Docker settings, etc.), please refer to [Levanter's official documentation](https://levanter.readthedocs.io/en/latest/Getting-Started-TPU-VM/).
 
-Here's a minimal example of `submodules/levanter/.levanter.yaml` highlighting Marin-relevant settings:
+Here's a minimal example of `.levanter.yaml` highlighting Marin-relevant settings:
 
 ```yaml
 # .levanter.yaml (place in the root of your Levanter clone, typically submodules/levanter/)
@@ -85,11 +87,6 @@ Here's a minimal example of `submodules/levanter/.levanter.yaml` highlighting Ma
 env:
     # Marin-specific: Path for experiment outputs
     MARIN_PREFIX: gs://YOUR_GCS_BUCKET_NAME/marin_outputs # IMPORTANT: Set this to your GCS bucket and desired output path.
-
-    # Marin-specific: Ensures Levanter source code is found by Python.
-    # This path is relative to the Levanter directory where this .levanter.yaml file resides.
-    PYTHONPATH: "./src:${PYTHONPATH}" 
-
     # For WandB logging (replace with your actual credentials)
     WANDB_API_KEY: YOUR_WANDB_API_KEY
     WANDB_ENTITY: YOUR_WANDB_ENTITY    # Your W&B username or organization
@@ -107,8 +104,9 @@ env:
     #   ... (and other args from marin/run/vars.py if needed)
 
 # Levanter-specific: TPU configuration (required by launch.py)
-# These must be set according to your GCP project and TPU details.
+# These should be set according to your GCP project and TPU details.
 # See Levanter docs for more details: https://levanter.readthedocs.io/en/latest/Getting-Started-TPU-VM/
+# You can instead pass these as command line args to launch.py
 zone: YOUR_ZONE # e.g., us-central2-b
 tpu: YOUR_TPU_NAME  # e.g., my-v4-8-tpu
 
@@ -123,12 +121,10 @@ tpu: YOUR_TPU_NAME  # e.g., my-v4-8-tpu
 
 *   **`env`**: Defines environment variables for the TPU execution environment.
     *   `MARIN_PREFIX`: **Essential for Marin.** Specifies the base GCS path for all Marin experiment outputs (checkpoints, logs, tokenized data). **Replace `gs://YOUR_GCS_BUCKET_NAME/marin_outputs` with your actual GCS bucket and desired path.**
-    *   `PYTHONPATH: "./src:${PYTHONPATH}"`: **Crucial for Levanter.** This path is relative to the `submodules/levanter/` directory (where `.levanter.yaml` resides) and ensures that Python within the Docker container can find the Levanter library code located in `submodules/levanter/src/`.
     *   `WANDB_API_KEY`, `WANDB_ENTITY`, `WANDB_PROJECT`: Your Weights & Biases credentials. Necessary if you intend to use W&B logging with Marin.
     *   `HF_TOKEN`: Your Hugging Face token. Required if your Marin experiments need to download private models or tokenizers from Hugging Face Hub.
     *   `LIBTPU_INIT_ARGS`: (Commented out by default in this minimal example) These are advanced XLA flags for fine-tuning TPU performance and stability. While Levanter might have its own defaults, Marin sometimes uses a specific set of these arguments for larger-scale runs. If you encounter issues or are scaling up, you might refer to `marin/run/vars.py` for a list of recommended arguments. For basic tutorial steps, they are often not strictly necessary.
 
-*   **`zone` & `tpu`**: **Essential for Levanter `launch.py`.** These specify your GCP zone and the name of your TPU instance. **Replace `YOUR_ZONE` and `YOUR_TPU_NAME` with your details.**
 
 **For all other settings in `.levanter.yaml`** (like `capacity_type`, `docker_repository`, `image_name`, `subnetwork`, other environment variables like `TPU_STDERR_LOG_LEVEL`, etc.), please consult the [Levanter documentation](https://levanter.readthedocs.io/en/latest/Getting-Started-TPU-VM/). This Marin tutorial assumes you have a working Levanter setup as per their guidelines, focusing only on the variables Marin directly depends on or commonly uses.
 
@@ -149,23 +145,30 @@ python submodules/levanter/infra/launch.py -- YOUR_COMMAND_TO_RUN_ON_TPU
 Key things to note:
 
 *   **Path to `launch.py`:** The script is now at `submodules/levanter/infra/launch.py`.
-*   **`--` Separator:** This is crucial. It separates the arguments for `launch.py` itself from the command that will be executed on the TPU VM.
+*   **`--` Separator:** It separates the arguments for `launch.py` itself from the command that will be executed on the TPU VM.
 *   **Command Execution Context:** `YOUR_COMMAND_TO_RUN_ON_TPU` is executed from the root of your Marin project directory *on the TPU VM*. `launch.py` sets up the Docker container so that the working directory is the root of your project.
 *   **Docker Packaging:** `launch.py` packages the current state of your Marin project directory (including the Levanter submodule, respecting any patterns in your `.dockerignore` files at both Marin root and Levanter submodule root) into a Docker image.
 
 ## Running a Marin Experiment Script
 
-With your `.levanter.yaml` configured for your TPU environment, you can now use `launch.py` to execute your Marin experiment scripts on the TPU. The Marin script itself, like the `train_tiny_model_tpu.py` example we created, defines the model, data, and training parameters, including the `TpuPodConfig` which specifies the TPU resources Marin expects.
+With your `.levanter.yaml` configured for your TPU environment, you can now use `launch.py` to execute your Marin experiment scripts on the TPU. The Marin script itself, like the [`train_tiny_model_tpu.py` example](https://github.com/marin-community/marin/tree/main/experiments/tutorials/train_tiny_model_tpu.py) defines the model, data, and training parameters, including the `TpuPodConfig` which specifies the TPU resources Marin expects.
+
+**You will need to update the TpuPodConfig to use the kind of TPU you are using.**
+
 
 Here's how to run the `train_tiny_model_tpu.py` script (assuming your Marin project root is the current directory):
 
 ```bash
-# Ensure your submodules/levanter/.levanter.yaml is configured with your TPU details 
+# Ensure you .levanter.yaml is configured with your TPU details 
 # (YOUR_TPU_NAME, YOUR_ZONE) and, most importantly, your MARIN_PREFIX 
 # (e.g., MARIN_PREFIX: gs://YOUR_GCS_BUCKET_NAME/marin_outputs).
 
 python submodules/levanter/infra/launch.py -- \
   python experiments/tutorials/train_tiny_model_tpu.py
+  
+  # or
+  
+  python submodules/levanter/infra/launch.py --zone us-central2-b --tpu_type v4-8 --tpu_name marin_tutorial --preemptible -- python experiments/tutorials/train_tiny_model_tpu.py
 ```
 
 **Explanation:**
@@ -176,7 +179,7 @@ python submodules/levanter/infra/launch.py -- \
     *   The `MARIN_PREFIX` environment variable, which you defined in `submodules/levanter/.levanter.yaml` (e.g., `gs://YOUR_GCS_BUCKET_NAME/marin_outputs`), is automatically picked up by Marin's execution logic within the `train_tiny_model_tpu.py` script (and other Marin experiment scripts).
     *   Marin uses this `MARIN_PREFIX` as the base directory in Google Cloud Storage for all outputs related to your experiments.
     *   The script itself (e.g., `train_tiny_model_tpu.py` which defines the `nano_wikitext_model` step) will then create a specific subdirectory structure under this `MARIN_PREFIX`. For example, checkpoints for the `nano_wikitext_model` might be saved to something like `gs://YOUR_GCS_BUCKET_NAME/marin_outputs/checkpoints/llama-nano-wikitext-VERSION_HASH/`. The exact naming and structure (like including `checkpoints/` and the step name with a version hash) are handled by Marin's internal step and executor logic.
-    *   You no longer need to pass a `--prefix` argument directly in the `launch.py` command for basic output location if `MARIN_PREFIX` is correctly set in `.levanter.yaml`. Your Marin script will use the `name` argument from its `Step` definitions (e.g., `name="llama-nano-wikitext"` in `train_tiny_model_tpu.py`) to create unique output paths under `MARIN_PREFIX`.
+    *   You don't need to pass a `--prefix` argument directly in the `launch.py` command for basic output location if `MARIN_PREFIX` is correctly set in `.levanter.yaml`. Your Marin script will use the `name` argument from its `Step` definitions (e.g., `name="llama-nano-wikitext"` in `train_tiny_model_tpu.py`) to create unique output paths under `MARIN_PREFIX`.
 
 The `train_tiny_model_tpu.py` script uses `TpuPodConfig` to declare its TPU resource needs (e.g., `tpu_type="v4-8"`). This should align with the TPU details (`tpu` and `zone`) in your `submodules/levanter/.levanter.yaml`. The "v4-8" in the script is a common default.
 
@@ -208,7 +211,7 @@ When you run `python submodules/levanter/infra/launch.py ...` from your Marin pr
 *   All files in your Marin project, including the `submodules/levanter/` directory, are included in the Docker image.
 *   A `.dockerignore` file in your Marin project root is respected for the primary context. Levanter also has its own `.dockerignore` (e.g., `submodules/levanter/.dockerignore`) for the submodule directory.
 
-This setup is standard for Marin development. The `PYTHONPATH` setting in `submodules/levanter/.levanter.yaml` ensures that Levanter's source code is correctly imported within the container.
+This setup is standard for Marin development.
 
 # Interacting with your TPU Node (Optional)
 
@@ -259,17 +262,10 @@ This concludes the tutorial on running Marin experiments on a single TPU node us
 
 Congratulations on successfully setting up and running a Marin experiment on a single TPU node! Here are a few suggestions for what you can explore next:
 
-*   **Experiment Further with Marin:**
-    *   Try running other Marin experiments located in the `experiments/` directory to see different models and configurations in action.
-    *   Consider how you might adapt the `experiments/tutorials/train_tiny_model_tpu.py` script for your own custom models or datasets. This is a great way to start your own research.
+## Next Steps
 
-*   **Deepen Your Levanter Knowledge:**
-    *   Explore [Levanter's documentation](https://levanter.readthedocs.io/en/latest/) for more advanced usage of `launch.py`, understanding different TPU configurations, and learning about Levanter's capabilities for distributed training.
+Congratulations! You have trained your first model in Marin.  Choose your next adventure:
 
-*   **Explore More Marin Tutorials:**
-    *   Dive into other Marin tutorials to learn about different aspects of the platform. For example:
-        *   [Training an LM (`tutorials/train-an-lm.md`)] (train-an-lm.md) for a more in-depth look at training language models.
-        *   [Your First Marin Experiment (`tutorials/first-experiment.md`)] (first-experiment.md) for a general introduction to Marin's workflow if you haven't seen it yet.
-        *   Browse the "Tutorials" section in the navigation for other topics that might interest you.
-
-We encourage you to continue experimenting and learning. The combination of Marin and Levanter provides a powerful platform for your research and development.
+- Train a real [1B or 8B parameter language model](train-an-lm.md) using Marin.
+- Learn about the [Executor framework](../explanations/executor.md).
+- Read more about the full [language modeling pipeline](../explanations/lm-pipeline.md), including data processing.
