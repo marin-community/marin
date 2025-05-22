@@ -23,10 +23,10 @@ speedrun_config = SpeedrunConfig(
     train_config=SimpleTrainConfig(
         resources=TpuPodConfig(tpu_type="v4-128"),
         train_batch_size=512,
-        num_train_steps=3000,
+        num_train_steps=6000,
         learning_rate=3e-3,
         weight_decay=0.1,
-        steps_per_eval=1000,
+        steps_per_eval=2000,
     ),
 )
 
