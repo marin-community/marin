@@ -14,7 +14,7 @@ Specifically, this script:
 
 Run with:
     - [Ray] ray job submit --address=http://127.0.0.1:8265 --working-dir . --no-wait -- \
-            python operations/validate/validate.py \
+            python marin/validate/validate.py \
             --input_path="gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart"
 """
 
