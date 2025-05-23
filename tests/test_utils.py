@@ -2,8 +2,11 @@ import glob
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+import tempfile # Added import
+import lzma # Added import
 
 import draccus
+import fsspec # Ensure fsspec is imported
 import pytest
 import ray
 
@@ -113,3 +116,28 @@ def test_asdict_excluding_invalid():
     """Test asdict_excluding with non-dataclass input."""
     with pytest.raises(ValueError, match="Only dataclasses are supported"):
         asdict_excluding({"key": "value"}, exclude=set())
+
+
+def test_fsspec_open_xz_infer_compression():
+    sample_text = "This is a test string for xz compression with fsspec.\n" \
+                  "It includes multiple lines and various characters: !@#$%^&*()_+{}[]|\\:;"'<>,.?/~`"
+    
+    # Create a temporary .xz file
+    # delete=False is used because we need to close it before fsspec can open it by path on some OS (e.g. Windows)
+    temp_file = tempfile.NamedTemporaryFile(suffix=".xz", mode="wb", delete=False)
+    temp_file_path = temp_file.name
+    
+    try:
+        compressed_data = lzma.compress(sample_text.encode('utf-8'))
+        temp_file.write(compressed_data)
+        temp_file.close() # Close the file so fsspec can open it
+
+        # Read the file using fsspec.open with compression="infer"
+        with fsspec.open(temp_file_path, mode='rt', compression='infer', encoding='utf-8') as f:
+            read_content = f.read()
+
+        assert read_content == sample_text, "Content read via fsspec does not match original"
+
+    finally:
+        if os.path.exists(temp_file_path): # Check if file exists before trying to remove
+            os.remove(temp_file_path)
