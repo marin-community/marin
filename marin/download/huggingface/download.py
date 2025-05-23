@@ -6,7 +6,7 @@ requires a pointer to the dataset repository URL, and a revision (Git SHA from t
 will automatically launch a Google Storage Transfer Service (STS) job to download the appropriate files to GCS.
 
 Run with:
-    - [Local] python operations/download/huggingface/download.py \
+    - [Local] python marin/download/huggingface/download.py \
         --gcs_output_path="gs://marin-us-central2/raw/hello_world_fw" \
         --hf_dataset_id="skaramcheti/hello_world_fw" \
         --revision="8fd6e8e"
