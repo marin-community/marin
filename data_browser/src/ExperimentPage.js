@@ -479,15 +479,15 @@ function renderExperimentStatus({step, auxiliaryData}) {
 
 const stepRenderers = {
   // Download
-  "operations.download.huggingface.download.download": renderDownloadStep,
-  "operations.download.huggingface.download_hf.download_hf": renderDownloadStep,
-  "operations.download.huggingface.download_gated_manual.download_and_upload_to_store": renderDownloadStep,
-  "operations.download.nemotron_cc.download_nemotron_cc.download_nemotron_cc": renderDownloadNemotronCCStep,
-  "operations.download.filesystem.transfer.transfer_files": renderTransferStep,
-  "operations.raw2json.huggingface.qa.raw2json.raw2json": renderRaw2JsonStep,
-  "operations.transform.conversation.transform_conversation.transform_hf_dataset": renderRaw2JsonStep,
-  "operations.transform.fasttext.transform.main": renderFastTextTransformStep,
-  "operations.transform.evaluation.eval_to_dolma.convert_eval_to_dolma": renderConvertEvalToDolmaStep,
+  "marin.download.huggingface.download.download": renderDownloadStep,
+  "marin.download.huggingface.download_hf.download_hf": renderDownloadStep,
+  "marin.download.huggingface.download_gated_manual.download_and_upload_to_store": renderDownloadStep,
+  "marin.download.nemotron_cc.download_nemotron_cc.download_nemotron_cc": renderDownloadNemotronCCStep,
+  "marin.download.filesystem.transfer.transfer_files": renderTransferStep,
+  "marin.raw2json.huggingface.qa.raw2json.raw2json": renderRaw2JsonStep,
+  "marin.transform.conversation.transform_conversation.transform_hf_dataset": renderRaw2JsonStep,
+  "marin.transform.fasttext.transform.main": renderFastTextTransformStep,
+  "marin.transform.evaluation.eval_to_dolma.convert_eval_to_dolma": renderConvertEvalToDolmaStep,
 
   // Inference for data filtering
   "marin.processing.classification.inference.run_inference": renderRunClassificationInferenceStep,

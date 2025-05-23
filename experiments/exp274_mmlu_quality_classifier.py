@@ -7,7 +7,7 @@ from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,
 )
-from operations.transform.evaluation.eval_to_dolma import ConvertEvalToDolmaConfig, convert_eval_to_dolma
+from marin.transform.evaluation.eval_to_dolma import ConvertEvalToDolmaConfig, convert_eval_to_dolma
 
 mmlu_eval_aux_in_dolma_format = ExecutorStep(
     name="documents/mmlu_eval_aux",
