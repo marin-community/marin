@@ -4,7 +4,7 @@ import Button from '@mui/material/Button';
 import ButtonGroup from '@mui/material/ButtonGroup';
 import Paper from '@mui/material/Paper';
 import { useLocation } from 'react-router-dom';
-import { apiViewUrl, renderError, renderDuration, renderDate, viewSingleUrl, round, joinSpans, renderSciNotation } from './utils';
+import { apiViewUrl, renderError, renderDuration, renderDate, viewSingleUrl, round, joinSpans, renderSciNotation, checkJsonResponse } from './utils';
 
 const wandbIcon = "📉";
 const huggingfaceIcon = "🤗";
@@ -37,6 +37,14 @@ function ExperimentPage() {
       try {
         // Get the main experiment JSON
         const response = await axios.get(apiViewUrl({path}));
+        checkJsonResponse(response, setError);
+
+        if (response.data.error) {
+          console.error(response.data.error);
+          setError(response.data.error);
+          return;
+        }
+
         const experiment = response.data.data;
         setExperiment(experiment);
 
@@ -47,6 +55,7 @@ function ExperimentPage() {
         const promises = urls.map(async (url) => {
           try {
             const response = await axios.get(url);
+            checkJsonResponse(response, setError);
             setAuxiliaryData(auxiliaryData => Object.assign({}, auxiliaryData, {[url]: response.data}));
           } catch (error) {
             console.error(error);
