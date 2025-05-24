@@ -37,7 +37,7 @@ eval_sets = {
     # TODO: this should really be a step.
     "tulu_sft": tulu3_flat_llama_tokenized_as_validation,
 }
-eval_set_mixture = mixture_for_evaluation(eval_sets)
+tulu_3_in_dolma = mixture_for_evaluation(eval_sets)
 
 
 all_steps = []
@@ -51,7 +51,7 @@ for checkpoint in CHECKPOINTS:
             config=VizLmConfig(
                 checkpoint_path=checkpoint,
                 model=llama_8b,
-                datasets=eval_set_mixture,
+                datasets=tulu_3_in_dolma,
                 num_docs_per_dataset=32,
                 comparison_model_path=COMPARISON_MODEL,
                 comparison_is_hf=True,
