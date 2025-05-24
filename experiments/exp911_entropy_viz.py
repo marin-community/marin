@@ -5,8 +5,8 @@ Our goal is to see if there are any structural differences in the log probabilit
 """
 
 from experiments.defaults import default_tokenize, default_validation_sets
-from experiments.exp600_tootsie import llama3_tokenizer, llama_8b, llama_8b_tootsie_phase3
 from experiments.exp883_viz_compare_tootsie_llama import tulu_3_in_dolma
+from experiments.tootsie.exp600_tootsie import llama3_tokenizer, llama_8b, llama_8b_tootsie_phase3
 from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import executor_main, output_path_of, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
