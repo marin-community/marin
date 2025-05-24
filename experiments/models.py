@@ -19,10 +19,10 @@ local_path = get_model_local_path(model_name)
 import os
 from dataclasses import dataclass
 
+from marin.download.huggingface.download import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.utils import get_directory_friendly_name
-from operations.download.huggingface.download import DownloadConfig
-from operations.download.huggingface.download_hf import download_hf
 
 
 @dataclass(frozen=True)
@@ -71,6 +71,7 @@ smollm2_1_7b_instruct = download_model_step(
     )
 )
 
+# Note(Will): I don't think we actually support Qwen models in Levanter?
 qwen2_5_7b_instruct = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen2.5-7B-Instruct",
@@ -117,5 +118,26 @@ olmo_2_sft_8b = download_model_step(
     ModelConfig(
         hf_repo_id="allenai/OLMo-2-1124-7B-SFT",
         hf_revision="1de02c0",
+    )
+)
+
+olmo_2_base_8b = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/OLMo-2-1124-7B",
+        hf_revision="7df9a82",
+    )
+)
+
+amber_base_7b = download_model_step(
+    ModelConfig(
+        hf_repo_id="LLM360/Amber",
+        hf_revision="83c188f",
+    )
+)
+
+map_neo_7b = download_model_step(
+    ModelConfig(
+        hf_repo_id="m-a-p/neo_7b",
+        hf_revision="81bad32",
     )
 )

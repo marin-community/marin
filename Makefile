@@ -9,6 +9,19 @@ help:
 	@echo "    Run code style and linting (black, ruff) *without* changing files!"
 	@echo "make autoformat"
 	@echo "    Run code styling (black, ruff) and update in place - committing with pre-commit also does this."
+	@echo "make lint"
+	@echo "    Run linter including changing files"
+	@echo "make test"
+	@echo "    Run all tests"
+	@echo "make init"
+	@echo "    Init the repo for development"
+
+init:
+	conda install -c conda-forge pandoc
+	npm install -g pandiff
+	pre-commit install
+	pip install -e ".[dev,download_transform]"
+	huggingface-cli login
 
 clean:
 	find . -name "*.pyc" | xargs rm -f && \
@@ -23,8 +36,16 @@ autoformat:
 	ruff check --fix --show-fixes .
 	black .
 
+lint:
+	pre-commit run --all-files
+
+test:
+	export HUGGING_FACE_HUB_TOKEN=$HF_TOKEN
+	export HF_HUB_TOKEN=$HF_TOKEN
+	RAY_ADDRESS= PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v
+
 # Define regions and tags for the Docker images
-CLUSTER_REPOS = us-central2 europe-west4 us-west4 asia-northeast1 us-east5 us-east1
+CLUSTER_REPOS = us-central2 us-central1 europe-west4 us-west4 asia-northeast1 us-east5 us-east1
 TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(shell date -u +"%Y%m%d")
 
 # If VLLM is defined, use different Dockerfile and image name
@@ -73,3 +94,17 @@ cluster_docker_ghcr_push: cluster_docker_build
 # Meta-target that builds and then pushes the Docker images
 cluster_docker: cluster_docker_build cluster_docker_push
 	@echo "Docker image build and push complete."
+
+
+
+# stuff for setting up locally
+
+# get secret ssh key from gcp secrets
+get_secret_key:
+	gcloud secrets versions access latest --secret=RAY_CLUSTER_PRIVATE_KEY > ~/.ssh/marin_ray_cluster.pem && \
+	chmod 600 ~/.ssh/marin_ray_cluster.pem
+	gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
+
+
+dev_setup: get_secret_key
+	echo "Dev setup complete."

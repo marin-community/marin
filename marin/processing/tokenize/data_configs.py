@@ -1,7 +1,9 @@
 import dataclasses
 import logging
 import os
+from functools import lru_cache
 
+import transformers
 from levanter.data.text import LMDatasetSourceConfig, LMMixtureDatasetConfig
 
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
@@ -24,10 +26,24 @@ def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_r
         return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
 
 
+def as_single_lm_data_source(
+    input: TokenizerStep | InputName,  # noqa: A002
+) -> LMDatasetSourceConfig:
+    """
+    Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
+
+    Args:
+        input: The training set to use
+    """
+    return step_to_lm_mixture_component(input, include_raw_paths=True)
+
+
 def lm_data_config(
     training_set: TokenizerStep | InputName,
     validation_sets: dict[str, TokenizerStep] | None = None,
     shuffle: bool | int = True,
+    max_train_batches: dict[str, int] | None = None,
+    num_validation_sequences: dict[str, int] | None = None,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
@@ -36,6 +52,8 @@ def lm_data_config(
         training_set: The training set to use
         validation_sets: A sequence of validation sets to use
         shuffle: Whether to shuffle the data. If int, uses era shuffling.
+        max_train_batches: Maximum number of batches to use for the training set per dataset.
+        num_validation_sequences: Number of validation sequences to take from the training set per dataset.
     """
     tokenizer = training_set.config.tokenizer
 
@@ -54,6 +72,8 @@ def lm_data_config(
         {train_set_name: 1.0},
         shuffle=shuffle,
         missing_weights_are_validation=True,
+        max_train_batches=max_train_batches,
+        num_validation_sequences=num_validation_sequences,
     )
 
 
@@ -64,6 +84,8 @@ def lm_mixture_data_config(
     shuffle: bool | int = True,
     missing_weights_are_validation: bool = True,
     include_raw_paths: bool = True,
+    max_train_batches: dict[str, int] | None = None,
+    num_validation_sequences: dict[str, int] | None = None,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources.
@@ -74,6 +96,8 @@ def lm_mixture_data_config(
         shuffle: shuffling policy. int means era shuffling (~shuffle buffer).
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
         include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
+        max_train_batches: Maximum number of batches to use for the training set per dataset.
+        num_validation_sequences: Number of validation sequences to take from the training set per dataset.
     """
     configs = {
         name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)
@@ -84,17 +108,16 @@ def lm_mixture_data_config(
         missing_keys = {k: 0.0 for k in components if k not in weights}
         weights = {**weights, **missing_keys}
 
-    first_name, first_step = next(iter(components.items()))
-    tokenizer = first_step.config.tokenizer
-    for name, step in components.items():
-        if step.config.tokenizer != tokenizer:
-            raise ValueError(
-                "All components must have the same tokenizer, but got:"
-                f" {step.config.tokenizer} ({name}) vs {tokenizer} ({name})"
-            )
+    tokenizer = _verify_tokenizers_same(components)
 
     return LMMixtureDatasetConfig(
-        configs=configs, train_weights=weights, tokenizer=tokenizer, cache_dir=None, shuffle=shuffle
+        configs=configs,
+        train_weights=weights,
+        tokenizer=tokenizer,
+        cache_dir=None,
+        shuffle=shuffle,
+        max_train_batches=max_train_batches,
+        num_validation_sequences=num_validation_sequences,
     )
 
 
@@ -106,6 +129,8 @@ def lm_varying_mixture_data_config(
     missing_weights_are_validation: bool = True,
     include_raw_paths: bool = True,
     mixture_block_size: int | None = None,
+    max_train_batches: dict[str, int] | None = None,
+    num_validation_sequences: dict[str, int] | None = None,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources with varying weights.
@@ -118,6 +143,10 @@ def lm_varying_mixture_data_config(
             Note that start_seq_index should be the index of the sequence (not batch) where the transition should occur.
         shuffle: shuffling policy. int means era shuffling (~shuffle buffer).
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
+        include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
+        mixture_block_size: The block size to use for the mixture.
+        max_train_batches: Maximum number of batches to use for the training set per dataset.
+        num_validation_sequences: Number of validation sequences to take from the training set per dataset.
 
     Returns:
         LMMixtureDatasetConfig configured with the varying weights
@@ -142,15 +171,7 @@ def lm_varying_mixture_data_config(
             padded_weights_list.append((step_idx, {**weights, **missing_keys}))
         weights_list = padded_weights_list
 
-    # Validate tokenizer consistency
-    first_name, first_step = next(iter(components.items()))
-    tokenizer = first_step.config.tokenizer
-    for name, step in components.items():
-        if step.config.tokenizer != tokenizer:
-            raise ValueError(
-                "All components must have the same tokenizer, but got:"
-                f" {step.config.tokenizer} ({name}) vs {tokenizer} ({first_name})"
-            )
+    tokenizer = _verify_tokenizers_same(components)
 
     return LMMixtureDatasetConfig(
         configs=configs,
@@ -159,6 +180,8 @@ def lm_varying_mixture_data_config(
         cache_dir=None,
         shuffle=shuffle,
         mixture_block_size=mixture_block_size or 2048,
+        max_train_batches=max_train_batches,
+        num_validation_sequences=num_validation_sequences,
     )
 
 
@@ -225,3 +248,55 @@ def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LMMixtureDatasetC
         shuffle=False,
         missing_weights_are_validation=True,
     )
+
+
+@lru_cache(maxsize=32)
+def _load_tokenizer(tokenizer_name: str) -> transformers.PreTrainedTokenizer:
+    """Load and cache a tokenizer by name"""
+    return transformers.AutoTokenizer.from_pretrained(tokenizer_name)
+
+
+def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
+    """Compare two tokenizers by loading them and comparing their vocabularies and token IDs"""
+    t1 = _load_tokenizer(tokenizer1)
+    t2 = _load_tokenizer(tokenizer2)
+
+    # Compare vocab sizes
+    if len(t1.get_vocab()) != len(t2.get_vocab()):
+        return False
+
+    # Compare vocab contents and IDs
+    vocab1 = t1.get_vocab()
+    vocab2 = t2.get_vocab()
+
+    # Check that all tokens exist in both vocabs with the same IDs
+    for token, id1 in vocab1.items():
+        if token not in vocab2:
+            return False
+        if vocab2[token] != id1:
+            return False
+
+    if getattr(t1, "chat_template", None) is not None and getattr(t2, "chat_template", None) is not None:
+        if t1.chat_template != t2.chat_template:
+            return False
+
+    return True
+
+
+def _verify_tokenizers_same(components: dict[str, TokenizerStep]):
+    first_name, first_step = next(iter(components.items()))
+    tokenizer = first_step.config.tokenizer
+    for name, step in components.items():
+        if step.config.tokenizer != tokenizer:
+            # If string comparison fails, try comparing loaded tokenizers
+            if not _are_tokenizers_equivalent(step.config.tokenizer, tokenizer):
+                raise ValueError(
+                    "All components must have the same tokenizer, but got:"
+                    f" {step.config.tokenizer} ({name}) vs {tokenizer} ({name})"
+                )
+            else:
+                logger.warning(
+                    f"Tokenizers ({name}) and {tokenizer} ({name}) have equivalent vocabularies but are not the same"
+                    f"tokenizer. This may cause issues with training."
+                )
+    return tokenizer

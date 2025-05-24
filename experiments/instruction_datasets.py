@@ -4,7 +4,7 @@ format which can be used for SFT.
 
 How to add a new instruction dataset:
 1. Add the dataset config to INSTRUCTION_DATASET_NAME_TO_CONFIG
-2. Register an adapter for the dataset in operations/transform/conversation/adapters.py
+2. Register an adapter for the dataset in marin/transform/conversation/adapters.py
 
 How to retrieve an instruction dataset:
 1. Use the function `get_instruction_dataset` with the HF repo id.
@@ -33,6 +33,10 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from experiments.defaults import default_tokenize
+from experiments.llama import llama3_tokenizer
+from marin.download.huggingface.download import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -40,9 +44,11 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-from operations.download.huggingface.download import DownloadConfig
-from operations.download.huggingface.download_hf import download_hf
-from operations.transform.conversation.transform_conversation import (
+from marin.transform.conversation.conversation_to_dolma import (
+    ConversationToDolmaConfig,
+    convert_conversation_to_dolma,
+)
+from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
     transform_hf_dataset,
 )
@@ -302,6 +308,26 @@ def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train"
     download_step = download_dataset_step(config)
     transform_step = transform_dataset_step(config, download_step)
     return transform_step
+
+
+tulu_3_in_dolma = ExecutorStep(
+    name="dolma/tulu_3_in_dolma",
+    fn=convert_conversation_to_dolma,
+    config=ConversationToDolmaConfig(output_path_of(get_instruction_dataset("allenai/tulu-3-sft-mixture"))),
+)
+
+
+# levanter treats validation and  training as separate so we tokenize twice. Not ideal, but fine here.
+tulu3_flat_llama_tokenized_as_validation = default_tokenize(
+    "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=True
+).with_output_path("tokenized/tulu_sft-1bb7d4")
+"""
+"flat" here means that we interpolated all the chat messages into a single string per doc
+"""
+
+tulu3_flat_llama_tokenized_as_train = default_tokenize(
+    "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=False
+).with_output_path("tokenized/tulu_sft-349fb7/")
 
 
 if __name__ == "__main__":

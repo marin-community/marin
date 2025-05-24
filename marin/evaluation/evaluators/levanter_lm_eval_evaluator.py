@@ -7,8 +7,8 @@ from typing import ClassVar
 import fsspec
 import jmp
 import levanter.eval_harness as eval_harness
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.distributed import RayConfig
-from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
 
 from experiments.evals.task_configs import convert_to_levanter_task_config
@@ -24,6 +24,9 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *LevanterTpuEvaluator.DEFAULT_PIP_PACKAGES,
+        Dependency(name="jax[tpu]==0.5.1"),
+        Dependency(name="haliax==1.4.dev343"),
+        Dependency(name="levanter==1.2.dev1313"),
     ]
 
     def evaluate(
@@ -46,7 +49,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         # Run the harness with the model and the specified evals
 
         try:
-
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
 
@@ -60,7 +62,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 ray=RayConfig(auto_start_cluster=False),
             )
 
-            model_config = LlamaConfig()
+            model_config = HFCheckpointConverter.from_hf(model_name_or_path).LevConfigClass()
 
             # convert to the config that Levanter's eval_harness expects
             tasks = convert_to_levanter_task_config(evals)

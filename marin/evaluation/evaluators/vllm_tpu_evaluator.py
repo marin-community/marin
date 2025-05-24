@@ -46,7 +46,14 @@ class VllmTpuEvaluator(Evaluator, ABC):
         model_name_or_path: str = VllmTpuEvaluator.download_model(model)
 
         # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
-        command: str = f"vllm serve {model_name_or_path} --trust-remote-code --host {host} --port {port} --device tpu"
+        command: str = (
+            f"vllm serve {model_name_or_path} "
+            f"--trust-remote-code "
+            f"--host {host} "
+            f"--port {port} "
+            f"--device tpu "
+            f"--distributed-executor-backend ray"
+        )
         process = subprocess.Popen(command, shell=True)
 
         # Check that the server has started by sending heartbeat checks
@@ -146,12 +153,16 @@ class VllmTpuEvaluator(Evaluator, ABC):
         """
 
         @ray.remote(
-            scheduling_strategy=self.scheduling_strategy_fn(resource_config.num_tpu, resource_config.tpu_type),
+            scheduling_strategy=self._get_scheduling_strategy(resource_config),
             runtime_env=self.get_runtime_env(),
+            max_calls=1,
         )
         @remove_tpu_lockfile_on_exit
         def launch(
-            model: ModelConfig, evals: list[EvalTaskConfig], output_path: str, max_eval_instances: int | None = None
+            model: ModelConfig,
+            evals: list[EvalTaskConfig],
+            output_path: str,
+            max_eval_instances: int | None = None,
         ) -> None:
             self.evaluate(model, evals, output_path, max_eval_instances)
 
