@@ -5,7 +5,7 @@ import ButtonGroup from '@mui/material/ButtonGroup';
 import Chip from '@mui/material/Chip';
 import Paper from '@mui/material/Paper';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { apiViewUrl, experimentUrl, renderError, renderLink, renderText, navigateToUrl, isUrl } from './utils';
+import { apiViewUrl, experimentUrl, renderError, renderLink, renderText, navigateToUrl, isUrl, checkJsonResponse } from './utils';
 
 function ViewPage() {
   /**
@@ -90,6 +90,7 @@ function ViewPage() {
       const promises = paths.map(async (path) => {
         try {
           const response = await axios.get(apiViewUrl({path, offset, count}));
+          checkJsonResponse(response, setError);
           setPayloads((prevPayloads) => ({...prevPayloads, [path]: response.data}));
         } catch (error) {
           console.error(error);
@@ -799,6 +800,8 @@ function renderPayloads(args) {
         </div>);
       }
       rendered.push(item);
+    } else {
+      rendered.push(renderError("Unknown payload type"));
     }
   });
 
