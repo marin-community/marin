@@ -36,7 +36,6 @@ MARIN_8B_LR = tootise_phase1_config.learning_rate
 MARIN_8B_BS = tootise_phase1_config.train_batch_size
 MARIN_8B_WIDTH = llama_8b.hidden_dim
 BASE_LR = MARIN_8B_LR / sqrt(MARIN_8B_BS) * MARIN_8B_WIDTH
-print(f"BASE_LR: {BASE_LR}")
 
 def scaling_train_config(model_config: LlamaConfig, train_config: SimpleTrainConfig) -> SimpleTrainConfig:
     """Return a train config that scales the learning rate based on the model size."""
@@ -49,6 +48,9 @@ def scaling_train_config(model_config: LlamaConfig, train_config: SimpleTrainCon
 
     # Scale the learning rate
     learning_rate = BASE_LR * sqrt(train_config.train_batch_size) / model_config.hidden_dim
+    print(f"{learning_rate=} {BASE_LR=} {train_config.train_batch_size=} {model_config.hidden_dim=}")
+    if not (0 < learning_rate < 1):
+        raise ValueError(f"Learning rate {learning_rate} is out of range")
     return replace(
         train_config,
         learning_rate=learning_rate,
