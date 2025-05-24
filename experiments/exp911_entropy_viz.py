@@ -3,7 +3,6 @@ This script evaluates log probabilities of the Tootsie 8b model and Llama 3.1 8B
 
 Our goal is to see if there are any structural differences in the log probabilities of the two models.
 """
-import dataclasses
 
 from experiments.defaults import default_tokenize, default_validation_sets
 from experiments.exp600_tootsie import llama3_tokenizer, llama_8b, llama_8b_tootsie_phase3
@@ -33,8 +32,7 @@ all_steps = []
 
 for checkpoint in CHECKPOINTS:
     all_steps.append(
-        default_lm_log_probs(checkpoint, llama_8b, eval_set_mixture, checkpoint_is_hf=False,
-                             max_samples_per_dataset=32)
+        default_lm_log_probs(checkpoint, llama_8b, eval_set_mixture, checkpoint_is_hf=False, max_samples_per_dataset=32)
     )
 
 all_steps.append(

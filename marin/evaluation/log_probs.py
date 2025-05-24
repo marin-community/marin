@@ -7,13 +7,14 @@ import os
 from dataclasses import dataclass
 
 import ray
-
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
-from levanter.main.eval_lm import EvalLmConfig as LevanterEvalLmConfig, main as eval_lm_main
+from levanter.main.eval_lm import EvalLmConfig as LevanterEvalLmConfig
+from levanter.main.eval_lm import main as eval_lm_main
 from levanter.models.lm_model import LmConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
@@ -111,6 +112,5 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
             max_eval_batches=max_eval_batches,
         ),
         log_entropy=config.log_entropy,
-
     )
     ray.get(do_eval_lm.remote(levanter_config))
