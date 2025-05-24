@@ -110,3 +110,16 @@ export function navigateToUrl(urlParams, delta, location, navigate) {
     search: urlParams.toString(),
   });
 }
+
+export function checkJsonResponse(response, setError) {
+  // If axios can't parse the payload into an object (e.g., there are nan's inside), then it silently returns a string.
+  // This should fail (otherwise the payload would have been an object).
+  if (typeof response.data === "string") {
+    try {
+      JSON.parse(response.data);
+    } catch (e) {
+      setError("Failed to parse response as JSON: " + e.message);
+      return;
+    }
+  }
+}
