@@ -18,7 +18,7 @@ TOP_K = -1
 
 
 @pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
-def test_alpaca_eval(current_date_time, ray_tpu_cluster, model_config):
+def test_alpaca_eval(current_date_time, ray_cluster, model_config):
     config = EvaluationConfig(
         evaluator="alpaca",
         model_name=model_config.name,
