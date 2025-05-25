@@ -4,9 +4,9 @@ Speedrun code for a 1.4B parameter model based on the Llama architecture.
 
 import logging
 
-from experiments.tutorials.exp1077_reproduce_dclm_1b1x import BATCH_SIZE, SEQ_LEN, llama_1_4b_dclm
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
+from experiments.tutorials.exp1077_reproduce_dclm_1b1x import BATCH_SIZE, SEQ_LEN, llama_1_4b_dclm
 from marin.execution.executor import executor_main, versioned
 from marin.resources import GpuConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
@@ -41,8 +41,4 @@ speedrun_config = SpeedrunConfig(
 speedrun_config.print_run_info()
 
 if __name__ == "__main__":
-    executor_main(
-        steps=default_speedrun(
-            "llama_1_4B_8xH200", config=speedrun_config
-        )
-    )
+    executor_main(steps=default_speedrun("llama_1_4B_8xH200", config=speedrun_config))
