@@ -5,7 +5,7 @@ Inputs: raw parquet files, Output: jsonl.gz files in dolma format
 
 Example Usage:
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python operations/transform/legal/transform_edgar.py \
+    python marin/transform/legal/transform_edgar.py \
         --input_path gs://marin-data/raw/law/edgar \
         --output_path gs://marin-data/processed/law/edgar-v1.0/txt/documents
 """
