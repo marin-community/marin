@@ -86,13 +86,6 @@ def _remove_problematic_deps(dependencies: list[str]):
 
 async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: dict, no_wait: bool):
     """Submit a job to Ray and optionally track logs."""
-    # Define the pattern to match the desired files
-    pattern = "logs/*"
-    # Use glob to get a list of all files matching the pattern
-    file_list = glob.glob(pattern)
-    pattern = ".git/*"
-    file_list.extend(glob.glob(pattern))
-    print(file_list)
     current_dir = os.getcwd()
     client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
     runtime_dict = {
@@ -100,7 +93,6 @@ async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: di
         "working_dir": current_dir,
         "env_vars": env_vars,
         "config": {"setup_timeout_seconds": 1800},
-        "excludes": file_list,
     }
 
     if len(dependencies) == 0:
