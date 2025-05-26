@@ -5,6 +5,7 @@ import pytest
 import ray
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.resources import TpuPodConfig
 
 default_engine_kwargs = {"enforce_eager": True, "max_model_len": 1024}
 
@@ -14,6 +15,10 @@ default_generation_params = {"max_tokens": 16}
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
+
+TPU_V6E_8_WITH_HEAD_CONFIG = TpuPodConfig(
+    tpu_type="v6e-8", slice_count=1, include_tpu_head=True, include_tpu_in_ray_resources=True
+)
 
 
 @pytest.fixture(scope="module")

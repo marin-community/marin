@@ -5,9 +5,9 @@ from typing import ClassVar
 
 import ray
 
-from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, Evaluator, ModelConfig
+from marin.resources import ResourceConfig
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         """
 
         @ray.remote(
-            scheduling_strategy=self._get_scheduling_strategy(resource_config),
+            scheduling_strategy=resource_config.as_ray_scheduling_strategy(),
             runtime_env=self.get_runtime_env(),
             max_calls=1,
         )

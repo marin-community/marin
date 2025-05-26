@@ -84,3 +84,8 @@ class SimpleTrainConfig:
         if isinstance(self.resources, TpuPodConfig):
             return self.resources.slice_count
         return 1
+
+    def __post_init__(self):
+        # In the case of TPU training, we let levanter schedule the TPUs.
+        if isinstance(self.resources, TpuPodConfig):
+            self.resources.include_tpu_in_ray_resources = False

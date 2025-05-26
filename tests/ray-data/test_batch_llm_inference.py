@@ -5,7 +5,7 @@ import ray
 
 from marin.generation.inference import OverwriteOutputFiletypeFilenameProvider
 from marin.generation.pipeline import vLLMTextGeneration
-from tests.conftest import default_engine_kwargs, default_generation_params
+from tests.conftest import TPU_V6E_8_WITH_HEAD_CONFIG, default_engine_kwargs, default_generation_params
 
 TEST_OUTPUT_PATH = "gs://marin-us-east5/documents/ray-data-test-llama-200m"
 
@@ -30,7 +30,7 @@ def test_ray_data(ray_cluster, gcsfuse_mount_model_path, test_file_path):
             "apply_chat_template": True,
             "max_doc_length": 896,
         },
-        resources={"TPU": 1, "TPU-v6e-8-head": 1},
+        resources=TPU_V6E_8_WITH_HEAD_CONFIG.get_ray_resources_dict(),
     )
 
     ds = ds.write_json(TEST_OUTPUT_PATH, filename_provider=OverwriteOutputFiletypeFilenameProvider("jsonl.gz"))

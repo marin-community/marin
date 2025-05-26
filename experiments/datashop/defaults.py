@@ -15,7 +15,6 @@ from experiments.datashop.default_configs import (
 )
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal, default_tokenize
-from experiments.evals.resource_configs import ResourceConfig
 from experiments.llama import llama3_tokenizer
 from marin.classifiers.hf.launch_ray_training import LaunchConfig, launch_training_with_ray
 from marin.datashop.dataset_processor import DatasetOutputProcessorConfig
@@ -33,7 +32,7 @@ from marin.processing.classification.config.inference_config import InferenceCon
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import run_inference
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
-from marin.resources import TpuPodConfig
+from marin.resources import ResourceConfig, TpuPodConfig
 
 
 def default_label(
