@@ -74,4 +74,6 @@ for size in df_loss["model_size"].unique():
     plt.grid(linestyle="--", linewidth=0.5)
 
     plt.tight_layout()
-    plt.savefig(f"experiments/optimizer_sweep/Analysis/PhaseIII_16x/figs/optimizer_loss_scaling_{size}.pdf", bbox_inches="tight")
+    plt.savefig(
+        f"experiments/optimizer_sweep/Analysis/PhaseIII_16x/figs/optimizer_loss_scaling_{size}.pdf", bbox_inches="tight"
+    )

@@ -1,10 +1,10 @@
 # https://github.com/stanford-crfm/marin/issues/725
 # Sweep to determine optimal hyperparameters for Adam on small scale
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
+from experiments.optimizer_sweep.defaults import default_train
 from marin.execution.executor import executor_main
 from marin.optimizer_sweep.config import map_tag_to_config
 from marin.optimizer_sweep.format import map_tag_to_format
-from experiments.optimizer_sweep.defaults import default_train
 from marin.optimizer_sweep.models import calculate_chinchilla, map_tag_to_model
 from marin.optimizer_sweep.utils import (
     approximate,
@@ -55,7 +55,7 @@ def template(
         train_configs = config_to_train_config(
             [baseline_config], target_steps, config_generator=optimizer_config_generator, tpu_type=tpu_type
         )
-        tags = ("debug",) + tags
+        tags = ("debug", *tags)
     else:
         approximate_best_config_list = []
         if check_baseline_run(baseline_config, tags):
@@ -94,7 +94,7 @@ def template(
             tokenized_data=dclm_mixture_config_llama3,
             format_train_config=map_tag_to_format[optimizer],
             default_train=default_train,
-            tags=("llama", "dclm") + tags,
+            tags=("llama", "dclm", *tags),
         )
         executor_main(steps)
 

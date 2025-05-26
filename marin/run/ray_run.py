@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import glob
 import json
 import logging
 import os
@@ -83,15 +84,12 @@ def _remove_problematic_deps(dependencies: list[str]):
     return out
 
 
-import glob
-
-
 async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: dict, no_wait: bool):
     """Submit a job to Ray and optionally track logs."""
     # Define the pattern to match the desired files
     pattern = "logs/*"
     # Use glob to get a list of all files matching the pattern
-    file_list = glob.glob(pattern) 
+    file_list = glob.glob(pattern)
     pattern = ".git/*"
     file_list.extend(glob.glob(pattern))
     print(file_list)

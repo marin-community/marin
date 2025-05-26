@@ -1,5 +1,6 @@
 # https://github.com/stanford-crfm/marin/issues/725
 # Sweep to determine optimal hyperparameters for Adam on small scale
+import copy
 import dataclasses
 import itertools
 import logging
@@ -110,7 +111,6 @@ baseline_config = versioned_baseline_config
 
 train_configs_130m = []
 
-import copy
 
 for step in target_steps:
     train_configs_130m.append(

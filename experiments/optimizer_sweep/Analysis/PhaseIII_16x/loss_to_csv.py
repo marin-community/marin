@@ -1,6 +1,8 @@
 import hashlib
 import json
 
+import pandas as pd
+
 color_map = {
     "mars": "#1f77b4",  # blue
     "muon": "#ff7f0e",  # orange
@@ -44,7 +46,9 @@ model_and_data_size = [
     ("300m", "12B", 2),
     ("300m", "24B", 4),
     ("300m", "48B", 8),
-] + [("300m", "96B", 16), ("130m", "42B", 16)]
+    ("300m", "96B", 16),
+    ("130m", "42B", 16),
+]
 model_sizes = ["130m", "300m"]
 
 optimizers = ["muon", "adamw", "nadamw", "soape"]
@@ -67,10 +71,9 @@ expected_params = {
     "1.2b": 1207959552,  # 32 * (1536*6144*3 + 1536*1536*4)
 }
 
-import pandas as pd
 
 df = pd.DataFrame(columns=["optimizer", "model_size", "chinchilla", "loss"])
-for idx, model_size in enumerate(model_sizes):
+for model_size in model_sizes:
     for optimizer in optimizers:
         optimizer_loss_list = []
         for chinchilla in [1, 2, 4, 8, 16]:

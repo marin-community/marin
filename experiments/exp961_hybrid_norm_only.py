@@ -5,9 +5,12 @@ Link: https://github.com/stanford-crfm/marin/issues/961
 In Gemma, a hybrid norm is applied on every layer, with one layernorm at the input and one at the output of each layer.
 Another similar operation is applying Layernorm with input embedding.
 
-This may be useful for controlling the norm of the weight because the norms of the features are now decided by the Layernorm scaling factor and the model becomes more scale invariant. Under our current hypothesis that larger weight norm is bad for SFT performance, we would expect training with more normalization, the model may be easier to finetune.
+This may be useful for controlling the norm of the weight.
+The norms of the features are now decided by the Layernorm scaling factor and the model becomes more scale invariant.
+If larger weight norm is bad for SFT, the model with more normalization may be easier to finetune.
+This experiment will ablate with this hypothesis.
 
-This experiment will ablate with this hypothesis, by running an experiment with the same setting as #950 (the large cosine learning rate version) but with a modified architecture with both the hybrid norm and input embedding norm.
+We conduct an experiment with the same setting as #950 (large cosine learning rate) but with a modified architecture.
 
 The experiment compares:
 - Combined: Llama with both hybrid norm and input embedding norm
@@ -66,5 +69,8 @@ if __name__ == "__main__":
             dclm_mix_model_hybrid,
             sft_model_hybrid,
         ],
-        description="Train 1.4B models with a hybrid normalization setting on dclm, then SFT the resulting models to test the impact of normalization on SFT performance.",
+        description=(
+            "Train 1.4B models with a hybrid normalization setting on dclm, "
+            "then SFT the resulting models to test the impact of normalization on SFT performance."
+        ),
     )

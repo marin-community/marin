@@ -1,14 +1,14 @@
+from marin.optimizer_sweep.Adam.adam import adam_config
+from marin.optimizer_sweep.AdamMini.adam_mini import adam_mini_config
+from marin.optimizer_sweep.Cautious.cautious import cautious_config
+from marin.optimizer_sweep.Kron.kron import kron_config
+from marin.optimizer_sweep.Lion.lion import lion_config
+from marin.optimizer_sweep.Mars.mars import mars_config
 from marin.optimizer_sweep.Muon.muon import muon_config
+from marin.optimizer_sweep.Nadam.nadam import nadam_config
 from marin.optimizer_sweep.Scion.scion import scion_config
 from marin.optimizer_sweep.Soap.soap import soap_config
 from marin.optimizer_sweep.Sophia.sophia import sophia_config
-from marin.optimizer_sweep.AdamMini.adam_mini import adam_mini_config
-from marin.optimizer_sweep.Kron.kron import kron_config
-from marin.optimizer_sweep.Mars.mars import mars_config
-from marin.optimizer_sweep.Adam.adam import adam_config
-from marin.optimizer_sweep.Nadam.nadam import nadam_config
-from marin.optimizer_sweep.Cautious.cautious import cautious_config
-from marin.optimizer_sweep.Lion.lion import lion_config
 
 map_tag_to_config = {
     "adamw": adam_config,

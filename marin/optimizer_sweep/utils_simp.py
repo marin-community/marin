@@ -28,7 +28,6 @@ def grab_best_run(keys, tags, return_loss=False, thshold=3e-3):
     for run in runs:
         if "trainer" not in run.config:
             continue
-        batch_size = run.config["trainer"]["train_batch_size"]
         loss = run.summary.get("eval/paloma/c4_en/loss", None)
         if type(loss) is float and loss < min_loss:
             min_loss = loss
@@ -64,7 +63,6 @@ def bad_number(x):
 
 def bad_run(run):
     history = run.history(keys=["eval/paloma/c4_en/loss"], pandas=True)
-    step = run.config["trainer"]["num_train_steps"]
     if len(history) > 0:
         history = history.fillna(20)
         max_step = history["_step"].max()

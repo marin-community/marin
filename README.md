@@ -8,7 +8,6 @@
 </a>
 
 <!--marin-intro-start-->
-
 > "*I am not afraid of storms, for I am learning how to sail my ship.*"<br/>
 > – Louisa May Alcott
 

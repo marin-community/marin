@@ -81,6 +81,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import time
 import traceback
 import urllib.parse
@@ -952,9 +953,6 @@ def should_run(
         return False
 
 
-import sys
-
-
 @ray.remote
 def execute_after_dependencies(
     fn: ExecutorFunction,
@@ -972,7 +970,8 @@ def execute_after_dependencies(
     try:
         print(ray.get_runtime_context().runtime_env.get("pip", {}).get("packages", []))
         print(sys.path)
-    except:
+    except Exception as e:
+        print(e)
         print("Couldn't get dependency")
     ray_task_id = ray.get_runtime_context().get_task_id()
 

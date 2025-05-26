@@ -1,9 +1,0 @@
-from marin.optimizer_sweep.template import template
-
-if __name__ == '__main__':
-    sweep_grids = {'learning_rate': [0.004, 0.008]}
-    baseline_config = {'learning_rate': 0.008, 'weight_decay': 0.1, 'min_lr_ratio': 0, 'warmup': 0, 'momentum': 0.9, 'beta1': 0.98, 'scion_epsilon': 1e-05, 'max_grad_norm': 2, 'lr_schedule': 'linear', 'scion_to_signum_lr': 0.2, 'decay': 1, 'train_batch_size': 128}
-    model_size = '130m'
-    target_chinchilla = 4
-    my_suffix = None
-    template(model_size, target_chinchilla, 'scion', baseline_config, sweep_grids, random_suffix=my_suffix)

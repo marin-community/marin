@@ -1,5 +1,6 @@
 import hashlib
 import json
+import pickle
 
 import numpy as np
 from scipy.optimize import curve_fit
@@ -28,7 +29,6 @@ model_and_data_size = [
     ("130m", "21B", 8),
     ("300m", "6B", 1),
     ("520m", "10B", 1),
-] + [
     ("300m", "12B", 2),
     ("300m", "24B", 4),
     ("300m", "48B", 8),
@@ -80,7 +80,7 @@ for optimizer_name in ["muon", "adamw", "nadamw"]:
                 for chinchilla in [1, 2, 4, 8]
             ]
             # fit a power law and print error
-            if type(y[-1]) == float or type(y[-1]) == int:
+            if isinstance(y[-1], float | int):
                 if key == "muon_to_adam_lr":
                     continue
                 baseline = np.mean(y[:-1])
@@ -97,9 +97,8 @@ for optimizer_name in ["muon", "adamw", "nadamw"]:
                 f.write(f"Relative error for {key}: {error / (y[-1] + 1e-6)}\n")
                 parameter = expected_params["1.2b"]
                 for chinchilla in [1, 2, 4, 8]:
-                    f.write(
-                        f"For 1.2B with {chinchilla} chinchilla, {key} = {popt[0] * parameter**popt[1] * chinchilla**popt[2] + popt[3]}\n"
-                    )
+                    predicted_value = popt[0] * parameter ** popt[1] * chinchilla ** popt[2] + popt[3]
+                    f.write(f"For 1.2B with {chinchilla} chinchilla, {key} = {predicted_value}\n")
                     if (optimizer_name, "1.2b", chinchilla) not in predicted_configs:
                         predicted_configs[(optimizer_name, "1.2b", chinchilla)] = {}
                     predicted_configs[(optimizer_name, "1.2b", chinchilla)][key] = float(
@@ -107,7 +106,6 @@ for optimizer_name in ["muon", "adamw", "nadamw"]:
                     )
     print(f"Predicted configs for {optimizer_name}: {predicted_configs}")
 
-import pickle
 
 with open("experiments/optimizer_sweep/Analysis/PhaseII/predicted_configs.pkl", "wb") as f:
     pickle.dump(predicted_configs, f)
