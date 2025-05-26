@@ -81,7 +81,6 @@ import logging
 import os
 import re
 import subprocess
-import sys
 import time
 import traceback
 import urllib.parse
@@ -744,7 +743,7 @@ class Executor:
         """Return the URL where the experiment can be viewed."""
         # TODO: remove hardcoding
         if self.prefix.startswith("gs://"):
-            host = "https://crfm.stanford.edu/marin/data_browser"
+            host = "https://marin.community/data-browser"
         else:
             host = "http://localhost:5000"
 
@@ -771,7 +770,6 @@ class Executor:
         logger.info("")
         logger.info(self.get_experiment_url())
         logger.info("")
-
         # Write out info for each step
         for step, info in zip(self.steps, self.step_infos, strict=True):
             info_path = _get_info_path(self.output_paths[step])
@@ -967,12 +965,7 @@ def execute_after_dependencies(
     Run a function `fn` with the given `config`, after all the `dependencies` have finished.
 
     """
-    try:
-        print(ray.get_runtime_context().runtime_env.get("pip", {}).get("packages", []))
-        print(sys.path)
-    except Exception as e:
-        print(e)
-        print("Couldn't get dependency")
+
     ray_task_id = ray.get_runtime_context().get_task_id()
 
     status_path = get_status_path(output_path)
@@ -1115,8 +1108,6 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     # print json path again so it's easy to copy
     logger.info(f"Executor info written to {executor.executor_info_path}")
     logger.info(f"View the experiment at {executor.get_experiment_url()}")
-
-    ray.shutdown()
 
 
 def _is_relative_path(url_or_path):
