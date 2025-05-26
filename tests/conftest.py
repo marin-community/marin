@@ -20,7 +20,7 @@ DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 TPU_V6E_8_WITH_HEAD_CONFIG = TpuPodConfig(
     tpu_type="v6e-8", slice_count=1, chip_count=1, include_tpu_head=True, include_tpu_in_ray_resources=True
 )
-SINGLE_GPU_CONFIG = GpuConfig(gpu_count=1, include_gpu_in_ray_resources=True)
+SINGLE_GPU_CONFIG = GpuConfig(gpu_count=1)
 
 
 @pytest.fixture(scope="module")
