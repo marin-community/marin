@@ -4,9 +4,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import ClassVar
 
+import ray
+
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.utils import download_from_gcs, is_remote_path
-from marin.resources import ResourceConfig
+from marin.resources import GpuConfig, ResourceConfig
+from marin.utils import remove_tpu_lockfile_on_exit
 
 
 @dataclass(frozen=True)
@@ -70,34 +73,6 @@ class Evaluator(ABC):
     _pip_packages: ClassVar[list[Dependency]]
     _py_modules: ClassVar[list[Dependency]]
 
-    def _get_scheduling_strategy(self, resource_config: ResourceConfig | None):
-        if resource_config is None:
-            fn = None
-        else:
-            fn = resource_config.as_ray_scheduling_strategy()
-
-        return fn
-
-    @abstractmethod
-    def launch_evaluate_with_ray(
-        self,
-        model: ModelConfig,
-        evals: list[EvalTaskConfig],
-        output_path: str,
-        max_eval_instances: int | None = None,
-        resource_config: ResourceConfig | None = None,
-    ) -> None:
-        """
-        Launches the evaluation run with Ray.
-
-        Args:
-            model (ModelConfig): The model configuration of the model we want to evaluate
-            evals (List[EvalTaskConfig]): The list of evaluations to run.
-            output_path (str): The path to save the evaluation results.
-            max_eval_instances (int | None): The maximum number of evaluation instances to run.
-            resource_config (ResourceConfig | None): The resource configuration to use for the evaluation.
-        """
-        pass
 
     @abstractmethod
     def evaluate(

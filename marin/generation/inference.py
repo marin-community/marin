@@ -10,7 +10,7 @@ from ray.data.datasource import FilenameProvider
 
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK
 from marin.generation.pipeline import vLLMTextGeneration
-from marin.resources import ResourceConfig
+from marin.resources import ResourceConfig, TpuPodConfig, GpuConfig
 from marin.utils import fsspec_glob, remove_tpu_lockfile_on_exit
 
 
@@ -82,7 +82,12 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
     # This is the amount of time to wait for the actors to be created.
     # We increase the default timeout since model loading
     # for large models can take awhile.
-    ctx.wait_for_min_actors_s = 60 * 10 * config.resource_config.chip_count
+    if isinstance(config.resource_config, TpuPodConfig):
+        ctx.wait_for_min_actors_s = 60 * 10 * config.resource_config.chip_count
+    elif isinstance(config.resource_config, GpuConfig):
+        ctx.wait_for_min_actors_s = 60 * 10 * config.resource_config.num_gpus
+    else:
+        raise ValueError(f"Unknown resource config type: {type(config.resource_config)}")
 
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
