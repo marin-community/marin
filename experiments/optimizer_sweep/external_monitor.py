@@ -161,9 +161,10 @@ if __name__ == '__main__':
             print(f'Going over: {file_path}')
             name = file_path.split('/')[1].split('.txt')[0]
             log_name = file_path
-            filename = f'optimizer_sweep/{name}.py'
+            filename = f'experiments/optimizer_sweep/PhaseI_Bound/{name}.py'
             parsed_data = parse_command_file(filename)
             first_baseline = parsed_data['baseline_config']
+            train_batch_size = first_baseline['train_batch_size']
             sweep_grids = parsed_data['sweep_grids']
             model_size = parsed_data['model_size']
             target_chinchilla = parsed_data['target_chinchilla']
@@ -193,6 +194,7 @@ if __name__ == '__main__':
             if job_id:
                 print("Extracted Job ID:", job_id)
                 print("baseline_config:", baseline_config)
+                baseline_config['train_batch_size'] = train_batch_size
             else:
                 print("No job ID found in the log file.")
             if (baseline_config is None) or ((not check_baseline_run(baseline_config, tags)) and (baseline_config == first_baseline)):

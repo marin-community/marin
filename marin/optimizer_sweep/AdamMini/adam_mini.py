@@ -14,6 +14,7 @@ def adam_mini_config(
     stable_lr_schedule: Optional[str] = None,
     min_lr_ratio: Optional[float] = None,
     cycle_length: Optional[int] = None,
+    nesterov: Optional[bool] = None,
 ) -> MiniConfig:
     optimizer=MiniConfig(
             learning_rate=learning_rate,
@@ -38,5 +39,6 @@ def adam_mini_config(
             min_lr_ratio=(
                 min_lr_ratio if min_lr_ratio is not None else MiniConfig().min_lr_ratio
             ),
+            nesterov=nesterov,
         )
     return optimizer

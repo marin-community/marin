@@ -60,8 +60,9 @@ def config_to_train_config(
 ):
     train_configs = []
     for config, target_step in zip(config_in_dict, target_steps, strict=False):
-        train_batch_size = config.pop('train_batch_size')
-        optimizer_config = config_generator(**config)
+        new_config = config.copy()
+        train_batch_size = new_config.pop('train_batch_size')
+        optimizer_config = config_generator(**new_config)
         train_configs.append(
             SimpleTrainConfig(
                 TpuPodConfig(versioned(tpu_type)),

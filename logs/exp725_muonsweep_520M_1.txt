@@ -1,0 +1,80 @@
+2025-05-21 01:15:17,226	INFO ray_run.py:64 -- Dependencies extracted: ['draccus>=0.11.5', 'google-api-python-client~=2.0', 'gcsfs', 'google-cloud-storage', 'google-cloud-storage-transfer', 's3fs>=2024', 'regex', 'requests', 'numpy', 'torch', 'braceexpand', 'deepdiff', 'tqdm', 'tqdm-loggable', 'toml', 'pandas', 'pyarrow', 'multiprocess==0.70.16', 'levanter>=1.2.dev1359', 'haliax>=1.4.dev348', 'sentencepiece', 'lz4', 'wandb<=0.19.9']
+['logs/exp725_scionsweep_130M_8.txt', 'logs/exp725_muonsweep_520M_1.txt', 'logs/exp725_cautioussweep_130M_1.txt', 'logs/exp725_marssweep_300M_1.txt', 'logs/exp725_scionsweep_130M_4.txt', 'logs/exp725_cautioussweep_130M_2.txt', 'logs/exp725_adamwsweep_520M_1.txt', 'logs/exp725_marssweep_520M_1.txt', 'logs/exp725_cautioussweep_130M_4.txt', 'logs/exp725_muonsweep_300M_1.txt', '.git/HEAD', '.git/objects', '.git/config', '.git/logs', '.git/index', '.git/branches', '.git/COMMIT_EDITMSG', '.git/info', '.git/description', '.git/packed-refs', '.git/refs', '.git/hooks']
+Traceback (most recent call last):
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/urllib3/connection.py", line 198, in _new_conn
+    sock = connection.create_connection(
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/urllib3/util/connection.py", line 85, in create_connection
+    raise err
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/urllib3/util/connection.py", line 73, in create_connection
+    sock.connect(sa)
+ConnectionRefusedError: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/urllib3/connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/urllib3/connectionpool.py", line 493, in _make_request
+    conn.request(
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/urllib3/connection.py", line 445, in request
+    self.endheaders()
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/http/client.py", line 1271, in endheaders
+    self._send_output(message_body, encode_chunked=encode_chunked)
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/http/client.py", line 1031, in _send_output
+    self.send(msg)
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/http/client.py", line 969, in send
+    self.connect()
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/urllib3/connection.py", line 276, in connect
+    self.sock = self._new_conn()
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/urllib3/connection.py", line 213, in _new_conn
+    raise NewConnectionError(
+urllib3.exceptions.NewConnectionError: <urllib3.connection.HTTPConnection object at 0x7fe54e565660>: Failed to establish a new connection: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/requests/adapters.py", line 667, in send
+    resp = conn.urlopen(
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/urllib3/connectionpool.py", line 841, in urlopen
+    retries = retries.increment(
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/urllib3/util/retry.py", line 519, in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+urllib3.exceptions.MaxRetryError: HTTPConnectionPool(host='127.0.0.1', port=8265): Max retries exceeded with url: /api/version (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x7fe54e565660>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/ray/dashboard/modules/dashboard_sdk.py", line 262, in _check_connection_and_version_with_url
+    r = self._do_request("GET", url)
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/ray/dashboard/modules/dashboard_sdk.py", line 303, in _do_request
+    return requests.request(
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/requests/api.py", line 59, in request
+    return session.request(method=method, url=url, **kwargs)
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/requests/adapters.py", line 700, in send
+    raise ConnectionError(e, request=request)
+requests.exceptions.ConnectionError: HTTPConnectionPool(host='127.0.0.1', port=8265): Max retries exceeded with url: /api/version (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x7fe54e565660>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/sailhome/kaiyue/TPU/marin-release/marin/marin/run/ray_run.py", line 211, in <module>
+    main()
+  File "/sailhome/kaiyue/TPU/marin-release/marin/marin/run/ray_run.py", line 206, in main
+    asyncio.run(submit_and_track_job(full_cmd, dependencies, env_vars, args.no_wait))
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/asyncio/runners.py", line 44, in run
+    return loop.run_until_complete(main)
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/asyncio/base_events.py", line 641, in run_until_complete
+    return future.result()
+  File "/sailhome/kaiyue/TPU/marin-release/marin/marin/run/ray_run.py", line 99, in submit_and_track_job
+    client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/ray/dashboard/modules/job/sdk.py", line 105, in __init__
+    self._check_connection_and_version(
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/ray/dashboard/modules/dashboard_sdk.py", line 248, in _check_connection_and_version
+    self._check_connection_and_version_with_url(min_version, version_error_message)
+  File "/tiger/u/kaiyue/anaconda3/envs/marin/lib/python3.10/site-packages/ray/dashboard/modules/dashboard_sdk.py", line 278, in _check_connection_and_version_with_url
+    raise ConnectionError(
+ConnectionError: Failed to connect to Ray at address: http://127.0.0.1:8265.

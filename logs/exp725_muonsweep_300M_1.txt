@@ -1,0 +1,34 @@
+2025-05-20 22:34:52,657	INFO ray_run.py:64 -- Dependencies extracted: ['draccus>=0.11.5', 'google-api-python-client~=2.0', 'gcsfs', 'google-cloud-storage', 'google-cloud-storage-transfer', 's3fs>=2024', 'regex', 'requests', 'numpy', 'torch', 'braceexpand', 'deepdiff', 'tqdm', 'tqdm-loggable', 'toml', 'pandas', 'pyarrow', 'multiprocess==0.70.16', 'levanter>=1.2.dev1359', 'haliax>=1.4.dev348', 'sentencepiece', 'lz4', 'wandb<=0.19.9']
+2025-05-20 22:34:53,310	INFO ray_run.py:111 -- Submitting job with entrypoint:  python experiments/optimizer_sweep/PhaseI_Bound/exp725_muonsweep_300M_1.py --force_run_failed True
+2025-05-20 22:34:53,310	INFO ray_run.py:112 -- Dependencies: [
+    "draccus>=0.11.5",
+    "google-api-python-client~=2.0",
+    "gcsfs",
+    "google-cloud-storage",
+    "google-cloud-storage-transfer",
+    "s3fs>=2024",
+    "regex",
+    "requests",
+    "numpy",
+    "torch",
+    "braceexpand",
+    "deepdiff",
+    "tqdm",
+    "tqdm-loggable",
+    "toml",
+    "pandas",
+    "pyarrow",
+    "multiprocess==0.70.16",
+    "levanter>=1.2.dev1359",
+    "haliax>=1.4.dev348",
+    "sentencepiece",
+    "lz4",
+    "wandb<=0.19.9"
+]
+2025-05-20 22:34:53,310	INFO ray_run.py:113 -- env_vars: {
+    "PYTHONPATH": "submodules/levanter:submodules/levanter/src:./submodules/levanter/src:${PYTHONPATH}",
+    "LIBTPU_INIT_ARGS": "--xla_tpu_scoped_vmem_limit_kib=81920 --xla_enable_async_all_gather=true --xla_tpu_overlap_compute_collective_tc=true --xla_tpu_enable_async_collective_fusion_multiple_steps=true --xla_tpu_enable_async_collective_fusion=true --xla_tpu_enable_async_collective_fusion_fuse_all_gather=true --xla_tpu_enable_data_parallel_all_reduce_opt=true --xla_tpu_data_parallel_opt_different_sized_ops=true --xla_tpu_megacore_fusion_allow_ags=false --xla_enable_async_collective_permute=true --xla_tpu_enable_ag_backward_pipelining=true",
+    "WANDB_API_KEY": "c10de4d92e8d3857f5ffe660fbcf7c4ae067b062"
+}
+2025-05-20 22:34:53,310	INFO ray_run.py:115 -- Terminal command: 
+ray job submit --runtime-env-json '{"pip": ["draccus>=0.11.5", "google-api-python-client~=2.0", "gcsfs", "google-cloud-storage", "google-cloud-storage-transfer", "s3fs>=2024", "regex", "requests", "numpy", "torch", "braceexpand", "deepdiff", "tqdm", "tqdm-loggable", "toml", "pandas", "pyarrow", "multiprocess==0.70.16", "levanter>=1.2.dev1359", "haliax>=1.4.dev348", "sentencepiece", "lz4", "wandb<=0.19.9"], "working_dir": "/sailhome/kaiyue/TPU/marin-release/marin", "env_vars": {"PYTHONPATH": "submodules/levanter:submodules/levanter/src:./submodules/levanter/src:${PYTHONPATH}", "LIBTPU_INIT_ARGS": "--xla_tpu_scoped_vmem_limit_kib=81920 --xla_enable_async_all_gather=true --xla_tpu_overlap_compute_collective_tc=true --xla_tpu_enable_async_collective_fusion_multiple_steps=true --xla_tpu_enable_async_collective_fusion=true --xla_tpu_enable_async_collective_fusion_fuse_all_gather=true --xla_tpu_enable_data_parallel_all_reduce_opt=true --xla_tpu_data_parallel_opt_different_sized_ops=true --xla_tpu_megacore_fusion_allow_ags=false --xla_enable_async_collective_permute=true --xla_tpu_enable_ag_backward_pipelining=true", "WANDB_API_KEY": "c10de4d92e8d3857f5ffe660fbcf7c4ae067b062"}, "config": {"setup_timeout_seconds": 1800}, "excludes": ["logs/exp725_muonsweep_520M_1.txt", "logs/exp725_cautioussweep_130M_1.txt", "logs/exp725_muonsweep_300m_1.txt", "logs/exp725_marssweep_300M_1.txt", "logs/exp725_adamwsweep_520M_1.txt", "logs/exp725_muonsweep_300M_1.txt", ".git/HEAD", ".git/objects", ".git/config", ".git/logs", ".git/index", ".git/branches", ".git/info", ".git/description", ".git/packed-refs", ".git/refs", ".git/hooks"]}' --  python experiments/optimizer_sweep/PhaseI_Bound/exp725_muonsweep_300M_1.py --force_run_failed True

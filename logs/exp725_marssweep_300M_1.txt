@@ -1,0 +1,38 @@
+2025-05-21 23:44:04,562	INFO ray_run.py:64 -- Dependencies extracted: ['draccus>=0.11.5', 'google-api-python-client~=2.0', 'gcsfs', 'google-cloud-storage', 'google-cloud-storage-transfer', 's3fs>=2024', 'regex', 'requests', 'numpy', 'torch', 'braceexpand', 'deepdiff', 'tqdm', 'tqdm-loggable', 'toml', 'pandas', 'pyarrow', 'multiprocess==0.70.16', 'levanter>=1.2.dev1359', 'haliax>=1.4.dev348', 'sentencepiece', 'lz4', 'wandb<=0.19.9']
+2025-05-21 23:44:06,800	INFO ray_run.py:111 -- Submitting job with entrypoint:  python experiments/optimizer_sweep/PhaseI_Bound/exp725_marssweep_300M_1.py --force_run_failed True
+2025-05-21 23:44:06,800	INFO ray_run.py:112 -- Dependencies: [
+    "draccus>=0.11.5",
+    "google-api-python-client~=2.0",
+    "gcsfs",
+    "google-cloud-storage",
+    "google-cloud-storage-transfer",
+    "s3fs>=2024",
+    "regex",
+    "requests",
+    "numpy",
+    "torch",
+    "braceexpand",
+    "deepdiff",
+    "tqdm",
+    "tqdm-loggable",
+    "toml",
+    "pandas",
+    "pyarrow",
+    "multiprocess==0.70.16",
+    "levanter>=1.2.dev1359",
+    "haliax>=1.4.dev348",
+    "sentencepiece",
+    "lz4",
+    "wandb<=0.19.9"
+]
+2025-05-21 23:44:06,800	INFO ray_run.py:113 -- env_vars: {
+    "PYTHONPATH": "submodules/levanter:submodules/levanter/src:./submodules/levanter/src:${PYTHONPATH}",
+    "LIBTPU_INIT_ARGS": "--xla_tpu_scoped_vmem_limit_kib=81920 --xla_enable_async_all_gather=true --xla_tpu_overlap_compute_collective_tc=true --xla_tpu_enable_async_collective_fusion_multiple_steps=true --xla_tpu_enable_async_collective_fusion=true --xla_tpu_enable_async_collective_fusion_fuse_all_gather=true --xla_tpu_enable_data_parallel_all_reduce_opt=true --xla_tpu_data_parallel_opt_different_sized_ops=true --xla_tpu_megacore_fusion_allow_ags=false --xla_enable_async_collective_permute=true --xla_tpu_enable_ag_backward_pipelining=true",
+    "WANDB_API_KEY": "c10de4d92e8d3857f5ffe660fbcf7c4ae067b062"
+}
+2025-05-21 23:44:06,800	INFO ray_run.py:115 -- Terminal command: 
+ray job submit --runtime-env-json '{"pip": ["draccus>=0.11.5", "google-api-python-client~=2.0", "gcsfs", "google-cloud-storage", "google-cloud-storage-transfer", "s3fs>=2024", "regex", "requests", "numpy", "torch", "braceexpand", "deepdiff", "tqdm", "tqdm-loggable", "toml", "pandas", "pyarrow", "multiprocess==0.70.16", "levanter>=1.2.dev1359", "haliax>=1.4.dev348", "sentencepiece", "lz4", "wandb<=0.19.9"], "working_dir": "/sailhome/kaiyue/TPU/marin-release/marin", "env_vars": {"PYTHONPATH": "submodules/levanter:submodules/levanter/src:./submodules/levanter/src:${PYTHONPATH}", "LIBTPU_INIT_ARGS": "--xla_tpu_scoped_vmem_limit_kib=81920 --xla_enable_async_all_gather=true --xla_tpu_overlap_compute_collective_tc=true --xla_tpu_enable_async_collective_fusion_multiple_steps=true --xla_tpu_enable_async_collective_fusion=true --xla_tpu_enable_async_collective_fusion_fuse_all_gather=true --xla_tpu_enable_data_parallel_all_reduce_opt=true --xla_tpu_data_parallel_opt_different_sized_ops=true --xla_tpu_megacore_fusion_allow_ags=false --xla_enable_async_collective_permute=true --xla_tpu_enable_ag_backward_pipelining=true", "WANDB_API_KEY": "c10de4d92e8d3857f5ffe660fbcf7c4ae067b062"}, "config": {"setup_timeout_seconds": 1800}, "excludes": ["logs/exp725_muonsweep_130M_2.txt", "logs/exp725_scionsweep_130M_8.txt", "logs/exp725_scionsweep_300M_1.txt", "logs/exp725_cautioussweep_130M_8.txt", "logs/exp725_cautioussweep_300M_1.txt", "logs/exp725_muonsweep_520M_1.txt", "logs/exp725_muonsweep_130M_4.txt", "logs/exp725_cautioussweep_130M_1.txt", "logs/exp725_nadamwsweep_130M_8.txt", "logs/exp725_nadamwsweep_300M_1.txt", "logs/exp725_nadamwsweep_130M_1.txt", "logs/exp725_marssweep_130M_8.txt", "logs/exp725_marssweep_300M_1.txt", "logs/exp725_minisweep_300M_1.txt", "logs/exp725_soapesweep_130M_1.txt", "logs/exp725_scionsweep_130M_4.txt", "logs/exp725_scionsweep_520M_1.txt", "logs/exp725_soapesweep_130M_2.txt", "logs/exp725_cautioussweep_130M_2.txt", "logs/exp725_marssweep_130M_2.txt", "logs/exp725_nadamwsweep_130M_2.txt", "logs/exp725_minisweep_520M_1.txt", "logs/exp725_nadamwsweep_520M_1.txt", "logs/exp725_nadamwsweep_130M_4.txt", "logs/exp725_marssweep_130M_4.txt", "logs/exp725_marssweep_520M_1.txt", "logs/exp725_cautioussweep_130M_4.txt", "logs/exp725_cautioussweep_520M_1.txt", "logs/exp725_muonsweep_300M_1.txt", "logs/exp725_muonsweep_130M_8.txt", ".git/HEAD", ".git/objects", ".git/config", ".git/logs", ".git/index", ".git/branches", ".git/COMMIT_EDITMSG", ".git/info", ".git/description", ".git/packed-refs", ".git/refs", ".git/hooks"]}' --  python experiments/optimizer_sweep/PhaseI_Bound/exp725_marssweep_300M_1.py --force_run_failed True
+2025-05-21 23:44:08,570	INFO dashboard_sdk.py:338 -- Uploading package gcs://_ray_pkg_27ec2a2f2fc7209e.zip.
+2025-05-21 23:44:08,572	INFO packaging.py:576 -- Creating a file package for local module '/sailhome/kaiyue/TPU/marin-release/marin'.
+2025-05-21 23:44:16,536	INFO ray_run.py:120 -- Job submitted with ID: raysubmit_na1yHrVvTjacvs2x
+2025-05-21 23:44:16,537	INFO ray_run.py:121 -- Job URL: http://localhost:8265/#/jobs/raysubmit_na1yHrVvTjacvs2x

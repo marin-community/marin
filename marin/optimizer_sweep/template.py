@@ -107,7 +107,7 @@ def template(
                 break
         if in_side:
             print(f"Found: {baseline_config}")
-            current_run_set = create_configs(baseline_config, sweep_grids, target_data=target_data)[0]
+            current_run_set = optimal_run_set(baseline_config)
             if len(current_run_set) > 0:
                 print("Stupid Ray", flush=True)
             else:
