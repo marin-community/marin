@@ -43,10 +43,10 @@ def default_label(
     annotator_model_name_or_path: str = "meta-llama/Llama-3.3-70B-Instruct",
     data_filter_prompt: str | None = None,
     medu_pipeline_config_kwargs: dict | None = None,
-    text_generation_inference_config: dict | None = None,
+    text_generation_inference_config_kwargs: dict | None = None,
 ):
     """Label a set of documents with an LLM given some targeted documents.
-
+    
     Inputs:
         documents_to_be_labeled: Input path to documents to be labeled.
         targeted_documents: A list of strings or filepaths of documents that is being targeted for labeling.
@@ -101,7 +101,7 @@ def default_label(
         data_filter_prompt_path = None
 
     # NOTE(chris): Assuming we are filtering from a jsonl.zst file such as DCLM.
-    if text_generation_inference_config is None:
+    if text_generation_inference_config_kwargs is None:
         text_generation_inference_config_kwargs = default_text_generation_config_kwargs
     else:
         text_generation_inference_config_kwargs = {

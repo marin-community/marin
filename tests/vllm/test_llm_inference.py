@@ -10,7 +10,7 @@ try:
 except ImportError:
     pytest.skip("vLLM is not installed", allow_module_level=True)
 
-from tests.conftest import SINGLE_GPU_CONFIG, TPU_V6E_8_WITH_HEAD_CONFIG, _create_test_func
+from tests.conftest import SINGLE_GPU_CONFIG, TPU_V6E_8_WITH_HEAD_CONFIG
 
 @TPU_V6E_8_WITH_HEAD_CONFIG.as_decorator()
 def _test_llm_func_single_tpu(model_config):

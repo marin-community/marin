@@ -46,7 +46,7 @@ class TextGenerationInferenceConfig:
 
     # Hardware specific
     resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
-    generated_text_column_name: str = "text"
+    generated_text_column_name: str = "generated_text"
 
 
 class OneToOneFilenameProvider(FilenameProvider):

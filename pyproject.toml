@@ -123,7 +123,7 @@ eval = [
 ]
 
 datashop_gpu = [
-    "vllm==0.8.5.post1",
+    "vllm>=0.9.0", # This is the lattest version that supports torch>=2.7.0
     "accelerate>=1.7.0",
 ]
 
