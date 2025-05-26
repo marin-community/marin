@@ -20,7 +20,6 @@ dependencies = [
     "regex",
     "requests",
     "numpy",
-    "torch",
     "braceexpand",
     "deepdiff",
     "tqdm",
@@ -124,7 +123,7 @@ eval = [
 ]
 
 datashop_gpu = [
-    "vllm>=0.8.5.post1",
+    "vllm==0.8.5.post1"
 ]
 
 [tool.setuptools.packages.find]

@@ -10,10 +10,9 @@ try:
 except ImportError:
     pytest.skip("vLLM is not installed", allow_module_level=True)
 
-from tests.conftest import TPU_V6E_8_WITH_HEAD_CONFIG
+from tests.conftest import SINGLE_GPU_CONFIG, TPU_V6E_8_WITH_HEAD_CONFIG, _create_test_func
 
 
-@TPU_V6E_8_WITH_HEAD_CONFIG.as_decorator()
 def _test_llm_func(model_config):
     model_path = model_config.ensure_downloaded("/tmp/test-llama-eval")
 
@@ -22,6 +21,12 @@ def _test_llm_func(model_config):
     model_config.destroy()
 
 
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
+@pytest.mark.skipif(
+    os.getenv("TPU_CI") != "true" and os.getenv("GPU_CI") != "true",
+    reason="Skip this test if not running with a TPU or GPU in CI.",
+)
 def test_local_llm_inference(ray_cluster, model_config):
-    ray.get(_test_llm_func.remote(model_config))
+    if os.getenv("TPU_CI") == "true":
+        ray.get(_create_test_func(_test_llm_func, TPU_V6E_8_WITH_HEAD_CONFIG, model_config))
+    elif os.getenv("GPU_CI") == "true":
+        ray.get(_create_test_func(_test_llm_func, SINGLE_GPU_CONFIG, model_config))
