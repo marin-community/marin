@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import ray
 
 from marin.classifiers.hf.train_classifier import HFTrainingConfig, load_dataset, train_classifier
-from marin.resources import ResourceConfig, TpuPodConfig
+from marin.resources import GpuConfig, ResourceConfig, TpuPodConfig
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,13 @@ def launch_training_with_ray(launch_config: LaunchConfig):
     def train_classifier_distributed(config: HFTrainingConfig):
         dataset = load_dataset(config.train_dataset, "train")
         dataset = dataset.train_test_split(train_size=config.train_size, seed=42)
-        xmp.spawn(train_classifier, args=(config, dataset["train"], dataset["test"]))
+
+        if isinstance(resource_config, TpuPodConfig):            
+            xmp.spawn(train_classifier, args=(config, dataset["train"], dataset["test"]))
+        elif isinstance(resource_config, GpuConfig):
+            # Support single-GPU training for now.
+            train_classifier(0, config, dataset["train"], dataset["test"])
+        else:
+            raise ValueError(f"Unknown resource config type: {type(resource_config)}")
 
     ray.get(train_classifier_distributed.remote(launch_config.training_config))

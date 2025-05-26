@@ -85,14 +85,24 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
     if isinstance(config.resource_config, TpuPodConfig):
         ctx.wait_for_min_actors_s = 60 * 10 * config.resource_config.chip_count
     elif isinstance(config.resource_config, GpuConfig):
-        ctx.wait_for_min_actors_s = 60 * 10 * config.resource_config.num_gpus
+        ctx.wait_for_min_actors_s = 60 * 10 * config.resource_config.gpu_count
     else:
         raise ValueError(f"Unknown resource config type: {type(config.resource_config)}")
 
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
-    if config.resource_config.chip_count == 1:
-        return {"resources": config.resource_config.get_ray_resources_dict()}
+    if isinstance(config.resource_config, TpuPodConfig):
+        device_count = config.resource_config.chip_count
+    elif isinstance(config.resource_config, GpuConfig):
+        device_count = config.resource_config.gpu_count
+    else:
+        raise ValueError(f"Unknown resource config type: {type(config.resource_config)}")
+
+    if device_count == 1:
+        if isinstance(config.resource_config, TpuPodConfig):
+            return {"resources": config.resource_config.get_ray_resources_dict()}
+        elif isinstance(config.resource_config, GpuConfig):
+            return {"num_gpus": config.resource_config.gpu_count}
     else:
         return {"ray_remote_args_fn": dict(scheduling_strategy=config.resource_config.as_ray_scheduling_strategy())}
 

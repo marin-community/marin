@@ -9,7 +9,8 @@ import fsspec
 import ray
 from transformers import AutoTokenizer
 
-from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
+from marin.resources import ResourceConfig
+from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK
 from marin.datashop.dataset_processor import AutoDatasetOutputProcessor, DatasetOutputProcessorConfig
 from marin.datashop.templates import (
     MEDU_BENCHMARK_DESCRIPTION_MERGING_TEMPLATE,
