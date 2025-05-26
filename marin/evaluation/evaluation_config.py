@@ -78,3 +78,8 @@ class EvaluationConfig:
     """
     Additional keyword arguments passed to the vLLM sampling params engine
     """
+
+    apply_chat_template: bool = False
+    """
+    Whether or not this model was trained with a Chat Template in the tokenizer
+    """
