@@ -4,6 +4,7 @@ This file uses Levanter to compute validation losses and entropies.
 
 import dataclasses
 import os
+import shutil
 from dataclasses import dataclass
 
 import ray
@@ -15,6 +16,7 @@ from levanter.models.lm_model import LmConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
+from marin.evaluation.utils import download_from_gcs, is_remote_path
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
@@ -81,7 +83,21 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
         config (EvalLmConfig): The configuration for visualizing log probabilities.
     """
     # _separate_process_fn(eval_lm_main, (config,), {})
-    eval_lm_main(config)
+
+    try:
+        if config.hf_checkpoint and is_remote_path(config.hf_checkpoint):
+            local_path = os.path.join("/tmp/levanter-lm-eval", ckpt_path_to_step_name(config.hf_checkpoint))
+            download_from_gcs(
+                gcs_path=config.hf_checkpoint,
+                destination_path=local_path,
+            )
+            config.hf_checkpoint = local_path
+            print(f"Downloaded model checkpoint to {local_path}: {os.listdir(local_path)}")
+        eval_lm_main(config)
+    finally:
+        if config.hf_checkpoint and os.path.exists(config.hf_checkpoint):
+            shutil.rmtree(config.hf_checkpoint, ignore_errors=True)
+            print(f"Deleted local checkpoint at {config.checkpoint_path}.")
 
 
 def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
