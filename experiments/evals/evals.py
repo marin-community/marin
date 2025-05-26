@@ -26,7 +26,6 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-
 from marin.resources import ResourceConfig
 
 logger = logging.getLogger(__name__)

@@ -10,7 +10,7 @@ from ray.data.datasource import FilenameProvider
 
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK
 from marin.generation.pipeline import vLLMTextGeneration
-from marin.resources import ResourceConfig, TpuPodConfig, GpuConfig
+from marin.resources import GpuConfig, ResourceConfig, TpuPodConfig
 from marin.utils import fsspec_glob, remove_tpu_lockfile_on_exit
 
 

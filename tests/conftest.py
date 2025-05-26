@@ -1,12 +1,11 @@
 import os
 import time
-from collections.abc import Callable
 
 import pytest
 import ray
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.resources import GpuConfig, ResourceConfig, TpuPodConfig
+from marin.resources import GpuConfig, TpuPodConfig
 
 default_engine_kwargs = {"enforce_eager": True, "max_model_len": 1024}
 
@@ -54,9 +53,11 @@ def gcsfuse_mount_llama_8b_model_path():
 def test_file_path():
     return "gs://marin-us-east5/documents/chris-test/test_50.jsonl.gz"
 
+
 @pytest.fixture
 def text_and_label_dataset_path():
     return "gs://marin-us-east1/documents/datashop-datasets/datashop-tutorial-9a3e89/sampled"
+
 
 @pytest.fixture
 def current_date_time():

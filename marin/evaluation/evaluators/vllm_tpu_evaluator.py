@@ -139,7 +139,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
             runtime_env["py_modules"] = [str(module) for module in self._py_modules]
 
         return runtime_env
-        
+
     def launch_evaluate_with_ray(
         self,
         model: ModelConfig,
@@ -166,8 +166,9 @@ class VllmTpuEvaluator(Evaluator, ABC):
         ) -> None:
             if isinstance(resource_config, GpuConfig):
                 from marin.evaluation.utils import set_cuda_visible_devices
+
                 set_cuda_visible_devices()
-                
+
             self.evaluate(model, evals, output_path, max_eval_instances)
 
         ray.get(launch.remote(model, evals, output_path, max_eval_instances))

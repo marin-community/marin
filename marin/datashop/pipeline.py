@@ -9,7 +9,6 @@ import fsspec
 import ray
 from transformers import AutoTokenizer
 
-from marin.resources import ResourceConfig
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK
 from marin.datashop.dataset_processor import AutoDatasetOutputProcessor, DatasetOutputProcessorConfig
 from marin.datashop.templates import (
@@ -19,6 +18,7 @@ from marin.datashop.templates import (
 )
 from marin.generation.dataset import DatasetSampler
 from marin.generation.llm_generation import vLLMProvider
+from marin.resources import ResourceConfig
 
 logger = logging.getLogger("ray")
 

@@ -4,12 +4,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import ClassVar
 
-import ray
-
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.utils import download_from_gcs, is_remote_path
-from marin.resources import GpuConfig, ResourceConfig
-from marin.utils import remove_tpu_lockfile_on_exit
+from marin.resources import ResourceConfig
 
 
 @dataclass(frozen=True)
@@ -72,7 +69,6 @@ class Evaluator(ABC):
     _python_version: str
     _pip_packages: ClassVar[list[Dependency]]
     _py_modules: ClassVar[list[Dependency]]
-
 
     @abstractmethod
     def launch_evaluate_with_ray(

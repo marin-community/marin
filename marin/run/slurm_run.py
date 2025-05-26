@@ -42,8 +42,9 @@ import sys
 import tempfile
 import time
 
-import wandb
 from huggingface_hub import HfFolder
+
+import wandb
 
 # Setup logger
 logger = logging.getLogger("slurm")

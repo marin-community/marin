@@ -35,6 +35,7 @@ def test_ray_data_tpu(ray_cluster, gcsfuse_mount_model_path, test_file_path):
 
     ds = ds.write_json(TEST_OUTPUT_PATH, filename_provider=OverwriteOutputFiletypeFilenameProvider("jsonl.gz"))
 
+
 @pytest.mark.skipif(os.getenv("GPU_CI") != "true", reason="Skip this test if not running with a GPU in CI.")
 def test_ray_data_gpu(ray_cluster, gcsfuse_mount_model_path, test_file_path):
     ds = ray.data.read_json(test_file_path, arrow_open_stream_args={"compression": "gzip"})
@@ -46,7 +47,7 @@ def test_ray_data_gpu(ray_cluster, gcsfuse_mount_model_path, test_file_path):
         # Specify the batch size for inference.
         batch_size=16,
         fn_constructor_kwargs={
-            "model_name": "Qwen/Qwen2.5-0.5B", # local gpu may not have access to the gcsfuse path, so use this model
+            "model_name": "Qwen/Qwen2.5-0.5B",  # local gpu may not have access to the gcsfuse path, so use this model
             "engine_kwargs": default_engine_kwargs,
             "generation_kwargs": default_generation_params,
             "template": "What is this text about? {example}",

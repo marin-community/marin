@@ -6,7 +6,6 @@ from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
 from experiments.evals.task_configs import EvalTaskConfig
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
-
 from tests.conftest import SINGLE_GPU_CONFIG
 
 
@@ -25,6 +24,7 @@ def test_lm_eval_harness_tpu(current_date_time, ray_cluster, model_config):
         resource_config=SINGLE_TPU_V6E_8,
     )
     evaluate(config=config)
+
 
 @pytest.mark.skipif(os.getenv("GPU_CI") != "true", reason="Skip this test if not running with a GPU in CI.")
 def test_lm_eval_harness_gpu(current_date_time, ray_cluster, model_config):

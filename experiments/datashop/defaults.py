@@ -46,7 +46,7 @@ def default_label(
     text_generation_inference_config_kwargs: dict | None = None,
 ):
     """Label a set of documents with an LLM given some targeted documents.
-    
+
     Inputs:
         documents_to_be_labeled: Input path to documents to be labeled.
         targeted_documents: A list of strings or filepaths of documents that is being targeted for labeling.
@@ -185,7 +185,9 @@ def default_train_quality_model(
     quality_train_config = LaunchConfig(training_config=training_config, resource_config=resource_config)
 
     datashop_classifier_remote = ExecutorStep(
-        name=f"classifiers/datashop-bert/{experiment_name}", fn=launch_training_with_ray, config=quality_train_config, 
+        name=f"classifiers/datashop-bert/{experiment_name}",
+        fn=launch_training_with_ray,
+        config=quality_train_config,
         pip_dependency_groups=[
             "accelerate~=1.7.0",
         ],

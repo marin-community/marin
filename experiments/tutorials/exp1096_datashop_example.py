@@ -14,9 +14,7 @@ datashop_runner_config = DatashopRunnerConfig(
     dataset_output_processor_config_kwargs={"processor_type": "finalscore0-5"},
 )
 
-datashop_runner = DatashopRunner(
-    datashop_runner_config
-)
+datashop_runner = DatashopRunner(datashop_runner_config)
 
 if __name__ == "__main__":
     datashop_runner.run_eval_cluster_steps()

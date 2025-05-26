@@ -89,4 +89,6 @@ class SimpleTrainConfig:
         # In the case of TPU training, we let levanter schedule the TPUs.
         if isinstance(self.resources, TpuPodConfig):
             if self.resources.include_tpu_in_ray_resources:
-                raise ValueError("include_tpu_in_ray_resources is not supported for TPU training. Please set it to False.")
+                raise ValueError(
+                    "include_tpu_in_ray_resources is not supported for TPU training. Please set it to False."
+                )

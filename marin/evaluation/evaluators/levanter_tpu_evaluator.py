@@ -7,7 +7,7 @@ import ray
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, Evaluator, ModelConfig
-from marin.resources import ResourceConfig, GpuConfig
+from marin.resources import GpuConfig, ResourceConfig
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
             runtime_env["py_modules"] = [str(module) for module in self._py_modules]
 
         return runtime_env
-    
+
     def launch_evaluate_with_ray(
         self,
         model: ModelConfig,
@@ -100,8 +100,9 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         ) -> None:
             if isinstance(resource_config, GpuConfig):
                 from marin.evaluation.utils import set_cuda_visible_devices
+
                 set_cuda_visible_devices()
-                
+
             self.evaluate(model, evals, output_path, max_eval_instances)
 
         ray.get(launch.remote(model, evals, output_path, max_eval_instances))
