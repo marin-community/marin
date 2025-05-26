@@ -15,7 +15,6 @@ def soap_config(
     warmup: float | None = None,
     decay: float | None = None,
     lr_schedule: str | None = None,
-    stable_lr_schedule: str | None = None,
     min_lr_ratio: float | None = None,
     cycle_length: int | None = None,
 ) -> SoapConfig:
@@ -39,7 +38,6 @@ def soap_config(
         warmup=(warmup if warmup is not None else SoapConfig().warmup),
         decay=(decay if decay is not None else SoapConfig().decay),
         lr_schedule=(lr_schedule if lr_schedule is not None else SoapConfig().lr_schedule),
-        stable_lr_schedule=(stable_lr_schedule if stable_lr_schedule is not None else SoapConfig().stable_lr_schedule),
         cycle_length=cycle_length,  # can be int, list[int], or None
         min_lr_ratio=(min_lr_ratio if min_lr_ratio is not None else SoapConfig().min_lr_ratio),
     )

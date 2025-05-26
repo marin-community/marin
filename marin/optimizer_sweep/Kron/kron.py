@@ -16,7 +16,6 @@ def kron_config(
     warmup: float | None = None,
     decay: float | None = None,
     lr_schedule: str | None = None,
-    stable_lr_schedule: bool | None = None,
     cycle_length: int | list[int] | None = None,
     min_lr_ratio: float | None = None,
 ) -> KronConfig:
@@ -50,7 +49,6 @@ def kron_config(
         warmup=warmup if warmup is not None else default_config.warmup,
         decay=decay if decay is not None else default_config.decay,
         lr_schedule=lr_schedule if lr_schedule is not None else default_config.lr_schedule,
-        stable_lr_schedule=stable_lr_schedule if stable_lr_schedule is not None else default_config.stable_lr_schedule,
         cycle_length=cycle_length,
         min_lr_ratio=min_lr_ratio if min_lr_ratio is not None else default_config.min_lr_ratio,
     )

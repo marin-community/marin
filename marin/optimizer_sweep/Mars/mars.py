@@ -12,7 +12,6 @@ def mars_config(
     warmup: float | None = None,
     decay: float | None = None,
     lr_schedule: str | None = None,
-    stable_lr_schedule: str | None = None,
     cycle_length: int | None = None,
     min_lr_ratio: float | None = None,
 ) -> MarsConfig:
@@ -27,7 +26,6 @@ def mars_config(
         warmup=(warmup if warmup is not None else MarsConfig().warmup),
         decay=(decay if decay is not None else MarsConfig().decay),
         lr_schedule=(lr_schedule if lr_schedule is not None else MarsConfig().lr_schedule),
-        stable_lr_schedule=(stable_lr_schedule if stable_lr_schedule is not None else MarsConfig().stable_lr_schedule),
         cycle_length=cycle_length,  # can be int, list[int], or None
         min_lr_ratio=(min_lr_ratio if min_lr_ratio is not None else MarsConfig().min_lr_ratio),
     )

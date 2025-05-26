@@ -31,7 +31,6 @@ class SimpleTrainConfig:
     The rewarmup parameter is used to re-warmup the learning rate after a decay cycles
     """
     lr_schedule: str | None = None
-    stable_lr_schedule: str | None = None
     min_lr_ratio: float | None = None
     cycle_length: int | list[int] | None = None
     z_loss_weight: float | None = None

@@ -14,7 +14,6 @@ def nadam_config(
     lr_schedule: str | None = None,
     cycle_length: int | None = None,
     min_lr_ratio: float | None = None,
-    stable_lr_schedule: str | None = None,
     nesterov: bool | None = None,
 ) -> AdamConfig:
     optimizer = AdamConfig(
