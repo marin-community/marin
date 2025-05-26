@@ -11,22 +11,50 @@ import fsspec
 
 
 @dataclass(frozen=True)
+class SpeedrunAuthor:
+    """Author information displayed in the leaderboard."""
+
+    name: str
+    affiliation: str
+    url: str | None = None
+
+
+@dataclass(frozen=True)
 class LeaderboardEntry:
+    # Run identification
     run_name: str
-    model_size: int
-    total_training_time: float
-    total_training_flops: float
-    submitted_by: str
     results_filepath: str
-    wandb_link: str | None = None
+    author: SpeedrunAuthor
+
+    # Model/hardware specs
+    model_size: int
+    training_hardware_flops: float
+
+    # Training metrics and FLOPs
+    training_time: float  # in seconds
+    model_flops: float
+
+    # Optional fields
     eval_paloma_c4_en_bpb: float | None = None
-    run_timestamp: datetime.datetime | None = None
+    wandb_link: str | None = None
+    run_completion_timestamp: datetime.datetime | None = None
+    description: str | None = None
+
+
+# Speedruns to exclude from the leaderboard (used for tutorials, etc.,
+# or generally when, we for some reason don't want to include a run)
+EXCLUDED_SPEEDRUNS = {
+    "hello_world_gpu_speedrun",
+}
 
 
 def find_speedrun_results(base_path: str) -> list[str]:
     fs = fsspec.filesystem(base_path.split("://", 1)[0] if "://" in base_path else "file")
     pattern = f"{base_path}/**/speedrun_results.json"
-    return fs.glob(pattern)
+    all_results = fs.glob(pattern)
+
+    # Filter out excluded speedruns by checking the run name (directory name)
+    return [path for path in all_results if Path(path).parent.name not in EXCLUDED_SPEEDRUNS]
 
 
 def load_results_file(path: str) -> dict:
@@ -37,28 +65,45 @@ def load_results_file(path: str) -> dict:
 
 
 def create_entry_from_results(results: dict, results_filepath: str) -> LeaderboardEntry:
+    # Path information
     run_name = Path(results_filepath).parent.name
     filepath = Path(results_filepath)
     repo_root = Path(__file__).resolve().parent.parent.parent
     relative_path = filepath.relative_to(repo_root).parent
-    total_training_flops = results["run_stats"]["total_training_flops"]
-    training_time = results["run_stats"]["training_time_in_minutes"]
-    eval_paloma_c4_en_bpb = results["run_stats"]["eval/paloma/c4_en/bpb"]
-    model_size = results["run_related_info"]["num_parameters"]
-    submitted_by = results["run_related_info"].get("submitted_by", "unknown")
-    wandb_link = results["run_related_info"].get("wandb_run_link", None)
-    run_timestamp = results["run_related_info"].get("run_completion_timestamp", None)
+
+    # Get the run info which contains all the information
+    run_data = results["run_info"]
+
+    # Training metrics and FLOPs
+    training_hardware_flops = run_data["training_hardware_flops"]
+    training_time = run_data["training_time"]
+    eval_paloma_c4_en_bpb = run_data["eval/paloma/c4_en/bpb"]
+    model_flops = run_data["model_flops"]
+
+    # Model specification
+    model_size = run_data["model_size"]
+
+    # Run metadata
+    wandb_link = run_data.get("wandb_run_link")
+    run_completion_timestamp = run_data.get("run_completion_timestamp")
+    description = run_data["description"]
+
+    # Author information
+    author_info = run_data["author"]
+    author = SpeedrunAuthor(name=author_info["name"], affiliation=author_info["affiliation"], url=author_info.get("url"))
 
     return LeaderboardEntry(
         run_name=run_name,
-        model_size=model_size,
-        total_training_time=training_time,
-        total_training_flops=total_training_flops,
-        submitted_by=submitted_by,
         results_filepath=str(relative_path),
+        model_size=model_size or 0,
+        training_hardware_flops=training_hardware_flops or 0.0,
+        training_time=training_time or 0.0,
+        model_flops=model_flops,
+        eval_paloma_c4_en_bpb=eval_paloma_c4_en_bpb,
+        author=author,
         wandb_link=wandb_link,
-        eval_paloma_c4_en_bpb=float(eval_paloma_c4_en_bpb) if eval_paloma_c4_en_bpb is not None else None,
-        run_timestamp=run_timestamp,
+        run_completion_timestamp=run_completion_timestamp,
+        description=description,
     )
 
 

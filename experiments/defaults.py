@@ -30,7 +30,7 @@ from levanter.utils import fsspec_utils
 from experiments.anneal_config import AnnealConfig
 from experiments.evals.task_configs import (
     CORE_TASKS,
-    CORE_TASKS_PLUS_MMLU,
+    MMLU_TASKS,
     convert_to_levanter_task_config,
     convert_to_task_metrics,
 )
@@ -38,6 +38,8 @@ from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
+from marin.download.huggingface.download import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -61,8 +63,6 @@ from marin.training.training import (
     TrainLmOnPodConfig,
     run_levanter_train_lm,
 )
-from operations.download.huggingface.download import DownloadConfig
-from operations.download.huggingface.download_hf import download_hf
 
 logger = logging.getLogger("ray")
 
@@ -264,8 +264,6 @@ def default_train(
                 name = prefix[: 63 - len(suffix)] + "-" + suffix
         logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
 
-    # TODO: right now, assume architecture is a LlamaConfig, generalize this
-    assert isinstance(model_config, LlamaConfig)
     if eval_harness_tasks:
         harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
     else:
@@ -522,7 +520,8 @@ def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
         tokenized=anneal_config.dataset_config,
         model_config=llama_8b,
         train_config=anneal_stage_train_config,
-        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+        use_default_validation=anneal_config.use_default_validation,
+        eval_harness_tasks=MMLU_TASKS,
     )
 
 

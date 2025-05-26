@@ -4,7 +4,7 @@ import Button from '@mui/material/Button';
 import ButtonGroup from '@mui/material/ButtonGroup';
 import Paper from '@mui/material/Paper';
 import { useLocation } from 'react-router-dom';
-import { apiViewUrl, renderError, renderDuration, renderDate, viewSingleUrl, round, joinSpans, renderSciNotation } from './utils';
+import { apiViewUrl, renderError, renderDuration, renderDate, viewSingleUrl, round, joinSpans, renderSciNotation, checkJsonResponse } from './utils';
 
 const wandbIcon = "📉";
 const huggingfaceIcon = "🤗";
@@ -37,6 +37,14 @@ function ExperimentPage() {
       try {
         // Get the main experiment JSON
         const response = await axios.get(apiViewUrl({path}));
+        checkJsonResponse(response, setError);
+
+        if (response.data.error) {
+          console.error(response.data.error);
+          setError(response.data.error);
+          return;
+        }
+
         const experiment = response.data.data;
         setExperiment(experiment);
 
@@ -47,6 +55,7 @@ function ExperimentPage() {
         const promises = urls.map(async (url) => {
           try {
             const response = await axios.get(url);
+            checkJsonResponse(response, setError);
             setAuxiliaryData(auxiliaryData => Object.assign({}, auxiliaryData, {[url]: response.data}));
           } catch (error) {
             console.error(error);
@@ -312,6 +321,7 @@ function renderTrainLmStep({step, steps}) {
   // Model
   const modelConfig = trainConfig.model;
   const architectureSummary = [
+    modelConfig.n_routed_experts && `${modelConfig.n_routed_experts} experts (${modelConfig.num_experts_per_tok} active) + ${modelConfig.n_shared_experts} shared experts`,
     `d_model = ${modelConfig.hidden_dim}`,
     `d_ff = ${modelConfig.intermediate_dim}`,
     `n_heads = ${modelConfig.num_heads} (${modelConfig.num_kv_heads} kv)`,
@@ -319,7 +329,7 @@ function renderTrainLmStep({step, steps}) {
     `seq_len = ${modelConfig.seq_len}`,
     `rope(${modelConfig.rope.factor},${modelConfig.rope.theta})`,
     modelConfig.activation_function,
-  ].join(", ");
+  ].filter((x) => x != null).join(", ");
 
   // Optimizer
   const optimizerConfig = trainConfig.optimizer;
@@ -333,8 +343,9 @@ function renderTrainLmStep({step, steps}) {
 
   // Initialization + training
   const trainerConfig = trainConfig.trainer;
-  const initializationSummary = trainerConfig.initialize_from ?
-    renderPath({path: trainerConfig.initialize_from, steps}) :
+  const initializeFrom = trainConfig.initialize_from_checkpoint || trainConfig.initialize_from_hf || trainerConfig.initialize_from;
+  const initializationSummary = initializeFrom ?
+    renderPath({path: initializeFrom, steps}) :
     `random(${modelConfig.initializer_range})`;
 
   const numSteps = trainerConfig.num_train_steps;
@@ -477,15 +488,15 @@ function renderExperimentStatus({step, auxiliaryData}) {
 
 const stepRenderers = {
   // Download
-  "operations.download.huggingface.download.download": renderDownloadStep,
-  "operations.download.huggingface.download_hf.download_hf": renderDownloadStep,
-  "operations.download.huggingface.download_gated_manual.download_and_upload_to_store": renderDownloadStep,
-  "operations.download.nemotron_cc.download_nemotron_cc.download_nemotron_cc": renderDownloadNemotronCCStep,
-  "operations.download.filesystem.transfer.transfer_files": renderTransferStep,
-  "operations.raw2json.huggingface.qa.raw2json.raw2json": renderRaw2JsonStep,
-  "operations.transform.conversation.transform_conversation.transform_hf_dataset": renderRaw2JsonStep,
-  "operations.transform.fasttext.transform.main": renderFastTextTransformStep,
-  "operations.transform.evaluation.eval_to_dolma.convert_eval_to_dolma": renderConvertEvalToDolmaStep,
+  "marin.download.huggingface.download.download": renderDownloadStep,
+  "marin.download.huggingface.download_hf.download_hf": renderDownloadStep,
+  "marin.download.huggingface.download_gated_manual.download_and_upload_to_store": renderDownloadStep,
+  "marin.download.nemotron_cc.download_nemotron_cc.download_nemotron_cc": renderDownloadNemotronCCStep,
+  "marin.download.filesystem.transfer.transfer_files": renderTransferStep,
+  "marin.raw2json.huggingface.qa.raw2json.raw2json": renderRaw2JsonStep,
+  "marin.transform.conversation.transform_conversation.transform_hf_dataset": renderRaw2JsonStep,
+  "marin.transform.fasttext.transform.main": renderFastTextTransformStep,
+  "marin.transform.evaluation.eval_to_dolma.convert_eval_to_dolma": renderConvertEvalToDolmaStep,
 
   // Inference for data filtering
   "marin.processing.classification.inference.run_inference": renderRunClassificationInferenceStep,

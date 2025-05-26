@@ -15,12 +15,12 @@ from levanter.data.text import (
 )
 from levanter.store.cache import CacheOptions
 
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName, ensure_versioned
-from marin.processing.tokenize.tokenize import TokenizeConfigBase
-from operations.download.huggingface.download import DownloadConfig as HfDownloadConfig
-from operations.download.huggingface.download_hf import (
+from marin.download.huggingface.download import DownloadConfig as HfDownloadConfig
+from marin.download.huggingface.download_hf import (
     download_hf as hf_download_logic,
 )
+from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName, ensure_versioned
+from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ def download_pretokenized_cache(
     """
     config = PretokenizedCacheDownloadConfig(
         cache_path=THIS_OUTPUT_PATH,  # ExecutorStep will resolve this to the actual output path
-        tokenizer=tokenizer,
+        tokenizer=ensure_versioned(tokenizer),
         hf_repo_id=ensure_versioned(hf_repo_id),  # type: ignore[call-arg]
         hf_revision=ensure_versioned(hf_revision),  # type: ignore[call-arg]
         hf_repo_type_prefix="datasets",  # Default for Hugging Face datasets
