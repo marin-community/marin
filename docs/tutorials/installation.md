@@ -13,7 +13,7 @@ Before you begin, ensure you have the following installed:
 
 This document focuses on basic setup and usage of Marin.
 If you're on a GPU, see [Local GPU Setup](local-gpu.md) for a GPU-specific walkthrough for getting started.
-If you want to set up a TPU cluster, see [TPU Setup](../tutorials/tpu-cluster-setup.md).
+If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
 
 ## Installation
 
@@ -96,7 +96,7 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
 
 - **CPU**: Works out of the box, suitable for small experiments
 - **GPU**: See [Local GPU Setup](local-gpu.md) for CUDA configuration and multi-GPU support
-- **TPU**: See [TPU Setup](../tutorials/tpu-setup.md) for Google Cloud TPU configuration
+- **TPU**: See [TPU Setup](../tutorials/tpu-cluster-setup.md) for Google Cloud TPU configuration
 
 ## Trying it Out
 
@@ -105,7 +105,7 @@ you train a tiny language model on TinyStories on your CPU.  For a sneak preview
 
 ```bash
 wandb offline  # Disable WandB logging
-python experiments/tutorial/train_tiny_model_cpu.py --prefix local_store
+python experiments/tutorials/train_tiny_model_cpu.py --prefix local_store
 ```
 
 This will:
@@ -121,4 +121,4 @@ next hands-on tutorial or read more about how Marin is designed for building
 language models.
 
 1. Follow our [First Experiment](first-experiment.md) tutorial to run a training experiment
-2. Read our [Language Modeling Pipeline](../explanation/lm-pipeline.md) to understand Marin's approach to language models
+2. Read our [Language Modeling Pipeline](../explanations/lm-pipeline.md) to understand Marin's approach to language models

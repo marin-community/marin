@@ -77,7 +77,7 @@ You can adjust the number of tokens for annealing by modifying the `num_anneal_t
 ### Model Checkpoint
 
 The default checkpoint path points to a Marin Tootsie 8b model trained for approximately 800B tokens.
-You can change this to use your own model or a different checkpoint. XXX update to a later checkpoint
+You can change this to use your own model or a different checkpoint.
 
 ## Example Experiments
 

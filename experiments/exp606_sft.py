@@ -29,7 +29,7 @@ tulu_sft_config = SimpleSFTConfig(
     train_batch_size=128,
     num_train_steps=NUM_TRAIN_STEPS,  # Adjust as needed.
     learning_rate=5e-6,
-    resources=TpuPodConfig(tpu_type="v4-128", node_count=1),
+    resources=TpuPodConfig(tpu_type="v4-128", slice_count=1),
     tokenizer=llama3_instruct_tokenizer,
     model_name_or_path="meta-llama/Llama-3.1-8B",
     max_seq_len=4096,

@@ -32,7 +32,7 @@ from marin.execution.executor import executor_main
 import logging
 ```
 
-- [`dclm_mixture_config_llama3`][experiments.dclm.tokenize_dclm.dclm_mixture_config_llama3]: A predefined dataset configuration for the DCLM mixture, this can be replaced with any tokenized dataset in Marin of the `lm_mixture_data_config` type (e.g. [Dolma](https://github.com/marin-community/marin/blob/main/experiments/dolma/exp442_dolma.py) or [Nemotron](https://github.com/marin-community/marin/blob/main/experiments/exp934_hq_vs_pt.py))
+- [`dclm_mixture_config_llama3`](https://github.com/marin-community/marin/blob/25c0f04438d0875e36a4627a5742b8b5a94c5ada/experiments/dclm/tokenize_dclm.py#L50): A predefined dataset configuration for the DCLM mixture, this can be replaced with any tokenized dataset in Marin of the `lm_mixture_data_config` type (e.g. [Dolma](https://github.com/marin-community/marin/blob/main/experiments/dolma/exp442_dolma.py) or [Nemotron](https://github.com/marin-community/marin/blob/main/experiments/exp934_hq_vs_pt.py))
 - [`SimpleTrainConfig`][experiments.simple_train_config.SimpleTrainConfig]
 - [`default_train`][experiments.defaults.default_train]: A utility function that creates a training pipeline
 - [`LlamaConfig`][levanter.models.llama.LlamaConfig]: A dataclass that defines the model architecture from [Levanter](https://github.com/stanford-crfm/levanter)
@@ -58,24 +58,44 @@ You can also use pre-defined model configurations from [`experiments.llama`](htt
 
 Set up your training configuration by calculating the number of training steps and defining hyperparameters:
 
-```python
-# Calculate training steps based on desired token count
-NUM_TRAIN_TOKENS = int(30e9)  # Example: 30 billion tokens
-BATCH_SIZE = 256
-SEQ_LEN = 2048
-NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
+=== "GPU"
+    ```python
+    # Calculate training steps based on desired token count
+    NUM_TRAIN_TOKENS = int(30e9)  # Example: 30 billion tokens
+    BATCH_SIZE = 256
+    SEQ_LEN = 2048
+    NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
 
-training_config = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v4-128"),  # Hardware configuration: 128 v4 TPU cores, can be swapped for GpuConfig
-    train_batch_size=BATCH_SIZE,                # Sequences processed per step
-    num_train_steps=NUM_TRAIN_STEPS,            # Total optimization steps
-    learning_rate=3e-3,                         # Peak learning rate
-    weight_decay=0.033,                         # L2 regularization
-    min_lr_ratio=0.1,                           # Minimum learning rate ratio (for decay)
-    warmup=5000,                                # Steps for learning rate warmup
-    z_loss_weight=1e-4,                         # Optional stabilization technique
-)
-```
+    training_config = SimpleTrainConfig(
+        resources=GpuConfig(gpu_count=4),           # Hardware configuration: 4 GPUs
+        train_batch_size=BATCH_SIZE,                # Sequences processed per step
+        num_train_steps=NUM_TRAIN_STEPS,            # Total optimization steps
+        learning_rate=3e-3,                         # Peak learning rate
+        weight_decay=0.033,                         # L2 regularization
+        min_lr_ratio=0.1,                           # Minimum learning rate ratio (for decay)
+        warmup=5000,                                # Steps for learning rate warmup
+        z_loss_weight=1e-4,                         # Optional stabilization technique
+    )
+    ```
+=== "TPU"
+    ```python
+    # Calculate training steps based on desired token count
+    NUM_TRAIN_TOKENS = int(30e9)  # Example: 30 billion tokens
+    BATCH_SIZE = 256
+    SEQ_LEN = 2048
+    NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
+
+    training_config = SimpleTrainConfig(
+        resources=TpuPodConfig(tpu_type="v4-128"),  # Hardware configuration: 128 v4 TPU cores
+        train_batch_size=BATCH_SIZE,                # Sequences processed per step
+        num_train_steps=NUM_TRAIN_STEPS,            # Total optimization steps
+        learning_rate=3e-3,                         # Peak learning rate
+        weight_decay=0.033,                         # L2 regularization
+        min_lr_ratio=0.1,                           # Minimum learning rate ratio (for decay)
+        warmup=5000,                                # Steps for learning rate warmup
+        z_loss_weight=1e-4,                         # Optional stabilization technique
+    )
+    ```
 
 ## Creating the Training Pipeline
 
@@ -103,10 +123,15 @@ if __name__ == "__main__":
 ```
 
 The `default_train` function creates a training pipeline that:
+
 1. Loads and processes the dataset
+
 2. Initializes the model according to the configuration
+
 3. Executes the training loop with the specified hyperparameters
+
 4. Handles distributed training across your hardware
+
 5. Manages checkpointing and logging
 
 ## Launching the Training Job
@@ -131,11 +156,11 @@ The run will be named based on the name you provided.
 For a complete example of training a DCLM 1B/1x model, see the implementation in:
 
 - Code: [experiments/howto/exp1077_reproduce_dclm_1b1x.py](https://github.com/marin-community/marin/blob/main/experiments/howto/exp1077_reproduce_dclm_1b1x.py)
-- WandB: [Dashboard](https://wandb.ai/stanford-mercury/marin/runs/dclm_1b_1x_how_to-58c8f0)
+- WandB: [Dashboard](https://wandb.ai/marin-community/marin/runs/dclm_1b_1x_how_to-58c8f0)
 
 This trains on the DCLM baseline mix with the same config as described in the original DCLM paper for 1X the compute optimal number of tokens!
 
 For a larger scale example of training a DCLM 7B/1x model, see the implementation in:
 
 - Code: [experiments/howto/exp1078_reproduce_dclm_7b1x.py](https://github.com/marin-community/marin/blob/main/experiments/howto/exp1078_reproduce_dclm_7b1x.py)
-- WandB: [Dashboard](https://wandb.ai/stanford-mercury/marin/runs/dclm_7b_1x_how_to-fefaab)
+- WandB: [Dashboard](https://wandb.ai/marin-community/marin/runs/dclm_7b_1x_how_to-fefaab)
