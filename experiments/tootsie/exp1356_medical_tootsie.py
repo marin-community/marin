@@ -1,10 +1,12 @@
 from experiments.anneal_config import AnnealConfig
+from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal, default_tokenize
 from experiments.llama import llama3_tokenizer
 from experiments.midtraining_datasets import lavita_medical_qa_datasets
-from experiments.pretraining_datasets import dclm_baseline
+from experiments.tootsie.exp600_tootsie import phoenix_phase4_checkpoint_for_phase5
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
+from marin.resources import TpuPodConfig
 from marin.transform.medical.lavita_to_dolma import LavitaToDolmaConfig, convert_lavita_split_to_dolma
 
 lavita_pubmed = ExecutorStep(
@@ -55,11 +57,10 @@ medical_token_proportion = 0.3
 dclm_token_proportion = 1 - medical_token_proportion
 num_anneal_tokens = int(all_medical_tokens * 4 / medical_token_proportion)
 anneal_config = AnnealConfig(
-    # NOTE(chris): There is some issue where we need to download all the dependencies for the html to text
-    initialize_from_checkpoint_path="gs://marin-us-central2/checkpoints/llama-8b-tootsie-adept-phoenix/checkpoints/step-1320000",
+    initialize_from_checkpoint_path=phoenix_phase4_checkpoint_for_phase5,
     dataset_config=lm_mixture_data_config(
         components={
-            "dclm": dclm_baseline,
+            "dclm": dclm_components_llama3["dclm_baseline"],
             "lavita_pubmedqa": lavita_pubmedqa_tokenized,
             "lavita_allprocessed": lavita_allprocessed_tokenized,
             "lavita_medmcqa": lavita_medmcqa_tokenized,
@@ -71,6 +72,7 @@ anneal_config = AnnealConfig(
             "lavita_medmcqa": medical_token_proportion * medmcqa_tokens / all_medical_tokens,
         },
     ),
+    resources=TpuPodConfig(tpu_type="v6e-128", slice_count=2),
 )
 medical_tootsie_anneal = default_anneal(
     name="checkpoints/medical_tootsie",
