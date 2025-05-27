@@ -13,7 +13,6 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 import ray
-from bs4 import BeautifulSoup
 from tqdm_loggable.auto import tqdm
 
 from marin.core.runtime import cached_or_construct_output
@@ -58,6 +57,8 @@ def remove_and_append_infobox(html: str) -> str:
     """
     Wraps the infobox in a new section with heading 'InfoBox' and appends it to the end of the article.
     """
+    from bs4 import BeautifulSoup
+
     soup = BeautifulSoup(html, "html.parser")
 
     infobox = soup.find("table", {"class": "infobox"})
@@ -89,6 +90,8 @@ def remove_references_from_html(html: str) -> str:
     """
     Removes the references list and heading from the article.
     """
+    from bs4 import BeautifulSoup
+
     soup = BeautifulSoup(html, "html.parser")
 
     reflist = soup.find("div", {"class": "reflist"})
@@ -105,6 +108,8 @@ def remove_references_from_html(html: str) -> str:
 def unwrap_eqn(html: str):
     """Extract equations from math elements and convert to LaTeX inline/block quotes,
     wrapping display math in <p> tags."""
+    from bs4 import BeautifulSoup
+
     html = BeautifulSoup(html, "html.parser")
     # Find all annotations containing equations
     annotations = html.findAll("annotation", {"encoding": "application/x-tex"})
