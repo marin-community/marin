@@ -19,7 +19,7 @@ from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,
 )
-from operations.transform.dolmino.filter_dolmino import FilterDolminoConfig, filter_dolmino
+from marin.transform.dolmino.filter_dolmino import FilterDolminoConfig, filter_dolmino
 
 wiki_longer_than_256_chars = ExecutorStep(
     name="documents/wiki-longer-than-256-chars",

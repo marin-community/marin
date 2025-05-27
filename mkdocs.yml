@@ -4,6 +4,7 @@ site_url: https://marin.community
 
 theme:
   name: material
+  custom_dir: docs/overrides
   features:
     - search.highlight
     - search.share
@@ -11,7 +12,27 @@ theme:
     - content.code.annotation
     - content.code.copy
     - navigation.footer
-  custom_dir: docs/overrides
+  language: en
+  palette:
+      - scheme: slate
+        toggle:
+          icon: material/weather-sunny
+          name: Switch to light mode
+        primary: black
+        accent: white
+      - scheme: default
+        toggle:
+          icon: material/weather-night
+          name: Switch to dark mode
+        primary: black
+        accent: white
+  icon:
+      repo: fontawesome/brands/git-alt
+      edit: material/pencil
+      view: material/eye
+  logo: static/logo.png
+  favicon: static/favicon.ico
+
 
 repo_url: https://github.com/marin-community/marin
 repo_name: marin-community/marin
@@ -25,40 +46,55 @@ extra_css:
   - css/custom.css
   - css/friendly.css
 
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/marin-community/marin
+    - icon: fontawesome/brands/discord
+      link: https://discord.gg/DhbGDq3jv4
+
 nav:
   - Home: index.md
   - Tutorials:
     - Installation: tutorials/installation.md
     - First Experiment: tutorials/first-experiment.md
+    - Setting up a Local GPU Environment: tutorials/local-gpu.md
     - Executor 101: tutorials/executor-101.md
     - Data Browser: tutorials/data-browser.md
+    - Using Data Shop: tutorials/datashop.md
     - Training an LM: tutorials/train-an-lm.md
     - Submitting a Speedrun: tutorials/submitting-speedrun.md
     - Filtering Data: tutorials/filtering-data.md
+    - Running an Annealing Experiment: tutorials/annealing-experiment.md
     - Co-Developing with Marin and Levanter: tutorials/co-develop.md
-    - Run an Annealing Experiment: tutorials/annealing-experiment.md
-  - Explanation:
-    - The Language Modeling Pipeline: explanation/lm-pipeline.md
-    - Concepts: explanation/concepts.md
-    - Evaluation: explanation/evaluation.md
-    - Experiments: explanation/experiments.md
-    - Executor: explanation/executor.md
-    - Guidelines: explanation/guidelines.md
-  - Experiment Reports: reports/index.md
+    - Adding an Optimizer for Speedrun: tutorials/add-optimizer.md
+  - Explanations:
+    - The Language Modeling Pipeline: explanations/lm-pipeline.md
+    - Datashop: explanations/datashop.md
+    - Evaluation: explanations/evaluation.md
+    - Experiments: explanations/experiments.md
+    - Executor: explanations/executor.md
+    - Guidelines: explanations/guidelines.md
+  - Experiments:
+    - Report Index: reports/index.md
+    - Auto-Generated Summary: reports/summary.md
+    - Marin 8B Retro: reports/marin-8b-retro.md
+    - Markdownified Datasets: reports/markdownified-datasets.md
   - Developer Guide:
     - Contributing: dev-guide/contributing.md
-    - Guidelines: dev-guide/guidelines.md
+    - Deployment: dev-guide/deployment.md
+    - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
     - Internal Guidelines: dev-guide/guidelines-internal.md
     - Building Docs: dev-guide/building-docs.md
     - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
-    - Architecture: reference/architecture.md
-    - Specifying Hardware Resources: reference/resource-config.md
-    - Executor API: reference/executor-api.md
-    - Default Steps: reference/default-steps.md
-    - Training Configuration: reference/train-config.md
+    - Specifying Hardware Resources: references/resource-config.md
+    - Executor API: references/executor-api.md
+    - Default Steps: references/default-steps.md
+    - Training Configuration: references/train-config.md
 
 markdown_extensions:
+  - markdown.extensions.footnotes
   - pymdownx.highlight
   - pymdownx.superfences
   - pymdownx.tabbed:
@@ -74,20 +110,20 @@ markdown_extensions:
   - footnotes
   - toc:
       permalink: true
+      toc_depth: 1-3
 
 plugins:
   - search:
       lang: en
       separator: '[\s\-\.]+'
-      min_search_length: 2
-      prebuild_index: true
-      indexing: 'full'
-      properties:
-          - title
-          - tags
-          - content
-          - sections
-      search_index_only: false
+      # min_search_length: 2
+      # prebuild_index: true
+      # # indexing: 'full'
+      # properties:
+      #     - title
+      #     - tags
+      #     - content
+      #     - sections
   - mkdocstrings:
       default_handler: python
       handlers:
@@ -123,5 +159,6 @@ plugins:
             members_order: source
             separate_signature: true
             line_length: 60
+            signature_crossrefs: true
 
   - include-markdown
