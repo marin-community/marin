@@ -164,7 +164,11 @@ def tokenize(config: TokenizeConfigBase):
     validation_source = source_config.get_shard_source("validation")
 
     if train_source is None and validation_source is None:
-        raise ValueError("No input files specified. Nothing to do.")
+        raise ValueError(
+            f"No input files specified. Nothing to do. Sources:\n"
+            f"Train source: {train_source}\n\n"
+            f"validation source: {validation_source}"
+        )
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
     batch_tokenizer = preprocessor_for_format(config.format, tokenizer)
@@ -305,7 +309,15 @@ def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
         return input_paths
 
     # we're only going to have one or the other, but might as well return both
-    return _get_files_by_extensions(input_paths, ["jsonl.{gz,zst,zstd}", "parquet"])
+    out = _get_files_by_extensions(input_paths, ["jsonl.{gz,zst,zstd}", "parquet"])
+
+    if not len(out):
+        raise ValueError(
+            f"No valid jsonl or parquet files found in {input_paths}. "
+            "Please provide a path to a directory containing jsonl or parquet files."
+        )
+
+    return out
 
 
 def _is_probably_path(path: str) -> bool:
