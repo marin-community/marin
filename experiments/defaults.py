@@ -44,7 +44,6 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
-    VersionedValue,
     ensure_versioned,
     get_executor_step,
     this_output_path,
@@ -103,11 +102,7 @@ def default_download(
         override_output_path=override_output_path,
     )
 
-    cd_path = revision
-    if isinstance(cd_path, VersionedValue):
-        cd_path = cd_path.value
-
-    return step.cd(cd_path)
+    return step
 
 
 def default_tokenize(
