@@ -14,11 +14,14 @@ from marin.utils import fsspec_mkdirs
 @dataclass
 class ConvertLingolyToDolmaConfig:
     input_path: str
+    """The directory containing the zip file of the lingoly dataset."""
     output_path: str
+    """The directory to save the lingoly dataset in dolma format."""
 
 
 @ray.remote
 def _convert_lingoly_to_dolma(config: ConvertLingolyToDolmaConfig) -> None:
+    """Convert the lingoly dataset to dolma format by concatenating the preamble, context, and questions."""
     # Create a temporary directory to extract the zip file
     with tempfile.TemporaryDirectory() as temp_dir:
         # Handle zip file from GCS or other cloud storage

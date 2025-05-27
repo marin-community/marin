@@ -39,7 +39,7 @@ from marin.resources import TpuPodConfig
 
 def default_label(
     documents_to_be_labeled: str | ExecutorStep,
-    targeted_documents: list[list[str] | str | CorpusContent],
+    targeted_documents: list[CorpusContent],
     experiment_name: str,
     resource_config: ResourceConfig,
     annotator_model_name_or_path: str = "meta-llama/Llama-3.3-70B-Instruct",
@@ -51,7 +51,9 @@ def default_label(
 
     Inputs:
         documents_to_be_labeled: Input path to documents to be labeled.
-        targeted_documents: A list of strings or filepaths of documents that is being targeted for labeling.
+        targeted_documents: A list of CorpusContent objects that define the corpus content to use for
+            generating the data filter prompt. It can either point to a filepath or a list of strings that
+            represent the text corpus.
         experiment_name: The name of the experiment.
         data_filter_prompt: The user's prompt for the annotator model.
         medu_pipeline_config_kwargs: Keyword arguments for the MEDU pipeline which is used to generate
