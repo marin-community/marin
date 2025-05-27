@@ -35,7 +35,8 @@ dependencies = [
     "sentencepiece",
     "lz4",
     "wandb<=0.19.9",
-    "jax[tpu]==0.5.1",
+    "markdownify",
+    "html2text",
 ]
 
 [project.optional-dependencies]
