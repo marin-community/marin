@@ -7,10 +7,10 @@ from typing import ClassVar
 import ray
 import requests
 
-from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port
+from marin.resources import GpuConfig, ResourceConfig
 from marin.utils import remove_tpu_lockfile_on_exit
 
 
@@ -153,7 +153,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         """
 
         @ray.remote(
-            scheduling_strategy=self._get_scheduling_strategy(resource_config),
+            scheduling_strategy=resource_config.as_ray_scheduling_strategy(),
             runtime_env=self.get_runtime_env(),
             max_calls=1,
         )
@@ -164,6 +164,11 @@ class VllmTpuEvaluator(Evaluator, ABC):
             output_path: str,
             max_eval_instances: int | None = None,
         ) -> None:
+            if isinstance(resource_config, GpuConfig):
+                from marin.evaluation.utils import set_cuda_visible_devices
+
+                set_cuda_visible_devices()
+
             self.evaluate(model, evals, output_path, max_eval_instances)
 
         ray.get(launch.remote(model, evals, output_path, max_eval_instances))

@@ -25,9 +25,10 @@ from experiments.datashop.defaults import (
     default_train_quality_model,
 )
 from experiments.evals.evals import default_eval
-from experiments.evals.resource_configs import SINGLE_TPU_V6E_8, TPU_V6E_8_STRICT_PACK, ResourceConfig
+from experiments.evals.resource_configs import SINGLE_TPU_V6E_8, TPU_V6E_8_STRICT_PACK
 from experiments.evals.task_configs import MMLU_5_SHOT
 from marin.execution.executor import executor_main
+from marin.resources import ResourceConfig
 
 
 @dataclass

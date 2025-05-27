@@ -15,7 +15,6 @@ from experiments.datashop.default_configs import (
 )
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal, default_tokenize
-from experiments.evals.resource_configs import ResourceConfig
 from experiments.llama import llama3_tokenizer
 from marin.classifiers.hf.launch_ray_training import LaunchConfig, launch_training_with_ray
 from marin.datashop.dataset_processor import DatasetOutputProcessorConfig
@@ -33,7 +32,7 @@ from marin.processing.classification.config.inference_config import InferenceCon
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import run_inference
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
-from marin.resources import TpuPodConfig
+from marin.resources import ResourceConfig, TpuPodConfig
 
 
 def default_label(
@@ -44,7 +43,7 @@ def default_label(
     annotator_model_name_or_path: str = "meta-llama/Llama-3.3-70B-Instruct",
     data_filter_prompt: str | None = None,
     medu_pipeline_config_kwargs: dict | None = None,
-    text_generation_inference_config: dict | None = None,
+    text_generation_inference_config_kwargs: dict | None = None,
 ):
     """Label a set of documents with an LLM given some targeted documents.
 
@@ -102,7 +101,7 @@ def default_label(
         data_filter_prompt_path = None
 
     # NOTE(chris): Assuming we are filtering from a jsonl.zst file such as DCLM.
-    if text_generation_inference_config is None:
+    if text_generation_inference_config_kwargs is None:
         text_generation_inference_config_kwargs = default_text_generation_config_kwargs
     else:
         text_generation_inference_config_kwargs = {
@@ -115,7 +114,6 @@ def default_label(
         output_path=this_output_path(),
         template=data_filter_prompt,
         template_path=data_filter_prompt_path,
-        tensor_parallel_size=resource_config.num_tpu,
         resource_config=resource_config,
         model_name=annotator_model_name_or_path,
         **text_generation_inference_config_kwargs,
@@ -174,17 +172,25 @@ def default_train_quality_model(
         quality_train_config_kwargs = {**default_quality_filter_train_config_kwargs, **quality_train_config_kwargs}
 
     training_config = quality_train_config_kwargs["training_config"]
+
     training_config = replace(
         training_config,
         train_dataset=dataset,
-        tpu_num_cores=resource_config.num_tpu,
         run_name=f"datashop-classifier-{experiment_name}",
     )
+
+    if isinstance(resource_config, TpuPodConfig):
+        training_config = replace(training_config, tpu_num_cores=resource_config.chip_count)
 
     quality_train_config = LaunchConfig(training_config=training_config, resource_config=resource_config)
 
     datashop_classifier_remote = ExecutorStep(
-        name=f"classifiers/datashop-bert/{experiment_name}", fn=launch_training_with_ray, config=quality_train_config
+        name=f"classifiers/datashop-bert/{experiment_name}",
+        fn=launch_training_with_ray,
+        config=quality_train_config,
+        pip_dependency_groups=[
+            "accelerate~=1.7.0",
+        ],
     )
     # Download the model locally to GCSFuse mount path for inference
     datashop_classifier = ExecutorStep(
@@ -195,11 +201,6 @@ def default_train_quality_model(
             output_path=this_output_path(),
         ),
         override_output_path=f"gcsfuse_mount/datashop-models/{experiment_name}-classifier",
-        pip_dependency_groups=[
-            # NOTE(Chris): USE MAIN for now since newest accelerate 1.6.0 still uses
-            # xrt_world_size which has since been deprecated after Pytorch XLA 2.7.0
-            "https://github.com/huggingface/accelerate/archive/refs/heads/main.zip"
-        ],
     )
 
     return datashop_classifier
@@ -433,7 +434,6 @@ def default_synthetic_data_generation(
             engine_kwargs=engine_kwargs,
             generation_kwargs=generation_kwargs,
             template=data_generation_template,
-            tensor_parallel_size=resource_config.num_tpu,
             prompt_column=prompt_column,
             filetype=input_filetype,
             output_filetype_override="jsonl.gz",

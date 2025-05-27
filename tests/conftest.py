@@ -5,6 +5,7 @@ import pytest
 import ray
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.resources import GpuConfig, TpuPodConfig
 
 default_engine_kwargs = {"enforce_eager": True, "max_model_len": 1024}
 
@@ -14,6 +15,11 @@ default_generation_params = {"max_tokens": 16}
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
+
+TPU_V6E_8_WITH_HEAD_CONFIG = TpuPodConfig(
+    tpu_type="v6e-8", slice_count=1, chip_count=1, include_tpu_head=True, include_tpu_in_ray_resources=True
+)
+SINGLE_GPU_CONFIG = GpuConfig(gpu_count=1, packing_strategy="STRICT_PACK")
 
 
 @pytest.fixture(scope="module")
@@ -49,6 +55,11 @@ def test_file_path():
 
 
 @pytest.fixture
+def text_and_label_dataset_path():
+    return "gs://marin-us-east1/documents/datashop-datasets/datashop-tutorial-9a3e89/sampled"
+
+
+@pytest.fixture
 def current_date_time():
     # Get the current local time and format as MM-DD-YYYY-HH-MM-SS
     formatted_time = time.strftime("%m-%d-%Y-%H-%M-%S", time.localtime())
@@ -57,9 +68,11 @@ def current_date_time():
 
 
 @pytest.fixture(scope="module")
-def ray_tpu_cluster():
+def ray_cluster():
     if os.getenv("START_RAY_TPU_CLUSTER") == "true":
         ray.init(resources={"TPU": 8, "TPU-v6e-8-head": 1}, num_cpus=120, ignore_reinit_error=True)
+    elif os.getenv("START_RAY_GPU_CLUSTER") == "true":
+        ray.init(num_gpus=1, num_cpus=4, ignore_reinit_error=True)
     else:
         ray.init("auto", ignore_reinit_error=True)
     yield

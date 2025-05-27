@@ -18,8 +18,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
-import wandb
 
+import wandb
 from marin.execution.executor import ExecutorStep
 from marin.scaling_laws.utils import (
     ProjectionPoint,

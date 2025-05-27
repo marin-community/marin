@@ -8,9 +8,9 @@ import ray
 from ray.data import DataContext
 from ray.data.datasource import FilenameProvider
 
-from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
+from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK
 from marin.generation.pipeline import vLLMTextGeneration
-from marin.generation.ray_utils import get_ray_remote_args_scheduling_strategy_fn
+from marin.resources import GpuConfig, ResourceConfig, TpuPodConfig
 from marin.utils import fsspec_glob, remove_tpu_lockfile_on_exit
 
 
@@ -35,7 +35,6 @@ class TextGenerationInferenceConfig:
     # Ray data specific
     num_instances: tuple[int, int] = (1, 4)
     batch_size: int = 32
-    tensor_parallel_size: int = 1
     preserve_order: bool = False
     one_to_one_input_output_mapping: bool = False
 
@@ -47,7 +46,7 @@ class TextGenerationInferenceConfig:
 
     # Hardware specific
     resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
-    generated_text_column_name: str = "text"
+    generated_text_column_name: str = "generated_text"
 
 
 class OneToOneFilenameProvider(FilenameProvider):
@@ -83,18 +82,29 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
     # This is the amount of time to wait for the actors to be created.
     # We increase the default timeout since model loading
     # for large models can take awhile.
-    ctx.wait_for_min_actors_s = 60 * 10 * config.tensor_parallel_size
+    if isinstance(config.resource_config, TpuPodConfig):
+        ctx.wait_for_min_actors_s = 60 * 10 * config.resource_config.chip_count
+    elif isinstance(config.resource_config, GpuConfig):
+        ctx.wait_for_min_actors_s = 60 * 10 * config.resource_config.gpu_count
+    else:
+        raise ValueError(f"Unknown resource config type: {type(config.resource_config)}")
 
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
-    if config.tensor_parallel_size == 1:
-        return {"resources": {"TPU": 1, f"{config.resource_config.tpu_type}-head": 1}}
+    if isinstance(config.resource_config, TpuPodConfig):
+        device_count = config.resource_config.chip_count
+    elif isinstance(config.resource_config, GpuConfig):
+        device_count = config.resource_config.gpu_count
     else:
-        return {
-            "ray_remote_args_fn": get_ray_remote_args_scheduling_strategy_fn(
-                config.resource_config.num_tpu, config.resource_config.strategy
-            )
-        }
+        raise ValueError(f"Unknown resource config type: {type(config.resource_config)}")
+
+    if device_count == 1:
+        if isinstance(config.resource_config, TpuPodConfig):
+            return {"resources": config.resource_config.get_ray_resources_dict()}
+        elif isinstance(config.resource_config, GpuConfig):
+            return {"num_gpus": config.resource_config.gpu_count}
+    else:
+        return {"ray_remote_args_fn": dict(scheduling_strategy=config.resource_config.as_ray_scheduling_strategy())}
 
 
 def get_ray_data_read_kwargs(config: TextGenerationInferenceConfig):
