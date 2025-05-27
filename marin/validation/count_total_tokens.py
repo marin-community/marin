@@ -6,11 +6,10 @@ python -m marin.validation.count_total_tokens --input_path gs://marin-data/filte
 """
 
 import argparse
-import json
 import os
 import time
 
-import fsspec
+import pandas as pd
 import ray
 
 from marin.utils import fsspec_glob
@@ -35,11 +34,24 @@ def count_tokens_in_file(filename: str, tokenizer_name: str) -> int:
         raise RuntimeError(f"Failed to load tokenizer {tokenizer_name} after {NUM_DOWNLOAD_RETRIES} retries")
 
     total_tokens = 0
-    with fsspec.open(filename, "rt", compression="infer") as f:
-        for line in f:
-            data = json.loads(line)
-            if "text" in data:
-                total_tokens += len(tokenizer.encode(data["text"]))
+
+    # Determine file format and read accordingly
+    if filename.endswith(".parquet"):
+        df = pd.read_parquet(filename)
+    elif filename.endswith(".jsonl.zst"):
+        df = pd.read_json(filename, lines=True, compression="zstd")
+    elif filename.endswith(".jsonl.gz"):
+        df = pd.read_json(filename, lines=True, compression="gzip")
+    elif filename.endswith(".jsonl"):
+        df = pd.read_json(filename, lines=True)
+    else:
+        raise ValueError(f"Unsupported file format: {filename}")
+
+    # Count tokens in 'text' column if it exists
+    if "text" in df.columns:
+        for text in df["text"].dropna():
+            total_tokens += len(tokenizer.encode(str(text)))
+
     return total_tokens
 
 
@@ -71,12 +83,17 @@ def count_total_tokens(input_path: str, tokenizer_name: str, filetype: str) -> i
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Count total tokens in 'text' fields of jsonl.gz files.")
-    parser.add_argument("--input_path", type=str, required=True, help="Input directory containing jsonl.gz files")
+    parser = argparse.ArgumentParser(description="Count total tokens in 'text' fields of supported file formats.")
+    parser.add_argument("--input_path", type=str, required=True, help="Input directory containing data files")
     parser.add_argument(
         "--tokenizer_name", type=str, default="meta-llama/Llama-3.1-8B-Instruct", help="Name of the tokenizer to use"
     )
-    parser.add_argument("--filetype", type=str, default="jsonl.gz", help="Filetype of the input files")
+    parser.add_argument(
+        "--filetype",
+        type=str,
+        default="jsonl.gz",
+        help="Filetype of the input files (jsonl.gz, jsonl.zst, parquet, jsonl)",
+    )
 
     args = parser.parse_args()
 

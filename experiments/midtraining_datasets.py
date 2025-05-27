@@ -29,10 +29,3 @@ lavita_medical_qa_datasets = default_download(
     revision="59d48e2",
     override_output_path="raw/lavita_medical_qa",
 )
-
-openlifescienceai_medmcqqa = default_download(
-    name="raw/openlifescienceai_medmcqqa",
-    hf_dataset_id="openlifescienceai/medmcqa",
-    revision="91c6572",
-    override_output_path="raw/openlifescienceai_medmcqqa",
-)
