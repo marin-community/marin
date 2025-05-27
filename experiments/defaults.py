@@ -8,8 +8,10 @@ import os
 from collections.abc import Sequence
 from datetime import timedelta
 from functools import lru_cache
+from typing import Any
 
 import jmp
+from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
@@ -28,7 +30,7 @@ from levanter.utils import fsspec_utils
 from experiments.anneal_config import AnnealConfig
 from experiments.evals.task_configs import (
     CORE_TASKS,
-    CORE_TASKS_PLUS_MMLU,
+    MMLU_TASKS,
     convert_to_levanter_task_config,
     convert_to_task_metrics,
 )
@@ -36,10 +38,13 @@ from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
+from marin.download.huggingface.download import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
+    VersionedValue,
     ensure_versioned,
     get_executor_step,
     this_output_path,
@@ -52,7 +57,7 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
-from marin.processing.tokenize.tokenize import HfTokenizeConfig
+from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
 from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import (
     TrainLmOnPodConfig,
@@ -60,6 +65,49 @@ from marin.training.training import (
 )
 
 logger = logging.getLogger("ray")
+
+
+def default_download(
+    name: str,
+    hf_dataset_id: str,
+    revision: str,
+    override_output_path: str | None = None,
+    **kwargs: Any,
+) -> InputName:
+    """
+    Download a HuggingFace dataset and upload it to a specified path with default configuration.
+
+    Args:
+        name: The name of the Download step. It forms the basis of the output path
+            unless override_output_path is explicitly specified.
+        hf_dataset_id: The HuggingFace dataset ID to download. As `$ORG/$DATASET` on HF Hub
+        revision: The revision of the dataset to download.
+            Short Commit Hash from HF Dataset Repo (7 characters)
+        override_output_path: Optional. The output path for the dataset.
+        **kwargs: Additional keyword arguments that are passed to the download config.
+
+    The final output data will reside in '{output_path}/{revision}'.
+    """
+
+    step = ExecutorStep(
+        name=name,
+        description=f"Download {hf_dataset_id} revision {revision}",
+        fn=download_hf,
+        config=DownloadConfig(
+            hf_dataset_id=hf_dataset_id,
+            revision=revision,
+            gcs_output_path=this_output_path(),
+            wait_for_completion=True,
+            **kwargs,
+        ),
+        override_output_path=override_output_path,
+    )
+
+    cd_path = revision
+    if isinstance(cd_path, VersionedValue):
+        cd_path = cd_path.value
+
+    return step.cd(cd_path)
 
 
 def default_tokenize(
@@ -216,8 +264,6 @@ def default_train(
                 name = prefix[: 63 - len(suffix)] + "-" + suffix
         logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
 
-    # TODO: right now, assume architecture is a LlamaConfig, generalize this
-    assert isinstance(model_config, LlamaConfig)
     if eval_harness_tasks:
         harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
     else:
@@ -275,6 +321,11 @@ def default_train(
             quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
             initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
             watch=train_config.watch,
+            axis_resources={
+                # Special axes for MoEs
+                "token": (ResourceAxis.REPLICA, ResourceAxis.DATA),
+                "token_repeat": (ResourceAxis.REPLICA, ResourceAxis.DATA),
+            },
         ),
         initialize_from_checkpoint_path=(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
@@ -360,8 +411,6 @@ def default_sft(
                   - For mixture: a LMMixtureDatasetConfig with multiple datasets.
         model_config: Levanter LlamaConfig for the model architecture to train.
         sft_config: Configuration for the SFT training process.
-        mixture_weights: Dict mapping datasets within mixture to weight to sample with. If provided,
-                       enables mixture-based training.
         tags: Additional tags for WandB logging. Default: ().
 
     Returns:
@@ -471,7 +520,8 @@ def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
         tokenized=anneal_config.dataset_config,
         model_config=llama_8b,
         train_config=anneal_stage_train_config,
-        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+        use_default_validation=anneal_config.use_default_validation,
+        eval_harness_tasks=MMLU_TASKS,
     )
 
 
@@ -518,12 +568,12 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
     match tokenized:
         case LMMixtureDatasetConfig(tokenizer=tokenizer):
             pass
-        case ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer)):
-            pass
+        case ExecutorStep(config=config) if isinstance(config, TokenizeConfigBase):
+            tokenizer = config.tokenizer
         case ExecutorStep(config=HfTokenizeConfig(tokenizer=tokenizer)):
             pass
-        case InputName(step=ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer))):
-            pass
+        case InputName(step=ExecutorStep(config)) if isinstance(config, TokenizeConfigBase):
+            tokenizer = config.tokenizer
         case _:
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 

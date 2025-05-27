@@ -16,13 +16,16 @@ Install dependencies:
 ```bash
 cd data_browser
 poetry install
+npm install
 ```
 
-The data browser takes a configuration file that specifies the root directory (in our examples, it's been `local_store`, 
+The data browser takes a configuration file that specifies the root directory (in our examples, it's been `local_store`,
 or `../local_store` if we're in the `data_browser` directory).  This is what's defined in `conf/local.conf`.
 
 The data browser has two pieces:
+
 - Frontend server (React)
+
 - Backend server (Flask)
 
 To start the data browser, we need to run both servers, in different shells:
