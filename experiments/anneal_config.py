@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from marin.execution import InputName
 from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig
 from marin.resources import ResourceConfig, TpuPodConfig
 
@@ -8,8 +9,7 @@ from marin.resources import ResourceConfig, TpuPodConfig
 class AnnealConfig:
     # 198468 steps is roughly 198468 steps * 1024 batch size * 4096 seq len = 0.832T tokens
     # Numbers were taken from exp600_tootsie.py. We start with this 8B model because it would take a long time to train
-    # another one from scratch.
-    DEFAULT_CHECKPOINT_PATH = "gs://marin-us-east1/checkpoints/llama-8b-tootsie-0.001-19ad63/checkpoints/step-660000"
+    DEFAULT_CHECKPOINT_PATH = InputName.hardcoded("checkpoints/llama-8b-tootsie-0.001-19ad63/checkpoints/step-660000")
     LLAMA_MAX_SEQ_LEN = 4096
 
     # Annealing dataset and proportions
@@ -17,7 +17,7 @@ class AnnealConfig:
 
     # Model Checkpoint related
     # The path to the checkpoint to initialize from. This is the checkpoint you start the annealing from.
-    initialize_from_checkpoint_path: str = DEFAULT_CHECKPOINT_PATH
+    initialize_from_checkpoint_path: str | InputName = DEFAULT_CHECKPOINT_PATH
 
     # Training schedule related
     # The learning rate to use for training. Since our checkpoint has a stable phase LR of 1e-3, we use that.

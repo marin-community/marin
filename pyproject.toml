@@ -34,7 +34,9 @@ dependencies = [
     "haliax>=1.4.dev348",
     "sentencepiece",
     "lz4",
-    "wandb<=0.19.9"
+    "wandb<=0.19.9",
+    "markdownify",
+    "html2text",
 ]
 
 [project.optional-dependencies]

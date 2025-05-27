@@ -3,6 +3,7 @@ import logging
 import os
 from functools import lru_cache
 
+import numpy
 import transformers
 from levanter.data.text import LMDatasetSourceConfig, LMMixtureDatasetConfig
 
@@ -121,6 +122,107 @@ def lm_mixture_data_config(
     )
 
 
+def interpolate_mixture_configs(
+    mixtures: list[LMMixtureDatasetConfig],
+    weights: list[float],
+) -> LMMixtureDatasetConfig:
+    """
+    Interpolates multiple mixture configs into a single config.
+
+    Args:
+        mixtures: List of LMMixtureDatasetConfig to interpolate.
+        weights: List of weights for each mixture config. Must sum to 1.0.
+
+    Returns:
+        A new LMMixtureDatasetConfig that is the weighted average of the input configs.
+    """
+    if len(mixtures) != len(weights):
+        raise ValueError("mixtures and weights must have the same length")
+
+    if not all(isinstance(m, LMMixtureDatasetConfig) for m in mixtures):
+        raise TypeError("All items in mixtures must be LMMixtureDatasetConfig instances")
+
+    if not all(isinstance(w, int | float) for w in weights):
+        raise TypeError("All items in weights must be numeric")
+
+    if not numpy.isclose(sum(weights), 1.0):
+        raise ValueError("Weights must sum to 1.0")
+
+    # verify they have the same tokenizer and other properties
+    tokenizer = mixtures[0].tokenizer
+    for mixture in mixtures:
+        if mixture.tokenizer != tokenizer and not _are_tokenizers_equivalent(mixture.tokenizer, tokenizer):
+            raise ValueError(
+                "All mixtures must have the same tokenizer, but got:" f" {mixture.tokenizer} vs {tokenizer}"
+            )
+
+        if mixture.shuffle != mixtures[0].shuffle:
+            raise ValueError("All mixtures must have the same shuffle policy")
+        if mixture.max_train_batches != mixtures[0].max_train_batches:
+            raise ValueError("All mixtures must have the same max_train_batches")
+        if mixture.num_validation_sequences != mixtures[0].num_validation_sequences:
+            raise ValueError("All mixtures must have the same num_validation_sequences")
+
+    mixture_train_weights = [mixture.train_weights for mixture in mixtures]
+
+    combined_weights = interpolate_mixture_weights(mixture_train_weights, weights)
+
+    combined_configs = {}
+    for mixture in mixtures:
+        for name, config in mixture.configs.items():
+            if name not in combined_configs:
+                combined_configs[name] = config
+            else:
+                pass
+
+    return LMMixtureDatasetConfig(
+        configs=combined_configs,
+        train_weights=combined_weights,
+        tokenizer=mixtures[0].tokenizer,
+        cache_dir=None,
+        shuffle=mixtures[0].shuffle,
+        max_train_batches=mixtures[0].max_train_batches,
+        num_validation_sequences=mixtures[0].num_validation_sequences,
+    )
+
+
+def interpolate_mixture_weights(mixture_weights: list[dict[str, float]], weights: list[float]) -> dict[str, float]:
+    """
+    Interpolates the weights of multiple mixtures into a single set of weights.
+
+    This method normalizes the weights of each mixture to sum to 1.0 before combining them.
+
+    Args:
+        mixture_weights: List of dictionaries, each mapping dataset names to their weights in the mixture.
+        weights: List of weights corresponding to each mixture. Must sum to 1.0.
+    Returns:
+        A single dictionary mapping dataset names to their interpolated weights.
+    """
+    if len(mixture_weights) != len(weights):
+        raise ValueError("mixture_train_weights and weights must have the same length")
+
+    # check weights are numeric and sum to 1.0
+    if not all(isinstance(w, int | float) for w in weights):
+        raise TypeError("All items in weights must be numeric")
+
+    if not numpy.isclose(sum(weights), 1.0):
+        raise ValueError("Weights must sum to 1.0")
+
+    combined_weights = {}
+    for train_weights, weight in zip(mixture_weights, weights, strict=False):
+        total_weight_in_mixture = sum(train_weights.values())
+        if total_weight_in_mixture == 0:
+            raise ValueError("Total weight in mixture cannot be zero")
+        normalized_mixture_weights = {name: w / total_weight_in_mixture for name, w in train_weights.items()}
+        for name in normalized_mixture_weights:
+            if name not in combined_weights:
+                combined_weights[name] = 0.0
+            else:
+                logger.info(f"Datasource {name} is in both mixtures, adding weights together.")
+            combined_weights[name] += weight * normalized_mixture_weights.get(name, 0.0)
+    return combined_weights
+
+
 def lm_varying_mixture_data_config(
     components: dict[str, TokenizerStep],
     weights_list: list[tuple[int, dict[str, float]]],
@@ -230,6 +332,24 @@ def add_validation_sets_to_mixture(
         raise ValueError(f"Invalid train_weights type: {type(config.train_weights)}")
 
     return dataclasses.replace(config, configs=new_configs, train_weights=new_weights)
+
+
+def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LMMixtureDatasetConfig:
+    """
+    Creates a mixture of datasets purely for evaluation purposes. Used mostly for visualizing log probabilities.
+
+    Args:
+        inputs (dict[str, ExecutorStep]): The inputs to the mixture.
+
+    Returns:
+        LMMixtureDatasetConfig: The mixture of datasets.
+    """
+    return lm_mixture_data_config(
+        {name: step for name, step in inputs.items()},
+        {name: 0.0 for name in inputs},
+        shuffle=False,
+        missing_weights_are_validation=True,
+    )
 
 
 @lru_cache(maxsize=32)
