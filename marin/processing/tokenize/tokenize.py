@@ -109,7 +109,7 @@ class TokenizeConfig(TokenizeConfigBase):
             url_or_name_to_check = None
             if isinstance(item, str):
                 url_or_name_to_check = item
-            elif hasattr(item, 'name') and isinstance(item.name, str):
+            elif hasattr(item, "name") and isinstance(item.name, str):
                 url_or_name_to_check = item.name
             # If item is neither a string nor has a .name attribute,
             # url_or_name_to_check remains None and it's skipped, as per instructions.
@@ -117,7 +117,8 @@ class TokenizeConfig(TokenizeConfigBase):
             if url_or_name_to_check:
                 if re.search(r"\btest\b", url_or_name_to_check) or re.search(r"validation", url_or_name_to_check):
                     raise ValueError(
-                        f"Error: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern ('test' or 'validation'). "
+                        f"Error: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
+                        "('test' or 'validation'). "
                         "Please ensure training data does not include test or validation sets."
                     )
 
