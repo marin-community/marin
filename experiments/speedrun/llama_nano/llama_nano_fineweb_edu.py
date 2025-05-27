@@ -10,7 +10,6 @@ from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
-
 logger = logging.getLogger("ray")
 
 speedrun_config = SpeedrunConfig(
