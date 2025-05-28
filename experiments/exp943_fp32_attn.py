@@ -28,7 +28,7 @@ llama_8b_quick_fp32_attn = dataclasses.replace(
 llama_8b_quick_train_config = dataclasses.replace(
     llama_8b_train_config,
     num_train_steps=1000,
-    resources=TpuPodConfig(tpu_type="v4-128", node_count=1),
+    resources=TpuPodConfig(tpu_type="v4-128", slice_count=1),
     # 1024 doesn't fit on v4-128
     train_batch_size=512,
 )

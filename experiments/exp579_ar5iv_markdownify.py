@@ -17,10 +17,10 @@ Reference Issue: https://github.com/marin-community/marin/issues/579
 
 import logging
 
+from marin.download.ar5iv.download import DownloadConfig, download
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
-from operations.download.ar5iv.download import DownloadConfig, download
-from operations.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump
+from marin.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump
 
 logger = logging.getLogger("ray")
 
@@ -242,7 +242,9 @@ ar5iv_extraction_steps = get_ar5iv_extraction_step(
     ),
 )
 
-ar5iv_no_problem_resiliparse_custom_fork = ar5iv_extraction_steps["no-problem"]
+ar5iv_no_problem_resiliparse_custom_fork = ar5iv_extraction_steps["no-problem"].with_output_path(
+    "documents/ar5iv/ar5iv-04-2024-no-problem-3971f"
+)
 ar5iv_warnings_resiliparse_custom_fork = ar5iv_extraction_steps["warnings"]
 ar5iv_errors_resiliparse_custom_fork = ar5iv_extraction_steps["errors"]
 

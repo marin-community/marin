@@ -10,7 +10,17 @@ import pytest
 import ray
 from draccus.utils import Dataclass
 
-from marin.execution.executor import Executor, ExecutorStep, _get_info_path, output_path_of, this_output_path, versioned
+from marin.execution import THIS_OUTPUT_PATH
+from marin.execution.executor import (
+    Executor,
+    ExecutorStep,
+    InputName,
+    _get_info_path,
+    collect_dependencies_and_version,
+    output_path_of,
+    this_output_path,
+    versioned,
+)
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     get_current_status,
@@ -445,3 +455,152 @@ def test_run_only_some_steps():
         results = read_log(log)
         assert len(results) == 2
         assert (results[0] is None and results[1]["m"] == 10) or (results[1] is None and results[0]["m"] == 10)
+
+
+@dataclass(frozen=True)
+class DummyCfg:
+    x: int = 0
+    input_path: str | None = None
+    output_path: str = THIS_OUTPUT_PATH
+
+
+def dummy_fn(cfg: DummyCfg):
+    # write one tiny file so the step "does something"
+    out_path = os.path.join(cfg.output_path, "dummy")
+    os.makedirs(out_path, exist_ok=True)
+    with open(os.path.join(out_path, "done.txt"), "w") as f:
+        f.write(str(cfg.x))
+    return cfg.x
+
+
+def shouldnt_run_fn(cfg: DummyCfg):
+    raise RuntimeError("This function should not run.")
+
+
+# ----------------------------------------------------------------------
+#  Unit tests for collect_dependencies_and_version
+# ----------------------------------------------------------------------
+
+
+def test_collect_deps_skip_vs_block():
+    parent = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=1))
+
+    # ----- skip parent -------------------------------------------------
+    inp_skip = InputName(step=parent, name="ckpt.pt").nonblocking()
+    computed_deps = collect_dependencies_and_version(inp_skip)
+    deps = computed_deps.dependencies
+    ver = computed_deps.version
+    pseudo = computed_deps.pseudo_dependencies
+
+    assert parent in pseudo and parent not in deps
+    # Placeholder looks like "DEP[0]/ckpt.pt"
+    assert ver == {"": "DEP[0]/ckpt.pt"}
+
+    # ----- require parent (default) ------------------------------------
+    inp_block = InputName(step=parent, name="ckpt.pt")  # no .skip_parent()
+    computed_deps = collect_dependencies_and_version(inp_block)
+    deps = computed_deps.dependencies
+    ver = computed_deps.version
+    pseudo = computed_deps.pseudo_dependencies
+
+    assert parent in deps and parent not in pseudo
+    assert ver == {"": "DEP[0]/ckpt.pt"}  # same placeholder, but in deps
+
+
+# ----------------------------------------------------------------------
+#  Parent-version should still affect child hash
+# ----------------------------------------------------------------------
+
+
+def test_parent_version_bubbles_into_skip_child():
+    """
+    Change parent's config ➜ child's version must change even if parent
+    is only a pseudo-dependency.
+    """
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        # First parent/child pair (parent.x = 1)
+        parent1 = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=versioned(1)))
+        child1_cfg = DummyCfg(0, input_path=parent1.cd("dummy").nonblocking())
+        child1 = ExecutorStep(
+            name="child",
+            fn=dummy_fn,
+            config=child1_cfg,
+        )
+
+        executor = create_executor(temp_dir)
+        executor.run(steps=[child1])
+        version1 = executor.version_strs[child1]
+        executor = create_executor(temp_dir)
+
+        # Second pair - identical except parent.x = 2
+        parent2 = ExecutorStep(name="parent2", fn=dummy_fn, config=DummyCfg(x=versioned(2)))
+        child2 = ExecutorStep(
+            name="child",
+            fn=dummy_fn,
+            config=DummyCfg(x=0, input_path=parent2.cd("dummy").nonblocking()),
+        )
+        executor.run(steps=[child2])
+        version2 = executor.version_strs[child2]
+
+        # Hashes should differ
+        assert version1 != version2
+
+
+def test_parent_doesnt_run_on_skip_parent():
+    """
+    Parent should not run if child is a skip-parent.
+    """
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        parent = ExecutorStep(name="parent", fn=shouldnt_run_fn, config=DummyCfg(x=1))
+        child = ExecutorStep(
+            name="child",
+            fn=dummy_fn,
+            config=DummyCfg(input_path=parent.cd("dummy").nonblocking()),
+        )
+
+        executor = create_executor(temp_dir)
+        executor.run(steps=[child])
+
+
+def test_skippable_parent_will_run_if_asked():
+    """
+    Parent should run if child is a skip-parent and we ask it to.
+    """
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        parent = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=1))
+        child = ExecutorStep(
+            name="child",
+            fn=dummy_fn,
+            config=DummyCfg(input_path=parent.cd("dummy").nonblocking()),
+        )
+
+        executor = create_executor(temp_dir)
+        executor.run(steps=[child], run_only=["parent"])
+
+        # make sure parent ran
+        assert os.path.exists(os.path.join(executor.output_paths[parent], "dummy", "done.txt"))
+
+
+def test_parent_will_run_if_some_child_is_not_skippable():
+    """
+    Parent should run if child is a skip-parent and we ask it to.
+    """
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        parent = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=1))
+        child = ExecutorStep(
+            name="child",
+            fn=dummy_fn,
+            config=DummyCfg(input_path=parent.cd("dummy").nonblocking()),
+        )
+
+        child2 = ExecutorStep(
+            name="child2",
+            fn=dummy_fn,
+            config=DummyCfg(input_path=parent.cd("dummy")),  # no skip
+        )
+
+        executor = create_executor(temp_dir)
+        executor.run(steps=[child, child2])
+
+        # make sure parent ran
+        assert os.path.exists(os.path.join(executor.output_paths[parent], "dummy", "done.txt"))

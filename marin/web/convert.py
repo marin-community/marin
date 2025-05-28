@@ -3,8 +3,6 @@ import re
 from dataclasses import asdict
 from urllib.parse import urljoin
 
-from bs4 import BeautifulSoup
-
 from marin.markdown import to_markdown
 from marin.schemas.web.convert import (
     ExtractionConfig,
@@ -136,6 +134,7 @@ def convert_page_with_readability(
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
     """
     import htmlmin
+    from bs4 import BeautifulSoup
     from readability import Document
 
     # remove null character and control characters
@@ -179,6 +178,7 @@ def convert_page_with_readability(
 def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
     print("This is Legacy method, use convert_page_python instead")
     import htmlmin
+    from bs4 import BeautifulSoup
     from readabilipy import simple_json_from_html_string
 
     reabilitied = simple_json_from_html_string(html, use_readability=True)
@@ -240,7 +240,7 @@ def convert_page(
             raise Exception(f"Invalid extract_method: {extract_method}")
 
 
-def make_links_absolute(soup: BeautifulSoup, base_url):
+def make_links_absolute(soup, base_url):
     """Converts relative image/anchor URLs to absolute URLs."""
     for tag in soup.select("a, img"):
         # handle images and anchors
