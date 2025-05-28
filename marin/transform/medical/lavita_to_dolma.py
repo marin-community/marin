@@ -12,6 +12,7 @@ from marin.core.runtime import cached_or_construct_output, map_files_in_director
 class LavitaToDolmaConfig:
     input_path: str
     output_path: str
+    subset: str
     split: str
 
 
@@ -90,16 +91,16 @@ def lavita_medmcqa_to_dolma(row):
 
 @ray.remote
 @cached_or_construct_output(success_suffix="success")
-def lavita_file_to_dolma(input_path: str, output_path: str, split: str):
+def lavita_file_to_dolma(input_path: str, output_path: str, subset: str):
     df = pd.read_parquet(input_path)
-    if split == "all-processed":
+    if subset == "all-processed":
         result_series = df.apply(lavita_allprocessed_to_dolma, axis=1)
-    elif split == "medmcqa":
+    elif subset == "medmcqa":
         result_series = df.apply(lavita_medmcqa_to_dolma, axis=1)
-    elif split == "pubmed-qa":
+    elif subset == "pubmed-qa":
         result_series = df.apply(lavita_pubmedqa_to_dolma, axis=1)
     else:
-        raise ValueError(f"Invalid split: {split}")
+        raise ValueError(f"Invalid subset: {subset}")
 
     # Convert the series of dictionaries back to a DataFrame
     df = pd.DataFrame(result_series.tolist())
@@ -109,9 +110,9 @@ def lavita_file_to_dolma(input_path: str, output_path: str, split: str):
 
 
 def convert_lavita_split_to_dolma(config: LavitaToDolmaConfig):
-    input_path = os.path.join(config.input_path, config.split)
+    input_path = os.path.join(config.input_path, config.subset)
     futures = map_files_in_directory(
-        lavita_file_to_dolma.remote, input_path, "**/*train*.parquet", config.output_path, split=config.split
+        lavita_file_to_dolma.remote, input_path, f"*{config.split}*.parquet", config.output_path, subset=config.subset
     )
 
     ray.get(futures)
