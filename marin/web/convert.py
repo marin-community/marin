@@ -91,7 +91,6 @@ def convert_page_with_resiliparse(
 
     content = None
     if not config.use_custom_variant:
-        print(config.resiliparse_kwargs)
         content = extract_plain_text(html, **config.resiliparse_kwargs)
 
         if title and config.prepend_title:
