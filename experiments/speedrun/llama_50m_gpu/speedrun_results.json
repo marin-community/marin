@@ -1,0 +1,99 @@
+{
+  "runs": [
+    {
+      "run_info": {
+        "author": {
+          "affiliation": "Stanford University",
+          "name": "Herumb Shandilya",
+          "url": "https://www.x.com/krypticmouse"
+        },
+        "description": "50m model based on Llama architecture.",
+        "eval/paloma/c4_en/bpb": 1.4032597541809082,
+        "model_config": {
+          "activation_function": "silu",
+          "attn_backend": null,
+          "cross_entropy_block_size": null,
+          "flash_attention_block_size": null,
+          "gradient_checkpointing": true,
+          "hidden_dim": 192,
+          "hybrid_norm": false,
+          "initializer_range": 0.02,
+          "input_embedding_norm": false,
+          "intermediate_dim": 448,
+          "layer_norm_epsilon": 1e-05,
+          "num_heads": 2,
+          "num_kv_heads": 2,
+          "num_layers": 4,
+          "reference_checkpoint": "meta-llama/Llama-2-7b-hf",
+          "rope": {
+            "factor": 1.0,
+            "theta": 10000
+          },
+          "scan_layers": true,
+          "seq_len": 1024,
+          "tie_word_embeddings": false,
+          "tokenizer": null,
+          "upcast_attn": false,
+          "use_bias": false,
+          "use_flash_attention": true,
+          "use_layer_norm_weight": true
+        },
+        "model_flops": 1.66350525825024e+17,
+        "model_size": 50874048,
+        "resources": {
+          "accelerator_type": "A100",
+          "device_flops_override": null,
+          "gpu_count": 4
+        },
+        "run_completion_timestamp": "2025-05-19 08:02:06 UTC",
+        "tokenized_dataset": "/juice4/scr4/herumbshandilya/50M_llama_chinchilla/tokenized/subcache/fineweb-edu-10B-6fbcbb",
+        "total_tokens": 996147200,
+        "train_config": {
+          "allow_partial_checkpoint": false,
+          "beta1": null,
+          "beta2": null,
+          "cycle_length": null,
+          "data_seed": null,
+          "decay": null,
+          "ema_beta": null,
+          "epsilon": null,
+          "initialize_from_checkpoint_path": null,
+          "initialize_from_hf": null,
+          "int8": false,
+          "learning_rate": 0.003,
+          "lr_schedule": null,
+          "max_eval_batches": null,
+          "max_grad_norm": null,
+          "min_lr_ratio": null,
+          "num_train_steps": 7600,
+          "optimizer_config": null,
+          "per_device_eval_parallelism": null,
+          "reset_data_loader_on_init": true,
+          "rewarmup": null,
+          "steps_per_eval": 500,
+          "steps_per_export": 10000,
+          "steps_per_hf_export": null,
+          "steps_per_task_eval": null,
+          "train_batch_size": 128,
+          "warmup": null,
+          "watch": {
+            "include_histograms": false,
+            "include_norms": true,
+            "include_per_parameter_norms": true,
+            "interval": 10,
+            "split_scan_layers": true,
+            "watch_targets": [
+              "grads",
+              "params"
+            ]
+          },
+          "weight_decay": 0.1,
+          "z_loss_weight": null
+        },
+        "training_hardware_flops": 1.4999205700146406e+18,
+        "training_time": 1201.859431101475,
+        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/llama_50m_gpu_4xA100_run-625275"
+      }
+    }
+  ]
+}

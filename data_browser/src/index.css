@@ -53,15 +53,6 @@ tr {
   vertical-align: top;
 }
 
-/* Alternate colors */
-.item-table tr:nth-child(even) {
-  background-color: #eeeeee;
-}
-
-.item-table tr:nth-child(odd) {
-  background-color: #ffffff;
-}
-
 .items-table {
   border-collapse: collapse;
 }
@@ -77,29 +68,6 @@ tr {
 
 .date {
   font-style: italic;
-}
-
-.experiment-step {
-  padding: 10px;
-  border: 1px solid lightgray;
-  margin-top: 10px;
-  margin-bottom: 10px;
-}
-
-.experiment-step-line {
-  margin: 5px;
-  padding: 5px;
-}
-
-.experiment-step-config {
-  padding: 5px;
-  border: 1px solid lightgray;
-  margin: 5px;
-}
-
-.experiment-step-status {
-  margin: 5px;
-  padding: 5px;
 }
 
 .description {
@@ -131,4 +99,31 @@ tr {
   margin: 10px;
   padding: 10px;
   border: 1px solid lightgray;
+}
+
+.status-container {
+  white-space: nowrap;
+}
+
+.experiment-steps-table {
+  border-collapse: collapse;
+}
+
+.experiment-steps-table tr {
+  border-top: 1px solid lightgray;
+}
+
+.experiment-step-table-cell {
+  padding-right: 20px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.dataset-table {
+  border: 1px solid lightgray;
+  padding: 10px;
+}
+
+.highlight, .path-link:hover {
+  background-color: #e6f3ff;
 }

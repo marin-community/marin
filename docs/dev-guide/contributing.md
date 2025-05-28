@@ -32,7 +32,7 @@ You can run the tests with `make test`.
 
 ## Guidelines
 
-Please see the [guidelines](../guidelines.md) for principles and practices for Marin.
+Please see the [guidelines](../explanations/guidelines.md) for principles and practices for Marin.
 
 
 # Data browser
