@@ -168,12 +168,16 @@ def default_tokenize(
 
 
 @lru_cache  # LRU to make the executor happier
-def default_validation_sets(tokenizer: str, is_speedrun: bool = False, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
+def default_validation_sets(
+    tokenizer: str, is_speedrun: bool = False, base_path: str = "tokenized/"
+) -> dict[str, TokenizerStep]:
     if is_speedrun:
         from marin.speedrun.paloma_local_download import paloma_tokenized
+
         return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
     else:
         from experiments.paloma import paloma_tokenized
+
         return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
 
 
