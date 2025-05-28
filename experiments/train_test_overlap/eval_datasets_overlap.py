@@ -34,7 +34,7 @@ gsm8k_raw = ExecutorStep(
     fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="openai/gsm8k",
-        revision=versioned("6e925c6"),
+        revision=versioned("e53f048"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
@@ -162,7 +162,7 @@ hellaswag_raw = ExecutorStep(
         revision=versioned("6002345"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_urls_glob=["**/*.jsonl", "*.jsonl"],
+        hf_urls_glob=["**/*.json", "*.json"],
     ),
     override_output_path="raw/Rowan/hellaswaghf",
 )
@@ -190,7 +190,7 @@ boolq_raw = ExecutorStep(
         revision=versioned("35b264d"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_urls_glob=["**/*.jsonl", "*.jsonl"],
+        hf_urls_glob=["**/*.parquet", "*.parquet"],
     ),
     override_output_path="raw/google/boolqhf",
 )

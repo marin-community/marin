@@ -10,6 +10,13 @@ from dataclasses import dataclass, field
 
 import fsspec
 
+from experiments.train_test_overlap.train_test.overlap_pipeline_dclm_sharded import dclm_sharded_step
+from experiments.train_test_overlap.train_test.overlap_pipeline_dolmino_sharded import dolmino_sharded_step
+from experiments.train_test_overlap.train_test.overlap_pipeline_finemath3plus_sharded import f3p_sharded_step
+from experiments.train_test_overlap.train_test.overlap_pipeline_nemotron_cc_sharded import nemotron_sharded_step
+from experiments.train_test_overlap.train_test.overlap_pipeline_proofpile_sharded import proofpile_sharded_step
+from experiments.train_test_overlap.train_test.overlap_pipeline_sft_sharded import overlap_steps
+from experiments.train_test_overlap.train_test.overlap_pipeline_starcoder_sharded import starcoder_sharded_step
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.utils import fsspec_glob, fsspec_mkdirs
 
@@ -36,6 +43,9 @@ TRAINING_DATASET_MAP = {
     "openthoughts": "OPENTHOUGHTS_MATH",
     "tulu_3_sft": "TULU3",
     "natural_reasoning": "NATURAL_REASONING",
+    "lavita-pubmed": "LAVITA-PUBMED",
+    "lavita-medmcqa": "LAVITA-MEDMCQA",
+    "lavita-allprocessed": "LAVITA-ALLPROCESSED",
 }
 
 
@@ -50,7 +60,7 @@ def detect_training_dataset(paths: list[str]) -> str:
 @dataclass
 class AggregateTestOverlapConfig:
     # GCS path to the consolidated directory containing subdirs of aggregated_metrics files
-    consolidated_root: str
+    input_paths: list[str]
     # GCS path where aggregate summaries will be written (base will append dataset/ngram_{N})
     output_base: str
     # Path to the consolidated scenarios JSONL for total instance counts
@@ -62,7 +72,7 @@ class AggregateTestOverlapConfig:
 
 
 def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
-    root = cfg.consolidated_root.rstrip("/")
+    # root = cfg.consolidated_root.rstrip("/")
     out_base = cfg.output_base.rstrip("/")
     partial = cfg.partial_overlap_spec
 
@@ -94,15 +104,23 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
                 }
 
     # Find all aggregated_metrics files under the root (both consolidated and raw shards)
-    pattern1 = f"{root}/**/aggregated_metrics_*.jsonl"
-    pattern2 = f"{root}/**/aggregate_metrics_*/aggregate_metrics_*"
-    metric_paths = fsspec_glob(pattern1) + fsspec_glob(pattern2)
+
+    metric_paths = []
+    for input_path in cfg.input_paths:
+        pattern1 = f"{input_path}/**/aggregated_metrics_*.jsonl"
+        pattern2 = f"{input_path}/**/aggregate_metrics_*/aggregate_metrics_*"
+        metric_paths.extend(fsspec_glob(pattern1))
+        metric_paths.extend(fsspec_glob(pattern2))
+
+    # pattern1 = f"{root}/**/aggregated_metrics_*.jsonl"
+    # pattern2 = f"{root}/**/aggregate_metrics_*/aggregate_metrics_*"
+    # metric_paths = fsspec_glob(pattern1) + fsspec_glob(pattern2)
     metric_paths = sorted(set(metric_paths))
     if not metric_paths:
-        logger.warning("No aggregated or raw aggregate metrics files found under %s", root)
+        logger.warning("No aggregated or raw aggregate metrics files found under %s", cfg.input_paths)
     # Show progress on discovered files
     total_metrics = len(metric_paths)
-    print(f"Discovered {total_metrics} metrics files under {root}", flush=True)
+    print(f"Discovered {total_metrics} metrics files under {cfg.input_paths}", flush=True)
 
     # summary for partial JSONL
     summary = {}
@@ -372,7 +390,15 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
 n_values_list = []  # empty means all
 n_values_list = [10, 15]
 config = AggregateTestOverlapConfig(
-    consolidated_root="gs://marin-us-central2/train_test_overlap/ngrams_final/",
+    input_paths=[
+        dclm_sharded_step,
+        dolmino_sharded_step,
+        f3p_sharded_step,
+        nemotron_sharded_step,
+        proofpile_sharded_step,
+        starcoder_sharded_step,
+        *overlap_steps,
+    ],
     output_base=this_output_path(),
     scenario_jsonl="gs://marin-us-central2/scenarios/consolidated_eval_scenarios_final-50b720/consolidated_scenarios.jsonl",
     n_values=n_values_list,
