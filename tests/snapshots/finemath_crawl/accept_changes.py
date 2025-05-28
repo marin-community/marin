@@ -1,7 +1,7 @@
 import os
 
 from tqdm import tqdm
-
+# from resiliparse.html.extract import extract_
 from marin.web.convert import convert_page
 from marin.schemas.web.convert import ResiliparseConfig
 from marin.crawl.get_finemath_crawl_yield import selectors
@@ -20,6 +20,7 @@ def prepare_expected_output(html: str) -> str:
             main_content=True,
             skip_elements=selectors,
             prepend_title=False,
+            preserve_formatting=True,
         ),
     )["content"]
 

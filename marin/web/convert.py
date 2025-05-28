@@ -64,7 +64,7 @@ def convert_page_with_trafilatura(
 def convert_page_with_resiliparse(
     html: str,
     url: str | None = None,
-    config: ResiliparseConfig | None = ResiliparseConfig.default_config(),
+    config: ResiliparseConfig = ResiliparseConfig.default_config(),
 ) -> dict[str, str]:
     """
     Convert HTML to text[non-markdown] using Resiliparse.
@@ -91,6 +91,7 @@ def convert_page_with_resiliparse(
 
     content = None
     if not config.use_custom_variant:
+        print(config.resiliparse_kwargs)
         content = extract_plain_text(html, **config.resiliparse_kwargs)
 
         if title and config.prepend_title:
