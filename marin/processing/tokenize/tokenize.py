@@ -129,7 +129,10 @@ def _validate_train_urls(train_paths: list[str | InputName]):
             url_or_name_to_check = item.name
 
         if url_or_name_to_check:
-            if re.search(r"\btest\b", url_or_name_to_check) or re.search(r"validation", url_or_name_to_check):
+            # \b doesn't work because of underscores
+            if re.search(r"[^a-zA-Z]test[^a-zA-Z]", url_or_name_to_check) or re.search(
+                r"validation", url_or_name_to_check
+            ):
                 raise ValueError(
                     f"Error: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
                     "('test' or 'validation'). "
