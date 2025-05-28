@@ -117,6 +117,7 @@ def extract_text(record_id: str, html_decoded: str) -> tuple[str, str | None]:
             html_decoded,
             extract_method="resiliparse",
             config=ResiliparseConfig(
+                main_content=True,
                 skip_elements=selectors
             ),
         )["content"]
@@ -314,7 +315,7 @@ def get_shard_langid_filter_results(input_path: str, output_directory: str) -> l
 
     logger.info("Applying the LangID filter")
     documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
-    langid_filter = LanguageFilter()
+    langid_filter = LanguageFilter(languages="en")
     examples_langid_filter_results: list[bool] = [
         langid_filter.filter(document) for document in tqdm(documents_to_classify, desc="Applying the LangID filter")
     ]
@@ -557,7 +558,7 @@ def get_shard_yield(
     # (4) gopher quality, (5) c4 quality, and (6) learned quality classifier
     (
         # examples_url_filter_results,
-        # examples_langid_filter_results,
+        examples_langid_filter_results,
         # examples_gopher_repetition_filter_results,
         # examples_gopher_quality_filter_results,
         # examples_c4_quality_filter_results,
@@ -565,7 +566,7 @@ def get_shard_yield(
     ) = ray.get(
         [
             # get_shard_url_filter_results.remote(input_path, intermediate_output_directory),
-            # get_shard_langid_filter_results.remote(input_path, intermediate_output_directory),
+            get_shard_langid_filter_results.remote(input_path, intermediate_output_directory),
             # get_shard_gopher_repetition_filter_results.remote(input_path, intermediate_output_directory),
             # get_shard_gopher_quality_filter_results.remote(input_path, intermediate_output_directory),
             # get_shard_c4_quality_filter_results.remote(input_path, intermediate_output_directory),
@@ -586,7 +587,7 @@ def get_shard_yield(
     for (
         example,
         # example_url_filter_result,
-        # example_langid_filter_result,
+        example_langid_filter_result,
         # example_gopher_repetition_filter_result,
         # example_gopher_quality_filter_result,
         # example_c4_quality_filter_result,
@@ -604,18 +605,18 @@ def get_shard_yield(
 
         passes_all_filters = (
             # example_url_filter_result is True
-            # and example_langid_filter_result is True
             # and example_gopher_repetition_filter_result is True
             # and example_gopher_quality_filter_result is True
             # and example_c4_quality_filter_result is True
             example_score >= 3.0
+            and example_langid_filter_result is True
         )
 
         example_metadata = {
             "url": example["metadata"]["url"],
             "canonicalized_url": example["metadata"]["canonicalized_url"],
             # "passed_url_filter": True if example_url_filter_result is True else False,
-            # "passed_langid_filter": True if example_langid_filter_result is True else False,
+            "passed_langid_filter": True if example_langid_filter_result is True else False,
             # "passed_gopher_repetition_filter": True if example_gopher_repetition_filter_result else False,
             # "passed_gopher_quality_filter": True if example_gopher_quality_filter_result else False,
             # "passed_c4_quality_filter": True if example_c4_quality_filter_result else False,
