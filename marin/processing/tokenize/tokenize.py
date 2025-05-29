@@ -309,7 +309,11 @@ def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
         return input_paths
 
     # we're only going to have one or the other, but might as well return both
-    out = _get_files_by_extensions(input_paths, ["jsonl.{gz,zst,zstd}", "parquet"])
+    out = _get_files_by_extensions(input_paths, ["jsonl.{gz,zst,zstd}", "parquet", "json"])
+
+    # NOTE(chris): When downloading the datasets from HF using default_download, we create a
+    # provenance.json file but we seek to exclude this since we shouldn't train on this.
+    out = [x for x in out if "provenance.json" not in x]
 
     if not len(out):
         raise ValueError(

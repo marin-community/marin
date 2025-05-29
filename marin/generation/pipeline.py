@@ -73,15 +73,17 @@ class vLLMTextGeneration(TextGeneration):
             llm, template, num_generations, prompt_column, save_templated_prompt, generated_text_column_name
         )
         self.apply_chat_template = apply_chat_template
-        self.max_doc_length = max_doc_length
+        self.max_doc_tokens = max_doc_length
 
     def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
         tokenizer = self.llm.llm.get_tokenizer()
         prompts = []
         for example in batch[self.prompt_column]:
             # NOTE(chris): We perform a left truncation of the document to the max doc length.
-            if len(example) > self.max_doc_length:
-                example = example[: self.max_doc_length]
+            example_tokens = tokenizer.encode(example)
+            if len(example_tokens) > self.max_doc_tokens:
+                example_tokens = example_tokens[: self.max_doc_tokens]
+                example = tokenizer.decode(example_tokens)
 
             if self.apply_chat_template:
                 chat_example = [{"role": "user", "content": self.template.format(example=example)}]
