@@ -64,7 +64,7 @@ class MEDUPipelineConfig:
         resource_config: The type of TPU hardware to use for the pipeline.
         medu_benchmark_description_template: The template that prompts an LLM to generate a description of the skills
                                              that the data should have.
-        max_corpus_length: The maximum length of the corpus to use for the pipeline. We right-truncate the corpus so that
+        max_corpus_tokens: The maximum length of the corpus to use for the pipeline. We right-truncate the corpus so that
             the corpus fits into the model's context window.
     """
 
