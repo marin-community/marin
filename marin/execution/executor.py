@@ -178,6 +178,9 @@ class ExecutorStep(Generic[ConfigT]):
         """Return a copy of the step with the given output_path."""
         return replace(self, override_output_path=output_path)
 
+    def as_input_name(self) -> "InputName":
+        return InputName(step=self, name=None)
+
 
 @dataclass(frozen=True)
 class InputName:
