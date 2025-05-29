@@ -1,3 +1,9 @@
+"""Transforming the Huggingface dataset lavita/medical-qa-datasets to dolma format.
+
+Note: It may not be a good idea to use lavita's allprocessed subset since it is contaminated
+with MMLU. We need to run it through a decontamination pipeline.
+"""
+
 import hashlib
 import os
 from dataclasses import dataclass
