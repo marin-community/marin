@@ -43,7 +43,7 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
     model_name = get_directory_friendly_name(model_config.hf_repo_id)
     model_revision = get_directory_friendly_name(model_config.hf_revision)
     download_step = ExecutorStep(
-        name=f"{GCS_FUSE_MOUNT_PATH}/{model_name}@{model_revision}",
+        name=f"{GCS_FUSE_MOUNT_PATH}/{model_name}--{model_revision}",
         fn=download_hf,
         config=DownloadConfig(
             hf_dataset_id=model_config.hf_repo_id,
@@ -54,7 +54,7 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
         ),
         # must override because it because if we don't then it will end in a hash
         # if it ends in a hash, then we cannot determine the local path
-        override_output_path=f"{GCS_FUSE_MOUNT_PATH}/{model_name}@{model_revision}",
+        override_output_path=f"{GCS_FUSE_MOUNT_PATH}/{model_name}--{model_revision}",
     )
 
     return download_step

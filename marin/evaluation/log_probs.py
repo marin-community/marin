@@ -86,7 +86,7 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
 
     try:
         if config.hf_checkpoint and is_remote_path(config.hf_checkpoint):
-            local_path = os.path.join("/tmp/levanter-lm-eval", ckpt_path_to_step_name(config.hf_checkpoint))
+            local_path = os.path.join("/dev/shm/levanter-lm-eval", ckpt_path_to_step_name(config.hf_checkpoint))
             download_from_gcs(
                 gcs_path=config.hf_checkpoint,
                 destination_path=local_path,

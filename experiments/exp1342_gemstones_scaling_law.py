@@ -26,10 +26,11 @@ from dataclasses import dataclass
 from huggingface_hub import get_collection, list_repo_refs
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 
+from experiments.defaults import default_validation_sets
 from experiments.models import ModelConfig, download_model_step
-from experiments.tootsie.exp883_viz_compare_tootsie_llama import tulu_3_in_dolma
 from marin.evaluation.log_probs import default_lm_log_probs
-from marin.execution.executor import executor_main, output_path_of
+from marin.execution.executor import executor_main, output_path_of, versioned
+from marin.processing.tokenize.data_configs import mixture_for_evaluation
 
 
 @dataclass(frozen=True)
@@ -138,8 +139,14 @@ def get_all_revisions(repo_id):
     refs = list_repo_refs(repo_id, repo_type="model")
     branches = [branch.name for branch in refs.branches]
     tags = [tag.name for tag in refs.tags]
+    combined = [tag for tag in (branches + tags) if "step" in tag]
 
-    return branches + tags
+    combined = sorted(combined, key=lambda x: int(x.split("step_")[-1].split("cooldown_")[-1]))
+    return combined
+
+
+def roughly_equals(real, target):
+    return real == target or real == target + 1 or real == target - 1
 
 
 model_revision_pairs = []
@@ -151,19 +158,28 @@ for model in models:
             model_revision_pairs.append((model, revision))
 
 gemstone_splits = {"main": {}, "cooldown": {}, "lr_ablation": {}}
+gemstone_tokenizer = "tomg-group-umd/Gemstone-1280x15"
+eval_sets = default_validation_sets(tokenizer=versioned(gemstone_tokenizer))
+evaluation_mixture = mixture_for_evaluation(eval_sets)
 eval_steps = []
-for model, revision in model_revision_pairs[0:2]:
+for model, revision in model_revision_pairs:
     try:
         config = GemstoneConfig.from_model_revision(model, revision)
 
         gemstone_model = download_model_step(ModelConfig(hf_repo_id=model, hf_revision=revision))
-        model_config = HFCheckpointConverter.from_hf(f"{model}@{revision}").config_from_hf_checkpoint(
-            f"{model}@{revision}"
-        )
         gemstone_splits[config.variant][config] = gemstone_model
-        eval_steps.append(
-            default_lm_log_probs(output_path_of(gemstone_model), model_config, tulu_3_in_dolma, checkpoint_is_hf=True)
-        )
+        if config.variant == "cooldown" and roughly_equals(
+            config.step, int(config.cooldown_start_step + (0.1 * config.cooldown_start_step))
+        ):
+            model_config = HFCheckpointConverter.from_hf(f"{model}@{revision}").config_from_hf_checkpoint(
+                f"{model}@{revision}"
+            )
+
+            eval_steps.append(
+                default_lm_log_probs(
+                    output_path_of(gemstone_model), model_config, evaluation_mixture, checkpoint_is_hf=True
+                )
+            )
     except ValueError as e:
         print(f"Skipping {model}/{revision}: {e}")
 
