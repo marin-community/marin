@@ -5,6 +5,8 @@ a process that automatically looks for data that is similar to the targeted data
 The benchmark is from: https://huggingface.co/datasets/ambean/lingOly
 """
 
+import copy
+
 from experiments.datashop.datashop_datasets import datashop_dclm_annotation_subset, datashop_dclm_pretraining_subset
 from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
 from experiments.datashop.default_configs import default_medu_config_kwargs, default_text_generation_config_kwargs
@@ -25,7 +27,7 @@ lingoly_dolma = ExecutorStep(
 
 # Customize the text generation config kwargs to allow for more tokens to be generated
 # and a longer thought process.
-medu_config_kwargs = default_medu_config_kwargs
+medu_config_kwargs = copy.deepcopy(default_medu_config_kwargs)
 medu_config_kwargs["generation_kwargs"]["max_tokens"] = 1024
 medu_config_kwargs["generation_kwargs"]["truncate_prompt_tokens"] = 7168
 text_generation_config_kwargs = default_text_generation_config_kwargs

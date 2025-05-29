@@ -28,9 +28,8 @@ def _convert_lingoly_to_dolma(config: ConvertLingolyToDolmaConfig) -> None:
         local_zip_path = os.path.join(temp_dir, "lingoly.zip")
 
         # Download the zip file if it's in cloud storage
-        with fsspec.open(config.input_path, "rb") as remote_file:
-            with open(local_zip_path, "wb") as local_file:
-                local_file.write(remote_file.read())
+        fs = fsspec.url_to_fs(config.input_path)[0]
+        fs.get_file(config.input_path, local_zip_path)
 
         # Extract the zip file
         with zipfile.ZipFile(local_zip_path, "r") as zip_ref:
@@ -65,11 +64,11 @@ def _convert_lingoly_to_dolma(config: ConvertLingolyToDolmaConfig) -> None:
 
                 for question in questions:
                     question_prompt = question["prompt"]
-                    subprompt_question_answer_joined = ""
+                    subprompt_question_joined = ""
                     for subprompt in question["subprompts"]:
-                        subprompt_question_answer_joined += f"{subprompt['question']}\n{subprompt['answer']}\n"
+                        subprompt_question_joined += f"{subprompt['question']}\n"
 
-                final_text = f"{preamble}\n{context}\n{question_prompt}\n{subprompt_question_answer_joined}"
+                final_text = f"{preamble}\n{context}\n{question_prompt}\n{subprompt_question_joined}"
 
                 text_so_far += f"{final_text}\n"
 
