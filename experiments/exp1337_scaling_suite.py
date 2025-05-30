@@ -1,9 +1,10 @@
 """
-Creates a suite of training runs of different model sizes and number of tokens trained on the same data ("modernized Pythia").
+Creates a suite of training runs of different model sizes and number of tokens
+trained on the same data ("modernized Pythia").
 """
 
-from math import sqrt
 from dataclasses import dataclass, replace
+from math import sqrt
 
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.defaults import default_train
@@ -21,8 +22,8 @@ from experiments.llama import (
     llama_300m,
     llama_300m_train_config,
 )
-from experiments.tootsie.exp600_tootsie import tootise_phase1_config
 from experiments.simple_train_config import SimpleTrainConfig
+from experiments.tootsie.exp600_tootsie import tootise_phase1_config
 from experiments.tootsie.exp859_big_tootsies import nemotron_mix
 from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
@@ -37,13 +38,19 @@ MARIN_8B_BS = tootise_phase1_config.train_batch_size
 MARIN_8B_WIDTH = llama_8b.hidden_dim
 BASE_LR = MARIN_8B_LR / sqrt(MARIN_8B_BS) * MARIN_8B_WIDTH
 
+
 def scaling_train_config(model_config: LlamaConfig, train_config: SimpleTrainConfig) -> SimpleTrainConfig:
     """Return a train config that scales the learning rate based on the model size."""
-    # Use the same batch size for all models (chosen to work for the largest 70B model, but okay-ish for smaller models)
-    train_config = replace(train_config,
+    # Use the same batch size for all models (chosen to work for the largest
+    # 70B model, but okay-ish for smaller models)
+    train_config = replace(
+        train_config,
         train_batch_size=8192,
         weight_decay=0.05,
         z_loss_weight=1e-4,
+        lr_schedule="wsd",
+        decay=0,  # Don't decay
+        min_lr_ratio=1,  # Keep the same learning rate (redundant)
     )
 
     # Scale the learning rate
@@ -56,16 +63,13 @@ def scaling_train_config(model_config: LlamaConfig, train_config: SimpleTrainCon
         learning_rate=learning_rate,
     )
 
+
 # Like the one in exp859_big_tootsies but with a constant batch size
 llama_32b_train_config = SimpleTrainConfig(
     resources=TpuPodConfig(tpu_type="v4-2048", slice_count=1),
     num_train_steps=1_000_000,  # To override later
     train_batch_size=-1,  # To override later
     learning_rate=float("nan"),  # To override later
-    decay=0.4,
-    ema_beta=0.995,
-    lr_schedule="linear",
-    cycle_length=None,
     steps_per_eval=1000,
     steps_per_task_eval=10000,
 )
@@ -76,10 +80,6 @@ llama_70b_train_config_mk6 = SimpleTrainConfig(
     num_train_steps=1_000_000,  # To override later
     train_batch_size=-1,  # To override later
     learning_rate=float("nan"),  # To override later
-    decay=0.4,
-    ema_beta=0.995,
-    lr_schedule="linear",
-    cycle_length=None,
     steps_per_eval=1000,
     steps_per_task_eval=10000,
 )
@@ -105,27 +105,10 @@ data_specs = [
 ]
 
 train_specs = [
-    TrainSpec(name="llama_150m", model_config=llama_150m, train_config=llama_150m_train_config, data_factor=1),
-    TrainSpec(name="llama_150m", model_config=llama_150m, train_config=llama_150m_train_config, data_factor=2),
-    TrainSpec(name="llama_150m", model_config=llama_150m, train_config=llama_150m_train_config, data_factor=4),
     TrainSpec(name="llama_150m", model_config=llama_150m, train_config=llama_150m_train_config, data_factor=8),
-    TrainSpec(name="llama_150m", model_config=llama_150m, train_config=llama_150m_train_config, data_factor=16),
-    TrainSpec(name="llama_300m", model_config=llama_300m, train_config=llama_300m_train_config, data_factor=1),
-    TrainSpec(name="llama_300m", model_config=llama_300m, train_config=llama_300m_train_config, data_factor=2),
-    TrainSpec(name="llama_300m", model_config=llama_300m, train_config=llama_300m_train_config, data_factor=4),
     TrainSpec(name="llama_300m", model_config=llama_300m, train_config=llama_300m_train_config, data_factor=8),
-    TrainSpec(name="llama_300m", model_config=llama_300m, train_config=llama_300m_train_config, data_factor=16),
-    TrainSpec(name="llama_1_4b", model_config=llama_1_4b, train_config=llama_1_4b_train_config, data_factor=1),
-    TrainSpec(name="llama_1_4b", model_config=llama_1_4b, train_config=llama_1_4b_train_config, data_factor=2),
-    TrainSpec(name="llama_1_4b", model_config=llama_1_4b, train_config=llama_1_4b_train_config, data_factor=4),
     TrainSpec(name="llama_1_4b", model_config=llama_1_4b, train_config=llama_1_4b_train_config, data_factor=8),
-    TrainSpec(name="llama_1_4b", model_config=llama_1_4b, train_config=llama_1_4b_train_config, data_factor=16),
-    TrainSpec(name="llama_8b", model_config=llama_8b, train_config=llama_8b_train_config, data_factor=1),
-    TrainSpec(name="llama_8b", model_config=llama_8b, train_config=llama_8b_train_config, data_factor=2),
-    TrainSpec(name="llama_8b", model_config=llama_8b, train_config=llama_8b_train_config, data_factor=4),
     TrainSpec(name="llama_8b", model_config=llama_8b, train_config=llama_8b_train_config, data_factor=8),
-    TrainSpec(name="llama_8b", model_config=llama_8b, train_config=llama_8b_train_config, data_factor=16),
-    TrainSpec(name="llama_32b", model_config=llama_32b, train_config=llama_32b_train_config, data_factor=1),
     TrainSpec(name="llama_32b", model_config=llama_32b, train_config=llama_32b_train_config, data_factor=2),
     TrainSpec(name="llama_70b", model_config=llama_70b, train_config=llama_70b_train_config_mk6, data_factor=1),
 ]
@@ -142,6 +125,7 @@ def create_train_step(data_spec: DataSpec, train_spec: TrainSpec):
     num_train_steps = num_tokens // (train_spec.train_config.train_batch_size * model_config.seq_len)
     train_config = replace(train_spec.train_config, num_train_steps=num_train_steps)
 
+    # Scale hyperparameters based on the model
     train_config = scaling_train_config(model_config, train_config)
 
     return default_train(
