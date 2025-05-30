@@ -267,8 +267,8 @@ def default_quality_filter(
             "fasttext",
             "datasets",
             "filelock",
-            "torch~=2.6.0",
-            "torch_xla[tpu]~=2.6.0",
+            "torch~=2.7.0",
+            "torch_xla[tpu]~=2.7.0",
         ],
     )
 

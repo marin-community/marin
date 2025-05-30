@@ -32,4 +32,7 @@ datashop_runner = DatashopRunner(
 )
 
 if __name__ == "__main__":
-    datashop_runner.run_eval_cluster_steps()
+    from marin.execution.executor import executor_main
+
+    # datashop_runner.run_all_steps()
+    executor_main([datashop_runner.quality_ablation_model])

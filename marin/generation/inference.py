@@ -80,6 +80,9 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
     # This allows us to run long-running tasks even if there is preemption.
     ctx.max_errored_blocks = -1
 
+    # Helps with debugging
+    ctx.log_internal_stack_trace_to_stdout = True
+
     # This is the amount of time to wait for the actors to be created.
     # We increase the default timeout since model loading
     # for large models can take awhile.
@@ -124,6 +127,72 @@ def get_ray_data_write_kwargs(config: TextGenerationInferenceConfig):
     return ray_data_write_kwargs
 
 
+def fix_warc_truncated_schema(batch: dict[str, Any]) -> dict[str, Any]:
+    """Fix WARC-Truncated field in metadata to maintain schema consistency.
+
+    NOTE(chris):
+    Fix WARC-Truncated schema issue. In DCLM, some input rows will have the column "WARC-Truncated" with a string
+    value there while others will not. When the vLLMTextGeneration concatenates blocks together after its outputs,
+    this will lead to an error where it tries to concatenate blocks with inconsistent schemas. That's why we call
+    this function before the vLLM text generation function to ensure a consistent schema.
+    For example, the input schema is:
+    Column                                                           Type
+    ------                                                           ----
+    bff_contained_ngram_count_before_dedupe                          int64
+    language_id_whole_page_fasttext                                  struct<en: double>
+    metadata                                                         struct<Content-Length: string, Content-Type:
+                                                                     string, WARC-Block-Digest: string,
+                                                                     WARC-Concurrent-To: string, WARC-Date:
+                                                                     timestamp[s], WARC-IP-Address: string,
+                                                                     WARC-Identified-Payload-Type: string,
+                                                                     WARC-Payload-Digest: string, WARC-Record-ID:
+                                                                     string, WARC-Target-URI: string, WARC-Type:
+                                                                     string, WARC-Warcinfo-ID: string,
+                                                                     WARC-Truncated: string>
+    previous_word_count                                              int64
+    text                                                             string
+    url                                                              string
+    warcinfo                                                         string
+    fasttext_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train_prob  double
+
+    However, since only some columns have the WARC-Truncated nested column in metadata, it leads the output schema
+    to set it to null. Here is an example of the broken output schema:
+    Column                                                           Type
+    ------                                                           ----
+    bff_contained_ngram_count_before_dedupe                          int64
+    language_id_whole_page_fasttext                                  struct<en: double>
+    metadata                                                         struct<Content-Length: string, Content-Type:
+                                                                     string, WARC-Block-Digest: string,
+                                                                     WARC-Concurrent-To: string, WARC-Date:
+                                                                     timestamp[us], WARC-IP-Address: string,
+                                                                     WARC-Identified-Payload-Type: string,
+                                                                     WARC-Payload-Digest: string, WARC-Record-ID:
+                                                                     string, WARC-Target-URI: string,
+                                                                     WARC-Truncated: null, WARC-Type: string,
+                                                                     WARC-Warcinfo-ID: string>
+    previous_word_count                                              int64
+    text                                                             string
+    url                                                              string
+    warcinfo                                                         string
+    fasttext_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train_prob  double
+    generated_text                                                   string
+
+    We fix this by checking if the row contains the "WARC-Truncated" key and if it doesn't then, we set the default
+    value to an empty string to have a consistent schema.
+    """
+    if "metadata" in batch:
+        metadata_list = batch["metadata"]
+        for metadata in metadata_list:
+            if metadata is not None:
+                if "WARC-Truncated" in metadata:
+                    if metadata["WARC-Truncated"] is None:
+                        metadata["WARC-Truncated"] = ""
+                else:
+                    metadata["WARC-Truncated"] = ""
+
+    return batch
+
+
 @ray.remote(max_calls=1)
 @remove_tpu_lockfile_on_exit
 def run_inference(config: TextGenerationInferenceConfig):
@@ -142,6 +211,9 @@ def run_inference(config: TextGenerationInferenceConfig):
     elif config.template:
         template = config.template
 
+    # Apply schema fix BEFORE vLLMTextGeneration to prevent PyArrow concatenation errors
+    # ds = ds.map_batches(fix_warc_truncated_schema)
+
     ds = ds.map_batches(  # Apply batch inference for all input data.
         vLLMTextGeneration,
         # Set the concurrency to the number of LLM instances.
@@ -156,9 +228,10 @@ def run_inference(config: TextGenerationInferenceConfig):
             "prompt_column": config.prompt_column,
             "save_templated_prompt": config.save_templated_prompt,
             "apply_chat_template": config.apply_chat_template,
-            "max_doc_length": config.max_doc_length,
+            "max_doc_tokens": config.max_doc_tokens,
             "generated_text_column_name": config.generated_text_column_name,
         },
         **ray_resources_kwarg(config),
     )
+
     ds = ds.write_json(config.output_path, **get_ray_data_write_kwargs(config))
