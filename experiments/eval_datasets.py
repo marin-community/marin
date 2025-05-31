@@ -1,10 +1,10 @@
 import dataclasses
 
 from experiments.defaults import default_download
+from marin.download.huggingface.download import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from operations.download.huggingface.download import DownloadConfig
-from operations.download.huggingface.download_hf import download_hf
-from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
+from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """
 This script downloads HF datasets for various tasks and converts them to prompt/response JSONL format for log prob
@@ -443,6 +443,17 @@ mmlu_convert_dolma = ExecutorStep(
         options_key="choices",
         answer_idx_key="answer",
         answer_labels=["A", "B", "C", "D"],
+    ),
+)
+
+lingoly = ExecutorStep(
+    name="raw/ambean/lingOly",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="ambean/lingOly",
+        revision=versioned("6aff4c2"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
     ),
 )
 

@@ -21,10 +21,12 @@ from marin.classifiers.hf.launch_ray_training import LaunchConfig, launch_traini
 from marin.datashop.dataset_processor import DatasetOutputProcessorConfig
 from marin.datashop.pipeline import (
     MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME,
+    CorpusContent,
     MEDUPipelineConfig,
     run_data_filter_prompt_generation_pipeline,
     run_medu_dataset_sampling_pipeline,
 )
+from marin.download.filesystem.transfer import TransferConfig, transfer_files
 from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
 from marin.generation.inference import TextGenerationInferenceConfig
 from marin.generation.inference import run_inference as run_generation_inference
@@ -33,24 +35,25 @@ from marin.processing.classification.consolidate import ConsolidateConfig, Filte
 from marin.processing.classification.inference import run_inference
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
 from marin.resources import TpuPodConfig
-from operations.download.filesystem.transfer import TransferConfig, transfer_files
 
 
 def default_label(
     documents_to_be_labeled: str | ExecutorStep,
-    targeted_documents: list[list[str] | str],
+    targeted_documents: list[CorpusContent],
     experiment_name: str,
     resource_config: ResourceConfig,
     annotator_model_name_or_path: str = "meta-llama/Llama-3.3-70B-Instruct",
     data_filter_prompt: str | None = None,
     medu_pipeline_config_kwargs: dict | None = None,
-    text_generation_inference_config: dict | None = None,
+    text_generation_inference_config_kwargs: dict | None = None,
 ):
     """Label a set of documents with an LLM given some targeted documents.
 
     Inputs:
         documents_to_be_labeled: Input path to documents to be labeled.
-        targeted_documents: A list of strings or filepaths of documents that is being targeted for labeling.
+        targeted_documents: A list of CorpusContent objects that define the corpus content to use for
+            generating the data filter prompt. It can either point to a filepath or a list of strings that
+            represent the text corpus.
         experiment_name: The name of the experiment.
         data_filter_prompt: The user's prompt for the annotator model.
         medu_pipeline_config_kwargs: Keyword arguments for the MEDU pipeline which is used to generate
@@ -102,7 +105,7 @@ def default_label(
         data_filter_prompt_path = None
 
     # NOTE(chris): Assuming we are filtering from a jsonl.zst file such as DCLM.
-    if text_generation_inference_config is None:
+    if text_generation_inference_config_kwargs is None:
         text_generation_inference_config_kwargs = default_text_generation_config_kwargs
     else:
         text_generation_inference_config_kwargs = {
