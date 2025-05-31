@@ -7,8 +7,12 @@ Link to issue: https://github.com/stanford-crfm/marin/issues/968
 from experiments.crawl.default import default_crawl
 from marin.crawl.common.schemas import HtmlExtractionConfig
 from marin.crawl.get_finemath_crawl_yield import filter_and_yield
-from marin.execution.executor import executor_main, this_output_path
+from marin.execution.executor import ExecutorMainConfig, executor_main, this_output_path
 
+
+executor_config = ExecutorMainConfig(
+    force_run_failed=True,
+)
 
 def url_modifier(url: str) -> str:
     return f"s3://commoncrawl/{url}"

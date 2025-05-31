@@ -18,7 +18,7 @@ from marin.resources import TpuPodConfig
 finemath_crawl_tokenized = default_tokenize(
     "finemath-crawled",
     InputName.hardcoded(
-        "gs://marin-us-central2/crawl/finemath-3plus/minhash-c4a324/finemath-3plus_passing_minhash_against_finemath-3plus/deduplicated_output"
+        "gs://marin-us-central2/crawl/finemath-3plus/minhash-31a182/finemath-3plus_passing_minhash_against_finemath-3plus/deduplicated_output"
     ),
     tokenizer=llama3_tokenizer,
 )

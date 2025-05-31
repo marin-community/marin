@@ -106,7 +106,7 @@ def batched(iterable, n=1):
     length = len(iterable)
     for ndx in range(0, length, n):
         yield iterable[ndx : min(ndx + n, length)]
-
+    
 
 @ray.remote(
     memory=16 * 1024 * 1024 * 1024,
@@ -118,6 +118,8 @@ def extract_text(record_id: str, html_decoded: str) -> tuple[str, str | None]:
             extract_method="resiliparse",
             config=ResiliparseConfig(
                 main_content=True,
+                preserve_formatting=True,
+                prepend_title=False,
                 skip_elements=selectors
             ),
         )["content"]
@@ -171,6 +173,10 @@ def extract_text_from_warc(
         for record in tqdm(ArchiveIterator(file_stream)):
             if record.rec_type == "response":
                 record_url = record.rec_headers.get_header("WARC-Target-URI")
+
+                # Skip scribd URLs
+                if "scribd" in record_url:
+                    continue
                 fetched_urls.add(record_url)
 
                 content = record.content_stream().read()
@@ -205,7 +211,7 @@ def extract_text_from_warc(
                         "file_path": warc_path,
                     },
                 }
-
+    
     # Wait for the text extraction remote functions to finish
     unfinished = text_extraction_refs
     extracted_text_records = []
@@ -552,7 +558,7 @@ def get_shard_yield(
         with fsspec.open(success_path, block_size=1 * 1024 * 1024 * 1024) as f:
             shard_stats = json.load(f)
         return shard_stats["total_urls_passing"]
-
+    
     # Launch remote functions for each of the filters:
     # (1) URL, (2) langid, (3) gopher reptition,
     # (4) gopher quality, (5) c4 quality, and (6) learned quality classifier
@@ -595,7 +601,7 @@ def get_shard_yield(
     ) in zip(
         examples_to_classify,
         # examples_url_filter_results,
-        # examples_langid_filter_results,
+        examples_langid_filter_results,
         # examples_gopher_repetition_filter_results,
         # examples_gopher_quality_filter_results,
         # examples_c4_quality_filter_results,

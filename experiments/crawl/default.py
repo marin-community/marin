@@ -131,7 +131,7 @@ def default_crawl(
             max_concurrent_shards=40,
         ),
     )
-
+    
     # Fetched outlinks in WARC format: gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/links.0.warc.gz
     links_fetched_warc = ExecutorStep(
         name=f"crawl/{config.source_name}/fetched_outlinks/{config.source_name}-warc",
@@ -153,7 +153,6 @@ def default_crawl(
             text_output_directory=this_output_path(),
             statistics_output_path=output_path_of(links_fetched_warc, "yield_statistics.json.gz"),
         ),
-        override_output_path=f"crawl/{config.source_name}",
     )
 
     # Passing paths: gs://marin-us-central2/scratch/nfliu/fineweb_edu_10M_passing_paths.txt
