@@ -37,7 +37,7 @@ dependencies = [
     "wandb<=0.19.9",
     "markdownify",
     "html2text",
-    "jax[tpu]",
+    "jax[tpu]==0.5.1",
 ]
 
 [project.optional-dependencies]

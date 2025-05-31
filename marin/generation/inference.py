@@ -193,6 +193,47 @@ def fix_warc_truncated_schema(batch: dict[str, Any]) -> dict[str, Any]:
     return batch
 
 
+@ray.remote
+def _find_finished_ids_for_file(checkpoint_filepath: str, id_column: str | dict[str, str]):
+    from marin.processing.classification.inference import read_dataset
+
+    if isinstance(id_column, dict):
+        dataset_column = id_column.keys()[0]
+        metadata_key_column = id_column.values()[0]
+    else:
+        dataset_column = id_column
+        metadata_key_column = None
+
+    # TODO(chris): replace columns with user input
+    df = read_dataset(checkpoint_filepath, columns=[dataset_column])
+    finished_ids = set()
+
+    if metadata_key_column is None:
+        finished_ids = set(df[dataset_column])
+    else:
+        for metadata in df[dataset_column]:
+            if metadata is not None and metadata_key_column in metadata:
+                finished_ids.add(metadata[metadata_key_column])
+
+    return finished_ids
+
+
+def find_all_finished_ids(checkpoint_path: str, filetype: str, id_column: str | dict[str, str]):
+    import concurrent.futures
+
+    import tqdm
+
+    files = fsspec_glob(os.path.join(checkpoint_path, f"**/*.{filetype}"))
+    finished_ids = set()
+
+    refs = [_find_finished_ids_for_file.remote(file, id_column) for file in files]
+    futures = [ref.future() for ref in refs]
+    for future in tqdm.tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Finding finished IDs"):
+        finished_ids.update(future.result())
+
+    return finished_ids
+
+
 @ray.remote(max_calls=1)
 @remove_tpu_lockfile_on_exit
 def run_inference(config: TextGenerationInferenceConfig):
@@ -210,9 +251,6 @@ def run_inference(config: TextGenerationInferenceConfig):
             template = str(f.read())
     elif config.template:
         template = config.template
-
-    # Apply schema fix BEFORE vLLMTextGeneration to prevent PyArrow concatenation errors
-    # ds = ds.map_batches(fix_warc_truncated_schema)
 
     ds = ds.map_batches(  # Apply batch inference for all input data.
         vLLMTextGeneration,

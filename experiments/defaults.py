@@ -30,7 +30,6 @@ from levanter.utils import fsspec_utils
 from experiments.anneal_config import AnnealConfig
 from experiments.evals.task_configs import (
     CORE_TASKS,
-    MMLU_TASKS,
     convert_to_levanter_task_config,
     convert_to_task_metrics,
 )
@@ -514,7 +513,8 @@ def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
         model_config=llama_8b,
         train_config=anneal_stage_train_config,
         use_default_validation=anneal_config.use_default_validation,
-        eval_harness_tasks=MMLU_TASKS,
+        # eval_harness_tasks=MMLU_TASKS,
+        eval_harness_tasks=[],
     )
 
 
