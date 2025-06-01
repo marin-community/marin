@@ -11,6 +11,8 @@ from time import time
 
 import draccus
 import fsspec
+import psutil
+import pyarrow.parquet as pq
 import ray
 
 from marin.core.runtime import cached_or_construct_output
@@ -101,8 +103,36 @@ def create_compressed_file_iterator(
         if not file_path.strip():
             continue
 
+        # Skip unsupported file types (only JSONL or Parquet)
+        if not file_path.lower().endswith((".jsonl", ".jsonl.gz", ".jsonl.zst", ".json.gz", ".json.zst", ".parquet")):
+            failed_files += 1
+            logger.error(f"Skipping unsupported file type: {file_path}")
+            continue
+
         file_start = time()
         print(f"Starting file: {file_path}", flush=True)
+
+        # Parquet files: read via pyarrow
+        if file_path.lower().endswith(".parquet"):
+            try:
+                with fsspec.open(file_path, "rb") as f:
+                    parquet_file = pq.ParquetFile(f)
+                    row_num = 0
+                    for batch in parquet_file.iter_batches():
+                        for record in batch.to_pylist():
+                            row_num += 1
+                            text = record.get("text")
+                            source_info = f"file={file_path}, row={row_num}"
+                            if text is None:
+                                logger.warning(f"Missing 'text' field in parquet row: {source_info}")
+                                continue
+                            yield text, source_info
+                processed_files += 1
+                gc.collect()
+            except Exception as e:
+                failed_files += 1
+                logger.error(f"Error processing parquet file {file_path}: {e!s}")
+            continue
 
         try:
             with managed_file_open(file_path) as f:
@@ -148,7 +178,29 @@ def create_compressed_file_iterator(
     print(f"Completed processing {processed_files} files in {total_time:.1f}s. Failed: {failed_files}", flush=True)
 
 
-@ray.remote(memory=1024 * 1024 * 1024 * 6, num_cpus=6)
+def _print_mem(label: str, include_children: bool = True):
+    """Helper function to print memory usage information for debugging purposes.
+
+    Args:
+        label: String label to identify the memory snapshot
+        include_children: Whether to include memory usage of child processes
+    """
+    proc = psutil.Process(os.getpid())
+    info = proc.memory_info()
+    uss = getattr(proc.memory_full_info(), "uss", None)
+
+    private = (info.rss - info.shared) / 2**20  # MiB
+    shared = info.shared / 2**20
+    txt = f"[MEM] {label}: private={private:,.1f} MiB  shared={shared:,.1f}"
+    if uss is not None:
+        txt += f"  uss={uss/2**20:,.1f}"
+    if include_children:
+        children_rss = sum(c.memory_info().rss for c in proc.children(recursive=True)) / 2**20
+        txt += f"  children_rss={children_rss:,.1f}"
+    print(txt, flush=True)
+
+
+@ray.remote(memory=1024 * 1024 * 1024 * 16, num_cpus=16)
 def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
     # Idempotence: skip if already completed
     print(f"starting run_data_overlap for {config.input_data}", flush=True)
@@ -197,6 +249,7 @@ def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
             "**/*.json.gz",
             "**/*.json.zst",
             "**/*.jsonl",
+            "**/*.parquet",
         ]
 
         # Create streaming iterator for compressed files

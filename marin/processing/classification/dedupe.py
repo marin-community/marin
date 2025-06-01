@@ -158,6 +158,13 @@ def do_dedup(
     bloom_filter_file="deduper_bloom_filter.bin",
 ):
     bloom_filter_file = os.path.join(local_base_dir, bloom_filter_file)
+
+    # If n-gram mode and no explicit bloom_filter_size, override estimated_doc_count
+    if ngram is not None and not bloom_filter_size:
+        total_ngrams = estimate_total_ngrams_fast(local_base_dir, ngram)
+        estimated_doc_count = total_ngrams
+        print(f"Estimated total {ngram.ngram_length}-grams: {estimated_doc_count}")
+
     command = [
         "RUST_BACKTRACE=full",
         "dolma",
@@ -338,6 +345,42 @@ def estimate_ngram_count(local_base_dir, ngram):
     return len(hll)
 
 
+# Fast estimate of total n-grams by sampling a subset of documents
+def estimate_total_ngrams_fast(local_base_dir, ngram, sample_lines=1000):
+    """
+    Fast estimate of total n-grams by sampling up to sample_lines JSONL lines
+    across all staged documents.
+    """
+    pattern = os.path.join(local_base_dir, "documents", "**", "*.jsonl.gz")
+    total_docs = 0
+    sample_count = 0
+    ngram_sum = 0
+    files = fsspec_glob(pattern)
+    for file in files:
+        with fsspec.open(file, "rt", compression="infer") as f:
+            for line in f:
+                total_docs += 1
+                if sample_count < sample_lines:
+                    try:
+                        rec = json.loads(line)
+                        text = rec.get("text", "")
+                    except json.JSONDecodeError:
+                        sample_count += 1
+                        continue
+                    tokens = text.split()
+                    L = len(tokens)
+                    if L < ngram.ngram_length:
+                        ngram_sum += 1
+                    else:
+                        stride = ngram.stride if ngram.stride > 0 else 1
+                        ngram_sum += (L - ngram.ngram_length) // stride + 1
+                    sample_count += 1
+    if sample_count == 0:
+        return total_docs
+    avg_ngrams = ngram_sum / sample_count
+    return int(avg_ngrams * total_docs)
+
+
 @ray.remote(num_cpus=4)
 def dolma_dedup(
     input_path,
@@ -361,7 +404,8 @@ def dolma_dedup(
             # First we copy the files to the temporary directory to get bloom filter
             copy_files_in(decomtaminate_dir, tmpdir)
             # Estimate number of n-grams in decontamination set
-            estimated_count = estimate_ngram_count(tmpdir, ngram)
+            # estimated_count = estimate_ngram_count(tmpdir, ngram)
+            estimated_count = estimate_total_ngrams_fast(tmpdir, ngram)
             print(f"Estimated {estimated_count} n-grams for decontamination filter")
             do_dedup(
                 tmpdir,
