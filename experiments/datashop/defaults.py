@@ -262,13 +262,13 @@ def default_quality_filter(
         fn=run_inference,
         config=inference_config,
         pip_dependency_groups=[
-            "--find-links https://storage.googleapis.com/libtpu-releases/index.html",
-            "--find-links https://storage.googleapis.com/libtpu-wheels/index.html",
-            "fasttext",
-            "datasets",
-            "filelock",
-            "torch~=2.7.0",
-            "torch_xla[tpu]~=2.7.0",
+            # "--find-links https://storage.googleapis.com/libtpu-releases/index.html",
+            # "--find-links https://storage.googleapis.com/libtpu-wheels/index.html",
+            # "fasttext",
+            # "datasets",
+            # "filelock",
+            # "torch~=2.7.0",
+            # "torch_xla[tpu]~=2.7.0",
         ],
     )
 

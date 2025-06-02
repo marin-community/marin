@@ -34,6 +34,16 @@ MMLU_TASKS = (
     MMLU_5_SHOT,
 )
 
+PUBMED_QA = EvalTaskConfig("pubmedqa", 0, task_alias="pubmedqa_0shot")
+MEDMCQA = EvalTaskConfig("medmcqa", 0, task_alias="medmcqa_0shot")
+HEADQA = EvalTaskConfig("headqa_en", 0, task_alias="headqa_en_0shot")
+
+MEDICAL_TASKS = (
+    PUBMED_QA,
+    MEDMCQA,
+    HEADQA,
+)
+
 CORE_TASKS_PLUS_LEADERBOARD = (
     EvalTaskConfig(
         "leaderboard_bbh",
