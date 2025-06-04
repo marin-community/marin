@@ -1,0 +1,6 @@
+[submodule "marin/environments/third_party/mle-bench"]
+	path = marin/environments/third_party/mle-bench
+	url = https://github.com/openai/mle-bench.git
+[submodule "marin/environments/third_party/mlebench"]
+	path = marin/environments/third_party/mlebench
+	url = https://github.com/openai/mle-bench.git
