@@ -36,6 +36,8 @@ class SimpleTrainConfig:
     z_loss_weight: float | None = None
     ema_beta: float | None = None
     """exponential moving average beta"""
+    skip_bad_steps: bool = False
+    """If True, skips steps where the loss or grad is significantly higher than the historical mean."""
 
     steps_per_eval: int | None = None
     """how often to run validation losses"""

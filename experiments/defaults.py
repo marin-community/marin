@@ -352,6 +352,7 @@ def default_train(
                 min_lr_ratio=(
                     train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
                 ),
+                skip_bad_steps=train_config.skip_bad_steps,
             )
         ),
         hf_save_steps=steps_per_export_hf,
