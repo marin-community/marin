@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Character stoping distance math - Character &amp; Animation - Epic Developer Community Forums</title>
+    <meta name="description" content="i’m trying to work out the math to give me the stopping distance and stopping time of a character. i know that if it wasn’t for ground friction it would be: 
+StopTime= Speed/braking Deceleration 
+Stop Distance = (Speed/S&amp;hellip;">
+    <meta name="generator" content="Discourse 3.5.0.beta5-dev - https://github.com/discourse/discourse version adc8dd29eb89b5a3c24ffeeaf91ac80345331d09">
+<link rel="icon" type="image/png" href="https://d3kjluh73b9h9o.cloudfront.net/optimized/4X/4/f/c/4fc78ce65be09c7e97b60a65447c99c078aca16b_2_32x32.png">
+<link rel="apple-touch-icon" type="image/png" href="https://d3kjluh73b9h9o.cloudfront.net/optimized/4X/7/1/3/713c9d3f58553f0de89543d76a8a3a2779dc9fa4_2_180x180.png">
+<meta name="theme-color" media="all" content="#000000">
+
+<meta name="color-scheme" content="dark">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, viewport-fit=cover">
+<link rel="canonical" href="https://forums.unrealengine.com/t/character-stoping-distance-math/430388" />
+
+<link rel="search" type="application/opensearchdescription+xml" href="https://forums.unrealengine.com/opensearch.xml" title="Epic Developer Community Forums Search">
+
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/color_definitions_default_26_14_83ed9d7e1bdd5991cbde84d20b0a8479de7f6cda.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" class="light-scheme" data-scheme-id="26"/>
+
+<link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/common_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="common"  />
+
+  <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/desktop_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="desktop"  />
+
+
+
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/checklist_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="checklist"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/discourse-assign_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="discourse-assign"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/discourse-data-explorer_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="discourse-data-explorer"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/discourse-details_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="discourse-details"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/discourse-epic-games_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="discourse-epic-games"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/discourse-epic-sso_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="discourse-epic-sso"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/discourse-lazy-videos_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="discourse-lazy-videos"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/discourse-local-dates_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="discourse-local-dates"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/discourse-narrative-bot_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="discourse-narrative-bot"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/discourse-presence_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="discourse-presence"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/discourse-solved_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="discourse-solved"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/discourse-templates_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="discourse-templates"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/discourse-topic-voting_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="discourse-topic-voting"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/footnote_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="footnote"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/hosted-site_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="hosted-site"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/poll_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="poll"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/spoiler-alert_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="spoiler-alert"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/discourse-epic-games_desktop_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="discourse-epic-games_desktop"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/discourse-topic-voting_desktop_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="discourse-topic-voting_desktop"  />
+    <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/poll_desktop_42e36b1dae11a0f2a3e6df1156be3de125d05e00.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="poll_desktop"  />
+
+  <link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/common_theme_24_db3698ac3836d681e174ee236c33e3c71f5b432c.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="common_theme" data-theme-id="24" data-theme-name="topic excerpts"/>
+<link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/common_theme_11_e361ca068ae4e269a50004d89db2962afb03dceb.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="common_theme" data-theme-id="11" data-theme-name="topic thumbnails"/>
+<link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/common_theme_20_a038a01fe8d08d2b35d062af7aaf5a98c3e6b435.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="common_theme" data-theme-id="20" data-theme-name="verse syntax highlighting"/>
+<link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/common_theme_30_ce5352c18fc969c0c37d95aa5bdf146376f59255.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="common_theme" data-theme-id="30" data-theme-name="hotfix: ipad scroll topic header"/>
+<link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/common_theme_34_02023299a2abf2ffb32e9e16fe4781a4cc1b23ab.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="common_theme" data-theme-id="34" data-theme-name="hotfixes"/>
+<link href="https://d1ap1mz92jnks1.cloudfront.net/stylesheets/common_theme_18_5c85e8bd07f5d2cc68fa335853feeb8a0c6c759d.css?__ws=forums.unrealengine.com" media="all" rel="stylesheet" data-target="common_theme" data-theme-id="18" data-theme-name="temporary styles"/>
+    
+
+    
+    
+        <link rel="alternate nofollow" type="application/rss+xml" title="RSS feed of &#39;Character stoping distance math&#39;" href="https://forums.unrealengine.com/t/character-stoping-distance-math/430388.rss" />
+    <meta property="og:site_name" content="Epic Developer Community Forums" />
+<meta property="og:type" content="website" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:image" content="https://d3kjluh73b9h9o.cloudfront.net/original/4X/2/9/b/29baba797e2c83ded8d953a8b17e3828436ca428.png" />
+<meta property="og:image" content="https://d3kjluh73b9h9o.cloudfront.net/original/4X/4/b/2/4b280f634b056c5ef927c55b924c348550827f02.png" />
+<meta property="og:url" content="https://forums.unrealengine.com/t/character-stoping-distance-math/430388" />
+<meta name="twitter:url" content="https://forums.unrealengine.com/t/character-stoping-distance-math/430388" />
+<meta property="og:title" content="Character stoping distance math" />
+<meta name="twitter:title" content="Character stoping distance math" />
+<meta property="og:description" content="i’m trying to work out the math to give me the stopping distance and stopping time of a character. i know that if it wasn’t for ground friction it would be:  StopTime= Speed/braking Deceleration  Stop Distance = (Speed/StopTime) / 2  but i’m finding it hard to wrap my head around how the ground friction works. it defaults to 8 and stooping times and distances don’t seem to have a linear relation ship to movement speed. so i’m guess there is some exponential thing i’m not understanding.  any help..." />
+<meta name="twitter:description" content="i’m trying to work out the math to give me the stopping distance and stopping time of a character. i know that if it wasn’t for ground friction it would be:  StopTime= Speed/braking Deceleration  Stop Distance = (Speed/StopTime) / 2  but i’m finding it hard to wrap my head around how the ground friction works. it defaults to 8 and stooping times and distances don’t seem to have a linear relation ship to movement speed. so i’m guess there is some exponential thing i’m not understanding.  any help..." />
+<meta property="og:article:section" content="Development" />
+<meta property="og:article:section:color" content="1b1b1b" />
+<meta property="og:article:section" content="Character &amp; Animation" />
+<meta property="og:article:section:color" content="B665E9" />
+<meta property="og:article:tag" content="question" />
+<meta property="og:article:tag" content="unreal-engine" />
+<meta property="og:article:tag" content="math" />
+<meta property="og:article:tag" content="Animation" />
+<meta property="og:article:tag" content="Character-Movement" />
+<meta property="og:article:tag" content="CPP" />
+<meta property="article:published_time" content="2018-07-27T14:45:20+00:00" />
+<meta property="og:ignore_canonical" content="true" />
+
+
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"QAPage","name":"Character stoping distance math","mainEntity":{"@type":"Question","name":"Character stoping distance math","text":"i’m trying to work out the math to give me the stopping distance and stopping time of a character. i know that if it wasn’t for ground friction it would be:\n\nStopTime= Speed/braking Deceleration\n\nStop Distance = (Speed/StopTime) / 2\n\nbut i’m finding it hard to wrap my head around how the ground fric&hellip;","upvoteCount":0,"answerCount":0,"datePublished":"2018-07-27T14:45:20.000Z","author":{"@type":"Person","name":"r8ivy","url":"https://forums.unrealengine.com/u/r8ivy"}}}</script>
+  </head>
+  <body class="crawler ">
+    
+    <header>
+  <a href="/">Epic Developer Community Forums</a>
+</header>
+
+    <div id="main-outlet" class="wrap" role="main">
+        <div id="topic-title">
+    <h1>
+      <a href="/t/character-stoping-distance-math/430388">Character stoping distance math</a>
+    </h1>
+
+      <div class="topic-category" itemscope itemtype="http://schema.org/BreadcrumbList">
+          <span itemprop="itemListElement" itemscope itemtype="http://schema.org/ListItem">
+            <a href="/c/development-discussion/character-animation/38" class="badge-wrapper bullet" itemprop="item">
+              <span class='badge-category-bg' style='background-color: #1b1b1b'></span>
+              <span class='badge-category clear-badge'>
+                <span class='category-name' itemprop='name'>Development</span>
+              </span>
+            </a>
+            <meta itemprop="position" content="1" />
+          </span>
+          <span itemprop="itemListElement" itemscope itemtype="http://schema.org/ListItem">
+            <a href="/c/development-discussion/character-animation/38" class="badge-wrapper bullet" itemprop="item">
+              <span class='badge-category-bg' style='background-color: #B665E9'></span>
+              <span class='badge-category clear-badge'>
+                <span class='category-name' itemprop='name'>Character &amp; Animation</span>
+              </span>
+            </a>
+            <meta itemprop="position" content="2" />
+          </span>
+      </div>
+
+      <div class="topic-category">
+        <div class='discourse-tags list-tags'>
+            <a href='https://forums.unrealengine.com/tag/question' class='discourse-tag' rel="tag">question</a>, 
+            <a href='https://forums.unrealengine.com/tag/unreal-engine' class='discourse-tag' rel="tag">unreal-engine</a>, 
+            <a href='https://forums.unrealengine.com/tag/math' class='discourse-tag' rel="tag">math</a>, 
+            <a href='https://forums.unrealengine.com/tag/Animation' class='discourse-tag' rel="tag">Animation</a>, 
+            <a href='https://forums.unrealengine.com/tag/Character-Movement' class='discourse-tag' rel="tag">Character-Movement</a>, 
+            <a href='https://forums.unrealengine.com/tag/CPP' class='discourse-tag' rel="tag">CPP</a>
+        </div>
+      </div>
+  </div>
+
+  
+
+    <div itemscope itemtype='http://schema.org/DiscussionForumPosting'>
+      <meta itemprop='headline' content='Character stoping distance math'>
+      <link itemprop='url' href='https://forums.unrealengine.com/t/character-stoping-distance-math/430388'>
+      <meta itemprop='datePublished' content='2018-07-27T14:45:20Z'>
+        <meta itemprop='articleSection' content='Character &amp; Animation'>
+      <meta itemprop='keywords' content='question, unreal-engine, math, Animation, Character-Movement, CPP'>
+      <div itemprop='publisher' itemscope itemtype="http://schema.org/Organization">
+        <meta itemprop='name' content='Epic Games, Inc.'>
+          <div itemprop='logo' itemscope itemtype="http://schema.org/ImageObject">
+            <meta itemprop='url' content='https://d3kjluh73b9h9o.cloudfront.net/original/4X/7/1/3/713c9d3f58553f0de89543d76a8a3a2779dc9fa4.png'>
+          </div>
+      </div>
+
+
+          <div id='post_1'  class='topic-body crawler-post'>
+            <div class='crawler-post-meta'>
+              <span class="creator" itemprop="author" itemscope itemtype="http://schema.org/Person">
+                <a itemprop="url" rel='nofollow' href='https://forums.unrealengine.com/u/r8ivy'><span itemprop='name'>r8ivy</span></a>
+                (r8ivy)
+              </span>
+
+                <link itemprop="mainEntityOfPage" href="https://forums.unrealengine.com/t/character-stoping-distance-math/430388">
+
+
+              <span class="crawler-post-infos">
+                  <time  datetime='2018-07-27T14:45:20Z' class='post-time'>
+                    July 27, 2018,  2:45pm
+                  </time>
+                  <meta itemprop='dateModified' content='2022-03-11T01:18:15Z'>
+              <span itemprop='position'>1</span>
+              </span>
+            </div>
+            <div class='post' itemprop='text'>
+              <p>i’m trying to work out the math to give me the stopping distance and stopping time of a character. i know that if it wasn’t for ground friction it would be:<br>
+StopTime= Speed/braking Deceleration<br>
+Stop Distance = (Speed/StopTime) / 2</p>
+<p>but i’m finding it hard to wrap my head around how the ground friction works. it defaults to 8 and stooping times and distances don’t seem to have a linear relation ship to movement speed. so i’m guess there is some exponential thing i’m not understanding.<br>
+any help would be awesome,<br>
+Thanks <img src="https://d1ap1mz92jnks1.cloudfront.net/images/emoji/twitter/slight_smile.png?v=12" title=":slight_smile:" class="emoji" alt=":slight_smile:" loading="lazy" width="20" height="20"></p>
+            </div>
+
+            <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+              <meta itemprop="interactionType" content="http://schema.org/LikeAction"/>
+              <meta itemprop="userInteractionCount" content="0" />
+              <span class='post-likes'></span>
+            </div>
+
+          </div>
+          <div id='post_2' itemprop='comment' itemscope itemtype='http://schema.org/Comment' class='topic-body crawler-post'>
+            <div class='crawler-post-meta'>
+              <span class="creator" itemprop="author" itemscope itemtype="http://schema.org/Person">
+                <a itemprop="url" rel='nofollow' href='https://forums.unrealengine.com/u/dZh0'><span itemprop='name'>dZh0</span></a>
+                (dZh0)
+              </span>
+
+
+
+              <span class="crawler-post-infos">
+                  <time itemprop='datePublished' datetime='2018-07-30T14:07:31Z' class='post-time'>
+                    July 30, 2018,  2:07pm
+                  </time>
+                  <meta itemprop='dateModified' content='2018-07-30T14:07:31Z'>
+              <span itemprop='position'>2</span>
+              </span>
+            </div>
+            <div class='post' itemprop='text'>
+              <p><a href="https://www.youtube.com/watch?v=6vFZ9alQKqI" rel="noopener nofollow ugc">Here</a> is a Tutorial to how to make a wheeled vehicle in Unreal.</p>
+<p>In reality vehicle experience 2 types of meaningful friction (static and dynamic) and materials have different friction coefficients for those cases. Here is a <a href="https://en.wikipedia.org/wiki/Friction" rel="noopener nofollow ugc">Wikipedia</a> article for more information on the physics side of things. Keep in mind that all those calculations already simulated in the Unreal physics engine.</p>
+<p>In short:</p>
+<pre><code>FrictionForce = FrictionCoefficient * NormalForce
+</code></pre>
+<p>but also</p>
+<pre><code>FrictionForce = ObjectMass * FrictionDeceleration
+</code></pre>
+<p>so</p>
+<pre><code>FrictionDeceleration = FrictionCoefficient * NormalForce / ObjectMass
+</code></pre>
+<p>from this point on you get</p>
+<pre><code>StopTime = Speed / FrictionDeceleration
+StopDistance = Speed * StopTime / 2
+</code></pre>
+<p>Keep in mind that the Friction Coefficient must be different when the car is sliding. (Above some maximum FrictionForce the coefficient changes) NormalForce is largely dependent on your car weight and the <a href="https://en.wikipedia.org/wiki/Downforce" rel="noopener nofollow ugc">downforce</a>.</p>
+<p>If you need a full physical model of a car you will need to account for the downforce, suspension hardness, loss of friction, weight transfer between wheels, centrifugal force in turns, contact surface temperature and area (between the wheels and the road).</p>
+<p>Some of these can and are frequently ignored in games. (temperature and weight transfer) Most of the ones that are needed (like loss of friction and down force) have simplified math models that are used in games  but they are in no way simple to understand.</p>
+<p>Happy coding <img src="https://d1ap1mz92jnks1.cloudfront.net/images/emoji/twitter/slight_smile.png?v=12" title=":slight_smile:" class="emoji" alt=":slight_smile:" loading="lazy" width="20" height="20"></p>
+            </div>
+
+            <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+              <meta itemprop="interactionType" content="http://schema.org/LikeAction"/>
+              <meta itemprop="userInteractionCount" content="0" />
+              <span class='post-likes'></span>
+            </div>
+
+          </div>
+          <div id='post_3' itemprop='comment' itemscope itemtype='http://schema.org/Comment' class='topic-body crawler-post'>
+            <div class='crawler-post-meta'>
+              <span class="creator" itemprop="author" itemscope itemtype="http://schema.org/Person">
+                <a itemprop="url" rel='nofollow' href='https://forums.unrealengine.com/u/r8ivy'><span itemprop='name'>r8ivy</span></a>
+                (r8ivy)
+              </span>
+
+
+
+              <span class="crawler-post-infos">
+                  <time itemprop='datePublished' datetime='2018-07-30T15:28:21Z' class='post-time'>
+                    July 30, 2018,  3:28pm
+                  </time>
+                  <meta itemprop='dateModified' content='2018-07-30T15:28:21Z'>
+              <span itemprop='position'>3</span>
+              </span>
+            </div>
+            <div class='post' itemprop='text'>
+              <p>thanks for the reply, very interesting (and useful) stuff. still finding it hard to make sense of the character implementation of friction in relation to this however. mass doesn’t effect stooping distance or time in my tests with the character movement component and its hard to pin down what the FrictionCoefficient  NormalForce are in this context.</p>
+            </div>
+
+            <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+              <meta itemprop="interactionType" content="http://schema.org/LikeAction"/>
+              <meta itemprop="userInteractionCount" content="0" />
+              <span class='post-likes'></span>
+            </div>
+
+          </div>
+          <div id='post_4' itemprop='comment' itemscope itemtype='http://schema.org/Comment' class='topic-body crawler-post'>
+            <div class='crawler-post-meta'>
+              <span class="creator" itemprop="author" itemscope itemtype="http://schema.org/Person">
+                <a itemprop="url" rel='nofollow' href='https://forums.unrealengine.com/u/dZh0'><span itemprop='name'>dZh0</span></a>
+                (dZh0)
+              </span>
+
+
+
+              <span class="crawler-post-infos">
+                  <time itemprop='datePublished' datetime='2018-07-30T15:46:02Z' class='post-time'>
+                    July 30, 2018,  3:46pm
+                  </time>
+                  <meta itemprop='dateModified' content='2018-07-30T15:46:02Z'>
+              <span itemprop='position'>4</span>
+              </span>
+            </div>
+            <div class='post' itemprop='text'>
+              <p>Character movement component does not use physics for it’s movement.</p>
+<p>Although it has some rudimentary calculations (for gravity and acceleration) it intentionally has no friction or complex physics involved. There is a way to make a pawn use the physics engine which, however does not go through the movement component.</p>
+<p>Check <a href="https://docs-origin.unrealengine.com/latest/INT/Videos/PLZlv_N0_O1ga0aV9jVqJgog0VWz1cLL5f/lFpXqggbUP4/index.html" rel="noopener nofollow ugc">https://docs-origin.unrealengine.com/latest/INT/Videos/PLZlv_N0_O1ga0aV9jVqJgog0VWz1cLL5f/lFpXqggbUP4/index.html</a></p>
+            </div>
+
+            <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+              <meta itemprop="interactionType" content="http://schema.org/LikeAction"/>
+              <meta itemprop="userInteractionCount" content="0" />
+              <span class='post-likes'></span>
+            </div>
+
+          </div>
+          <div id='post_5' itemprop='comment' itemscope itemtype='http://schema.org/Comment' class='topic-body crawler-post'>
+            <div class='crawler-post-meta'>
+              <span class="creator" itemprop="author" itemscope itemtype="http://schema.org/Person">
+                <a itemprop="url" rel='nofollow' href='https://forums.unrealengine.com/u/r8ivy'><span itemprop='name'>r8ivy</span></a>
+                (r8ivy)
+              </span>
+
+
+
+              <span class="crawler-post-infos">
+                  <time itemprop='datePublished' datetime='2018-07-30T16:26:28Z' class='post-time'>
+                    July 30, 2018,  4:26pm
+                  </time>
+                  <meta itemprop='dateModified' content='2018-07-30T16:26:28Z'>
+              <span itemprop='position'>5</span>
+              </span>
+            </div>
+            <div class='post' itemprop='text'>
+              <p>i’m looking to predict the stopping distance and time of the standard Character movement component. so i guess i’m looking for whatever there approximation of friction is (as the component has a number of variable associated with friction) and it doesn’t stop linearly in the way it would if it had a constant deceleration force applied.</p>
+            </div>
+
+            <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+              <meta itemprop="interactionType" content="http://schema.org/LikeAction"/>
+              <meta itemprop="userInteractionCount" content="0" />
+              <span class='post-likes'></span>
+            </div>
+
+          </div>
+          <div id='post_6' itemprop='comment' itemscope itemtype='http://schema.org/Comment' class='topic-body crawler-post'>
+            <div class='crawler-post-meta'>
+              <span class="creator" itemprop="author" itemscope itemtype="http://schema.org/Person">
+                <a itemprop="url" rel='nofollow' href='https://forums.unrealengine.com/u/dZh0'><span itemprop='name'>dZh0</span></a>
+                (dZh0)
+              </span>
+
+
+
+              <span class="crawler-post-infos">
+                  <time itemprop='datePublished' datetime='2018-07-30T19:38:38Z' class='post-time'>
+                    July 30, 2018,  7:38pm
+                  </time>
+                  <meta itemprop='dateModified' content='2018-07-30T19:38:38Z'>
+              <span itemprop='position'>6</span>
+              </span>
+            </div>
+            <div class='post' itemprop='text'>
+              <p>In this case the you should go VERY in-depth with the character movement component.</p>
+<p>If I were you I would start with:</p>
+<pre><code>void UCharacterMovementComponent::CalcVelocity(...){..} //CharacterMovementComponent.cpp line:2986
+</code></pre>
+<p>which calls:</p>
+<pre><code>bool UCharacterMovementComponent::ApplyRequestedMove(...){...} //CharacterMovementComponent.cpp line:3073
+</code></pre>
+<p>and in there is a line of code that states:</p>
+<pre><code>Velocity = Velocity - (Velocity - RequestedMoveDir * VelSize) * FMath::Min(DeltaTime * Friction, 1.f);
+</code></pre>
+<p>I guess you can work your way backwards from that point but note that the file is over TEN THOUSAND lines so it wont be easy. The component has too many variables which modify the values given to these functions.</p>
+            </div>
+
+            <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+              <meta itemprop="interactionType" content="http://schema.org/LikeAction"/>
+              <meta itemprop="userInteractionCount" content="0" />
+              <span class='post-likes'></span>
+            </div>
+
+          </div>
+          <div id='post_7' itemprop='comment' itemscope itemtype='http://schema.org/Comment' class='topic-body crawler-post'>
+            <div class='crawler-post-meta'>
+              <span class="creator" itemprop="author" itemscope itemtype="http://schema.org/Person">
+                <a itemprop="url" rel='nofollow' href='https://forums.unrealengine.com/u/Soumik_25'><span itemprop='name'>Soumik_25</span></a>
+                (Soumik_25)
+              </span>
+
+
+
+              <span class="crawler-post-infos">
+                  <time itemprop='datePublished' datetime='2021-04-29T14:48:52Z' class='post-time'>
+                    April 29, 2021,  2:48pm
+                  </time>
+                  <meta itemprop='dateModified' content='2021-04-29T14:48:52Z'>
+              <span itemprop='position'>7</span>
+              </span>
+            </div>
+            <div class='post' itemprop='text'>
+              <p>I know I am a bit late for answering, but this is how friction is calculated for ground movement in UE4 character movement component</p>
+<p>Velocity = Velocity - ((Velocity * Friction) + Braking Deceleration) * Delta Time</p>
+<p>Friction is only used in case of braking its not added when accelerating</p>
+<p>Friction  = Ground Friction * Braking Friction Factor</p>
+<p>if you still searching for calculating stop location I posted my code here: <a href="https://answers.unrealengine.com/questions/531204/predict-stop-position-of-character-ahead-in-time.html?sort=oldest" class="inline-onebox" rel="noopener nofollow ugc">Predict Stop Position of Character ahead in time - Character &amp; Animation - Unreal Engine Forums</a></p>
+            </div>
+
+            <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+              <meta itemprop="interactionType" content="http://schema.org/LikeAction"/>
+              <meta itemprop="userInteractionCount" content="0" />
+              <span class='post-likes'></span>
+            </div>
+
+          </div>
+    </div>
+
+
+    
+
+
+
+
+    </div>
+    <footer class="container wrap">
+  <nav class='crawler-nav'>
+    <ul>
+      <li itemscope itemtype='http://schema.org/SiteNavigationElement'>
+        <span itemprop='name'>
+          <a href='/' itemprop="url">Home </a>
+        </span>
+      </li>
+      <li itemscope itemtype='http://schema.org/SiteNavigationElement'>
+        <span itemprop='name'>
+          <a href='/categories' itemprop="url">Categories </a>
+        </span>
+      </li>
+      <li itemscope itemtype='http://schema.org/SiteNavigationElement'>
+        <span itemprop='name'>
+          <a href='/guidelines' itemprop="url">Guidelines </a>
+        </span>
+      </li>
+        <li itemscope itemtype='http://schema.org/SiteNavigationElement'>
+          <span itemprop='name'>
+            <a href='https://www.epicgames.com/tos' itemprop="url">Terms of Service </a>
+          </span>
+        </li>
+        <li itemscope itemtype='http://schema.org/SiteNavigationElement'>
+          <span itemprop='name'>
+            <a href='https://www.epicgames.com/site/privacypolicy' itemprop="url">Privacy Policy </a>
+          </span>
+        </li>
+    </ul>
+  </nav>
+  <p class='powered-by-link'>Powered by <a href="https://www.discourse.org">Discourse</a>, best viewed with JavaScript enabled</p>
+</footer>
+
+    
+    
+  </body>
+  
+</html>
