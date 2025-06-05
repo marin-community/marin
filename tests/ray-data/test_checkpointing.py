@@ -60,7 +60,7 @@ def test_ray_data_resumption(input_path, finished_ids_path):
         "jsonl.gz",
         "id",
     )
-    ds = ray.data.read_json(TEST_INPUT_PATH, arrow_open_stream_args={"compression": "gzip"})
+    ds = ray.data.read_json(TEST_INPUT_PATH, arrow_open_stream_args={"compression": "gzip"}, override_num_blocks=1)
     ds = ds.filter(lambda x: x["id"] not in finished_ids)
     assert ds.count() == 2
 

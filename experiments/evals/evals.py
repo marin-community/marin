@@ -108,6 +108,7 @@ def evaluate_lm_evaluation_harness(
             evals=evals,
             max_eval_instances=max_eval_instances,
             launch_with_ray=True,
+            discover_latest_checkpoint=True,
             engine_kwargs=engine_kwargs,
             resource_config=resource_config,
         ),
@@ -197,7 +198,7 @@ def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[s
     Extract the model name and path from a step.
     """
     if isinstance(step, ExecutorStep):
-        model_step_path = output_path_of(step, "hf")
+        model_step_path = output_path_of(step)
         name = step.name
     elif isinstance(step, InputName):
         model_step_path = output_path_of(step.step, "hf")

@@ -86,8 +86,17 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         Launches the evaluation run with Ray.
         """
 
+        from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+
+        placement_group = ray.util.placement_group(
+            [{"TPU": 1, "CPU": 1}] * 4 + [{"TPU-v6e-4-head": 1}], strategy="STRICT_PACK"
+        )
+
         @ray.remote(
-            scheduling_strategy=self._get_scheduling_strategy(resource_config),
+            # scheduling_strategy=self._get_scheduling_strategy(resource_config),
+            scheduling_strategy=PlacementGroupSchedulingStrategy(
+                placement_group, placement_group_capture_child_tasks=True
+            ),
             runtime_env=self.get_runtime_env(),
             max_calls=1,
         )

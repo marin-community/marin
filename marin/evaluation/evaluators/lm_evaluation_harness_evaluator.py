@@ -23,6 +23,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
+        "lm-eval",
         # NOTE(chris): We put lm-eval[ifeval] in the Dockerfile.vllm, so this dependency is not needed
     ]
     _env_vars: ClassVar[dict[str, str]] = {

@@ -1,7 +1,9 @@
 from experiments.datashop.datashop_datasets import datashop_dclm_annotation_subset, datashop_dclm_pretraining_subset
 from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
-from experiments.evals.evals import default_eval
+from experiments.evals.evals import default_base_eval, default_eval
 from experiments.evals.task_configs import MEDICAL_TASKS
+from experiments.models import llama_3_1_8b, llama_3_1_8b_instruct
+from marin.execution.executor import executor_main
 
 DATASHOP_MEDICAL_DATA_FILTER_PROMPT = """
 Evaluate the following text extract for its potential usefulness for studying medical content. Use the following 5-point scoring system described below. Points are accumulated based on the satisfaction of
@@ -33,12 +35,34 @@ datashop_runner = DatashopRunner(
     )
 )
 
-medical_evals = default_eval(
+initial_model_evals = default_eval(
+    "gs://marin-us-east1/checkpoints/llama-8b-tootsie-0.001-19ad63/hf/step-660000",
+    datashop_runner.config.eval_resource_config,
+    MEDICAL_TASKS,
+)
+
+datashop_model_evals = default_eval(
     datashop_runner.quality_ablation_model, datashop_runner.config.eval_resource_config, MEDICAL_TASKS
 )
 
-if __name__ == "__main__":
-    from marin.execution.executor import executor_main
+llama_3_1_8b_instruct_evals = default_eval(
+    llama_3_1_8b_instruct, datashop_runner.config.eval_resource_config, MEDICAL_TASKS
+)
 
-    # datashop_runner.run_all_steps()
-    executor_main([medical_evals])
+llama_3_1_8b_evals = default_eval(llama_3_1_8b, datashop_runner.config.eval_resource_config, MEDICAL_TASKS)
+
+datashop_model_base_evals = default_base_eval(
+    datashop_runner.quality_ablation_model,
+    datashop_runner.config.eval_resource_config,
+)
+
+if __name__ == "__main__":
+    executor_main(
+        [
+            initial_model_evals,
+            datashop_model_evals,
+            llama_3_1_8b_instruct_evals,
+            llama_3_1_8b_evals,
+            *datashop_model_base_evals,
+        ]
+    )

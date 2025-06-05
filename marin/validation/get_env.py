@@ -6,11 +6,16 @@ import ray
 
 
 def run_collect_env():
+    import requests
+
     url = "https://raw.githubusercontent.com/vllm-project/vllm/main/vllm/collect_env.py"
     filename = "collect_env.py"
-    # Download the file using wget
+    # Download the file using requests
     try:
-        subprocess.run(["wget", "-O", filename, url], check=True)
+        response = requests.get(url)
+        response.raise_for_status()
+        with open(filename, "w") as f:
+            f.write(response.text)
     except Exception as e:
         print(f"Failed to download collect_env.py: {e}")
         return

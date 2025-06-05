@@ -1,5 +1,6 @@
 # Uses the marin-cluster-template.yaml file to create the three cluster configuration files.
 import os
+from dataclasses import dataclass
 
 import jinja2
 import yaml
@@ -18,7 +19,7 @@ DOCKER_TAGS = {
     "big-run": "8b035b60",
     "us-west4": "89b461b3",
     "europe-west4": "89b461b3",
-    "us-east1": "89b461b3",
+    "us-east1": "9c11439a",
     "us-east5": "89b461b3",
     # NB: different naming convention because we have two zones in europe-west4
     "europe-west4-a": "89b461b3",
@@ -99,7 +100,7 @@ configs = {
         "tpu_generation": "v6e",
         "min_workers": 0,
         "worker_targets": {
-            "v6e-128": 8,
+            "v6e-128": 2,
         },
     },
     "marin-us-east5": {
@@ -177,62 +178,102 @@ configs = {
     },
 }
 
+
+@dataclass
+class SliceConfig:
+    slice_count: int
+    num_tpus: int
+    override_slice_name: str = None
+
+
 generation_configs = {
     "v4": {
         "runtime_version": "tpu-ubuntu2204-base",
         "base_worker": "8",
-        "slices": [16, 32, 64, 128, 256],
-        "num_tpus": 4,
+        "slice_configs": [
+            SliceConfig(slice_count=16, num_tpus=4),
+            SliceConfig(slice_count=32, num_tpus=4),
+            SliceConfig(slice_count=64, num_tpus=4),
+            SliceConfig(slice_count=128, num_tpus=4),
+            SliceConfig(slice_count=256, num_tpus=4),
+        ],
+        "base_worker_num_tpus": 4,
         "tpus_worker": 4,
     },
     "v5e": {
         "runtime_version": "v2-alpha-tpuv5-lite",
         "base_worker": "4",
-        "slices": [8, 16, 32, 64, 128, 256],
-        "num_tpus": 4,
+        "slice_configs": [
+            SliceConfig(slice_count=8, num_tpus=4),
+            SliceConfig(slice_count=16, num_tpus=4),
+            SliceConfig(slice_count=32, num_tpus=4),
+            SliceConfig(slice_count=64, num_tpus=4),
+            SliceConfig(slice_count=128, num_tpus=4),
+            SliceConfig(slice_count=256, num_tpus=4),
+        ],
+        "base_worker_num_tpus": 4,
         "tpus_worker": 1,
     },
     "v5p": {
         "runtime_version": "v2-alpha-tpuv5",
         "base_worker": "8",
-        "slices": [8, 16, 32, 64, 128, 256, 512, 1024],
-        "num_tpus": 8,
+        "slice_configs": [
+            SliceConfig(slice_count=8, num_tpus=8),
+            SliceConfig(slice_count=16, num_tpus=8),
+            SliceConfig(slice_count=32, num_tpus=8),
+            SliceConfig(slice_count=64, num_tpus=8),
+            SliceConfig(slice_count=128, num_tpus=8),
+            SliceConfig(slice_count=256, num_tpus=8),
+            SliceConfig(slice_count=512, num_tpus=8),
+            SliceConfig(slice_count=1024, num_tpus=8),
+        ],
+        "base_worker_num_tpus": 8,
         "tpus_worker": 8,
     },
     "v6e": {
         "runtime_version": "v2-alpha-tpuv6e",
         "base_worker": "4",
-        "slices": [8, 16, 32, 64, 128, 256],
-        "num_tpus": 4,
+        "slice_configs": [
+            SliceConfig(slice_count=8, num_tpus=4),
+            SliceConfig(slice_count=16, num_tpus=4),
+            SliceConfig(slice_count=32, num_tpus=4),
+            SliceConfig(slice_count=64, num_tpus=4),
+            SliceConfig(slice_count=128, num_tpus=4),
+            SliceConfig(slice_count=256, num_tpus=4),
+            SliceConfig(slice_count=8, num_tpus=8, override_slice_name="tpu_slice_v6e_8_serve"),
+        ],
+        "base_worker_num_tpus": 4,
     },
     "v6e-serve": {
         "runtime_version": "v2-alpha-tpuv6e",
         "base_worker": "8",
-        "slices": [],
-        "num_tpus": 8,
+        "slice_configs": [],
+        "base_worker_num_tpus": 8,
     },
     "v4-serve": {
         "runtime_version": "tpu-ubuntu2204-base",
         "base_worker": "16",
-        "slices": [],
-        "num_tpus": 4,
+        "slice_configs": [],
+        "base_worker_num_tpus": 4,
     },
 }
 
 
-def make_tpu_slice_config(generation, count, target_count) -> dict[str, dict]:
+def make_tpu_slice_config(generation, slice_config: SliceConfig, target_count) -> dict[str, dict]:
     slice_gen_name = "v5litepod" if generation == "v5e" else generation
 
     if "serve" in generation:
         slice_gen_name = generation.replace("-serve", "")
-    name = f"tpu_slice_{generation}_{count}"
+    name = f"tpu_slice_{generation}_{slice_config.slice_count}"
+    if slice_config.override_slice_name:
+        name = slice_config.override_slice_name
     return {
         name: {
             "min_workers": target_count,
             "max_workers": 1024,
-            "resources": {"CPU": 120, "TPU": generation_configs[generation]["num_tpus"]},
+            "resources": {"CPU": 120, "TPU": slice_config.num_tpus},
             "node_config": {
-                "acceleratorType": f"{slice_gen_name}-{count}",
+                "acceleratorType": f"{slice_gen_name}-{slice_config.slice_count}",
                 "runtimeVersion": generation_configs[generation]["runtime_version"],
                 "schedulingConfig": {"preemptible": True},
             },
@@ -247,7 +288,11 @@ def get_template_path(config_name):
 
 
 def make_tpu_worker_config(generation, count, min_workers=4):
-    _, config = next(iter(make_tpu_slice_config(generation, count, min_workers).items()))
+    # Create a temporary SliceConfig for the base worker
+    base_slice_config = SliceConfig(
+        slice_count=int(count), num_tpus=generation_configs[generation]["base_worker_num_tpus"]
+    )
+    _, config = next(iter(make_tpu_slice_config(generation, base_slice_config, min_workers).items()))
     return {"tpu_worker": config}
 
 
@@ -270,10 +315,12 @@ if __name__ == "__main__":
             base_string = "\n  " + base_string.replace("\n", "\n  ")
             yaml_string += base_string
 
-            for tpu_type in generation_config["slices"]:
-                target_worker_count = config.get("worker_targets", {}).get(f"{generation}-{tpu_type}", 0)
+            for slice_config in generation_config["slice_configs"]:
+                target_worker_count = config.get("worker_targets", {}).get(f"{generation}-{slice_config.slice_count}", 0)
                 base_string = yaml.dump(
-                    make_tpu_slice_config(generation, tpu_type, target_worker_count), default_flow_style=False, indent=2
+                    make_tpu_slice_config(generation, slice_config, target_worker_count),
+                    default_flow_style=False,
+                    indent=2,
                 )
                 base_string = "\n  " + base_string.replace("\n", "\n  ")
                 yaml_string += base_string
