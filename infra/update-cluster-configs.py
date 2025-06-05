@@ -57,7 +57,7 @@ configs = {
         "tpu_generation": "v5p",
         "min_workers": 1,
         "worker_targets": {
-            "v5p-128": 32,
+            "v5p-512": 16,
         },
     },
     "marin-big-run": {
@@ -196,7 +196,7 @@ generation_configs = {
         "runtime_version": "v2-alpha-tpuv5",
         "base_worker": "8",
         "slices": [8, 16, 32, 64, 128, 256, 512, 1024],
-        "num_tpus": 8,
+        "num_tpus": 4,
         "tpus_worker": 8,
     },
     "v6e": {
