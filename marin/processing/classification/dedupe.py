@@ -11,7 +11,7 @@ from hyperloglog import HyperLogLog
 from tqdm import tqdm
 
 from marin.core.runtime import cached_or_construct_output
-from marin.utils import fsspec_glob, fsspec_mkdirs, fsspec_rm, rebase_file_path
+from marin.utils import fsspec_glob, fsspec_mkdirs, fsspec_rm, rebase_file_path, fsspec_exists, fsspec_isdir
 
 
 @dataclass
@@ -79,6 +79,33 @@ class DedupeConfig:
 def copy_files_in(input_path, local_base_dir):
     # Ensure input_path doesn't end with a slash
     input_path = input_path.rstrip("/")
+
+    # If input_path is a single file, copy only that file
+    if fsspec_exists(input_path) and not fsspec_isdir(input_path):
+        # Extract the filename and normalize extension
+        relative_path = os.path.basename(input_path)
+        if relative_path.endswith(".jsonl.zst"):
+            relative_path = relative_path[: -len(".jsonl.zst")] + ".jsonl.gz"
+        elif relative_path.endswith(".jsonl.gs"):
+            relative_path = relative_path[: -len(".jsonl.gs")] + ".jsonl.gz"
+        elif relative_path.endswith(".json.zst"):
+            relative_path = relative_path[: -len(".json.zst")] + ".jsonl.gz"
+        elif relative_path.endswith(".json.gz"):
+            relative_path = relative_path[: -len(".json.gz")] + ".jsonl.gz"
+
+        # Construct the output path under 'documents/'
+        output_file = os.path.join(local_base_dir, "documents", relative_path)
+
+        # Ensure the output directory exists
+        fsspec_mkdirs(os.path.dirname(output_file))
+
+        # Copy the file using fsspec with gzip compression
+        with fsspec.open(input_path, "rb", compression="infer") as f_remote:
+            with fsspec.open(output_file, "wb", compression="gzip") as f_local:
+                f_local.write(f_remote.read())
+
+        print(f"Copied 1 file from {input_path} to {output_file}")
+        return
 
     # Get all .jsonl.gz, .jsonl.zst, .jsonl.gs, .json.gz, and .json.zst files in the input directory
     jsonl_gz_pattern = f"{input_path}/**/*.jsonl.gz"
@@ -162,6 +189,7 @@ def do_dedup(
     # If n-gram mode and no explicit bloom_filter_size, override estimated_doc_count
     if ngram is not None and not bloom_filter_size:
         total_ngrams = estimate_total_ngrams_fast(local_base_dir, ngram)
+        #total_ngrams = estimate_ngram_count(local_base_dir, ngram)
         estimated_doc_count = total_ngrams
         print(f"Estimated total {ngram.ngram_length}-grams: {estimated_doc_count}")
 
@@ -201,6 +229,7 @@ def do_dedup(
 
     # add ngram settings to dolma dedupe command if in ngram matching mode
     if ngram is not None:
+        # chatgpt says the separator below is extrememly unlikely to ever occur, so we count all n-grams in document
         command.extend(
             [
                 "--dedupe.paragraphs.by_ngram.ngram_length",
@@ -209,6 +238,8 @@ def do_dedup(
                 str(ngram.overlap_threshold),
                 "--dedupe.paragraphs.by_ngram.stride",
                 str(ngram.stride),
+                "--dedupe.paragraphs.paragraph_separator",
+                str("\u001e\u001e"),
             ]
         )
 
@@ -316,34 +347,65 @@ def delete_jsonl_files(dir_path):
     return files_deleted
 
 
-def estimate_ngram_count(local_base_dir, ngram):
+# Fast estimate of total n-grams by sampling a subset of documents
+def estimate_total_ngrams_fast_fixed(local_base_dir, ngram, sample_lines: int = 1000):
     """
-    Estimate number of unique n-grams across staged JSONL under local_base_dir/documents/.
+    Estimate *unique* n-gram count quickly by reading at most `sample_lines`
+    JSONL lines across all `documents/**/*.jsonl.gz`.
+
+    ----------------------------------------------------------------------
+    ⚠️  FIX: stride handling
+    ----------------------------------------------------------------------
+    In the original version `stride==0` (Dolma's default, meaning "advance
+    one token") was special-cased as
+
+        stride = ngram.stride if ngram.stride > 0 else 1
+
+    but that value was *not* reused in the formula below, so the
+    denominator differed between the two statements.  We instead compute
+    a single variable `step = max(1, ngram.stride)` and use it
+    consistently when counting n-grams.
+    ----------------------------------------------------------------------
     """
-    hll = HyperLogLog(0.01)
     pattern = os.path.join(local_base_dir, "documents", "**", "*.jsonl.gz")
-    files = fsspec_glob(pattern)
-    for file in files:
+
+    total_lines   = 0          # total records in corpus
+    sample_lines_seen = 0      # lines actually included in the sample
+    ngram_total  = 0           # Σ n-grams over sampled lines
+
+    for file in fsspec_glob(pattern):
         with fsspec.open(file, "rt", compression="infer") as f:
-            for line in f:
+            for raw_line in f:
+                total_lines += 1
+                if sample_lines_seen >= sample_lines:
+                    continue
+
                 try:
-                    rec = json.loads(line)
+                    text = json.loads(raw_line).get("text", "")
                 except json.JSONDecodeError:
                     continue
-                text = rec.get("text", "")
-                for paragraph in text.split("\n"):
-                    tokens = paragraph.split()
-                    L = len(tokens)
-                    if L < ngram.ngram_length:
-                        hll.add(paragraph)
-                    else:
-                        stride = ngram.stride
-                        step = stride if stride > 0 else 1
-                        for i in range(0, L - ngram.ngram_length + 1, step):
-                            ngram_str = " ".join(tokens[i : i + ngram.ngram_length])
-                            hll.add(ngram_str)
-    return len(hll)
 
+                tokens = text.split()
+                L = len(tokens)
+
+                step = max(1, ngram.stride)          # ← fixed
+                if L < ngram.ngram_length:
+                    ngram_total += 1
+                else:
+                    ngram_total += (L - ngram.ngram_length) // step + 1
+
+                # one illustrative debug print per file
+                if sample_lines_seen == 0:
+                    print(f"[sample] L={L}, step={step}, ngrams_for_line="
+                          f"{(L - ngram.ngram_length) // step + 1}")
+                sample_lines_seen += 1
+
+    if sample_lines_seen == 0:
+        # nothing decoded ⇒ fall back to "one n-gram per line" heuristic
+        return total_lines
+
+    avg_ngrams_per_line = ngram_total / sample_lines_seen
+    return int(avg_ngrams_per_line * total_lines)
 
 # Fast estimate of total n-grams by sampling a subset of documents
 def estimate_total_ngrams_fast(local_base_dir, ngram, sample_lines=1000):
@@ -358,22 +420,27 @@ def estimate_total_ngrams_fast(local_base_dir, ngram, sample_lines=1000):
     files = fsspec_glob(pattern)
     for file in files:
         with fsspec.open(file, "rt", compression="infer") as f:
-            for line in f:
+            for idx, line in enumerate(f):
                 total_docs += 1
                 if sample_count < sample_lines:
                     try:
                         rec = json.loads(line)
                         text = rec.get("text", "")
                     except json.JSONDecodeError:
-                        sample_count += 1
                         continue
                     tokens = text.split()
                     L = len(tokens)
+                    
                     if L < ngram.ngram_length:
                         ngram_sum += 1
                     else:
                         stride = ngram.stride if ngram.stride > 0 else 1
                         ngram_sum += (L - ngram.ngram_length) // stride + 1
+                    if idx == 1:
+                        print(f"text: {text}", flush=True)
+                        print(f"tokens: {tokens}", flush=True)
+                        print(f"L: {L}", flush=True)
+                        print(f"ngram sum for this example is {(L - ngram.ngram_length) // stride + 1}", flush=True)
                     sample_count += 1
     if sample_count == 0:
         return total_docs
@@ -381,7 +448,7 @@ def estimate_total_ngrams_fast(local_base_dir, ngram, sample_lines=1000):
     return int(avg_ngrams * total_docs)
 
 
-@ray.remote(num_cpus=4)
+@ray.remote
 def dolma_dedup(
     input_path,
     output_path,
@@ -403,17 +470,14 @@ def dolma_dedup(
         if decontaminate:
             # First we copy the files to the temporary directory to get bloom filter
             copy_files_in(decomtaminate_dir, tmpdir)
-            # Estimate number of n-grams in decontamination set
-            # estimated_count = estimate_ngram_count(tmpdir, ngram)
-            estimated_count = estimate_total_ngrams_fast(tmpdir, ngram)
-            print(f"Estimated {estimated_count} n-grams for decontamination filter")
             do_dedup(
                 tmpdir,
                 attribute_name,
                 min_length,
                 min_words,
                 bloom_filter_size,
-                estimated_count,
+                # estimated doc count will be computed in do_dedup
+                0,
                 false_positive_rate,
                 ngram,
                 processes,
@@ -431,7 +495,7 @@ def dolma_dedup(
                 min_length,
                 min_words,
                 bloom_filter_size,
-                estimated_doc_count,
+                0,
                 false_positive_rate,
                 ngram,
                 processes,
@@ -468,7 +532,7 @@ def dolma_dedup(
     return "Deduplication process completed"
 
 
-@ray.remote
+@ray.remote(num_cpus=1, memory=1024 * 1024 * 1024 * 2)
 def dedupe(config: DedupeConfig):
     # require directory if decontaminate is set
     if config.decontaminate and config.decontaminate_path is None:
