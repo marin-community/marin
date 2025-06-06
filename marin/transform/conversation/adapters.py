@@ -4,6 +4,7 @@ from enum import Enum
 from typing import Any
 
 from marin.core.conversation import OpenAIChatMessage
+# Removed problematic import: from .base import HuggingFaceSFTConversationAdapter, register_adapter
 
 
 class InputDatasetFormat(str, Enum):
@@ -174,6 +175,66 @@ register_adapter(
         assistant_value="gpt",
         system_value="system",
         content_key="value",
+    )
+)
+
+
+# HuggingFaceSFTConversationAdapter and register_adapter would normally be imported from .base
+# For now, let's assume HuggingFaceSFTConversationAdapter is similar to TransformAdapter for structure
+# and register_adapter is the one defined in this file.
+
+class NemotronAdapter(TransformAdapter):
+    def __init__(self, source: str, instruction_column: str, response_column: str, dataset_format: InputDatasetFormat, **kwargs):
+        super().__init__(source=source,
+                         dataset_format=dataset_format,
+                         instruction_column=instruction_column,
+                         response_column=response_column,
+                         **kwargs)
+
+    def parse_conversations(self, row: dict[str, Any]) -> list[dict[str, str]]:
+        """
+        Extracts user and assistant messages from the input row.
+        Input: row['input'] for user, row['output'] for assistant.
+        Output: [{"role": "user", "content": row['input']}, {"role": "assistant", "content": row['output']}]
+        """
+        if row.get(self.instruction_column) is None or row.get(self.response_column) is None:
+            return [] # Handle missing data if necessary, or let transform_conversation_to_openai_format handle it
+
+        return [
+            {"role": "user", "content": row[self.instruction_column]},
+            {"role": "assistant", "content": row[self.response_column]},
+        ]
+
+    def transform_conversation_to_openai_format(
+        self,
+        row: dict[str, Any],
+    ) -> list[OpenAIChatMessage]:
+        """
+        Transforms the conversation from the Nemotron format to OpenAI chat messages.
+        """
+        # We use the parent's logic for INSTRUCTION_RESPONSE which is what Nemotron dataset is.
+        # The instruction_column and response_column are set in the __init__.
+        # The parse_conversations method is here to fulfill the prompt, but the parent's
+        # transform_conversation_to_openai_format with INSTRUCTION_RESPONSE
+        # already does what's needed for this specific dataset structure.
+        # If we wanted to use parse_conversations directly:
+        # parsed_messages = self.parse_conversations(row)
+        # if not parsed_messages:
+        #     return None
+        # return [OpenAIChatMessage(role=msg["role"], content=msg["content"]) for msg in parsed_messages]
+        #
+        # However, since 'input' and 'output' map directly to instruction/response,
+        # and we've set self.instruction_column and self.response_column,
+        # the parent method will handle it correctly.
+        return super().transform_conversation_to_openai_format(row)
+
+
+register_adapter(
+    NemotronAdapter(
+        source="nvidia/Llama-Nemotron-Post-Training-Dataset-v1",
+        dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
+        instruction_column="input",
+        response_column="output",
     )
 )
 
