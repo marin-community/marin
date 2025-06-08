@@ -99,10 +99,12 @@ class LevanterTpuEvaluator(Evaluator, ABC):
             max_eval_instances: int | None = None,
         ) -> None:
             if isinstance(resource_config, GpuConfig):
-                from marin.evaluation.utils import set_cuda_visible_devices
-
-                set_cuda_visible_devices()
-
+                # We have to delete the CUDA_VISIBLE_DEVICES environment variable
+                # which Ray sets as empty if there are no GPUs available.
+                # This behavior from Ray causes issues with vLLM.
+                # Issue: https://github.com/vllm-project/vllm/issues/8402
+                if os.environ["CUDA_VISIBLE_DEVICES"] == "":
+                    del os.environ["CUDA_VISIBLE_DEVICES"]
             self.evaluate(model, evals, output_path, max_eval_instances)
 
         ray.get(launch.remote(model, evals, output_path, max_eval_instances))
