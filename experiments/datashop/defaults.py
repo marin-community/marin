@@ -20,6 +20,7 @@ from marin.classifiers.hf.launch_ray_training import LaunchConfig, launch_traini
 from marin.datashop.dataset_processor import DatasetOutputProcessorConfig
 from marin.datashop.pipeline import (
     MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME,
+    CorpusContent,
     MEDUPipelineConfig,
     run_data_filter_prompt_generation_pipeline,
     run_medu_dataset_sampling_pipeline,
@@ -37,7 +38,7 @@ from marin.resources import ResourceConfig, TpuPodConfig
 
 def default_label(
     documents_to_be_labeled: str | ExecutorStep,
-    targeted_documents: list[list[str] | str],
+    targeted_documents: list[CorpusContent],
     experiment_name: str,
     resource_config: ResourceConfig,
     annotator_model_name_or_path: str = "meta-llama/Llama-3.3-70B-Instruct",
@@ -49,7 +50,9 @@ def default_label(
 
     Inputs:
         documents_to_be_labeled: Input path to documents to be labeled.
-        targeted_documents: A list of strings or filepaths of documents that is being targeted for labeling.
+        targeted_documents: A list of CorpusContent objects that define the corpus content to use for
+            generating the data filter prompt. It can either point to a filepath or a list of strings that
+            represent the text corpus.
         experiment_name: The name of the experiment.
         data_filter_prompt: The user's prompt for the annotator model.
         medu_pipeline_config_kwargs: Keyword arguments for the MEDU pipeline which is used to generate

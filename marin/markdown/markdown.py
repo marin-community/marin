@@ -3,7 +3,6 @@ import os
 import re
 from textwrap import fill
 
-import html2text
 import markdownify
 import six
 from bs4 import BeautifulSoup, Comment, Doctype, NavigableString
@@ -30,15 +29,32 @@ def to_markdown(html, config: HtmlToMarkdownConfig = HtmlToMarkdownConfig.defaul
     return text
 
 
-_global_html2text = html2text.HTML2Text()
+_global_html2text = None
 
-_global_html2text.ignore_links = False
-_global_html2text.body_width = 0
-# TODO: html2text uses [code]...[/code] for code blocks. would prefer github markdown style
-# Could also use some kind of PL lang-id to highlight code blocks, but probably not super necessary
-_global_html2text.mark_code = True  # Optionally convert code blocks to markdown
-_global_html2text.include_sup_sub = True  # Optionally include <sup> and <sub> tags
-_global_html2text.pad_tables = False
+
+def get_html2text():
+    """
+    Returns a global instance of HTML2Text configured for Markdown conversion.
+    """
+    global _global_html2text
+    if _global_html2text is None:
+        # Initialize the global HTML2Text instance with default settings
+        # This is done to avoid re-initializing it multiple times
+        # and to ensure consistent behavior across the application.
+        import html2text
+
+        _global_html2text = html2text.HTML2Text()
+
+        _global_html2text.ignore_links = False
+        _global_html2text.body_width = 0
+        # TODO: html2text uses [code]...[/code] for code blocks. would prefer github markdown style
+        # Could also use some kind of PL lang-id to highlight code blocks, but probably not super necessary
+        _global_html2text.mark_code = True  # Optionally convert code blocks to markdown
+        _global_html2text.include_sup_sub = True  # Optionally include <sup> and <sub> tags
+        _global_html2text.pad_tables = False
+
+    return _global_html2text
+
 
 whitespace_re = re.compile(r"[\t ]+")
 spaces_re = re.compile(r"^[ ]+$")
@@ -46,7 +62,7 @@ spaces_re = re.compile(r"^[ ]+$")
 
 def html2text_markdown(html):
     html = str(html)
-    return _global_html2text.handle(html)
+    return get_html2text().handle(html)
 
 
 always_escape_pattern = re.compile(r"([\[\]<>`])")  # square brackets, backticks, angle brackets
