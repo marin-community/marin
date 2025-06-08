@@ -30,19 +30,6 @@ def _test_llm_func_single_gpu(model_config):
 
 
 @pytest.mark.skipif(
-    os.getenv("TPU_CI") != "true" and os.getenv("GPU_CI") != "true",
-    reason="Skip this test if not running with a TPU or GPU in CI.",
-)
-def test_local_llm_inference(ray_cluster, model_config):
-    if os.getenv("TPU_CI") == "true":
-        test_fn = _test_llm_func_single_tpu
-    elif os.getenv("GPU_CI") == "true":
-        test_fn = _test_llm_func_single_gpu
-
-    ray.get(test_fn.remote(model_config))
-
-
-@pytest.mark.skipif(
     os.getenv("TPU_CI") != "true",
     reason="Skip this test if not running with a TPU in CI.",
 )

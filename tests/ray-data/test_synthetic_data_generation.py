@@ -14,7 +14,7 @@ def test_synthetic_data_generation_gpu(ray_cluster, test_file_path):
             config=TextGenerationInferenceConfig(
                 input_path=test_file_path,
                 output_path="documents/synthetic_data_llama_8b_gpu",
-                model_name="meta-llama/Llama-3.1-8B-Instruct",
+                model_name="Qwen/Qwen3-0.6B",
                 engine_kwargs=default_engine_kwargs,
                 generation_kwargs=default_generation_params,
                 template="Summarize the following text in 20 words:\n{example}",

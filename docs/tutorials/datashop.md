@@ -3,9 +3,9 @@
 Datashop is a tool for data filtering and evaluating the filtered data quality. This tutorial will walk through a basic example of using Datashop to filter a data pool for desired documents given a prompt and training a model on the filtered data.
 
 ## Prerequisites
-TPUs are currently required to run this process for model inference. We perform this inference on TPU v6e-8s for serving and TPU v6e-128s for training for reference. Check the TPU Cluster yamls in `infra/` for reference. GPUs are not supported yet.
+We require a TPU cluster or a local GPU to run this process.
 
-
+### TPU Cluster
 We use vLLM to run fast model inference to annotate each document given a rubric prompt. To install the docker image with vLLM and publish it to Google Cloud Artifact Registry, run the following commands:
 
 ```bash
@@ -23,6 +23,28 @@ python infra/update-cluster-configs.py
 Lastly, spin up the vLLM cluster with the following command.
 ```bash
 ray up infra/marin-{region}-vllm.yaml
+```
+
+### Local GPU
+For the local GPU, we utilize [uv](https://docs.astral.sh/uv/) to install the dependencies.
+
+```bash
+# We recommend 3.12 since this is what we have tested on.
+uv venv --python 3.12
+uv sync
+```
+
+That's it! When running some of the datashop steps such as those that require vLLM, make sure to run your `uv run` command with the correct `--extra` flag:
+```
+# run datashop workloads
+uv run --extra datashop_gpu python <experiment-file.py>
+```
+
+Check the `datashop_gpu` extra in the `pyproject.toml` file for more details about the exact dependencies.
+
+Feel free to test your `vLLM` installation by running the following command:
+```bash
+GPU_CI=true START_RAY_GPU_CLUSTER=true uv run --extra datashop_gpu pytests -s -v tests/vllm/test_llm_inference.py
 ```
 
 ## Running a data filtering prompt
