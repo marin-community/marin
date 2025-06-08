@@ -11,7 +11,7 @@ from ray.data.datasource import FilenameProvider
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
 from marin.generation.pipeline import vLLMTextGeneration
 from marin.generation.ray_utils import get_ray_remote_args_scheduling_strategy_fn
-from marin.utils import fsspec_glob, remove_tpu_lockfile_on_exit
+from marin.utils import fsspec_glob
 
 
 @dataclass
@@ -48,6 +48,9 @@ class TextGenerationInferenceConfig:
     # Hardware specific
     resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
     generated_text_column_name: str = "text"
+
+    # Checkpoint specific
+    checkpoint_id_column: str | None = None
 
 
 class OneToOneFilenameProvider(FilenameProvider):
@@ -198,8 +201,8 @@ def _find_finished_ids_for_file(checkpoint_filepath: str, id_column: str | dict[
     from marin.processing.classification.inference import read_dataset
 
     if isinstance(id_column, dict):
-        dataset_column = id_column.keys()[0]
-        metadata_key_column = id_column.values()[0]
+        dataset_column = next(iter(id_column.keys()))
+        metadata_key_column = next(iter(id_column.values()))
     else:
         dataset_column = id_column
         metadata_key_column = None
@@ -234,8 +237,7 @@ def find_all_finished_ids(checkpoint_path: str, filetype: str, id_column: str | 
     return finished_ids
 
 
-@ray.remote(max_calls=1)
-@remove_tpu_lockfile_on_exit
+@ray.remote
 def run_inference(config: TextGenerationInferenceConfig):
     set_ray_data_config(config)
 
@@ -251,6 +253,20 @@ def run_inference(config: TextGenerationInferenceConfig):
             template = str(f.read())
     elif config.template:
         template = config.template
+
+    if config.checkpoint_id_column:
+        if config.output_filetype_override:
+            output_filetype = config.output_filetype_override
+        else:
+            output_filetype = config.filetype
+        finished_ids = find_all_finished_ids(config.output_path, output_filetype, config.checkpoint_id_column)
+        if len(finished_ids) > 0:
+            if isinstance(config.checkpoint_id_column, dict):
+                dataset_column = next(iter(config.checkpoint_id_column.keys()))
+                metadata_key_column = next(iter(config.checkpoint_id_column.values()))
+                ds = ds.filter(lambda x: x[dataset_column][metadata_key_column] not in finished_ids)
+            else:
+                ds = ds.filter(lambda x: x[config.checkpoint_id_column] not in finished_ids)
 
     ds = ds.map_batches(  # Apply batch inference for all input data.
         vLLMTextGeneration,

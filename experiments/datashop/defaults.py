@@ -262,13 +262,13 @@ def default_quality_filter(
         fn=run_inference,
         config=inference_config,
         pip_dependency_groups=[
-            # "--find-links https://storage.googleapis.com/libtpu-releases/index.html",
-            # "--find-links https://storage.googleapis.com/libtpu-wheels/index.html",
-            # "fasttext",
-            # "datasets",
-            # "filelock",
-            # "torch~=2.7.0",
-            # "torch_xla[tpu]~=2.7.0",
+            "--find-links https://storage.googleapis.com/libtpu-releases/index.html",
+            "--find-links https://storage.googleapis.com/libtpu-wheels/index.html",
+            "fasttext",
+            "datasets",
+            "filelock",
+            "torch~=2.7.0",
+            "torch_xla[tpu]~=2.7.0",
         ],
     )
 
@@ -392,15 +392,16 @@ def default_candidate_anneal(documents: ExecutorStep | None, tpu_type: str, expe
 
 def default_synthetic_data_generation(
     input_path: ExecutorStep | InputName,
+    output_path: str,
     model_name_or_path: str,
     data_generation_template: str,
     input_filetype: str,
     prompt_column: str,
     resource_config: ResourceConfig,
+    checkpoint_id_column: str | None = None,
     generated_text_column_name: str = "generated_text",
     engine_kwargs: dict = default_engine_kwargs,
     generation_kwargs: dict = default_generation_kwargs,
-    output_path: str | None = None,
 ) -> ExecutorStep:
     """
     Generates synthetic data using a specified model and prompt template.
@@ -443,5 +444,7 @@ def default_synthetic_data_generation(
             one_to_one_input_output_mapping=False,
             generated_text_column_name=generated_text_column_name,
             resource_config=resource_config,
+            checkpoint_id_column=checkpoint_id_column,
+            batch_size=512,
         ),
     )
