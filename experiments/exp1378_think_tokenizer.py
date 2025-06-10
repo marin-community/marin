@@ -50,8 +50,8 @@ def main():
         with open(config_path, "r") as f:
             config = json.load(f)
 
-        for id, t in MARIN_CUSTOM_SPECIAL_TOKENS.items():
-            config["added_tokens_decoder"][str(id)]["content"] = t
+        for token_id, t in MARIN_CUSTOM_SPECIAL_TOKENS.items():
+            config["added_tokens_decoder"][str(token_id)]["content"] = t
 
         # Save the config
         with open(config_path, "w") as f:
@@ -83,12 +83,14 @@ def main():
     marin = AutoTokenizer.from_pretrained(final_dir, local_files_only=True)
 
     # Test 1: Tokenizer is modified to use new special tokens
-    for id, t in MARIN_CUSTOM_SPECIAL_TOKENS.items():
-        assert marin.decode([id]) == t
-        assert marin.tokenize(t) == id
+    for token_id, t in MARIN_CUSTOM_SPECIAL_TOKENS.items():
+        assert marin.decode([token_id]) == t
+        assert marin.tokenize(t) == token_id
 
     # Tests (including those from exp964 since we are starting from base llama3)
-    reasoning_trace_example = "<|start_think|>User is asking how am I doing. This should be straightforward. I should reply politely.<|end_think|>"
+    reasoning_trace_example = "<|start_think|>User is asking how am I doing. \
+            This should be straightforward. \
+                I should reply politely.<|end_think|>"
     convo = [
         {"role": "user", "content": "Hello, how are you?"},
         {"role": "assistant", "content": reasoning_trace_example + "I'm doing well, thanks!"},
