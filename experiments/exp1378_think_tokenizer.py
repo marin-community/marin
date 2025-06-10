@@ -14,30 +14,40 @@ from huggingface_hub.errors import GatedRepoError
 from transformers import AutoTokenizer
 
 from experiments.llama import llama3_tokenizer
-from experiments.marin_models import MARIN_CHAT_TEMPLATE, MARIN_CUSTOM_SPECIAL_TOKENS
+from experiments.marin_models import MARIN_CHAT_TEMPLATE, MARIN_CUSTOM_SPECIAL_TOKENS, marin_tokenizer
 
-# Olmo 2 template modified so we can use with levanter
-MARIN_OLMO2_CHAT_TEMPLATE = """
-{{ bos_token }}
-{%- for message in messages -%}
-  {%- if message['role'] == 'system' -%}
-<|system|>\n{{ message['content'] | trim }}\n
-  {%- elif message['role'] == 'user' -%}
-<|user|>\n{{ message['content'] | trim }}\n
-  {%- elif message['role'] == 'assistant' -%}
-    {%- if not loop.last -%}
-<|assistant|>\n{% generation %}{{ message['content'] | trim }}{{ eos_token }}{% endgeneration %}\n
-    {%- else -%}
-<|assistant|>\n{% generation %}{{ message['content'] | trim }}{{ eos_token }}{% endgeneration %}
-    {%- endif -%}
-  {%- endif -%}
-{%- endfor -%}
-{%- if add_generation_prompt -%}
-<|assistant|>\n
-{%- endif -%}""".strip()
-
+def test_special_reserved_tokens(tokenizer):
+    """
+    Test that the tokenizer correctly handles the custom special tokens defined in MARIN_CUSTOM_SPECIAL_TOKENS.
+    
+    This function verifies that:
+    1. Each token ID in MARIN_CUSTOM_SPECIAL_TOKENS decodes to its corresponding token string
+    2. Each token string in MARIN_CUSTOM_SPECIAL_TOKENS encodes to its corresponding token ID
+    
+    Args:
+        tokenizer (transformers.PreTrainedTokenizer): The tokenizer to test
+        
+    Raises:
+        AssertionError: If any token ID/string pair doesn't match between encoding and decoding
+    """
+    for token_id, token_str in MARIN_CUSTOM_SPECIAL_TOKENS.items():
+        assert tokenizer.decode(token_id) == token_str
+        assert tokenizer.convert_tokens_to_ids([token_str]) == [token_id]
 
 def main():
+    """
+    Saves a modified version of the llama3 tokenizer with:
+    1) a simple Olmo2-inspired chat format and
+    2) special tokens as defined in marin_models.py.
+
+    This script:
+    - Downloads the llama3 tokenizer to a temporary directory.
+    - Modifies the tokenizer configuration files (tokenizer_config.json and tokenizer.json) to replace the reserved special token strings with new ones (e.g., '<|start_think|>' and '<|end_think|>') while preserving their original token IDs.
+    - Loads the modified tokenizer and assigns the MARIN_CHAT_TEMPLATE.
+    - Saves the final tokenizer to a local directory.
+    - Cleans up the temporary directory.
+    - Optionally pushes the tokenizer to the Hugging Face Hub.
+    """
     # Create temporary directory for tokenizer
     temp_dir = os.path.join(os.getcwd(), "llama_tokenizer_local")
     os.makedirs(temp_dir, exist_ok=True)
@@ -99,9 +109,7 @@ def main():
     marin = AutoTokenizer.from_pretrained(final_dir, local_files_only=True)
 
     # Test 1: Tokenizer is modified to use new special tokens
-    for token_id, token_str in MARIN_CUSTOM_SPECIAL_TOKENS.items():
-        assert marin.decode(token_id) == token_str
-        assert marin.convert_tokens_to_ids([token_str]) == [token_id]
+    test_special_reserved_tokens(tokenizer)
 
     # Tests (including those from exp964 since we are starting from base llama3)
     reasoning_trace_example = "<|start_think|>User is asking how am I doing. \
@@ -142,7 +150,7 @@ def main():
     )
 
     # Push to huggingface
-    # marin.push_to_hub(marin_tokenizer)
+    marin.push_to_hub(marin_tokenizer)
 
 
 if __name__ == "__main__":
