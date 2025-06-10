@@ -4,6 +4,7 @@ import datasets
 from marin_env import MarinEnv, EnvStep
 from third_party.math import compute_score, remove_boxed, last_boxed_only_string
 
+
 class MathEnv(MarinEnv):
 
     def __init__(self, endpoint: str, **kwargs):
@@ -44,9 +45,10 @@ class MathEnv(MarinEnv):
         
         return EnvStep(llm_in=llm_in, llm_out=llm_out, reward=score)
 
+
 def main():
-    env = MathEnv("", model_name="gpt-4-turbo")
-    for i in range(10):
+    env = MathEnv("", model_name="gpt-4o-mini-2024-07-18")
+    for i in range(5):
         print(f"step={i}", env.step(temperature=0.7, max_tokens=512))
 
 
