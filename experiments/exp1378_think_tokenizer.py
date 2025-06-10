@@ -44,7 +44,9 @@ def main():
 
     This script:
     - Downloads the llama3 tokenizer to a temporary directory.
-    - Modifies the tokenizer configuration files (tokenizer_config.json and tokenizer.json) to replace the reserved special token strings with new ones (e.g., '<|start_think|>' and '<|end_think|>') while preserving their original token IDs.
+    - Modifies the tokenizer configuration files (tokenizer_config.json and tokenizer.json) to replace the
+      reserved special token strings with new ones (e.g., '<|start_think|>' and '<|end_think|>') while
+      preserving their original token IDs.
     - Loads the modified tokenizer and assigns the MARIN_CHAT_TEMPLATE.
     - Saves the final tokenizer to a local directory.
     - Cleans up the temporary directory.
