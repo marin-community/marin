@@ -103,15 +103,15 @@ def main():
             return
         raise e
 
-    assert marin.chat_template == MARIN_CHAT_TEMPLATE
-
     # Load from final location
     marin = AutoTokenizer.from_pretrained(final_dir, local_files_only=True)
 
     # Test 1: Tokenizer is modified to use new special tokens
     test_special_reserved_tokens(tokenizer)
 
-    # Tests (including those from exp964 since we are starting from base llama3)
+    # Test 2: check chat template
+    assert marin.chat_template == MARIN_CHAT_TEMPLATE
+    
     reasoning_trace_example = "<|start_think|>User is asking how am I doing. \
         This should be straightforward. \
         I should reply politely.<|end_think|>"
@@ -122,18 +122,18 @@ def main():
         {"role": "assistant", "content": "Great!"},
     ]
 
-    # Test 2: Ensure that we didn't mess up normal tokenization
+    # Test 3: Ensure that we didn't mess up normal tokenization
     llama3 = AutoTokenizer.from_pretrained(llama3_tokenizer)
     assert marin.tokenize("Hello, how are you?") == llama3.tokenize("Hello, how are you?")
 
-    # Test 3: Make sure we use the special tokens in _chat_ template
+    # Test 4: Make sure we use the special tokens in _chat_ template
     out = marin.apply_chat_template(convo, tokenize=True, return_dict=True, return_assistant_tokens_mask=True)
     assert all(
         token in out["input_ids"]
         for token in marin.convert_tokens_to_ids(["<|start_header_id|>", "<|end_header_id|>", "<|eot_id|>"])
     )
 
-    # Test 4: Ensure masking of assistant tokens works correctly
+    # Test 5: Ensure masking of assistant tokens works correctly
     ids = np.array(out["input_ids"])
     assert np.sum(out["assistant_masks"]) == (
         len(marin(reasoning_trace_example + "I'm doing well, thanks!")["input_ids"]) + len(marin("Great!")["input_ids"])
@@ -144,7 +144,7 @@ def main():
         == reasoning_trace_example + "I'm doing well, thanks!<|eot_id|>Great!<|eot_id|>"
     )
 
-    # Test 5: Ensure that when we use add_generation_prompt, we add the final newline (and other bits)
+    # Test 6: Ensure that when we use add_generation_prompt, we add the final newline (and other bits)
     assert marin.apply_chat_template(convo, tokenize=False, add_generation_prompt=True).endswith(
         "<|start_header_id|>assistant<|end_header_id|>\n"
     )
