@@ -2,10 +2,10 @@
 Saves a modified version of the llama3 tokenizer with a simple Olmo2-inspired chat format.
 """
 
-import os
 import json
-from urllib.error import HTTPError
+import os
 import shutil
+from urllib.error import HTTPError
 
 import numpy as np
 from huggingface_hub.errors import GatedRepoError
@@ -39,37 +39,37 @@ def main():
     # Create temporary directory for tokenizer
     temp_dir = os.path.join(os.getcwd(), "experiments/exp9999/temp")
     os.makedirs(temp_dir, exist_ok=True)
-    
+
     try:
         # Download llama3 tokenizer to temp directory
         tokenizer = AutoTokenizer.from_pretrained(llama3_tokenizer, cache_dir=temp_dir)
         tokenizer.save_pretrained(temp_dir)
-        
+
         # Modify tokenizer_config.json
         config_path = os.path.join(temp_dir, "tokenizer_config.json")
-        with open(config_path, 'r') as f:
+        with open(config_path, "r") as f:
             config = json.load(f)
-        
+
         for id, t in MARIN_CUSTOM_SPECIAL_TOKENS.items():
-            config['added_tokens_decoder'][str(id)]['content'] = t
-        
+            config["added_tokens_decoder"][str(id)]["content"] = t
+
         # Save the config
-        with open(config_path, 'w') as f:
+        with open(config_path, "w") as f:
             json.dump(config, f)
-        
+
         # Load the modified tokenizer
         marin = AutoTokenizer.from_pretrained(temp_dir, local_files_only=True)
-        
+
         # Assign marin template
         marin.chat_template = MARIN_CHAT_TEMPLATE
-        
+
         # Save final version
         final_dir = os.path.join(os.getcwd(), "marin_tokenizer")
         marin.save_pretrained(final_dir)
-        
+
         # Clean up temp directory
         shutil.rmtree(temp_dir)
-        
+
     except (OSError, GatedRepoError, HTTPError) as e:
         print("You need to request access to the llama3 tokenizer")
         if os.getenv("CI", False) in ["true", "1"]:
@@ -78,7 +78,7 @@ def main():
         raise e
 
     assert marin.chat_template == MARIN_CHAT_TEMPLATE
-    
+
     # Load from final location
     marin = AutoTokenizer.from_pretrained(final_dir, local_files_only=True)
 
@@ -106,7 +106,7 @@ def main():
         token in out["input_ids"]
         for token in marin.convert_tokens_to_ids(["<|start_header_id|>", "<|end_header_id|>", "<|eot_id|>"])
     )
-    
+
     # Test 4: Ensure masking of assistant tokens works correctly
     ids = np.array(out["input_ids"])
     assert np.sum(out["assistant_masks"]) == (
@@ -125,7 +125,6 @@ def main():
 
     # Push to huggingface
     marin.push_to_hub(marin_tokenizer)
-
 
 
 if __name__ == "__main__":

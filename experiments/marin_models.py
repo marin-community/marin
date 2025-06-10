@@ -39,6 +39,6 @@ for more information on how this works.
 """
 
 MARIN_CUSTOM_SPECIAL_TOKENS = {
-    128002: "<|start_think|>", # Originally "<|reserved_special_token_0|>"
-    128003: "<|end_think|>",   # Originally "<|reserved_special_token_1|>"
+    128002: "<|start_think|>",  # Originally "<|reserved_special_token_0|>"
+    128003: "<|end_think|>",  # Originally "<|reserved_special_token_1|>"
 }
