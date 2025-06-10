@@ -16,23 +16,25 @@ from transformers import AutoTokenizer
 from experiments.llama import llama3_tokenizer
 from experiments.marin_models import MARIN_CHAT_TEMPLATE, MARIN_CUSTOM_SPECIAL_TOKENS, marin_tokenizer
 
+
 def test_special_reserved_tokens(tokenizer):
     """
     Test that the tokenizer correctly handles the custom special tokens defined in MARIN_CUSTOM_SPECIAL_TOKENS.
-    
+
     This function verifies that:
     1. Each token ID in MARIN_CUSTOM_SPECIAL_TOKENS decodes to its corresponding token string
     2. Each token string in MARIN_CUSTOM_SPECIAL_TOKENS encodes to its corresponding token ID
-    
+
     Args:
         tokenizer (transformers.PreTrainedTokenizer): The tokenizer to test
-        
+
     Raises:
         AssertionError: If any token ID/string pair doesn't match between encoding and decoding
     """
     for token_id, token_str in MARIN_CUSTOM_SPECIAL_TOKENS.items():
         assert tokenizer.decode(token_id) == token_str
         assert tokenizer.convert_tokens_to_ids([token_str]) == [token_id]
+
 
 def main():
     """
@@ -111,7 +113,7 @@ def main():
 
     # Test 2: check chat template
     assert marin.chat_template == MARIN_CHAT_TEMPLATE
-    
+
     reasoning_trace_example = "<|start_think|>User is asking how am I doing. \
         This should be straightforward. \
         I should reply politely.<|end_think|>"
