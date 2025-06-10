@@ -1,5 +1,7 @@
 """
-Saves a modified version of the llama3 tokenizer with a simple Olmo2-inspired chat format.
+Saves a modified version of the llama3 tokenizer with
+1) a simple Olmo2-inspired chat format and
+2) special tokens as defined in marin_models.py
 """
 
 import json
@@ -12,7 +14,7 @@ from huggingface_hub.errors import GatedRepoError
 from transformers import AutoTokenizer
 
 from experiments.llama import llama3_tokenizer
-from experiments.marin_models import MARIN_CHAT_TEMPLATE, MARIN_CUSTOM_SPECIAL_TOKENS, marin_tokenizer
+from experiments.marin_models import MARIN_CHAT_TEMPLATE, MARIN_CUSTOM_SPECIAL_TOKENS
 
 # Olmo 2 template modified so we can use with levanter
 MARIN_OLMO2_CHAT_TEMPLATE = """
@@ -37,28 +39,42 @@ MARIN_OLMO2_CHAT_TEMPLATE = """
 
 def main():
     # Create temporary directory for tokenizer
-    temp_dir = os.path.join(os.getcwd(), "experiments/exp9999/temp")
+    temp_dir = os.path.join(os.getcwd(), "llama_tokenizer_local")
     os.makedirs(temp_dir, exist_ok=True)
 
     try:
         # Download llama3 tokenizer to temp directory
         tokenizer = AutoTokenizer.from_pretrained(llama3_tokenizer, cache_dir=temp_dir)
+
+        # Save the original tokenizer to temp directory
         tokenizer.save_pretrained(temp_dir)
 
-        # Modify tokenizer_config.json
-        config_path = os.path.join(temp_dir, "tokenizer_config.json")
-        with open(config_path, "r") as f:
-            config = json.load(f)
+        # Modify and save tokenizer_config.json
+        tokenizer_config_path = os.path.join(temp_dir, "tokenizer_config.json")
+        with open(tokenizer_config_path, "r") as f:
+            tokenizer_config = json.load(f)
+        for token_id, token_str in MARIN_CUSTOM_SPECIAL_TOKENS.items():
+            tokenizer_config["added_tokens_decoder"][str(token_id)]["content"] = token_str
+        with open(tokenizer_config_path, "w") as f:
+            json.dump(tokenizer_config, f)
 
-        for token_id, t in MARIN_CUSTOM_SPECIAL_TOKENS.items():
-            config["added_tokens_decoder"][str(token_id)]["content"] = t
-
-        # Save the config
-        with open(config_path, "w") as f:
-            json.dump(config, f)
+        # Also update tokenizer.json so the underlying fast tokenizer knows about the new strings
+        tokenizer_json_path = os.path.join(temp_dir, "tokenizer.json")
+        if os.path.exists(tokenizer_json_path):
+            with open(tokenizer_json_path, "r") as f:
+                tokenizer_json = json.load(f)
+            # Update the added_tokens list (id -> content)
+            if "added_tokens" in tokenizer_json:
+                for at in tokenizer_json["added_tokens"]:
+                    tid = at.get("id")
+                    if tid in MARIN_CUSTOM_SPECIAL_TOKENS:
+                        at["content"] = MARIN_CUSTOM_SPECIAL_TOKENS[tid]
+            # Persist the file back
+            with open(tokenizer_json_path, "w") as f:
+                json.dump(tokenizer_json, f)
 
         # Load the modified tokenizer
-        marin = AutoTokenizer.from_pretrained(temp_dir, local_files_only=True)
+        marin = AutoTokenizer.from_pretrained(temp_dir)
 
         # Assign marin template
         marin.chat_template = MARIN_CHAT_TEMPLATE
@@ -83,14 +99,14 @@ def main():
     marin = AutoTokenizer.from_pretrained(final_dir, local_files_only=True)
 
     # Test 1: Tokenizer is modified to use new special tokens
-    for token_id, t in MARIN_CUSTOM_SPECIAL_TOKENS.items():
-        assert marin.decode([token_id]) == t
-        assert marin.tokenize(t) == token_id
+    for token_id, token_str in MARIN_CUSTOM_SPECIAL_TOKENS.items():
+        assert marin.decode(token_id) == token_str
+        assert marin.convert_tokens_to_ids([token_str]) == [token_id]
 
     # Tests (including those from exp964 since we are starting from base llama3)
     reasoning_trace_example = "<|start_think|>User is asking how am I doing. \
-            This should be straightforward. \
-                I should reply politely.<|end_think|>"
+        This should be straightforward. \
+        I should reply politely.<|end_think|>"
     convo = [
         {"role": "user", "content": "Hello, how are you?"},
         {"role": "assistant", "content": reasoning_trace_example + "I'm doing well, thanks!"},
@@ -126,7 +142,7 @@ def main():
     )
 
     # Push to huggingface
-    marin.push_to_hub(marin_tokenizer)
+    # marin.push_to_hub(marin_tokenizer)
 
 
 if __name__ == "__main__":
