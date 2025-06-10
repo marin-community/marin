@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 # Define the dedupe step that consumes the converted StarCoder JSONL
 starcoder_dedupe = ExecutorStep(
-    name="train_test_overlap/dolma/mmlu_overlap_fast",
+    name="train_test_overlap/dolma/mmlu_overlap_debug",
     fn=dedupe,
     config=DedupeConfig(
         input_path="gs://marin-us-central2/decontamination/mmlu-9fbdd5/cais/",
@@ -18,11 +18,11 @@ starcoder_dedupe = ExecutorStep(
         attribute_name="mmlu_overlap",
         false_positive_rate=0.0001,
         ngram=NGramConfig(
-            ngram_length=15,
+            ngram_length=[10, 15],
             overlap_threshold=1e-6,
             stride=0,
         ),
-        processes=4,
+        processes=8,
         decontaminate=True,
         decontaminate_path="gs://marin-us-central2/documents/finemath-3plus-8f233cf/train-00000-of-00128.jsonl.zst",
         # decontaminate_path="gs://marin-us-central2/dolma/mmlu_dev_set/",
