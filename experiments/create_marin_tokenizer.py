@@ -218,9 +218,10 @@ def main():
     4) Runs validation tests
     5) Optionally pushes to Hugging Face Hub
     """
+    # Load llama3 tokenizer
     llama3_tokenizer = load_llama3_tokenizer()
 
-    # Create marin tokenizer from llama3_tokenizer tokenizer
+    # Create marin tokenizer from llama3 tokenizer
     marin_tokenizer = create_marin_tokenizer(
         llama3_tokenizer,
     )
