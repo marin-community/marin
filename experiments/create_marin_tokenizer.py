@@ -13,7 +13,6 @@ import tempfile
 from urllib.error import HTTPError
 
 import numpy as np
-import pytest
 from huggingface_hub.errors import GatedRepoError
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
@@ -123,39 +122,14 @@ TEST_CONVERSATION = [
 ]
 
 
-@pytest.fixture
-def marin_tokenizer():
-    """Fixture that provides a configured marin tokenizer for testing."""
-    llama3_tokenizer = load_llama3_tokenizer()
-    tokenizer = create_marin_tokenizer(llama3_tokenizer)
-
-    # Roundtrip write-read to ensure consistency
-    with tempfile.TemporaryDirectory() as temp_path:
-        tokenizer.save_pretrained(temp_path)
-        tokenizer = AutoTokenizer.from_pretrained(temp_path, local_files_only=True)
-
-    return tokenizer
-
-
-def test_special_tokens(marin_tokenizer: PreTrainedTokenizer):
-    """Test that special tokens are correctly replaced."""
-    for token_id, token_str in MARIN_CUSTOM_SPECIAL_TOKENS.items():
-        assert marin_tokenizer.decode(token_id) == token_str
-        assert marin_tokenizer.convert_tokens_to_ids([token_str]) == [token_id]
-
-
-def test_chat_template(marin_tokenizer: PreTrainedTokenizer):
+def chat_template_checks(marin_tokenizer: PreTrainedTokenizer):
     """Test that chat template is correctly set."""
     assert marin_tokenizer.chat_template == MARIN_CHAT_TEMPLATE
 
-
-def test_normal_tokenization(marin_tokenizer: PreTrainedTokenizer):
     """Test that normal tokenization is preserved."""
     llama3_tokenizer = load_llama3_tokenizer()
     assert marin_tokenizer.tokenize("Hello, how are you?") == llama3_tokenizer.tokenize("Hello, how are you?")
 
-
-def test_chat_template_special_tokens(marin_tokenizer: PreTrainedTokenizer):
     """Test that special tokens are used in chat template."""
     out = marin_tokenizer.apply_chat_template(
         TEST_CONVERSATION, tokenize=True, return_dict=True, return_assistant_tokens_mask=True
@@ -165,8 +139,6 @@ def test_chat_template_special_tokens(marin_tokenizer: PreTrainedTokenizer):
         for token in marin_tokenizer.convert_tokens_to_ids(["<|start_header_id|>", "<|end_header_id|>", "<|eot_id|>"])
     )
 
-
-def test_assistant_token_masking(marin_tokenizer: PreTrainedTokenizer):
     """Test that assistant tokens are masked correctly."""
     out = marin_tokenizer.apply_chat_template(
         TEST_CONVERSATION, tokenize=True, return_dict=True, return_assistant_tokens_mask=True
@@ -176,8 +148,6 @@ def test_assistant_token_masking(marin_tokenizer: PreTrainedTokenizer):
     )
     assert np.sum(out["assistant_masks"]) == expected_length
 
-
-def test_assistant_token_decoding(marin_tokenizer: PreTrainedTokenizer):
     """Test that decoding of assistant tokens is correct."""
     out = marin_tokenizer.apply_chat_template(
         TEST_CONVERSATION, tokenize=True, return_dict=True, return_assistant_tokens_mask=True
@@ -186,24 +156,23 @@ def test_assistant_token_decoding(marin_tokenizer: PreTrainedTokenizer):
     expected_text = REASONING_TRACE_EXAMPLE + "I'm doing well, thanks!<|eot_id|>Great!<|eot_id|>"
     assert marin_tokenizer.decode(ids[np.array(out["assistant_masks"]).astype(bool)]) == expected_text
 
-
-def test_generation_prompt(marin_tokenizer: PreTrainedTokenizer):
     """Test that add_generation_prompt adds the final newline."""
     assert marin_tokenizer.apply_chat_template(TEST_CONVERSATION, tokenize=False, add_generation_prompt=True).endswith(
         "<|start_header_id|>assistant<|end_header_id|>\n"
     )
 
 
+def special_tokens_injection_check(marin_tokenizer: PreTrainedTokenizer):
+    """Test that special tokens are correctly replaced."""
+    for token_id, token_str in MARIN_CUSTOM_SPECIAL_TOKENS.items():
+        assert marin_tokenizer.decode(token_id) == token_str
+        assert marin_tokenizer.convert_tokens_to_ids([token_str]) == [token_id]
+
+
 def run_all_tests(marin_tokenizer: PreTrainedTokenizer):
     """Run all tests on the modified tokenizer."""
-    test_special_tokens(marin_tokenizer)
-    test_chat_template(marin_tokenizer)
-    test_normal_tokenization(marin_tokenizer)
-    test_chat_template_special_tokens(marin_tokenizer)
-    test_assistant_token_masking(marin_tokenizer)
-    test_assistant_token_decoding(marin_tokenizer)
-    test_generation_prompt(marin_tokenizer)
-    print("All tests passed!")
+    special_tokens_injection_check(marin_tokenizer)
+    chat_template_checks(marin_tokenizer)
 
 
 # ============ Main function ============
