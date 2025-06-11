@@ -5,8 +5,8 @@ import re
 from tqdm import tqdm
 
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
-from marin.web.convert import convert_page
 from marin.transform.dolmino.transform_dclm_hq import find_html_in_cc
+from marin.web.convert import convert_page
 
 
 def save_html(json_data, input_path):
