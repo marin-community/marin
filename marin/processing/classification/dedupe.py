@@ -14,6 +14,46 @@ import psutil
 import ray
 from tqdm import tqdm
 
+# Import dolma deduper with PYTHONPATH approach
+dolma_deduper = None
+
+# Check PYTHONPATH
+import sys
+print(f"PYTHONPATH includes: {[p for p in sys.path if 'dolma' in p]}")
+
+try:
+    # Try direct import from dolma.cli first (most likely location)
+    from dolma.cli import deduper as dolma_deduper
+    print("SUCCESS: Imported dolma deduper from dolma.cli")
+except ImportError as e:
+    print(f"Failed to import from dolma.cli: {e}")
+    
+    try:
+        # Fallback: try direct dolma import
+        from dolma import deduper as dolma_deduper
+        print("SUCCESS: Imported dolma deduper from dolma")
+    except ImportError as e2:
+        print(f"Failed to import from dolma: {e2}")
+        
+        # Debug what's available
+        try:
+            import dolma
+            print(f"dolma location: {getattr(dolma, '__file__', 'unknown')}")
+            print(f"dolma contents: {dir(dolma)}")
+            
+            # Check if cli module exists
+            try:
+                import dolma.cli
+                print(f"dolma.cli contents: {dir(dolma.cli)}")
+            except ImportError:
+                print("dolma.cli module not found")
+                
+        except ImportError as e3:
+            print(f"Cannot import dolma at all: {e3}")
+
+if dolma_deduper is None:
+    print("ERROR: dolma_deduper is None - will fail at runtime")
+
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_mkdirs, fsspec_rm, rebase_file_path
 
@@ -279,81 +319,54 @@ def do_dedup(
         estimated_doc_count = total_ngrams
         print(f"Estimated total {ngram.ngram_length}-grams: {estimated_doc_count}")
 
-    command = [
-        "RUST_BACKTRACE=full",
-        "dolma",
-        "dedupe",
-        "--documents",
-        f"{local_base_dir}/documents/**/*.jsonl.gz",
-        "--dedupe.paragraphs.attribute_name",
-        attribute_name,
-        "--dedupe.skip_empty",
-        "--dedupe.min_length",
-        str(min_length),
-        "--dedupe.min_words",
-        str(min_words),
-        "--bloom_filter.file",
-        bloom_filter_file,
-        "--processes",
-        str(processes),
-    ]
+    # Run Dolma deduper directly via Python API instead of subprocess
 
-    if bloom_filter_size:
-        command.extend(["--bloom_filter.size_in_bytes", str(bloom_filter_size)])
-    else:
-        command.extend(
-            [
-                "--bloom_filter.estimated_doc_count",
-                str(estimated_doc_count),
-                "--bloom_filter.desired_false_positive_rate",
-                str(false_positive_rate),
-            ]
-        )
+    dolma_config = {
+        "documents": [f"{local_base_dir}/documents/**/*.jsonl.gz"],
+        "dedupe": {
+            "name": attribute_name,
+            "skip_empty": True,
+            "min_length": min_length,
+            "min_words": min_words,
+            "paragraphs": {
+                "attribute_name": attribute_name,
+                "by_ngram": {
+                    "ngram_length": ngram.ngram_length,
+                    "overlap_threshold": ngram.overlap_threshold,
+                    "stride": ngram.stride,
+                },
+                "paragraph_separator": "\u001e\u001e",
+            },
+        },
+        "bloom_filter": {
+            "file": bloom_filter_file,
+            "read_only": read_only,
+            "size_in_bytes": bloom_filter_size or 0,
+            "estimated_doc_count": estimated_doc_count,
+            "desired_false_positive_rate": false_positive_rate,
+        },
+        "work_dir": {"input": local_base_dir, "output": local_base_dir},
+        "processes": processes,
+        "compression": {"input": None, "output": None},
+        "dryrun": False,
+        "is_s3_volume": False,
+    }
+    print(f"Running Dolma deduper with config: {dolma_config}", flush=True)
+    
+    if dolma_deduper is None:
+        raise ImportError("Could not import dolma deduper function. Make sure dolma is properly installed.")
+    
+    dolma_deduper(dolma_config)
 
-    # for decontamination bloom filter is read only
-    command.append("--bloom_filter.read_only" if read_only else "--no-bloom_filter.read_only")
-
-    # add ngram settings to dolma dedupe command if in ngram matching mode
-    if ngram is not None:
-        # chatgpt says the separator below is extrememly unlikely to ever occur, so we count all n-grams in document
-        command.extend(
-            [
-                "--dedupe.paragraphs.by_ngram.ngram_length",
-                str(ngram.ngram_length),
-                "--dedupe.paragraphs.by_ngram.overlap_threshold",
-                str(ngram.overlap_threshold),
-                "--dedupe.paragraphs.by_ngram.stride",
-                str(ngram.stride),
-                "--dedupe.paragraphs.paragraph_separator",
-                "\u001e\u001e",
-            ]
-        )
-
-    process = subprocess.Popen(
-        " ".join(command),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        shell=True,
-        text=True,
-        bufsize=1,
-        universal_newlines=True,
-    )
-    for line in process.stdout:
-        print(line, end="", flush=True)
-    process.wait()
-
-    # Rename temporary files
-    attr_dir = os.path.join(local_base_dir, "attributes/duplicate_documents")
-    print(f"Checking for temporary files in: {attr_dir}")
-    for root, _, files in os.walk(attr_dir):
+    # Rename any temporary output files
+    for root, _, files in os.walk(os.path.join(local_base_dir, "attributes")):
         for file in files:
             if file.endswith(".jsonl.gz.tmp"):
-
                 old_path = os.path.join(root, file)
                 new_path = old_path.rsplit(".tmp", 1)[0]
                 os.rename(old_path, new_path)
 
-    return process.returncode
+    return 0
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
