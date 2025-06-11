@@ -1,4 +1,4 @@
-FROM rayproject/ray:nightly.240914.bb15a3-py311-cpu
+FROM rayproject/ray:2.45.0.145f59-py311-cpu
 ARG VLLM_VERSION=0.6.6.post1
 
 # Install general dependencies

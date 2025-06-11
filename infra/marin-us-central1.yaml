@@ -180,7 +180,7 @@ available_node_types:
 
   tpu_slice_v5p_512:
     max_workers: 1024
-    min_workers: 8
+    min_workers: 16
     node_config:
       acceleratorType: v5p-512
       runtimeVersion: v2-alpha-tpuv5
