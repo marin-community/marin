@@ -1,5 +1,7 @@
-*/cache/*
-*/plots/*
+experiments/two_stage/cache/*
+experiments/two_stage/plotting/*
+experiments/curriculum/cache/*
+experiments/curriculum/plots/*
 
 tests/snapshots/outputs
 tests/snapshots/diffs
