@@ -18,18 +18,19 @@ from huggingface_hub.errors import GatedRepoError
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from experiments.llama import llama3_tokenizer as llama3_tokenizer_hf_path
-from experiments.marin_models import MARIN_CHAT_TEMPLATE, MARIN_CUSTOM_SPECIAL_TOKENS, marin_tokenizer as marin_tokenizer_hf_path
+from experiments.marin_models import MARIN_CHAT_TEMPLATE, MARIN_CUSTOM_SPECIAL_TOKENS
+from experiments.marin_models import marin_tokenizer as marin_tokenizer_hf_path
 
 
 def create_marin_tokenizer(
-        tokenizer: PreTrainedTokenizer,
-    ) -> PreTrainedTokenizer:
+    tokenizer: PreTrainedTokenizer,
+) -> PreTrainedTokenizer:
     """
     Create a modified version of tokenizer with custom chat format and special tokens.
-    
+
     Args:
         tokenizer: The base tokenizer to modify (typically llama3)
-        
+
     Returns:
         A new tokenizer instance
     """
@@ -70,13 +71,14 @@ def create_marin_tokenizer(
 
         return marin_tokenizer
 
+
 def load_llama3_tokenizer() -> PreTrainedTokenizer:
     """
     Load the base llama3 tokenizer.
-    
+
     Returns:
         The llama3 tokenizer instance
-        
+
     Raises:
         OSError, GatedRepoError, HTTPError: If access to the tokenizer is not available
     """
@@ -108,13 +110,14 @@ def marin_tokenizer():
     """Fixture that provides a configured marin tokenizer for testing."""
     llama3_tokenizer = load_llama3_tokenizer()
     tokenizer = create_marin_tokenizer(llama3_tokenizer)
-    
+
     # Roundtrip write-read to ensure consistency
     with tempfile.TemporaryDirectory() as temp_path:
         tokenizer.save_pretrained(temp_path)
         tokenizer = AutoTokenizer.from_pretrained(temp_path, local_files_only=True)
-    
+
     return tokenizer
+
 
 def test_special_tokens(marin_tokenizer: PreTrainedTokenizer):
     """Test that special tokens are correctly replaced."""
@@ -122,45 +125,57 @@ def test_special_tokens(marin_tokenizer: PreTrainedTokenizer):
         assert marin_tokenizer.decode(token_id) == token_str
         assert marin_tokenizer.convert_tokens_to_ids([token_str]) == [token_id]
 
+
 def test_chat_template(marin_tokenizer: PreTrainedTokenizer):
     """Test that chat template is correctly set."""
     assert marin_tokenizer.chat_template == MARIN_CHAT_TEMPLATE
+
 
 def test_normal_tokenization(marin_tokenizer: PreTrainedTokenizer):
     """Test that normal tokenization is preserved."""
     llama3_tokenizer = load_llama3_tokenizer()
     assert marin_tokenizer.tokenize("Hello, how are you?") == llama3_tokenizer.tokenize("Hello, how are you?")
 
+
 def test_chat_template_special_tokens(marin_tokenizer: PreTrainedTokenizer):
     """Test that special tokens are used in chat template."""
-    out = marin_tokenizer.apply_chat_template(TEST_CONVERSATION, tokenize=True, return_dict=True, return_assistant_tokens_mask=True)
+    out = marin_tokenizer.apply_chat_template(
+        TEST_CONVERSATION, tokenize=True, return_dict=True, return_assistant_tokens_mask=True
+    )
     assert all(
         token in out["input_ids"]
         for token in marin_tokenizer.convert_tokens_to_ids(["<|start_header_id|>", "<|end_header_id|>", "<|eot_id|>"])
     )
 
+
 def test_assistant_token_masking(marin_tokenizer: PreTrainedTokenizer):
     """Test that assistant tokens are masked correctly."""
-    out = marin_tokenizer.apply_chat_template(TEST_CONVERSATION, tokenize=True, return_dict=True, return_assistant_tokens_mask=True)
+    out = marin_tokenizer.apply_chat_template(
+        TEST_CONVERSATION, tokenize=True, return_dict=True, return_assistant_tokens_mask=True
+    )
     ids = np.array(out["input_ids"])
-    expected_length = (
-        len(marin_tokenizer(REASONING_TRACE_EXAMPLE + "I'm doing well, thanks!")["input_ids"]) + 
-        len(marin_tokenizer("Great!")["input_ids"])
+    expected_length = len(marin_tokenizer(REASONING_TRACE_EXAMPLE + "I'm doing well, thanks!")["input_ids"]) + len(
+        marin_tokenizer("Great!")["input_ids"]
     )
     assert np.sum(out["assistant_masks"]) == expected_length
 
+
 def test_assistant_token_decoding(marin_tokenizer: PreTrainedTokenizer):
     """Test that decoding of assistant tokens is correct."""
-    out = marin_tokenizer.apply_chat_template(TEST_CONVERSATION, tokenize=True, return_dict=True, return_assistant_tokens_mask=True)
+    out = marin_tokenizer.apply_chat_template(
+        TEST_CONVERSATION, tokenize=True, return_dict=True, return_assistant_tokens_mask=True
+    )
     ids = np.array(out["input_ids"])
     expected_text = REASONING_TRACE_EXAMPLE + "I'm doing well, thanks!<|eot_id|>Great!<|eot_id|>"
     assert marin_tokenizer.decode(ids[np.array(out["assistant_masks"]).astype(bool)]) == expected_text
+
 
 def test_generation_prompt(marin_tokenizer: PreTrainedTokenizer):
     """Test that add_generation_prompt adds the final newline."""
     assert marin_tokenizer.apply_chat_template(TEST_CONVERSATION, tokenize=False, add_generation_prompt=True).endswith(
         "<|start_header_id|>assistant<|end_header_id|>\n"
     )
+
 
 def run_all_tests(marin_tokenizer: PreTrainedTokenizer):
     """Run all tests on the modified tokenizer."""
@@ -178,7 +193,7 @@ def run_all_tests(marin_tokenizer: PreTrainedTokenizer):
 def main():
     """
     Create and save a modified version of the llama3 tokenizer.
-    
+
     The script:
     1) Loads the base llama3 tokenizer
     2) Creates a modified version with custom chat format and special tokens
@@ -207,4 +222,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
