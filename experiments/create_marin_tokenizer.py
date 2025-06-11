@@ -153,7 +153,6 @@ def test_assistant_token_masking(marin_tokenizer: PreTrainedTokenizer):
     out = marin_tokenizer.apply_chat_template(
         TEST_CONVERSATION, tokenize=True, return_dict=True, return_assistant_tokens_mask=True
     )
-    ids = np.array(out["input_ids"])
     expected_length = len(marin_tokenizer(REASONING_TRACE_EXAMPLE + "I'm doing well, thanks!")["input_ids"]) + len(
         marin_tokenizer("Great!")["input_ids"]
     )
