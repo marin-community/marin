@@ -22,14 +22,16 @@ from experiments.marin_models import MARIN_CHAT_TEMPLATE, MARIN_CUSTOM_SPECIAL_T
 from experiments.marin_models import marin_tokenizer as marin_tokenizer_hf_path
 
 
-def create_marin_tokenizer(
+def _inject_special_tokens(
     tokenizer: PreTrainedTokenizer,
-) -> PreTrainedTokenizer:
+    new_tokens: dict[int, str],
+):
     """
-    Create a modified version of tokenizer with custom chat format and special tokens.
+    Inject special tokens into the tokenizer config.
 
     Args:
-        tokenizer: The base tokenizer to modify (typically llama3)
+        tokenizer: The tokenizer to modify
+        new_tokens: A dictionary of token_id -> token_str
 
     Returns:
         A new tokenizer instance
@@ -43,7 +45,7 @@ def create_marin_tokenizer(
         tokenizer_config_path = os.path.join(temp_path, "tokenizer_config.json")
         with open(tokenizer_config_path, "r") as f:
             tokenizer_config = json.load(f)
-        for token_id, token_str in MARIN_CUSTOM_SPECIAL_TOKENS.items():
+        for token_id, token_str in new_tokens.items():
             tokenizer_config["added_tokens_decoder"][str(token_id)]["content"] = token_str
         with open(tokenizer_config_path, "w") as f:
             json.dump(tokenizer_config, f)
@@ -57,19 +59,35 @@ def create_marin_tokenizer(
             if "added_tokens" in tokenizer_json:
                 for at in tokenizer_json["added_tokens"]:
                     tid = at.get("id")
-                    if tid in MARIN_CUSTOM_SPECIAL_TOKENS:
-                        at["content"] = MARIN_CUSTOM_SPECIAL_TOKENS[tid]
+                    if tid in new_tokens:
+                        at["content"] = new_tokens[tid]
             # Persist the file back
             with open(tokenizer_json_path, "w") as f:
                 json.dump(tokenizer_json, f)
 
         # Load the modified tokenizer
-        marin_tokenizer = AutoTokenizer.from_pretrained(temp_path)
+        return AutoTokenizer.from_pretrained(temp_path)
 
-        # Assign marin template
-        marin_tokenizer.chat_template = MARIN_CHAT_TEMPLATE
 
-        return marin_tokenizer
+def create_marin_tokenizer(
+    tokenizer: PreTrainedTokenizer,
+) -> PreTrainedTokenizer:
+    """
+    Create a modified version of tokenizer with custom chat format and special tokens.
+
+    Args:
+        tokenizer: The base tokenizer to modify (typically llama3)
+
+    Returns:
+        A new tokenizer instance
+    """
+    # Inject special tokens
+    marin_tokenizer = _inject_special_tokens(tokenizer, MARIN_CUSTOM_SPECIAL_TOKENS)
+
+    # Assign marin template
+    marin_tokenizer.chat_template = MARIN_CHAT_TEMPLATE
+
+    return marin_tokenizer
 
 
 def load_llama3_tokenizer() -> PreTrainedTokenizer:
