@@ -1,9 +1,13 @@
-import pytest
 import tempfile
 
-from experiments.create_marin_tokenizer import load_llama3_tokenizer, create_marin_tokenizer, special_tokens_injection_check
+import pytest
 from transformers import AutoTokenizer, PreTrainedTokenizer
-from experiments.marin_models import MARIN_CUSTOM_SPECIAL_TOKENS
+
+from experiments.create_marin_tokenizer import (
+    create_marin_tokenizer,
+    load_llama3_tokenizer,
+    special_tokens_injection_check,
+)
 
 
 @pytest.fixture
@@ -23,6 +27,3 @@ def marin_tokenizer():
 def test_special_tokens_injection(marin_tokenizer: PreTrainedTokenizer):
     """Test that special tokens are correctly replaced."""
     special_tokens_injection_check(marin_tokenizer)
-
-
-
