@@ -1,0 +1,130 @@
+# ====================================================================================
+# Dockerfile.cluster.venv Explanation:
+# We use uv (a drop-in replacement for pip) within a Python venv to achieve
+# reproducible, high-performance dependency installation. Key steps:
+# 1. Create a virtual environment and install uv (fast installer + resolver).
+# 2. Define overrides.txt to relax any upstream version conflicts (e.g., tokenizers).
+# 3. Generate requirements.in listing only direct dependencies.
+# 4. Run `uv pip compile` to lock deps (with overrides) into requirements.txt.
+# 5. Install dependencies from requirements.txt via `uv pip install`.
+# 6. Install special packages (e.g., dolma) separately with --no-deps to skip unwanted constraints.
+#
+# To extend for more packages:
+#  - Add your package spec to the requirements.in block below.
+#  - If a conflict arises, add a matching override to overrides.txt.
+#  - Rebuild and uv will pick up your changes automatically.
+# ====================================================================================
+#FROM rayproject/ray:nightly.240914.bb15a3-py311-cpu
+FROM rayproject/ray:2.45.0.145f59-py311-cpu
+ARG VLLM_VERSION=0.6.6.post1
+
+# Install system dependencies and venv support
+RUN sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+    python3-venv python3-pip \
+    clang curl g++ vim libpython3.11 libpython3.11-dev docker.io cmake \
+    build-essential zlib1g-dev liblz4-dev libuchardet-dev libre2-dev \
+    git cargo rustc \
+ && sudo rm -rf /var/lib/apt/lists/*
+# Install rustup and nightly toolchain for Dolma editable build
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain nightly --profile minimal
+ENV PATH="$HOME/.cargo/bin:${PATH}"
+ENV RUSTUP_TOOLCHAIN=nightly
+ENV CARGO_HOME=$HOME/.cargo
+ENV RUSTUP_HOME=$HOME/.rustup
+
+# Ensure cargo directories have proper permissions
+RUN mkdir -p $HOME/.cargo/registry/cache && \
+    chmod -R 755 $HOME/.cargo
+
+# Add Google Cloud CLI so that `gcloud` is available for setup_commands
+RUN sudo apt-get update && sudo apt-get install -y --no-install-recommends gnupg curl ca-certificates && \
+    sudo mkdir -p /usr/share/keyrings && \
+    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list && \
+    sudo apt-get update && sudo apt-get install -y --no-install-recommends google-cloud-cli && \
+    sudo rm -rf /var/lib/apt/lists/*
+
+# Create application directory
+RUN sudo mkdir -p /opt/marin && sudo chown -R $(whoami) /opt/marin
+
+# Set working directory and prepare venv early so uv is available
+WORKDIR /opt/marin
+
+# Create and activate a virtual environment
+RUN python3 -m venv venv
+ENV PATH=/opt/marin/venv/bin:$PATH
+
+# Add dolma Python path to PYTHONPATH so imports work (using unique name to avoid conflicts)
+ENV PYTHONPATH="$HOME/dolma_source/python:$PYTHONPATH"
+
+# Upgrade pip in the venv and install uv
+RUN pip install --upgrade pip uv
+RUN pip install --upgrade pip setuptools wheel
+
+# Stage metadata for fast dependency caching
+WORKDIR /tmp/
+ADD pyproject.toml README.md /tmp/
+RUN uv pip install .
+WORKDIR /opt/marin
+
+# Workaround for tokenizers version conflict between dolma and transformers
+# Create an overrides file to relax tokenizers dependency
+RUN printf 'tokenizers>=0.21,<0.22\n' > overrides.txt
+# overrides.txt entries override transitive constraints during compile
+
+# Generate a requirements.in for cluster dependencies
+RUN cat <<EOF > requirements.in
+jax[tpu]==0.5.1
+fsspec==2024.9.0
+transformers>=4.49.0
+draccus==0.11.5
+google-api-python-client~=2.0
+gcsfs
+google-cloud-storage
+google-cloud-storage-transfer
+s3fs
+regex
+requests
+numpy
+torch
+braceexpand
+deepdiff
+tqdm
+tqdm-loggable
+toml
+pandas
+pyarrow
+levanter>=1.2.dev1361
+haliax>=1.4.dev348
+HLL==2.3.0
+omegaconf
+EOF
+# requirements.in declares top-level packages for uv pip compile
+
+# Clone Dolma with unique name to avoid naming conflicts
+RUN git clone --depth 1 https://github.com/allenai/dolma.git $HOME/dolma_source \
+ && rm -f $HOME/dolma_source/Cargo.lock \
+ && cd $HOME/dolma_source && ls -la \
+ && echo "Dolma cloned to $HOME/dolma_source, will use PYTHONPATH approach" \
+ && cd /opt/marin \
+ && uv pip compile --find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html \
+    --find-links https://download.pytorch.org/whl/cpu \
+    requirements.in --override overrides.txt --quiet -o requirements.txt \
+ && uv pip install --no-cache-dir --find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html \
+    --find-links https://download.pytorch.org/whl/cpu \
+    -r requirements.txt
+# - `uv pip compile`: locks direct and transitive deps to exact versions in requirements.txt
+# - `uv pip install -r requirements.txt`: installs locked deps reproducibly
+# - Install dolma separately without its own dependencies to honor the tokenizer override
+
+# Test dolma installation and imports - debug before cluster starts (cache-busting)
+# ARG CACHE_BUST=11
+# RUN echo "=== TESTING DOLMA INSTALLATION ===" && sleep 5
+# RUN echo "Testing basic dolma import..." && python -u -c "import sys; import dolma; print('SUCCESS: dolma imported from', dolma.__file__ if hasattr(dolma, '__file__') else 'unknown'); print('dolma contents:', dir(dolma)); sys.stdout.flush()" && sleep 10
+# RUN echo "Testing dolma.deduper import..." && python -u -c "import sys; from dolma import deduper; print('SUCCESS: dolma.deduper imported:', deduper); sys.stdout.flush()" && sleep 10 || (echo "FAILED: dolma.deduper import failed" && sleep 10)
+# RUN echo "Testing dolma.cli.deduper import..." && python -u -c "import sys; from dolma.cli import deduper; print('SUCCESS: dolma.cli.deduper imported:', deduper); sys.stdout.flush()" && sleep 10 || (echo "FAILED: dolma.cli.deduper import failed" && sleep 10)
+# RUN echo "Testing omegaconf import..." && python -u -c "import sys; import omegaconf; print('SUCCESS: omegaconf imported from', omegaconf.__file__); sys.stdout.flush()" && sleep 10
+# RUN echo "=== END DOLMA TEST ===" && sleep 20 && echo "INTENTIONAL BUILD STOP FOR DEBUG - COMMENT OUT NEXT LINE" && exit 1
+
+# # Default entrypoint (adjust as needed)
+# # ENTRYPOINT ["python", "-m", "marin.main"]
