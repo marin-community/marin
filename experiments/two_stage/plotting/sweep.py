@@ -44,6 +44,9 @@ value_pretty_name_dict = {
     "1_9b4k": "1.9B",
 }
 
+def format_sci(val):
+    return f"{val:.0e}".replace("e-0", "e-").replace("e+0", "e+")
+
 def value_to_pretty_name(value):
     if value in value_pretty_name_dict:
         return value_pretty_name_dict[value]
@@ -65,17 +68,24 @@ def parse_run(run):
     lr_str = run_id.split(f"{run_dict['lr_schedule']}-")[-1][:5]
     lr_str = lr_str if lr_str[-1] != "-" else lr_str[:-1]
     run_dict["lr"] = float(lr_str)
-    run_dict["lr_cooldown_duration"] = "na" if "-na-" in run_id else float(run_id.split(f"{run_dict['lr']}-")[-1][:4])
+    lr_str = f"{run_dict['lr']:.3f}" if run_dict['lr'] >= 1e-3 else f"{format_sci(run_dict['lr'])}"
+    run_dict["lr_cooldown_duration"] = "na" if "-na-" in run_id else float(run_id.split(f"{lr_str}-")[-1][:4])
     run_dict["rare_data_epochs"] = int(run_id.split("x")[-1].split("-")[0])
     run_dict["model_name"] = run_id.split("-")[0]
 
-    if "-w" in run_id:
-        weight_decay_str = run_id.split("-w")[-1]
-        if weight_decay_str == "":
-            weight_decay_str = "16"
-        run_dict["weight_decay"] = float(weight_decay_str) / 10.0
+    # if "-w" in run_id:
+    #     weight_decay_str = run_id.split("-w")[-1]
+    #     if weight_decay_str == "":
+    #         weight_decay_str = "16"
+    #     run_dict["weight_decay"] = float(weight_decay_str) / 10.0
 
     run_history_loss_keys = [f"eval/{rare_data_name}/loss"]
+
+    if key == "train-loss-spike-observation" and "train-loss-spike-observation" in run.tags:
+        history_loss = run.scan_history()
+        run_dict["steps"] = [row["_step"] for row in history_loss]
+        run_dict["train_loss"] = [row["train/loss"] for row in history_loss]
+        return run_dict
 
     history_loss = run.history(keys=run_history_loss_keys)
 
@@ -352,6 +362,23 @@ def create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name
     print(f"Final {pretty_name_dict[rare_data_name]} Loss: {best_run[f'final_{rare_data_name}_loss']:.4f}")
     print(f"Run ID: {best_run['run_id']}")
 
+def plot_train_loss(run_list, key):
+    assert len(run_list) == 1
+    run = run_list[0]
+
+    steps = run["steps"]
+    train_loss = run["train_loss"]
+
+    plt.figure(figsize=(5, 3), dpi=300)
+    plt.plot(steps, train_loss, color=LIGHT_BLUE, label="Train Loss")
+    plt.xlabel("Step")
+    plt.ylabel("Loss")
+    plt.title("Train Loss")
+    plt.tight_layout()
+    plt.legend()
+    plt.savefig(f"plotting/plots/{key}_train_loss.png")
+    plt.close()
+
 def create_double_scatter(run_lists, x_axis_key, rare_data_name, common_data_name, key, labels, ylims=None):
     """
     Creates a scatter plot with two series of data points.
@@ -462,6 +489,8 @@ if __name__ == "__main__":
         "lr_schedule": f"{rare_data_name}-{common_data_name}-finding-lr-schedule",
         "lr_schedule_v2": f"{rare_data_name}-{common_data_name}-finding-lr-schedule-v2",
         "weight_decay": f"{rare_data_name}-{common_data_name}-finding-weight-decay",
+        "model_scaling": f"{rare_data_name}-{common_data_name}-model-scaling-v3",
+        "spike": f"train-loss-spike-observation",
     }[args.mode]
 
     if args.build_cache:
@@ -480,7 +509,9 @@ if __name__ == "__main__":
     run_list = sorted(run_list, key=lambda x: x[x_axis_key])
 
     print("Total runs: ", len(run_list))
-    if x_axis_key == "rare_data_epochs":
+    if args.mode == "spike":
+        plot_train_loss(run_list, key)
+    elif x_axis_key == "rare_data_epochs":
         create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=False)
     elif x_axis_key == "lr_cooldown_duration":
         # baseline_run = [run for run in run_list if run["replay_ratio"] != 0.0 and run["lr_cooldown_duration"] == 0.99 and run["lr"] == 3e-3][0]
@@ -497,6 +528,9 @@ if __name__ == "__main__":
         print(run_list)
         create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=False)
     else:
+        if args.mode == "model_scaling":
+            run_list = [run for run in run_list if run["model_name"] != "1_9b4k"]
+
         run_list = [run for run in run_list if run["replay_ratio"] < 0.9]
         create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key)
         create_scatter_plot(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key)

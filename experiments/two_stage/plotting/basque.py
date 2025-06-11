@@ -77,7 +77,7 @@ def plot_basque_comparison():
     create_replay_plot(
         replay_ratios_200m, 
         accuracies_200m,
-        "200M Model",
+        "200M tokens",
         'plotting/plots/basque_replay_200M.png'
     )
 
@@ -91,7 +91,7 @@ def plot_basque_comparison():
     create_replay_plot(
         replay_ratios_40m,
         accuracies_40m,
-        "40M Model",
+        "40M tokens",
         'plotting/plots/basque_replay_40M.png'
     )
 

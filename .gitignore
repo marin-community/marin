@@ -1,3 +1,6 @@
+*/cache/*
+*/plots/*
+
 tests/snapshots/outputs
 tests/snapshots/diffs
 
