@@ -20,7 +20,6 @@ dependencies = [
     "regex",
     "requests",
     "numpy",
-    "torch",
     "braceexpand",
     "deepdiff",
     "tqdm",
@@ -125,6 +124,11 @@ eval = [
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
 
+datashop_gpu = [
+    "vllm>=0.9.0", # This is the lattest version that supports torch>=2.7.0
+    "accelerate>=1.7.0",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["cache", "infra"]
@@ -170,3 +174,11 @@ exclude = [
 
 [tool.uv.sources]
 resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
+
+[tool.uv]
+conflicts = [
+    [
+      { extra = "datashop_gpu" },
+      { extra = "cuda12" },
+    ],
+]
