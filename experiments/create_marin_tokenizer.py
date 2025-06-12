@@ -10,10 +10,8 @@ The script uses temporary in-memory storage for intermediate operations.
 import json
 import os
 import tempfile
-from urllib.error import HTTPError
 
 import numpy as np
-from huggingface_hub.errors import GatedRepoError
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from experiments.llama import llama3_tokenizer as llama3_tokenizer_hf_path
@@ -99,14 +97,7 @@ def load_llama3_tokenizer() -> PreTrainedTokenizer:
     Raises:
         OSError, GatedRepoError, HTTPError: If access to the tokenizer is not available
     """
-    try:
-        return AutoTokenizer.from_pretrained(llama3_tokenizer_hf_path)
-    except (OSError, GatedRepoError, HTTPError) as e:
-        print("You need to request access to the llama3 tokenizer")
-        if os.getenv("CI", False) in ["true", "1"]:
-            print("Skipping test in CI")
-            return
-        raise e
+    return AutoTokenizer.from_pretrained(llama3_tokenizer_hf_path)
 
 
 # ============ Test data and functions ============
