@@ -1,3 +1,4 @@
+import os
 import tempfile
 
 import pytest
@@ -13,7 +14,12 @@ from experiments.create_marin_tokenizer import (
 @pytest.fixture
 def marin_tokenizer():
     """Fixture that provides a configured marin tokenizer for testing."""
-    llama3_tokenizer = load_llama3_tokenizer()
+    try:
+        llama3_tokenizer = load_llama3_tokenizer()
+    except Exception as e:
+        if os.getenv("CI", False) in ["true", "1"]:
+            pytest.skip("Llama 3 tokenizer repository is gated")
+        raise e
     tokenizer = create_marin_tokenizer(llama3_tokenizer)
 
     # Roundtrip write-read to ensure consistency
