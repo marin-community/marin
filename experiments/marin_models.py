@@ -37,3 +37,8 @@ The modifications are:
 See [Levanter's documentation on Chat Templates](https://levanter.readthedocs.io/en/latest/reference/Data-Formats/#chat-format)
 for more information on how this works.
 """
+
+MARIN_CUSTOM_SPECIAL_TOKENS = {
+    128002: "<|start_think|>",  # Originally "<|reserved_special_token_0|>"
+    128003: "<|end_think|>",  # Originally "<|reserved_special_token_1|>"
+}
