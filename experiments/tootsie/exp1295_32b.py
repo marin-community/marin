@@ -6,6 +6,8 @@ import dataclasses
 
 import haliax
 from levanter.callbacks.watch import WatchConfig
+from levanter.optim import AdamConfig
+from levanter.optim.clip_update_norm import ClipUpdateNormConfig
 from levanter.schedule import ScheduleStep
 
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
@@ -36,9 +38,6 @@ llama_32b_train_config = SimpleTrainConfig(
     ],
     num_train_steps=1_000_000,
     weight_decay=0.05,
-    # width is a little smaller than the 24B and we're using a much larger batch size
-    # 4.2e-4 * sqrt(8192/3072) ≈ 7e-4
-    learning_rate=7e-4,
     decay=0.4,
     ema_beta=0.995,
     lr_schedule="linear",
@@ -46,11 +45,32 @@ llama_32b_train_config = SimpleTrainConfig(
     steps_per_eval=1000,
     steps_per_task_eval=10000,
     z_loss_weight=1e-4,
+    # width is a little smaller than the 24B and we're using a much larger batch size
+    # 4.2e-4 * sqrt(8192/3072) ≈ 7e-4
+    learning_rate=7e-4,  ## ignored and overridden by the optimizer config
     watch=WatchConfig(watch_targets=["grads", "params", "updates", "opt_state"], interval=1),
     skip_bad_steps=True,
     max_grad_norm=0.2,  # we're almost always < .2 except during spikes
     allow_partial_checkpoint=True,
+    optimizer_config=AdamConfig(
+        beta1=0.9,
+        beta2=0.95,
+        epsilon=1e-8,
+        max_grad_norm=0.2,  # we're almost always < .2 except during spikes
+        # width is a little smaller than the 24B and we're using a much larger batch size
+        # 4.2e-4 * sqrt(8192/3072) ≈ 7e-4
+        learning_rate=7e-4,
+        weight_decay=0.05,
+        skip_bad_steps=True,
+        # update_rms_clipping=1.0,  # added at 67522, removed at 72233
+        lr_schedule="linear",
+        warmup=0.01,
+        decay=0.4,
+        cycle_length=None,
+        clip_update_norm=ClipUpdateNormConfig(rolling_interval_length=128, sigma_factor=2.0),
+    ),
 )
+
 nemotron_steps = tokenize_nemotron_steps()
 proofpile_2 = dclm_components_llama3["proofpile_2"]
 starcoderdata = dclm_components_llama3["starcoderdata"]
@@ -62,6 +82,7 @@ nemotron_mix = lm_mixture_data_config(
         "proofpile_2": 0.055,
     },
 )
+
 llama_32b_tootsie = default_train(
     name="llama-32b-tootsie-2",
     tokenized=nemotron_mix,
