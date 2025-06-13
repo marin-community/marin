@@ -2,7 +2,8 @@ import dataclasses
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Dict, List, Optional
+import re
 
 from marin.core.conversation import OpenAIChatMessage
 
@@ -250,7 +251,7 @@ class TransformAdapter:
         return dataclasses.replace(self)
 
 
-transform_templates: dict[str, TransformAdapter] = {}
+transform_templates: Dict[str, TransformAdapter] = {}
 
 
 def register_adapter(adapter: TransformAdapter) -> None:
