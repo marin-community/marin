@@ -1,8 +1,8 @@
 import dataclasses
+import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional
-import re
+from typing import Any
 
 from marin.core.conversation import OpenAIChatMessage
 
@@ -52,21 +52,22 @@ class InputDatasetFormat(str, Enum):
     INSTRUCT_MSG_RESPONSE: str = "instruct_msg_response"
 
 
-def _replace_special_keys(string: Optional[str], special_keys_mapping: Dict[str, str]) -> Optional[str]:
+def _replace_special_keys(string: str | None, special_keys_mapping: dict[str, str]) -> str | None:
     if (not special_keys_mapping) or (string is None):
         return string
-    pattern = '|'.join(map(re.escape, special_keys_mapping.keys()))
+    pattern = "|".join(map(re.escape, special_keys_mapping.keys()))
     return re.sub(pattern, lambda m: special_keys_mapping[m.group(0)], string)
 
+
 def transform_instruction_response(
-        row: Dict[str, Dict[str, str]],
-        instruction_column: str,
-        response_column: str,
-        filter_on_key: Optional[str],
-        content_key: str,
-        special_keys_mapping: Dict[str, str],
-    ) -> Optional[List[OpenAIChatMessage]]:
-    messages: List[OpenAIChatMessage] = []
+    row: dict[str, dict[str, str]],
+    instruction_column: str,
+    response_column: str,
+    filter_on_key: str | None,
+    content_key: str,
+    special_keys_mapping: dict[str, str] = {},
+) -> list[OpenAIChatMessage] | None:
+    messages: list[OpenAIChatMessage] = []
     instruction = row[instruction_column]
     response = row[response_column]
     # Check data
@@ -89,18 +90,19 @@ def transform_instruction_response(
     messages.append(OpenAIChatMessage(role="assistant", content=response))
     return messages
 
+
 def transform_single_column_multi_turn(
-        row: Dict[str, List[str]],
-        conversation_column: str,
-        role_key: str,
-        user_value: str,
-        assistant_value: str,
-        system_value: str,
-        content_key: str,
-        special_keys_mapping: Dict[str, str],
-    ) -> List[OpenAIChatMessage]:
-    messages: List[OpenAIChatMessage] = []
-    role_to_openai_role: Dict[str, str] = {
+    row: dict[str, list[str]],
+    conversation_column: str,
+    role_key: str,
+    user_value: str,
+    assistant_value: str,
+    system_value: str,
+    content_key: str,
+    special_keys_mapping: dict[str, str] = {},
+) -> list[OpenAIChatMessage]:
+    messages: list[OpenAIChatMessage] = []
+    role_to_openai_role: dict[str, str] = {
         user_value: "user",
         assistant_value: "assistant",
         system_value: "system",
@@ -116,14 +118,15 @@ def transform_single_column_multi_turn(
         messages.append(OpenAIChatMessage(role=openai_role, content=this_content))
     return messages
 
+
 def transform_instruct_column_response(
-        row: Dict[str, Dict[str, str]],
-        instruction_column: str,
-        response_column: str,
-        content_key: str,
-        special_keys_mapping: Dict[str, str],
-    ) -> List[OpenAIChatMessage]:
-    messages: List[OpenAIChatMessage] = []
+    row: dict[str, dict[str, str]],
+    instruction_column: str,
+    response_column: str,
+    content_key: str,
+    special_keys_mapping: dict[str, str] = {},
+) -> list[OpenAIChatMessage]:
+    messages: list[OpenAIChatMessage] = []
     instruction = row[instruction_column]
     responses = row[response_column]
 
@@ -138,15 +141,16 @@ def transform_instruct_column_response(
     messages.append(OpenAIChatMessage(role="assistant", content=response_content))
     return messages
 
+
 def transform_instruct_msg_response(
-        row: Dict[str, Dict[str, str]],
-        instruction_column: str,
-        response_column: str,
-        role_key: str,
-        content_key: str,
-        special_keys_mapping: Dict[str, str],
-    ) -> Optional[List[OpenAIChatMessage]]:
-    messages: List[OpenAIChatMessage] = []  # Initialize
+    row: dict[str, dict[str, str]],
+    instruction_column: str,
+    response_column: str,
+    role_key: str,
+    content_key: str,
+    special_keys_mapping: dict[str, str] = {},
+) -> list[OpenAIChatMessage] | None:
+    messages: list[OpenAIChatMessage] = []  # Initialize
     # Get data
     instruction = row[instruction_column]  # List of dict
     responses = row[response_column]  # Single string
@@ -165,7 +169,8 @@ def transform_instruct_msg_response(
         messages.append(OpenAIChatMessage(role="user", content=instruction_content))
         messages.append(OpenAIChatMessage(role="assistant", content=responses))
         return messages
-    
+
+
 @dataclass
 class TransformAdapter:
     source: str
@@ -208,7 +213,7 @@ class TransformAdapter:
                 self.response_column,
                 self.filter_on_key,
                 self.content_key,
-                self.special_keys_mapping,
+                special_keys_mapping=self.special_keys_mapping,
             )
         elif self.dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN:
             return transform_single_column_multi_turn(
@@ -219,7 +224,7 @@ class TransformAdapter:
                 self.assistant_value,
                 self.system_value,
                 self.content_key,
-                self.special_keys_mapping,
+                special_keys_mapping=self.special_keys_mapping,
             )
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE:
             return transform_instruct_column_response(
@@ -227,7 +232,7 @@ class TransformAdapter:
                 self.instruction_column,
                 self.response_column,
                 self.content_key,
-                self.special_keys_mapping,
+                special_keys_mapping=self.special_keys_mapping,
             )
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_MSG_RESPONSE:
             return transform_instruct_msg_response(
@@ -236,7 +241,7 @@ class TransformAdapter:
                 self.response_column,
                 self.role_key,
                 self.content_key,
-                self.special_keys_mapping,
+                special_keys_mapping=self.special_keys_mapping,
             )
         else:
             raise ValueError(f"Invalid dataset format: {self.dataset_format}")
@@ -245,7 +250,7 @@ class TransformAdapter:
         return dataclasses.replace(self)
 
 
-transform_templates: Dict[str, TransformAdapter] = {}
+transform_templates: dict[str, TransformAdapter] = {}
 
 
 def register_adapter(adapter: TransformAdapter) -> None:
