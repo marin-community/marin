@@ -20,6 +20,9 @@ muon_config = MuonConfig(
     learning_rate=2e-3,
     weight_decay=0.1,
     momentum=0.98,
+    # Keep wsd
+    lr_schedule="linear",
+    decay=0.4,
 )
 
 llama_32b_warmstart_train = dataclasses.replace(
