@@ -10,6 +10,7 @@ from experiments.defaults import default_train
 from experiments.llama import llama_32b
 from experiments.tootsie.exp1295_32b import llama_32b_tootsie, llama_32b_train_config, nemotron_mix
 from marin.execution import executor_main
+from marin.resources import TpuPodConfig
 
 warmstart_checkpoint = llama_32b_tootsie.cd("checkpoints/step-77096/").nonblocking()
 
@@ -22,15 +23,19 @@ muon_config = MuonConfig(
     momentum=0.98,
 )
 
-llama_32b_multislice_train = dataclasses.replace(
-    llama_32b_train_config, initialize_from_checkpoint_path=warmstart_checkpoint, optimizer_config=muon_config
+llama_32b_warmstart_train = dataclasses.replace(
+    llama_32b_train_config,
+    initialize_from_checkpoint_path=warmstart_checkpoint,
+    optimizer_config=muon_config,
+    resources=TpuPodConfig("v4-2048", 1),
+    reset_data_loader_on_init=False,
 )
 
 llama_32b_muon = default_train(
     name="marin-32b-muon-4",
     tokenized=nemotron_mix,
     model_config=llama_32b,
-    train_config=llama_32b_multislice_train,
+    train_config=llama_32b_warmstart_train,
     tags=["llama", "32b", "ema", "exp859", "tootsie", "muon"],
     eval_harness_tasks=[],
 ).with_output_path("checkpoints/marin-32b-muon-4")
