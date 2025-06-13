@@ -9,6 +9,8 @@ How to add a new instruction dataset:
 How to retrieve an instruction dataset:
 1. Use the function `get_instruction_dataset` with the HF repo id.
 
+[TBI] = To be implemented
+
 Current datasets:
 1. GeneralReasoning/GeneralThought-195K-modelanswer
 2. GeneralReasoning/GeneralThought-195K-modelreasoning
@@ -27,6 +29,12 @@ Current datasets:
 15. PrimeIntellect/verifiable-math-problems
 16. sherryy/tulu-3-sft-personas-instruction-following-expanded
 17. facebook/natural_reasoning
+18. open-thoughts/OpenThoughts3-1.2M
+19. nvidia/Llama-Nemotron-Post-Training-Dataset-v1
+20. [TBI] HuggingFaceH4/no_robots
+21. [TBI] m-a-p/CodeFeedback-Filtered-Instruction
+22. [TBI] nvidia/Daring-Anteater
+23. [TBI] HuggingFaceH4/ultrafeedback_binarized
 """
 
 import hashlib
@@ -67,8 +75,7 @@ class InstructionDatasetConfig:
         subsets: Data subsets (from HuggingFace config) to use. Empty list indicates to use all/default subset(s).
         splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
                 Defaults to `train` only
-        legacy: True uses the Marin function as dataloader. False uses the `datasets` package as dataloader.
-        adapter_name: Nmae of the adapter. None indicates that the adapater name is the same as the `hf_dataset_id`.
+        adapter_name: Name of the adapter. None indicates that the adapater name is the same as the `hf_dataset_id`.
     """
 
     hf_dataset_id: str
@@ -78,7 +85,6 @@ class InstructionDatasetConfig:
     filetype: str
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
-    legacy: bool = False
     adapter_name: str = None
 
 
@@ -213,6 +219,23 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         filetype="jsonl",  # The dataset appears to be in parquet format
         splits=["train"],  # Default to train split
         adapter_name="GeneralReasoning/GeneralThought-195K-modelreasoning",
+    ),
+    "open-thoughts/OpenThoughts3-1.2M": InstructionDatasetConfig(
+        hf_dataset_id="open-thoughts/OpenThoughts3-1.2M",
+        revision="61bcf9d",  # The revision hash shown in the image
+        wait_for_completion=True,
+        metadata_columns=["difficulty", "source", "domain"],
+        filetype="parquet",
+    ),
+    "nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT": InstructionDatasetConfig(
+        hf_dataset_id="nvidia/Llama-Nemotron-Post-Training-Dataset",
+        revision="ab2a40d",
+        wait_for_completion=True,
+        filetype="jsonl",
+        splits=[], # Empty to use all 5 splits
+        subsets=["SFT"],
+        metadata_columns=["category", "license", "generator"],
+        adapter_name="nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
     ),
 }
 
