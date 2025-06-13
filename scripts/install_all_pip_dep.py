@@ -59,7 +59,8 @@ def install_all_pip_dependencies(pip_dep: List[str]):
                 "--extra-index-url",
                 "https://download.pytorch.org/whl/cpu",
                 "-f",
-                "https://storage.googleapis.com/jax-releases/libtpu_releases.html" "--index-strategy",
+                "https://storage.googleapis.com/jax-releases/libtpu_releases.html",
+                "--index-strategy",
                 "unsafe-best-match",
                 "--prerelease=allow",
             ]
