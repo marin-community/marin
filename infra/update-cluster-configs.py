@@ -9,8 +9,6 @@ this_path = os.path.dirname(os.path.abspath(__file__))
 cluster_template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 vllm_template_path = os.path.join(this_path, "marin-vllm-template.yaml")
 
-# LAtest tahs ABh:  latest 4a47ffc0 20250305
-
 configs = {
     "marin-us-central2": {
         "NAME": "marin-us-central2",
@@ -44,15 +42,6 @@ configs = {
     },
     "marin-big-run": {
         "NAME": "marin-big-run",
-        "REGION": "us-central2",
-        "ZONE": "us-central2-b",
-        "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": "18ee8d6a",
-        "tpu_generation": "v4",
-        "min_workers": 0,
-    },
-    "marin-big-run-2": {
-        "NAME": "marin-big-run-2",
         "REGION": "us-central2",
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",

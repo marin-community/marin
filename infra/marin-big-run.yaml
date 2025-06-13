@@ -36,18 +36,10 @@ docker:
       - "/tmp:/tmp"
       # this lets the worker run docker commands and have them run as sibling containers
       - -v "/var/run/docker.sock:/var/run/docker.sock"
-      - -e TPU_MIN_LOG_LEVEL=3
-      - -e TPU_STDERR_LOG_LEVEL=3
-      - -e GLOG_minloglevel=2
-      - -e GLOG_v=0
     head_run_options:
       - --privileged
       - -v "/tmp:/tmp"
       - --ulimit nofile=1048576:1048576
-      - -e TPU_MIN_LOG_LEVEL=3
-      - -e TPU_STDERR_LOG_LEVEL=3
-      - -e GLOG_minloglevel=2
-      - -e GLOG_v=0
 
 
 initialization_commands:
