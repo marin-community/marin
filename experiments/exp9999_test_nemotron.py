@@ -15,10 +15,10 @@ def main():
 
 
 if __name__ == "__main__":
+    dataset_names = ["open-thoughts/OpenThoughts3-1.2M"]
     all_steps = []
-    for config in [
-        "open-thoughts/OpenThoughts3-1.2M",
-    ]:
+    for dataset_name in dataset_names:
+        config = INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_name]
         downloaded_dataset = download_dataset_step(config)
         all_steps.append(downloaded_dataset)
         transformed_dataset = transform_dataset_step(config, downloaded_dataset)
