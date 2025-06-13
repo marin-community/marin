@@ -81,7 +81,7 @@ def transform_instruction_response(
                 best_metric = completion[filter_on_key]
                 best_completion = completion
         response = best_completion[content_key]
-    # Replace special keys    
+    # Replace special keys
     instruction = _replace_special_keys(instruction, special_keys_mapping)
     response = _replace_special_keys(response, special_keys_mapping)
     # Save
@@ -107,10 +107,13 @@ def transform_single_column_multi_turn(
     }
     conversation = row[conversation_column]
     for conv in conversation:
-        role = role_to_openai_role[conv[role_key]]
+        this_role, this_content = conv[role_key], conv[content_key]
+        openai_role = role_to_openai_role[this_role]
         # Replace special keys
-        conv[content_key] = _replace_special_keys(conv[content_key], special_keys_mapping)
-        messages.append(OpenAIChatMessage(role=role, content=conv[content_key]))
+        this_content = _replace_special_keys(this_content, special_keys_mapping)
+        # if this_content is None:
+        #     raise ValueError(f"Content is None, original conv: {conv}")
+        messages.append(OpenAIChatMessage(role=openai_role, content=this_content))
     return messages
 
 def transform_instruct_column_response(
@@ -205,6 +208,7 @@ class TransformAdapter:
                 self.response_column,
                 self.filter_on_key,
                 self.content_key,
+                self.special_keys_mapping,
             )
         elif self.dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN:
             return transform_single_column_multi_turn(
@@ -215,6 +219,7 @@ class TransformAdapter:
                 self.assistant_value,
                 self.system_value,
                 self.content_key,
+                self.special_keys_mapping,
             )
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE:
             return transform_instruct_column_response(
@@ -222,6 +227,7 @@ class TransformAdapter:
                 self.instruction_column,
                 self.response_column,
                 self.content_key,
+                self.special_keys_mapping,
             )
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_MSG_RESPONSE:
             return transform_instruct_msg_response(
@@ -230,6 +236,7 @@ class TransformAdapter:
                 self.response_column,
                 self.role_key,
                 self.content_key,
+                self.special_keys_mapping,
             )
         else:
             raise ValueError(f"Invalid dataset format: {self.dataset_format}")
