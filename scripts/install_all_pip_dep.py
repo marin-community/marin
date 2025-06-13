@@ -1,7 +1,6 @@
 """
 This script reads pyproject.toml and installs all dependencies in the [project.dependencies] section and
 all dependencies in [project.optional-dependencies.*] sections.
-This is majorly needed for unit testing
 """
 
 import logging
@@ -59,7 +58,8 @@ def install_all_pip_dependencies(pip_dep: List[str]):
                 tempf.name,
                 "--extra-index-url",
                 "https://download.pytorch.org/whl/cpu",
-                "--index-strategy",
+                "-f",
+                "https://storage.googleapis.com/jax-releases/libtpu_releases.html" "--index-strategy",
                 "unsafe-best-match",
                 "--prerelease=allow",
             ]
