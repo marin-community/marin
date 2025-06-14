@@ -214,6 +214,16 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         splits=["train"],  # Default to train split
         adapter_name="GeneralReasoning/GeneralThought-195K-modelreasoning",
     ),
+    "nvidia/Llama-Nemotron-Post-Training-Dataset-v1": InstructionDatasetConfig(
+        hf_dataset_id="nvidia/Llama-Nemotron-Post-Training-Dataset-v1",
+        revision="8e1e47a",
+        wait_for_completion=True,
+        metadata_columns=["category", "reasoning", "generator", "license"],
+        filetype="jsonl",
+        subsets=["SFT"],
+        splits=["math", "safety"],
+        adapter_name="nvidia/Llama-Nemotron-Post-Training-Dataset-v1",
+    ),
 }
 
 
