@@ -176,7 +176,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         # doesn't need to be a TPU because ray insists that all VMs are in the same region
         ray.get(ray.remote(_doublecheck_paths).options(runtime_env=hw_config.runtime_env, num_cpus=0.1).remote(config))
 
-    @ray.remote(**hw_config.as_remote_kwargs())
+    @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1)
     def train_lm_task():
         train_lm.main(train_config)
 
@@ -303,6 +303,11 @@ def _add_run_env_variables(env: dict):
 
     if "TOKENIZERS_PARALLELISM" not in env:
         env["TOKENIZERS_PARALLELISM"] = "false"
+
+    if "TPU_MIN_LOG_LEVEL" not in env:
+        env["TPU_MIN_LOG_LEVEL"] = "2"
+    if "TPU_STDERR_LOG_LEVEL" not in env:
+        env["TPU_STDERR_LOG_LEVEL"] = "2"
 
     return env
 
