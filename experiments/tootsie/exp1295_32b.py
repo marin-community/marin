@@ -67,6 +67,7 @@ llama_32b_train_config = SimpleTrainConfig(
         warmup=0.01,
         decay=0.4,
         cycle_length=None,
+        # this was inadvertently off from about 74k to 80k
         clip_update_norm=ClipUpdateNormConfig(rolling_interval_length=128, sigma_factor=2.0),
     ),
 )
