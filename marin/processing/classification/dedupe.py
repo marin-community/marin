@@ -3,6 +3,7 @@ import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from enum import Enum
 
 import draccus
 import fsspec
@@ -11,6 +12,12 @@ from tqdm import tqdm
 
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_mkdirs, fsspec_rm, rebase_file_path
+
+
+class DedupMode(str, Enum):
+    DECONTAMINATE = "decontaminate"
+    DEDUPLICATE = "deduplicate"
+    TRAIN_TEST_OVERLAP = "train_test_overlap"
 
 
 @dataclass
@@ -57,8 +64,12 @@ class DedupeConfig:
         false_positive_rate (float): false positive rate for Bloom filter
         ngram (NGramConfig): settings for ngram matching including length, match threshold, and stride
         processes (int): number of processes to use for deduplication
-        decontaminate (bool): run in decontamination mode (don't add non benchmark text to Bloom filter)
-        decontaminate_path (str): path of decontamination set text
+        # mode switch between decontamination (build filter) and regular deduplication
+        mode: DedupMode = DedupMode.DEDUPLICATE
+        # source to seed bloom filter when decontaminating
+        decontaminate_source: str | None = None
+        # path to write or read the bloom filter file
+        bloom_filter_path: str = "deduper_bloom_filter.bin"
     """
 
     input_path: str
@@ -71,8 +82,12 @@ class DedupeConfig:
     false_positive_rate: float = 0.001
     ngram: NGramConfig | None = None  # use ngram matching if ngram settings provided
     processes: int = 1
-    decontaminate: bool = False
-    decontaminate_path: str | None = None
+    # mode switch between decontamination (build filter) and regular deduplication
+    mode: DedupMode = DedupMode.DEDUPLICATE
+    # source to seed bloom filter when decontaminating
+    decontaminate_source: str | None = None
+    # path to write or read the bloom filter file
+    bloom_filter_path: str = "deduper_bloom_filter.bin"
 
 
 def copy_files_in(input_path, local_base_dir):
@@ -388,102 +403,15 @@ def estimate_total_ngrams_fast(local_base_dir, ngram, sample_lines: int = 1000):
     return int(avg_ngrams_per_line * total_lines)
 
 
-@ray.remote
-def dolma_dedup(
-    input_path,
-    output_path,
-    attribute_name,
-    min_length,
-    min_words,
-    bloom_filter_size,
-    estimated_doc_count,
-    false_positive_rate,
-    ngram,
-    processes,
-    decomtaminate_dir,
-    decontaminate,
-):
-    # require ngram config for decontamination
-    if decontaminate and ngram is None:
-        raise ValueError("ngram configuration is required in decontamination mode")
+# Helpers for the two workflows
+def _run_decontamination(config: DedupeConfig):
     with tempfile.TemporaryDirectory(dir="/dev/shm") as tmpdir:
-        if decontaminate:
-            # First we copy the files to the temporary directory to get bloom filter
-            copy_files_in(decomtaminate_dir, tmpdir)
-            do_dedup(
-                tmpdir,
-                attribute_name,
-                min_length,
-                min_words,
-                bloom_filter_size,
-                # estimated doc count will be computed in do_dedup
-                0,
-                false_positive_rate,
-                ngram,
-                processes,
-                read_only=False,
-                bloom_filter_file="decontaminated_bloom_filter.bin",
-            )
-
-            # Delete all JSONL files in the temporary directory since we have bloom filter
-            delete_jsonl_files(tmpdir)
-            # Then copy files of interest and apply bloom filter read only
-            copy_files_in(input_path, tmpdir)
-            do_dedup(
-                tmpdir,
-                attribute_name,
-                min_length,
-                min_words,
-                bloom_filter_size,
-                0,
-                false_positive_rate,
-                ngram,
-                processes,
-                read_only=True,
-                bloom_filter_file="decontaminated_bloom_filter.bin",
-            )
-        else:
-            copy_files_in(input_path, tmpdir)
-            do_dedup(
-                tmpdir,
-                attribute_name,
-                min_length,
-                min_words,
-                bloom_filter_size,
-                estimated_doc_count,
-                false_positive_rate,
-                ngram,
-                processes,
-            )
-
-        # copy files out stays the same.
-        # Ensure output_path doesn't end with a slash
-        output_path = output_path.rstrip("/")
-
-        local_attribute_dir = os.path.join(tmpdir, "attributes", attribute_name)
-
-        # Get all .jsonl.gz files in the local attribute directory
-        glob_path = f"{local_attribute_dir}/**/*.jsonl.gz"
-        local_files = fsspec_glob(glob_path)
-        for local_file in tqdm(local_files, desc="Uploading files"):
-            output_file = rebase_file_path(local_attribute_dir, local_file, output_path)
-            copy_file_out(local_file, output_file)
-
-    return "Deduplication process completed"
-
-
-@ray.remote(num_cpus=1, memory=1024 * 1024 * 1024 * 2)
-def dedupe(config: DedupeConfig):
-    # require directory if decontaminate is set
-    if config.decontaminate and config.decontaminate_path is None:
-        raise ValueError("decontaminate_path is required if decontaminate is set")
-
-    input_path = config.input_path
-    output_path = config.output_path
-    result = ray.get(
-        dolma_dedup.remote(
-            input_path,
-            output_path,
+        if not config.decontaminate_source:
+            raise ValueError("decontaminate_source is required in DECONTAMINATE mode")
+        # 1) build the filter
+        copy_files_in(config.decontaminate_source, tmpdir)
+        do_dedup(
+            tmpdir,
             config.attribute_name,
             config.min_length,
             config.min_words,
@@ -492,11 +420,115 @@ def dedupe(config: DedupeConfig):
             config.false_positive_rate,
             config.ngram,
             config.processes,
-            config.decontaminate_path,
-            config.decontaminate,
+            read_only=False,
+            bloom_filter_file=config.bloom_filter_path,
         )
-    )
-    print(result)
+        # 2) clear out JSONLs
+        delete_jsonl_files(tmpdir)
+        # 3) apply filter to real input
+        copy_files_in(config.input_path, tmpdir)
+        do_dedup(
+            tmpdir,
+            config.attribute_name,
+            config.min_length,
+            config.min_words,
+            config.bloom_filter_size,
+            config.estimated_doc_count,
+            config.false_positive_rate,
+            config.ngram,
+            config.processes,
+            read_only=True,
+            bloom_filter_file=config.bloom_filter_path,
+        )
+        # 4) write results
+        copy_files_out(tmpdir, config.output_path, config.attribute_name)
+
+
+def _run_deduplication(config: DedupeConfig):
+    with tempfile.TemporaryDirectory(dir="/dev/shm") as tmpdir:
+        # run standard deduplication
+        copy_files_in(config.input_path, tmpdir)
+        do_dedup(
+            tmpdir,
+            config.attribute_name,
+            config.min_length,
+            config.min_words,
+            config.bloom_filter_size,
+            config.estimated_doc_count,
+            config.false_positive_rate,
+            config.ngram,
+            config.processes,
+            read_only=False,
+            bloom_filter_file=config.bloom_filter_path,
+        )
+        copy_files_out(tmpdir, config.output_path, config.attribute_name)
+
+
+def _run_train_test_overlap(config: DedupeConfig):
+    with tempfile.TemporaryDirectory(dir="/dev/shm") as tmpdir:
+        if not config.decontaminate_source:
+            raise ValueError("decontaminate_source is required in TRAIN_TEST_OVERLAP mode")
+        # 1) split the seed file into shards
+        doc_dir = os.path.join(tmpdir, "documents")
+        fsspec_mkdirs(doc_dir)
+        writers = []
+        for i in range(config.processes):
+            shard_path = os.path.join(doc_dir, f"shard_{i}.jsonl.gz")
+            # open a real file handle for writing
+            writers.append(fsspec.open(shard_path, "wt", compression="gzip").open())
+        with fsspec.open(config.decontaminate_source, "rt", compression="infer") as fr:
+            for idx, line in enumerate(fr):
+                writers[idx % config.processes].write(line)
+        for w in writers:
+            w.close()
+        # 2) build the filter
+        do_dedup(
+            tmpdir,
+            config.attribute_name,
+            config.min_length,
+            config.min_words,
+            config.bloom_filter_size,
+            config.estimated_doc_count,
+            config.false_positive_rate,
+            config.ngram,
+            config.processes,
+            read_only=False,
+            bloom_filter_file=config.bloom_filter_path,
+        )
+        # 3) clear out JSONLs
+        delete_jsonl_files(tmpdir)
+        # 4) apply filter to real input
+        copy_files_in(config.input_path, tmpdir)
+        do_dedup(
+            tmpdir,
+            config.attribute_name,
+            config.min_length,
+            config.min_words,
+            config.bloom_filter_size,
+            config.estimated_doc_count,
+            config.false_positive_rate,
+            config.ngram,
+            config.processes,
+            read_only=True,
+            bloom_filter_file=config.bloom_filter_path,
+        )
+        # 5) write results
+        copy_files_out(tmpdir, config.output_path, config.attribute_name)
+
+
+@ray.remote(num_cpus=32, memory=1024 * 1024 * 1024 * 16)
+def dedupe(config: DedupeConfig):
+    """Top-level Ray task: dispatch between decontamination and deduplication workflows."""
+    if config.mode == DedupMode.DECONTAMINATE:
+        _run_decontamination(config)
+
+    elif config.mode == DedupMode.DEDUPLICATE:
+        _run_deduplication(config)
+    elif config.mode == DedupMode.TRAIN_TEST_OVERLAP:
+        _run_train_test_overlap(config)
+
+    else:
+        raise ValueError(f"Unknown mode {config.mode}")
 
 
 @draccus.wrap()

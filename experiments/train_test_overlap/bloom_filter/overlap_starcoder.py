@@ -1,7 +1,7 @@
 import logging
 
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
+from marin.processing.classification.dedupe import DedupeConfig, NGramConfig, dedupe
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -9,22 +9,22 @@ logger = logging.getLogger(__name__)
 
 # Define the dedupe step that consumes the converted StarCoder JSONL
 starcoder_dedupe = ExecutorStep(
-    name="train_test_overlap/dolma/mmlu_overlap_debug_rollback",
+    name="train_test_overlap/dolma/starcoder_overlap",
     fn=dedupe,
     config=DedupeConfig(
-        input_path="gs://marin-us-central2/decontamination/mmlu-9fbdd5/cais/",
+        input_path="gs://marin-us-central2/dolma/mmlu_dev_set/",
         # input_path="gs://marin-us-central2/documents/starcoderdata-720c8c/9fc30b5/ada/",
         output_path=this_output_path(),
-        attribute_name="mmlu_overlap",
-        false_positive_rate=0.0001,
+        attribute_name="starcoder_overlap",
+        false_positive_rate=0.00001,
         ngram=NGramConfig(
-            ngram_length=15,
-            overlap_threshold=1e-6,
+            ngram_length=13,
+            overlap_threshold=0.9,
             stride=0,
         ),
-        processes=16,
-        mode=DedupMode.TRAIN_TEST_OVERLAP,
-        decontaminate_source="gs://marin-us-central2/documents/finemath-3plus-8f233cf/train-00000-of-00128.jsonl.zst",
+        processes=4,
+        decontaminate=True,
+        decontaminate_path="gs://marin-us-central2/documents/starcoderdata-720c8c/agda",
         # decontaminate_path="gs://marin-us-central2/dolma/mmlu_dev_set/",
     ),
 )

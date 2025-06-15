@@ -3,7 +3,7 @@ import os
 
 from experiments.train_test_overlap.format.convert_finemath3plus_parquet2jsonl import finemath3plus_to_jsonl
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
+from marin.processing.classification.dedupe import DedupeConfig, NGramConfig, dedupe
 from marin.utils import fsspec_glob
 
 # Configure logging
@@ -44,13 +44,13 @@ for shard_path in shard_paths:
         attribute_name="mmlu_overlap",
         false_positive_rate=0.0001,
         ngram=NGramConfig(
-            ngram_length=15,
+            ngram_length=[10, 15],
             overlap_threshold=1e-6,
             stride=0,
         ),
-        processes=16,
-        mode=DedupMode.TRAIN_TEST_OVERLAP,
-        decontaminate_source=shard_path,
+        processes=8,
+        decontaminate=True,
+        decontaminate_path=shard_path,
     )
     steps.append(ExecutorStep(name=step_name, fn=dedupe, config=cfg))
 
