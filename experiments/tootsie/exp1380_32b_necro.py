@@ -46,13 +46,13 @@ llama_32b_warmstart_train = dataclasses.replace(
 )
 
 marin_32b_necro = default_train(
-    name="marin-32b-necro",
+    name="marin-32b-necro-2",
     tokenized=nemotron_mix,
     model_config=llama_32b_remat,
     train_config=llama_32b_warmstart_train,
     tags=["llama", "32b", "ema", "exp859", "exp1380", "tootsie", "necro"],
     eval_harness_tasks=[],
-).with_output_path("checkpoints/marin-32b-necro")
+).with_output_path("checkpoints/marin-32b-necro-2")
 
 
 if __name__ == "__main__":
