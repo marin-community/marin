@@ -171,12 +171,17 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
         relative_path = os.path.relpath(blob.name, gcs_directory_path)
         local_file_path = os.path.join(local_directory_path, relative_path)
 
-        # Skip if file already exists
+        # Skip if file already exists locally and has the same size
         if os.path.exists(local_file_path):
-            continue
-
-        # Create local directories if they do not exist
-        os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+            local_size = os.path.getsize(local_file_path)
+            if local_size == blob.size:
+                logger.info(f"Skipping {blob.name} - already exists with same size")
+                continue
+            else:
+                logger.info(f"File {blob.name} exists but size differs, downloading again")
+        else:
+            # Create local directories if they do not exist
+            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
 
         # Download the blob to the local file path
         blob.download_to_filename(local_file_path)
@@ -215,11 +220,12 @@ def get_shard_dir(dir_name: os.PathLike, subset_name: str | None, split: str) ->
     return os.path.join(dir_name, subset_name, split)
 
 
-@ray.remote(num_cpus=1, memory=1 * 1024 * 1024 * 1024) # 1GB memory limit
-@draccus.wrap()
-def transform_and_write_batch(batch: list[dict], shard_idx: int, output_path: str, cfg: TransformSFTDatasetConfig) -> None:
+@ray.remote(num_cpus=1, num_gpus=0)  # No need for GPUs
+def transform_and_write_batch(
+    batch: list[dict], shard_idx: int, output_path: str, cfg: TransformSFTDatasetConfig
+) -> None:
     """Write a batch of transformed data to a compressed JSONL file.
-    
+
     Args:
         batch: List of data rows to transform and write
         shard_idx: Index of the current shard
@@ -234,7 +240,6 @@ def transform_and_write_batch(batch: list[dict], shard_idx: int, output_path: st
             f.write(f"{json.dumps(transformed_row)}\n")
 
 
-@ray.remote(memory=20 * 1024 * 1024 * 1024)  # 20GB memory limit
 def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     """Shards the dataset; copies datafiles from GCP to instance, loads
     data using the `datasets` package, and write shards to target directory
@@ -281,7 +286,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
             # b. Create GCP target directory
             subset_output_path = get_shard_dir(cfg.output_path, subset, split)
             output_path = create_shard_output_directory(subset_output_path)
-            
+
             # c. Process and write in batches
             batch = []
             shard_idx = 0
@@ -294,7 +299,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
                         # Queue the batch for writing
                         write_ops.append(
                             transform_and_write_batch.remote(
-                                batch.copy(), # need .copy() or else ray will fail
+                                batch.copy(),  # need .copy() or else ray will fail
                                 shard_idx,
                                 output_path,
                                 cfg,
@@ -311,7 +316,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
             if batch:
                 write_ops.append(
                     transform_and_write_batch.remote(
-                        batch.copy(), # need .copy() or else ray will fail
+                        batch.copy(),  # need .copy() or else ray will fail
                         shard_idx,
                         output_path,
                         cfg,
@@ -330,4 +335,4 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
 
 @draccus.wrap()
 def main(cfg: TransformSFTDatasetConfig):
-    ray.get(transform_hf_dataset.remote(cfg))
+    transform_hf_dataset(cfg)
