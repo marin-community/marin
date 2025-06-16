@@ -1,3 +1,10 @@
+experiments/data_efficiency/cache/*
+experiments/data_efficiency/plots/*
+experiments/two_stage/cache/*
+experiments/two_stage/plots/*
+experiments/curriculum/cache/*
+experiments/curriculum/plots/*
+
 tests/snapshots/outputs
 tests/snapshots/diffs
 
