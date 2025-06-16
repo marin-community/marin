@@ -1,18 +1,18 @@
 from instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
     download_dataset_step,
-    transform_dataset_step,
     get_instruction_dataset,
+    transform_dataset_step,
 )
-
 from levanter.data.text import ChatLmDatasetFormat
+
 from experiments.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
-
 from marin.execution.executor import (
-    executor_main,
     ExecutorStep,
+    executor_main,
 )
+
 
 def create_tokenization_step(dataset_name: str) -> ExecutorStep:
     """
@@ -36,13 +36,14 @@ def create_tokenization_step(dataset_name: str) -> ExecutorStep:
         format=ChatLmDatasetFormat(),
     )
 
+
 def main():
     return
 
 
 if __name__ == "__main__":
     dataset_names = [
-        #"open-thoughts/OpenThoughts3-1.2M",
+        # "open-thoughts/OpenThoughts3-1.2M",
         "nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
     ]
     all_steps = []
