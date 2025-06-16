@@ -65,7 +65,7 @@ def transform_instruction_response(
     response_column: str,
     filter_on_key: str | None,
     content_key: str,
-    special_keys_mapping: dict[str, str] = {},
+    special_keys_mapping: dict[str, str] = dataclasses.field(default_factory=dict),
 ) -> list[OpenAIChatMessage] | None:
     messages: list[OpenAIChatMessage] = []
     instruction = row[instruction_column]
@@ -99,7 +99,7 @@ def transform_single_column_multi_turn(
     assistant_value: str,
     system_value: str,
     content_key: str,
-    special_keys_mapping: dict[str, str] = {},
+    special_keys_mapping: dict[str, str] = dataclasses.field(default_factory=dict),
 ) -> list[OpenAIChatMessage]:
     messages: list[OpenAIChatMessage] = []
     role_to_openai_role: dict[str, str] = {
@@ -124,7 +124,7 @@ def transform_instruct_column_response(
     instruction_column: str,
     response_column: str,
     content_key: str,
-    special_keys_mapping: dict[str, str] = {},
+    special_keys_mapping: dict[str, str] = dataclasses.field(default_factory=dict),
 ) -> list[OpenAIChatMessage]:
     messages: list[OpenAIChatMessage] = []
     instruction = row[instruction_column]
@@ -148,7 +148,7 @@ def transform_instruct_msg_response(
     response_column: str,
     role_key: str,
     content_key: str,
-    special_keys_mapping: dict[str, str] = {},
+    special_keys_mapping: dict[str, str] = dataclasses.field(default_factory=dict),
 ) -> list[OpenAIChatMessage] | None:
     messages: list[OpenAIChatMessage] = []  # Initialize
     # Get data
