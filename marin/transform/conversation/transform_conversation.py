@@ -215,7 +215,8 @@ def get_shard_dir(dir_name: os.PathLike, subset_name: str | None, split: str) ->
     return os.path.join(dir_name, subset_name, split)
 
 
-@ray.remote(num_cpus=1)
+@ray.remote(num_cpus=1, memory=1 * 1024 * 1024 * 1024) # 1GB memory limit
+@draccus.wrap()
 def transform_and_write_batch(batch: list[dict], shard_idx: int, output_path: str, cfg: TransformSFTDatasetConfig) -> None:
     """Write a batch of transformed data to a compressed JSONL file.
     
@@ -250,6 +251,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
         subsets = [x for x in datasets.get_dataset_infos(path=local_data_dir)]
 
     # 3. For each subset...
+    write_ops = []
     for subset in subsets:
         # Validate splits
         split_values = [x for x in datasets.get_dataset_infos(path=local_data_dir)[subset].splits.values()]
@@ -283,7 +285,6 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
             # c. Process and write in batches
             batch = []
             shard_idx = 0
-            write_ops = []
 
             try:
                 for row in dataset:
@@ -291,7 +292,14 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
                     # When batch reaches shard size, process and write it
                     if len(batch) >= cfg.shard_size:
                         # Queue the batch for writing
-                        write_ops.append(transform_and_write_batch.remote(batch, shard_idx, output_path, cfg))
+                        write_ops.append(
+                            transform_and_write_batch.remote(
+                                batch.copy(), # need .copy() or else ray will fail
+                                shard_idx,
+                                output_path,
+                                cfg,
+                            )
+                        )
                         # Clear batch and increment shard index
                         batch = []
                         shard_idx += 1
@@ -301,10 +309,17 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
 
             # Write any remaining rows in the final batch
             if batch:
-                write_ops.append(transform_and_write_batch.remote(batch, shard_idx, output_path, cfg))
+                write_ops.append(
+                    transform_and_write_batch.remote(
+                        batch.copy(), # need .copy() or else ray will fail
+                        shard_idx,
+                        output_path,
+                        cfg,
+                    )
+                )
 
-            # Wait for all write operations to complete
-            ray.get(write_ops)
+    # Wait for all write operations to complete
+    ray.get(write_ops)
 
     # 4. Delete local data for others
     if os.path.exists(local_data_dir):
