@@ -1,5 +1,6 @@
 from instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
+    InstructionDatasetConfig,
     download_dataset_step,
     get_instruction_dataset,
     transform_dataset_step,
@@ -14,10 +15,10 @@ import ray
 
 from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
-    InstructionDatasetConfig,
     download_directory_from_gcs,
     create_shard_output_directory,
     get_shard_dir,
+    transform_and_write_batch
 )
 
 from experiments.defaults import default_tokenize
@@ -28,7 +29,6 @@ from marin.execution.executor import (
     output_path_of,
     this_output_path,
     versioned,
-    transform_and_write_batch
 )
 import hashlib
 import logging
@@ -121,27 +121,29 @@ def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
     parsed_url = urlparse(cfg.input_path)
     bucket = parsed_url.netloc
     gcp_path = parsed_url.path.lstrip("/")
-    local_dir = os.path.join("/dev/shm", os.path.basename(gcp_path))
+    local_dir = os.path.join("/tmp", os.path.basename(gcp_path))
 
     # 3. For each subset...
     write_ops = []
     for subset in cfg.subsets:
         for split in cfg.splits:
             try:
-                download_directory_from_gcs(bucket, f"{gcp_path}/{subset}/{split}", local_dir)
+                logger.info(f"Downloading dataset from GCP: {gcp_path}/{subset}/{split}")
+                try:
+                    download_directory_from_gcs(bucket, f"{gcp_path}/{subset}/{split}", local_dir)
+                except Exception as e:
+                    logger.error(f"Error downloading dataset from GCP: {e}. \nRemoving local directory `{local_dir}`")
+                    shutil.rmtree(local_dir)
+                    raise e
 
                 # Get full paths of all jsonl files
                 files = [os.path.join(local_dir, file) for file in os.listdir(local_dir) if file.endswith(".jsonl")]
 
                 for file in files:
                     # b. Create GCP target directory
-                    if len(files) == 1:
-                        subset_output_path = get_shard_dir(cfg.output_path, subset, split)
-                    else:
-                        subset_output_path = get_shard_dir(
-                            cfg.output_path,
-                            subset,
-                            split,
+                    subset_output_path = get_shard_dir(cfg.output_path, subset, split)
+                    if len(files) > 1:
+                        subset_output_path = os.path.join(
                             file.replace(split, "").replace(".jsonl", "").strip('_') #should be v1 or v1.1
                         )
                     output_path = create_shard_output_directory(subset_output_path)
@@ -159,6 +161,16 @@ def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
                                 if "input" not in row or "output" not in row:
                                     logger.error(f"Missing required fields: {row}")
                                     raise ValueError(f"Skipping row - missing required fields: {row}")
+                                    
+                                # Convert input to string if it's a list
+                                if isinstance(row["input"], list):
+                                    row["input"] = "\n".join(str(x) for x in row["input"])
+                                elif not isinstance(row["input"], str):
+                                    row["input"] = str(row["input"])
+                                    
+                                # Ensure output is a string
+                                if not isinstance(row["output"], str):
+                                    row["output"] = str(row["output"])
                                     
                                 # Ensure metadata fields exist
                                 for col in cfg.metadata_columns:
@@ -201,6 +213,7 @@ def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
                             )
             finally:
                 if os.path.exists(local_dir):
+                    logger.info(f"Deleting local directory `{local_dir}`")
                     shutil.rmtree(local_dir)
 
     # Wait for all write operations to complete
