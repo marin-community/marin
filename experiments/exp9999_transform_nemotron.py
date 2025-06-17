@@ -96,7 +96,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
         config=TransformSFTDatasetConfig(
             input_path=download_data_path,
             output_path=this_output_path(),
-            shard_size=versioned(5000),
+            shard_size=versioned(500), # Context is long in nemotron
             metadata_columns=versioned(dataset_cfg.metadata_columns),
             filetype=dataset_cfg.filetype,
             source=dataset_cfg.hf_dataset_id,
@@ -144,6 +144,7 @@ def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
                     subset_output_path = get_shard_dir(cfg.output_path, subset, split)
                     if len(files) > 1:
                         subset_output_path = os.path.join(
+                            subset_output_path,
                             file.replace(split, "").replace(".jsonl", "").strip('_') #should be v1 or v1.1
                         )
                     output_path = create_shard_output_directory(subset_output_path)
