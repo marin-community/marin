@@ -201,14 +201,17 @@ def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike) -> os.PathLike:
         parsed_url = urlparse(input_gcp_path)
         bucket = parsed_url.netloc
         gcp_path = parsed_url.path.lstrip("/")
-        dir_name = os.path.basename(gcp_path)
+        local_dir_path = os.path.join("/dev/shm", os.path.basename(gcp_path))
         # download the repo from GCP path into local directory which is basename of provided path (e.g. mmlu)
-        download_directory_from_gcs(bucket, gcp_path, dir_name)
-        input_path = dir_name
+        try:
+            download_directory_from_gcs(bucket, gcp_path, local_dir_path)
+        except Exception as e:
+            logger.error(f"Error downloading dataset from GCP: {e}. \nRemoving local directory `{local_dir_path}`")
+            shutil.rmtree(local_dir_path)
+            raise e
+        return local_dir_path
     else:
         raise Exception("Input is not a GCP path")
-
-    return input_path
 
 
 def get_shard_dir(dir_name: os.PathLike, subset_name: str | None, split: str) -> os.PathLike:
@@ -242,61 +245,86 @@ def transform_and_write_batch(
 
 def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     """Shards the dataset; copies datafiles from GCP to instance, loads
-    data using the `datasets` package, and write shards to target directory
+    data using the `datasets` package, and write shards to target directory.
+    We now implement checks to ensure that the temporary files are deleted 
+    after the script is done to free up disk space for others.
+
+    Adding some documentation so that others won't attempt the same things.
+    - There is no way to pass in the gs:// path to the `datasets` package in Ray. The main issue is
+      that the `datasets` package always resolve the relative path, which resolves to a weird 
+      /tmp/... path when executed in Ray and the `datasets` package will fail.
+    - This is the main reason why we need to copy the data from GCP to local instance.
+    - However, when we do this, we cannot a-priori know the splits that are available in the dataset.
+    - We use the /dev/shm (RAMDisk) to store the data. Please change this to /tmp if it fails.
     """
     # 1. Copy data from GCP to local instance
     local_data_dir = copy_dataset_from_gcp_to_local(cfg.input_path)
 
-    # 2. Identify subsets
-    if cfg.subsets:
-        # Process only given subsets
-        subsets = cfg.subsets
-    else:
-        # No subset is defined, so process all subsets
-        subsets = [x for x in datasets.get_dataset_infos(path=local_data_dir)]
-
-    # 3. For each subset...
-    write_ops = []
-    for subset in subsets:
-        # Validate splits
-        split_values = [x for x in datasets.get_dataset_infos(path=local_data_dir)[subset].splits.values()]
-        if isinstance(split_values[0], dict):
-            # Dict obj;
-            data_splits = [x["name"] for x in split_values]
+    try:
+        # 2. Identify subsets
+        if cfg.subsets:
+            # Process only given subsets
+            subsets = cfg.subsets
         else:
-            # SplitInfo obj;
-            data_splits = [x.name for x in split_values]
+            # No subset is defined, so process all subsets
+            subsets = [x for x in datasets.get_dataset_infos(path=local_data_dir)]
 
-        if cfg.splits:
-            # Splits are defined, process only these splits
-            splits = cfg.splits
-            # Warn when defined splits are not available
-            extra_splits = list(set(splits).symmetric_difference(data_splits))
-            if extra_splits:
-                logging.log(logging.WARNING, f"Requested split(s) {extra_splits} for {cfg.source} skipped.")
-                splits = list(set(splits).intersection(data_splits))
-        else:
-            # Splits are not defined, we will load everything (default behavior)
-            splits = data_splits
+        # 3. For each subset...
+        write_ops = []
+        for subset in subsets:
+            # Validate splits
+            split_values = [x for x in datasets.get_dataset_infos(path=local_data_dir)[subset].splits.values()]
+            if isinstance(split_values[0], dict):
+                # Dict obj;
+                data_splits = [x["name"] for x in split_values]
+            else:
+                # SplitInfo obj;
+                data_splits = [x.name for x in split_values]
 
-        for split in splits:
-            # a. Load dataset
-            dataset = datasets.load_dataset(path=local_data_dir, name=subset, split=split, streaming=True)
+            if cfg.splits:
+                # Splits are defined, process only these splits
+                splits = cfg.splits
+                # Warn when defined splits are not available
+                extra_splits = list(set(splits).symmetric_difference(data_splits))
+                if extra_splits:
+                    logging.log(logging.WARNING, f"Requested split(s) {extra_splits} for {cfg.source} skipped.")
+                    splits = list(set(splits).intersection(data_splits))
+            else:
+                # Splits are not defined, we will load everything (default behavior)
+                splits = data_splits
 
-            # b. Create GCP target directory
-            subset_output_path = get_shard_dir(cfg.output_path, subset, split)
-            output_path = create_shard_output_directory(subset_output_path)
+            for split in splits:
+                # a. Load dataset
+                dataset = datasets.load_dataset(path=local_data_dir, name=subset, split=split, streaming=True)
 
-            # c. Process and write in batches
-            batch = []
-            shard_idx = 0
+                # b. Create GCP target directory
+                subset_output_path = get_shard_dir(cfg.output_path, subset, split)
+                output_path = create_shard_output_directory(subset_output_path)
 
-            try:
-                for row in dataset:
-                    batch.append(row)
-                    # When batch reaches shard size, process and write it
-                    if len(batch) >= cfg.shard_size:
-                        # Queue the batch for writing
+                # c. Process and write in batches
+                batch = []
+                shard_idx = 0
+
+                try:
+                    for row in dataset:
+                        batch.append(row)
+                        # When batch reaches shard size, process and write it
+                        if len(batch) >= cfg.shard_size:
+                            # Queue the batch for writing
+                            write_ops.append(
+                                transform_and_write_batch.remote(
+                                    batch.copy(),  # need .copy() or else ray will fail
+                                    shard_idx,
+                                    output_path,
+                                    cfg,
+                                )
+                            )
+                            # Clear batch and increment shard index
+                            batch = []
+                            shard_idx += 1
+
+                    # Write any remaining rows in the final batch
+                    if batch:
                         write_ops.append(
                             transform_and_write_batch.remote(
                                 batch.copy(),  # need .copy() or else ray will fail
@@ -305,30 +333,15 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
                                 cfg,
                             )
                         )
-                        # Clear batch and increment shard index
-                        batch = []
-                        shard_idx += 1
-
-            except Exception as e:
-                logger.error(f"Error processing subset {subset}, split {split}: {e}")
-
-            # Write any remaining rows in the final batch
-            if batch:
-                write_ops.append(
-                    transform_and_write_batch.remote(
-                        batch.copy(),  # need .copy() or else ray will fail
-                        shard_idx,
-                        output_path,
-                        cfg,
-                    )
-                )
-
-    # Wait for all write operations to complete
-    ray.get(write_ops)
-
-    # 4. Delete local data for others
-    if os.path.exists(local_data_dir):
-        shutil.rmtree(local_data_dir)
+                except Exception as e:
+                    logger.error(f"Error processing subset {subset}, split {split}: {e}")
+        # Wait for all write operations to complete
+        ray.get(write_ops)
+    finally:
+        # 4. Delete local data for others
+        logger.info(f"Deleting local data directory `{local_data_dir}`")
+        if os.path.exists(local_data_dir):
+            shutil.rmtree(local_data_dir)
 
     return cfg.output_path
 
