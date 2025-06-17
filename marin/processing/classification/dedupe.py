@@ -531,6 +531,7 @@ def _run_decontamination(config: DedupeConfig):
         )
         # 4) write results
         copy_files_out(tmpdir, config.output_path, config.attribute_name)
+        fsspec_rm(tmpdir)
 
 
 def _run_deduplication(config: DedupeConfig):
@@ -551,57 +552,130 @@ def _run_deduplication(config: DedupeConfig):
             bloom_filter_file=config.bloom_filter_path,
         )
         copy_files_out(tmpdir, config.output_path, config.attribute_name)
+        fsspec_rm(tmpdir)
 
 
 def _run_train_test_overlap(config: DedupeConfig):
+    """Run train-test overlap detection, supporting multiple n-gram sizes efficiently."""
     with tempfile.TemporaryDirectory(dir="/tmp", prefix="marin_dedupe_") as tmpdir:
         print(f"DEBUG: _run_train_test_overlap starting with tmpdir={tmpdir}", flush=True)
+        
+        
         if not config.decontaminate_source:
             raise ValueError("decontaminate_source is required in TRAIN_TEST_OVERLAP mode")
+        if not config.ngram:
+            raise ValueError("ngram config is required in TRAIN_TEST_OVERLAP mode")
+        
         print(f"DEBUG: decontaminate_source={config.decontaminate_source}", flush=True)
 
-        # 1) Shard the decontaminate source (Parquet or JSONL)
+        # Handle both single int and list of ints for ngram_length
+        ngram_lengths = (
+            config.ngram.ngram_length 
+            if isinstance(config.ngram.ngram_length, list) 
+            else [config.ngram.ngram_length]
+        )
+        print(f"DEBUG: Processing n-gram sizes: {ngram_lengths}", flush=True)
+
+        # 1) Shard the decontaminate source ONCE (reused for all n-gram sizes)
         doc_dir = os.path.join(tmpdir, "documents")
         fsspec_mkdirs(doc_dir)
         print(f"DEBUG: Created doc_dir={doc_dir}", flush=True)
+        print(f"DEBUG: Sharding decontaminate source (once for all n-gram sizes)", flush=True)
         _shard_decontaminate_source(config.decontaminate_source, doc_dir, config.processes)
-
-        # 2) build the filter
-        do_dedup(
-            tmpdir,
-            config.attribute_name,
-            config.min_length,
-            config.min_words,
-            config.bloom_filter_size,
-            config.estimated_doc_count,
-            config.false_positive_rate,
-            config.ngram,
-            config.processes,
-            read_only=False,
-            bloom_filter_file=config.bloom_filter_path,
-        )
-        # 3) clear out JSONLs
+        
+        # Process each n-gram size with the same sharded decontaminate source
+        for i, ngram_len in enumerate(ngram_lengths):
+            print(f"DEBUG: Processing n-gram size {ngram_len} ({i+1}/{len(ngram_lengths)})", flush=True)
+            
+            # Create n-gram specific configuration
+            current_ngram_config = NGramConfig(
+                ngram_length=ngram_len,
+                stride=config.ngram.stride,
+                overlap_threshold=config.ngram.overlap_threshold
+            )
+            
+            # Create attribute name for this n-gram size
+            current_attr_name = (
+                f"{config.attribute_name}_{ngram_len}" 
+                if len(ngram_lengths) > 1 
+                else config.attribute_name
+            )
+            print(f"DEBUG: Using attribute name: {current_attr_name}", flush=True)
+            
+            # Create n-gram specific bloom filter path
+            current_bloom_filter = f"{ngram_len}_{config.bloom_filter_path}" if len(ngram_lengths) > 1 else config.bloom_filter_path
+            
+            # 2) Build the bloom filter for this n-gram size using the sharded decontaminate source
+            print(f"DEBUG: Building bloom filter for {ngram_len}-gram using existing sharded source", flush=True)
+            do_dedup(
+                tmpdir,
+                current_attr_name,
+                config.min_length,
+                config.min_words,
+                config.bloom_filter_size,
+                config.estimated_doc_count,
+                config.false_positive_rate,
+                current_ngram_config,
+                config.processes,
+                read_only=False,
+                bloom_filter_file=current_bloom_filter,
+            )
+            
+            print(f"DEBUG: Completed building {ngram_len}-gram bloom filter", flush=True)
+            
+        # 3) Clear out the decontaminate JSONLs (keep bloom filters)
+        print(f"DEBUG: Clearing decontaminate JSONLs after building all bloom filters", flush=True)
         delete_jsonl_files(tmpdir)
-        # 4) apply filter to real input
+        
+        # 4) Copy input files ONCE (reused for all n-gram sizes)
+        print(f"DEBUG: Copying input files (once for all n-gram sizes)", flush=True)
         copy_files_in(config.input_path, tmpdir)
-        do_dedup(
-            tmpdir,
-            config.attribute_name,
-            config.min_length,
-            config.min_words,
-            config.bloom_filter_size,
-            config.estimated_doc_count,
-            config.false_positive_rate,
-            config.ngram,
-            config.processes,
-            read_only=True,
-            bloom_filter_file=config.bloom_filter_path,
-        )
-        # 5) write results
-        copy_files_out(tmpdir, config.output_path, config.attribute_name)
+        
+        # 5) Apply each bloom filter to the same input files
+        for i, ngram_len in enumerate(ngram_lengths):
+            print(f"DEBUG: Applying {ngram_len}-gram filter to input data ({i+1}/{len(ngram_lengths)})", flush=True)
+            
+            # Create n-gram specific configuration (same as before)
+            current_ngram_config = NGramConfig(
+                ngram_length=ngram_len,
+                stride=config.ngram.stride,
+                overlap_threshold=config.ngram.overlap_threshold
+            )
+            
+            # Same attribute name and bloom filter as before
+            current_attr_name = (
+                f"{config.attribute_name}_{ngram_len}" 
+                if len(ngram_lengths) > 1 
+                else config.attribute_name
+            )
+            current_bloom_filter = f"{ngram_len}_{config.bloom_filter_path}" if len(ngram_lengths) > 1 else config.bloom_filter_path
+            
+            # Apply this n-gram's bloom filter to the input files
+            do_dedup(
+                tmpdir,
+                current_attr_name,
+                config.min_length,
+                config.min_words,
+                config.bloom_filter_size,
+                config.estimated_doc_count,
+                config.false_positive_rate,
+                current_ngram_config,
+                config.processes,
+                read_only=True,  # Use existing bloom filter
+                bloom_filter_file=current_bloom_filter,
+            )
+            
+            # 6) Write results for this n-gram size
+            print(f"DEBUG: Writing results for {ngram_len}-gram", flush=True)
+            copy_files_out(tmpdir, config.output_path, current_attr_name)
+            
+            print(f"DEBUG: Completed processing {ngram_len}-gram", flush=True)
+        
+        print(f"DEBUG: Completed processing all {len(ngram_lengths)} n-gram sizes efficiently", flush=True)
+        fsspec_rm(tmpdir)
+        
 
-
-@ray.remote(num_cpus=32, memory=1024 * 1024 * 1024 * 16)
+@ray.remote(num_cpus=64, memory=1024 * 1024 * 1024 * 128)
 def dedupe(config: DedupeConfig):
     """Top-level Ray task: dispatch between decontamination and deduplication workflows."""
     if config.mode == DedupMode.DECONTAMINATE:

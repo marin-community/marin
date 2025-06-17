@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 import logging
 import os
+from dataclasses import dataclass
+
+import ray
 
 from experiments.midtraining_datasets import finemath_3_plus
 from experiments.train_test_overlap.utils import clean_shard_basename, find_dataset_shards
+from marin.core.runtime import simple_backpressure
 from marin.execution.executor import ExecutorStep, executor_main, get_executor_step, this_output_path
 from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 from marin.utils import fsspec_glob
@@ -40,36 +44,75 @@ else:
     base_dir = matching_dirs[0]
     dataset_dir = os.path.join(base_dir, subpath) if subpath else base_dir
 
-logger.info(f"Looking for dataset shards in {dataset_dir}")
 
-# Find all supported dataset shards under root (Parquet or compressed JSONL)
-shard_paths = find_dataset_shards(dataset_dir)
+@dataclass(frozen=True)
+class ShardedDedupeConfig:
+    """Configuration for running dedupe across multiple shards with backpressure."""
+    dataset_dir: str
+    output_path: str
+    max_in_flight: int = 16
 
-# Build one dedupe step per shard
-steps: list[ExecutorStep] = []
-for shard_path in shard_paths:
-    # derive a unique name from the shard file
-    shard_basename = clean_shard_basename(shard_path)
 
-    step_name = f"train_test_overlap/dolma/parquet_finemath3plus_dedupe/{shard_basename}"
-    cfg = DedupeConfig(
-        input_path="gs://marin-us-central2/decontamination/",
-        output_path=this_output_path(),
-        attribute_name="ngram_overlap",
-        false_positive_rate=0.0001,
-        ngram=NGramConfig(
-            ngram_length=[10, 15],
-            overlap_threshold=1e-6,
-            stride=0,
-        ),
-        processes=16,
-        mode=DedupMode.TRAIN_TEST_OVERLAP,
-        decontaminate_source=shard_path,
-    )
-    steps.append(ExecutorStep(name=step_name, fn=dedupe, config=cfg))
+@ray.remote
+def run_all_shards(config: ShardedDedupeConfig) -> str:
+    """
+    Discover all dataset shards and launch dedupe tasks with backpressure.
+    """
+    logger.info(f"Looking for dataset shards in {config.dataset_dir}")
+    
+    # Find all supported dataset shards under root (Parquet or compressed JSONL)
+    shard_paths = find_dataset_shards(config.dataset_dir)
+    
+    def make_task(shard_path: str) -> DedupeConfig:
+        # Derive a unique output path from the shard file
+        shard_basename = clean_shard_basename(shard_path)
+        output_path = os.path.join(config.output_path, f"debug/{shard_basename}")
+        return DedupeConfig(
+            input_path="gs://marin-us-central2/decontamination/",
+            output_path=output_path,
+            attribute_name="ngram_overlap",
+            false_positive_rate=0.0001,
+            ngram=NGramConfig(
+                ngram_length=[10, 15],  # Multiple n-gram sizes
+                overlap_threshold=1e-6,
+                stride=0,
+            ),
+            processes=16,
+            mode=DedupMode.TRAIN_TEST_OVERLAP,
+            decontaminate_source=shard_path,
+        )
+
+    # Generator of arguments for each Ray task
+    task_generator = ((make_task(shard_path),) for shard_path in shard_paths)
+
+    # Launch tasks with simple backpressure
+    for ref in simple_backpressure(
+        dedupe,  # Use dedupe directly - it's already a Ray remote function
+        task_generator,
+        max_in_flight=config.max_in_flight,
+        fetch_local=True,
+    ):
+        ray.get(ref)
+
+    return f"Sharded dedupe pipeline completed! Processed {len(shard_paths)} shards."
+
+
+# Configure the sharded dedupe pipeline
+config = ShardedDedupeConfig(
+    dataset_dir=dataset_dir,
+    output_path=this_output_path(),
+    max_in_flight=16,
+)
+
+dedupe_step = ExecutorStep(
+    name="train_test_overlap/dolma/debug_sharded_parquet",
+    fn=run_all_shards,
+    config=config,
+    description="Run per-shard Dolma dedupe against MMLU test set with backpressure",
+)
 
 if __name__ == "__main__":
     executor_main(
-        steps=steps,
+        steps=[dedupe_step],
         description="Run per-shard Dolma dedupe against MMLU test set, reading Parquet or JSONL directly",
     )
