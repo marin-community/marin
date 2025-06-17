@@ -7,12 +7,12 @@ from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGra
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Define the dedupe step that consumes the converted StarCoder JSONL
+# Define the dedupe step that consumes the converted MMLU JSONL
 starcoder_dedupe = ExecutorStep(
-    name="train_test_overlap/dolma/mmlu_overlap_debug_rollback",
+    name="train_test_overlap/dolma/all_overlap",
     fn=dedupe,
     config=DedupeConfig(
-        input_path="gs://marin-us-central2/decontamination/mmlu-9fbdd5/cais/",
+        input_path="gs://marin-us-central2/decontamination/",
         # input_path="gs://marin-us-central2/documents/starcoderdata-720c8c/9fc30b5/ada/",
         output_path=this_output_path(),
         attribute_name="mmlu_overlap",
