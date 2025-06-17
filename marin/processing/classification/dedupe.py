@@ -1,3 +1,4 @@
+import gzip
 import json
 import os
 import subprocess
@@ -7,6 +8,8 @@ from enum import Enum
 
 import draccus
 import fsspec
+import pandas as pd
+import pyarrow.parquet as pq
 import ray
 from tqdm import tqdm
 
@@ -90,9 +93,46 @@ class DedupeConfig:
     bloom_filter_path: str = "deduper_bloom_filter.bin"
 
 
+# Helper: convert Parquet files (single or shards) directly into .jsonl.gz under docs_dir
+def _parquet_to_jsonl_gz(input_path: str, docs_dir: str) -> None:
+    print(f"DEBUG: Starting Parquet conversion for {input_path}", flush=True)
+    os.makedirs(docs_dir, exist_ok=True)
+    # find all Parquet files
+    if input_path.endswith(".parquet"):
+        parquet_files = [input_path]
+    else:
+        parquet_files = fsspec_glob(f"{input_path.rstrip('/')}/*.parquet")
+    print(f"DEBUG: Found {len(parquet_files)} Parquet files: {parquet_files[:3]}...", flush=True)
+    for pq in parquet_files:
+        print(f"DEBUG: Converting {pq}", flush=True)
+        df = pd.read_parquet(pq)
+        print(f"DEBUG: Read Parquet with {len(df)} rows, columns: {list(df.columns)}", flush=True)
+        out_name = os.path.splitext(os.path.basename(pq))[0] + ".jsonl.gz"
+        out_path = os.path.join(docs_dir, out_name)
+        print(f"DEBUG: Writing to {out_path}", flush=True)
+        with gzip.open(out_path, "wt") as f:
+            for rec in df.to_dict(orient="records"):
+                f.write(json.dumps(rec) + "\n")
+        print(f"DEBUG: Successfully wrote {out_path}", flush=True)
+    print("DEBUG: Finished Parquet conversion", flush=True)
+
+
 def copy_files_in(input_path, local_base_dir):
     # Ensure input_path doesn't end with a slash
     input_path = input_path.rstrip("/")
+    print(f"DEBUG: copy_files_in called with input_path={input_path}, local_base_dir={local_base_dir}", flush=True)
+
+    # Auto-convert Parquet inputs into .jsonl.gz under documents/
+    parquet_pattern = f"{input_path}/**/*.parquet"
+    print(f"DEBUG: Checking for Parquet files with pattern {parquet_pattern}", flush=True)
+    if input_path.endswith(".parquet") or fsspec_glob(parquet_pattern):
+        print("DEBUG: Detected Parquet input, converting to JSONL", flush=True)
+        docs_dir = os.path.join(local_base_dir, "documents")
+        _parquet_to_jsonl_gz(input_path, docs_dir)
+        print(f"Converted Parquet → JSONL.gz into {docs_dir}")
+        return
+    else:
+        print("DEBUG: No Parquet files detected, proceeding with JSONL logic", flush=True)
 
     # If input_path is a single file, copy only that file
     if fsspec_exists(input_path) and not fsspec_isdir(input_path):
@@ -318,21 +358,6 @@ def copy_files_out(local_base_dir, output_path, attribute_name):
     print(f"Uploaded {files_uploaded} files to {output_path}")
 
 
-@cached_or_construct_output(success_suffix="SUCCESS")
-def copy_file_out(input_file_path, output_file_path):
-
-    # Ensure the output directory exists
-    output_file_dir = os.path.dirname(output_file_path)
-    fsspec_mkdirs(output_file_dir)
-
-    # Copy the file using fsspec
-    with fsspec.open(input_file_path, "rb") as f_local:
-        with fsspec.open(output_file_path, "wb") as f_remote:
-            f_remote.write(f_local.read())
-
-    print(f"Uploaded file to {output_file_path}")
-
-
 def delete_jsonl_files(dir_path):
     """
     Delete all JSONL files (both .jsonl and .jsonl.gz) in the specified directory and its subdirectories.
@@ -403,9 +428,73 @@ def estimate_total_ngrams_fast(local_base_dir, ngram, sample_lines: int = 1000):
     return int(avg_ngrams_per_line * total_lines)
 
 
+def _shard_decontaminate_source(source_path: str, doc_dir: str, num_processes: int) -> None:
+    """
+    Shard the decontaminate source into num_processes files under doc_dir.
+    Handles both Parquet and compressed JSONL efficiently.
+    """
+    print(f"DEBUG: Sharding {source_path} into {num_processes} shards", flush=True)
+
+    # Create shard writers
+    writers = []
+    for i in range(num_processes):
+        shard_path = os.path.join(doc_dir, f"shard_{i}.jsonl.gz")
+        writers.append(fsspec.open(shard_path, "wt", compression="gzip").open())
+
+    try:
+        if source_path.endswith(".parquet"):
+            print("DEBUG: Detected Parquet file, using streaming approach", flush=True)
+            _shard_parquet_source(source_path, writers)
+        else:
+            print("DEBUG: Detected JSONL file, using line-by-line approach", flush=True)
+            _shard_jsonl_source(source_path, writers)
+    finally:
+        for w in writers:
+            w.close()
+        print("DEBUG: Finished sharding, closed all writers", flush=True)
+
+
+def _shard_parquet_source(parquet_path: str, writers: list) -> None:
+    """Stream Parquet file and distribute records across writers."""
+    print(f"DEBUG: Opening Parquet file for streaming: {parquet_path}", flush=True)
+
+    with fsspec.open(parquet_path, "rb") as f:
+        parquet_file = pq.ParquetFile(f)
+        print(f"DEBUG: Parquet file has {parquet_file.metadata.num_rows} rows", flush=True)
+
+        idx = 0
+        # Read in batches to avoid loading entire file into memory
+        for batch in parquet_file.iter_batches(batch_size=1000):
+            # Convert batch to pandas for easier record iteration
+            df = batch.to_pandas()
+            for record in df.to_dict(orient="records"):
+                json_line = json.dumps(record) + "\n"
+                writers[idx % len(writers)].write(json_line)
+                idx += 1
+
+            if idx % 10000 == 0:
+                print(f"DEBUG: Processed {idx} records from Parquet", flush=True)
+
+        print(f"DEBUG: Finished processing {idx} records from Parquet", flush=True)
+
+
+def _shard_jsonl_source(jsonl_path: str, writers: list) -> None:
+    """Stream JSONL file and distribute lines across writers."""
+    print(f"DEBUG: Opening JSONL file for streaming: {jsonl_path}", flush=True)
+
+    with fsspec.open(jsonl_path, "rt", compression="infer") as fr:
+        for idx, line in enumerate(fr):
+            writers[idx % len(writers)].write(line)
+
+            if idx % 10000 == 0:
+                print(f"DEBUG: Processed {idx} lines from JSONL", flush=True)
+
+        print(f"DEBUG: Finished processing {idx+1} lines from JSONL", flush=True)
+
+
 # Helpers for the two workflows
 def _run_decontamination(config: DedupeConfig):
-    with tempfile.TemporaryDirectory(dir="/dev/shm") as tmpdir:
+    with tempfile.TemporaryDirectory(dir="/tmp", prefix="marin_dedupe_") as tmpdir:
         if not config.decontaminate_source:
             raise ValueError("decontaminate_source is required in DECONTAMINATE mode")
         # 1) build the filter
@@ -445,7 +534,7 @@ def _run_decontamination(config: DedupeConfig):
 
 
 def _run_deduplication(config: DedupeConfig):
-    with tempfile.TemporaryDirectory(dir="/dev/shm") as tmpdir:
+    with tempfile.TemporaryDirectory(dir="/tmp", prefix="marin_dedupe_") as tmpdir:
         # run standard deduplication
         copy_files_in(config.input_path, tmpdir)
         do_dedup(
@@ -465,22 +554,18 @@ def _run_deduplication(config: DedupeConfig):
 
 
 def _run_train_test_overlap(config: DedupeConfig):
-    with tempfile.TemporaryDirectory(dir="/dev/shm") as tmpdir:
+    with tempfile.TemporaryDirectory(dir="/tmp", prefix="marin_dedupe_") as tmpdir:
+        print(f"DEBUG: _run_train_test_overlap starting with tmpdir={tmpdir}", flush=True)
         if not config.decontaminate_source:
             raise ValueError("decontaminate_source is required in TRAIN_TEST_OVERLAP mode")
-        # 1) split the seed file into shards
+        print(f"DEBUG: decontaminate_source={config.decontaminate_source}", flush=True)
+
+        # 1) Shard the decontaminate source (Parquet or JSONL)
         doc_dir = os.path.join(tmpdir, "documents")
         fsspec_mkdirs(doc_dir)
-        writers = []
-        for i in range(config.processes):
-            shard_path = os.path.join(doc_dir, f"shard_{i}.jsonl.gz")
-            # open a real file handle for writing
-            writers.append(fsspec.open(shard_path, "wt", compression="gzip").open())
-        with fsspec.open(config.decontaminate_source, "rt", compression="infer") as fr:
-            for idx, line in enumerate(fr):
-                writers[idx % config.processes].write(line)
-        for w in writers:
-            w.close()
+        print(f"DEBUG: Created doc_dir={doc_dir}", flush=True)
+        _shard_decontaminate_source(config.decontaminate_source, doc_dir, config.processes)
+
         # 2) build the filter
         do_dedup(
             tmpdir,
