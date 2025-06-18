@@ -9,7 +9,7 @@ import levanter.infra.cli_helpers
 import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
-from levanter.main import train_lm, dpo
+from levanter.main import train_lm  # , dpo
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
@@ -202,6 +202,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     else:
         return ray.get(train_lm_task.remote())
 
+
 # TODO: (ahmed) this is probably broken, refactor
 @ray.remote(num_cpus=0.1)
 def run_levanter_dpo(config: TrainLmOnPodConfig):
@@ -242,7 +243,7 @@ def run_levanter_dpo(config: TrainLmOnPodConfig):
         return run_on_pod_resumable(dpo_task, config.pod_config.tpu_type, max_retries_failure=10)
     else:
         return ray.get(dpo_task.remote())
-    
+
 
 def _doublecheck_paths(config: TrainLmOnPodConfig):
     """

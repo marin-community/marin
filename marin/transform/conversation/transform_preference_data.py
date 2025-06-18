@@ -1,5 +1,5 @@
 """
-Transform any HuggingFace preference dataset (for DPO, etc) to a standard OpenAI chat format within each preference "column".
+Transform any HuggingFace preference dataset (for DPO, etc) to a standard format within each preference "column".
 
 Usage:
 - Register your adapter in preference_data_adapters.py
@@ -11,8 +11,6 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
 from urllib.parse import urlparse
 
 import datasets
@@ -21,16 +19,17 @@ import fsspec
 import ray
 from google.cloud import storage
 
-from marin.core.conversation import OpenAIChatMessage
 from marin.core.runtime import fsspec_mkdirs
 
 from .preference_data_adapters import PreferenceTransformAdapter, get_preference_adapter
 
 logger = logging.getLogger("ray")
 
+
 @dataclass(frozen=True)
 class TransformPreferenceDatasetConfig:
     """Configuration for transforming a preference dataset from huggingface json/parquet to OpenAI format."""
+
     input_path: str
     output_path: str
     shard_size: int
@@ -41,8 +40,10 @@ class TransformPreferenceDatasetConfig:
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
 
+
 def generate_hash_from_pair(chosen: list[dict], rejected: list[dict]) -> str:
     return hashlib.sha256((str(chosen) + str(rejected)).encode()).hexdigest()
+
 
 def transform_row(row: dict, cfg: TransformPreferenceDatasetConfig, adapter: PreferenceTransformAdapter):
     example = adapter.extract_preference_example(row)
@@ -58,6 +59,7 @@ def transform_row(row: dict, cfg: TransformPreferenceDatasetConfig, adapter: Pre
             result[col] = row[col]
     return result
 
+
 def transform_rows(rows: list[dict], cfg: TransformPreferenceDatasetConfig, adapter: PreferenceTransformAdapter):
     transformed = []
     for row in rows:
@@ -65,6 +67,7 @@ def transform_rows(rows: list[dict], cfg: TransformPreferenceDatasetConfig, adap
         if out is not None:
             transformed.append(out)
     return transformed
+
 
 def create_shard_output_directory(output_filename: str) -> str:
     # Remove file suffix and create directory for shards
@@ -79,6 +82,7 @@ def create_shard_output_directory(output_filename: str) -> str:
     fsspec_mkdirs(output_path)
     return output_path
 
+
 def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local_directory_path: str):
     client = storage.Client()
     bucket = client.bucket(bucket_name)
@@ -92,6 +96,7 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
         blob.download_to_filename(target_path)
 
+
 def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike):
     if input_gcp_path.startswith("gs://"):
         parsed_url = urlparse(input_gcp_path)
@@ -104,10 +109,12 @@ def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike):
         raise Exception("Input is not a GCP path")
     return input_path
 
+
 def get_shard_dir(dir_name: os.PathLike, subset_name: str | None, split: str) -> os.PathLike:
     if (subset_name == "default") or (subset_name is None):
         return os.path.join(dir_name, split)
     return os.path.join(dir_name, subset_name, split)
+
 
 @ray.remote
 def transform_hf_preference_dataset(cfg: TransformPreferenceDatasetConfig):
@@ -151,6 +158,7 @@ def transform_hf_preference_dataset(cfg: TransformPreferenceDatasetConfig):
                         f.write(f"{json.dumps(row)}\n")
             logging.log(logging.INFO, f"Wrote processed data to {output_path}")
     return cfg.output_path
+
 
 @draccus.wrap()
 def main(cfg: TransformPreferenceDatasetConfig):
