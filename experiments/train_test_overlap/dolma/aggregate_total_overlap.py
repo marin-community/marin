@@ -38,15 +38,48 @@ def get_ngram_config_from_dedupe_steps():
         if hasattr(first_step, "config") and hasattr(first_step.config, "ngram"):
             ngram_length = first_step.config.ngram.ngram_length
             print(f"[DEBUG] Found ngram_length = {ngram_length} from dedupe config", flush=True)
-            return (ngram_length,)
+
+            # Handle both single int and list of ints
+            if isinstance(ngram_length, list):
+                return tuple(ngram_length)
+            else:
+                return (ngram_length,)
 
     print("[DEBUG] Could not extract ngram config, using default (15,)", flush=True)
     return (15,)
 
 
+def get_attribute_name_from_dedupe_steps():
+    """Extract base attribute name from dedupe steps."""
+    print(f"[DEBUG] Extracting attribute name from {len(dedupe_steps)} dedupe steps", flush=True)
+
+    if dedupe_steps:
+        # Get the first step's config to read attribute name
+        first_step = dedupe_steps[0]
+        if hasattr(first_step, "config"):
+            # For the new architecture, we need to look inside the ShardedDedupeConfig
+            # The actual DedupeConfig is created in make_task function
+            # We'll try to access it or fall back to a reasonable default
+            if hasattr(first_step.config, "attribute_name"):
+                attr_name = first_step.config.attribute_name
+                print(f"[DEBUG] Found attribute_name = {attr_name} from config", flush=True)
+                return attr_name
+            else:
+                print("[DEBUG] Config doesn't have attribute_name, checking if it's ShardedDedupeConfig", flush=True)
+                # For ShardedDedupeConfig, we need to infer the attribute name
+                # Based on the code, it's likely "ngram_overlap"
+                attr_name = "ngram_overlap"  # Default for the new architecture
+                print(f"[DEBUG] Using inferred attribute_name = {attr_name}", flush=True)
+                return attr_name
+
+    print("[DEBUG] Could not extract attribute name, using default 'ngram_overlap'", flush=True)
+    return "ngram_overlap"
+
+
 def discover_datasets_from_outputs(shard_outputs: list[str]) -> dict[str, list[str]]:
     """
     Discover evaluation datasets from dedupe output directory structure.
+    Updated to handle the new architecture with debug/{shard}/ subdirectories.
 
     Args:
         shard_outputs: List of output paths from dedupe steps
@@ -61,61 +94,75 @@ def discover_datasets_from_outputs(shard_outputs: list[str]) -> dict[str, list[s
     for shard_output in shard_outputs:
         print(f"[DEBUG] Scanning shard output: {shard_output}", flush=True)
 
-        # Find all dataset directories under this shard output
-        # Try both with and without trailing slash for fsspec compatibility
-        pattern1 = f"{shard_output.rstrip('/')}/*/"
-        pattern2 = f"{shard_output.rstrip('/')}/*"
-        print(f"[DEBUG] Trying glob patterns: {pattern1} and {pattern2}", flush=True)
+        # NEW: Look for debug/ subdirectories first, then scan under each shard
+        debug_pattern = f"{shard_output.rstrip('/')}/debug/*"
+        shard_dirs = fsspec_glob(debug_pattern)
+        print(f"[DEBUG] Found shard directories under debug/: {len(shard_dirs)}", flush=True)
 
-        dataset_dirs = fsspec_glob(pattern1)
-        if not dataset_dirs:
-            print("[DEBUG] First pattern failed, trying second pattern", flush=True)
-            all_items = fsspec_glob(pattern2)
-            if not all_items:
-                print("[DEBUG] Second pattern also failed", flush=True)
-                dataset_dirs = []
-            else:
-                print(f"[DEBUG] Second pattern found {len(all_items)} items", flush=True)
-                # Use fsspec to check which items are directories
-                try:
-                    fs = fsspec.get_filesystem_class("gs")()
+        if not shard_dirs:
+            print("[DEBUG] No debug/ structure found, falling back to old structure", flush=True)
+            # Fallback to old structure for backward compatibility
+            shard_dirs = [shard_output]
+
+        for shard_dir in shard_dirs:
+            print(f"[DEBUG] Scanning shard directory: {shard_dir}", flush=True)
+
+            # Find all dataset directories under this shard directory
+            pattern1 = f"{shard_dir.rstrip('/')}/*/"
+            pattern2 = f"{shard_dir.rstrip('/')}/*"
+            print(f"[DEBUG] Trying glob patterns: {pattern1} and {pattern2}", flush=True)
+
+            dataset_dirs = fsspec_glob(pattern1)
+            if not dataset_dirs:
+                print("[DEBUG] First pattern failed, trying second pattern", flush=True)
+                all_items = fsspec_glob(pattern2)
+                if not all_items:
+                    print("[DEBUG] Second pattern also failed", flush=True)
                     dataset_dirs = []
-                    for item in all_items:
-                        try:
-                            if fs.isdir(item):
-                                dataset_dirs.append(item)
-                                print(f"[DEBUG] Confirmed directory: {os.path.basename(item)}", flush=True)
-                            else:
-                                print(f"[DEBUG] Not a directory: {os.path.basename(item)}", flush=True)
-                        except Exception as e:
-                            print(f"[DEBUG] Error checking {item}: {e}", flush=True)
-                except Exception as e:
-                    print(f"[DEBUG] Falling back to name-based detection due to: {e}", flush=True)
-                    # Fallback: assume items without extensions are directories
-                    dataset_dirs = [item for item in all_items if "." not in os.path.basename(item)]
+                else:
+                    print(f"[DEBUG] Second pattern found {len(all_items)} items", flush=True)
+                    # Use fsspec to check which items are directories
+                    try:
+                        fs = fsspec.get_filesystem_class("gs")()
+                        dataset_dirs = []
+                        for item in all_items:
+                            try:
+                                if fs.isdir(item):
+                                    dataset_dirs.append(item)
+                                    print(f"[DEBUG] Confirmed directory: {os.path.basename(item)}", flush=True)
+                                else:
+                                    print(f"[DEBUG] Not a directory: {os.path.basename(item)}", flush=True)
+                            except Exception as e:
+                                print(f"[DEBUG] Error checking {item}: {e}", flush=True)
+                    except Exception as e:
+                        print(f"[DEBUG] Falling back to name-based detection due to: {e}", flush=True)
+                        # Fallback: assume items without extensions are directories
+                        dataset_dirs = [item for item in all_items if "." not in os.path.basename(item)]
 
-                print(f"[DEBUG] Final directory count: {len(dataset_dirs)}", flush=True)
+                    print(f"[DEBUG] Final directory count: {len(dataset_dirs)}", flush=True)
 
-        print(f"[DEBUG] Final glob results: {dataset_dirs[:5] if len(dataset_dirs) > 5 else dataset_dirs}", flush=True)
+            print(
+                f"[DEBUG] Final glob results: {dataset_dirs[:5] if len(dataset_dirs) > 5 else dataset_dirs}", flush=True
+            )
 
-        for dataset_dir in dataset_dirs:
-            dir_name = os.path.basename(dataset_dir.rstrip("/"))
-            print(f"[DEBUG] Processing directory: {dir_name}", flush=True)
+            for dataset_dir in dataset_dirs:
+                dir_name = os.path.basename(dataset_dir.rstrip("/"))
+                print(f"[DEBUG] Processing directory: {dir_name}", flush=True)
 
-            # Skip executor metadata
-            if dir_name.startswith("."):
-                print(f"[DEBUG] Skipping metadata directory: {dir_name}", flush=True)
-                continue
+                # Skip executor metadata
+                if dir_name.startswith("."):
+                    print(f"[DEBUG] Skipping metadata directory: {dir_name}", flush=True)
+                    continue
 
-            # Extract dataset name from directory (e.g., "mmlu-9fbdd5" -> "mmlu")
-            dataset_name = dir_name.split("-")[0]
-            dataset_to_dirs[dataset_name].append(dataset_dir)
-            print(f"[DEBUG] Added {dataset_name} -> {dataset_dir}", flush=True)
+                # Extract dataset name from directory (e.g., "mmlu-9fbdd5" -> "mmlu")
+                dataset_name = dir_name.split("-")[0]
+                dataset_to_dirs[dataset_name].append(dataset_dir)
+                print(f"[DEBUG] Added {dataset_name} -> {dataset_dir}", flush=True)
 
-        print(
-            f"[DEBUG] Found {len(dataset_dirs)} total dirs, processed {len([d for d in dataset_dirs if not os.path.basename(d.rstrip('/')).startswith('.')])} non-metadata dirs in {shard_output}",
-            flush=True,
-        )
+            print(
+                f"[DEBUG] Found {len(dataset_dirs)} total dirs, processed {len([d for d in dataset_dirs if not os.path.basename(d.rstrip('/')).startswith('.')])} non-metadata dirs in {shard_dir}",
+                flush=True,
+            )
 
     # Log discovered datasets
     for dataset_name, dirs in dataset_to_dirs.items():
@@ -124,20 +171,21 @@ def discover_datasets_from_outputs(shard_outputs: list[str]) -> dict[str, list[s
     return dict(dataset_to_dirs)
 
 
-def aggregate_single_dataset(dataset_name: str, dataset_dirs: list[str], n: int) -> dict:
+def aggregate_single_dataset(dataset_name: str, dataset_dirs: list[str], n: int, base_attr_name: str) -> dict:
     """
     Aggregate overlap results for a single dataset across all training shards.
 
     Args:
         dataset_name: Name of the dataset (e.g., "mmlu")
         dataset_dirs: List of directories containing this dataset's results
-        n: N-gram size (for reference, actual attribute is just "mmlu_overlap")
+        n: N-gram size
+        base_attr_name: Base attribute name (e.g., "ngram_overlap")
 
     Returns:
         Dict with aggregation results
     """
-    # FIXED: Use just "mmlu_overlap" without the n-gram suffix
-    attr_key = "mmlu_overlap"
+    # Use n-gram size specific attribute name (e.g., "ngram_overlap_10")
+    attr_key = f"{base_attr_name}_{n}"
     print(f"[DEBUG] Aggregating {dataset_name} for {n}-gram, attribute key={attr_key}", flush=True)
 
     id_to_shards = defaultdict(list)
@@ -169,7 +217,7 @@ def aggregate_single_dataset(dataset_name: str, dataset_dirs: list[str], n: int)
                         total_test += 1
                         rec = json.loads(line)
 
-                        # FIXED: Check if mmlu_overlap list is non-empty
+                        # Check if {base_attr_name}_{n} list is non-empty
                         overlap_val = rec.get("attributes", {}).get(attr_key, [])
 
                         if line_count <= 5:  # Debug first few records
@@ -230,6 +278,10 @@ def aggregate_total_overlap(config: AggregateTotalOverlapConfig):
     actual_ngrams = get_ngram_config_from_dedupe_steps()
     print(f"[DEBUG] Using ngram sizes: {actual_ngrams}", flush=True)
 
+    # FIXED: Read attribute name from dedupe steps
+    base_attr_name = get_attribute_name_from_dedupe_steps()
+    print(f"[DEBUG] Using base attribute name: {base_attr_name}", flush=True)
+
     # The config.dedupe_steps should be InputName objects pointing to the actual output paths
     # We'll get the resolved paths from the config
     shard_outputs = config.dedupe_steps
@@ -268,7 +320,7 @@ def aggregate_total_overlap(config: AggregateTotalOverlapConfig):
 
         for dataset_name, dataset_dirs in dataset_to_dirs.items():
             print(f"[DEBUG] Starting aggregation for dataset: {dataset_name}", flush=True)
-            result = aggregate_single_dataset(dataset_name, dataset_dirs, n)
+            result = aggregate_single_dataset(dataset_name, dataset_dirs, n, base_attr_name)
             dataset_results[dataset_name] = result
 
             # Add to combined statistics

@@ -95,44 +95,34 @@ class DedupeConfig:
 
 # Helper: convert Parquet files (single or shards) directly into .jsonl.gz under docs_dir
 def _parquet_to_jsonl_gz(input_path: str, docs_dir: str) -> None:
-    print(f"DEBUG: Starting Parquet conversion for {input_path}", flush=True)
     os.makedirs(docs_dir, exist_ok=True)
     # find all Parquet files
     if input_path.endswith(".parquet"):
         parquet_files = [input_path]
     else:
         parquet_files = fsspec_glob(f"{input_path.rstrip('/')}/*.parquet")
-    print(f"DEBUG: Found {len(parquet_files)} Parquet files: {parquet_files[:3]}...", flush=True)
     for pq in parquet_files:
-        print(f"DEBUG: Converting {pq}", flush=True)
         df = pd.read_parquet(pq)
-        print(f"DEBUG: Read Parquet with {len(df)} rows, columns: {list(df.columns)}", flush=True)
         out_name = os.path.splitext(os.path.basename(pq))[0] + ".jsonl.gz"
         out_path = os.path.join(docs_dir, out_name)
-        print(f"DEBUG: Writing to {out_path}", flush=True)
         with gzip.open(out_path, "wt") as f:
             for rec in df.to_dict(orient="records"):
                 f.write(json.dumps(rec) + "\n")
-        print(f"DEBUG: Successfully wrote {out_path}", flush=True)
-    print("DEBUG: Finished Parquet conversion", flush=True)
 
 
 def copy_files_in(input_path, local_base_dir):
     # Ensure input_path doesn't end with a slash
     input_path = input_path.rstrip("/")
-    print(f"DEBUG: copy_files_in called with input_path={input_path}, local_base_dir={local_base_dir}", flush=True)
 
     # Auto-convert Parquet inputs into .jsonl.gz under documents/
     parquet_pattern = f"{input_path}/**/*.parquet"
-    print(f"DEBUG: Checking for Parquet files with pattern {parquet_pattern}", flush=True)
     if input_path.endswith(".parquet") or fsspec_glob(parquet_pattern):
-        print("DEBUG: Detected Parquet input, converting to JSONL", flush=True)
         docs_dir = os.path.join(local_base_dir, "documents")
         _parquet_to_jsonl_gz(input_path, docs_dir)
         print(f"Converted Parquet → JSONL.gz into {docs_dir}")
         return
     else:
-        print("DEBUG: No Parquet files detected, proceeding with JSONL logic", flush=True)
+        pass
 
     # If input_path is a single file, copy only that file
     if fsspec_exists(input_path) and not fsspec_isdir(input_path):
@@ -243,7 +233,6 @@ def do_dedup(
     # If n-gram mode and no explicit bloom_filter_size, override estimated_doc_count
     if ngram is not None and not bloom_filter_size:
         total_ngrams = estimate_total_ngrams_fast(local_base_dir, ngram)
-        # total_ngrams = estimate_ngram_count(local_base_dir, ngram)
         estimated_doc_count = total_ngrams
         print(f"Estimated total {ngram.ngram_length}-grams: {estimated_doc_count}")
 
@@ -390,7 +379,7 @@ def delete_jsonl_files(dir_path):
 def estimate_total_ngrams_fast(local_base_dir, ngram, sample_lines: int = 1000):
     """
     Estimate *unique* n-gram count quickly by reading at most `sample_lines`
-    JSONL lines across all `documents/**/*.jsonl.gz`.
+    JSONL lines across all `<documents_dir>/**/*.jsonl.gz`.
     """
     pattern = os.path.join(local_base_dir, "documents", "**", "*.jsonl.gz")
 
@@ -433,7 +422,6 @@ def _shard_decontaminate_source(source_path: str, doc_dir: str, num_processes: i
     Shard the decontaminate source into num_processes files under doc_dir.
     Handles both Parquet and compressed JSONL efficiently.
     """
-    print(f"DEBUG: Sharding {source_path} into {num_processes} shards", flush=True)
 
     # Create shard writers
     writers = []
@@ -443,24 +431,19 @@ def _shard_decontaminate_source(source_path: str, doc_dir: str, num_processes: i
 
     try:
         if source_path.endswith(".parquet"):
-            print("DEBUG: Detected Parquet file, using streaming approach", flush=True)
             _shard_parquet_source(source_path, writers)
         else:
-            print("DEBUG: Detected JSONL file, using line-by-line approach", flush=True)
             _shard_jsonl_source(source_path, writers)
     finally:
         for w in writers:
             w.close()
-        print("DEBUG: Finished sharding, closed all writers", flush=True)
 
 
 def _shard_parquet_source(parquet_path: str, writers: list) -> None:
     """Stream Parquet file and distribute records across writers."""
-    print(f"DEBUG: Opening Parquet file for streaming: {parquet_path}", flush=True)
 
     with fsspec.open(parquet_path, "rb") as f:
         parquet_file = pq.ParquetFile(f)
-        print(f"DEBUG: Parquet file has {parquet_file.metadata.num_rows} rows", flush=True)
 
         idx = 0
         # Read in batches to avoid loading entire file into memory
@@ -473,23 +456,16 @@ def _shard_parquet_source(parquet_path: str, writers: list) -> None:
                 idx += 1
 
             if idx % 10000 == 0:
-                print(f"DEBUG: Processed {idx} records from Parquet", flush=True)
-
-        print(f"DEBUG: Finished processing {idx} records from Parquet", flush=True)
+                pass
 
 
 def _shard_jsonl_source(jsonl_path: str, writers: list) -> None:
-    """Stream JSONL file and distribute lines across writers."""
-    print(f"DEBUG: Opening JSONL file for streaming: {jsonl_path}", flush=True)
+    """Stream JSONL file and distribute lines across writers.
+    We do this to write the bloom filters faster for large training shards."""
 
     with fsspec.open(jsonl_path, "rt", compression="infer") as fr:
         for idx, line in enumerate(fr):
             writers[idx % len(writers)].write(line)
-
-            if idx % 10000 == 0:
-                print(f"DEBUG: Processed {idx} lines from JSONL", flush=True)
-
-        print(f"DEBUG: Finished processing {idx+1} lines from JSONL", flush=True)
 
 
 # Helpers for the two workflows
@@ -554,55 +530,76 @@ def _run_deduplication(config: DedupeConfig):
 
 
 def _run_train_test_overlap(config: DedupeConfig):
-    """Run train-test overlap detection, supporting multiple n-gram sizes."""
-    with tempfile.TemporaryDirectory(dir="/tmp", prefix="marin_dedupe_") as tmpdir:
-        print(f"DEBUG: _run_train_test_overlap starting with tmpdir={tmpdir}", flush=True)
+    """
+    Run train-test overlap detection, supporting multiple n-gram sizes.
+
+    This workflow performs, for each n-gram size N:
+      1) Build a Bloom filter from a training (decontamination) source.
+      2) Apply that filter in read-only mode against a test set to detect overlaps.
+      3) Upload only the test overlaps (duplicate spans) to the remote output directory.
+
+    Inputs in `config`:
+      - decontaminate_source: path (file or directory) of training docs to build the filter.
+      - input_path: path (file or directory) of test docs to scan for overlaps.
+      - ngram.ngram_length: int or list[int], the N-gram sizes to run.
+      - output_path: remote base directory; results will go under `<output_path>/<N>/...`.
+      - bloom_filter_path, bloom_filter_size, estimated_doc_count, false_positive_rate: Bloom filter parameters.
+      - processes: number of parallel shards to use.
+
+    Key details / Dolma requirements:
+      * Dolma always expects `--documents <...>/documents/**/*.jsonl.gz`.
+      * We stage the training shards in `documents_seed/` and test files in `documents_test/`.
+      * Before each Dolma invocation, we symlink one of those into `documents/` so Dolma sees exactly that path.
+      * We never delete the seed or test source trees; we only swap the `documents/` symlink.
+      * After building the filter, we remove the seed symlink; after testing, we remove the test symlink.
+
+    Expected outputs:
+      * Under `<output_path>/<N>/`, you will find a mirror of the test-set directory structure,
+        each `.jsonl.gz` containing the duplicate-span attributes for that doc.
+      * Only test overlaps are uploaded; seed-shard attribute files are removed before upload.
+    """
+    with tempfile.TemporaryDirectory(dir="/dev/shm", prefix="marin_dedupe_") as tmpdir:
         if not config.decontaminate_source:
             raise ValueError("decontaminate_source is required in TRAIN_TEST_OVERLAP mode")
         if not config.ngram:
             raise ValueError("ngram config is required in TRAIN_TEST_OVERLAP mode")
-        
-        print(f"DEBUG: decontaminate_source={config.decontaminate_source}", flush=True)
 
-        # Handle both single int and list of ints for ngram_length
+        # Handle single or multiple ngram_lengths
         ngram_lengths = (
-            config.ngram.ngram_length 
-            if isinstance(config.ngram.ngram_length, list) 
-            else [config.ngram.ngram_length]
+            config.ngram.ngram_length if isinstance(config.ngram.ngram_length, list) else [config.ngram.ngram_length]
         )
-        print(f"DEBUG: Processing n-gram sizes: {ngram_lengths}", flush=True)
 
-        # 1) Shard the decontaminate source once (reused for all n-gram sizes)
-        doc_dir = os.path.join(tmpdir, "documents")
-        fsspec_mkdirs(doc_dir)
-        print(f"DEBUG: Created doc_dir={doc_dir}", flush=True)
-        _shard_decontaminate_source(config.decontaminate_source, doc_dir, config.processes)
+        # 1) Shard the decontaminate source once into a seed directory
+        seed_dir = os.path.join(tmpdir, "documents_seed")
+        fsspec_mkdirs(seed_dir)
+        seed_files = fsspec_glob(f"{seed_dir}/**/*.jsonl.gz")
+        _shard_decontaminate_source(config.decontaminate_source, seed_dir, config.processes)
 
-        # Process each n-gram size separately
-        for i, ngram_len in enumerate(ngram_lengths):
-            print(f"DEBUG: Processing n-gram size {ngram_len} ({i+1}/{len(ngram_lengths)})", flush=True)
-            
-            # Create n-gram specific configuration
+        # 2) Stage test data once under a separate directory
+        copy_files_in(config.input_path, tmpdir)
+        test_dir = os.path.join(tmpdir, "documents_test")
+        os.rename(os.path.join(tmpdir, "documents"), test_dir)
+        test_files = fsspec_glob(f"{test_dir}/**/*.jsonl.gz")
+
+        # 3) Iterate over n-gram sizes
+        for ngram_len in ngram_lengths:
             current_ngram_config = NGramConfig(
                 ngram_length=ngram_len,
                 stride=config.ngram.stride,
-                overlap_threshold=config.ngram.overlap_threshold
+                overlap_threshold=config.ngram.overlap_threshold,
             )
-            
-            # Create attribute name for this n-gram size
             current_attr_name = (
-                f"{config.attribute_name}_{ngram_len}" 
-                if len(ngram_lengths) > 1 
-                else config.attribute_name
+                f"{config.attribute_name}_{ngram_len}" if len(ngram_lengths) > 1 else config.attribute_name
             )
-            print(f"DEBUG: Using attribute name: {current_attr_name}", flush=True)
-            
-            # Create n-gram specific bloom filter path
-            current_bloom_filter = f"{config.bloom_filter_path}_{ngram_len}" if len(ngram_lengths) > 1 else config.bloom_filter_path
-            
-            # 2) Build the bloom filter for this n-gram size
-            print(f"DEBUG: Building bloom filter for {ngram_len}-gram", flush=True)
-            do_dedup(
+
+            # Determine bloom-filter filename for this size
+            current_bloom_filter = (
+                f"{config.bloom_filter_path}_{ngram_len}" if len(ngram_lengths) > 1 else config.bloom_filter_path
+            )
+
+            # a) Build bloom filter on seed data
+            os.symlink(seed_dir, os.path.join(tmpdir, "documents"))
+            build_rc = do_dedup(
                 tmpdir,
                 current_attr_name,
                 config.min_length,
@@ -615,15 +612,11 @@ def _run_train_test_overlap(config: DedupeConfig):
                 read_only=False,
                 bloom_filter_file=current_bloom_filter,
             )
-            
-            # 3) Clear out JSONLs (keep bloom filter)
-            print(f"DEBUG: Clearing JSONLs after building {ngram_len}-gram bloom filter", flush=True)
-            delete_jsonl_files(tmpdir)
-            
-            # 4) Apply filter to real input
-            print(f"DEBUG: Applying {ngram_len}-gram filter to input data", flush=True)
-            copy_files_in(config.input_path, tmpdir)
-            do_dedup(
+            os.remove(os.path.join(tmpdir, "documents"))
+
+            # b) Apply bloom filter to test data
+            os.symlink(test_dir, os.path.join(tmpdir, "documents"))
+            test_rc = do_dedup(
                 tmpdir,
                 current_attr_name,
                 config.min_length,
@@ -636,25 +629,29 @@ def _run_train_test_overlap(config: DedupeConfig):
                 read_only=True,
                 bloom_filter_file=current_bloom_filter,
             )
-            
-            # 5) Write results for this n-gram size
-            print(f"DEBUG: Writing results for {ngram_len}-gram", flush=True)
-            copy_files_out(tmpdir, config.output_path, current_attr_name)
-            
-            # 6) Clean up for next iteration (except on last iteration)
-            if i < len(ngram_lengths) - 1:
-                print(f"DEBUG: Cleaning up for next n-gram size", flush=True)
-                delete_jsonl_files(tmpdir)
-                # Remove the bloom filter file for this n-gram size to free space
-                bloom_filter_full_path = os.path.join(tmpdir, current_bloom_filter)
-                if os.path.exists(bloom_filter_full_path):
-                    os.remove(bloom_filter_full_path)
-                    print(f"DEBUG: Removed bloom filter {bloom_filter_full_path}", flush=True)
-        
-        print(f"DEBUG: Completed processing all {len(ngram_lengths)} n-gram sizes", flush=True)
+            os.remove(os.path.join(tmpdir, "documents"))
+
+            # c) Upload results for this n-gram size
+            ngram_output = os.path.join(config.output_path, str(ngram_len))
+            # Remove any seed-shard attribute files (at root of attribute dir)
+            attr_dir = os.path.join(tmpdir, "attributes", current_attr_name)
+            if os.path.isdir(attr_dir):
+                for fname in os.listdir(attr_dir):
+                    fpath = os.path.join(attr_dir, fname)
+                    # top-level attribute files from seed run end in .jsonl.gz and have no subdir
+                    if fname.endswith(".jsonl.gz") and os.path.isfile(fpath):
+                        os.remove(fpath)
+            # Now upload only test overlap files
+            copy_files_out(tmpdir, ngram_output, current_attr_name)
+
+            # d) Clean up the bloom-filter file to save space
+            bf_path = os.path.join(tmpdir, current_bloom_filter)
+            if os.path.exists(bf_path):
+                os.remove(bf_path)
+        fsspec_rm(tmpdir)
 
 
-@ray.remote(num_cpus=32, memory=1024 * 1024 * 1024 * 16)
+@ray.remote(num_cpus=16, memory=1024 * 1024 * 1024 * 16)
 def dedupe(config: DedupeConfig):
     """Top-level Ray task: dispatch between decontamination and deduplication workflows."""
     if config.mode == DedupMode.DECONTAMINATE:

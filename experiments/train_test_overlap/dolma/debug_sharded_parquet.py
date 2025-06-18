@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import dataclasses
 import logging
 import os
 from dataclasses import dataclass
@@ -20,6 +21,37 @@ logger = logging.getLogger(__name__)
 prefix = os.environ.get("MARIN_PREFIX")
 if not prefix:
     raise ValueError("MARIN_PREFIX environment variable must be set to your GCS prefix")
+
+# Base dedupe configuration - modify this to change n-gram settings, processes, etc.
+BASE_DEDUPE_CONFIG = DedupeConfig(
+    input_path="gs://marin-us-central2/decontamination/",
+    output_path="",  # Will be replaced per shard
+    attribute_name="ngram_overlap",
+    false_positive_rate=0.0001,
+    ngram=NGramConfig(
+        ngram_length=[10, 15],  # Multiple n-gram sizes - modify this to change n-grams
+        overlap_threshold=1e-6,
+        stride=0,
+    ),
+    processes=16,  # Modify this to change number of processes
+    mode=DedupMode.TRAIN_TEST_OVERLAP,
+    decontaminate_source="",  # Will be replaced per shard
+)
+
+
+def make_task(shard_path: str, base_output_path: str, base_config: DedupeConfig = BASE_DEDUPE_CONFIG) -> DedupeConfig:
+    """Create a DedupeConfig for a single shard using the base config."""
+    # Derive a unique output path from the shard file
+    shard_basename = clean_shard_basename(shard_path)
+    output_path = os.path.join(base_output_path, f"debug/{shard_basename}")
+
+    # Use dataclasses.replace to create a new config with the shard-specific values
+    return dataclasses.replace(
+        base_config,
+        output_path=output_path,
+        decontaminate_source=shard_path,
+    )
+
 
 # Identify dataset directory from the executor step or InputName
 # Extract the underlying ExecutorStep
@@ -48,6 +80,7 @@ else:
 @dataclass(frozen=True)
 class ShardedDedupeConfig:
     """Configuration for running dedupe across multiple shards with backpressure."""
+
     dataset_dir: str
     output_path: str
     max_in_flight: int = 16
@@ -59,31 +92,11 @@ def run_all_shards(config: ShardedDedupeConfig) -> str:
     Discover all dataset shards and launch dedupe tasks with backpressure.
     """
     logger.info(f"Looking for dataset shards in {config.dataset_dir}")
-    
+
     # Find all supported dataset shards under root (Parquet or compressed JSONL)
     shard_paths = find_dataset_shards(config.dataset_dir)
-    
-    def make_task(shard_path: str) -> DedupeConfig:
-        # Derive a unique output path from the shard file
-        shard_basename = clean_shard_basename(shard_path)
-        output_path = os.path.join(config.output_path, f"debug/{shard_basename}")
-        return DedupeConfig(
-            input_path="gs://marin-us-central2/decontamination/",
-            output_path=output_path,
-            attribute_name="ngram_overlap",
-            false_positive_rate=0.0001,
-            ngram=NGramConfig(
-                ngram_length=[10, 15],  # Multiple n-gram sizes
-                overlap_threshold=1e-6,
-                stride=0,
-            ),
-            processes=16,
-            mode=DedupMode.TRAIN_TEST_OVERLAP,
-            decontaminate_source=shard_path,
-        )
-
     # Generator of arguments for each Ray task
-    task_generator = ((make_task(shard_path),) for shard_path in shard_paths)
+    task_generator = ((make_task(shard_path, config.output_path),) for shard_path in shard_paths)
 
     # Launch tasks with simple backpressure
     for ref in simple_backpressure(
@@ -101,11 +114,11 @@ def run_all_shards(config: ShardedDedupeConfig) -> str:
 config = ShardedDedupeConfig(
     dataset_dir=dataset_dir,
     output_path=this_output_path(),
-    max_in_flight=16,
+    max_in_flight=64,
 )
 
 dedupe_step = ExecutorStep(
-    name="train_test_overlap/dolma/debug_sharded_parquet",
+    name="train_test_overlap/dolma/shm_test",
     fn=run_all_shards,
     config=config,
     description="Run per-shard Dolma dedupe against MMLU test set with backpressure",
