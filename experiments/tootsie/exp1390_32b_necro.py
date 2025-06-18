@@ -24,7 +24,7 @@ llama_32b_warmstart_train = dataclasses.replace(
     reset_data_loader_on_init=False,
     # Specifically don't want to allow partial checkpoints here because we want to
     # ensure that the opt state is fully loaded and we don't have any issues with
-    allow_partial_checkpoint=False,
+    allow_partial_checkpoint=True,
     optimizer_config=AdamConfig(
         beta1=0.9,
         beta2=0.95,
