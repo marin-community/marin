@@ -19,7 +19,8 @@ from experiments.defaults import _prepare_data_config
 from experiments.evals.task_configs import convert_to_levanter_task_config
 from experiments.data_efficiency.models import model_dict
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.evaluation.log_probs import default_lm_log_probs, default_ensemble_log_probs
+from marin.execution.executor import ExecutorStep, this_output_path, output_path_of
 from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig, lm_mixture_data_config
 from marin.training.training import TpuPodConfig, TrainLmOnPodConfig, run_levanter_train_lm
 
@@ -227,4 +228,29 @@ def data_efficiency_train_step(data_efficiency_config: DataEfficiencyConfig) -> 
         f"= {data_efficiency_config.total_tokens:,} total tokens.",
         config=train_lm_on_pod_config,
         pip_dependency_groups=["tokenize_train"],
+    )
+
+def data_efficiency_eval_model(data_efficiency_executor_step: ExecutorStep) -> ExecutorStep:
+    data_efficiency_train_lm_on_pod_config = data_efficiency_executor_step.config
+    data_efficiency_train_lm_config = data_efficiency_train_lm_on_pod_config.train_config
+
+    return default_lm_log_probs(
+        checkpoint=output_path_of(data_efficiency_executor_step, f"hf/step-{int(data_efficiency_train_lm_config.trainer.num_train_steps-1)}"),
+        model=data_efficiency_train_lm_config.model,
+        data=data_efficiency_train_lm_config.data,
+        checkpoint_is_hf=True,
+    )
+
+def data_efficiency_eval_ensemble(data_efficiency_executor_steps: list[ExecutorStep]) -> ExecutorStep:
+    data_efficiency_train_lm_on_pod_config = data_efficiency_executor_steps[0].config
+    data_efficiency_train_lm_config = data_efficiency_train_lm_on_pod_config.train_config
+
+    return default_ensemble_log_probs(
+        checkpoints=[
+            output_path_of(data_efficiency_executor_step, f"hf/step-{int(data_efficiency_executor_step.config.train_config.trainer.num_train_steps-1)}")
+            for data_efficiency_executor_step in data_efficiency_executor_steps
+        ],
+        model=data_efficiency_train_lm_config.model,
+        data=data_efficiency_train_lm_config.data,
+        checkpoint_is_hf=True,
     )

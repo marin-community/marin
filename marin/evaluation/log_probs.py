@@ -11,6 +11,8 @@ from levanter.data.text import LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
 from levanter.main.eval_lm import EvalLmConfig as LevanterEvalLmConfig
 from levanter.main.eval_lm import main as eval_lm_main
+from levanter.main.eval_ensemble import EvalEnsembleConfig as LevanterEvalEnsembleConfig
+from levanter.main.eval_ensemble import main as eval_ensemble_main
 from levanter.models.lm_model import LmConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -34,6 +36,25 @@ class EvalLmConfig:
     """Whether the checkpoint is in HF format."""
 
     log_entropy: bool = True
+    """ Whether to log entropies of the model. """
+
+    max_samples_per_dataset: int | None = None
+
+@dataclass
+class EvalEnsembleLmConfig:
+    """
+    Configuration for visualizing log probabilities of a language model.
+    """
+
+    checkpoint_paths: list[str | InputName]
+    model: LmConfig
+    datasets: LMMixtureDatasetConfig
+    per_device_batch_size: int = 4
+    output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
+    checkpoint_is_hf: bool = False
+    """Whether the checkpoint is in HF format."""
+
+    log_entropy: bool = False
     """ Whether to log entropies of the model. """
 
     max_samples_per_dataset: int | None = None
@@ -71,6 +92,38 @@ def default_lm_log_probs(
         ),
     )
 
+def default_ensemble_log_probs(
+    checkpoints: list[str | InputName],
+    model: LmConfig,
+    data: LMMixtureDatasetConfig,
+    checkpoint_is_hf: bool,
+    per_device_batch_size: int = 4,
+    max_samples_per_dataset: int | None = None,
+) -> ExecutorStep:
+    """
+    Creates a step to evaluate log probabilities of a language model.
+    Args:
+        checkpoint:  The checkpoint to evaluate.
+        model:  The model configuration.
+        data: The data to evaluate on.
+        checkpoint_is_hf:  Whether the checkpoint is in HF format.
+    """
+    name = ckpt_path_to_step_name(checkpoints[0])
+    name = f"analysis/log_probs/data-efficiency/ensemble-v10-{len(checkpoints)}x-{name}"
+    return ExecutorStep(
+        name=name,
+        fn=evaluate_ensemble_log_probs,
+        config=EvalEnsembleLmConfig(
+            checkpoint_paths=checkpoints,  # type: ignore
+            model=model,
+            datasets=data,
+            log_entropy=False,
+            checkpoint_is_hf=checkpoint_is_hf,
+            per_device_batch_size=per_device_batch_size,
+            max_samples_per_dataset=max_samples_per_dataset,
+        ),
+    )
+
 
 @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1}, max_calls=1)
 def do_eval_lm(config: LevanterEvalLmConfig) -> None:
@@ -83,6 +136,12 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
     # _separate_process_fn(eval_lm_main, (config,), {})
     eval_lm_main(config)
 
+@ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1}, max_calls=1)
+def do_eval_ensemble(config: LevanterEvalEnsembleConfig) -> None:
+    """
+    Evaluate log probabilities of a language model on a mixture, and optionally entropies.
+    """
+    eval_ensemble_main(config)
 
 def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
     """
@@ -106,7 +165,7 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
         model=config.model,
         data=config.datasets,
         trainer=TrainerConfig(
-            tracker=WandbConfig(project="marin", tags=["eval_lm"], name=name, id=name[:64]),
+            tracker=WandbConfig(project="suhas-eval-data-efficiency", tags=["eval_lm"], name=name, id=name[:64]),
             ray=RayConfig(auto_start_cluster=False),
             per_device_eval_parallelism=config.per_device_batch_size,
             max_eval_batches=max_eval_batches,
@@ -114,3 +173,34 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
         log_entropy=config.log_entropy,
     )
     ray.get(do_eval_lm.remote(levanter_config))
+
+def evaluate_ensemble_log_probs(config: EvalEnsembleLmConfig) -> None:
+    """
+    Evaluate log probabilities of a language model on a mixture, and optionally entropies.
+
+    Args:
+        config (EvalLmConfig): The configuration for visualizing log probabilities.
+    """
+
+    name = os.path.basename(config.output_path)
+    name = f"ppl-eval-{name}"
+
+    if config.max_samples_per_dataset is None:
+        max_eval_batches = None
+    else:
+        max_eval_batches = config.max_samples_per_dataset // config.per_device_batch_size
+
+    levanter_config = LevanterEvalEnsembleConfig(
+        checkpoint_paths=config.checkpoint_paths if not config.checkpoint_is_hf else None,
+        hf_checkpoints=config.checkpoint_paths if config.checkpoint_is_hf else None,
+        model=config.model,
+        data=config.datasets,
+        trainer=TrainerConfig(
+            tracker=WandbConfig(project="suhas-eval-data-efficiency", tags=["eval_lm"], name=name, id=name[:64]),
+            ray=RayConfig(auto_start_cluster=False),
+            per_device_eval_parallelism=config.per_device_batch_size,
+            max_eval_batches=max_eval_batches,
+        ),
+        log_entropy=config.log_entropy,
+    )
+    ray.get(do_eval_ensemble.remote(levanter_config))
