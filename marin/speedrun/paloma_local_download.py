@@ -24,7 +24,7 @@ paloma_speedrun = ExecutorStep(
 
 
 def speedrun_paloma_tokenized(tokenizer: str = llama3_tokenizer):
-    return paloma_tokenized(base_path="raw/paloma-speedrun", tokenizer=tokenizer, paloma_raw=paloma_speedrun).values()
+    return paloma_tokenized(base_path="raw/paloma-speedrun", tokenizer=tokenizer, paloma_raw=paloma_speedrun)
 
 
 if __name__ == "__main__":
