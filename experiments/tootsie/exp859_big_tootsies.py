@@ -14,7 +14,7 @@ Also buried in here is a 56B model that I thought was a 70B model. Always double
 
 import dataclasses
 
-from levanter.models.rotary import DefaultRotaryEmbeddingsConfig
+from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 from levanter.schedule import ScheduleStep
 
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3
