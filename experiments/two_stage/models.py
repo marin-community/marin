@@ -1,7 +1,7 @@
 import dataclasses
 
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.rotary import Llama3RotaryEmbeddingsConfig
 
 from experiments.llama import llama_1_4b, llama_1_9b, llama_150m, llama_300m, llama_600m
 

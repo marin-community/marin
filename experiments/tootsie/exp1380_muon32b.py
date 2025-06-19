@@ -7,8 +7,7 @@ import dataclasses
 from levanter.optim import MuonConfig
 
 from experiments.defaults import default_train
-from experiments.llama import llama_32b
-from experiments.tootsie.exp1295_32b import llama_32b_tootsie, llama_32b_train_config, nemotron_mix
+from experiments.tootsie.exp1295_32b import llama_32b_remat, llama_32b_tootsie, llama_32b_train_config, nemotron_mix
 from marin.execution import executor_main
 from marin.resources import TpuPodConfig
 
@@ -21,6 +20,9 @@ muon_config = MuonConfig(
     learning_rate=2e-3,
     weight_decay=0.1,
     momentum=0.98,
+    # Keep wsd
+    lr_schedule="linear",
+    decay=0.4,
 )
 
 llama_32b_warmstart_train = dataclasses.replace(
@@ -34,7 +36,7 @@ llama_32b_warmstart_train = dataclasses.replace(
 llama_32b_muon = default_train(
     name="marin-32b-muon-4",
     tokenized=nemotron_mix,
-    model_config=llama_32b,
+    model_config=llama_32b_remat,
     train_config=llama_32b_warmstart_train,
     tags=["llama", "32b", "ema", "exp859", "tootsie", "muon"],
     eval_harness_tasks=[],
