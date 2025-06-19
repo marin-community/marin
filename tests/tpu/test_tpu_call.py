@@ -14,6 +14,6 @@ def increment(x):
 
 
 @pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
-def test_scheduling_on_tpu(ray_tpu_cluster):
+def test_scheduling_on_tpu(ray_cluster):
     result = ray.get(increment.remote(1))
     assert result == 2

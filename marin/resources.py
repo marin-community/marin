@@ -2,13 +2,14 @@ import dataclasses
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import ray
 from levanter.utils.py_utils import logical_cpu_core_count
 from levanter.utils.ray_utils import RayResources
 from ray.remote_function import RemoteFunction
 from ray.runtime_env import RuntimeEnv
+from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from marin.resources_utils import AcceleratorType
 
@@ -118,6 +119,13 @@ class GpuConfig(ResourceConfig):
     device_flops_override: float | None = None
     """Optional override for device FLOPS. If set, this value will be used instead of looking up in device_flops_map."""
 
+    packing_strategy: Literal["PACK", "STRICT_PACK"] = "PACK"
+    """The packing strategy to use for the GPUs.
+    PACK means that GPUs can be spread across multiple nodes.
+    STRICT_PACK means that GPUs must be packed into a single node.
+    Defaults to PACK.
+    """
+
     def __post_init__(self):
         if self.accelerator_type is not None:
             # Ray uses uppercase for accelerator types
@@ -137,6 +145,10 @@ class GpuConfig(ResourceConfig):
             out["accelerator_type"] = self.accelerator_type
 
         return out
+
+    def as_ray_scheduling_strategy(self) -> PlacementGroupSchedulingStrategy:
+        pg = ray.util.placement_group([{"GPU": 1, "CPU": 1}] * self.gpu_count, strategy=self.packing_strategy)
+        return PlacementGroupSchedulingStrategy(pg, placement_group_capture_child_tasks=True)
 
     def as_ray_resources(self) -> RayResources:
         return RayResources(**self.as_remote_kwargs())
@@ -186,21 +198,59 @@ class TpuPodConfig(ResourceConfig):
     """Type of TPU to use, e.g. v4-128."""
     slice_count: int = 1
     """Number of TPU slices for training."""
-
+    num_cpus: int = 8
+    """Number of CPUs to use for training."""
     runtime_env: RuntimeEnv = dataclasses.field(default_factory=lambda: RuntimeEnv())
-
     device_flops_override: float | None = None
     """Optional override for device FLOPS. If set, this value will be used instead of looking up in device_flops_map."""
 
+    # These are used for fractional pod usage such as inference or quality filter model training.
+    include_tpu_in_ray_resources: bool = False
+    """Whether to include the TPU in the Ray resource bundle.
+    False means we let Levanter schedule the TPUs, used in training.
+    True means the TPU will be included in the resource bundle as "TPU" and
+    the TPU head will be included as f"TPU-{tpu_type}-head".
+    Defaults to False.
+    """
+    chip_count: int = 1
+    """Number of TPU chips to use."""
+    include_tpu_head: bool = False
+    """Whether to include the TPU head in the resource bundle."""
+    packing_strategy: Literal["PACK", "STRICT_PACK"] = "PACK"
+    """The packing strategy to use for the TPUs.
+    PACK means that TPUs can be spread across multiple nodes.
+    STRICT_PACK means that TPUs must be packed into a single node.
+    Defaults to PACK.
+    """
+
     def accelerator_descriptor(self) -> str | None:
         return self.tpu_type
+
+    def get_ray_resources_dict(self) -> dict[str, Any]:
+        resources: dict[str, Any] = {}
+        if self.include_tpu_in_ray_resources:
+            resources.update({"TPU": self.chip_count})
+            if self.include_tpu_head:
+                resources.update({f"TPU-{self.tpu_type}-head": 1})
+        return resources
 
     def as_ray_resources(self) -> RayResources:
         """
         Returns the resource bundle for this TPU configuration. We handle the TPU requirements separately
         so don't need to specify them here.
         """
-        return RayResources(runtime_env=self.runtime_env, num_cpus=8)
+        return RayResources(**self.as_remote_kwargs())
+
+    def as_remote_kwargs(self) -> dict:
+        return dict(runtime_env=self.runtime_env, resources=self.get_ray_resources_dict(), num_cpus=self.num_cpus)
+
+    def as_ray_scheduling_strategy(self) -> PlacementGroupSchedulingStrategy:
+        # One bundle per tensor parallel worker
+        pg = ray.util.placement_group(
+            [{"TPU": 1, "CPU": 1}] * self.chip_count,
+            strategy=self.packing_strategy,  # STRICT_PACK means same node, PACK can span multiple nodes
+        )
+        return PlacementGroupSchedulingStrategy(pg, placement_group_capture_child_tasks=True)
 
     def device_flops(self) -> float:
         """Get the peak FLOPs/s for *each* device of the given TPU type."""

@@ -23,6 +23,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
+        "lm-eval",
         # NOTE(chris): We put lm-eval[ifeval] in the Dockerfile.vllm, so this dependency is not needed
     ]
     _env_vars: ClassVar[dict[str, str]] = {
@@ -49,8 +50,6 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         # From https://github.com/EleutherAI/lm-evaluation-harness?tab=readme-ov-file#model-apis-and-inference-servers
         # Run lm_eval with the model and the specified evals
         try:
-            # NOTE(chris): This is not supported on TPUs
-            # set_cuda_visible_devices()
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
 
