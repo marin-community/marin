@@ -11,16 +11,14 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 
-paloma_speedrun = (
-    ExecutorStep(
-        name="raw/paloma-speedrun",
-        fn=download_hf,
-        config=HfDownloadConfig(
-            hf_dataset_id=versioned("allenai/paloma"),
-            revision=versioned("65cd6fc"),
-            gcs_output_path=this_output_path(),
-            wait_for_completion=True,
-        ),
+paloma_speedrun = ExecutorStep(
+    name="raw/paloma-speedrun",
+    fn=download_hf,
+    config=HfDownloadConfig(
+        hf_dataset_id=versioned("allenai/paloma"),
+        revision=versioned("65cd6fc"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
     ),
 )
 
