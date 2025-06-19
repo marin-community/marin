@@ -4,39 +4,14 @@ The Paloma eval sets, downloaded and tokenized
 https://huggingface.co/datasets/allenai/paloma
 """
 
-import os.path
-
+from experiments.paloma import paloma_tokenized
 from marin.download import HfDownloadConfig
 from marin.download.huggingface.download_hf import download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig
-from marin.processing.tokenize.data_configs import TokenizerStep
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 
-
-# The datasets in the Paloma eval set and their paths within the HF dataset
-# https://huggingface.co/datasets/allenai/paloma
-PALOMA_DATASETS_TO_DIR = {
-    "4chan": "4chan_meta_sep",
-    "c4_100_domains": "c4_100_domains",
-    "c4_en": "c4_en",
-    "dolma-v1_5": "dolma-v1_5",
-    "dolma_100_programing_languages": "dolma_100_programing_languages",
-    "dolma_100_subreddits": "dolma_100_subreddits",
-    "falcon-refinedweb": "falcon-refinedweb",
-    "gab": "gab",
-    "m2d2_s2orc_unsplit": "m2d2_s2orc_unsplit",
-    "m2d2_wikipedia_unsplit": "m2d2_wikipedia_unsplit",
-    "manosphere_meta_sep": "manosphere_meta_sep",
-    "mc4": "mc4",
-    "ptb": "ptb",
-    "redpajama": "redpajama",
-    "twitterAAE_HELM_fixed": "twitterAAE_HELM_fixed",
-    "wikitext_103": "wikitext_103",
-}
-
-paloma = (
+paloma_speedrun = (
     ExecutorStep(
         name="raw/paloma-speedrun",
         fn=download_hf,
@@ -50,24 +25,9 @@ paloma = (
 )
 
 
-def paloma_tokenized(*, base_path="tokenized/", tokenizer: str = llama3_tokenizer) -> dict[str, TokenizerStep]:
-    """
-    Returns a dictionary of steps to tokenize the Paloma eval sets. Keys are the subset names (with `paloma/` prefix)
-    """
-    # avoid cyclic dependency
-    from experiments.defaults import default_tokenize
-
-    paloma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
-    for dataset, path_part in PALOMA_DATASETS_TO_DIR.items():
-        paloma_steps[os.path.join("paloma-speedrun", dataset)] = default_tokenize(
-            name=os.path.join("paloma-speedrun", dataset),
-            dataset=paloma.cd(f"{path_part}/val/val*.jsonl.gz"),
-            tokenizer=tokenizer,
-            is_validation=True,
-        )
-
-    return paloma_steps
+def speedrun_paloma_tokenized(tokenizer: str = llama3_tokenizer):
+    return paloma_tokenized(base_path="raw/paloma-speedrun", tokenizer=tokenizer, paloma_raw=paloma_speedrun).values()
 
 
 if __name__ == "__main__":
-    executor_main(steps=[paloma, *paloma_tokenized(base_path="raw/paloma-speedrun").values()])
+    executor_main(steps=[paloma_speedrun, *speedrun_paloma_tokenized])

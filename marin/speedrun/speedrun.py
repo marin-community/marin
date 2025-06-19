@@ -22,6 +22,8 @@ from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
+from marin.processing.tokenize import add_validation_sets_to_mixture
+from marin.speedrun.paloma_local_download import speedrun_paloma_tokenized
 from marin.training.training import TrainLmOnPodConfig
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 from marin.utils import asdict_excluding
@@ -213,7 +215,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
             logger.warning(
                 f"Device FLOPS in wandb ({wandb_device_flops}) does not match device FLOPS in config "
                 f"({config.speedrun_config.device_flops})."
-                f"Going with config value."
+                "Going with config value."
             )
 
     # Get timestamps in UTC
@@ -287,14 +289,16 @@ def default_speedrun(
     run_tags = ["speedrun"] + (tags or [])
 
     train_config = dataclasses.replace(config.train_config, data_seed=42)
+    pretraining_data = add_validation_sets_to_mixture(config.tokenized_dataset, speedrun_paloma_tokenized)
     train_step = default_train(
         name=f"speedrun/{name}",
-        tokenized=config.tokenized_dataset,
+        tokenized=pretraining_data,
         model_config=config.model_config,
         train_config=train_config,
         tags=run_tags,
         eval_harness_tasks=None,
         override_output_path=override_output_path,
+        use_default_validation=False,
     )
 
     # Extract wandb info from train step
@@ -306,7 +310,6 @@ def default_speedrun(
         and train_step.config.train_config.trainer
         and train_step.config.train_config.trainer.tracker
     ):
-
         wandb_entity = train_step.config.train_config.trainer.tracker.entity or WANDB_ENTITY
         wandb_project = train_step.config.train_config.trainer.tracker.project or WANDB_PROJECT
 

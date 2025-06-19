@@ -35,6 +35,7 @@ from experiments.evals.task_configs import (
     convert_to_task_metrics,
 )
 from experiments.llama import compute_num_parameters, llama_8b
+from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.download.huggingface.download import DownloadConfig
@@ -168,17 +169,8 @@ def default_tokenize(
 
 
 @lru_cache  # LRU to make the executor happier
-def default_validation_sets(
-    tokenizer: str, is_speedrun: bool = False, base_path: str = "tokenized/"
-) -> dict[str, TokenizerStep]:
-    if is_speedrun:
-        from marin.speedrun.paloma_local_download import paloma_tokenized
-
-        return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
-    else:
-        from experiments.paloma import paloma_tokenized
-
-        return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
+def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
+    return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
 
 
 def simulated_epoching_train(
@@ -236,7 +228,6 @@ def default_train(
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     override_output_path: str | None = None,
-    is_speedrun: bool = False,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -249,10 +240,9 @@ def default_train(
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
-        is_speedrun: Whether this is a speedrun. If so, load appropriate val set and in the future, other metrics and settings we need for speedrun.
     """
 
-    pretraining_data = _prepare_data_config(tokenized, use_default_validation, is_speedrun)
+    pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
     vocab_size = _get_vocab_size(pretraining_data)
 
@@ -549,7 +539,6 @@ def _get_vocab_size(pretraining_data):
 def _prepare_data_config(
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     use_default_validation: bool,
-    is_speedrun: bool = False,
 ) -> LMMixtureDatasetConfig:
     """
     Prepare a tokenized dataset for training. This is mostly just combining the tokenized data with the validation sets.
@@ -561,7 +550,7 @@ def _prepare_data_config(
     """
     tokenizer = _get_tokenizer_for_train(tokenized)
     if use_default_validation:
-        validation_sets = default_validation_sets(tokenizer=tokenizer, is_speedrun=is_speedrun)
+        validation_sets = default_validation_sets(tokenizer=tokenizer)
     else:
         validation_sets = {}
 
