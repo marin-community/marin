@@ -34,7 +34,9 @@ dependencies = [
     "haliax>=1.4.dev348",
     "sentencepiece",
     "lz4",
-    "wandb<=0.19.9"
+    "wandb<=0.19.9",
+    "markdownify",
+    "html2text",
 ]
 
 [project.optional-dependencies]
@@ -104,7 +106,6 @@ quality_dedup_consolidate = [
     "transformers",
 ]
 tokenize_train = [
-    # "jax[tpu]==0.5.1",
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1359",
     "haliax>=1.4.dev348",

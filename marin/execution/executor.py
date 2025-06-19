@@ -178,6 +178,9 @@ class ExecutorStep(Generic[ConfigT]):
         """Return a copy of the step with the given output_path."""
         return replace(self, override_output_path=output_path)
 
+    def as_input_name(self) -> "InputName":
+        return InputName(step=self, name=None)
+
 
 @dataclass(frozen=True)
 class InputName:
@@ -848,9 +851,12 @@ def _get_ray_status(current_owner_task_id: str | None) -> str | None:
     if current_owner_task_id is None:
         return current_owner_ray_status
 
-    current_owner = ray.util.state.get_task(current_owner_task_id)
-    if type(current_owner) is list:  # Due to retries in ray, task_state can be a list of states
-        current_owner = current_owner[-1]
+    try:
+        current_owner = ray.util.state.get_task(current_owner_task_id)
+        if type(current_owner) is list:  # Due to retries in ray, task_state can be a list of states
+            current_owner = current_owner[-1]
+    except ray.util.state.exception.RayStateApiException:
+        current_owner = None
 
     if current_owner is None:  # We need to retry. Ray still does not have the status of the task
         current_owner_ray_status = STATUS_UNKNOWN
@@ -896,7 +902,7 @@ def get_status(output_path: str, current_owner_task_id: str | None, states: dict
     if current_owner_gcs_status in [STATUS_RUNNING, STATUS_WAITING]:
         logger.info(
             f"Status of {output_path = } is {current_owner_gcs_status} as per GCP. "
-            f"But as per Ray, the task has terminated, it's likely that this task was cancelled previously"
+            "But as per Ray, the task has terminated, it's likely that this task was cancelled previously"
         )
         current_owner_gcs_status = STATUS_CANCELLED
 

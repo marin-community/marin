@@ -2,8 +2,8 @@
 Specifies a sequence of Llama 3 models from small to large.
 """
 
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.rotary import Llama3RotaryEmbeddingsConfig
 
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.resources import TpuPodConfig
