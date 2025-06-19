@@ -17,7 +17,7 @@ import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 
-from experiments.defaults import default_train
+from experiments.defaults import _get_tokenizer_for_train, default_train
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
@@ -289,7 +289,10 @@ def default_speedrun(
     run_tags = ["speedrun"] + (tags or [])
 
     train_config = dataclasses.replace(config.train_config, data_seed=42)
-    pretraining_data = add_validation_sets_to_mixture(config.tokenized_dataset, speedrun_paloma_tokenized)
+    pretraining_data = add_validation_sets_to_mixture(
+        config.tokenized_dataset,
+        speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
+    )
     train_step = default_train(
         name=f"speedrun/{name}",
         tokenized=pretraining_data,
