@@ -1,5 +1,6 @@
 import gzip
 import json
+import logging
 import os
 import subprocess
 import tempfile
@@ -14,7 +15,9 @@ import ray
 from tqdm import tqdm
 
 from marin.core.runtime import cached_or_construct_output
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_mkdirs, fsspec_rm, rebase_file_path
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_mkdirs, fsspec_rm, rebase_file_path, fsspec_size
+
+logger = logging.getLogger(__name__)
 
 
 class DedupMode(str, Enum):
@@ -101,12 +104,49 @@ def _parquet_to_jsonl_gz(input_path: str, docs_dir: str) -> None:
         parquet_files = [input_path]
     else:
         parquet_files = fsspec_glob(f"{input_path.rstrip('/')}/*.parquet")
+    
     for pq in parquet_files:
         df = pd.read_parquet(pq)
+        # Skip empty Parquet files gracefully
+        if df.empty:
+            logger.error(f"Parquet file {pq} contains 0 rows, skipping conversion")
+            continue
         out_name = os.path.splitext(os.path.basename(pq))[0] + ".jsonl.gz"
         out_path = os.path.join(docs_dir, out_name)
+        
+        print(f"Converting {pq} with columns: {list(df.columns)}")
+        
+        # Determine text field strategy
+        has_text = "text" in df.columns
+        has_content = "content" in df.columns
+        
+        if not has_text and not has_content:
+            logger.error(f"CRITICAL: Parquet file {pq} has neither 'text' nor 'content' fields! Available columns: {list(df.columns)}")
+            logger.error(f"Cannot convert {pq} - skipping this file")
+            continue
+        elif not has_text and has_content:
+            logger.warning(f"Parquet file {pq} missing 'text' field, using 'content' as fallback")
+        
         with gzip.open(out_path, "wt") as f:
             for rec in df.to_dict(orient="records"):
+                # Robust text field handling
+                if "text" not in rec:
+                    if "content" in rec:
+                        rec["text"] = rec.pop("content")
+                    else:
+                        logger.error(f"Record in {pq} missing both 'text' and 'content' fields, has keys: {list(rec.keys())}")
+                        continue
+                
+                # Validate text field is actually a string
+                if not isinstance(rec["text"], str):
+                    logger.warning(f"Text field in {pq} is not a string (type: {type(rec['text'])}), converting to string")
+                    rec["text"] = str(rec["text"])
+                    
+                if "id" not in rec:
+                    # Generate a synthetic ID if missing
+                    logger.warning(f"Adding synthetic id to {pq}")
+                    rec["id"] = f"synthetic_{hash(str(rec))}"
+                
                 f.write(json.dumps(rec) + "\n")
 
 
@@ -121,8 +161,6 @@ def copy_files_in(input_path, local_base_dir):
         _parquet_to_jsonl_gz(input_path, docs_dir)
         print(f"Converted Parquet → JSONL.gz into {docs_dir}")
         return
-    else:
-        pass
 
     # If input_path is a single file, copy only that file
     if fsspec_exists(input_path) and not fsspec_isdir(input_path):
@@ -386,17 +424,26 @@ def estimate_total_ngrams_fast(local_base_dir, ngram, sample_lines: int = 1000):
     total_lines = 0  # total records in corpus
     sample_lines_seen = 0  # lines actually included in the sample
     ngram_total = 0  # Σ n-grams over sampled lines
+    malformed_lines = 0
 
     for file in fsspec_glob(pattern):
+        print(f"Sampling from {file}")
         with fsspec.open(file, "rt", compression="infer") as f:
-            for raw_line in f:
+            for line_num, raw_line in enumerate(f):
                 total_lines += 1
                 if sample_lines_seen >= sample_lines:
                     continue
 
                 try:
-                    text = json.loads(raw_line).get("text", "")
-                except json.JSONDecodeError:
+                    data = json.loads(raw_line)
+                    text = data.get("text", "")
+                    if not isinstance(text, str):
+                        print(f"Warning: 'text' field is not a string in {file}:{line_num}, type: {type(text)}")
+                        malformed_lines += 1
+                        continue
+                except json.JSONDecodeError as e:
+                    print(f"JSON decode error in {file}:{line_num}: {e}")
+                    malformed_lines += 1
                     continue
 
                 tokens = text.split()
@@ -408,6 +455,10 @@ def estimate_total_ngrams_fast(local_base_dir, ngram, sample_lines: int = 1000):
                 else:
                     ngram_total += (L - ngram.ngram_length) // step + 1
                 sample_lines_seen += 1
+
+    print(f"Sampled {sample_lines_seen} valid lines out of {total_lines} total lines")
+    if malformed_lines > 0:
+        print(f"Warning: Found {malformed_lines} malformed lines during sampling")
 
     if sample_lines_seen == 0:
         # nothing decoded ⇒ fall back to "one n-gram per line" heuristic
@@ -428,7 +479,7 @@ def _shard_decontaminate_source(source_path: str, doc_dir: str, num_processes: i
     for i in range(num_processes):
         shard_path = os.path.join(doc_dir, f"shard_{i}.jsonl.gz")
         writers.append(fsspec.open(shard_path, "wt", compression="gzip").open())
-
+    print(f"Sharding decontaminate source {source_path} into {num_processes} shards under {doc_dir}", flush=True)
     try:
         if source_path.endswith(".parquet"):
             _shard_parquet_source(source_path, writers)
@@ -442,21 +493,72 @@ def _shard_decontaminate_source(source_path: str, doc_dir: str, num_processes: i
 def _shard_parquet_source(parquet_path: str, writers: list) -> None:
     """Stream Parquet file and distribute records across writers."""
 
+    # Skip 0-byte parquet files (avoids ArrowInvalid on empty files)
+    try:
+        if fsspec_size(parquet_path) == 0:
+            logger.error(f"Parquet file {parquet_path} is 0 bytes, skipping shard processing")
+            return
+    except Exception as e:
+        logger.warning(f"Could not determine size for {parquet_path}: {e}")
     with fsspec.open(parquet_path, "rb") as f:
         parquet_file = pq.ParquetFile(f)
+        # Skip empty Parquet shards gracefully
+        if parquet_file.metadata.num_rows == 0:
+            logger.error(f"Parquet file {parquet_path} contains 0 rows, skipping shard processing")
+            return
+        
+        # Debug: print schema info
+        schema = parquet_file.schema
+        column_names = [field.name for field in schema]
+        print(f"Parquet schema for {parquet_path}: {column_names}")
+        
+        # Determine text field strategy
+        has_text = "text" in column_names
+        has_content = "content" in column_names
+        
+        if not has_text and not has_content:
+            logger.error(f"CRITICAL: Parquet file {parquet_path} has neither 'text' nor 'content' fields! Available columns: {column_names}")
+            logger.error(f"Cannot process {parquet_path} - aborting shard operation")
+            return
+        elif not has_text and has_content:
+            logger.warning(f"Parquet file {parquet_path} missing 'text' field, using 'content' as fallback")
 
         idx = 0
         # Read in batches to avoid loading entire file into memory
         for batch in parquet_file.iter_batches(batch_size=1000):
             # Convert batch to pandas for easier record iteration
             df = batch.to_pandas()
+            
+            # Debug: print first record in first batch
+            if idx == 0 and len(df) > 0:
+                first_record = df.iloc[0].to_dict()
+                print(f"First record keys: {list(first_record.keys())}")
+                print(f"First record sample: {dict(list(first_record.items())[:3])}")
+            
             for record in df.to_dict(orient="records"):
+                # Robust text field handling
+                if "text" not in record:
+                    if "content" in record:
+                        record["text"] = record.pop("content")
+                    else:
+                        logger.error(f"Record in {parquet_path} missing both 'text' and 'content' fields, has keys: {list(record.keys())}")
+                        continue
+                
+                # Validate text field is actually a string
+                if not isinstance(record["text"], str):
+                    logger.warning(f"Text field in {parquet_path} is not a string (type: {type(record['text'])}), converting to string")
+                    record["text"] = str(record["text"])
+                    
+                if "id" not in record:
+                    # Generate a synthetic ID if missing
+                    record["id"] = f"synthetic_{hash(str(record))}"
+                
                 json_line = json.dumps(record) + "\n"
                 writers[idx % len(writers)].write(json_line)
                 idx += 1
 
             if idx % 10000 == 0:
-                pass
+                print(f"Sharded {idx} records from {parquet_path}", flush=True)
 
 
 def _shard_jsonl_source(jsonl_path: str, writers: list) -> None:
@@ -572,14 +674,16 @@ def _run_train_test_overlap(config: DedupeConfig):
         # 1) Shard the decontaminate source once into a seed directory
         seed_dir = os.path.join(tmpdir, "documents_seed")
         fsspec_mkdirs(seed_dir)
-        seed_files = fsspec_glob(f"{seed_dir}/**/*.jsonl.gz")
         _shard_decontaminate_source(config.decontaminate_source, seed_dir, config.processes)
+        
+        # Debug: print contents of documents_seed directory
+        seed_files = os.listdir(seed_dir) if os.path.exists(seed_dir) else []
+        print(f"Contents of documents_seed directory: {seed_files}", flush=True)
 
         # 2) Stage test data once under a separate directory
         copy_files_in(config.input_path, tmpdir)
         test_dir = os.path.join(tmpdir, "documents_test")
         os.rename(os.path.join(tmpdir, "documents"), test_dir)
-        test_files = fsspec_glob(f"{test_dir}/**/*.jsonl.gz")
 
         # 3) Iterate over n-gram sizes
         for ngram_len in ngram_lengths:
@@ -651,7 +755,7 @@ def _run_train_test_overlap(config: DedupeConfig):
         fsspec_rm(tmpdir)
 
 
-@ray.remote(num_cpus=16, memory=1024 * 1024 * 1024 * 16)
+@ray.remote(num_cpus=8, memory=1024 * 1024 * 1024 * 16)
 def dedupe(config: DedupeConfig):
     """Top-level Ray task: dispatch between decontamination and deduplication workflows."""
     if config.mode == DedupMode.DECONTAMINATE:
