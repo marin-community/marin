@@ -5,8 +5,8 @@ from experiments.data_efficiency.ensemble_members import ensemble_members_train_
 eval_steps = [
     # data_efficiency_eval_model(ensemble_members_train_steps[0]),
     # data_efficiency_eval_ensemble(ensemble_members_train_steps[:1]),
-    data_efficiency_eval_ensemble(ensemble_members_train_steps[:2]),
-    # data_efficiency_eval_ensemble(ensemble_members_train_steps[:4]),
+    data_efficiency_eval_ensemble(ensemble_members_train_steps[:4]),
+    # data_efficiency_eval_ensemble(ensemble_members_train_steps[:5]),
     # data_efficiency_eval_ensemble(ensemble_members_train_steps[:10])
     # data_efficiency_eval_ensemble([ensemble_members_train_steps[0], ensemble_members_train_steps[0], ensemble_members_train_steps[0]])
 ]

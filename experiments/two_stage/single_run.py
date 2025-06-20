@@ -5,7 +5,7 @@ if __name__ == "__main__":
     train_steps = [
         two_stage_train_step(
             TwoStageConfig(
-                rare_data_name="starcoder",
+                rare_data_name="flan",
                 common_data_name="c4",
                 rare_fraction=0.01,
                 replay_ratio=0.8,
@@ -17,7 +17,7 @@ if __name__ == "__main__":
                 wandb_project_name="suhas-two-stage",
                 wandb_additional_tags=["debug"],
                 model_name="150m4k",
-                nametag="",
+                nametag="-618v1",
             )
         )
         for lr, lr_schedule, lr_cooldown_duration in [

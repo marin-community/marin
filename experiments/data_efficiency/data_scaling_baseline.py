@@ -14,7 +14,7 @@ train_steps = [
             wandb_project_name="suhas-data-efficiency",
             wandb_additional_tags=["data-scaling-laws-6-10"],
             model_name=model_name,
-            nametag=f"-bs{batch_size}",
+            nametag=f"-suTEST1-bs{batch_size}",
         )
     )
     for base_train_steps in [50]

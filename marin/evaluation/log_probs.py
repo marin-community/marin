@@ -109,7 +109,7 @@ def default_ensemble_log_probs(
         checkpoint_is_hf:  Whether the checkpoint is in HF format.
     """
     name = ckpt_path_to_step_name(checkpoints[0])
-    name = f"analysis/log_probs/data-efficiency/ensemble-v10-{len(checkpoints)}x-{name}"
+    name = f"analysis/log_probs/data-efficiency/ensemble-v13-{len(checkpoints)}x-{name}"
     return ExecutorStep(
         name=name,
         fn=evaluate_ensemble_log_probs,
@@ -136,7 +136,30 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
     # _separate_process_fn(eval_lm_main, (config,), {})
     eval_lm_main(config)
 
-@ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1}, max_calls=1)
+# @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1}, max_calls=1)
+# @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU-v4-128-head": 1}, max_calls=1)
+@ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 1, "TPU-v4-128-head": 1}, runtime_env={"env_vars": {"PJRT_DEVICE": "TPU"}}, max_calls=1)
+# from levanter.infra.cli_helpers import load_config
+# from marin.resources import TpuPodConfig
+# from marin.training.training import _add_default_env_variables, _check_for_wandb_key, _add_run_env_variables
+
+# default_launch_config = load_config()
+
+# resources_config = TpuPodConfig(tpu_type="v4-128", slice_count=1)
+
+
+# env = _add_default_env_variables(
+#     resources_config.runtime_env.get("env_vars", {}),
+#     default_launch_config.env_for_accel(resources_config.accelerator_descriptor() or ""),
+# )
+# # if we're on tpu, ensure we have wandb
+# if isinstance(resources_config, TpuPodConfig):
+#     _check_for_wandb_key(env)
+
+# env = _add_run_env_variables(env)
+# hw_config = resources_config.with_env_vars(env)
+
+# @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1)
 def do_eval_ensemble(config: LevanterEvalEnsembleConfig) -> None:
     """
     Evaluate log probabilities of a language model on a mixture, and optionally entropies.
