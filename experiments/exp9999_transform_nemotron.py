@@ -96,7 +96,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
         config=TransformSFTDatasetConfig(
             input_path=download_data_path,
             output_path=this_output_path(),
-            shard_size=versioned(500), # Context is long in nemotron
+            shard_size=versioned(5000), # Context is long in nemotron
             metadata_columns=versioned(dataset_cfg.metadata_columns),
             filetype=dataset_cfg.filetype,
             source=dataset_cfg.hf_dataset_id,
@@ -127,6 +127,8 @@ def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
     write_ops = []
     for subset in cfg.subsets:
         for split in cfg.splits:
+            if split!='code':
+                continue
             try:
                 logger.info(f"Downloading dataset from GCP: {gcp_path}/{subset}/{split}")
                 try:
@@ -137,17 +139,24 @@ def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
                     raise e
 
                 # Get full paths of all jsonl files
+                # File: e.g., "/tmp/nvidia--Llama-Nemotron-Post-Training-Dataset-v1-SFT-ab2a40d-6aa704/SFT/code/v1.jsonl"
                 files = [os.path.join(local_dir, file) for file in os.listdir(local_dir) if file.endswith(".jsonl")]
 
                 for file in files:
                     # b. Create GCP target directory
                     subset_output_path = get_shard_dir(cfg.output_path, subset, split)
                     if len(files) > 1:
-                        subset_output_path = os.path.join(
-                            subset_output_path,
-                            file.replace(split, "").replace(".jsonl", "").strip('_') #should be v1 or v1.1
+                        suffix = (
+                            file.split("/")[-1]
+                            .replace(split, "")
+                            .strip("_")
+                            .replace(".jsonl", "")
+                            .strip() #should be v1 or v1.1
                         )
+                        subset_output_path += '/' + suffix
                     output_path = create_shard_output_directory(subset_output_path)
+                    logger.info(f"Output path for {file} is {output_path}")
+                    raise Exception("Stop here")
 
                     # Read the file
                     jsonl_file_path = os.path.join(local_dir, file)
