@@ -35,6 +35,10 @@ from marin.execution.executor import ExecutorStep, executor_main, output_path_of
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
+# Unfortunately, the international corpus of english is not publicly accessible and cannot be redistributed.
+# By default, this experiment runs without ICE since it cannot be shared more widely.
+CAN_ACCESS_ICE = False
+
 
 @dataclass(frozen=True)
 class GemstoneConfig:
@@ -206,36 +210,37 @@ for split in get_dataset_split_names("WillHeld/MD3"):
     tokenized_json = default_tokenize(f"tokenized/md3-{split}", json, gemstone_tokenizer, is_validation=True)
     tokenized_domains[f"md3/{split}"] = tokenized_json
 
-ice_raw = ExecutorStep(
-    name="raw/WillHeld/ICE",
-    fn=download,
-    config=DownloadConfig(
-        hf_dataset_id="WillHeld/ICE_Cleaned",
-        revision=versioned("4c09dd9"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet"],
-    ),
-    override_output_path="raw/WillHeld/ICE_Cleaned",
-).cd("4c09dd9/huggingface.co/datasets/WillHeld/ICE_Cleaned/resolve/4c09dd9")
-
-for split in get_dataset_split_names("WillHeld/ICE_Cleaned"):
-    json = ExecutorStep(
-        name=f"raw2json/ICE/{split}",
-        fn=raw2json,
-        config=DatasetConversionConfig(
-            dataset_name="WillHeld/ICE_Cleaned",
-            subsets=["*"],
-            splits=[split],
-            input_path=ice_raw,
-            hf_path="WillHeld/ICE_Cleaned",
-            output_path=this_output_path(),
-            output_format=OutputFormatOptions("decontamination"),
-            prompt_key="text",
+if CAN_ACCESS_ICE:
+    ice_raw = ExecutorStep(
+        name="raw/WillHeld/ICE",
+        fn=download,
+        config=DownloadConfig(
+            hf_dataset_id="WillHeld/ICE_Cleaned",
+            revision=versioned("4c09dd9"),
+            gcs_output_path=this_output_path(),
+            wait_for_completion=True,
+            hf_urls_glob=["**/*.parquet"],
         ),
-    )
-    tokenized_json = default_tokenize(f"tokenized/ICE-{split}", json, gemstone_tokenizer, is_validation=True)
-    tokenized_domains[f"ICE/{split}"] = tokenized_json
+        override_output_path="raw/WillHeld/ICE_Cleaned",
+    ).cd("4c09dd9/huggingface.co/datasets/WillHeld/ICE_Cleaned/resolve/4c09dd9")
+
+    for split in get_dataset_split_names("WillHeld/ICE_Cleaned"):
+        json = ExecutorStep(
+            name=f"raw2json/ICE/{split}",
+            fn=raw2json,
+            config=DatasetConversionConfig(
+                dataset_name="WillHeld/ICE_Cleaned",
+                subsets=["*"],
+                splits=[split],
+                input_path=ice_raw,
+                hf_path="WillHeld/ICE_Cleaned",
+                output_path=this_output_path(),
+                output_format=OutputFormatOptions("decontamination"),
+                prompt_key="text",
+            ),
+        )
+        tokenized_json = default_tokenize(f"tokenized/ICE-{split}", json, gemstone_tokenizer, is_validation=True)
+        tokenized_domains[f"ICE/{split}"] = tokenized_json
 
 subreddits_raw = ExecutorStep(
     name="raw/WillHeld/paloma_subreddits",
