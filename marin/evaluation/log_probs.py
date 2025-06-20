@@ -27,6 +27,7 @@ class EvalLmConfig:
     Configuration for visualizing log probabilities of a language model.
     """
 
+    name: str | None
     checkpoint_path: str
     model: LmConfig
     datasets: LMMixtureDatasetConfig
@@ -48,6 +49,7 @@ def default_lm_log_probs(
     checkpoint_is_hf: bool,
     per_device_batch_size: int = 4,
     max_samples_per_dataset: int | None = None,
+    name: str | None = None,
 ) -> ExecutorStep:
     """
     Creates a step to evaluate log probabilities of a language model.
@@ -57,12 +59,14 @@ def default_lm_log_probs(
         data: The data to evaluate on.
         checkpoint_is_hf:  Whether the checkpoint is in HF format.
     """
-    name = ckpt_path_to_step_name(checkpoint)
-    name = f"analysis/log_probs/{name}"
+    if not name:
+        name = ckpt_path_to_step_name(checkpoint)
+    executor_name = f"analysis/log_probs/{name}"
     return ExecutorStep(
-        name=name,
+        name=executor_name,
         fn=evaluate_lm_log_probs,
         config=EvalLmConfig(
+            name=name,
             checkpoint_path=checkpoint,  # type: ignore
             model=model,
             datasets=data,
@@ -108,8 +112,11 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
         config (EvalLmConfig): The configuration for visualizing log probabilities.
     """
 
-    name = os.path.basename(config.output_path)
-    name = f"ppl-eval-{name}"
+    if not config.name:
+        name = os.path.basename(config.output_path)
+        name = f"ppl-eval-{name}"
+    else:
+        name = config.name.replace("/", "-")
 
     if config.max_samples_per_dataset is None:
         max_eval_batches = None

@@ -23,14 +23,17 @@ local_path = get_model_local_path(gemstone_768x45)
 import re
 from dataclasses import dataclass
 
+from datasets import get_dataset_config_names, get_dataset_split_names
 from huggingface_hub import get_collection, list_repo_refs
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 
-from experiments.defaults import default_validation_sets
+from experiments.defaults import default_tokenize, default_validation_sets
 from experiments.models import ModelConfig, download_model_step
+from marin.download.huggingface.download import DownloadConfig, download
 from marin.evaluation.log_probs import default_lm_log_probs
-from marin.execution.executor import executor_main, output_path_of, versioned
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
+from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,8 @@ class GemstoneConfig:
 
     width: int
     depth: int
+    model_id: str
+    revision: str
     variant: str  # "main", "lr_ablation", or "cooldown"
     step: int | None = None
     cooldown_start_step: int | None = None
@@ -83,7 +88,15 @@ class GemstoneConfig:
                 if step_match:
                     step = int(step_match.group(1))
 
-        return cls(width=width, depth=depth, variant=variant, step=step, cooldown_start_step=cooldown_start_step)
+        return cls(
+            width=width,
+            depth=depth,
+            variant=variant,
+            step=step,
+            cooldown_start_step=cooldown_start_step,
+            model_id=model_id,
+            revision=revision,
+        )
 
     def __hash__(self):
         return hash((self.width, self.depth, self.variant, self.step, self.cooldown_start_step))
@@ -158,33 +171,190 @@ for model in models:
             model_revision_pairs.append((model, revision))
 
 gemstone_splits = {"main": {}, "cooldown": {}, "lr_ablation": {}}
-gemstone_tokenizer = "tomg-group-umd/Gemstone-1280x15"
+# gemstone_tokenizer = "tomg-group-umd/Gemstone-1280x15"
+gemstone_tokenizer = "allenai/OLMo-2-1124-7B"
 eval_sets = default_validation_sets(tokenizer=versioned(gemstone_tokenizer))
+md3_raw = ExecutorStep(
+    name="raw/WillHeld/MD3",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id="WillHeld/MD3",
+        revision=versioned("7c74e59"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet"],
+    ),
+    override_output_path="raw/WillHeld/MD3-Trunc",
+).cd("7c74e59/huggingface.co/datasets/WillHeld/MD3/resolve/7c74e59")
+
+tokenized_domains = {}
+for split in get_dataset_split_names("WillHeld/MD3"):
+    json = ExecutorStep(
+        name=f"raw2json/md3/{split}",
+        fn=raw2json,
+        config=DatasetConversionConfig(
+            dataset_name="WillHeld/MD3",
+            subsets=["*"],
+            splits=[split],
+            input_path=md3_raw,
+            hf_path="WillHeld/MD3",
+            output_path=this_output_path(),
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="transcript",
+        ),
+    )
+    tokenized_json = default_tokenize(f"tokenized/md3-{split}", json, gemstone_tokenizer, is_validation=True)
+    tokenized_domains[f"md3/{split}"] = tokenized_json
+
+ice_raw = ExecutorStep(
+    name="raw/WillHeld/ICE",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id="WillHeld/ICE_Cleaned",
+        revision=versioned("4c09dd9"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet"],
+    ),
+    override_output_path="raw/WillHeld/ICE_Cleaned",
+).cd("4c09dd9/huggingface.co/datasets/WillHeld/ICE_Cleaned/resolve/4c09dd9")
+
+for split in get_dataset_split_names("WillHeld/ICE_Cleaned"):
+    json = ExecutorStep(
+        name=f"raw2json/ICE/{split}",
+        fn=raw2json,
+        config=DatasetConversionConfig(
+            dataset_name="WillHeld/ICE_Cleaned",
+            subsets=["*"],
+            splits=[split],
+            input_path=ice_raw,
+            hf_path="WillHeld/ICE_Cleaned",
+            output_path=this_output_path(),
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="text",
+        ),
+    )
+    tokenized_json = default_tokenize(f"tokenized/ICE-{split}", json, gemstone_tokenizer, is_validation=True)
+    tokenized_domains[f"ICE/{split}"] = tokenized_json
+
+subreddits_raw = ExecutorStep(
+    name="raw/WillHeld/paloma_subreddits",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id="WillHeld/paloma_subreddits",
+        revision=versioned("9561a2b"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "README.md"],
+    ),
+    override_output_path="raw/WillHeld/paloma_subreddits",
+).cd("9561a2b/huggingface.co/datasets/WillHeld/paloma_subreddits/resolve/9561a2b")
+
+for subset in get_dataset_config_names("WillHeld/paloma_subreddits"):
+    json = ExecutorStep(
+        name=f"raw2json/paloma_subreddits/{subset}",
+        fn=raw2json,
+        config=DatasetConversionConfig(
+            dataset_name="WillHeld/paloma_subreddits",
+            subsets=[subset],
+            splits=["train"],
+            input_path=subreddits_raw,
+            hf_path="WillHeld/paloma_subreddits",
+            output_path=this_output_path(),
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="text",
+        ),
+    )
+    tokenized_json = default_tokenize(
+        f"tokenized/paloma_subreddits-{subset}", json, gemstone_tokenizer, is_validation=True
+    )
+    tokenized_domains[f"paloma_subreddits/{subset}"] = tokenized_json
+
+pls_raw = ExecutorStep(
+    name="raw/WillHeld/paloma_programming_languages",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id="WillHeld/paloma_programming_languages",
+        revision=versioned("6c08b5f"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "README.md"],
+    ),
+    override_output_path="raw/WillHeld/paloma_programming_languages",
+).cd("6c08b5f/huggingface.co/datasets/WillHeld/paloma_programming_languages/resolve/6c08b5f")
+
+for subset in get_dataset_config_names("WillHeld/paloma_programming_languages"):
+    json = ExecutorStep(
+        name=f"raw2json/paloma_programming_languages/{subset}",
+        fn=raw2json,
+        config=DatasetConversionConfig(
+            dataset_name="WillHeld/paloma_programming_languages",
+            subsets=[subset],
+            splits=["train"],
+            input_path=pls_raw,
+            hf_path="WillHeld/paloma_programming_languages",
+            output_path=this_output_path(),
+            output_format=OutputFormatOptions("decontamination"),
+            prompt_key="text",
+        ),
+    )
+    tokenized_json = default_tokenize(
+        f"tokenized/paloma_programming_languages-{subset}", json, gemstone_tokenizer, is_validation=True
+    )
+    tokenized_domains[f"paloma_programming_languages/{subset}"] = tokenized_json
+
+eval_sets = {**eval_sets, **tokenized_domains}
 evaluation_mixture = mixture_for_evaluation(eval_sets)
-eval_steps = []
+
+
 for model, revision in model_revision_pairs:
-    try:
-        config = GemstoneConfig.from_model_revision(model, revision)
+    config = GemstoneConfig.from_model_revision(model, revision)
 
-        gemstone_model = download_model_step(ModelConfig(hf_repo_id=model, hf_revision=revision))
-        gemstone_splits[config.variant][config] = gemstone_model
-        if config.variant == "cooldown" and roughly_equals(
-            config.step, int(config.cooldown_start_step + (0.1 * config.cooldown_start_step))
-        ):
-            model_config = HFCheckpointConverter.from_hf(f"{model}@{revision}").config_from_hf_checkpoint(
-                f"{model}@{revision}"
-            )
+    gemstone_model = download_model_step(ModelConfig(hf_repo_id=model, hf_revision=revision))
+    gemstone_splits[config.variant][config] = gemstone_model
 
-            eval_steps.append(
-                default_lm_log_probs(
-                    output_path_of(gemstone_model), model_config, evaluation_mixture, checkpoint_is_hf=True
-                )
-            )
-    except ValueError as e:
-        print(f"Skipping {model}/{revision}: {e}")
 
 if __name__ == "__main__":
-    executor_main(
-        eval_steps,
-        description="Compute logprobs for all Gemstone Model Checkpoints",
-    )
+    for config in gemstone_splits["cooldown"]:
+        if roughly_equals(config.step, int(config.cooldown_start_step + (0.1 * config.cooldown_start_step))):
+            try:
+                model = config.model_id
+                revision = config.revision
+                model_config = HFCheckpointConverter.from_hf(f"{model}@{revision}").config_from_hf_checkpoint(
+                    f"{model}@{revision}"
+                )
+                gemstone_model = gemstone_splits["cooldown"][config]
+
+                eval_step = default_lm_log_probs(
+                    output_path_of(gemstone_model),
+                    model_config,
+                    evaluation_mixture,
+                    checkpoint_is_hf=True,
+                    name=versioned(f"Domain-Scaling-Laws-{model}@{revision}"),
+                )
+                executor_main(
+                    [eval_step],
+                    description="Compute logprobs for all Gemstone Model Checkpoints",
+                )
+            except ValueError as e:
+                print(f"Skipping {model}/{revision}: {e}")
+    baselines = [
+        ("allenai/OLMo-2-1124-7B", "stage1-step928646-tokens3896B"),
+        ("allenai/OLMo-2-1124-13B", "stage1-step596000-tokens5000B"),
+    ]
+    for model, revision in baselines:
+        model_instance = download_model_step(ModelConfig(hf_repo_id=model, hf_revision=revision))
+        model_config = HFCheckpointConverter.from_hf(f"{model}@{revision}").config_from_hf_checkpoint(
+            f"{model}@{revision}"
+        )
+        eval_step = default_lm_log_probs(
+            output_path_of(model_instance),
+            model_config,
+            evaluation_mixture,
+            checkpoint_is_hf=True,
+            name=versioned(f"Domain-Scaling-Laws-tokenizer-fix-{model}@{revision}"),
+        )
+        executor_main(
+            [eval_step],
+            description="Compute logprobs for all Baseline Model Checkpoints",
+        )
