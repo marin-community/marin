@@ -290,7 +290,7 @@ def default_speedrun(
 
     train_config = dataclasses.replace(config.train_config, data_seed=42)
     if isinstance(config.tokenized_dataset, InputName | ExecutorStep):
-        lm_data_config(
+        pretraining_data = lm_data_config(
             training_set=config.tokenized_dataset,
             validation_sets=speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
         )
