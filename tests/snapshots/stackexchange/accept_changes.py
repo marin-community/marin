@@ -5,7 +5,7 @@ import random
 from tqdm import tqdm
 
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
-from operations.transform.stackexchange.transform_stackexchange import prepare_md_template
+from marin.transform.stackexchange.transform_stackexchange import prepare_md_template
 
 
 def prepare_expected_output(
