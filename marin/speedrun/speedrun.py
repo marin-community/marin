@@ -289,10 +289,17 @@ def default_speedrun(
     run_tags = ["speedrun"] + (tags or [])
 
     train_config = dataclasses.replace(config.train_config, data_seed=42)
-    pretraining_data = add_validation_sets_to_mixture(
-        config.tokenized_dataset,
-        speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
-    )
+    if isinstance(config.tokenized_dataset, InputName | ExecutorStep):
+        lm_data_config(
+            training_set=config.tokenized_dataset,
+            validation_sets=speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
+        )
+    else:
+        pretraining_data = add_validation_sets_to_mixture(
+            config.tokenized_dataset,
+            speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
+        )
+
     train_step = default_train(
         name=f"speedrun/{name}",
         tokenized=pretraining_data,
