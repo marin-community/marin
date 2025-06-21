@@ -1,0 +1,2631 @@
+{
+  "ray_job_id": "0f010000",
+  "git_commit": "c3038993267374d2de2d3ec8b8576d6bdea7be30",
+  "caller_path": "/tmp/ray/session_2025-05-12_01-40-46_433252_665/runtime_resources/working_dir_files/_ray_pkg_33f981b72a293ba0/experiments/speedrun/llama_nano/llama_nano_fineweb_edu.py",
+  "created_date": "2025-05-27T04:35:01.669351",
+  "user": "ray",
+  "prefix": "gs://marin-us-central2",
+  "description": null,
+  "steps": [
+    {
+      "name": "tokenized/subcache/fineweb-edu-10B",
+      "fn_name": "marin.processing.tokenize.download_pretokenized._actually_download_pretokenized_cache",
+      "config": {
+        "cache_path": "gs://marin-us-central2/tokenized/subcache/fineweb-edu-10B-6fbcbb",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "hf_repo_id": "marin-community/fineweb-edu-pretokenized-10B",
+        "hf_revision": null,
+        "hf_repo_type_prefix": "datasets",
+        "hf_token": null,
+        "format": {
+          "text_key": "text"
+        },
+        "cache_options": null,
+        "tags": []
+      },
+      "description": null,
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/subcache/fineweb-edu-10B",
+        "config": {
+          "tokenizer": "stanford-crfm/marin-tokenizer",
+          "hf_repo_id": "marin-community/fineweb-edu-pretokenized-10B",
+          "hf_revision": null
+        },
+        "dependencies": []
+      },
+      "dependencies": [],
+      "output_path": "gs://marin-us-central2/tokenized/subcache/fineweb-edu-10B-6fbcbb"
+    },
+    {
+      "name": "raw/paloma",
+      "fn_name": "operations.download.huggingface.download_gated_manual.download_and_upload_to_store",
+      "config": {
+        "hf_dataset_id": "allenai/paloma",
+        "revision": "65cd6fc",
+        "hf_urls_glob": [],
+        "gcs_output_path": "gs://marin-us-central2/raw/paloma-fc6827",
+        "public_gcs_path": "gs://hf_dataset_transfer_bucket",
+        "wait_for_completion": true,
+        "timeout": 1800,
+        "poll_interval": 10,
+        "hf_repo_type_prefix": "datasets"
+      },
+      "description": null,
+      "override_output_path": "raw/paloma-fc6827",
+      "version": {
+        "name": "raw/paloma",
+        "config": {
+          "hf_dataset_id": "allenai/paloma",
+          "revision": "65cd6fc"
+        },
+        "dependencies": []
+      },
+      "dependencies": [],
+      "output_path": "gs://marin-us-central2/raw/paloma-fc6827"
+    },
+    {
+      "name": "tokenized/paloma/4chan",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/4chan-187c38",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/4chan",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/4chan-187c38"
+    },
+    {
+      "name": "tokenized/paloma/c4_100_domains",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/c4_100_domains/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/c4_100_domains-8cbede",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/c4_100_domains",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/c4_100_domains/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/c4_100_domains-8cbede"
+    },
+    {
+      "name": "tokenized/paloma/c4_en",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/c4_en/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/c4_en-5fcb25",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/c4_en",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/c4_en/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/c4_en-5fcb25"
+    },
+    {
+      "name": "tokenized/paloma/dolma-v1_5",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/dolma-v1_5/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/dolma-v1_5-757141",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/dolma-v1_5",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/dolma-v1_5/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/dolma-v1_5-757141"
+    },
+    {
+      "name": "tokenized/paloma/dolma_100_programing_languages",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-5670a8",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/dolma_100_programing_languages",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-5670a8"
+    },
+    {
+      "name": "tokenized/paloma/dolma_100_subreddits",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/dolma_100_subreddits-dafde7",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/dolma_100_subreddits",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/dolma_100_subreddits-dafde7"
+    },
+    {
+      "name": "tokenized/paloma/falcon-refinedweb",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/falcon-refinedweb-6fe173",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/falcon-refinedweb",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/falcon-refinedweb-6fe173"
+    },
+    {
+      "name": "tokenized/paloma/gab",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/gab/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/gab-75fcc7",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/gab",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/gab/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/gab-75fcc7"
+    },
+    {
+      "name": "tokenized/paloma/m2d2_s2orc_unsplit",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-83bcf9",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/m2d2_s2orc_unsplit",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-83bcf9"
+    },
+    {
+      "name": "tokenized/paloma/m2d2_wikipedia_unsplit",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/m2d2_wikipedia_unsplit-38efee",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/m2d2_wikipedia_unsplit",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/m2d2_wikipedia_unsplit-38efee"
+    },
+    {
+      "name": "tokenized/paloma/manosphere_meta_sep",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/manosphere_meta_sep-9c97d5",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/manosphere_meta_sep",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/manosphere_meta_sep-9c97d5"
+    },
+    {
+      "name": "tokenized/paloma/mc4",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/mc4/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/mc4-3e0113",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/mc4",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/mc4/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/mc4-3e0113"
+    },
+    {
+      "name": "tokenized/paloma/ptb",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/ptb/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/ptb-d3f540",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/ptb",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/ptb/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/ptb-d3f540"
+    },
+    {
+      "name": "tokenized/paloma/redpajama",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/redpajama/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/redpajama-eebbb1",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/redpajama",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/redpajama/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/redpajama-eebbb1"
+    },
+    {
+      "name": "tokenized/paloma/twitterAAE_HELM_fixed",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/twitterAAE_HELM_fixed-15c4ba",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/twitterAAE_HELM_fixed",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/twitterAAE_HELM_fixed-15c4ba"
+    },
+    {
+      "name": "tokenized/paloma/wikitext_103",
+      "fn_name": "marin.processing.tokenize.tokenize.tokenize",
+      "config": {
+        "train_paths": [],
+        "validation_paths": [
+          "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/wikitext_103/val/val*.jsonl.gz"
+        ],
+        "cache_path": "gs://marin-us-central2/tokenized/paloma/wikitext_103-9d5384",
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+        "tags": [],
+        "cache_options": null,
+        "format": {
+          "text_key": "text"
+        }
+      },
+      "description": "Tokenize raw text using the VersionedValue(value='stanford-crfm/marin-tokenizer') tokenizer.",
+      "override_output_path": null,
+      "version": {
+        "name": "tokenized/paloma/wikitext_103",
+        "config": {
+          "validation_paths.[0]": "DEP[0]/65cd6fc/wikitext_103/val/val*.jsonl.gz",
+          "tokenizer": "stanford-crfm/marin-tokenizer"
+        },
+        "dependencies": [
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/tokenized/paloma/wikitext_103-9d5384"
+    },
+    {
+      "name": "checkpoints/speedrun/nano_llama_fineweb_edu",
+      "fn_name": "marin.training.training.run_levanter_train_lm",
+      "config": {
+        "train_config": {
+          "data": {
+            "tokenizer": "stanford-crfm/marin-tokenizer",
+            "vocab_size": null,
+            "cache_dir": null,
+            "cache_options": {
+              "num_shard_groups": 128,
+              "target_size_per_flush": "512MB",
+              "batch_size": 128
+            },
+            "enforce_eos": true,
+            "chat_template": null,
+            "ignore_token_id": -100,
+            "shuffle": true,
+            "permutation_type": null,
+            "configs": {
+              "fineweb-edu-10B": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/subcache/fineweb-edu-10B-6fbcbb",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [
+                  "dummy.jsonl"
+                ],
+                "validation_urls": []
+              },
+              "paloma/4chan": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/4chan-187c38",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz"
+                ]
+              },
+              "paloma/c4_100_domains": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/c4_100_domains-8cbede",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/c4_100_domains/val/val*.jsonl.gz"
+                ]
+              },
+              "paloma/c4_en": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/c4_en-5fcb25",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/c4_en/val/val*.jsonl.gz"
+                ]
+              },
+              "paloma/dolma-v1_5": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/dolma-v1_5-757141",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/dolma-v1_5/val/val*.jsonl.gz"
+                ]
+              },
+              "paloma/dolma_100_programing_languages": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-5670a8",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz"
+                ]
+              },
+              "paloma/dolma_100_subreddits": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/dolma_100_subreddits-dafde7",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz"
+                ]
+              },
+              "paloma/falcon-refinedweb": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/falcon-refinedweb-6fe173",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz"
+                ]
+              },
+              "paloma/gab": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/gab-75fcc7",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/gab/val/val*.jsonl.gz"
+                ]
+              },
+              "paloma/m2d2_s2orc_unsplit": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-83bcf9",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz"
+                ]
+              },
+              "paloma/m2d2_wikipedia_unsplit": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/m2d2_wikipedia_unsplit-38efee",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz"
+                ]
+              },
+              "paloma/manosphere_meta_sep": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/manosphere_meta_sep-9c97d5",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz"
+                ]
+              },
+              "paloma/mc4": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/mc4-3e0113",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/mc4/val/val*.jsonl.gz"
+                ]
+              },
+              "paloma/ptb": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/ptb-d3f540",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/ptb/val/val*.jsonl.gz"
+                ]
+              },
+              "paloma/redpajama": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/redpajama-eebbb1",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/redpajama/val/val*.jsonl.gz"
+                ]
+              },
+              "paloma/twitterAAE_HELM_fixed": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/twitterAAE_HELM_fixed-15c4ba",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz"
+                ]
+              },
+              "paloma/wikitext_103": {
+                "tags": [],
+                "cache_dir": "gs://marin-us-central2/tokenized/paloma/wikitext_103-9d5384",
+                "format": {
+                  "text_key": "text"
+                },
+                "train_urls": [],
+                "validation_urls": [
+                  "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/wikitext_103/val/val*.jsonl.gz"
+                ]
+              }
+            },
+            "train_weights": {
+              "fineweb-edu-10B": 1.0,
+              "paloma/4chan": 0.0,
+              "paloma/c4_100_domains": 0.0,
+              "paloma/c4_en": 0.0,
+              "paloma/dolma-v1_5": 0.0,
+              "paloma/dolma_100_programing_languages": 0.0,
+              "paloma/dolma_100_subreddits": 0.0,
+              "paloma/falcon-refinedweb": 0.0,
+              "paloma/gab": 0.0,
+              "paloma/m2d2_s2orc_unsplit": 0.0,
+              "paloma/m2d2_wikipedia_unsplit": 0.0,
+              "paloma/manosphere_meta_sep": 0.0,
+              "paloma/mc4": 0.0,
+              "paloma/ptb": 0.0,
+              "paloma/redpajama": 0.0,
+              "paloma/twitterAAE_HELM_fixed": 0.0,
+              "paloma/wikitext_103": 0.0
+            },
+            "stop_strategy": "restart",
+            "target_budget": null,
+            "experiment_budget": null,
+            "mixture_block_size": 2048,
+            "max_train_batches": null,
+            "num_validation_sequences": null
+          },
+          "trainer": {
+            "seed": 0,
+            "mp": {
+              "param_dtype": "<class 'jax.numpy.float32'>",
+              "compute_dtype": "<class 'jax.numpy.bfloat16'>",
+              "output_dtype": "<class 'jax.numpy.bfloat16'>"
+            },
+            "quantization": null,
+            "model_averaging": null,
+            "wandb": null,
+            "log_dir": "logs",
+            "id": null,
+            "tracker": {
+              "entity": null,
+              "project": "marin",
+              "name": null,
+              "tags": [
+                "speedrun"
+              ],
+              "id": null,
+              "group": null,
+              "mode": null,
+              "resume": "allow",
+              "save_code": true,
+              "save_xla_dumps": false
+            },
+            "watch": {
+              "watch_targets": [
+                "grads",
+                "params"
+              ],
+              "include_norms": true,
+              "include_per_parameter_norms": true,
+              "include_histograms": false,
+              "split_scan_layers": true,
+              "interval": 10
+            },
+            "profiler": false,
+            "profiler_start_step": 5,
+            "profiler_num_steps": 100,
+            "profiler_perfetto_link": false,
+            "log_jaxprs": true,
+            "log_xla_hlo": true,
+            "crash_on_nan": true,
+            "crash_on_inf": true,
+            "batch_axis": "batch",
+            "fsdp_axis": "embed",
+            "tensor_parallel_axes": null,
+            "axis_resources": {
+              "token": [
+                "replica",
+                "data"
+              ],
+              "token_repeat": [
+                "replica",
+                "data"
+              ]
+            },
+            "parameter_axis_resources": {},
+            "replica_ici_axis_size": 1,
+            "model_axis_size": 1,
+            "replica_dcn_axis_size": -1,
+            "train_batch_size": 512,
+            "per_device_parallelism": -1,
+            "per_device_eval_parallelism": -1,
+            "allow_nondivisible_batch_size": true,
+            "num_train_steps": 3000,
+            "steps_per_eval": 1000,
+            "max_eval_batches": null,
+            "checkpointer": {
+              "base_path": "checkpoints/",
+              "save_interval": {
+                "days": 0,
+                "seconds": 600,
+                "microseconds": 0
+              },
+              "keep": [
+                {
+                  "every": 10000
+                }
+              ],
+              "append_run_id_to_base_path": true,
+              "delete_old_temp_checkpoints": true
+            },
+            "load_checkpoint": null,
+            "load_checkpoint_path": null,
+            "initialize_from": null,
+            "allow_partial_checkpoint": false,
+            "jax_config": {
+              "jax_threefry_partitionable": true,
+              "jax_softmax_custom_jvp": true
+            },
+            "distributed": {
+              "coordinator_address": null,
+              "num_processes": null,
+              "process_id": null,
+              "local_device_ids": null
+            },
+            "ray": {
+              "address": null,
+              "start_workers": true,
+              "auto_start_cluster": true
+            },
+            "require_accelerator": null,
+            "shutdown_at_exit": false
+          },
+          "model": {
+            "cross_entropy_block_size": null,
+            "seq_len": 512,
+            "hidden_dim": 32,
+            "intermediate_dim": 128,
+            "num_layers": 2,
+            "num_heads": 2,
+            "num_kv_heads": 2,
+            "activation_function": "silu",
+            "initializer_range": 0.02,
+            "layer_norm_epsilon": 1e-05,
+            "tie_word_embeddings": false,
+            "hybrid_norm": false,
+            "input_embedding_norm": false,
+            "upcast_attn": false,
+            "use_flash_attention": true,
+            "attn_backend": null,
+            "flash_attention_block_size": null,
+            "gradient_checkpointing": true,
+            "scan_layers": true,
+            "use_bias": false,
+            "use_layer_norm_weight": true,
+            "rope": {
+              "theta": 10000,
+              "factor": 1.0
+            },
+            "reference_checkpoint": "meta-llama/Llama-2-7b-hf",
+            "tokenizer": null
+          },
+          "optimizer": {
+            "learning_rate": 0.003,
+            "weight_decay": 0.1,
+            "min_lr_ratio": 0.1,
+            "warmup": 0.01,
+            "decay": null,
+            "rewarmup": 0.0,
+            "cooldown": null,
+            "cycle_length": null,
+            "cycles": null,
+            "lr_schedule": "cosine",
+            "haps": null,
+            "weight_decay_modules": null,
+            "default_weight_decay_mask": null,
+            "beta1": 0.9,
+            "beta2": 0.95,
+            "epsilon": 1e-08,
+            "max_grad_norm": 1.0
+          },
+          "initialize_from_hf": false,
+          "use_hf_model_config": false,
+          "z_loss_weight": null,
+          "hf_save_path": null,
+          "hf_upload": null,
+          "hf_save_steps": 10000,
+          "data_seed": 42,
+          "initialize_from_checkpoint_path": null,
+          "epoch": 0,
+          "eval_harness": null,
+          "eval_harness_steps": 10000,
+          "log_entropy": false
+        },
+        "resources": {
+          "tpu_type": "v4-32",
+          "slice_count": 1,
+          "runtime_env": {},
+          "device_flops_override": null
+        },
+        "output_path": "gs://marin-us-central2/checkpoints/speedrun/nano_llama_fineweb_edu-a38b8c",
+        "impute_run_id_from_output_path": true,
+        "allow_out_of_region": []
+      },
+      "description": "Train a 8,224,896 parameter model for 3000 (steps) * 512 (batch_size) * 512 (seq_len) = 786,432,000 tokens.",
+      "override_output_path": null,
+      "version": {
+        "name": "checkpoints/speedrun/nano_llama_fineweb_edu",
+        "config": {
+          "train_config.data.tokenizer": "stanford-crfm/marin-tokenizer",
+          "train_config.data.configs.fineweb-edu-10B.cache_dir": "DEP[0]",
+          "train_config.data.configs.paloma/4chan.cache_dir": "DEP[1]",
+          "train_config.data.configs.paloma/4chan.validation_urls.[0]": "DEP[2]/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/c4_100_domains.cache_dir": "DEP[3]",
+          "train_config.data.configs.paloma/c4_100_domains.validation_urls.[0]": "DEP[4]/65cd6fc/c4_100_domains/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/c4_en.cache_dir": "DEP[5]",
+          "train_config.data.configs.paloma/c4_en.validation_urls.[0]": "DEP[6]/65cd6fc/c4_en/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/dolma-v1_5.cache_dir": "DEP[7]",
+          "train_config.data.configs.paloma/dolma-v1_5.validation_urls.[0]": "DEP[8]/65cd6fc/dolma-v1_5/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/dolma_100_programing_languages.cache_dir": "DEP[9]",
+          "train_config.data.configs.paloma/dolma_100_programing_languages.validation_urls.[0]": "DEP[10]/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/dolma_100_subreddits.cache_dir": "DEP[11]",
+          "train_config.data.configs.paloma/dolma_100_subreddits.validation_urls.[0]": "DEP[12]/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/falcon-refinedweb.cache_dir": "DEP[13]",
+          "train_config.data.configs.paloma/falcon-refinedweb.validation_urls.[0]": "DEP[14]/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/gab.cache_dir": "DEP[15]",
+          "train_config.data.configs.paloma/gab.validation_urls.[0]": "DEP[16]/65cd6fc/gab/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/m2d2_s2orc_unsplit.cache_dir": "DEP[17]",
+          "train_config.data.configs.paloma/m2d2_s2orc_unsplit.validation_urls.[0]": "DEP[18]/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/m2d2_wikipedia_unsplit.cache_dir": "DEP[19]",
+          "train_config.data.configs.paloma/m2d2_wikipedia_unsplit.validation_urls.[0]": "DEP[20]/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/manosphere_meta_sep.cache_dir": "DEP[21]",
+          "train_config.data.configs.paloma/manosphere_meta_sep.validation_urls.[0]": "DEP[22]/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/mc4.cache_dir": "DEP[23]",
+          "train_config.data.configs.paloma/mc4.validation_urls.[0]": "DEP[24]/65cd6fc/mc4/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/ptb.cache_dir": "DEP[25]",
+          "train_config.data.configs.paloma/ptb.validation_urls.[0]": "DEP[26]/65cd6fc/ptb/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/redpajama.cache_dir": "DEP[27]",
+          "train_config.data.configs.paloma/redpajama.validation_urls.[0]": "DEP[28]/65cd6fc/redpajama/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/twitterAAE_HELM_fixed.cache_dir": "DEP[29]",
+          "train_config.data.configs.paloma/twitterAAE_HELM_fixed.validation_urls.[0]": "DEP[30]/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz",
+          "train_config.data.configs.paloma/wikitext_103.cache_dir": "DEP[31]",
+          "train_config.data.configs.paloma/wikitext_103.validation_urls.[0]": "DEP[32]/65cd6fc/wikitext_103/val/val*.jsonl.gz"
+        },
+        "dependencies": [
+          {
+            "name": "tokenized/subcache/fineweb-edu-10B",
+            "config": {
+              "tokenizer": "stanford-crfm/marin-tokenizer",
+              "hf_repo_id": "marin-community/fineweb-edu-pretokenized-10B",
+              "hf_revision": null
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/4chan",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/c4_100_domains",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/c4_100_domains/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/c4_en",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/c4_en/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/dolma-v1_5",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/dolma-v1_5/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/dolma_100_programing_languages",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/dolma_100_subreddits",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/falcon-refinedweb",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/gab",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/gab/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/m2d2_s2orc_unsplit",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/m2d2_wikipedia_unsplit",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/manosphere_meta_sep",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/mc4",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/mc4/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/ptb",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/ptb/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/redpajama",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/redpajama/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/twitterAAE_HELM_fixed",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          },
+          {
+            "name": "tokenized/paloma/wikitext_103",
+            "config": {
+              "validation_paths.[0]": "DEP[0]/65cd6fc/wikitext_103/val/val*.jsonl.gz",
+              "tokenizer": "stanford-crfm/marin-tokenizer"
+            },
+            "dependencies": [
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "raw/paloma",
+            "config": {
+              "hf_dataset_id": "allenai/paloma",
+              "revision": "65cd6fc"
+            },
+            "dependencies": []
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/tokenized/subcache/fineweb-edu-10B-6fbcbb",
+        "gs://marin-us-central2/tokenized/paloma/4chan-187c38",
+        "gs://marin-us-central2/raw/paloma-fc6827",
+        "gs://marin-us-central2/tokenized/paloma/c4_100_domains-8cbede",
+        "gs://marin-us-central2/raw/paloma-fc6827",
+        "gs://marin-us-central2/tokenized/paloma/c4_en-5fcb25",
+        "gs://marin-us-central2/raw/paloma-fc6827",
+        "gs://marin-us-central2/tokenized/paloma/dolma-v1_5-757141",
+        "gs://marin-us-central2/raw/paloma-fc6827",
+        "gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-5670a8",
+        "gs://marin-us-central2/raw/paloma-fc6827",
+        "gs://marin-us-central2/tokenized/paloma/dolma_100_subreddits-dafde7",
+        "gs://marin-us-central2/raw/paloma-fc6827",
+        "gs://marin-us-central2/tokenized/paloma/falcon-refinedweb-6fe173",
+        "gs://marin-us-central2/raw/paloma-fc6827",
+        "gs://marin-us-central2/tokenized/paloma/gab-75fcc7",
+        "gs://marin-us-central2/raw/paloma-fc6827",
+        "gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-83bcf9",
+        "gs://marin-us-central2/raw/paloma-fc6827",
+        "gs://marin-us-central2/tokenized/paloma/m2d2_wikipedia_unsplit-38efee",
+        "gs://marin-us-central2/raw/paloma-fc6827",
+        "gs://marin-us-central2/tokenized/paloma/manosphere_meta_sep-9c97d5",
+        "gs://marin-us-central2/raw/paloma-fc6827",
+        "gs://marin-us-central2/tokenized/paloma/mc4-3e0113",
+        "gs://marin-us-central2/raw/paloma-fc6827",
+        "gs://marin-us-central2/tokenized/paloma/ptb-d3f540",
+        "gs://marin-us-central2/raw/paloma-fc6827",
+        "gs://marin-us-central2/tokenized/paloma/redpajama-eebbb1",
+        "gs://marin-us-central2/raw/paloma-fc6827",
+        "gs://marin-us-central2/tokenized/paloma/twitterAAE_HELM_fixed-15c4ba",
+        "gs://marin-us-central2/raw/paloma-fc6827",
+        "gs://marin-us-central2/tokenized/paloma/wikitext_103-9d5384",
+        "gs://marin-us-central2/raw/paloma-fc6827"
+      ],
+      "output_path": "gs://marin-us-central2/checkpoints/speedrun/nano_llama_fineweb_edu-a38b8c"
+    },
+    {
+      "name": "speedrun/nano_llama_fineweb_edu-speedrun_results",
+      "fn_name": "marin.speedrun.speedrun.speedrun_results",
+      "config": {
+        "wandb_run_id": "gs://marin-us-central2/checkpoints/speedrun/nano_llama_fineweb_edu-a38b8c",
+        "wandb_entity": "marin-community",
+        "wandb_project": "marin",
+        "speedrun_config": {
+          "author": {
+            "name": "",
+            "affiliation": "",
+            "url": ""
+          },
+          "description": "",
+          "model_config": {
+            "cross_entropy_block_size": null,
+            "seq_len": 512,
+            "hidden_dim": 32,
+            "intermediate_dim": 128,
+            "num_layers": 2,
+            "num_heads": 2,
+            "num_kv_heads": 2,
+            "activation_function": "silu",
+            "initializer_range": 0.02,
+            "layer_norm_epsilon": 1e-05,
+            "tie_word_embeddings": false,
+            "hybrid_norm": false,
+            "input_embedding_norm": false,
+            "upcast_attn": false,
+            "use_flash_attention": true,
+            "attn_backend": null,
+            "flash_attention_block_size": null,
+            "gradient_checkpointing": true,
+            "scan_layers": true,
+            "use_bias": false,
+            "use_layer_norm_weight": true,
+            "rope": {
+              "theta": 10000,
+              "factor": 1.0
+            },
+            "reference_checkpoint": "meta-llama/Llama-2-7b-hf",
+            "tokenizer": null
+          },
+          "train_config": {
+            "resources": {
+              "tpu_type": "v4-32",
+              "slice_count": 1,
+              "runtime_env": {},
+              "device_flops_override": null
+            },
+            "train_batch_size": 512,
+            "num_train_steps": 3000,
+            "learning_rate": 0.003,
+            "data_seed": null,
+            "weight_decay": 0.1,
+            "beta1": null,
+            "beta2": null,
+            "epsilon": null,
+            "max_grad_norm": null,
+            "warmup": null,
+            "decay": null,
+            "rewarmup": null,
+            "lr_schedule": null,
+            "min_lr_ratio": null,
+            "cycle_length": null,
+            "z_loss_weight": null,
+            "ema_beta": null,
+            "steps_per_eval": 1000,
+            "steps_per_export": 10000,
+            "steps_per_task_eval": null,
+            "steps_per_hf_export": null,
+            "per_device_eval_parallelism": null,
+            "max_eval_batches": null,
+            "initialize_from_checkpoint_path": null,
+            "initialize_from_hf": null,
+            "reset_data_loader_on_init": true,
+            "allow_partial_checkpoint": false,
+            "int8": false,
+            "optimizer_config": null,
+            "watch": {
+              "watch_targets": [
+                "grads",
+                "params"
+              ],
+              "include_norms": true,
+              "include_per_parameter_norms": true,
+              "include_histograms": false,
+              "split_scan_layers": true,
+              "interval": 10
+            }
+          },
+          "tokenized_dataset": "gs://marin-us-central2/tokenized/subcache/fineweb-edu-10B-6fbcbb"
+        },
+        "output_path": "gs://marin-us-central2/checkpoints/speedrun/nano_llama_fineweb_edu-a38b8c/speedrun_results.json"
+      },
+      "description": "compute and store metrics and stats for the speedrun nano_llama_fineweb_edu.",
+      "override_output_path": null,
+      "version": {
+        "name": "speedrun/nano_llama_fineweb_edu-speedrun_results",
+        "config": {
+          "wandb_run_id": "DEP[0]",
+          "speedrun_config.tokenized_dataset": "DEP[1]",
+          "output_path": "DEP[2]/speedrun_results.json"
+        },
+        "dependencies": [
+          {
+            "name": "checkpoints/speedrun/nano_llama_fineweb_edu",
+            "config": {
+              "train_config.data.tokenizer": "stanford-crfm/marin-tokenizer",
+              "train_config.data.configs.fineweb-edu-10B.cache_dir": "DEP[0]",
+              "train_config.data.configs.paloma/4chan.cache_dir": "DEP[1]",
+              "train_config.data.configs.paloma/4chan.validation_urls.[0]": "DEP[2]/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/c4_100_domains.cache_dir": "DEP[3]",
+              "train_config.data.configs.paloma/c4_100_domains.validation_urls.[0]": "DEP[4]/65cd6fc/c4_100_domains/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/c4_en.cache_dir": "DEP[5]",
+              "train_config.data.configs.paloma/c4_en.validation_urls.[0]": "DEP[6]/65cd6fc/c4_en/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/dolma-v1_5.cache_dir": "DEP[7]",
+              "train_config.data.configs.paloma/dolma-v1_5.validation_urls.[0]": "DEP[8]/65cd6fc/dolma-v1_5/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/dolma_100_programing_languages.cache_dir": "DEP[9]",
+              "train_config.data.configs.paloma/dolma_100_programing_languages.validation_urls.[0]": "DEP[10]/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/dolma_100_subreddits.cache_dir": "DEP[11]",
+              "train_config.data.configs.paloma/dolma_100_subreddits.validation_urls.[0]": "DEP[12]/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/falcon-refinedweb.cache_dir": "DEP[13]",
+              "train_config.data.configs.paloma/falcon-refinedweb.validation_urls.[0]": "DEP[14]/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/gab.cache_dir": "DEP[15]",
+              "train_config.data.configs.paloma/gab.validation_urls.[0]": "DEP[16]/65cd6fc/gab/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/m2d2_s2orc_unsplit.cache_dir": "DEP[17]",
+              "train_config.data.configs.paloma/m2d2_s2orc_unsplit.validation_urls.[0]": "DEP[18]/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/m2d2_wikipedia_unsplit.cache_dir": "DEP[19]",
+              "train_config.data.configs.paloma/m2d2_wikipedia_unsplit.validation_urls.[0]": "DEP[20]/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/manosphere_meta_sep.cache_dir": "DEP[21]",
+              "train_config.data.configs.paloma/manosphere_meta_sep.validation_urls.[0]": "DEP[22]/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/mc4.cache_dir": "DEP[23]",
+              "train_config.data.configs.paloma/mc4.validation_urls.[0]": "DEP[24]/65cd6fc/mc4/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/ptb.cache_dir": "DEP[25]",
+              "train_config.data.configs.paloma/ptb.validation_urls.[0]": "DEP[26]/65cd6fc/ptb/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/redpajama.cache_dir": "DEP[27]",
+              "train_config.data.configs.paloma/redpajama.validation_urls.[0]": "DEP[28]/65cd6fc/redpajama/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/twitterAAE_HELM_fixed.cache_dir": "DEP[29]",
+              "train_config.data.configs.paloma/twitterAAE_HELM_fixed.validation_urls.[0]": "DEP[30]/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/wikitext_103.cache_dir": "DEP[31]",
+              "train_config.data.configs.paloma/wikitext_103.validation_urls.[0]": "DEP[32]/65cd6fc/wikitext_103/val/val*.jsonl.gz"
+            },
+            "dependencies": [
+              {
+                "name": "tokenized/subcache/fineweb-edu-10B",
+                "config": {
+                  "tokenizer": "stanford-crfm/marin-tokenizer",
+                  "hf_repo_id": "marin-community/fineweb-edu-pretokenized-10B",
+                  "hf_revision": null
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/4chan",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/c4_100_domains",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/c4_100_domains/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/c4_en",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/c4_en/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/dolma-v1_5",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/dolma-v1_5/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/dolma_100_programing_languages",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/dolma_100_subreddits",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/falcon-refinedweb",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/gab",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/gab/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/m2d2_s2orc_unsplit",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/m2d2_wikipedia_unsplit",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/manosphere_meta_sep",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/mc4",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/mc4/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/ptb",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/ptb/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/redpajama",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/redpajama/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/twitterAAE_HELM_fixed",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/wikitext_103",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/wikitext_103/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          },
+          {
+            "name": "tokenized/subcache/fineweb-edu-10B",
+            "config": {
+              "tokenizer": "stanford-crfm/marin-tokenizer",
+              "hf_repo_id": "marin-community/fineweb-edu-pretokenized-10B",
+              "hf_revision": null
+            },
+            "dependencies": []
+          },
+          {
+            "name": "checkpoints/speedrun/nano_llama_fineweb_edu",
+            "config": {
+              "train_config.data.tokenizer": "stanford-crfm/marin-tokenizer",
+              "train_config.data.configs.fineweb-edu-10B.cache_dir": "DEP[0]",
+              "train_config.data.configs.paloma/4chan.cache_dir": "DEP[1]",
+              "train_config.data.configs.paloma/4chan.validation_urls.[0]": "DEP[2]/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/c4_100_domains.cache_dir": "DEP[3]",
+              "train_config.data.configs.paloma/c4_100_domains.validation_urls.[0]": "DEP[4]/65cd6fc/c4_100_domains/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/c4_en.cache_dir": "DEP[5]",
+              "train_config.data.configs.paloma/c4_en.validation_urls.[0]": "DEP[6]/65cd6fc/c4_en/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/dolma-v1_5.cache_dir": "DEP[7]",
+              "train_config.data.configs.paloma/dolma-v1_5.validation_urls.[0]": "DEP[8]/65cd6fc/dolma-v1_5/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/dolma_100_programing_languages.cache_dir": "DEP[9]",
+              "train_config.data.configs.paloma/dolma_100_programing_languages.validation_urls.[0]": "DEP[10]/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/dolma_100_subreddits.cache_dir": "DEP[11]",
+              "train_config.data.configs.paloma/dolma_100_subreddits.validation_urls.[0]": "DEP[12]/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/falcon-refinedweb.cache_dir": "DEP[13]",
+              "train_config.data.configs.paloma/falcon-refinedweb.validation_urls.[0]": "DEP[14]/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/gab.cache_dir": "DEP[15]",
+              "train_config.data.configs.paloma/gab.validation_urls.[0]": "DEP[16]/65cd6fc/gab/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/m2d2_s2orc_unsplit.cache_dir": "DEP[17]",
+              "train_config.data.configs.paloma/m2d2_s2orc_unsplit.validation_urls.[0]": "DEP[18]/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/m2d2_wikipedia_unsplit.cache_dir": "DEP[19]",
+              "train_config.data.configs.paloma/m2d2_wikipedia_unsplit.validation_urls.[0]": "DEP[20]/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/manosphere_meta_sep.cache_dir": "DEP[21]",
+              "train_config.data.configs.paloma/manosphere_meta_sep.validation_urls.[0]": "DEP[22]/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/mc4.cache_dir": "DEP[23]",
+              "train_config.data.configs.paloma/mc4.validation_urls.[0]": "DEP[24]/65cd6fc/mc4/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/ptb.cache_dir": "DEP[25]",
+              "train_config.data.configs.paloma/ptb.validation_urls.[0]": "DEP[26]/65cd6fc/ptb/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/redpajama.cache_dir": "DEP[27]",
+              "train_config.data.configs.paloma/redpajama.validation_urls.[0]": "DEP[28]/65cd6fc/redpajama/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/twitterAAE_HELM_fixed.cache_dir": "DEP[29]",
+              "train_config.data.configs.paloma/twitterAAE_HELM_fixed.validation_urls.[0]": "DEP[30]/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz",
+              "train_config.data.configs.paloma/wikitext_103.cache_dir": "DEP[31]",
+              "train_config.data.configs.paloma/wikitext_103.validation_urls.[0]": "DEP[32]/65cd6fc/wikitext_103/val/val*.jsonl.gz"
+            },
+            "dependencies": [
+              {
+                "name": "tokenized/subcache/fineweb-edu-10B",
+                "config": {
+                  "tokenizer": "stanford-crfm/marin-tokenizer",
+                  "hf_repo_id": "marin-community/fineweb-edu-pretokenized-10B",
+                  "hf_revision": null
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/4chan",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/c4_100_domains",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/c4_100_domains/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/c4_en",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/c4_en/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/dolma-v1_5",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/dolma-v1_5/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/dolma_100_programing_languages",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/dolma_100_subreddits",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/falcon-refinedweb",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/gab",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/gab/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/m2d2_s2orc_unsplit",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/m2d2_wikipedia_unsplit",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/manosphere_meta_sep",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/mc4",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/mc4/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/ptb",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/ptb/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/redpajama",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/redpajama/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/twitterAAE_HELM_fixed",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              },
+              {
+                "name": "tokenized/paloma/wikitext_103",
+                "config": {
+                  "validation_paths.[0]": "DEP[0]/65cd6fc/wikitext_103/val/val*.jsonl.gz",
+                  "tokenizer": "stanford-crfm/marin-tokenizer"
+                },
+                "dependencies": [
+                  {
+                    "name": "raw/paloma",
+                    "config": {
+                      "hf_dataset_id": "allenai/paloma",
+                      "revision": "65cd6fc"
+                    },
+                    "dependencies": []
+                  }
+                ]
+              },
+              {
+                "name": "raw/paloma",
+                "config": {
+                  "hf_dataset_id": "allenai/paloma",
+                  "revision": "65cd6fc"
+                },
+                "dependencies": []
+              }
+            ]
+          }
+        ]
+      },
+      "dependencies": [
+        "gs://marin-us-central2/checkpoints/speedrun/nano_llama_fineweb_edu-a38b8c",
+        "gs://marin-us-central2/tokenized/subcache/fineweb-edu-10B-6fbcbb",
+        "gs://marin-us-central2/checkpoints/speedrun/nano_llama_fineweb_edu-a38b8c"
+      ],
+      "output_path": "gs://marin-us-central2/speedrun/nano_llama_fineweb_edu-speedrun_results-ebb5d1"
+    }
+  ]
+}
