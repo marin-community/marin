@@ -32,7 +32,6 @@ llama_7b_dclm = LlamaConfig(
     num_heads=32,  # Number of attention heads
     num_kv_heads=32,  # Number of key/value heads
     num_layers=32,  # Number of transformer layers
-    use_flash_attention=True,  # Optimization for faster attention computation
 )
 
 NUM_TRAIN_TOKENS = int(140e9)  # 140 billion tokens
