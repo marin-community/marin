@@ -34,81 +34,6 @@ import hashlib
 import logging
 logger = logging.getLogger("ray")
 
-def create_tokenization_step(dataset_name: str) -> ExecutorStep:
-    """
-    Creates a tokenization ExecutorStep for a given dataset.
-
-    Args:
-        dataset_name: Name of the dataset (e.g., 'TIGER-Lab/AceCode-89K', 'HuggingFaceTB/smoltalk')
-
-    Returns:
-        ExecutorStep configured for tokenizing the specified dataset
-    """
-    # Get the dataset with only train split
-    dataset = get_instruction_dataset(dataset_name, splits=["train"])
-
-    # Get the last part of the path and clean it up
-    short_name = dataset_name.split("/")[-1].lower().replace("-", "_")
-    return default_tokenize(
-        name=f"{short_name}_marin_tokenizer",
-        dataset=dataset / "**/*.jsonl.gz",
-        tokenizer=marin_tokenizer,
-        format=ChatLmDatasetFormat(),
-    )
-
-
-def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
-    """ExecutorStep that preprocesses and shards the input dataset.
-
-    ===========================================================================
-    dataset_cfg: {
-        ...
-        "hf_dataset_id": "cognitivecomputations/dolphin-r1",
-        "subsets": ["reasoning-flash"],
-        "splits": ['train', 'validation'],
-        ...
-    }
-    output_path_of(download_step) --> gs://.../raw/dolphin-r1-[revision_number]-[hash]
-
-    Expected files written: [
-        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/train/shard_00001.json.gz,
-        ...
-        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/train/shard_00055.json.gz,
-        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/validation/shard_00001.json.gz,
-        ...
-        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/validation/shard_00023.json.gz,
-    ]
-    ===========================================================================
-    """
-    adapter_name = dataset_cfg.adapter_name if dataset_cfg.adapter_name is not None else dataset_cfg.hf_dataset_id
-    dataset_name = get_directory_friendly_dataset_name(adapter_name)
-    download_data_path = output_path_of(download_step)
-
-    config_str = f"{dataset_name}-\
-        {dataset_cfg.revision}\
-        -{sorted(dataset_cfg.subsets)}\
-        -{sorted(dataset_cfg.splits)}"
-    hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
-
-    transform_step = ExecutorStep(
-        name=f"documents/{dataset_name}",
-        fn=custom_transform_nemotron,
-        config=TransformSFTDatasetConfig(
-            input_path=download_data_path,
-            output_path=this_output_path(),
-            shard_size=versioned(5000), # Context is long in nemotron
-            metadata_columns=versioned(dataset_cfg.metadata_columns),
-            filetype=dataset_cfg.filetype,
-            source=dataset_cfg.hf_dataset_id,
-            subsets=dataset_cfg.subsets,
-            splits=dataset_cfg.splits,
-            adapter_name=adapter_name,
-        ),
-        override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
-    )
-
-    return transform_step
-
 
 def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
     """We need a custom transform function because Nemotron is too large (~140GB in total). Downloading the entire
@@ -127,8 +52,6 @@ def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
     write_ops = []
     for subset in cfg.subsets:
         for split in cfg.splits:
-            if split!='code':
-                continue
             try:
                 logger.info(f"Downloading dataset from GCP: {gcp_path}/{subset}/{split}")
                 try:
@@ -227,6 +150,82 @@ def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
     # Wait for all write operations to complete
     ray.get(write_ops)
     return cfg.output_path
+
+
+def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
+    """ExecutorStep that preprocesses and shards the input dataset.
+
+    ===========================================================================
+    dataset_cfg: {
+        ...
+        "hf_dataset_id": "cognitivecomputations/dolphin-r1",
+        "subsets": ["reasoning-flash"],
+        "splits": ['train', 'validation'],
+        ...
+    }
+    output_path_of(download_step) --> gs://.../raw/dolphin-r1-[revision_number]-[hash]
+
+    Expected files written: [
+        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/train/shard_00001.json.gz,
+        ...
+        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/train/shard_00055.json.gz,
+        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/validation/shard_00001.json.gz,
+        ...
+        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/validation/shard_00023.json.gz,
+    ]
+    ===========================================================================
+    """
+    adapter_name = dataset_cfg.adapter_name if dataset_cfg.adapter_name is not None else dataset_cfg.hf_dataset_id
+    dataset_name = get_directory_friendly_dataset_name(adapter_name)
+    download_data_path = output_path_of(download_step)
+
+    config_str = f"{dataset_name}-\
+        {dataset_cfg.revision}\
+        -{sorted(dataset_cfg.subsets)}\
+        -{sorted(dataset_cfg.splits)}"
+    hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
+
+    transform_step = ExecutorStep(
+        name=f"documents/{dataset_name}",
+        fn=custom_transform_nemotron,
+        config=TransformSFTDatasetConfig(
+            input_path=download_data_path,
+            output_path=this_output_path(),
+            shard_size=versioned(5000), # Context is long in nemotron
+            metadata_columns=versioned(dataset_cfg.metadata_columns),
+            filetype=dataset_cfg.filetype,
+            source=dataset_cfg.hf_dataset_id,
+            subsets=dataset_cfg.subsets,
+            splits=dataset_cfg.splits,
+            adapter_name=adapter_name,
+        ),
+        override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
+    )
+
+    return transform_step
+
+
+def create_tokenization_step(dataset_name: str) -> ExecutorStep:
+    """
+    Creates a tokenization ExecutorStep for a given dataset.
+
+    Args:
+        dataset_name: Name of the dataset (e.g., 'TIGER-Lab/AceCode-89K', 'HuggingFaceTB/smoltalk')
+
+    Returns:
+        ExecutorStep configured for tokenizing the specified dataset
+    """
+    # Get the dataset with only train split
+    dataset = get_instruction_dataset(dataset_name, splits=['chat', 'code', 'math', 'science', 'safety'])
+
+    # Get the last part of the path and clean it up
+    short_name = dataset_name.split("/")[-1].lower().replace("-", "_")
+    return default_tokenize(
+        name=f"{short_name}_marin_tokenizer",
+        dataset=dataset / "**/*.jsonl.gz",
+        tokenizer=marin_tokenizer,
+        format=ChatLmDatasetFormat(),
+    )
 
 
 def main():
