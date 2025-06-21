@@ -155,8 +155,6 @@ def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
                         )
                         subset_output_path += '/' + suffix
                     output_path = create_shard_output_directory(subset_output_path)
-                    logger.info(f"Output path for {file} is {output_path}")
-                    raise Exception("Stop here")
 
                     # Read the file
                     jsonl_file_path = os.path.join(local_dir, file)
