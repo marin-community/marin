@@ -1,4 +1,4 @@
-.PHONY: help clean check autoformat cluster_docker cluster_docker_build cluster_docker_push
+.PHONY: help clean check autoformat cluster_docker cluster_docker_build cluster_docker_push cluster_docker_venv cluster_docker_venv_build cluster_docker_venv_push
 .DEFAULT: help
 
 # Help, clean, check and autoformat targets remain unchanged
@@ -57,6 +57,10 @@ else
 	DOCKER_IMAGE_NAME = marin_cluster
 endif
 
+# Config for venv-based Dockerfile
+VENV_DOCKERFILE = docker/marin/Dockerfile.cluster.venv
+VENV_IMAGE_NAME = marin_cluster_venv
+
 # Target to build the Docker image and tag it appropriately
 cluster_docker_build:
 	@echo "Building Docker image using Dockerfile: $(DOCKERFILE)"
@@ -90,6 +94,32 @@ cluster_docker_ghcr_push: cluster_docker_build
 	$(foreach version,$(TAG_VERSIONS), \
 		docker push 'ghcr.io/stanford-crfm/marin/$(DOCKER_IMAGE_NAME):$(version)';)
 
+# Targets for building and pushing using the venv-based Dockerfile
+cluster_docker_venv_build:
+	@echo "Building Docker image using Dockerfile: $(VENV_DOCKERFILE)"
+	docker buildx build --platform linux/amd64 -t '$(VENV_IMAGE_NAME):latest' -f $(VENV_DOCKERFILE) .
+	@echo "Tagging Docker image for each region and version..."
+	$(foreach region,$(CLUSTER_REPOS), \
+		$(foreach version,$(TAG_VERSIONS), \
+			docker tag '$(VENV_IMAGE_NAME):latest' '$(region)-docker.pkg.dev/hai-gcp-models/marin/$(VENV_IMAGE_NAME):$(version)';))
+
+cluster_docker_venv_push:
+	@echo "Authenticating and preparing repositories..."
+	$(foreach region,$(CLUSTER_REPOS), \
+		gcloud auth configure-docker $(region)-docker.pkg.dev;)
+	$(foreach region,$(CLUSTER_REPOS), \
+		gcloud artifacts repositories list --location=$(region) --filter 'name:marin' > /dev/null || \
+		gcloud artifacts repositories create --repository-format=docker --location=$(region) marin;)
+	@echo "Pushing Docker images for each region and version..."
+	$(foreach region,$(CLUSTER_REPOS), \
+		$(foreach version,$(TAG_VERSIONS), \
+			docker push '$(region)-docker.pkg.dev/hai-gcp-models/marin/$(VENV_IMAGE_NAME):$(version)';))
+	@echo "##################################################################"
+	@echo "Don't forget to update the tags in infra/update-cluster-configs.py for venv images"
+	@echo "##################################################################"
+
+cluster_docker_venv: cluster_docker_venv_build cluster_docker_venv_push
+	@echo "Venv Docker image build and push complete."
 
 # Meta-target that builds and then pushes the Docker images
 cluster_docker: cluster_docker_build cluster_docker_push
