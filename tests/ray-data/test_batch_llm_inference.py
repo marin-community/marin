@@ -28,7 +28,7 @@ def test_ray_data(gcsfuse_mount_model_path, test_file_path):
             "prompt_column": "text",
             "save_templated_prompt": False,
             "apply_chat_template": True,
-            "max_doc_length": 896,
+            "max_doc_tokens": 896,
         },
         resources={"TPU": 1, "TPU-v6e-8-head": 1},
     )
