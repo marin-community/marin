@@ -2,6 +2,7 @@ import gzip
 import json
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -265,6 +266,7 @@ def do_dedup(
     processes,
     read_only=False,
     bloom_filter_file="deduper_bloom_filter.bin",
+    train_test_overlap=False,
 ):
     bloom_filter_file = os.path.join(local_base_dir, bloom_filter_file)
 
@@ -272,7 +274,6 @@ def do_dedup(
     if ngram is not None and not bloom_filter_size:
         total_ngrams = estimate_total_ngrams_fast(local_base_dir, ngram)
         estimated_doc_count = total_ngrams
-        print(f"Estimated total {ngram.ngram_length}-grams: {estimated_doc_count}")
 
     command = [
         "RUST_BACKTRACE=full",
@@ -294,7 +295,14 @@ def do_dedup(
     ]
 
     if bloom_filter_size:
-        command.extend(["--bloom_filter.size_in_bytes", str(bloom_filter_size)])
+        command.extend([
+            "--bloom_filter.size_in_bytes",
+            str(bloom_filter_size),
+            "--bloom_filter.estimated_doc_count",
+            str(max(1, estimated_doc_count)),
+            "--bloom_filter.desired_false_positive_rate",
+            str(false_positive_rate),
+        ])
     else:
         command.extend(
             [
@@ -319,6 +327,19 @@ def do_dedup(
                 str(ngram.overlap_threshold),
                 "--dedupe.paragraphs.by_ngram.stride",
                 str(ngram.stride),
+            ]
+        )
+
+    if train_test_overlap:
+        # For train-test overlap, we need to shard the documents for parallel processing
+        # when constructing bloom filter (not when applying it)
+        if not read_only:
+            _shard_documents_for_train_test_overlap(local_base_dir, processes, debug=False)
+        
+        # chatgpt says the separator below is extrememly unlikely to ever occur, so we count all n-grams in document
+        # instead of per paragraph, giving us overlap if any n-grams match
+        command.extend(
+            [
                 "--dedupe.paragraphs.paragraph_separator",
                 "\u001e\u001e",
             ]
@@ -427,7 +448,6 @@ def estimate_total_ngrams_fast(local_base_dir, ngram, sample_lines: int = 1000):
     malformed_lines = 0
 
     for file in fsspec_glob(pattern):
-        print(f"Sampling from {file}")
         with fsspec.open(file, "rt", compression="infer") as f:
             for line_num, raw_line in enumerate(f):
                 total_lines += 1
@@ -456,7 +476,6 @@ def estimate_total_ngrams_fast(local_base_dir, ngram, sample_lines: int = 1000):
                     ngram_total += (L - ngram.ngram_length) // step + 1
                 sample_lines_seen += 1
 
-    print(f"Sampled {sample_lines_seen} valid lines out of {total_lines} total lines")
     if malformed_lines > 0:
         print(f"Warning: Found {malformed_lines} malformed lines during sampling")
 
@@ -468,106 +487,78 @@ def estimate_total_ngrams_fast(local_base_dir, ngram, sample_lines: int = 1000):
     return int(avg_ngrams_per_line * total_lines)
 
 
-def _shard_decontaminate_source(source_path: str, doc_dir: str, num_processes: int) -> None:
-    """
-    Shard the decontaminate source into num_processes files under doc_dir.
-    Handles both Parquet and compressed JSONL efficiently.
-    """
-
-    # Create shard writers
-    writers = []
-    for i in range(num_processes):
-        shard_path = os.path.join(doc_dir, f"shard_{i}.jsonl.gz")
-        writers.append(fsspec.open(shard_path, "wt", compression="gzip").open())
-    print(f"Sharding decontaminate source {source_path} into {num_processes} shards under {doc_dir}", flush=True)
-    try:
-        if source_path.endswith(".parquet"):
-            _shard_parquet_source(source_path, writers)
-        else:
-            _shard_jsonl_source(source_path, writers)
-    finally:
-        for w in writers:
-            w.close()
-
-
-def _shard_parquet_source(parquet_path: str, writers: list) -> None:
-    """Stream Parquet file and distribute records across writers."""
-
-    # Skip 0-byte parquet files (avoids ArrowInvalid on empty files)
-    try:
-        if fsspec_size(parquet_path) == 0:
-            logger.error(f"Parquet file {parquet_path} is 0 bytes, skipping shard processing")
-            return
-    except Exception as e:
-        logger.warning(f"Could not determine size for {parquet_path}: {e}")
-    with fsspec.open(parquet_path, "rb") as f:
-        parquet_file = pq.ParquetFile(f)
-        # Skip empty Parquet shards gracefully
-        if parquet_file.metadata.num_rows == 0:
-            logger.error(f"Parquet file {parquet_path} contains 0 rows, skipping shard processing")
-            return
-        
-        # Debug: print schema info
-        schema = parquet_file.schema
-        column_names = [field.name for field in schema]
-        print(f"Parquet schema for {parquet_path}: {column_names}")
-        
-        # Determine text field strategy
-        has_text = "text" in column_names
-        has_content = "content" in column_names
-        
-        if not has_text and not has_content:
-            logger.error(f"CRITICAL: Parquet file {parquet_path} has neither 'text' nor 'content' fields! Available columns: {column_names}")
-            logger.error(f"Cannot process {parquet_path} - aborting shard operation")
-            return
-        elif not has_text and has_content:
-            logger.warning(f"Parquet file {parquet_path} missing 'text' field, using 'content' as fallback")
-
-        idx = 0
-        # Read in batches to avoid loading entire file into memory
-        for batch in parquet_file.iter_batches(batch_size=1000):
-            # Convert batch to pandas for easier record iteration
-            df = batch.to_pandas()
-            
-            # Debug: print first record in first batch
-            if idx == 0 and len(df) > 0:
-                first_record = df.iloc[0].to_dict()
-                print(f"First record keys: {list(first_record.keys())}")
-                print(f"First record sample: {dict(list(first_record.items())[:3])}")
-            
-            for record in df.to_dict(orient="records"):
-                # Robust text field handling
-                if "text" not in record:
-                    if "content" in record:
-                        record["text"] = record.pop("content")
-                    else:
-                        logger.error(f"Record in {parquet_path} missing both 'text' and 'content' fields, has keys: {list(record.keys())}")
-                        continue
-                
-                # Validate text field is actually a string
-                if not isinstance(record["text"], str):
-                    logger.warning(f"Text field in {parquet_path} is not a string (type: {type(record['text'])}), converting to string")
-                    record["text"] = str(record["text"])
-                    
-                if "id" not in record:
-                    # Generate a synthetic ID if missing
-                    record["id"] = f"synthetic_{hash(str(record))}"
-                
-                json_line = json.dumps(record) + "\n"
-                writers[idx % len(writers)].write(json_line)
-                idx += 1
-
-            if idx % 10000 == 0:
-                print(f"Sharded {idx} records from {parquet_path}", flush=True)
-
-
 def _shard_jsonl_source(jsonl_path: str, writers: list) -> None:
     """Stream JSONL file and distribute lines across writers.
     We do this to write the bloom filters faster for large training shards."""
-
     with fsspec.open(jsonl_path, "rt", compression="infer") as fr:
         for idx, line in enumerate(fr):
             writers[idx % len(writers)].write(line)
+
+
+def _shard_documents_for_train_test_overlap(local_base_dir: str, processes: int, debug: bool = False) -> bool:
+    """
+    Shard documents in the documents/ directory for train-test overlap processing.
+    Works in-place to avoid symlink issues.
+    
+    Args:
+        local_base_dir: Base directory containing documents/ subdirectory
+        processes: Number of shards to create
+        debug: If True, print debug information with flush
+        
+    Returns:
+        True if sharding was performed, False if no files found
+    """
+    if debug:
+        print(f"Sharding documents for train-test overlap processing with {processes} shards", flush=True)
+    
+    documents_dir = os.path.join(local_base_dir, "documents")
+    
+    # Find all jsonl.gz files in documents directory
+    docs_pattern = os.path.join(documents_dir, "**", "*.jsonl.gz")
+    jsonl_files = fsspec_glob(docs_pattern)
+    
+    if not jsonl_files:
+        # Fallback to shallow search
+        docs_pattern = os.path.join(documents_dir, "*.jsonl.gz")
+        jsonl_files = fsspec_glob(docs_pattern)
+    
+    if not jsonl_files:
+        if debug:
+            print("No JSONL files found for sharding", flush=True)
+        return False
+    
+    if debug:
+        print(f"Found {len(jsonl_files)} JSONL files to shard", flush=True)
+    
+    # Create shard writers directly in the documents directory
+    writers = []
+    shard_paths = []
+    for i in range(processes):
+        shard_path = os.path.join(documents_dir, f"shard_{i}.jsonl.gz")
+        shard_paths.append(shard_path)
+        writers.append(fsspec.open(shard_path, "wt", compression="gzip").open())
+    
+    try:
+        # Shard each jsonl.gz file
+        for jsonl_file in jsonl_files:
+            if debug:
+                print(f"Sharding file: {jsonl_file}", flush=True)
+            _shard_jsonl_source(jsonl_file, writers)
+    finally:
+        for w in writers:
+            w.close()
+    
+    # Delete the original files (but keep the documents directory intact)
+    for original_file in jsonl_files:
+        if debug:
+            print(f"Removing original file: {original_file}", flush=True)
+        fsspec_rm(original_file)
+    
+    if debug:
+        print(f"Successfully sharded {len(jsonl_files)} files into {processes} shards in-place", flush=True)
+        print(f"Shard files created: {shard_paths}", flush=True)
+    
+    return True
 
 
 # Helpers for the two workflows
@@ -659,6 +650,8 @@ def _run_train_test_overlap(config: DedupeConfig):
       * Under `<output_path>/<N>/`, you will find a mirror of the test-set directory structure,
         each `.jsonl.gz` containing the duplicate-span attributes for that doc.
       * Only test overlaps are uploaded; seed-shard attribute files are removed before upload.
+
+    The sharding logic is now handled inside do_dedup when train_test_overlap=True.
     """
     with tempfile.TemporaryDirectory(dir="/dev/shm", prefix="marin_dedupe_") as tmpdir:
         if not config.decontaminate_source:
@@ -671,16 +664,12 @@ def _run_train_test_overlap(config: DedupeConfig):
             config.ngram.ngram_length if isinstance(config.ngram.ngram_length, list) else [config.ngram.ngram_length]
         )
 
-        # 1) Shard the decontaminate source once into a seed directory
-        seed_dir = os.path.join(tmpdir, "documents_seed")
-        fsspec_mkdirs(seed_dir)
-        _shard_decontaminate_source(config.decontaminate_source, seed_dir, config.processes)
-        
-        # Debug: print contents of documents_seed directory
-        seed_files = os.listdir(seed_dir) if os.path.exists(seed_dir) else []
-        print(f"Contents of documents_seed directory: {seed_files}", flush=True)
+        # 1) Convert decontaminate source to jsonl.gz format using copy_files_in
+        copy_files_in(config.decontaminate_source, tmpdir)
+        seed_dir = os.path.join(tmpdir, "documents_seed") 
+        os.rename(os.path.join(tmpdir, "documents"), seed_dir)
 
-        # 2) Stage test data once under a separate directory
+        # 2) Stage test data under a separate directory
         copy_files_in(config.input_path, tmpdir)
         test_dir = os.path.join(tmpdir, "documents_test")
         os.rename(os.path.join(tmpdir, "documents"), test_dir)
@@ -715,6 +704,7 @@ def _run_train_test_overlap(config: DedupeConfig):
                 config.processes,
                 read_only=False,
                 bloom_filter_file=current_bloom_filter,
+                train_test_overlap=True,
             )
             os.remove(os.path.join(tmpdir, "documents"))
 
@@ -732,6 +722,7 @@ def _run_train_test_overlap(config: DedupeConfig):
                 config.processes,
                 read_only=True,
                 bloom_filter_file=current_bloom_filter,
+                train_test_overlap=True,
             )
             os.remove(os.path.join(tmpdir, "documents"))
 
@@ -760,7 +751,6 @@ def dedupe(config: DedupeConfig):
     """Top-level Ray task: dispatch between decontamination and deduplication workflows."""
     if config.mode == DedupMode.DECONTAMINATE:
         _run_decontamination(config)
-
     elif config.mode == DedupMode.DEDUPLICATE:
         _run_deduplication(config)
     elif config.mode == DedupMode.TRAIN_TEST_OVERLAP:
