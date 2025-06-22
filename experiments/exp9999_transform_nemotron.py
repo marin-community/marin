@@ -3,7 +3,6 @@ from instruction_datasets import (
     InstructionDatasetConfig,
     download_dataset_step,
     get_instruction_dataset,
-    transform_dataset_step,
     get_directory_friendly_dataset_name
 )
 from levanter.data.text import ChatLmDatasetFormat
@@ -58,7 +57,8 @@ def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
                     download_directory_from_gcs(bucket, f"{gcp_path}/{subset}/{split}", local_dir)
                 except Exception as e:
                     logger.error(f"Error downloading dataset from GCP: {e}. \nRemoving local directory `{local_dir}`")
-                    shutil.rmtree(local_dir)
+                    if os.path.exists(local_dir):
+                        shutil.rmtree(local_dir)
                     raise e
 
                 # Get full paths of all jsonl files
@@ -70,7 +70,7 @@ def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
                     subset_output_path = get_shard_dir(cfg.output_path, subset, split)
                     if len(files) > 1:
                         suffix = (
-                            file.split("/")[-1]
+                            os.path.basename(file)
                             .replace(split, "")
                             .strip("_")
                             .replace(".jsonl", "")
@@ -80,7 +80,7 @@ def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
                     output_path = create_shard_output_directory(subset_output_path)
 
                     # Read the file
-                    jsonl_file_path = os.path.join(local_dir, file)
+                    jsonl_file_path = file
                     # Read the file
                     with open(jsonl_file_path, 'r') as f:
                         batch = []
@@ -142,6 +142,9 @@ def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
                                     cfg,
                                 )
                             )
+            except Exception as e:
+                logger.error(f"Error processing dataset: {e}")
+                raise e
             finally:
                 if os.path.exists(local_dir):
                     logger.info(f"Deleting local directory `{local_dir}`")
@@ -152,28 +155,13 @@ def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
     return cfg.output_path
 
 
-def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
+def custom_transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
     """ExecutorStep that preprocesses and shards the input dataset.
 
-    ===========================================================================
-    dataset_cfg: {
-        ...
-        "hf_dataset_id": "cognitivecomputations/dolphin-r1",
-        "subsets": ["reasoning-flash"],
-        "splits": ['train', 'validation'],
-        ...
-    }
-    output_path_of(download_step) --> gs://.../raw/dolphin-r1-[revision_number]-[hash]
-
-    Expected files written: [
-        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/train/shard_00001.json.gz,
-        ...
-        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/train/shard_00055.json.gz,
-        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/validation/shard_00001.json.gz,
-        ...
-        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/validation/shard_00023.json.gz,
-    ]
-    ===========================================================================
+    This is a modified copy of the transform_dataset_step function in instruction_datasets.py.
+    We should be thinking of passing TransformSFTDatasetConfig (and hence have the user loading from the config)
+    instead of trying to infer the config from InstructionDatasetConfig.
+    It is great to be fully automatic but it limits customizability.
     """
     adapter_name = dataset_cfg.adapter_name if dataset_cfg.adapter_name is not None else dataset_cfg.hf_dataset_id
     dataset_name = get_directory_friendly_dataset_name(adapter_name)
@@ -244,7 +232,7 @@ if __name__ == "__main__":
         downloaded_dataset = download_dataset_step(config)
         all_steps.append(downloaded_dataset)
         # Transform the dataset
-        transformed_dataset = transform_dataset_step(config, downloaded_dataset)
+        transformed_dataset = custom_transform_dataset_step(config, downloaded_dataset)
         all_steps.append(transformed_dataset)
 
     executor_main(steps=all_steps)
