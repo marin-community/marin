@@ -38,11 +38,12 @@ from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
+from marin.download.huggingface.download import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
-    VersionedValue,
     ensure_versioned,
     get_executor_step,
     this_output_path,
@@ -61,8 +62,6 @@ from marin.training.training import (
     TrainLmOnPodConfig,
     run_levanter_train_lm,
 )
-from operations.download.huggingface.download import DownloadConfig
-from operations.download.huggingface.download_hf import download_hf
 
 logger = logging.getLogger("ray")
 
@@ -103,11 +102,7 @@ def default_download(
         override_output_path=override_output_path,
     )
 
-    cd_path = revision
-    if isinstance(cd_path, VersionedValue):
-        cd_path = cd_path.value
-
-    return step.cd(cd_path)
+    return step.as_input_name()
 
 
 def default_tokenize(
@@ -140,7 +135,7 @@ def default_tokenize(
     """
 
     # sniff out if it's a HuggingFace dataset
-    if isinstance(dataset, str) and "/" in dataset and not fsspec_utils.exists(dataset):
+    if isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
         config = HfTokenizeConfig(
             id=dataset,
             cache_path=this_output_path(),
@@ -264,8 +259,6 @@ def default_train(
                 name = prefix[: 63 - len(suffix)] + "-" + suffix
         logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
 
-    # TODO: right now, assume architecture is a LlamaConfig, generalize this
-    assert isinstance(model_config, LlamaConfig)
     if eval_harness_tasks:
         harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
     else:
@@ -359,6 +352,7 @@ def default_train(
                 min_lr_ratio=(
                     train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
                 ),
+                skip_bad_steps=train_config.skip_bad_steps,
             )
         ),
         hf_save_steps=steps_per_export_hf,
@@ -485,10 +479,8 @@ def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
         An ExecutorStep configured for annealing.
 
     """
-    imputed_checkpoint_steps = anneal_config.initialize_from_checkpoint_path.index("step-")
-    imputed_checkpoint_step = int(
-        anneal_config.initialize_from_checkpoint_path[imputed_checkpoint_steps + len("step-") :]
-    )
+    checkpoint_path = anneal_config.initialize_from_checkpoint_path
+    imputed_checkpoint_step = _impute_checkpoint_step(checkpoint_path)
 
     num_anneal_steps = anneal_config.num_anneal_training_tokens / (
         anneal_config.train_batch_size * AnnealConfig.LLAMA_MAX_SEQ_LEN
@@ -514,7 +506,7 @@ def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
         min_lr_ratio=anneal_config.min_lr_ratio,
         steps_per_export=anneal_config.steps_per_export,
         lr_schedule=anneal_config.lr_schedule,
-        initialize_from_checkpoint_path=anneal_config.initialize_from_checkpoint_path,
+        initialize_from_checkpoint_path=checkpoint_path,
     )
 
     return default_train(
@@ -525,6 +517,22 @@ def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
         use_default_validation=anneal_config.use_default_validation,
         eval_harness_tasks=MMLU_TASKS,
     )
+
+
+def _impute_checkpoint_step(checkpoint_path: str | InputName) -> int:
+    """
+    Extracts the checkpoint step from a checkpoint path.
+    Args:
+        checkpoint_path:
+
+    Returns:
+
+    """
+    if isinstance(checkpoint_path, InputName):
+        checkpoint_path = checkpoint_path.name
+    imputed_checkpoint_steps = checkpoint_path.index("step-")
+    imputed_checkpoint_step = int(checkpoint_path[imputed_checkpoint_steps + len("step-") :])
+    return imputed_checkpoint_step
 
 
 @lru_cache

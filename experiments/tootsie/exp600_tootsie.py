@@ -22,6 +22,7 @@ from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components
 from experiments.defaults import default_train
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from experiments.dolmino.tokenize_dolmino import dolmino_math_tokenized_llama3, get_dolmino_step_llama3
+from experiments.evals.evals import default_base_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary
@@ -690,6 +691,7 @@ if __name__ == "__main__":
             llama_8b_tootsie_adept_phoenix,
             tootsie_8b_sensible_starling,
             tootsie_8b_deeper_starling,
+            *default_base_eval(tootsie_8b_deeper_starling),
         ],
         description="Train 8B model on DCLM using WSD-S, then switching to EMA with a new mixture.",
     )

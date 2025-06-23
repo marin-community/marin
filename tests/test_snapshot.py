@@ -9,9 +9,9 @@ from bs4 import BeautifulSoup
 from experiments.exp575_wikipedia_markdownify import WIKI_BLACKLISTED_SELECTORS
 from experiments.exp579_ar5iv_markdownify import ARXIV_BLACKLISTED_SELECTORS
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig, TrafilaturaConfig
+from marin.transform.ar5iv.transform_ar5iv import clean_html
+from marin.transform.wikipedia.transform_wikipedia import clean_wiki_html
 from marin.web.convert import convert_page
-from operations.transform.ar5iv.transform_ar5iv import clean_html
-from operations.transform.wikipedia.transform_wikipedia import clean_wiki_html
 from tests.snapshots.stackexchange.accept_changes import prepare_expected_output
 from tests.test_utils import skip_if_module_missing
 
