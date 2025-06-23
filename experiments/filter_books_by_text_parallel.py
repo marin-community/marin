@@ -33,4 +33,4 @@ filter_step = ExecutorStep(
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    executor_main(steps=[filter_step]) 
+    executor_main(steps=[filter_step])

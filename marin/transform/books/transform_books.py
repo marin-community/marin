@@ -44,7 +44,6 @@ class BooksToSFTConfig:
     step_size: int = 10
     split_ratio: float = 0.6
     shard_size: int = 10000
-    min_book_length: int = 1000
 
 
 @dataclasses.dataclass
@@ -92,8 +91,6 @@ def generate_sliding_windows(text: str, config: BooksToSFTConfig) -> list[dict[s
     Returns:
         List of prompt-response pairs with metadata
     """
-    if len(text) < config.min_book_length:
-        return []
 
     examples = []
     text_length = len(text)
@@ -263,14 +260,11 @@ def transform_books_to_sft(config: BooksToSFTConfig):
 
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
-def _process_single_book(input_file_path: str, row_index: int, output_dir: str, config: BooksToSFTConfig):
+def _process_single_book(input_file_path: str, output_dir: str, row_index: int, config: BooksToSFTConfig):
     """Process *one* book (identified by its row index) inside a JSONL.gz file and generate SFT examples.
 
-    Args:
-        input_file_path: Path to the input JSONL.gz file.
-        row_index:       Zero-based index of the line containing the book.
-        output_dir:      Directory to write output shards.
-        config:          Transformation configuration (window size, shard size, etc.).
+    The first two positional parameters are `input_file_path` and `output_dir` to satisfy
+    `cached_or_construct_output`, which uses them to decide caching.
     """
     # Load only the requested line to avoid reading the full file into memory.
     with fsspec.open(input_file_path, "rt", compression="gzip") as f:
@@ -327,8 +321,8 @@ def transform_single_book_to_sft(config: SingleBookToSFTConfig):
     total_examples = ray.get(
         _process_single_book.remote(
             config.input_path,
-            config.row_index,
             output_dir,
+            config.row_index,
             config,
         )
     )
