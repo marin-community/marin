@@ -2,6 +2,7 @@ import dataclasses
 import io
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -13,7 +14,7 @@ import ray
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.core.runtime import cached_or_construct_output
 from marin.transform.conversation.transform_conversation import create_shard_output_directory
-from marin.utils import fsspec_glob, fsspec_mkdirs, rebase_file_path
+from marin.utils import fsspec_glob, fsspec_mkdirs, fsspec_rm, rebase_file_path
 
 try:
     import zstandard as zstd  # type: ignore
@@ -362,75 +363,99 @@ def _iter_jsonl_lines(path: str):
 
 
 # -----------------------------------------------------------------------------
-# Ray remote filtering function
+# Ray map task: filter a single file and write matches to a temporary part file
 # -----------------------------------------------------------------------------
+
+
+@ray.remote
+def _filter_single_file(file_path: str, cfg: FilterBooksByTextConfig, part_dir: str) -> tuple[str, int]:
+    """Return (temporary_part_path, number_of_matches) for one JSONL shard."""
+
+    match_substr = cfg.substring if cfg.case_sensitive else cfg.substring.lower()
+
+    part_suffix = ""
+    part_filename = f"{os.path.basename(file_path)}.{uuid.uuid4().hex}.part{part_suffix}"
+    part_path = os.path.join(part_dir, part_filename)
+
+    matches = 0
+    with fsspec.open(part_path, "wt", compression=None) as fout:
+        for line in _iter_jsonl_lines(file_path):
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            text_val = obj.get("text", "")
+            if not isinstance(text_val, str):
+                continue
+
+            haystack = text_val if cfg.case_sensitive else text_val.lower()
+            if match_substr in haystack:
+                fout.write(line if line.endswith("\n") else line + "\n")
+                matches += 1
+
+    return part_path, matches
 
 
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
 def _filter_books_by_text(input_path: str, output_path: str, config: FilterBooksByTextConfig):
-    """Scan `input_path`, writing rows whose `text` contains `substring` to `output_path`."""
+    """Scan `input_path` (file or directory) in parallel and write all matching rows to `output_path`."""
 
-    match_substr = config.substring if config.case_sensitive else config.substring.lower()
-    matches = 0
+    # Determine actual output *file* path. If the provided output_path does not
+    # look like a filename (no .json/.jsonl/.gz suffix), treat it as a directory
+    # and create a default filename inside it.
+    if any(output_path.endswith(ext) for ext in (".jsonl", ".jsonl.gz", ".jsonl.zst")):
+        final_output_path = output_path
+    else:
+        final_output_path = os.path.join(output_path, "matches.jsonl.gz")
 
     # Ensure parent directory for output exists
-    output_dir = os.path.dirname(output_path)
+    output_dir = os.path.dirname(final_output_path)
     if output_dir:
         fsspec_mkdirs(output_dir)
 
-    # Decide output compression based on suffix
-    output_kwargs = {}
-    if output_path.endswith(".gz"):
-        output_kwargs["compression"] = "gzip"
-
-    # Identify input files (single file or directory)
+    # Identify input files
     if any(input_path.endswith(ext) for ext in (".jsonl", ".jsonl.gz", ".jsonl.zst")):
         file_paths = [input_path]
     else:
-        # Treat as directory/prefix
-        pattern = os.path.join(input_path, "**/*.jsonl*")
-        file_paths = fsspec_glob(pattern)
+        file_paths = fsspec_glob(os.path.join(input_path, "**/*.jsonl*"))
 
     if not file_paths:
         raise FileNotFoundError(f"No jsonl files found under {input_path}")
 
-    with fsspec.open(output_path, "wt", **output_kwargs) as fout:
-        for file_path in file_paths:
-            line_counter = 0
-            for line in _iter_jsonl_lines(file_path):
-                line_counter += 1
-                if line_counter % 1000 == 0:
-                    print(
-                        f"Processed {line_counter:,} lines from {file_path}… (current matches: {matches:,})",
-                        flush=True,
-                    )
+    # Temporary directory to hold part files (one per shard)
+    part_dir = os.path.join(os.path.dirname(final_output_path), f"_parts_{uuid.uuid4().hex}")
+    fsspec_mkdirs(part_dir)
 
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue  # skip malformed line
+    # Launch mapper tasks in parallel
+    futures = [_filter_single_file.remote(fp, config, part_dir) for fp in file_paths]
+    results = ray.get(futures)  # List of (part_path, matches)
 
-                text_val = obj.get("text", "")
-                if not isinstance(text_val, str):
-                    continue
+    total_matches = sum(m for _p, m in results)
 
-                haystack = text_val if config.case_sensitive else text_val.lower()
-                if match_substr in haystack:
-                    fout.write(line if line.endswith("\n") else line + "\n")
-                    matches += 1
+    # Write final output, compressing once if filename ends with .gz
+    final_compression = "gzip" if final_output_path.endswith(".gz") else None
 
-            # End-of-file summary
-            print(
-                f"Finished {file_path}: {line_counter:,} lines scanned, {matches:,} cumulative matches.",
-                flush=True,
-            )
+    write_mode = "wb" if final_compression else "wt"
+    # for binary writing when gzip; for text writing otherwise
+
+    with fsspec.open(final_output_path, write_mode, compression=final_compression) as fout:
+        for part_path, _ in results:
+            with fsspec.open(part_path, "rb", compression=None) as fin:
+                fout.write(fin.read())
+
+            # Clean up temporary part file
+            try:
+                fsspec_rm(part_path)
+            except Exception:
+                pass
 
     print(
-        f"Found {matches} matching rows '{config.substring}' across {len(file_paths)} file(s) under {input_path}. "
-        f"Wrote results to {output_path}."
+        f"Found {total_matches} matching rows '{config.substring}' across {len(file_paths)} file(s) under {input_path}. "
+        f"Wrote results to {final_output_path}."
     )
-    return matches
+    return total_matches
 
 
 @draccus.wrap()
