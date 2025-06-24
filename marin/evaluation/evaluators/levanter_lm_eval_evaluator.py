@@ -80,6 +80,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     max_examples=max_eval_instances,
                     log_samples=False,
                     max_eval_length=4096,
+                    apply_chat_template=model.apply_chat_template,
                 ),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,
