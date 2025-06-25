@@ -24,7 +24,7 @@ while true; do
       --zone="$ZONE" \
       --accelerator-type="$ACCELERATOR_TYPE" \
       --version="$VERSION"
-    
+
     if [ $? -eq 0 ]; then
       echo "✅ TPU successfully created in zone: $ZONE"
       exit 0
