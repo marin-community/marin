@@ -4,11 +4,17 @@ VERSION="v2-alpha-tpuv5"
 
 ZONES=(
   "us-central1-a"
-  "us-central1-b"
-  "us-central1-c"
-  "us-east1-a"
+  "us-east5-a"
+  "us-east5-b"
+  "us-east5-c"
+  "us-east5-d"
+  "europe-west4-a"
+  "europe-west4-b"
+  "europe-west4-c"
   "us-east1-b"
   "us-east1-c"
+  "us-central1-b"
+  "us-central1-c"
 )
 
 while true; do
@@ -18,7 +24,7 @@ while true; do
       --zone="$ZONE" \
       --accelerator-type="$ACCELERATOR_TYPE" \
       --version="$VERSION"
-
+    
     if [ $? -eq 0 ]; then
       echo "✅ TPU successfully created in zone: $ZONE"
       exit 0

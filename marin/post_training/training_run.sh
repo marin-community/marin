@@ -3,7 +3,7 @@
     export RUN_NAME="llama3_8b_math_test_experiment"
     export GCLOUD_TOKEN_PATH="$HOME/.config/gcloud/application_default_credentials.json"
     export GCLOUD_PROJECT="hai-gcp-models"
-    python -m post_training.train \
+    python -m train \
             --load_model="paths:{
                 \"params\": \"gs://marin-us-central2/checkpoints/Llama-3.1-8B-Instruct-converted/params.msgpack\",
                 \"tokenizer\": \"meta-llama/Meta-Llama-3-8B-Instruct\",
@@ -14,7 +14,6 @@
             --num_train_steps=2048 \
             --max_input_length=256 \
             --max_output_length=1025 \
-            --env_name="math" \
             --train_bsize=64 \
             --decode_bsize=1024 \
             --prefill_bsize=16 \
@@ -23,7 +22,6 @@
             --log_freq=8 \
             --num_eval_examples=1024 \
             --save_model_freq=0 \
-            --environment_conf_path="environments.conf" \
             --wandb_project="math_rloo_math_test_experiments" \
             --inference_param_dtype="bf16" \
             --inference_activation_dtype="bf16" \

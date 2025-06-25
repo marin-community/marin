@@ -3,25 +3,25 @@ This logic is largely copied from the Hendrycks' MATH release (math_equivalence)
 Answer checker API that uses sympy to simplify expressions and check for equality.
 Call grade_answer(given_answer: str, ground_truth: str).
 """
-
 import re
-
+from typing import Optional
+import re
 import sympy
 from pylatexenc import latex2text
 from sympy.parsing import sympy_parser
 
 
-def normalize_answer(answer: str | None) -> str | None:
+def normalize_answer(answer: Optional[str]) -> Optional[str]:
     if answer is None:
         return None
     answer = answer.strip()
     try:
         # Remove enclosing `\text{}`.
-        m = re.search("^\\\\text\\{(?P<text>.+?)\\}$", answer)
+        m = re.search("^\\\\text\{(?P<text>.+?)\}$", answer)
         if m is not None:
             answer = m.group("text").strip()
         return _strip_string(answer)
-    except BaseException:
+    except:
         return answer
 
 
@@ -37,7 +37,7 @@ def _fix_fracs(string):
             else:
                 try:
                     assert len(substr) >= 2
-                except BaseException:
+                except:
                     return string
                 a = substr[0]
                 b = substr[1]
@@ -65,10 +65,10 @@ def _fix_a_slash_b(string):
     try:
         a = int(a)
         b = int(b)
-        assert string == f"{a}/{b}"
+        assert string == "{}/{}".format(a, b)
         new_string = "\\frac{" + str(a) + "}{" + str(b) + "}"
         return new_string
-    except BaseException:
+    except:
         return string
 
 
@@ -132,7 +132,7 @@ def _strip_string(string):
 
     # remove percentage
     string = string.replace("\\%", "")
-    string = string.replace("\\%", "")
+    string = string.replace("\%", "")
 
     # " 0." equivalent to " ." and "{0." equivalent to "{." Alternatively, add "0" if "." is the start of the string
     string = string.replace(" .", " 0.")
@@ -154,24 +154,21 @@ def _strip_string(string):
     # remove spaces
     string = string.replace(" ", "")
 
-    # \frac1b or \frac12 --> \frac{1}{b} and \frac{1}{2}, etc.
-    # Even works with \frac1{72} (but not \frac{72}1). Also does a/b --> \\frac{a}{b}
+    # \frac1b or \frac12 --> \frac{1}{b} and \frac{1}{2}, etc. Even works with \frac1{72} (but not \frac{72}1). Also does a/b --> \\frac{a}{b}
     string = _fix_fracs(string)
 
     # manually change 0.5 --> \frac{1}{2}
     if string == "0.5":
         string = "\\frac{1}{2}"
 
-    # NOTE: X/Y changed to \frac{X}{Y} in dataset, but in simple cases fix in
-    # case the model output is X/Y
+    # NOTE: X/Y changed to \frac{X}{Y} in dataset, but in simple cases fix in case the model output is X/Y
     string = _fix_a_slash_b(string)
 
     return string
 
-
 # sympy might hang -- we don't care about trying to be lenient in these cases
 BAD_SUBSTRINGS = ["^{", "^("]
-BAD_REGEXES = ["\\^[0-9]+\\^", "\\^[0-9][0-9]+"]
+BAD_REGEXES = ["\^[0-9]+\^", "\^[0-9][0-9]+"]
 TUPLE_CHARS = "()[]"
 
 
@@ -181,8 +178,8 @@ def _sympy_parse(expr: str):
     return sympy_parser.parse_expr(
         py_expr,
         transformations=(
-            *sympy_parser.standard_transformations,
-            sympy_parser.implicit_multiplication_application,
+            sympy_parser.standard_transformations
+            + (sympy_parser.implicit_multiplication_application,)
         ),
     )
 
@@ -198,9 +195,9 @@ def _parse_latex(expr: str) -> str:
     expr = expr.replace("√", "sqrt")
     expr = expr.replace("π", "pi")
     expr = expr.replace("∞", "inf")
-    expr = expr.replace("∪", "U")  # noqa: RUF001
+    expr = expr.replace("∪", "U")
     expr = expr.replace("·", "*")
-    expr = expr.replace("×", "*")  # noqa: RUF001
+    expr = expr.replace("×", "*")
 
     return expr.strip()
 
@@ -215,8 +212,8 @@ def _is_float(num: str) -> bool:
 
 def _is_int(x: float) -> bool:
     try:
-        return abs(x - round(x)) <= 1e-7
-    except BaseException:
+        return abs(x - int(round(x))) <= 1e-7
+    except:
         return False
 
 
@@ -228,8 +225,8 @@ def _str_is_int(x: str) -> bool:
     try:
         x = _strip_properly_formatted_commas(x)
         x = float(x)
-        return abs(x - round(x)) <= 1e-7
-    except BaseException:
+        return abs(x - int(round(x))) <= 1e-7
+    except:
         return False
 
 
@@ -245,13 +242,13 @@ def _inject_implicit_mixed_number(step: str):
     e.g. 7 3/4 => 7+3/4
     """
     p1 = re.compile("([0-9]) +([0-9])")
-    step = p1.sub("\\1+\\2", step)  # implicit mults
+    step = p1.sub("\\1+\\2", step)  ## implicit mults
     return step
 
 
 def _strip_properly_formatted_commas(expr: str):
     # We want to be careful because we don't want to strip tuple commas
-    p1 = re.compile("(\\d)(,)(\\d\\d\\d)($|\\D)")
+    p1 = re.compile("(\d)(,)(\d\d\d)($|\D)")
     while True:
         next_expr = p1.sub("\\1\\3\\4", expr)
         if next_expr == expr:
@@ -266,7 +263,7 @@ def _normalize(expr: str) -> str:
         return None
 
     # Remove enclosing `\text{}`.
-    m = re.search("^\\\\text\\{(?P<text>.+?)\\}$", expr)
+    m = re.search("^\\\\text\{(?P<text>.+?)\}$", expr)
     if m is not None:
         expr = m.group("text")
 
@@ -299,19 +296,19 @@ def _normalize(expr: str) -> str:
         "inch",
         "yard",
     ]:
-        expr = re.sub(f"{unit}(es)?(s)? *(\\^[0-9]+)?", "", expr)
-    expr = re.sub("\\^ *\\\\circ", "", expr)
+        expr = re.sub(f"{unit}(es)?(s)? *(\^[0-9]+)?", "", expr)
+    expr = re.sub(f"\^ *\\\\circ", "", expr)
 
     if len(expr) > 0 and expr[0] == "{" and expr[-1] == "}":
         expr = expr[1:-1]
 
     expr = re.sub(",\\\\! *", "", expr)
     if _is_float(expr) and _is_int(float(expr)):
-        expr = str(round(float(expr)))
+        expr = str(int(round(float(expr))))
     if "\\" in expr:
         try:
             expr = _parse_latex(expr)
-        except BaseException:
+        except:
             pass
 
     # edge case with mixed numbers and negative signs
@@ -341,8 +338,7 @@ def count_unknown_letters_in_expr(expr: str):
 
 
 def should_allow_eval(expr: str):
-    # we don't want to try parsing unknown text or functions of more than two
-    # variables
+    # we don't want to try parsing unknown text or functions of more than two variables
     if count_unknown_letters_in_expr(expr) > 2:
         return False
 
@@ -366,7 +362,7 @@ def are_equal_under_sympy(ground_truth_normalized: str, given_normalized: str):
             simplified = sympy.simplify(sympy_diff)
             if simplified == 0:
                 are_equal = True
-    except BaseException:
+    except:
         pass
     return are_equal
 
@@ -423,20 +419,20 @@ def grade_answer(given_answer: str, ground_truth: str) -> bool:
     given_elems = split_tuple(given_normalized)
 
     if len(ground_truth_elems) > 1 and (
-        ground_truth_normalized[0] != given_normalized[0] or ground_truth_normalized[-1] != given_normalized[-1]
+        ground_truth_normalized[0] != given_normalized[0]
+        or ground_truth_normalized[-1] != given_normalized[-1]
     ):
         is_correct = False
     elif len(ground_truth_elems) != len(given_elems):
         is_correct = False
     else:
-        for ground_truth_elem, given_elem in zip(ground_truth_elems, given_elems, strict=False):
+        for ground_truth_elem, given_elem in zip(ground_truth_elems, given_elems):
             if _is_frac(ground_truth_elem) and _is_frac(given_elem):
                 # if fractions aren't reduced, then shouldn't be marked as correct
                 # so, we don't want to allow sympy.simplify in this case
                 is_correct = ground_truth_elem == given_elem
             elif _str_is_int(ground_truth_elem) != _str_is_int(given_elem):
-                # if the ground truth answer is an integer, we require the
-                # given answer to be a strict match (no sympy.simplify)
+                # if the ground truth answer is an integer, we require the given answer to be a strict match (no sympy.simplify)
                 is_correct = False
             else:
                 is_correct = are_equal_under_sympy(ground_truth_elem, given_elem)
@@ -449,15 +445,15 @@ def grade_answer(given_answer: str, ground_truth: str) -> bool:
 def remove_boxed(s):
     if "\\boxed " in s:
         left = "\\boxed "
-        assert s[: len(left)] == left
-        return s[len(left) :]
+        assert s[:len(left)] == left
+        return s[len(left):]
 
     left = "\\boxed{"
 
-    assert s[: len(left)] == left
+    assert s[:len(left)] == left
     assert s[-1] == "}"
 
-    return s[len(left) : -1]
+    return s[len(left):-1]
 
 
 def last_boxed_only_string(string):
@@ -485,6 +481,7 @@ def last_boxed_only_string(string):
     if right_brace_idx is None:
         retval = None
     else:
-        retval = string[idx : right_brace_idx + 1]
+        retval = string[idx:right_brace_idx + 1]
 
     return retval
+
