@@ -1,14 +1,17 @@
-# adapted from: https://github.com/stanford-crfm/levanter/blob/main/src/levanter/models/attention.py
-from typing import Optional
-import jax.numpy as jnp
-import warnings
+# adapted from:
+# https://github.com/stanford-crfm/levanter/blob/main/src/levanter/models/attention.py
+import functools
+
 import jax
+import jax.numpy as jnp
 from jax.experimental.shard_map import shard_map
 from jax.sharding import PartitionSpec as PS
 from scalax.sharding import MeshShardingHelper
-import functools
 
-# CF https://github.com/google/maxtext/blob/db31dd4b0b686bca4cd7cf940917ec372faa183a/MaxText/layers/attentions.py#L179
+# CF
+# https://github.com/google/maxtext/blob/db31dd4b0b686bca4cd7cf940917ec372faa183a/MaxText/layers/attentions.py#L179
+
+
 def _tpu_splash_attention(
     query: jnp.ndarray,
     key: jnp.ndarray,
@@ -16,9 +19,9 @@ def _tpu_splash_attention(
     attention_mask: jnp.ndarray,
     dropout: float = 0.0,
     *,
-    attention_dtype: Optional[jnp.dtype] = None,
-    block_size: Optional[int] = None,
-) -> Optional[jnp.ndarray]:
+    attention_dtype: jnp.dtype | None = None,
+    block_size: int | None = None,
+) -> jnp.ndarray | None:
     from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
 
     # Splash attention requires BHSD format
@@ -109,26 +112,27 @@ def _tpu_splash_attention(
     attn_output = attn_output.transpose(0, 2, 1, 3)
     return attn_output
 
-# adopted from https://github.com/Sea-Snell/llama3_train/blob/fixed_fast_inference/llama_train/paged.py
+
+# adopted from
+# https://github.com/Sea-Snell/llama3_train/blob/fixed_fast_inference/llama_train/paged.py
+
+
 def _tpu_paged_attention(
     query: jnp.ndarray,
     key: jnp.ndarray,
     value: jnp.ndarray,
     lengths: jnp.ndarray,
     *,
-    attention_dtype: Optional[jnp.dtype] = None,
+    attention_dtype: jnp.dtype | None = None,
     page_size: int = 512,
     pages_per_compute_block: int = 1,
     megacore_mode: str | None = None,
     inline_seq_dim: bool = True,
     use_int8: bool = False,
-) -> Optional[jnp.ndarray]:
+) -> jnp.ndarray | None:
     # NOTE: ALL SEQUENCES MUST BE RIGHT PADDED!
     from jax.experimental.pallas.ops.tpu.paged_attention import paged_attention
     from jax.experimental.pallas.ops.tpu.paged_attention.quantization_utils import QuantizedTensor
-
-    # if attention_dtype is None:
-    attention_dtype = jnp.float32
 
     B, Sq, Hq, D = query.shape
     if use_int8:
@@ -155,12 +159,12 @@ def _tpu_paged_attention(
 
     if D != Dk:
         raise ValueError(f"Embedding axes must be the same for q, k, and v: {D} != {Dk}")
-    
+
     if Sq != 1:
         raise NotImplementedError("Paged attention only supports query sequence length 1")
-    
+
     assert Sk % page_size == 0, "Key sequence length must be a multiple of page size"
-    
+
     pages_per_seq = Sk // page_size
 
     # copied from MaxText
@@ -185,36 +189,35 @@ def _tpu_paged_attention(
         if use_int8:
             local_B, _, local_Hk, local_Dk = k.weight.shape
             k_flat = QuantizedTensor(
-                k.weight.reshape(local_B*pages_per_seq, page_size, local_Hk, local_Dk).transpose(2, 0, 1, 3),
-                k.scales.reshape(local_B*pages_per_seq, page_size, local_Hk, 1).transpose(2, 0, 1, 3),
+                k.weight.reshape(local_B * pages_per_seq, page_size, local_Hk, local_Dk).transpose(2, 0, 1, 3),
+                k.scales.reshape(local_B * pages_per_seq, page_size, local_Hk, 1).transpose(2, 0, 1, 3),
             )
             v_flat = QuantizedTensor(
-                v.weight.reshape(local_B*pages_per_seq, page_size, local_Hk, local_Dk).transpose(2, 0, 1, 3),
-                v.scales.reshape(local_B*pages_per_seq, page_size, local_Hk, 1).transpose(2, 0, 1, 3),
+                v.weight.reshape(local_B * pages_per_seq, page_size, local_Hk, local_Dk).transpose(2, 0, 1, 3),
+                v.scales.reshape(local_B * pages_per_seq, page_size, local_Hk, 1).transpose(2, 0, 1, 3),
             )
         else:
             local_B, _, local_Hk, local_Dk = k.shape
-            k_flat = k.reshape(local_B*pages_per_seq, page_size, local_Hk, local_Dk).transpose(2, 0, 1, 3)
-            v_flat = v.reshape(local_B*pages_per_seq, page_size, local_Hk, local_Dk).transpose(2, 0, 1, 3)
+            k_flat = k.reshape(local_B * pages_per_seq, page_size, local_Hk, local_Dk).transpose(2, 0, 1, 3)
+            v_flat = v.reshape(local_B * pages_per_seq, page_size, local_Hk, local_Dk).transpose(2, 0, 1, 3)
 
         q_flat = q[:, 0, :, :]
 
-        # k_flat = k_flat.astype(attention_dtype)
-        # v_flat = v_flat.astype(attention_dtype)
-        # q_flat = q_flat.astype(attention_dtype)
+        page_indices = jnp.arange(local_B * pages_per_seq).reshape(local_B, pages_per_seq)
 
-        page_indices = jnp.arange(local_B*pages_per_seq).reshape(local_B, pages_per_seq)
-
-        return jnp.expand_dims(paged_attention(
-            q_flat,
-            k_flat,
-            v_flat,
-            lengths,
-            page_indices,
-            pages_per_compute_block=pages_per_compute_block,
-            megacore_mode=megacore_mode,
-            inline_seq_dim=inline_seq_dim,
-        ), axis=1)
+        return jnp.expand_dims(
+            paged_attention(
+                q_flat,
+                k_flat,
+                v_flat,
+                lengths,
+                page_indices,
+                pages_per_compute_block=pages_per_compute_block,
+                megacore_mode=megacore_mode,
+                inline_seq_dim=inline_seq_dim,
+            ),
+            axis=1,
+        )
 
     attn_output = wrap_paged_attention(query, key, value, lengths)
     return attn_output
