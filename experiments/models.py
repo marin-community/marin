@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from marin.download.huggingface.download import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.utils import get_directory_friendly_name
 
 
@@ -107,6 +107,20 @@ llama_3_1_8b = download_model_step(
     )
 )
 
+llama_3_1_70b = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Llama-3.1-70B",
+        hf_revision="d4cd2f9",
+    )
+)
+
+llama_3_1_405b = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Llama-3.1-405B",
+        hf_revision="b906e4d",
+    )
+)
+
 tulu_3_1_8b_sft = download_model_step(
     ModelConfig(
         hf_repo_id="allenai/Llama-3.1-Tulu-3-8B-SFT",
@@ -141,3 +155,27 @@ map_neo_7b = download_model_step(
         hf_revision="81bad32",
     )
 )
+
+
+if __name__ == "__main__":
+    # Collect all model download steps
+    all_models = [
+        smollm2_1_7b_instruct,
+        qwen2_5_7b_instruct,
+        qwen2_5_72b_instruct,
+        llama_3_3_70b_instruct,
+        llama_3_1_8b_instruct,
+        llama_3_1_8b,
+        llama_3_1_70b,
+        tulu_3_1_8b_sft,
+        olmo_2_sft_8b,
+        olmo_2_base_8b,
+        amber_base_7b,
+        map_neo_7b,
+    ]
+
+    # Run all model downloads
+    executor_main(
+        steps=all_models,
+        description="Download all models from HuggingFace",
+    )
