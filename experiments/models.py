@@ -115,6 +115,13 @@ tulu_3_1_8b_sft = download_model_step(
     )
 )
 
+tulu_3_1_8b_instruct = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/Llama-3.1-Tulu-3.1-8B",
+        hf_revision="46239c2",
+    )
+)
+
 olmo_2_sft_8b = download_model_step(
     ModelConfig(
         hf_repo_id="allenai/OLMo-2-1124-7B-SFT",
