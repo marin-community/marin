@@ -4,9 +4,10 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import numpy as np
-from environments.marin_env import EnvStep
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
+
+from .environments.marin_env import EnvStep
 
 
 class RLDataset:
