@@ -84,7 +84,7 @@ if __name__ == "__main__":
     launch_config_path = os.path.join(os.path.dirname(__file__), "launch_config.json")
 
     available_tpus = [
-        ("ray-marin-us-central1-worker-4e01d4d4-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-f43d3df9-tpu", "us-central1-a"),
         ("post-training-v5p-8", "us-east5-a"),
     ]
 
