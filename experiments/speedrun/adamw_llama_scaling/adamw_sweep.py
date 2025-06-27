@@ -1,8 +1,8 @@
-"""Speedruns using the Muon optimizer for various Llama model sizes (Chinchilla optimal steps)."""
+"""Speedruns using the AdamW optimizer for various Llama model sizes (Chinchilla optimal steps)."""
 
 import logging
 
-from levanter.optim import MuonConfig
+from levanter.optim import AdamConfig
 
 from experiments.llama import llama_1_4b, llama_150m, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
@@ -43,7 +43,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     batch_sizes = {
         "130m": 128,
         "300m": 128,
-        "520m": 128,
+        "520m": 256,  # NOTE: matches provided config!
         "1_2b": 256,
     }
 
@@ -55,84 +55,68 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
         "1_2b": TpuPodConfig(tpu_type="v5p-32"),
     }
 
-    # Optimizer configs for each size
-    muon_configs = {
-        "130m": MuonConfig(
-            learning_rate=0.016,
-            adam_lr=0.0032,
-            weight_decay=0.1,
-            min_lr_ratio=0,
-            warmup=0,
-            momentum=0.95,
-            beta1=0.8,
-            beta2=0.98,
-            epsilon=1e-15,
-            muon_epsilon=1e-5,
-            max_grad_norm=1,
-            lr_schedule="linear",
-            decay=0.8,
-        ),
-        "300m": MuonConfig(
+    # AdamW optimizer configs for each size
+    adam_configs = {
+        "130m": AdamConfig(
             learning_rate=0.008,
-            adam_lr=0.0024,
             weight_decay=0.1,
             min_lr_ratio=0,
-            warmup=0,
-            momentum=0.98,
-            beta1=0.8,
+            warmup=2000,
+            beta1=0.9,
             beta2=0.98,
-            epsilon=1e-15,
-            muon_epsilon=1e-5,
+            epsilon=1e-20,
             max_grad_norm=1,
-            lr_schedule="linear",
-            decay=0.8,
+            nesterov=False,
         ),
-        "520m": MuonConfig(
+        "300m": AdamConfig(
             learning_rate=0.008,
-            adam_lr=0.0024,
             weight_decay=0.1,
             min_lr_ratio=0,
-            warmup=0,
-            momentum=0.98,
-            beta1=0.8,
+            warmup=2000,
+            beta1=0.9,
+            beta2=0.98,
+            epsilon=1e-10,
+            max_grad_norm=1,
+            nesterov=False,
+        ),
+        "520m": AdamConfig(
+            learning_rate=0.004,
+            weight_decay=0.2,
+            min_lr_ratio=0,
+            warmup=1000,
+            beta1=0.9,
+            beta2=0.98,
+            epsilon=1e-10,
+            max_grad_norm=1,
+            nesterov=False,
+        ),
+        "1_2b": AdamConfig(
+            learning_rate=0.002,
+            weight_decay=0.2,
+            min_lr_ratio=0,
+            warmup=1000,
+            beta1=0.9,
             beta2=0.98,
             epsilon=1e-25,
-            muon_epsilon=1e-5,
-            max_grad_norm=1,
-            lr_schedule="linear",
-            decay=1,
-        ),
-        "1_2b": MuonConfig(
-            learning_rate=0.004,
-            adam_lr=0.0012,
-            weight_decay=0.1,
-            min_lr_ratio=0,
-            warmup=0,
-            momentum=0.98,
-            beta1=0.8,
-            beta2=0.98,
-            epsilon=1e-15,
-            muon_epsilon=1e-5,
             max_grad_norm=2,
-            lr_schedule="linear",
-            decay=1,
+            nesterov=False,
         ),
     }
 
     # Descriptions
     descriptions = {
-        "130m": "130M parameter model trained with the Muon optimizer.",
-        "300m": "300M parameter model trained with the Muon optimizer.",
-        "520m": "520M parameter model trained with the Muon optimizer.",
-        "1_2b": "1.2B parameter model trained with the Muon optimizer.",
+        "130m": "130M parameter model trained with the AdamW optimizer.",
+        "300m": "300M parameter model trained with the AdamW optimizer.",
+        "520m": "520M parameter model trained with the AdamW optimizer.",
+        "1_2b": "1.2B parameter model trained with the AdamW optimizer.",
     }
 
     # Names for the runs
     run_names = {
-        "130m": "llama_130m_muon",
-        "300m": "llama_300m_muon",
-        "520m": "llama_520m_muon",
-        "1_2b": "llama_1_2b_muon",
+        "130m": "llama_130m_adamw",
+        "300m": "llama_300m_adamw",
+        "520m": "llama_520m_adamw",
+        "1_2b": "llama_1_2b_adamw",
     }
 
     # Gather config for the requested size
@@ -144,7 +128,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     model_config = model_cfgs[size]
     seq_len = model_config.seq_len
     resource_config = resource_cfgs[size]
-    muon = muon_configs[size]
+    adam = adam_configs[size]
     description = descriptions[size]
     run_name = run_names[size]
 
@@ -154,8 +138,8 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
         resource_config,
         train_batch_size=batch_size,
         num_train_steps=num_train_steps,
-        learning_rate=muon.learning_rate,
-        optimizer_config=muon,
+        learning_rate=adam.learning_rate,
+        optimizer_config=adam,
     )
     cfg = SpeedrunConfig(
         author=AUTHOR,
@@ -179,4 +163,4 @@ if __name__ == "__main__":
         cfg.print_run_info()
         steps.extend(default_speedrun(name, cfg))
 
-    executor_main(steps=steps, description="Muon speedruns (Chinchilla optimal)")
+    executor_main(steps=steps, description="AdamW speedruns (Chinchilla optimal)")
