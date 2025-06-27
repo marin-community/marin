@@ -1,4 +1,7 @@
-"""Speedruns using the Muon optimizer for various Llama model sizes (Chinchilla optimal steps)."""
+"""Speedruns using the Muon optimizer for various Llama model sizes (Chinchilla optimal steps).
+
+https://wandb.ai/marin-community/marin/reports/Fantastic-Optimizers-and-Where-to-Find-Them--VmlldzoxMjgzMzQ2NQ
+"""
 
 import logging
 
