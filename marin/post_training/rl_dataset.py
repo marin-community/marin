@@ -4,10 +4,9 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import numpy as np
+from environments.marin_env import EnvStep
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
-
-from .environments.marin_env import EnvStep
 
 
 class RLDataset:
@@ -43,6 +42,7 @@ class RLDataset:
         self.max_output_length = max_output_length
         self.pad_token_id = pad_token_id
 
+        # Validate data consistency
         self._validate_data()
 
     def _validate_data(self) -> None:
@@ -101,7 +101,7 @@ class RLDataset:
             RLDataset instance with processed training data
         """
         examples = env_step.examples
-        responses = env_step.responses
+        samples = env_step.samples
         rewards = env_step.rewards
 
         # Prepare data to compute reference logprobs
@@ -111,11 +111,11 @@ class RLDataset:
             prompt_attention_mask = [0] * (max_input_length - len(prompt_tokens)) + [1] * len(prompt_tokens)
             prompt_tokens = [pad_token_id] * (max_input_length - len(prompt_tokens)) + prompt_tokens
 
-            for response in responses[i]:
-                answer_tokens = response["tokens"][:max_output_length]
+            for sample in samples[i]:
+                answer_tokens = sample["tokens"][:max_output_length]
                 answer_attention_mask = [1] * len(answer_tokens) + [0] * (max_output_length - len(answer_tokens))
                 answer_tokens = answer_tokens + [pad_token_id] * (max_output_length - len(answer_tokens))
-                answer_logprobs = response["logprobs"][:max_output_length]
+                answer_logprobs = sample["logprobs"][:max_output_length]
                 answer_logprobs = answer_logprobs + [0] * (max_output_length - len(answer_logprobs))
 
                 batch_items.append(
@@ -259,32 +259,13 @@ class RLDataset:
                     break
 
     def _prepare_rloo_examples(self, examples: dict[str, Any]) -> dict[str, np.ndarray]:
-        """Prepare data for RLOO training.
-
-        Takes batched RL training data and transforms it into the format needed for
-        RLLOO with policy gradient losses and KL penalties.
+        """Prepare examples for RLOO training.
 
         Args:
-            examples: Dictionary containing batched training examples with keys:
-                - prompt_tokens: (batch_size, max_input_length) tokenized prompts
-                - prompt_masks: (batch_size, max_input_length) attention masks for prompts
-                - output_tokens: (batch_size, max_output_length) tokenized model outputs
-                - output_masks: (batch_size, max_output_length) attention masks for outputs
-                - returns: (batch_size, max_output_length) advantage values for each output token
-                - reference_logprobs: (batch_size, max_output_length) log probs from reference model
+            examples: Dictionary containing batched examples with keys matching self.data_items
 
         Returns:
-            Dictionary containing processed batch ready for language model training:
-                - input_ids: (batch_size, seq_len-1) input token sequences
-                - attention_mask: (batch_size, seq_len-1) attention masks for inputs
-                - position_ids: (batch_size, seq_len-1) position indices for each token
-                - target_ids: (batch_size, seq_len-1) target tokens (shifted by 1 for next-token prediction)
-                - loss_masks: (batch_size, seq_len-1) binary masks indicating which positions to compute loss on
-                  (1 for output tokens, 0 for prompt tokens)
-                - loss_weights: (batch_size, seq_len-1) advantage values used as weights in policy gradient loss
-                - reference_logprobs: (batch_size, seq_len-1) reference model logprobs for KL penalty computation
-
-            Where seq_len = max_input_length + max_output_length
+            Dictionary containing processed batch ready for training
         """
         # Concatenate prompt and output tokens
         full_tokens = np.concatenate((examples["prompt_tokens"], examples["output_tokens"]), axis=1)
