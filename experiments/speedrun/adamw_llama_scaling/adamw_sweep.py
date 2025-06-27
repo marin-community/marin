@@ -1,4 +1,7 @@
-"""Speedruns using the AdamW optimizer for various Llama model sizes (Chinchilla optimal steps)."""
+"""Speedruns using the AdamW optimizer for various Llama model sizes (Chinchilla optimal steps).
+
+Optimizer configs were searched & provided by Kaiyue Wen in https://wandb.ai/marin-community/marin/reports/Fantastic-Optimizers-and-Where-to-Find-Them--VmlldzoxMjgzMzQ2NQ
+"""
 
 import logging
 
@@ -43,7 +46,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     batch_sizes = {
         "130m": 128,
         "300m": 128,
-        "520m": 256,  # NOTE: matches provided config!
+        "520m": 256,
         "1_2b": 256,
     }
 
