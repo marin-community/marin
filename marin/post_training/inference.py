@@ -18,15 +18,16 @@ from flax import struct
 from jax.experimental.shard_map import shard_map
 from jax.sharding import PartitionSpec as PS
 from jaxtyping import PyTree
-from llama3 import (
+from scalax.sharding import MeshShardingHelper, TreePathShardingRule
+from tqdm.auto import tqdm
+from transformers import AutoTokenizer
+
+from .llama3 import (
     LLAMA_STANDARD_CONFIGS,
     FlaxLLaMAForCausalLM,
     LLaMAConfig,
 )
-from scalax.sharding import MeshShardingHelper, TreePathShardingRule
-from tqdm.auto import tqdm
-from transformers import AutoTokenizer
-from utils import (
+from .utils import (
     get_float_dtype_by_name,
     jax_distributed_barrier,
     jax_distributed_initalize,
