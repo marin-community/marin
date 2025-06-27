@@ -3,13 +3,11 @@ import json
 import os
 import tempfile
 from collections import deque
-from collections.abc import Iterator
 from functools import partial
 from typing import Any
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import optax
 import tyro
 from environments.marin_env import MarinEnv
@@ -24,6 +22,7 @@ from llama3 import (
 )
 from optax import softmax_cross_entropy_with_integer_labels
 from optimizer import load_adamw_optimizer
+from rl_dataset import create_dataset_from_environment
 from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
@@ -272,129 +271,6 @@ class Trainer:
         self.get_logprobs = get_logprobs
         self.train_step = train_step
 
-    def compute_rloo_advantages_for_group(self, rewards: np.ndarray) -> np.ndarray:
-        """Compute RLOO advantages for a group of rewards."""
-        advantages = (rewards - rewards.mean()) / np.clip(rewards.std(), 1e-8, None)
-        return advantages
-
-    def prepare_data_from_env_step(self, env_step) -> dict[str, np.ndarray]:
-        """Prepare training data from environment step."""
-        examples = env_step.examples
-        samples = env_step.samples
-        rewards = env_step.rewards
-
-        # Prepare data to compute reference logprobs
-        batch_items = []
-        for i, example in enumerate(examples):
-            # Use pre-tokenized data instead of tokenizing again
-            prompt_tokens = example["prompt_tokens"]
-            prompt_attention_mask = example["prompt_attention_mask"]
-
-            for sample in samples[i]:
-                answer_tokens = sample["tokens"][: self.max_output_length]
-                answer_attention_mask = [1] * len(answer_tokens) + [0] * (self.max_output_length - len(answer_tokens))
-                answer_tokens = answer_tokens + [self.pad_token_id] * (self.max_output_length - len(answer_tokens))
-                answer_logprobs = sample["logprobs"][: self.max_output_length]
-                answer_logprobs = answer_logprobs + [0] * (self.max_output_length - len(answer_logprobs))
-                batch_items.append(
-                    {
-                        "prompt_tokens": prompt_tokens[None],
-                        "prompt_attention_mask": prompt_attention_mask[None],
-                        "answer_tokens": np.asarray(answer_tokens)[None],
-                        "answer_attention_mask": np.asarray(answer_attention_mask)[None],
-                        "answer_logprobs": np.asarray(answer_logprobs)[None],
-                    }
-                )
-
-        true_batch_items_len = len(batch_items)
-        if true_batch_items_len % self.reference_logprobs_bsize != 0:
-            for _ in range(self.reference_logprobs_bsize - (true_batch_items_len % self.reference_logprobs_bsize)):
-                batch_items.append(
-                    {
-                        "prompt_tokens": np.full((1, self.max_input_length), self.pad_token_id, dtype=np.int32),
-                        "prompt_attention_mask": np.zeros((1, self.max_input_length), dtype=np.int32),
-                        "answer_tokens": np.full((1, self.max_output_length), self.pad_token_id, dtype=np.int32),
-                        "answer_attention_mask": np.zeros((1, self.max_output_length), dtype=np.int32),
-                        "answer_logprobs": np.zeros((1, self.max_output_length), dtype=np.float32),
-                    }
-                )
-
-        # Compute reference logprobs
-        all_reference_logprobs, all_logprobs = [], []
-        prompt_tokens, prompt_masks = [], []
-        output_tokens, output_masks = [], []
-        for i in tqdm(range(0, len(batch_items), self.reference_logprobs_bsize)):
-            curr_batch = batch_items[i : (i + self.reference_logprobs_bsize)]
-            curr_batch = {k: np.concatenate([item[k] for item in curr_batch], axis=0) for k in curr_batch[0].keys()}
-            reference_logprobs = np.asarray(
-                self.get_logprobs(
-                    self.reference_params,
-                    curr_batch["prompt_tokens"],
-                    curr_batch["prompt_attention_mask"],
-                    curr_batch["answer_tokens"],
-                    curr_batch["answer_attention_mask"],
-                )
-            )
-            if (i // self.reference_logprobs_bsize) == (len(batch_items) // self.reference_logprobs_bsize) - 1:
-                true_batch_size = true_batch_items_len % self.reference_logprobs_bsize
-                if true_batch_size == 0:
-                    true_batch_size = reference_logprobs.shape[0]
-            else:
-                true_batch_size = reference_logprobs.shape[0]
-            for x in range(true_batch_size):
-                all_reference_logprobs.append(reference_logprobs[x])
-                all_logprobs.append(curr_batch["answer_logprobs"][x])
-                output_masks.append(curr_batch["answer_attention_mask"][x])
-                output_tokens.append(curr_batch["answer_tokens"][x])
-                prompt_tokens.append(curr_batch["prompt_tokens"][x])
-                prompt_masks.append(curr_batch["prompt_attention_mask"][x])
-
-        all_reference_logprobs = np.stack(all_reference_logprobs, axis=0)
-        all_logprobs = np.stack(all_logprobs, axis=0)
-        output_masks = np.stack(output_masks, axis=0)
-        output_tokens = np.stack(output_tokens, axis=0)
-        prompt_tokens = np.stack(prompt_tokens, axis=0)
-        prompt_masks = np.stack(prompt_masks, axis=0)
-
-        # Compute RLOO advantages
-        all_rloo_advantages = []
-        for rewards_group in rewards:
-            all_rloo_advantages.append(self.compute_rloo_advantages_for_group(rewards_group))
-        all_rloo_advantages = np.concatenate(all_rloo_advantages, axis=0)
-
-        # Compute returns
-        all_returns = jnp.repeat(all_rloo_advantages[..., None], output_masks.shape[1], axis=1)
-
-        return {
-            "returns": all_returns,
-            "policy_logprobs": all_logprobs,
-            "reference_logprobs": all_reference_logprobs,
-            "prompt_tokens": prompt_tokens,
-            "prompt_masks": prompt_masks,
-            "output_tokens": output_tokens,
-            "output_masks": output_masks,
-        }
-
-    def prepare_data_from_environment(self, params, prng_key):
-        """Prepare training data using environment."""
-        inference_params = self.reshard_params(params)
-
-        # Get environment step
-        env_step = self.environment.step(
-            sampler=self.sampler,
-            params=inference_params,
-            n_examples=self.config["n_prompts_per_step"],
-            prng_key=prng_key,
-            mode="train",
-            n_generations=self.config["generation_config"]["n_generations"],
-        )
-
-        del inference_params
-
-        # Prepare training data from environment step
-        dataset = self.prepare_data_from_env_step(env_step)
-        return dataset, env_step.metrics
-
     def evaluate_data_from_environment(self, params, prng_key):
         """Evaluate model using environment."""
         inference_params = self.reshard_params(params)
@@ -421,110 +297,6 @@ class Trainer:
         for k, v in metrics.items():
             eval_metrics[k.replace("train_", "test_")] = v
         return eval_metrics
-
-    def prepare_training_data_iterable(
-        self, data_items: dict[str, np.ndarray], bsize: int, shuffle: bool = True, loop: bool = True
-    ) -> Iterator[dict[str, np.ndarray]]:
-        """Create an iterable over processed training data - moved from Dataset class."""
-        N = data_items["returns"].shape[0]
-        rng = jax.random.PRNGKey(0)
-
-        while True:
-            with jax.default_device(jax.devices("cpu")[0]):
-                idxs = []
-                for _ in range((bsize + (N - 1)) // N):
-                    if shuffle:
-                        rng, subrng = jax.random.split(rng)
-                        curr_idxs = jax.random.permutation(subrng, np.arange(N))
-                        idxs.extend(curr_idxs.tolist())
-                    else:
-                        curr_idxs = np.arange(N)
-                        idxs.extend(curr_idxs.tolist())
-                idxs = np.asarray(idxs)
-
-                for batch_idx in range(len(idxs) // bsize):
-                    batch_idxs = idxs[batch_idx * bsize : (batch_idx + 1) * bsize]
-                    batch_examples = {
-                        k: np.asarray([data_items[k][idx] for idx in batch_idxs]) for k in data_items.keys()
-                    }
-                    batch = self._prepare_rloo_examples(batch_examples)
-                    yield batch
-
-                if not loop:
-                    break
-
-    def _prepare_rloo_examples(self, examples: dict[str, Any]) -> dict[str, np.ndarray]:
-        """Prepare examples for RLOO training - moved from Dataset class."""
-        full_tokens = np.concatenate(
-            (
-                examples["prompt_tokens"],
-                examples["output_tokens"],
-            ),
-            axis=1,
-        )
-        full_attention_mask = np.concatenate(
-            (
-                examples["prompt_masks"],
-                examples["output_masks"],
-            ),
-            axis=1,
-        )
-        full_position_ids = np.maximum(
-            np.cumsum(full_attention_mask, axis=1) - 1,
-            0,
-        )
-        input_tokens = full_tokens[:, :-1]
-        input_attention_mask = full_attention_mask[:, :-1]
-        target_tokens = full_tokens[:, 1:]
-        position_ids = full_position_ids[:, :-1]
-        loss_masks = np.concatenate(
-            [
-                np.zeros(
-                    (
-                        examples["prompt_masks"].shape[0],
-                        examples["prompt_masks"].shape[1] - 1,
-                    ),
-                    dtype=np.float32,
-                ),
-                examples["output_masks"].astype(np.float32),
-            ],
-            axis=1,
-        )
-        loss_weights = np.concatenate(
-            [
-                np.zeros(
-                    (
-                        examples["prompt_masks"].shape[0],
-                        examples["prompt_masks"].shape[1] - 1,
-                    ),
-                    dtype=np.float32,
-                ),
-                examples["returns"].astype(np.float32),
-            ],
-            axis=1,
-        )
-        reference_logprobs = np.concatenate(
-            [
-                np.zeros(
-                    (
-                        examples["prompt_masks"].shape[0],
-                        examples["prompt_masks"].shape[1] - 1,
-                    ),
-                    dtype=np.float32,
-                ),
-                examples["reference_logprobs"].astype(np.float32),
-            ],
-            axis=1,
-        )
-        return {
-            "input_ids": input_tokens,
-            "attention_mask": input_attention_mask,
-            "position_ids": position_ids,
-            "target_ids": target_tokens,
-            "loss_masks": loss_masks,
-            "loss_weights": loss_weights,
-            "reference_logprobs": reference_logprobs,
-        }
 
     def save_checkpoint(self, train_state, step):
         """Save model checkpoint."""
@@ -610,19 +382,27 @@ class Trainer:
         for step in tqdm(range(self.config["num_train_steps"]), total=self.config["num_train_steps"]):
             rng, subrng = jax.random.split(rng)
 
-            # Get training data from environment
-            generated_data, dataset_metrics = self.prepare_data_from_environment(
-                train_state.params,
-                subrng,
+            inference_params = self.reshard_params(train_state.params)
+            rl_dataset, dataset_metrics = create_dataset_from_environment(
+                environment=self.environment,
+                sampler=self.sampler,
+                params=inference_params,
+                reference_params=self.reference_params,
+                get_logprobs_fn=self.get_logprobs,
+                n_examples=self.config["n_prompts_per_step"],
+                prng_key=subrng,
+                reference_logprobs_bsize=self.reference_logprobs_bsize,
+                max_input_length=self.max_input_length,
+                max_output_length=self.max_output_length,
+                pad_token_id=self.pad_token_id,
+                tokenizer=self.tokenizer,
+                generation_config=self.config["generation_config"],
+                mode="train",
             )
+            del inference_params
 
-            # Use the training data directly without creating Dataset object
-            generated_data_iterable = self.prepare_training_data_iterable(
-                generated_data, self.train_bsize, shuffle=True, loop=False
-            )
-
-            for generated_train_sub_batch in tqdm(generated_data_iterable):
-                train_state, metrics = self.train_step(train_state, subrng, generated_train_sub_batch)
+            for batch in tqdm(rl_dataset.iterate_batches(batch_size=self.train_bsize, shuffle=True, loop=False)):
+                train_state, metrics = self.train_step(train_state, subrng, batch)
 
             if self.config["log_freq"] > 0 and (
                 (step + 1) % self.config["log_freq"] == 0 or (self.config.get("log_initial_step", True) and step == 0)
@@ -816,7 +596,7 @@ def main(
             os.remove(model_paths["tokenizer"])
 
         # Initialize environment with tokenization parameters
-        environment = MathEnv(tokenizer=tokenizer, max_input_length=max_input_length, pad_token_id=pad_token_id)
+        environment = MathEnv(tokenizer=tokenizer)
 
         # Initialize logger
         if "enable" not in logger_config:

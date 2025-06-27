@@ -2,6 +2,7 @@ import random
 from typing import Any
 
 import datasets
+import jax
 import numpy as np
 from inference import batch_inference
 from tqdm.auto import tqdm
@@ -12,11 +13,8 @@ from .math_utils import grade_answer, last_boxed_only_string, remove_boxed
 
 
 class MathEnv(MarinEnv):
-    def __init__(self, tokenizer, max_input_length: int, pad_token_id: int, **kwargs):
-        """Initialize math environment with pre-tokenized prompts."""
+    def __init__(self, tokenizer, **kwargs):
         self.tokenizer = tokenizer
-        self.max_input_length = max_input_length
-        self.pad_token_id = pad_token_id
 
         # Initialize datasets
         data_source = "DigitalLearningGmbH/MATH-lighteval"
@@ -36,17 +34,10 @@ class MathEnv(MarinEnv):
             prompt = f"{item['problem']} {instruction}"
             answer = remove_boxed(last_boxed_only_string(item["solution"]))
 
-            # Pre-tokenize the prompt
-            prompt_tokens = self.tokenizer.encode(prompt, add_special_tokens=True)[-self.max_input_length :]
-            prompt_attention_mask = [0] * (self.max_input_length - len(prompt_tokens)) + [1] * len(prompt_tokens)
-            prompt_tokens = [self.pad_token_id] * (self.max_input_length - len(prompt_tokens)) + prompt_tokens
-
             self.train_examples.append(
                 {
-                    "prompt": prompt,  # Keep original for inference
+                    "prompt": prompt,
                     "answer": answer,
-                    "prompt_tokens": np.asarray(prompt_tokens),
-                    "prompt_attention_mask": np.asarray(prompt_attention_mask),
                 }
             )
 
@@ -56,17 +47,10 @@ class MathEnv(MarinEnv):
             prompt = f"{item['problem']} {instruction}"
             answer = remove_boxed(last_boxed_only_string(item["solution"]))
 
-            # Pre-tokenize the prompt
-            prompt_tokens = self.tokenizer.encode(prompt, add_special_tokens=True)[-self.max_input_length :]
-            prompt_attention_mask = [0] * (self.max_input_length - len(prompt_tokens)) + [1] * len(prompt_tokens)
-            prompt_tokens = [self.pad_token_id] * (self.max_input_length - len(prompt_tokens)) + prompt_tokens
-
             self.eval_examples.append(
                 {
-                    "prompt": prompt,  # Keep original for inference
+                    "prompt": prompt,
                     "answer": answer,
-                    "prompt_tokens": np.asarray(prompt_tokens),
-                    "prompt_attention_mask": np.asarray(prompt_attention_mask),
                 }
             )
 
@@ -89,14 +73,19 @@ class MathEnv(MarinEnv):
             mode: "train" or "eval"
             n_generations: Number of generations per example
         """
-        # Sample examples from dataset
+        # Sample examples from dataset using JAX random (synchronized across workers)
         if mode == "train":
-            examples = random.sample(self.train_examples, min(n_examples, len(self.train_examples)))
+            available_examples = self.train_examples
         else:
-            examples = random.sample(self.eval_examples, min(n_examples, len(self.eval_examples)))
+            available_examples = self.eval_examples
 
-        # Generate responses using the model (still need original prompts for
-        # inference)
+        # Use JAX random for consistent sampling across all TPU workers
+        with jax.default_device(jax.devices("cpu")[0]):
+            n_to_sample = min(n_examples, len(available_examples))
+            indices = jax.random.choice(prng_key, len(available_examples), shape=(n_to_sample,), replace=False)
+            examples = [available_examples[int(idx)] for idx in indices]
+
+        # Generate responses using the model
         samples = batch_inference(
             sampler,
             params,
@@ -168,4 +157,9 @@ class MathEnv(MarinEnv):
 
     def get_eval_examples(self, n_examples: int) -> list[dict[str, Any]]:
         """Get evaluation examples for evaluation."""
-        return random.sample(self.eval_examples, min(n_examples, len(self.eval_examples)))
+        # Use a fixed seed for reproducible evaluation
+        eval_key = jax.random.PRNGKey(42)
+        with jax.default_device(jax.devices("cpu")[0]):
+            n_to_sample = min(n_examples, len(self.eval_examples))
+            indices = jax.random.choice(eval_key, len(self.eval_examples), shape=(n_to_sample,), replace=False)
+            return [self.eval_examples[int(idx)] for idx in indices]
