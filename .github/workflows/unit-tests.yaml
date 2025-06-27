@@ -152,7 +152,7 @@ jobs:
       - name: Start Ray cluster locally
         shell: bash -l {0}
         run: |
-          ray start --head
+          ray start --head --resources='{"head_node": 1}'
 
       - name: Test with pytest
         shell: bash -l {0}
