@@ -7,8 +7,8 @@ class EnvStep(NamedTuple):
     """Container for an environment step."""
 
     examples: list[dict[str, Any]]  # The problems sampled from dataset
-    samples: list[list[dict[str, np.ndarray]]]  # Generated samples from model
-    rewards: np.ndarray  # Computed rewards for each sample
+    samples: list[list[dict[str, np.ndarray]]]  # samples[i][j]: The j-th sample for the i-th problem in a batch
+    rewards: np.ndarray  # Shape: (number of examples, number of generations per example)
     metrics: dict[str, float]  # Additional metrics
 
 
