@@ -81,7 +81,7 @@ available_node_types:
   head_default:
     min_workers: 0
     max_workers: 0
-    resources: {"CPU": 1}
+    resources: {"CPU": 0, "head_node": 1}
 
     # GCP-Specific Configuration; by default, Ray will configure unspecified fields (e.g., subnets, ssh-keys)
     #   => Ref: https://cloud.google.com/compute/docs/reference/rest/v1/instances/insert
@@ -136,7 +136,7 @@ available_node_types:
 
   tpu_slice_v5p_32:
     max_workers: 1024
-    min_workers: 0
+    min_workers: 8
     node_config:
       acceleratorType: v5p-32
       runtimeVersion: v2-alpha-tpuv5
@@ -184,7 +184,7 @@ available_node_types:
 
   tpu_slice_v5p_512:
     max_workers: 1024
-    min_workers: 16
+    min_workers: 0
     node_config:
       acceleratorType: v5p-512
       runtimeVersion: v2-alpha-tpuv5
