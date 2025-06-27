@@ -29,8 +29,12 @@ class ServerConfig:
     root_paths: list[str]
     """Paths (and their descendents) to allow access to."""
 
-    max_lines: int
-    """Maximum number of lines to read from a text or parquet file.
+    max_size: int | None = None
+    """Maximum size of a file to read in bytes (for text files), when reading a
+    JSON or downloading a file."""
+
+    max_lines: int | None = None
+    """Maximum number of lines to read from a jsonl or parquet file.
     This is the maximum number of lines that will be read in a single request,
     which means that even if we're only requesting a single line, if the portion
     of the file requested is past the first `max_lines` lines, we would exceed
@@ -90,20 +94,30 @@ def list_files(path: str) -> dict:
 
 def read_json_file(path: str) -> dict:
     """Reads a JSON file."""
-    MAX_BYTES = 100 * 1024 * 1024
     with server.fs(path).open(path) as f:
-        raw = f.read(MAX_BYTES)  # Don't OOM on huge files
-        if len(raw) == MAX_BYTES:
-            return {
-                "type": "json",
-                "error": f"File too large (exceeded {MAX_BYTES} bytes)",
-            }
+        if server.config.max_size is None:
+            raw = f.read()
+        else:
+            raw = f.read(server.config.max_size)  # Don't OOM on huge files
+            if len(raw) == server.config.max_size:
+                return {
+                    "type": "json",
+                    "error": f"File too large (exceeded {server.config.max_size} bytes)",
+                }
         data = json.loads(raw)
 
     return {
         "type": "json",
         "data": data,
     }
+
+
+def is_too_many_lines(offset: int, count: int) -> bool:
+    return server.config.max_lines is not None and offset + count > server.config.max_lines
+
+
+def is_too_large(size: int) -> bool:
+    return server.config.max_size is not None and size > server.config.max_size
 
 
 def read_text_file(
@@ -114,7 +128,7 @@ def read_text_file(
     Interpret each line as a JSON if `get_json` is set.
     """
     # Ensure we only read a max of server.config.max_lines lines
-    if offset + count >= server.config.max_lines or count >= server.config.max_lines:
+    if is_too_many_lines(offset, count):
         return {"error": f"Only {server.config.max_lines} lines are allowed to be read at a time"}
     with server.fs(path).open(path, "rb") as f:
         # Unzip
@@ -149,7 +163,7 @@ def read_text_file(
 def read_parquet_file(path: str, offset: int, count: int) -> dict:
     """Reads a range of records (offset to offset + count) from a parquet file."""
     # Ensure we only read a max of server.config.max_lines lines
-    if offset + count >= server.config.max_lines or count >= server.config.max_lines:
+    if is_too_many_lines(offset, count):
         return {"error": f"Only {server.config.max_lines} lines are allowed to be read at a time"}
 
     pf = ParquetFile(path)
@@ -205,8 +219,14 @@ def download():
     if not server.fs(path).exists(path):
         return jsonify({"error": f"Path does not exist: {path}"})
 
-    # Stream the file directly from cloud storage or the filesystem
-    return Response(server.fs(path).open(path, "rb"), content_type="application/octet-stream")
+    if is_too_large(server.fs(path).size(path)):
+        return jsonify({"error": f"File too large (exceeded {server.config.max_size} bytes)"})
+
+    try:
+        file_handle = server.fs(path).open(path, "rb")
+        return Response(file_handle, content_type="application/octet-stream")
+    except ValueError as e:
+        return jsonify({"error": str(e)})
 
 
 @app.route("/api/view", methods=["GET"])
