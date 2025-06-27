@@ -116,16 +116,16 @@ tokenize_train = [
 ]
 
 post_training = [
-    "gcsfs==2023.10.0",
-    "jax==0.4.29",  # jax==0.5.2 might need to update some stuff
-    "transformers==4.44.2",
+    "gcsfs",
+    "jax==0.5.2",
+    "transformers",
     "flax==0.10.0",
     "sentencepiece==0.1.99",
     "wget==3.2",
-    "jaxtyping==0.2.23",
+    "jaxtyping",#==0.2.23",
     "tyro==0.8.11",
-    "tqdm==4.66.1",
-    "wandb==0.16.1",
+    "tqdm",
+    "wandb",
     "einops==0.8.0",
     "numpy<2.0.0",
     "ringattention==0.1.2",
