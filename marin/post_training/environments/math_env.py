@@ -4,9 +4,10 @@ from typing import Any
 import datasets
 import jax
 import numpy as np
-from inference import batch_inference
 from tqdm.auto import tqdm
-from utils import validate_format
+
+from marin.post_training.inference import batch_inference
+from marin.post_training.utils import validate_format
 
 from .marin_env import EnvStep, MarinEnv
 from .math_utils import grade_answer, last_boxed_only_string, remove_boxed

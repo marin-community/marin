@@ -10,23 +10,24 @@ import jax
 import jax.numpy as jnp
 import optax
 import tyro
-from environments.marin_env import MarinEnv
-from environments.math_env import MathEnv
 from flax.training.train_state import TrainState
-from inference import GenerationConfig, batch_inference, build_sampler
 from jax.sharding import PartitionSpec as PS
-from llama3 import (
+from optax import softmax_cross_entropy_with_integer_labels
+from scalax.sharding import MeshShardingHelper, TreePathShardingRule
+from tqdm.auto import tqdm
+from transformers import AutoTokenizer
+
+from .environments.marin_env import MarinEnv
+from .environments.math_env import MathEnv
+from .inference import GenerationConfig, batch_inference, build_sampler
+from .llama3 import (
     LLAMA_STANDARD_CONFIGS,
     FlaxLLaMAForCausalLM,
     LLaMAConfig,
 )
-from optax import softmax_cross_entropy_with_integer_labels
-from optimizer import load_adamw_optimizer
-from rl_dataset import create_dataset_from_environment
-from scalax.sharding import MeshShardingHelper, TreePathShardingRule
-from tqdm.auto import tqdm
-from transformers import AutoTokenizer
-from utils import (
+from .optimizer import load_adamw_optimizer
+from .rl_dataset import create_dataset_from_environment
+from .utils import (
     WandbLogger,
     checkpointer,
     delete_with_bucket,

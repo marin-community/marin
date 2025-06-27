@@ -17,12 +17,13 @@ from jax.experimental.shard_map import shard_map
 from jax.sharding import PartitionSpec as PS
 from ringattention import ringattention, ringattention_jax
 from scalax.sharding import MeshShardingHelper, with_sharding_annotation
-from tpu_attention import _tpu_paged_attention, _tpu_splash_attention
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_flax_outputs import FlaxBaseModelOutput, FlaxCausalLMOutput
 from transformers.modeling_flax_utils import FlaxPreTrainedModel
 from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging
-from utils import get_gradient_checkpoint_policy
+
+from .tpu_attention import _tpu_paged_attention, _tpu_splash_attention
+from .utils import get_gradient_checkpoint_policy
 
 LLAMA_STANDARD_CONFIGS = {
     "1b": {
