@@ -3,6 +3,7 @@
 Optimizer configs were searched & provided by Kaiyue Wen in https://wandb.ai/marin-community/marin/reports/Fantastic-Optimizers-and-Where-to-Find-Them--VmlldzoxMjgzMzQ2NQ
 """
 
+import dataclasses
 import logging
 
 from levanter.optim import AdamConfig
@@ -116,10 +117,10 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     # Names for the runs
     run_names = {
-        "130m": "llama_130m_adamw",
-        "300m": "llama_300m_adamw",
-        "520m": "llama_520m_adamw",
-        "1_2b": "llama_1_2b_adamw",
+        "130m": "llama_130m_adamw_4096",
+        "300m": "llama_300m_adamw_4096",
+        "520m": "llama_520m_adamw_4096",
+        "1_2b": "llama_1_2b_adamw_fix_4096",
     }
 
     # Gather config for the requested size
@@ -128,7 +129,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     param_count = param_counts[size]
     batch_size = batch_sizes[size]
-    model_config = model_cfgs[size]
+    model_config = dataclasses.replace(model_cfgs[size], seq_len=4096)
     seq_len = model_config.seq_len
     resource_config = resource_cfgs[size]
     adam = adam_configs[size]
