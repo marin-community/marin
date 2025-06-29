@@ -3,7 +3,7 @@
     export RUN_NAME="llama3_8b_math_test_experiment"
     export GCLOUD_TOKEN_PATH="$HOME/.config/gcloud/application_default_credentials.json"
     export GCLOUD_PROJECT="hai-gcp-models"
-    python -m train \
+    python -m post_training.train \
             --load_model="paths:{
                 \"params\": \"gs://marin-us-central2/checkpoints/Llama-3.1-8B-Instruct-converted/params.msgpack\",
                 \"tokenizer\": \"meta-llama/Meta-Llama-3-8B-Instruct\",
