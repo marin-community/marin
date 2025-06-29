@@ -4,10 +4,9 @@ from typing import Any
 import datasets
 import jax
 import numpy as np
+from post_training.inference import batch_inference
+from post_training.utils import validate_format
 from tqdm.auto import tqdm
-
-from marin.post_training.inference import batch_inference
-from marin.post_training.utils import validate_format
 
 from .marin_env import EnvStep, MarinEnv
 from .math_utils import grade_answer, last_boxed_only_string, remove_boxed
@@ -29,7 +28,6 @@ class MathEnv(MarinEnv):
             "tags. Assistant: Let me solve this step by step. <think>"
         )
 
-        print("Pre-tokenizing training examples...")
         self.train_examples = []
         for item in tqdm(train_dataset, desc="Processing train set"):
             prompt = f"{item['problem']} {instruction}"
@@ -42,7 +40,6 @@ class MathEnv(MarinEnv):
                 }
             )
 
-        print("Pre-tokenizing evaluation examples...")
         self.eval_examples = []
         for item in tqdm(test_dataset, desc="Processing test set"):
             prompt = f"{item['problem']} {instruction}"
@@ -87,7 +84,7 @@ class MathEnv(MarinEnv):
             examples = [available_examples[int(idx)] for idx in indices]
 
         # Generate responses using the model
-        samples = batch_inference(
+        responses = batch_inference(
             sampler,
             params,
             [example["prompt"] for example in examples],
@@ -97,27 +94,27 @@ class MathEnv(MarinEnv):
         )
 
         # Compute rewards
-        rewards, metrics = self._compute_rewards(examples, samples)
+        rewards, metrics = self._compute_rewards(examples, responses)
 
-        return EnvStep(examples=examples, samples=samples, rewards=rewards, metrics=metrics)
+        return EnvStep(examples=examples, responses=responses, rewards=rewards, metrics=metrics)
 
     def _compute_rewards(
-        self, examples: list[dict[str, Any]], samples: list[list[dict[str, np.ndarray]]]
+        self, examples: list[dict[str, Any]], responses: list[list[dict[str, np.ndarray]]]
     ) -> tuple[np.ndarray, dict[str, float]]:
-        """Compute rewards for generated samples."""
+        """Compute rewards for generated responses."""
         all_rewards = []
         all_format_rewards = []
         all_correct_rewards = []
         all_lens = []
 
-        for i, sample in tqdm(enumerate(samples)):
+        for i, response in tqdm(enumerate(responses)):
             group_rewards = []
             group_format_rewards = []
             group_correct_rewards = []
-            for inner_sample in sample:
-                all_lens.append(len(inner_sample["tokens"]))
-                decoded_sample = self.tokenizer.decode(inner_sample["tokens"], skip_special_tokens=True)
-                validation = validate_format(decoded_sample + ">")
+            for inner_response in response:
+                all_lens.append(len(inner_response["tokens"]))
+                decoded_response = self.tokenizer.decode(inner_response["tokens"], skip_special_tokens=True)
+                validation = validate_format(decoded_response + ">")
                 if validation["is_valid"]:
                     grade = grade_answer(validation["answer"], examples[i]["answer"])
                 else:
@@ -126,7 +123,7 @@ class MathEnv(MarinEnv):
                 if random.random() < 1 / 64:
                     print("=" * 25)
                     print(examples[i]["prompt"])
-                    print(decoded_sample + ">")
+                    print(decoded_response + ">")
                     print("=" * 25)
                     print("gt answer: ", examples[i]["answer"])
                     print("extracted answer: ", validation["answer"])
@@ -148,9 +145,9 @@ class MathEnv(MarinEnv):
         all_lens = np.asarray(all_lens)
 
         metrics = {
-            "train_rs": np.mean(all_rewards),
-            "train_format_rs": np.mean(all_format_rewards),
-            "train_correct_rs": np.mean(all_correct_rewards),
+            "train_rewardss": np.mean(all_rewards),
+            "train_format_rewards": np.mean(all_format_rewards),
+            "train_correct_rewardss": np.mean(all_correct_rewards),
             "train_output_len": np.mean(all_lens),
         }
 
