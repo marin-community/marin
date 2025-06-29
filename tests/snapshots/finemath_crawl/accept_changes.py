@@ -1,11 +1,12 @@
 import os
 
 from tqdm import tqdm
+
+from marin.crawl.get_finemath_crawl_yield import selectors
+from marin.schemas.web.convert import ResiliparseConfig
+
 # from resiliparse.html.extract import extract_
 from marin.web.convert import convert_page
-from marin.schemas.web.convert import ResiliparseConfig
-from marin.crawl.get_finemath_crawl_yield import selectors
-
 
 BANNED_SELECTORS = [
     "body.footer",

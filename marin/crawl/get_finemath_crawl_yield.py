@@ -84,6 +84,7 @@ with open(selectors_path, "r") as f:
     selectors = [line.replace("\n", "").strip() for line in f]
     selectors = [line for line in selectors if line]
 
+
 @dataclass
 class DolmaFormattedFineWebEduRecord:
     id: str
@@ -106,7 +107,7 @@ def batched(iterable, n=1):
     length = len(iterable)
     for ndx in range(0, length, n):
         yield iterable[ndx : min(ndx + n, length)]
-    
+
 
 @ray.remote(
     memory=16 * 1024 * 1024 * 1024,
@@ -117,10 +118,7 @@ def extract_text(record_id: str, html_decoded: str) -> tuple[str, str | None]:
             html_decoded,
             extract_method="resiliparse",
             config=ResiliparseConfig(
-                main_content=True,
-                preserve_formatting=True,
-                prepend_title=False,
-                skip_elements=selectors
+                main_content=True, preserve_formatting=True, prepend_title=False, skip_elements=selectors
             ),
         )["content"]
     except Exception:
@@ -211,7 +209,7 @@ def extract_text_from_warc(
                         "file_path": warc_path,
                     },
                 }
-    
+
     # Wait for the text extraction remote functions to finish
     unfinished = text_extraction_refs
     extracted_text_records = []
@@ -558,7 +556,7 @@ def get_shard_yield(
         with fsspec.open(success_path, block_size=1 * 1024 * 1024 * 1024) as f:
             shard_stats = json.load(f)
         return shard_stats["total_urls_passing"]
-    
+
     # Launch remote functions for each of the filters:
     # (1) URL, (2) langid, (3) gopher reptition,
     # (4) gopher quality, (5) c4 quality, and (6) learned quality classifier

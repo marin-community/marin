@@ -99,11 +99,17 @@ def default_crawl(
             ),
         )
 
+    inp_pat = None
+    if not deduplicate_from_cc:
+        inp_pat = output_path_of(extracted_outlinks, input_pattern)
+    else:
+        inp_pat = output_path_of(outlinks_cc_deduplicated_2013_2018, input_pattern)
+
     outlinks_deduplicated = ExecutorStep(
         name=f"crawl/{config.source_name}/outlinks/{config.source_name}-deduplicated",
         fn=deduplicate_and_shuffle_with_bq_driver,
         config=DeduplicateOutlinksConfig(
-            gcs_input_pattern=output_path_of(extracted_outlinks, input_pattern) if not deduplicate_from_cc else output_path_of(outlinks_cc_deduplicated_2013_2018, input_pattern),
+            gcs_input_pattern=inp_pat,
             gcs_output_prefix=this_output_path("links"),
             bq_table_id=f"{config.source_name.split('/')[-1]}",
         ),
@@ -131,7 +137,7 @@ def default_crawl(
             max_concurrent_shards=40,
         ),
     )
-    
+
     # Fetched outlinks in WARC format: gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/links.0.warc.gz
     links_fetched_warc = ExecutorStep(
         name=f"crawl/{config.source_name}/fetched_outlinks/{config.source_name}-warc",
@@ -161,15 +167,9 @@ def default_crawl(
         fn=minhash_deduplicate_against_index_driver,
         config=MinhashDeduplicateAgainstIndexConfig(
             index_path=this_output_path("index"),
-            input_patterns=[
-                output_path_of(
-                    links_fetched_warc_yield, f"*_text_and_scores.passing.parquet"
-                )
-            ],
+            input_patterns=[output_path_of(links_fetched_warc_yield, "*_text_and_scores.passing.parquet")],
             parquets_paths_file=this_output_path(f"{config.source_name}-passing_paths.txt"),
-            minhash_base_path=this_output_path(
-                f"{config.source_name}_passing_minhash_against_{config.source_name}"
-            ),
+            minhash_base_path=this_output_path(f"{config.source_name}_passing_minhash_against_{config.source_name}"),
             minhash_logs_path=this_output_path(
                 f"{config.source_name}_passing_minhash_against_{config.source_name}_logs"
             ),
@@ -188,9 +188,11 @@ def default_crawl(
     ]
 
     if deduplicate_from_cc:
-        steps.extend([
-            outlinks_cc_deduplicated_2013_2018,
-            outlinks_cc_deduplicated_2019_2024,
-        ])
+        steps.extend(
+            [
+                outlinks_cc_deduplicated_2013_2018,
+                outlinks_cc_deduplicated_2019_2024,
+            ]
+        )
 
     return steps

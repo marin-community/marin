@@ -7,9 +7,10 @@ which fine-tunes an 8B model on a mixture of:
 
 Reference Issue: https://github.com/stanford-crfm/marin/issues/1167
 """
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
+
 from experiments.anneal_config import AnnealConfig
 from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
+from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal, default_tokenize
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from experiments.evals.evals import default_eval
@@ -30,9 +31,7 @@ finemath_crawl_tokenized = default_tokenize(
 
 finemath_raw_tokenized = default_tokenize(
     "finemath-control",
-    InputName.hardcoded(
-        "gs://marin-us-central2/raw/finemath-7090a5/finemath-3plus"
-    ),
+    InputName.hardcoded("gs://marin-us-central2/raw/finemath-7090a5/finemath-3plus"),
     tokenizer=llama3_tokenizer,
 )
 
@@ -83,7 +82,8 @@ crawl_control_lm_mixture_anneal_config = AnnealConfig(
 )
 
 crawl_control_ablation = default_anneal(
-    name="8b-quality-eval-finemath-crawl-control-token-proportional", anneal_config=crawl_control_lm_mixture_anneal_config
+    name="8b-quality-eval-finemath-crawl-control-token-proportional",
+    anneal_config=crawl_control_lm_mixture_anneal_config,
 )
 
 crawl_control_ablation_eval = default_eval(

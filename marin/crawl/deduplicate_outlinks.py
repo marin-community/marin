@@ -155,7 +155,7 @@ def deduplicate_and_shuffle_with_bq(
     logger.info(f"Checking for BigQuery dataset {dataset_name}...")
 
     try:
-        dataset = client.get_dataset(dataset_name) # Check existence first
+        dataset = client.get_dataset(dataset_name)  # Check existence first
         logger.info(f"Found existing dataset {dataset_name}.")
         if dataset.location != dataset_location:
             raise ValueError(
@@ -184,7 +184,7 @@ def deduplicate_and_shuffle_with_bq(
     ext_table_ref = f"{project_id}.{dataset_id}.{ext_table_id}"
     schema = [
         bigquery.SchemaField("page_url", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("link_target", "STRING", mode="REQUIRED"), # Used for deduplication
+        bigquery.SchemaField("link_target", "STRING", mode="REQUIRED"),  # Used for deduplication
         bigquery.SchemaField("is_internal_link", "BOOLEAN", mode="NULLABLE"),
         bigquery.SchemaField("in_main_content", "BOOLEAN", mode="NULLABLE"),
     ]
