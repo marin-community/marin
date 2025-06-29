@@ -27,8 +27,8 @@ source ~/miniconda3/bin/activate
 conda init bash
 conda create -n llama3_train python=3.10 -y
 conda activate llama3_train
-cd ~/llama3_train
-python -m pip install -e .
+cd ~/llama3_train/post_training
+python -m pip install -r requirements.txt
 python -m pip install -U "jax[tpu]==0.4.29" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 # clean up
@@ -84,7 +84,7 @@ if __name__ == "__main__":
     launch_config_path = os.path.join(os.path.dirname(__file__), "launch_config.json")
 
     available_tpus = [
-        ("ray-marin-us-central1-worker-f43d3df9-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-093d297d-tpu", "us-central1-a"),
         ("post-training-v5p-8", "us-east5-a"),
     ]
 

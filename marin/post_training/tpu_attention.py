@@ -8,7 +8,7 @@ from jax.experimental.shard_map import shard_map
 from jax.sharding import PartitionSpec as PS
 from scalax.sharding import MeshShardingHelper
 
-# CF
+# Copied from
 # https://github.com/google/maxtext/blob/db31dd4b0b686bca4cd7cf940917ec372faa183a/MaxText/layers/attentions.py#L179
 
 
@@ -113,8 +113,7 @@ def _tpu_splash_attention(
     return attn_output
 
 
-# adopted from
-# https://github.com/Sea-Snell/llama3_train/blob/fixed_fast_inference/llama_train/paged.py
+# Copied from  https://github.com/Sea-Snell/llama3_train/blob/fixed_fast_inference/llama_train/paged.py
 
 
 def _tpu_paged_attention(
