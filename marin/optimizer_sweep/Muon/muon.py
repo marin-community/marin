@@ -28,7 +28,7 @@ def muon_config(
         nesterov=(nesterov if nesterov is not None else MuonConfig().nesterov),
         max_grad_norm=(max_grad_norm if max_grad_norm is not None else MuonConfig().max_grad_norm),
         muon_epsilon=(muon_epsilon if muon_epsilon is not None else MuonConfig().muon_epsilon),
-        muon_to_adam_lr=(muon_to_adam_lr if muon_to_adam_lr is not None else MuonConfig().muon_to_adam_lr),
+        adam_lr=(muon_to_adam_lr * learning_rate if muon_to_adam_lr is not None else MuonConfig().muon_to_adam_lr),
         warmup=(warmup if warmup is not None else MuonConfig().warmup),
         decay=(decay if decay is not None else MuonConfig().decay),
         lr_schedule=(lr_schedule if lr_schedule is not None else MuonConfig().lr_schedule),
