@@ -2,12 +2,10 @@
 RL training experiment following marin patterns.
 """
 
-import dataclasses
 import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any
 
 import ray
 
@@ -17,8 +15,6 @@ from marin.training.training import (
     _add_default_env_variables,
     _add_run_env_variables,
     _check_for_wandb_key,
-    _enforce_run_id,
-    _update_config_to_use_out_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,9 +25,9 @@ class RlTrainOnPodConfig:
     """Configuration for RL training on a pod, following marin's TrainLmOnPodConfig pattern."""
 
     resources: ResourceConfig
-    
+
     load_model: str
-    sharding: str = "1,4,1,-1"    
+    sharding: str = "1,4,1,-1"
     num_train_steps: int = 2048
     max_input_length: int = 256
     max_output_length: int = 1025
@@ -50,16 +46,34 @@ class RlTrainOnPodConfig:
     training_param_dtype: str = "fp32"
     training_activation_dtype: str = "bf16"
 
-    optim_config: str = '{"init_lr": 5e-7, "end_lr": 5e-7, "lr": 5e-7, "lr_warmup_steps": 0, "lr_decay_steps": 2048, "b1": 0.9, "b2": 0.95, "clip_gradient": 1.0, "weight_decay": 0.0, "bf16_momentum": false, "multiply_by_parameter_scale": false, "weight_decay_exclusions": [], "schedule": "cos", "grad_accum_steps": 16}'
+    optim_config: str = (
+        '{"init_lr": 5e-7, "end_lr": 5e-7, "lr": 5e-7, "lr_warmup_steps": 0, "lr_decay_steps": 2048, '
+        '"b1": 0.9, "b2": 0.95, "clip_gradient": 1.0, "weight_decay": 0.0, "bf16_momentum": false, '
+        '"multiply_by_parameter_scale": false, "weight_decay_exclusions": [], "schedule": "cos", '
+        '"grad_accum_steps": 16}'
+    )
     logger_config: str = '{"online": true, "prefix": "rl_math_experiment", "prefix_to_id": true}'
     checkpointer_config: str = '{"save_optimizer_state": false, "save_float_dtype": "bf16"}'
-    generation_config: str = '{"max_output_length": 1025, "temperature": 1.0, "stop_tokens": [[524, 9399], [694, 9399], [4005, 9399], [6199, 9399], [8217, 9399], [9169, 9399], [12817, 9399], [19203, 9399], [20264, 9399], [22246, 9399], [27147, 9399], [128001]], "n_generations": 64}'
-    test_generation_config: str = '{"max_output_length": 1025, "temperature": 0.0, "stop_tokens": [[524, 9399], [694, 9399], [4005, 9399], [6199, 9399], [8217, 9399], [9169, 9399], [12817, 9399], [19203, 9399], [20264, 9399], [22246, 9399], [27147, 9399], [128001]], "n_generations": 1}'
-    model_config_override: str = '{"bos_token_id": 128000, "eos_token_id": 128001, "pad_token_id": 128002, "max_sequence_length": 2048, "remat_block": "nothing_saveable", "resid_pdrop": 0.0, "embd_pdrop": 0.0, "attn_pdrop": 0.0}'
+    generation_config: str = (
+        '{"max_output_length": 1025, "temperature": 1.0, "stop_tokens": [[524, 9399], [694, 9399], '
+        "[4005, 9399], [6199, 9399], [8217, 9399], [9169, 9399], [12817, 9399], [19203, 9399], "
+        '[20264, 9399], [22246, 9399], [27147, 9399], [128001]], "n_generations": 64}'
+    )
+    test_generation_config: str = (
+        '{"max_output_length": 1025, "temperature": 0.0, "stop_tokens": [[524, 9399], [694, 9399], '
+        "[4005, 9399], [6199, 9399], [8217, 9399], [9169, 9399], [12817, 9399], [19203, 9399], [20264, 9399], "
+        '[22246, 9399], [27147, 9399], [128001]], "n_generations": 1}'
+    )
+    model_config_override: str = (
+        '{"bos_token_id": 128000, "eos_token_id": 128001, "pad_token_id": 128002, "max_sequence_length": 2048, '
+        '"remat_block": "nothing_saveable", "resid_pdrop": 0.0, "embd_pdrop": 0.0, "attn_pdrop": 0.0}'
+    )
     tokenizer_override: str = "{}"
     train_attention_kernel_config: str = 'splash:{"block_size": 256}'
     prefill_attention_kernel_config: str = 'splash:{"block_size": 256}'
-    generate_attention_kernel_config: str = 'paged:{"page_size": 256, "pages_per_compute_block": 1, "inline_seq_dim": true, "use_int8": false}'
+    generate_attention_kernel_config: str = (
+        'paged:{"page_size": 256, "pages_per_compute_block": 1, "inline_seq_dim": true, "use_int8": false}'
+    )
     jax_distributed_initalize_config: str = "{}"
 
     save_initial_checkpoint: bool = False
@@ -70,22 +84,18 @@ class RlTrainOnPodConfig:
     kl_coef: float = 1e-3
 
     output_path: str | None = None
-    """Base output directory to be used for training, mainly for use with executor framework."""
-    impute_run_id_from_output_path: bool = True
-    """If true and output_path is not None, the run id will be set to the basename of the output_path plus a random string."""
 
 
 @ray.remote(num_cpus=0.1)
 def run_rl_training_on_pod(config: RlTrainOnPodConfig):
     """
     Run RL training on a Ray cluster, following marin's execution pattern.
-    
+
     This function follows the same pattern as run_levanter_train_lm but adapted for RL training.
     """
+
     import levanter.infra.cli_helpers
-    from copy import deepcopy
-    from mergedeep import mergedeep
-    
+
     from marin.post_training.train import main as rl_training_main
 
     default_launch_config = levanter.infra.cli_helpers.load_config()
@@ -151,12 +161,12 @@ def run_rl_training_on_pod(config: RlTrainOnPodConfig):
             "pad_token_id": config.pad_token_id,
             "kl_coef": config.kl_coef,
         }
-        
+
         rl_training_main(**training_kwargs)
 
     if isinstance(hw_config, TpuPodConfig):
-        from levanter.infra.ray_tpu import run_on_pod_resumable, run_on_pod_multislice_resumable
-        
+        from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
+
         if hw_config.slice_count == 1:
             return run_on_pod_resumable(rl_train_task, config.resources.accelerator_descriptor(), max_retries_failure=10)
         else:
@@ -183,7 +193,7 @@ def default_rl_train(
 ) -> ExecutorStep:
     """
     Create an RL training experiment following marin's default_train pattern.
-    
+
     Args:
         name: The name of the training run
         model_paths: Dictionary with 'params', 'tokenizer', and 'config' paths
@@ -195,9 +205,9 @@ def default_rl_train(
         wandb_project: Wandb project name
         **kwargs: Additional arguments
     """
-    
+
     load_model = f"paths:{json.dumps(model_paths)}"
-    
+
     optim_config = {
         "init_lr": learning_rate,
         "end_lr": learning_rate,
@@ -214,15 +224,15 @@ def default_rl_train(
         "schedule": "cos",
         "grad_accum_steps": 16,
     }
-    
+
     logger_config = {
         "online": True,
         "prefix": name,
         "prefix_to_id": True,
     }
-    
+
     resources = TpuPodConfig(tpu_type=tpu_type)
-    
+
     config = RlTrainOnPodConfig(
         load_model=load_model,
         train_bsize=train_bsize,
@@ -247,13 +257,13 @@ def default_rl_train(
 
 def main():
     """Main function to run RL training experiments."""
-    
+
     model_paths = {
         "params": "gs://marin-us-central2/checkpoints/Llama-3.1-8B-Instruct-converted/params.msgpack",
         "tokenizer": "meta-llama/Meta-Llama-3-8B-Instruct",
         "config": "gs://marin-us-central2/checkpoints/Llama-3.1-8B-Instruct-converted/config.json",
     }
-    
+
     experiments = [
         default_rl_train(
             name="llama3_8b_math_test_experiment",
