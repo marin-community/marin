@@ -37,6 +37,8 @@ class SimpleTrainConfig:
     ema_beta: float | None = None
     nesterov: bool | None = None
     """exponential moving average beta"""
+    skip_bad_steps: bool = False
+    """If True, skips steps where the loss or grad is significantly higher than the historical mean."""
 
     id: str | None = None
     ckpt_path: str | None = None
