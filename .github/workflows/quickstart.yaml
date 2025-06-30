@@ -52,7 +52,7 @@ jobs:
       - name: Start Ray cluster locally
         shell: bash -l {0}
         run: |
-          ray start --head --num-cpus=64
+          ray start --head --num-cpus=64 --resources='{"head_node": 1}'
 
       - name: Run the quickstart script
         shell: bash -l {0}
