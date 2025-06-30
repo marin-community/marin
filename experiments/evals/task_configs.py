@@ -25,12 +25,50 @@ CORE_TASKS = (
     EvalTaskConfig("winogrande", 0),  # Winograd challenge, extended to more domains
 )
 
+MMLU_0_SHOT = EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot")
+MMLU_5_SHOT = EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")
+MMLU_PRO_5_SHOT = EvalTaskConfig("leaderboard_mmlu_pro", 5, task_alias="mmlu_5shot")
+
+OPEN_LM_LEADERBOARD_MCQ = (
+    EvalTaskConfig("leaderboard_bbh", 3, task_alias="lb_bbh_3shot"),
+    EvalTaskConfig("leaderboard_mmlu_pro", 5, task_alias="lb_mmlu_pro_5shot"),
+    EvalTaskConfig("leaderboard_gpqa", 0, task_alias="lb_gpqa_0shot"),
+    EvalTaskConfig("leaderboard_musr", 0, task_alias="lb_musr_0shot"),
+)
+
+
+OPEN_LM_LEADERBOARD_GEN = (
+    EvalTaskConfig("leaderboard_ifeval", 0, task_alias="lb_ifeval_0shot"),
+    EvalTaskConfig("leaderboard_math_hard", 4, task_alias="lb_math_4shot"),
+)
+
 MMLU_TASKS = (
-    EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"),
-    EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),
+    MMLU_0_SHOT,
+    MMLU_5_SHOT,
+)
+
+CORE_TASKS_PLUS_LEADERBOARD = (
+    EvalTaskConfig(
+        "leaderboard_bbh",
+        3,
+        task_alias="bbh_3shot",
+    ),
+    EvalTaskConfig(
+        "leaderboard_gpqa",
+        0,
+        task_alias="gpqa_0shot",
+    ),
+    *CORE_TASKS,
 )
 
 CORE_TASKS_PLUS_MMLU = CORE_TASKS + MMLU_TASKS
+
+BASE_GENERATION_TASKS = (
+    EvalTaskConfig(name="bbh_cot", num_fewshot=3),
+    EvalTaskConfig(name="gsm8k_cot", num_fewshot=8),
+    EvalTaskConfig(name="nq_open", num_fewshot=0, task_alias="nq_open"),
+    EvalTaskConfig(name="triviaqa", num_fewshot=0, task_alias="triviaqa"),
+)
 
 # Settings are chosen to compare to Olmo2
 KEY_GENERATION_TASKS = (
