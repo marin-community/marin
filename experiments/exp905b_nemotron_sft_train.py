@@ -35,15 +35,16 @@ mixture_weights = {
     "nemotron_sft": 32955418,
     "openthoughts3": 1200000
 }
-
+BATCH_SIZE = 128
 tokenized_datasets = {short_name: create_tokenization_step(hf_name) for short_name, hf_name in DATASETS.items()}
+
 
 sft_experiments = []
 deeper_sft_config = dataclasses.replace(
     spoonbill_zloss_tulu3_sft_config,
     learning_rate=1e-4,
-    num_train_steps=10228,
-    train_batch_size=128,
+    num_train_steps=10228*8, # Num rows is now 8x larger, so we need to train for 8x more steps. We need to be more principled
+    train_batch_size=BATCH_SIZE,
     model_name_or_path=tootsie_8b_deeper_starling,
 )
 
@@ -54,8 +55,8 @@ sft_mixture_llama3 = lm_mixture_data_config(
     missing_weights_are_validation=True,
 )
 
-mixture_sft_deeper_starling2 = default_sft(
-    name="sft/mixture_sft_deeper_starling2",
+mixture_sft_deeper_starling_with_nemotron_and_openthoughts3 = default_sft(
+    name="sft/mixture_sft_deeper_starling_with_nemotron_and_openthoughts3",
     tokenized=sft_mixture_llama3,
     model_config=llama_8b,
     sft_config=deeper_sft_config,
@@ -69,14 +70,14 @@ mixture_sft_deeper_starling2 = default_sft(
         "exp905b",
         "nemotron+openthoughts3-1.2m",
     ],
-).with_output_path("checkpoints/sft/mixture_sft_deeper_starling2")
+).with_output_path("checkpoints/sft/mixture_sft_deeper_starling_with_nemotron_and_openthoughts3")
 
 
 if __name__ == "__main__":
     executor_main(
         [
-            mixture_sft_deeper_starling2,
-            *default_sft_eval(mixture_sft_deeper_starling2),
+            mixture_sft_deeper_starling_with_nemotron_and_openthoughts3,
+            *default_sft_eval(mixture_sft_deeper_starling_with_nemotron_and_openthoughts3),
         ],
         description="SFT for Deeper Starling Model with addition of Nemotron and OpenThoughts3-1.2M",
     )
