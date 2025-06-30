@@ -1,6 +1,28 @@
-from marin.download.huggingface.download import DownloadConfig
-from marin.download.huggingface.download_hf import download_hf
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from experiments.eval_datasets import (
+    arc_raw as ai2_arc_raw,
+)
+from experiments.eval_datasets import (
+    bbh_raw,
+    boolq_raw,
+    commonsense_qa_raw,
+    gpqa_raw,
+    gsm8k_raw,
+    hellaswag_raw,
+    humaneval_raw,
+    instruction_following_raw,
+    lambada_openai_raw,
+    math_raw,
+    mmlu_pro_raw,
+    mmlu_raw,
+    musr_raw,
+    openbookqa_raw,
+    truthful_qa_raw,
+    winograd_wsc_raw,
+)
+from experiments.eval_datasets import (
+    piqa_baber_raw as piqa_raw,
+)
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """
@@ -13,257 +35,6 @@ The script follows the pattern from eval_datasets.py but focuses only on the dec
 ############################################################
 # Download datasets
 ############################################################
-
-# mmlu raw
-mmlu_raw = ExecutorStep(
-    name="raw/cais/mmlu_raw",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="cais/mmlu",
-        revision=versioned("c30699e"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
-    override_output_path="raw/cais/mmlu_raw",
-)
-
-# download gsm8k dataset
-gsm8k_raw = ExecutorStep(
-    name="raw/gsm8k",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="openai/gsm8k",
-        revision=versioned("6e925c6"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
-    override_output_path="raw/gsm8k/mainhf",
-)
-
-# download math dataset
-math_raw = ExecutorStep(
-    name="raw/hendrycks_math",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="EleutherAI/hendrycks_math",
-        revision=versioned("21a5633"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
-    override_output_path="raw/hendrycks/mathhf",
-)
-
-# download truthful_qa dataset
-truthful_qa_raw = ExecutorStep(
-    name="raw/truthful_qa",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="truthfulqa/truthful_qa",
-        revision=versioned("741b827"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
-    override_output_path="raw/truthful_qa/multiple_choicehf",
-)
-
-# download bbh dataset
-bbh_raw = ExecutorStep(
-    name="raw/bbh",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="SaylorTwift/bbh",
-        revision=versioned("b5306be"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
-    override_output_path="raw/SaylorTwift/bbhhf",
-)
-
-# download humaneval dataset
-humaneval_raw = ExecutorStep(
-    name="raw/humaneval",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="openai/openai_humaneval",
-        revision=versioned("7dce605"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
-    override_output_path="raw/openai/openai_humanevalhf",
-)
-
-
-# download musr dataset
-musr_raw = ExecutorStep(
-    name="raw/musr",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="WillHeld/MuSRDecontam",
-        revision=versioned("39b4f56"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.parquet"],
-    ),
-    override_output_path="raw/WillHeld/MuSRDecontamhf",
-)
-
-
-mmlu_pro_raw = ExecutorStep(
-    name="raw/mmlu_pro",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="TIGER-Lab/MMLU-Pro",
-        revision=versioned("475d58b"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
-    override_output_path="raw/TIGER-Lab/MMLU-Prohf",
-)
-
-instruction_following_raw = ExecutorStep(
-    name="raw/instruction_following_eval",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="wis-k/instruction-following-eval",
-        revision=versioned("5a5661c"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.jsonl", "*.jsonl"],
-    ),
-    override_output_path="raw/wis-k/instruction-following-evalhf",
-)
-
-gpqa_raw = ExecutorStep(
-    name="raw/gpqa",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="Idavidrein/gpqa",
-        revision=versioned("90b8e5b"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.csv", "*.csv"],
-    ),
-    override_output_path="raw/Idavidrein/gpqa",
-)
-
-# Download HellaSwag dataset
-hellaswag_raw = ExecutorStep(
-    name="raw/hellaswag",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="Rowan/hellaswag",
-        revision=versioned("6002345"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.jsonl", "*.jsonl"],
-    ),
-    override_output_path="raw/Rowan/hellaswaghf",
-)
-
-# download ai2_arc dataset
-ai2_arc_raw = ExecutorStep(
-    name="raw/ai2_arc",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="allenai/ai2_arc",
-        revision=versioned("210d026"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.parquet"],
-    ),
-    override_output_path="raw/allenai/ai2_archf",
-)
-
-# download boolq dataset
-boolq_raw = ExecutorStep(
-    name="raw/boolq",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="google/boolq",
-        revision=versioned("35b264d"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.jsonl", "*.jsonl"],
-    ),
-    override_output_path="raw/google/boolqhf",
-)
-
-# Insert Tau Commonsense QA download step
-commonsense_qa_raw = ExecutorStep(
-    name="raw/commonsense_qa",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="tau/commonsense_qa",
-        revision=versioned("94630fe"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.parquet"],
-    ),
-    override_output_path="raw/tau/commonsense_qahf",
-)
-
-# download Lambada OpenAI dataset
-lambada_openai_raw = ExecutorStep(
-    name="raw/lambada_openai",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="EleutherAI/lambada_openai",
-        revision=versioned("879e19a"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.jsonl", "*.jsonl"],
-    ),
-    override_output_path="raw/EleutherAI/lambada_openaihf",
-)
-
-# download AllenAI OpenBookQA dataset
-openbookqa_raw = ExecutorStep(
-    name="raw/openbookqa",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="allenai/openbookqa",
-        revision=versioned("388097e"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.parquet"],
-    ),
-    override_output_path="raw/allenai/openbookqahf",
-)
-
-# download PIQA dataset
-piqa_raw = ExecutorStep(
-    name="raw/piqa",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="baber/piqa",
-        revision=versioned("142f6d7"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.parquet"],
-    ),
-    override_output_path="raw/baber/piqahf",
-)
-
-# download Winograd WSC dataset
-winograd_wsc_raw = ExecutorStep(
-    name="raw/winograd_wsc",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="marcov/winograd_wsc_wsc273_promptsource",
-        revision=versioned("63befd8"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.parquet"],
-    ),
-    override_output_path="raw/marcov/winograd_wsc_wsc273_promptsourcehf",
-)
 
 ############################################################
 # Convert datasets to dolma format for decontamination
