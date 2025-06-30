@@ -57,3 +57,12 @@ register_preference_adapter(
         content_key="content",
     )
 )
+
+register_preference_adapter(
+    PreferenceTransformAdapter(
+        source="allenai/olmo-2-1124-7b-preference-mix",
+        dataset_format=PreferenceDatasetFormat.CHOSEN_REJECTED,
+        chosen_column="chosen",
+        rejected_column="rejected",
+    ),
+)
