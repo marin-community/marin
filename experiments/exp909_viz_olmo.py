@@ -12,9 +12,10 @@ from levanter.models.olmo import Olmo2Config
 from experiments.defaults import default_validation_sets
 from experiments.instruction_datasets import tulu_3_in_dolma
 from experiments.models import get_model_local_path, olmo2_7b
-from marin.evaluation.visualize import VizLmConfig, mixture_for_visualization, visualize_lm_log_probs
+from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.processing.tokenize.data_configs import mixture_for_evaluation
 
 # Get the base model path using the models.py utilities
 BASE_MODEL_PATH = get_model_local_path(olmo2_7b)
@@ -86,7 +87,7 @@ eval_sets = {
     **eval_sets,
     "tulu3_dolma": tulu_tokenized,
 }
-eval_set_mixture = mixture_for_visualization(eval_sets)
+eval_set_mixture = mixture_for_evaluation(eval_sets)
 
 all_steps = []
 # Add the base model visualization step
