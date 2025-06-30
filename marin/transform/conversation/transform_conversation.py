@@ -252,10 +252,11 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     Adding some documentation so that others won't attempt the same things.
     - There is no way to pass in the gs:// path to the `datasets` package in Ray. The main issue is
       that the `datasets` package always resolve the relative path, which resolves to a weird 
-      /tmp/... path when executed in Ray and the `datasets` package will fail.
+      `/tmp/...` path when executed in Ray and the `datasets` package will fail.
     - This is the main reason why we need to copy the data from GCP to local instance.
     - However, when we do this, we cannot a-priori know the splits that are available in the dataset.
-    - We use the /dev/shm (RAMDisk) to store the data. Please change this to /tmp if it fails.
+    - We use the /dev/shm (RAMDisk) to store the data. Please change this to /tmp if it fails. On marin
+      cluster, it seems that our RAMDisk is not the typical 50% of memory but way smaller.
     """
     # 1. Copy data from GCP to local instance
     local_data_dir = copy_dataset_from_gcp_to_local(cfg.input_path)
