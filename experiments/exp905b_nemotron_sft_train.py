@@ -21,6 +21,7 @@ from marin.processing.tokenize import lm_mixture_data_config
 # Dataset configurations
 from exp905a_nemotron_sft_dstc import DATASETS, create_tokenization_step
 # Dataset weights set with the naive baseline of the number of documents per dataset
+# TODO: replace this with a loader that reads the output of compile_and_store_num_rows_step
 mixture_weights = {
     "acecode_89k": 87149,
     "smoltalk": 1043917,
