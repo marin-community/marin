@@ -86,11 +86,11 @@ nemotron_dedupe_step = ExecutorStep(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            # finemath_dedupe_step,
-            # dclm_dedupe_step,
-            # starcoder_dedupe_step,
-            # proofpile_dedupe_step,
-            # nemotron_dedupe_step,
+            finemath_dedupe_step,
+            dclm_dedupe_step,
+            starcoder_dedupe_step,
+            proofpile_dedupe_step,
+            nemotron_dedupe_step,
             dolmino_dedupe_step,
         ],
         description="Run train-test-overlap dedupe across all pretraining and midtraining datasets",
