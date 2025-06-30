@@ -65,6 +65,8 @@ mixture_sft_deeper_starling2 = default_sft(
         "sft",
         "starling",
         "mixture",
+        "exp905b",
+        "nemotron+openthoughts3-1.2m",
     ],
 ).with_output_path("checkpoints/sft/mixture_sft_deeper_starling2")
 
