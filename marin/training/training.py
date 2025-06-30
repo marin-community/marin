@@ -9,7 +9,7 @@ import levanter.infra.cli_helpers
 import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
-from levanter.main import train_lm  # , dpo
+from levanter.main import train_lm
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
@@ -201,48 +201,6 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
             )
     else:
         return ray.get(train_lm_task.remote())
-
-
-# TODO: (ahmed) this is probably broken, refactor
-@ray.remote(num_cpus=0.1)
-def run_levanter_dpo(config: TrainLmOnPodConfig):
-    """
-    Run Levanter DPO on a Ray cluster.
-    """
-
-    default_launch_config = levanter.infra.cli_helpers.load_config()
-
-    if config.output_path is not None:
-        logger.info(f"Using output path: {config.output_path}")
-        config = _update_config_to_use_out_path(config)
-
-    default_env = default_launch_config.env_for_accel(config.pod_config.tpu_type or "")
-    env = _add_default_env_variables(config.pod_config.env, default_env)
-    _check_for_wandb_key(env)
-    env = _add_run_env_variables(env)
-    pod_config = replace(config.pod_config, env=env)
-    config = replace(config, pod_config=pod_config)
-
-    config = _suppress_ray_config(config)
-    config = _enforce_run_id(config)
-    logger.info(f"Using run ID: {config.config.trainer.id}")
-
-    if config.pod_config.tpu_type is not None:
-        ray.get(ray.remote(_doublecheck_paths).options(num_cpus=0.1).remote(config))
-
-        if config.config.hf_save_path is None:
-            raise ValueError("hf_save_path must be set when running on a TPU")
-
-    dpo_config = config.config
-
-    @ray.remote
-    def dpo_task():
-        dpo.train(dpo_config)
-
-    if config.pod_config.tpu_type is not None:
-        return run_on_pod_resumable(dpo_task, config.pod_config.tpu_type, max_retries_failure=10)
-    else:
-        return ray.get(dpo_task.remote())
 
 
 def _doublecheck_paths(config: TrainLmOnPodConfig):
