@@ -1,69 +1,42 @@
-# Train-Test Overlap Detection
+# Dolma Train/Test Overlap
 
-This directory tracks efforts for measuring train-test overlap in Marin datasets.
+This directory contains helper scripts for running Dolma-based
+train–test overlap detection on large datasets.
 
-## Directory Structure
+## Scripts
 
-- `format/`: Contains scripts for converting datasets to JSONL format, which is required by the Dolma deduplication pipeline
-- `train_test/`: Contains scripts to run train-test overlap detection for each dataset of interest
+- `dedupe_total.py` runs the deduplication pipeline on every shard of the
+  configured datasets. Each shard is processed with the parameters in
+  `ShardedDedupeConfig`.
+- `aggregate_total.py` aggregates the per-shard results and produces CSV
+  summaries and a contamination matrix.
 
-## Overview
+Both scripts are standard Python programs executed via `python`. They use
+Marin's executor framework, which handles Ray job submission and output
+paths.
 
-The process involves two main steps:
+## Supported Input Formats
 
-1. Converting datasets to JSONL format using scripts in the `format/` directory, since this is the required format for Dolma's deduplication functionality
+Dataset shards may end with any of the following extensions:
 
-2. Running train-test overlap detection using scripts in `train_test/` directory to identify and measure overlap between training and test sets for each dataset
-
-The overlap detection helps ensure data quality by identifying potential contamination between training and evaluation data.
-
-## Workflow Process
-
-This section outlines the complete workflow for running train-test overlap detection:
-
-### 1. Convert Raw Data to Dolma Format
-
-First, run `eval_datasets_overlap.py` to convert raw Hugging Face datasets to Dolma format suitable for deduplication:
-
-```bash
-python experiments/train_test_overlap/eval_datasets_overlap.py
+```
+.parquet
+.jsonl.gz
+.jsonl.zst
+.jsonl
+.json.gz
+.json.zst
 ```
 
-This script:
-- Downloads evaluation datasets (MMLU, GSM8K, Math, TruthfulQA, BBH) from Hugging Face
-- Converts each dataset to the "decontamination" format with proper text fields for overlap detection
+Parquet shards are automatically converted to `jsonl.gz` before running
+the dedupe step.
 
-### 2. Run Overlap Pipeline to Generate N-grams
+## Gotchas
 
-First, run a sharded overlap pipeline script to generate n-gram overlap data. For example, to use the DCLM pipeline:
-
-```bash
-python experiments/train_test_overlap/train_test/overlap_pipeline_dclm_sharded.py
-```
-
-You can also use other pipeline scripts in the `train_test/` directory for different datasets (e.g., `overlap_pipeline_starcoder.py`).
-
-### 3. Aggregate N-gram Results
-
-Once the n-gram overlap data has been generated, run the aggregation script to combine results and compute summaries:
-
-```bash
-python experiments/train_test_overlap/train_test/aggregate_test_overlap.py
-```
-
-Optionally, filter which n-gram sizes to process by setting the `N_VALUES` environment variable:
-
-```bash
-export N_VALUES="10,15"
-python experiments/train_test_overlap/train_test/aggregate_test_overlap.py
-```
-
-### 4. Analysis of Results
-
-The overlap detection pipeline outputs several types of files:
-- Overlap statistics showing which test instances have overlapping inputs or references
-- Raw n-gram data showing the specific overlapping content
-- Aggregated metrics for different n-gram sizes (5, 10, 15, etc.)
-- Instance mapping files to help trace overlaps back to specific examples
-
-These files can be used to assess the extent of data contamination and make informed decisions about dataset quality.
+- If the provided dataset path contains no files or only empty files, the
+  pipeline will exit early to avoid hanging on empty shards.
+- The Bloom filter false positive rate defaults to `1e-12` in
+  `dedupe_total.py`. For very large datasets you may need to adjust this
+  value to manage memory usage.
+- Ensure the dataset path you provide actually contains files with one of
+  the supported extensions; otherwise no shards will be discovered.
