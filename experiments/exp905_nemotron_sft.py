@@ -1,10 +1,9 @@
 from instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
     transform_dataset_step,
-    InstructionDatasetConfig,
     download_dataset_step,
     get_instruction_dataset,
-    get_directory_friendly_dataset_name
+    InstructionDatasetConfig,
 )
 from levanter.data.text import ChatLmDatasetFormat
 from urllib.parse import urlparse
@@ -13,6 +12,8 @@ import shutil
 import json
 import ray
 from google.cloud import storage
+import hashlib
+from dataclasses import dataclass
 
 from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
@@ -21,16 +22,18 @@ from marin.transform.conversation.transform_conversation import (
     transform_and_write_batch
 )
 
-from experiments.defaults import default_tokenize
+from experiments.defaults import default_tokenize, default_sft, default_train, this_output_path
+from experiments.exp606_sft import tulu3_llama_tokenize_step
 from experiments.marin_models import marin_tokenizer
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
+    output_path_of
 )
 import logging
 logger = logging.getLogger("ray")
 
-
+########### Nemotron SFT ###########
 def list_jsonl_files_in_gcs(bucket_name: str, gcs_directory_path: str) -> list[str]:
     """
     List all .jsonl files in a GCS directory.
@@ -212,9 +215,52 @@ def custom_transform_nemotron(cfg: TransformSFTDatasetConfig):
     ray.get(write_ops)
     return cfg.output_path
 
+########### Custom function to transform dataset in order to accomodate Nemotron ###########
+def custom_transform_dataset_step(dataset_cfg: InstructionDatasetConfig, data_download_step: ExecutorStep) -> ExecutorStep:
+    """We need a custom transform function because Nemotron is too large (~140GB in total).
+    Downloading the entire dataset to disk can fill up the disk and cause disk failure.
+    Even downloading splits will cause failure (code split is 50GB+)
+    
+    This approach:
+    1. Lists all .jsonl files in the GCS directory
+    2. Downloads each file individually
+    3. Processes each file immediately
+    4. Deletes the file after processing to save disk space
+    """
+    # Convert InstructionDatasetConfig to TransformSFTDatasetConfig (same as transform_dataset_step)
+    adapter_name = dataset_cfg.adapter_name if dataset_cfg.adapter_name is not None else dataset_cfg.hf_dataset_id
+    dataset_name = adapter_name.split("/")[-1].lower().replace("-", "_")
+    download_data_path = output_path_of(data_download_step)
 
-# This is a modification of the create_tokenization_step function in exp808_sft_mixture.py
+    config_str = f"{dataset_name}-\
+        {sorted(dataset_cfg.subsets)}\
+        -{sorted(dataset_cfg.splits)}"
+    hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
+
+    # Create TransformSFTDatasetConfig from InstructionDatasetConfig
+    transform_config = TransformSFTDatasetConfig(
+        input_path=download_data_path,
+        output_path=this_output_path(),
+        shard_size=5000,
+        metadata_columns=dataset_cfg.metadata_columns,
+        filetype=dataset_cfg.filetype,
+        source=dataset_cfg.hf_dataset_id,
+        subsets=dataset_cfg.subsets,
+        splits=dataset_cfg.splits,
+        adapter_name=adapter_name,
+    )
+
+    return ExecutorStep(
+        name=f"documents/{dataset_name}",
+        fn=custom_transform_nemotron,
+        config=transform_config,
+        override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
+    )
+
+
+########### Tokenization ###########
 def create_tokenization_step(dataset_name: str) -> ExecutorStep:
+    # This is a modified version of the `create_tokenization_step` function in exp808_sft_mixture.py
     """
     Creates a tokenization ExecutorStep for a given dataset.
 
@@ -243,26 +289,123 @@ def create_tokenization_step(dataset_name: str) -> ExecutorStep:
         format=ChatLmDatasetFormat(),
     )
 
-# Dataset configurations
-DATASETS = {
-    "openthoughts3_1pt2m": "open-thoughts/OpenThoughts3-1.2M",
-    "nemotron_sft": "nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
-}
+
+########### Compiling token counts ###########
+@dataclass
+class CompileTokenCountsConfig:
+    tokenization_paths: dict[str, str]
+    output_path: str = this_output_path()
+
+def get_num_tokens_from_tokenized_datasets(transform_executor_steps: dict[str, ExecutorStep]) -> dict[str, int]:
+    from levanter.store.jagged_array import JaggedArrayStore
+    size_dict = dict()
+    for ds_short_name, step in transform_executor_steps.items():
+        gcs_tokenized_path = output_path_of(step)
+        b = JaggedArrayStore.open(
+            f"{gcs_tokenized_path}/input_ids",
+            dtype=int,
+        )
+        size_dict[ds_short_name] = b.offsets.shape[0]
+    return size_dict
+
+def _compile_and_store_counts(config: CompileTokenCountsConfig) -> str:
+    """Helper function to compile counts and store as JSON"""
+    import json
+    import fsspec
+    
+    # Flatten the tokenization steps (each value is a list with one step)
+    flattened_steps = {name: steps[0] for name, steps in config.tokenization_paths.items()}
+    
+    # Get token counts
+    token_counts = get_num_tokens_from_tokenized_datasets(flattened_steps)
+    
+    # Store as JSON using fsspec for GCS compatibility
+    output_path = config.output_path
+    output_file_path = f"{output_path}/token_counts.json"
+    
+    # Create directory if it doesn't exist
+    fs, path = fsspec.core.url_to_fs(output_path)
+    fs.makedirs(path, exist_ok=True)
+    
+    # Write JSON file using fsspec
+    with fsspec.open(output_file_path, 'w') as f:
+        json.dump(token_counts, f, indent=2)
+        logger.info(f"Wrote token counts to {output_file_path}")
+    
+    return output_file_path
+
+def compile_and_store_count_step(tokenization_steps: dict[str, list[ExecutorStep]]) -> ExecutorStep:
+    """
+    Creates an ExecutorStep that compiles token counts from tokenized datasets.
+    We need this to 1) calculate number of epochs, 2) decide how to sample given a token budget
+    
+    Previously, we manually compute and compile this dict, which makes it impossible to run
+    experiments end-to-end.
+    
+    Args:
+        tokenization_steps: Dictionary mapping dataset short names to their tokenization ExecutorSteps
+        
+    Returns:
+        ExecutorStep that computes and returns token counts as dictionary
+    """
+
+    # Create InputName references to establish dependencies
+    tokenization_paths = {name: output_path_of(steps[0]) for name, steps in tokenization_steps.items()}
+    
+    return ExecutorStep(
+        name="scratch/thinking_sft/compile_token_counts",
+        fn=_compile_and_store_counts,
+        config=CompileTokenCountsConfig(tokenization_paths=tokenization_paths),
+    )
+
+########### Main ###########
 
 if __name__ == "__main__":
-    all_steps = []
     
-    # Download, transform, and tokenize datasets
-    for dataset_name in DATASETS.values():
+    # Define datasets
+    from exp808_sft_mixture import DATASETS as EXP808_DATASETS, mixture_weights as EXP808_mixture_weights
+    DATASETS = {
+        # **EXP808_DATASETS,
+        # "nemotron_sft": "nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
+        "openthoughts3": "open-thoughts/OpenThoughts3-1.2M",
+    }
+    
+    ALL_STEPS = []
+    TOKENIZATION_STEPS = dict()
+    for short_ds_name, full_ds_name in DATASETS.items():
         # Download the dataset
-        config = INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_name]
-        downloaded_dataset = download_dataset_step(config)
-        all_steps.append(downloaded_dataset)
+        config = INSTRUCTION_DATASET_NAME_TO_CONFIG[full_ds_name]
+        data_download_step = download_dataset_step(config)
         # Transform the dataset
-        transformed_dataset = transform_dataset_step(config, downloaded_dataset)
-        all_steps.append(transformed_dataset)
+        if full_ds_name == "nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT":
+            data_transform_step = custom_transform_dataset_step(config, data_download_step)
+        else:
+            data_transform_step = transform_dataset_step(config, data_download_step)
+            
         # Tokenize the dataset
-        tokenized_dataset = create_tokenization_step(dataset_name)
-        all_steps.append(tokenized_dataset)
+        data_tokenize_step = create_tokenization_step(full_ds_name)
+        
+        ALL_STEPS += [data_download_step] + [data_transform_step] + [data_tokenize_step]
+        TOKENIZATION_STEPS[short_ds_name] = [data_tokenize_step]
+    
+    # Add the compile token counts step
+    compile_step = compile_and_store_count_step(TOKENIZATION_STEPS)
+    ALL_STEPS.append(compile_step)
+       
+    # Define SFT 
+    # tootsie_8b_hypnotic_spoonbill = dataclasses.replace(
+    #     default_train(
+    #         name="tootsie-8b-hypnotic-spoonbill",
+    #         tokenized=spoonbill_mixture,
+    #         model_config=llama_8b,
+    #         train_config=tootsie_8b_hypnotic_spoonbill_train,
+    #         use_default_validation=True,
+    #         tags=["llama", "8b", "ema", "exp916", "tootsie"],
+    #         # HF is having trouble today so skipping this.
+    #         eval_harness_tasks=[],
+    #     ),
+    #     override_output_path="checkpoints/tootsie-8b-hypnotic-spoonbill-2",
+    # )
+    
 
-    executor_main(steps=all_steps)
+    executor_main(steps=ALL_STEPS)
