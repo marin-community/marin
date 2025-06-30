@@ -16,7 +16,7 @@ Marin's system detects overlap by finding shared n-grams (sequences of words) be
 
 The system uses a two-step process:
 
-1. **Deduplication Step** (`dedupe_total.py`):
+1. **Deduplication Step** (`train_test_total.py`):
    - Builds Bloom filters from training data n-grams
    - Scans evaluation datasets for matching n-grams
    - Outputs contaminated examples with overlap statistics
@@ -41,7 +41,7 @@ The easiest way to get started is to run overlap detection on the pre-configured
 
 ```bash
 # Step 1: Run deduplication on all configured datasets
-python experiments/train_test_overlap/dedupe_total.py --prefix gs://your-bucket
+python experiments/train_test_overlap/train_test_total.py --prefix gs://your-bucket
 
 # Step 2: Aggregate results across datasets
 python experiments/train_test_overlap/aggregate_total.py --prefix gs://your-bucket
@@ -92,7 +92,7 @@ SUPPORTED_FORMATS = [
 
 ### Step 2: Add Dataset to Configuration
 
-Edit `experiments/train_test_overlap/dedupe_total.py` and add your dataset:
+Edit `experiments/train_test_overlap/train_test_total.py` and add your dataset:
 
 ```python
 # Add your dataset to DATASET_CONFIGS
@@ -110,7 +110,7 @@ DATASET_CONFIGS = [
 ### Step 3: Run Detection
 
 ```bash
-python experiments/train_test_overlap/dedupe_total.py --prefix gs://your-bucket
+python experiments/train_test_overlap/train_test_total.py --prefix gs://your-bucket
 ```
 
 The system will automatically:
@@ -293,14 +293,14 @@ DATASET_CONFIGS = [
 Here's a complete workflow for checking a new training dataset against all evaluation benchmarks:
 
 ```python
-# 1. Add your dataset to dedupe_total.py
+# 1. Add your dataset to train_test_total.py
 DATASET_CONFIGS = [
     # ... existing datasets ...
     ("my_new_dataset", "gs://my-bucket/my-training-data", 64),
 ]
 
 # 2. Run deduplication
-# python experiments/train_test_overlap/dedupe_total.py --prefix gs://output-bucket
+# python experiments/train_test_overlap/train_test_total.py --prefix gs://output-bucket
 
 # 3. Run aggregation
 # python experiments/train_test_overlap/aggregate_total.py --prefix gs://output-bucket

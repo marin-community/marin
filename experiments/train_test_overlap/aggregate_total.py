@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import os
 from collections import defaultdict
 from collections.abc import Iterator
@@ -49,6 +50,8 @@ from experiments.train_test_overlap.eval_datasets_overlap import (
 from marin.core.runtime import simple_backpressure
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.utils import fsspec_glob
+
+logger = logging.getLogger(__name__)
 
 # List of evaluator conversion steps
 EVAL_DATASET_STEPS: list[ExecutorStep] = [
@@ -129,9 +132,9 @@ def _compute_dataset_sizes(dataset_steps: list[ExecutorStep]) -> dict[str, int]:
         size_map[ds_name.split("-")[0]] = count_dir(step)
 
     _DATASET_SIZE_CACHE = size_map
-    print("[INFO] Pre-computed dataset sizes:")
+    logger.info("Pre-computed dataset sizes:")
     for k, v in sorted(size_map.items()):
-        print(f"    {k}: {v}")
+        logger.info("    %s: %s", k, v)
     return size_map
 
 
@@ -186,9 +189,9 @@ def discover_training_datasets(base_path: str, ngram_size: int = 15) -> list[str
         training_datasets.add(dataset_root)
 
     result = sorted(training_datasets)
-    print(f"[INFO] Discovered {len(result)} training datasets:")
+    logger.info("Discovered %d training datasets:", len(result))
     for ds in result:
-        print(f"    {os.path.basename(ds)}")
+        logger.info("    %s", os.path.basename(ds))
     return result
 
 
@@ -225,10 +228,10 @@ def aggregate_single_dataset(
     pattern = os.path.join(training_root, "**", str(cfg.ngram_size), "**", "*.jsonl*")
     shard_paths: list[str] = sorted(fsspec_glob(pattern))
     if not shard_paths:
-        print(f"[WARN] No attribute shards found for {training_name}")
+        logger.warning("No attribute shards found for %s", training_name)
         return {}, {}
 
-    print(f"[INFO] Processing {training_name} with {len(shard_paths)} shards")
+    logger.info("Processing %s with %d shards", training_name, len(shard_paths))
 
     # 2. Submit Ray tasks
     task_args: list[tuple[str, str, str, str]] = []
@@ -286,10 +289,14 @@ def aggregate_single_dataset(
     contaminated = len(overall_overlap)
     frac = contaminated / total if total else 0.0
 
-    print(
-        f"[RESULT] {training_name} • {cfg.ngram_size}-gram "
-        f"• shards={len(shard_paths)} ⇒ {contaminated}/{total} "
-        f"(fraction {frac:.4f})"
+    logger.info(
+        "%s • %d-gram • shards=%d ⇒ %d/%d (fraction %.4f)",
+        training_name,
+        cfg.ngram_size,
+        len(shard_paths),
+        contaminated,
+        total,
+        frac,
     )
 
     return {
@@ -322,7 +329,7 @@ def write_dataset_results(results: dict, output_dir: str, cfg: AggregateConfig, 
                 f"{results['fraction']:.6f}",
             ]
         )
-    print(f"[INFO] Wrote {csv_path}")
+    logger.info("Wrote %s", csv_path)
 
     # 2. Write per-test breakdown CSV
     per_test_csv = os.path.join(output_dir, "per_test_breakdown.csv")
@@ -334,7 +341,7 @@ def write_dataset_results(results: dict, output_dir: str, cfg: AggregateConfig, 
             cont = len(results["per_test"][tds]["overlap"])
             frac_t = cont / tot if tot else 0.0
             writer.writerow([tds, tot, cont, f"{frac_t:.6f}"])
-    print(f"[INFO] Wrote {per_test_csv}")
+    logger.info("Wrote %s", per_test_csv)
 
     # 3. Write detailed contamination JSONL files
     for tds, id_map in results["contam_map"].items():
@@ -355,7 +362,7 @@ def write_dataset_results(results: dict, output_dir: str, cfg: AggregateConfig, 
                         )
                         + "\n"
                     )
-        print(f"[INFO] Wrote {file_path}")
+        logger.info("Wrote %s", file_path)
 
 
 ###############################################################################
@@ -413,7 +420,13 @@ def aggregate_total(cfg: AggregateConfig):
     union_contaminated = len(union_overlap)
     union_frac = union_contaminated / union_total if union_total else 0.0
 
-    print(f"All datasets • {cfg.ngram_size}-gram ⇒ {union_contaminated}/{union_total} (fraction {union_frac:.4f})")
+    logger.info(
+        "All datasets • %d-gram ⇒ %d/%d (fraction %.4f)",
+        cfg.ngram_size,
+        union_contaminated,
+        union_total,
+        union_frac,
+    )
 
     union_dir = os.path.join(cfg.output_path, "union", str(cfg.ngram_size))
     os.makedirs(union_dir, exist_ok=True)
@@ -424,7 +437,7 @@ def aggregate_total(cfg: AggregateConfig):
         writer = csv.writer(f)
         writer.writerow(["training_dataset", "ngram", "shards", "total_examples", "contaminated", "fraction"])
         writer.writerow(["union", cfg.ngram_size, "all", union_total, union_contaminated, f"{union_frac:.6f}"])
-    print(f"[INFO] Wrote {union_csv}")
+    logger.info("Wrote %s", union_csv)
 
     # Union per-test breakdown CSV
     union_per_test_csv = os.path.join(union_dir, "per_test_breakdown.csv")
@@ -436,7 +449,7 @@ def aggregate_total(cfg: AggregateConfig):
             cont = len(union_per_test[tds]["overlap"])
             frac_t = cont / tot if tot else 0.0
             writer.writerow([tds, tot, cont, f"{frac_t:.6f}"])
-    print(f"[INFO] Wrote {union_per_test_csv}")
+    logger.info("Wrote %s", union_per_test_csv)
 
     # Generate contamination matrix CSV
     matrix_path = os.path.join(cfg.output_path, "contamination_matrix.csv")
@@ -463,9 +476,11 @@ def aggregate_total(cfg: AggregateConfig):
 
             writer.writerow(row)
 
-    print(f"[INFO] Wrote contamination matrix: {matrix_path}")
-    print(
-        f"[INFO] Matrix dimensions: {len(dataset_sizes)} evaluation datasets x {len(training_names)} training datasets"
+    logger.info("Wrote contamination matrix: %s", matrix_path)
+    logger.info(
+        "Matrix dimensions: %d evaluation datasets x %d training datasets",
+        len(dataset_sizes),
+        len(training_names),
     )
 
 

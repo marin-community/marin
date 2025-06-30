@@ -5,7 +5,7 @@ train–test overlap detection on large datasets.
 
 ## Scripts
 
-- `dedupe_total.py` runs the deduplication pipeline on every shard of the
+- `train_test_total.py` runs the deduplication pipeline on every shard of the
   configured datasets. Each shard is processed with the parameters in
   `ShardedDedupeConfig`.
 - `aggregate_total.py` aggregates the per-shard results and produces CSV
@@ -36,7 +36,7 @@ the dedupe step.
 - If the provided dataset path contains no files or only empty files, the
   pipeline will exit early to avoid hanging on empty shards.
 - The Bloom filter false positive rate defaults to `1e-12` in
-  `dedupe_total.py`. For very large datasets you may need to adjust this
+  `train_test_total.py`. For very large datasets you may need to adjust this
   value to manage memory usage.
 - Ensure the dataset path you provide actually contains files with one of
   the supported extensions; otherwise no shards will be discovered.
