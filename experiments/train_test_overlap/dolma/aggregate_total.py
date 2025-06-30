@@ -20,8 +20,6 @@ from dataclasses import dataclass
 import fsspec
 import ray
 
-from experiments.train_test_overlap.dolma.aggregate_parallel_test import summarise_shard
-
 # ---------------------------------------------------------------------------
 # Import evaluation dataset conversion steps so executor can resolve paths and
 # we can count their sizes on-the-fly.
@@ -73,6 +71,35 @@ EVAL_DATASET_STEPS: list[ExecutorStep] = [
     piqa_convert_dolma,
     winograd_wsc_convert_dolma,
 ]
+
+
+@ray.remote
+def summarise_shard(shard_path: str, test_dataset: str, training_dataset: str, attr_key: str) -> dict:
+    """Return basic overlap statistics for a single attribute shard."""
+
+    ids_seen: set[str] = set()
+    overlap_ids: set[str] = set()
+    with fsspec.open(shard_path, "rt", compression="infer") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            doc_id = rec.get("id")
+            if doc_id is None:
+                continue
+            ids_seen.add(doc_id)
+            attrs = rec.get("attributes", {})
+            if attrs.get(attr_key):
+                overlap_ids.add(doc_id)
+
+    return {
+        "shard_path": shard_path,
+        "test_dataset": test_dataset,
+        "training_dataset": training_dataset,
+        "ids_seen": list(ids_seen),
+        "overlap_ids": list(overlap_ids),
+    }
 
 
 # Helper: cache for dataset sizes so we compute them only once per run
@@ -260,7 +287,9 @@ def aggregate_single_dataset(
     frac = contaminated / total if total else 0.0
 
     print(
-        f"[RESULT] {training_name} • {cfg.ngram_size}-gram • shards={len(shard_paths)} ⇒ {contaminated}/{total} (fraction {frac:.4f})"
+        f"[RESULT] {training_name} • {cfg.ngram_size}-gram "
+        f"• shards={len(shard_paths)} ⇒ {contaminated}/{total} "
+        f"(fraction {frac:.4f})"
     )
 
     return {
