@@ -1,24 +1,132 @@
+import functools
 import gzip
 import json
 import logging
 import os
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 
 import draccus
 import fsspec
 import pandas as pd
-import pyarrow.parquet as pq
 import ray
 from tqdm import tqdm
 
-from marin.core.runtime import cached_or_construct_output
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_mkdirs, fsspec_rm, rebase_file_path, fsspec_size
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_mkdirs, fsspec_rm, fsspec_size, rebase_file_path
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Supported input formats for JSON/JSONL documents that can be staged for
+# Dolma deduplication.  All of these will be normalised to GZip-compressed
+# ``*.jsonl.gz`` files inside the temporary ``documents/`` directory.
+# ---------------------------------------------------------------------------
+SUPPORTED_JSONL_EXTENSIONS: list[str] = [
+    ".jsonl",  # uncompressed JSON Lines
+    ".jsonl.gz",  # gzip-compressed JSON Lines
+    ".jsonl.zst",  # zstd-compressed JSON Lines
+    ".jsonl.gs",  # Google-storage compressed JSON Lines
+    ".json.gz",  # gzip-compressed single JSON object per line
+    ".json.zst",  # zstd-compressed single JSON object per line
+]
+
+
+def _normalise_to_gz(path: str) -> str:
+    """Return *path* with its extension rewritten to ``.jsonl.gz``.
+
+    The input path must end with one of ``SUPPORTED_JSONL_EXTENSIONS``.
+    If the extension is already ``.jsonl.gz`` it is returned unchanged.
+    """
+    for ext in SUPPORTED_JSONL_EXTENSIONS:
+        if path.endswith(ext):
+            if ext == ".jsonl.gz":
+                return path  # already normalised
+            return path[: -len(ext)] + ".jsonl.gz"
+    # caller must ensure extension is supported
+    return path
+
+
+def _check_input_size(input_path: str) -> dict:
+    """Check if input has processable content before downloading"""
+    try:
+        if fsspec_isdir(input_path):
+            # For directories, check if any files exist and get total size
+            # Build the glob patterns dynamically from the canonical list of
+            # supported extensions so we never get out of sync with
+            # ``copy_files_in``.
+            patterns = [f"**/*{ext}" for ext in SUPPORTED_JSONL_EXTENSIONS] + ["**/*.parquet"]
+            total_size = 0
+            file_count = 0
+            for pattern in patterns:
+                files = fsspec_glob(f"{input_path.rstrip('/')}/{pattern}")
+                for f in files:
+                    total_size += fsspec_size(f)
+                    file_count += 1
+        else:
+            # Single file
+            total_size = fsspec_size(input_path)
+            file_count = 1 if total_size > 0 else 0
+        print(f"total_size: {total_size}, file_count: {file_count}\n\n", flush=True)
+        return {
+            "has_content": total_size > 100,  # 100 bytes is a reasonable minimum for a shard
+            "total_size_bytes": total_size,
+            "file_count": file_count,
+        }
+    except Exception as e:
+        return {"has_content": False, "total_size_bytes": 0, "file_count": 0, "error": str(e)}
+
+
+def workflow_cached(success_suffix="SUCCESS", verbose=True):
+    """
+    Decorator to make a workflow function idempotent by checking for a SUCCESS file
+    at config.output_path before execution. Functions must return a dict with success info.
+
+    Args:
+        success_suffix: The suffix of the success file.
+        verbose: If true, print logs for each function invocation.
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(config, *args, **kwargs):
+            success_file = f"{config.output_path.rstrip('/')}.{success_suffix}"
+
+            # If the success file exists, skip execution
+            if fsspec_exists(success_file):
+                if verbose:
+                    logger.info(f"Output already exists at {config.output_path}. Skipping {func.__name__}")
+                return {"success": True, "reason": "already_exists", "skipped": True}
+
+            datetime_start = datetime.now(timezone.utc)
+            if verbose:
+                logger.info(f"Running {func.__name__} with output to {config.output_path}")
+
+            # Execute the main function
+            response = func(config, *args, **kwargs)
+
+            datetime_end = datetime.now(timezone.utc)
+
+            # Write the success file with merged metadata
+            with fsspec.open(success_file, "w") as f:
+                metadata = {
+                    "output_path": config.output_path,
+                    "datetime_start": str(datetime_start),
+                    "datetime_end": str(datetime_end),
+                    "function_name": func.__name__,
+                    **response,  # Merge all the function's return data
+                }
+                f.write(json.dumps(metadata, indent=2))
+
+            if verbose:
+                logger.info(f"Completed {func.__name__}")
+            return response
+
+        return wrapper
+
+    return decorator
 
 
 class DedupMode(str, Enum):
@@ -59,6 +167,11 @@ class DedupeConfig:
     Configuration class for running dolma deduplication on docs.
 
     Deduplication will identify spans of text in documents that are duplicate.
+
+    Empty file handling: If input_path or decontaminate_source (when required) contains
+    no processable files or has 0 total bytes, the workflow will return early with
+    success=True and detailed metadata about why no processing occurred. This prevents
+    expensive downloads and processing of empty datasets.
 
     Attributes:
         input_path (str): Path of files to apply deduplication to.
@@ -105,7 +218,7 @@ def _parquet_to_jsonl_gz(input_path: str, docs_dir: str) -> None:
         parquet_files = [input_path]
     else:
         parquet_files = fsspec_glob(f"{input_path.rstrip('/')}/*.parquet")
-    
+
     for pq in parquet_files:
         df = pd.read_parquet(pq)
         # Skip empty Parquet files gracefully
@@ -114,20 +227,22 @@ def _parquet_to_jsonl_gz(input_path: str, docs_dir: str) -> None:
             continue
         out_name = os.path.splitext(os.path.basename(pq))[0] + ".jsonl.gz"
         out_path = os.path.join(docs_dir, out_name)
-        
+
         print(f"Converting {pq} with columns: {list(df.columns)}")
-        
+
         # Determine text field strategy
         has_text = "text" in df.columns
         has_content = "content" in df.columns
-        
+
         if not has_text and not has_content:
-            logger.error(f"CRITICAL: Parquet file {pq} has neither 'text' nor 'content' fields! Available columns: {list(df.columns)}")
+            logger.error(
+                f" Parquet file {pq} has neither 'text' nor 'content' fields! Available columns: {list(df.columns)}"
+            )
             logger.error(f"Cannot convert {pq} - skipping this file")
             continue
         elif not has_text and has_content:
             logger.warning(f"Parquet file {pq} missing 'text' field, using 'content' as fallback")
-        
+
         with gzip.open(out_path, "wt") as f:
             for rec in df.to_dict(orient="records"):
                 # Robust text field handling
@@ -135,19 +250,23 @@ def _parquet_to_jsonl_gz(input_path: str, docs_dir: str) -> None:
                     if "content" in rec:
                         rec["text"] = rec.pop("content")
                     else:
-                        logger.error(f"Record in {pq} missing both 'text' and 'content' fields, has keys: {list(rec.keys())}")
+                        logger.error(
+                            f"Record in {pq} missing both 'text' and 'content' fields, has keys: {list(rec.keys())}"
+                        )
                         continue
-                
+
                 # Validate text field is actually a string
                 if not isinstance(rec["text"], str):
-                    logger.warning(f"Text field in {pq} is not a string (type: {type(rec['text'])}), converting to string")
+                    logger.warning(
+                        f"Text field in {pq} is not a string (type: {type(rec['text'])}), converting to string"
+                    )
                     rec["text"] = str(rec["text"])
-                    
+
                 if "id" not in rec:
                     # Generate a synthetic ID if missing
                     logger.warning(f"Adding synthetic id to {pq}")
                     rec["id"] = f"synthetic_{hash(str(rec))}"
-                
+
                 f.write(json.dumps(rec) + "\n")
 
 
@@ -165,16 +284,9 @@ def copy_files_in(input_path, local_base_dir):
 
     # If input_path is a single file, copy only that file
     if fsspec_exists(input_path) and not fsspec_isdir(input_path):
-        # Extract the filename and normalize extension
+        # Extract the filename and normalise extension to .jsonl.gz
         relative_path = os.path.basename(input_path)
-        if relative_path.endswith(".jsonl.zst"):
-            relative_path = relative_path[: -len(".jsonl.zst")] + ".jsonl.gz"
-        elif relative_path.endswith(".jsonl.gs"):
-            relative_path = relative_path[: -len(".jsonl.gs")] + ".jsonl.gz"
-        elif relative_path.endswith(".json.zst"):
-            relative_path = relative_path[: -len(".json.zst")] + ".jsonl.gz"
-        elif relative_path.endswith(".json.gz"):
-            relative_path = relative_path[: -len(".json.gz")] + ".jsonl.gz"
+        relative_path = _normalise_to_gz(relative_path)
 
         # Construct the output path under 'documents/'
         output_file = os.path.join(local_base_dir, "documents", relative_path)
@@ -182,76 +294,54 @@ def copy_files_in(input_path, local_base_dir):
         # Ensure the output directory exists
         fsspec_mkdirs(os.path.dirname(output_file))
 
-        # Copy the file using fsspec with gzip compression
+        # Copy the file using fsspec with gzip compression (always write gzip)
         with fsspec.open(input_path, "rb", compression="infer") as f_remote:
             with fsspec.open(output_file, "wb", compression="gzip") as f_local:
                 f_local.write(f_remote.read())
 
-        print(f"Copied 1 file from {input_path} to {output_file}")
+        print(f"Copied 1 file from {input_path} to {output_file}", flush=True)
         return
 
-    # Get all .jsonl.gz, .jsonl.zst, .jsonl.gs, .json.gz, and .json.zst files in the input directory
-    jsonl_gz_pattern = f"{input_path}/**/*.jsonl.gz"
-    jsonl_zst_pattern = f"{input_path}/**/*.jsonl.zst"
-    jsonl_gs_pattern = f"{input_path}/**/*.jsonl.gs"
-    json_gz_pattern = f"{input_path}/**/*.json.gz"
-    json_zst_pattern = f"{input_path}/**/*.json.zst"
-    # First attempt recursive glob patterns
-    input_files = (
-        fsspec_glob(jsonl_gz_pattern)
-        + fsspec_glob(jsonl_zst_pattern)
-        + fsspec_glob(jsonl_gs_pattern)
-        + fsspec_glob(json_gz_pattern)
-        + fsspec_glob(json_zst_pattern)
-    )
+    # gather every supported extension recursively.
+    recursive_patterns = [f"{input_path}/**/*{ext}" for ext in SUPPORTED_JSONL_EXTENSIONS]
+    input_files: list[str] = []
+    for pattern in recursive_patterns:
+        input_files.extend(fsspec_glob(pattern))
+
     fallback = False
-    # Fallback to shallow glob if none found
     if not input_files:
+        # Fallback to shallow glob (no **)
         fallback = True
-        shallow_patterns = [
-            f"{input_path}/*.jsonl.gz",
-            f"{input_path}/*.jsonl.zst",
-            f"{input_path}/*.jsonl.gs",
-            f"{input_path}/*.json.gz",
-            f"{input_path}/*.json.zst",
-        ]
-        input_files = []
+        shallow_patterns = [f"{input_path}/*{ext}" for ext in SUPPORTED_JSONL_EXTENSIONS]
         for pattern in shallow_patterns:
             input_files.extend(fsspec_glob(pattern))
-    # Log the result
+
+    # Log discovery results
     if fallback:
         print(f"Found {len(input_files)} input files in {input_path} (shallow), first five: {input_files[:5]}")
     else:
         print(f"Found {len(input_files)} input files in {input_path}, first five: {input_files[:5]}")
 
+    # ------------------------------------------------------------------
+    # Copy each discovered file, normalising extension to .jsonl.gz
+    # ------------------------------------------------------------------
     for input_file in tqdm(input_files, desc="Copying files"):
-        # Extract the relative path from the input file
+        # Determine destination relative path and make sure extension is .jsonl.gz
         relative_path = os.path.relpath(input_file, input_path)
-        # Normalize extension: convert .jsonl.zst or .jsonl.gs to .jsonl.gz for local documents
-        if relative_path.endswith(".jsonl.zst"):
-            relative_path = relative_path[: -len(".jsonl.zst")] + ".jsonl.gz"
-        elif relative_path.endswith(".jsonl.gs"):  # Handle .jsonl.gs
-            relative_path = relative_path[: -len(".jsonl.gs")] + ".jsonl.gz"
-        elif relative_path.endswith(".json.zst"):
-            relative_path = relative_path[: -len(".json.zst")] + ".jsonl.gz"
-        elif relative_path.endswith(".json.gz"):
-            relative_path = relative_path[: -len(".json.gz")] + ".jsonl.gz"
+        relative_path = _normalise_to_gz(relative_path)
 
-        # Construct the output path, ensuring it's under the 'documents' directory
         output_file = os.path.join(local_base_dir, "documents", relative_path)
+        fsspec_mkdirs(os.path.dirname(output_file))
 
-        # Ensure the output directory exists
-        output_path = os.path.dirname(output_file)
-        fsspec_mkdirs(output_path)
-
-        # Copy the file using fsspec
+        # Read with automatic decompression and write as gzip
         with fsspec.open(input_file, "rb", compression="infer") as f_remote:
-            # always compress local documents as gzip for downstream dedupe
             with fsspec.open(output_file, "wb", compression="gzip") as f_local:
                 f_local.write(f_remote.read())
 
-    # Dolma deduplicator requires 'documents/' as a subdir
-    print(f"Copied {len(input_files)} files to {os.path.join(local_base_dir, 'documents')}")
+    print(
+        f"Copied {len(input_files)} files to {os.path.join(local_base_dir, 'documents')}",
+        flush=True,
+    )
 
 
 def do_dedup(
@@ -267,13 +357,19 @@ def do_dedup(
     read_only=False,
     bloom_filter_file="deduper_bloom_filter.bin",
     train_test_overlap=False,
+    pre_estimated_counts: dict[int, int] | None = None,
 ):
     bloom_filter_file = os.path.join(local_base_dir, bloom_filter_file)
 
-    # If n-gram mode and no explicit bloom_filter_size, override estimated_doc_count
-    if ngram is not None and not bloom_filter_size:
-        total_ngrams = estimate_total_ngrams_fast(local_base_dir, ngram)
-        estimated_doc_count = total_ngrams
+    # If n-gram mode and no explicit bloom_filter_size, use pre-computed estimates
+    if ngram is not None and not bloom_filter_size and pre_estimated_counts is not None:
+        ngram_length = ngram.ngram_length
+        estimated_doc_count = pre_estimated_counts[ngram_length]
+        print(f"Using pre-computed estimate for {ngram_length}-grams: {estimated_doc_count}")
+        if estimated_doc_count < 100:
+            print(
+                f"Warning: Pre-computed estimate for {ngram_length}-grams is too low: {estimated_doc_count}", flush=True
+            )
 
     command = [
         "RUST_BACKTRACE=full",
@@ -292,24 +388,17 @@ def do_dedup(
         bloom_filter_file,
         "--processes",
         str(processes),
+        "--bloom_filter.estimated_doc_count",
+        str(max(1, estimated_doc_count)),
+        "--bloom_filter.desired_false_positive_rate",
+        str(false_positive_rate),
     ]
 
     if bloom_filter_size:
-        command.extend([
-            "--bloom_filter.size_in_bytes",
-            str(bloom_filter_size),
-            "--bloom_filter.estimated_doc_count",
-            str(max(1, estimated_doc_count)),
-            "--bloom_filter.desired_false_positive_rate",
-            str(false_positive_rate),
-        ])
-    else:
         command.extend(
             [
-                "--bloom_filter.estimated_doc_count",
-                str(estimated_doc_count),
-                "--bloom_filter.desired_false_positive_rate",
-                str(false_positive_rate),
+                "--bloom_filter.size_in_bytes",
+                str(bloom_filter_size),
             ]
         )
 
@@ -318,7 +407,6 @@ def do_dedup(
 
     # add ngram settings to dolma dedupe command if in ngram matching mode
     if ngram is not None:
-        # chatgpt says the separator below is extrememly unlikely to ever occur, so we count all n-grams in document
         command.extend(
             [
                 "--dedupe.paragraphs.by_ngram.ngram_length",
@@ -330,12 +418,8 @@ def do_dedup(
             ]
         )
 
+    # ONLY set special paragraph separator for train-test overlap
     if train_test_overlap:
-        # For train-test overlap, we need to shard the documents for parallel processing
-        # when constructing bloom filter (not when applying it)
-        if not read_only:
-            _shard_documents_for_train_test_overlap(local_base_dir, processes, debug=False)
-        
         # chatgpt says the separator below is extrememly unlikely to ever occur, so we count all n-grams in document
         # instead of per paragraph, giving us overlap if any n-grams match
         command.extend(
@@ -372,7 +456,6 @@ def do_dedup(
     return process.returncode
 
 
-@cached_or_construct_output(success_suffix="SUCCESS")
 def copy_files_out(local_base_dir, output_path, attribute_name):
     # Ensure output_path doesn't end with a slash
     output_path = output_path.rstrip("/")
@@ -435,16 +518,24 @@ def delete_jsonl_files(dir_path):
 
 
 # Fast estimate of total n-grams by sampling a subset of documents
-def estimate_total_ngrams_fast(local_base_dir, ngram, sample_lines: int = 1000):
+def estimate_total_ngrams_fast(local_base_dir, ngram_lengths: list[int], sample_lines: int = 1000) -> dict[int, int]:
     """
     Estimate *unique* n-gram count quickly by reading at most `sample_lines`
     JSONL lines across all `<documents_dir>/**/*.jsonl.gz`.
+
+    Args:
+        local_base_dir: Base directory containing documents/ subdirectory
+        ngram_lengths: List of n-gram lengths to estimate for
+        sample_lines: Maximum number of lines to sample for estimation
+
+    Returns:
+        Dict mapping ngram_length -> estimated_doc_count
     """
     pattern = os.path.join(local_base_dir, "documents", "**", "*.jsonl.gz")
 
     total_lines = 0  # total records in corpus
     sample_lines_seen = 0  # lines actually included in the sample
-    ngram_total = 0  # Σ n-grams over sampled lines
+    ngram_totals = {n: 0 for n in ngram_lengths}  # Σ n-grams over sampled lines for each n
     malformed_lines = 0
 
     for file in fsspec_glob(pattern):
@@ -469,11 +560,14 @@ def estimate_total_ngrams_fast(local_base_dir, ngram, sample_lines: int = 1000):
                 tokens = text.split()
                 L = len(tokens)
 
-                step = max(1, ngram.stride)
-                if L < ngram.ngram_length:
-                    ngram_total += 1
-                else:
-                    ngram_total += (L - ngram.ngram_length) // step + 1
+                # Calculate n-grams for each requested length
+                for ngram_length in ngram_lengths:
+                    if L < ngram_length:
+                        ngram_totals[ngram_length] += 1
+                    else:
+                        # Using stride=0 for estimation (most conservative)
+                        ngram_totals[ngram_length] += (L - ngram_length) + 1
+
                 sample_lines_seen += 1
 
     if malformed_lines > 0:
@@ -481,10 +575,15 @@ def estimate_total_ngrams_fast(local_base_dir, ngram, sample_lines: int = 1000):
 
     if sample_lines_seen == 0:
         # nothing decoded ⇒ fall back to "one n-gram per line" heuristic
-        return total_lines
+        return {n: max(1, total_lines) for n in ngram_lengths}
 
-    avg_ngrams_per_line = ngram_total / sample_lines_seen
-    return int(avg_ngrams_per_line * total_lines)
+    # Calculate final estimates
+    estimates = {}
+    for ngram_length in ngram_lengths:
+        avg_ngrams_per_line = ngram_totals[ngram_length] / sample_lines_seen
+        estimates[ngram_length] = max(1, int(avg_ngrams_per_line * total_lines))
+
+    return estimates
 
 
 def _shard_jsonl_source(jsonl_path: str, writers: list) -> None:
@@ -499,37 +598,37 @@ def _shard_documents_for_train_test_overlap(local_base_dir: str, processes: int,
     """
     Shard documents in the documents/ directory for train-test overlap processing.
     Works in-place to avoid symlink issues.
-    
+
     Args:
         local_base_dir: Base directory containing documents/ subdirectory
         processes: Number of shards to create
         debug: If True, print debug information with flush
-        
+
     Returns:
         True if sharding was performed, False if no files found
     """
     if debug:
         print(f"Sharding documents for train-test overlap processing with {processes} shards", flush=True)
-    
+
     documents_dir = os.path.join(local_base_dir, "documents")
-    
+
     # Find all jsonl.gz files in documents directory
     docs_pattern = os.path.join(documents_dir, "**", "*.jsonl.gz")
     jsonl_files = fsspec_glob(docs_pattern)
-    
+
     if not jsonl_files:
         # Fallback to shallow search
         docs_pattern = os.path.join(documents_dir, "*.jsonl.gz")
         jsonl_files = fsspec_glob(docs_pattern)
-    
+
     if not jsonl_files:
         if debug:
             print("No JSONL files found for sharding", flush=True)
         return False
-    
+
     if debug:
         print(f"Found {len(jsonl_files)} JSONL files to shard", flush=True)
-    
+
     # Create shard writers directly in the documents directory
     writers = []
     shard_paths = []
@@ -537,7 +636,7 @@ def _shard_documents_for_train_test_overlap(local_base_dir: str, processes: int,
         shard_path = os.path.join(documents_dir, f"shard_{i}.jsonl.gz")
         shard_paths.append(shard_path)
         writers.append(fsspec.open(shard_path, "wt", compression="gzip").open())
-    
+
     try:
         # Shard each jsonl.gz file
         for jsonl_file in jsonl_files:
@@ -547,25 +646,41 @@ def _shard_documents_for_train_test_overlap(local_base_dir: str, processes: int,
     finally:
         for w in writers:
             w.close()
-    
+
     # Delete the original files (but keep the documents directory intact)
     for original_file in jsonl_files:
         if debug:
             print(f"Removing original file: {original_file}", flush=True)
         fsspec_rm(original_file)
-    
+
     if debug:
         print(f"Successfully sharded {len(jsonl_files)} files into {processes} shards in-place", flush=True)
         print(f"Shard files created: {shard_paths}", flush=True)
-    
+
     return True
 
 
 # Helpers for the two workflows
+@workflow_cached(success_suffix="SUCCESS")
 def _run_decontamination(config: DedupeConfig):
+    # Check input sizes first before any processing
+    input_check = _check_input_size(config.input_path)
+    if not input_check["has_content"]:
+        return {"success": True, "reason": "empty_input", "input_path": config.input_path, **input_check}
+
+    if not config.decontaminate_source:
+        raise ValueError("decontaminate_source is required in DECONTAMINATE mode")
+
+    source_check = _check_input_size(config.decontaminate_source)
+    if not source_check["has_content"]:
+        return {
+            "success": True,
+            "reason": "empty_decontaminate_source",
+            "decontaminate_source": config.decontaminate_source,
+            **source_check,
+        }
+
     with tempfile.TemporaryDirectory(dir="/tmp", prefix="marin_dedupe_") as tmpdir:
-        if not config.decontaminate_source:
-            raise ValueError("decontaminate_source is required in DECONTAMINATE mode")
         # 1) build the filter
         copy_files_in(config.decontaminate_source, tmpdir)
         do_dedup(
@@ -580,6 +695,8 @@ def _run_decontamination(config: DedupeConfig):
             config.processes,
             read_only=False,
             bloom_filter_file=config.bloom_filter_path,
+            train_test_overlap=False,
+            pre_estimated_counts=None,
         )
         # 2) clear out JSONLs
         delete_jsonl_files(tmpdir)
@@ -597,12 +714,28 @@ def _run_decontamination(config: DedupeConfig):
             config.processes,
             read_only=True,
             bloom_filter_file=config.bloom_filter_path,
+            train_test_overlap=False,
+            pre_estimated_counts=None,
         )
         # 4) write results
         copy_files_out(tmpdir, config.output_path, config.attribute_name)
 
+        return {
+            "success": True,
+            "reason": "completed_normally",
+            "mode": "decontamination",
+            **input_check,
+            "decontaminate_source_info": source_check,
+        }
 
+
+@workflow_cached(success_suffix="SUCCESS")
 def _run_deduplication(config: DedupeConfig):
+    # Check input size first before any processing
+    input_check = _check_input_size(config.input_path)
+    if not input_check["has_content"]:
+        return {"success": True, "reason": "empty_input", "input_path": config.input_path, **input_check}
+
     with tempfile.TemporaryDirectory(dir="/tmp", prefix="marin_dedupe_") as tmpdir:
         # run standard deduplication
         copy_files_in(config.input_path, tmpdir)
@@ -618,10 +751,15 @@ def _run_deduplication(config: DedupeConfig):
             config.processes,
             read_only=False,
             bloom_filter_file=config.bloom_filter_path,
+            train_test_overlap=False,
+            pre_estimated_counts=None,
         )
         copy_files_out(tmpdir, config.output_path, config.attribute_name)
 
+        return {"success": True, "reason": "completed_normally", "mode": "deduplication", **input_check}
 
+
+@workflow_cached(success_suffix="SUCCESS")
 def _run_train_test_overlap(config: DedupeConfig):
     """
     Run train-test overlap detection, supporting multiple n-gram sizes.
@@ -651,13 +789,34 @@ def _run_train_test_overlap(config: DedupeConfig):
         each `.jsonl.gz` containing the duplicate-span attributes for that doc.
       * Only test overlaps are uploaded; seed-shard attribute files are removed before upload.
 
+    Empty file handling:
+      * If input_path or decontaminate_source contains no processable files (0 bytes total),
+        the function will return early with success=True and reason="empty_input" or
+        "empty_decontaminate_source", avoiding any expensive processing or downloads.
+
     The sharding logic is now handled inside do_dedup when train_test_overlap=True.
     """
+    # Check input sizes first before any processing
+    input_check = _check_input_size(config.input_path)
+    if not input_check["has_content"]:
+        return {"success": True, "reason": "empty_input", "input_path": config.input_path, **input_check}
+
+    if not config.decontaminate_source:
+        raise ValueError("decontaminate_source is required in TRAIN_TEST_OVERLAP mode")
+
+    source_check = _check_input_size(config.decontaminate_source)
+    if not source_check["has_content"]:
+        return {
+            "success": True,
+            "reason": "empty_decontaminate_source",
+            "decontaminate_source": config.decontaminate_source,
+            **source_check,
+        }
+
+    if not config.ngram:
+        raise ValueError("ngram config is required in TRAIN_TEST_OVERLAP mode")
+
     with tempfile.TemporaryDirectory(dir="/dev/shm", prefix="marin_dedupe_") as tmpdir:
-        if not config.decontaminate_source:
-            raise ValueError("decontaminate_source is required in TRAIN_TEST_OVERLAP mode")
-        if not config.ngram:
-            raise ValueError("ngram config is required in TRAIN_TEST_OVERLAP mode")
 
         # Handle single or multiple ngram_lengths
         ngram_lengths = (
@@ -666,33 +825,47 @@ def _run_train_test_overlap(config: DedupeConfig):
 
         # 1) Convert decontaminate source to jsonl.gz format using copy_files_in
         copy_files_in(config.decontaminate_source, tmpdir)
-        seed_dir = os.path.join(tmpdir, "documents_seed") 
+        seed_dir = os.path.join(tmpdir, "documents_seed")
         os.rename(os.path.join(tmpdir, "documents"), seed_dir)
 
-        # 2) Stage test data under a separate directory
+        # 2) Pre-estimate ngram counts for ALL sizes before sharding
+        print(f"Pre-estimating ngram counts for sizes: {ngram_lengths}")
+        if not config.bloom_filter_size:
+            # Temporarily symlink for estimation
+            os.symlink(seed_dir, os.path.join(tmpdir, "documents"))
+            pre_estimated_counts = estimate_total_ngrams_fast(tmpdir, ngram_lengths)
+            os.remove(os.path.join(tmpdir, "documents"))
+            print(f"Pre-computed estimates: {pre_estimated_counts}")
+        else:
+            pre_estimated_counts = None
+
+        # 3) Shard the training data once for parallel processing
+        print(f"Sharding training data into {config.processes} shards...")
+        os.symlink(seed_dir, os.path.join(tmpdir, "documents"))
+        _shard_documents_for_train_test_overlap(tmpdir, config.processes)
+        os.remove(os.path.join(tmpdir, "documents"))
+        print("Training data sharded and originals removed")
+
+        # 4) Stage test data under a separate directory
         copy_files_in(config.input_path, tmpdir)
         test_dir = os.path.join(tmpdir, "documents_test")
         os.rename(os.path.join(tmpdir, "documents"), test_dir)
 
-        # 3) Iterate over n-gram sizes
+        # 5) Iterate over n-gram sizes
         for ngram_len in ngram_lengths:
             current_ngram_config = NGramConfig(
                 ngram_length=ngram_len,
                 stride=config.ngram.stride,
                 overlap_threshold=config.ngram.overlap_threshold,
             )
-            current_attr_name = (
-                f"{config.attribute_name}_{ngram_len}" if len(ngram_lengths) > 1 else config.attribute_name
-            )
+            current_attr_name = f"{config.attribute_name}_{ngram_len}"
 
             # Determine bloom-filter filename for this size
-            current_bloom_filter = (
-                f"{config.bloom_filter_path}_{ngram_len}" if len(ngram_lengths) > 1 else config.bloom_filter_path
-            )
+            current_bloom_filter = f"{config.bloom_filter_path}_{ngram_len}"
 
             # a) Build bloom filter on seed data
             os.symlink(seed_dir, os.path.join(tmpdir, "documents"))
-            build_rc = do_dedup(
+            _ = do_dedup(
                 tmpdir,
                 current_attr_name,
                 config.min_length,
@@ -704,13 +877,14 @@ def _run_train_test_overlap(config: DedupeConfig):
                 config.processes,
                 read_only=False,
                 bloom_filter_file=current_bloom_filter,
+                pre_estimated_counts=pre_estimated_counts,
                 train_test_overlap=True,
             )
             os.remove(os.path.join(tmpdir, "documents"))
 
             # b) Apply bloom filter to test data
             os.symlink(test_dir, os.path.join(tmpdir, "documents"))
-            test_rc = do_dedup(
+            _ = do_dedup(
                 tmpdir,
                 current_attr_name,
                 config.min_length,
@@ -722,6 +896,7 @@ def _run_train_test_overlap(config: DedupeConfig):
                 config.processes,
                 read_only=True,
                 bloom_filter_file=current_bloom_filter,
+                pre_estimated_counts=pre_estimated_counts,
                 train_test_overlap=True,
             )
             os.remove(os.path.join(tmpdir, "documents"))
@@ -745,8 +920,17 @@ def _run_train_test_overlap(config: DedupeConfig):
                 os.remove(bf_path)
         fsspec_rm(tmpdir)
 
+        return {
+            "success": True,
+            "reason": "completed_normally",
+            "mode": "train_test_overlap",
+            "ngram_lengths_processed": ngram_lengths,
+            **input_check,
+            "decontaminate_source_info": source_check,
+        }
 
-@ray.remote(num_cpus=8, memory=1024 * 1024 * 1024 * 16)
+
+@ray.remote(num_cpus=16, memory=1024 * 1024 * 1024 * 16)
 def dedupe(config: DedupeConfig):
     """Top-level Ray task: dispatch between decontamination and deduplication workflows."""
     if config.mode == DedupMode.DECONTAMINATE:

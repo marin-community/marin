@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""debug_parallel_test.py
+"""debug_parallel_dolmino.py
 
 Run the parallel-overlap aggregator on *only the first N shards* of a
 training-dataset output directory.  Intended for interactively debugging how
 the union-contamination curve grows as we add more shards.
 
 Usage inside Marin/Executor: the script defines several `ExecutorStep`s – one
-per value of `shard_limit` – that depend on the upstream `finemath_dedupe_step`
+per value of `shard_limit` – that depend on the upstream `dolmino_dedupe_step`
 (so they run *after* the attribute files have been produced).
 
 The logic is identical to `aggregate_parallel_test.py` but we:
@@ -28,7 +28,7 @@ import fsspec
 import ray
 
 from experiments.train_test_overlap.dolma.aggregate_parallel_test import summarise_shard
-from experiments.train_test_overlap.dolma.dedupe_total import finemath_dedupe_step
+from experiments.train_test_overlap.dolma.dedupe_total import dolmino_dedupe_step
 
 # ---------------------------------------------------------------------------
 # Import evaluation dataset conversion steps so executor can resolve paths and
@@ -173,9 +173,6 @@ def aggregate_debug(cfg: DebugAggregateConfig):
         shard_paths = shard_paths[: cfg.shard_limit]
     if not shard_paths:
         raise FileNotFoundError(f"No attribute shards found under {cfg.training_root} for {cfg.ngram_size}-gram")
-
-    print(f"[INFO] Using {len(shard_paths)} shard files")
-    print(f"[INFO] Shard paths: {shard_paths}\n", flush=True)
 
     # ------------------------------------------------------------------
     # 2. Submit Ray tasks
@@ -331,27 +328,27 @@ def aggregate_debug(cfg: DebugAggregateConfig):
 
 
 ###############################################################################
-# Build Executor steps (Finemath example)
+# Build Executor steps (Dolmino example)
 ###############################################################################
 
 # Define which shard counts you'd like to inspect
-SHARD_COUNTS = [1, 10, 20, 50, 128]  # adjust as needed
+SHARD_COUNTS = [1, 100, 1000, 1000000]  # adjust as needed
 
 steps = []
 for n_shards in SHARD_COUNTS:
     cfg = DebugAggregateConfig(
-        training_root=finemath_dedupe_step,
+        training_root=dolmino_dedupe_step,
         output_path=this_output_path(),
         ngram_size=15,
         shard_limit=n_shards,
         dataset_steps=EVAL_DATASET_STEPS,
-        training_dataset_dir=finemath_dedupe_step.config.dataset_dir,
+        training_dataset_dir=dolmino_dedupe_step.config.dataset_dir,
     )
     step = ExecutorStep(
-        name=f"debug/train_test_overlap/finemath_15gram_{n_shards}shards",
+        name=f"debug/train_test_overlap/dolmino_15gram_{n_shards}shards",
         fn=aggregate_debug,
         config=cfg,
-        description=f"Union contamination for Finemath, 15-gram, first {n_shards} shards",
+        description=f"Union contamination for Dolmino, 15-gram, first {n_shards} shards",
     )
     steps.append(step)
 
@@ -362,5 +359,5 @@ for n_shards in SHARD_COUNTS:
 if __name__ == "__main__":
     executor_main(
         steps=steps,
-        description="Debug contamination curve for Finemath 15-gram (true denominators)",
+        description="Debug contamination curve for Dolmino 15-gram (true denominators)",
     )

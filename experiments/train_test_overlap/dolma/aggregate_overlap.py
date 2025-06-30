@@ -60,10 +60,6 @@ def discover_datasets_from_outputs(input_path: str, ngram_size: int) -> dict[str
 
     print(f"[DEBUG] Discovering datasets for {ngram_size}-gram in {input_path}", flush=True)
 
-    # Get attribute name to look for
-    base_attr_name = get_attribute_name()
-    ngram_sizes = get_ngram_sizes()
-
     # Look for debug/ subdirectories
     debug_pattern = f"{input_path.rstrip('/')}/debug/*"
     shard_dirs = fsspec_glob(debug_pattern)
@@ -318,7 +314,7 @@ def aggregate_overlap(config: AggregateOverlapConfig):
             writer.writerow([combined_total_test, len(combined_overlapped_ids), combined_overlap_fraction])
 
         print(
-            f"[INFO] Combined {ngram_size}-gram results: {len(combined_overlapped_ids)}/{combined_total_test} = {combined_overlap_fraction:.4f}",
+            f"Combined {ngram_size}-gram stat: {len(combined_overlapped_ids)}/{combined_total_test} = {combined_overlap_fraction:.4f}",
             flush=True,
         )
 

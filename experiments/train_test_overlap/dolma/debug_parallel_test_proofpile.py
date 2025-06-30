@@ -21,21 +21,12 @@ import csv
 import json
 import os
 from collections import defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator, List
 
 import fsspec
 import ray
 
-from marin.core.runtime import simple_backpressure
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, output_path_of
-from marin.utils import fsspec_glob
-
-# Re-use helper functions + remote task from the existing aggregator
-from experiments.train_test_overlap.utils import (
-    find_dataset_shards,
-    get_relative_path_no_extension,
-)
 from experiments.train_test_overlap.dolma.aggregate_parallel_test import summarise_shard
 from experiments.train_test_overlap.dolma.dedupe_total import proofpile_dedupe_step
 
@@ -43,30 +34,37 @@ from experiments.train_test_overlap.dolma.dedupe_total import proofpile_dedupe_s
 # Import evaluation dataset conversion steps so executor can resolve paths and
 # we can count their sizes on-the-fly.
 # ---------------------------------------------------------------------------
-
 from experiments.train_test_overlap.eval_datasets_overlap import (
-    gsm8k_convert_dolma,
-    math_convert_dolma,
-    truthful_qa_convert_dolma,
-    bbh_convert_dolma,
-    mmlu_convert_dolma,
-    humaneval_convert_dolma,
-    instruction_following_convert_dolma,
-    gpqa_convert_dolma,
-    musr_convert_dolma,
-    mmlu_pro_convert_dolma,
-    hellaswag_convert_dolma,
     ai2_arc_convert_dolma,
+    bbh_convert_dolma,
     boolq_convert_dolma,
     commonsense_qa_convert_dolma,
+    gpqa_convert_dolma,
+    gsm8k_convert_dolma,
+    hellaswag_convert_dolma,
+    humaneval_convert_dolma,
+    instruction_following_convert_dolma,
     lambada_openai_convert_dolma,
+    math_convert_dolma,
+    mmlu_convert_dolma,
+    mmlu_pro_convert_dolma,
+    musr_convert_dolma,
     openbookqa_convert_dolma,
     piqa_convert_dolma,
+    truthful_qa_convert_dolma,
     winograd_wsc_convert_dolma,
 )
 
+# Re-use helper functions + remote task from the existing aggregator
+from experiments.train_test_overlap.utils import (
+    find_dataset_shards,
+)
+from marin.core.runtime import simple_backpressure
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.utils import fsspec_glob
+
 # List of evaluator conversion steps
-EVAL_DATASET_STEPS: List[ExecutorStep] = [
+EVAL_DATASET_STEPS: list[ExecutorStep] = [
     gsm8k_convert_dolma,
     math_convert_dolma,
     truthful_qa_convert_dolma,
@@ -93,7 +91,7 @@ _DATASET_SIZE_CACHE: dict[str, int] | None = None
 _TEST_LOOKUP_CACHE: dict[str, list[str]] | None = None
 
 
-def _compute_dataset_sizes(dataset_steps: List[ExecutorStep]) -> dict[str, int]:
+def _compute_dataset_sizes(dataset_steps: list[ExecutorStep]) -> dict[str, int]:
     """Return mapping dataset_name -> total example count."""
     global _DATASET_SIZE_CACHE
     if _DATASET_SIZE_CACHE is not None:
@@ -121,7 +119,7 @@ def _compute_dataset_sizes(dataset_steps: List[ExecutorStep]) -> dict[str, int]:
     return size_map
 
 
-def _build_test_lookup(dataset_steps: List[ExecutorStep]) -> dict[str, list[str]]:
+def _build_test_lookup(dataset_steps: list[ExecutorStep]) -> dict[str, list[str]]:
     global _TEST_LOOKUP_CACHE
     if _TEST_LOOKUP_CACHE is not None:
         return _TEST_LOOKUP_CACHE
@@ -151,7 +149,7 @@ class DebugAggregateConfig:
     shard_limit: int | None = None  # if None ⇒ use *all* shards
     attribute_name: str = "ngram_overlap"
     max_in_flight: int = 64  # ray back-pressure
-    dataset_steps: List[ExecutorStep] = None  # steps for eval datasets
+    dataset_steps: list[ExecutorStep] = None  # steps for eval datasets
     training_dataset_dir: str | None = None  # path where raw training shards live
 
 
@@ -170,7 +168,7 @@ def aggregate_debug(cfg: DebugAggregateConfig):
 
     # 1. Discover shards and slice
     pattern = os.path.join(cfg.training_root, "**", str(cfg.ngram_size), "**", "*.jsonl*")
-    shard_paths: List[str] = sorted(fsspec_glob(pattern))
+    shard_paths: list[str] = sorted(fsspec_glob(pattern))
     if cfg.shard_limit is not None:
         shard_paths = shard_paths[: cfg.shard_limit]
     if not shard_paths:
@@ -195,7 +193,6 @@ def aggregate_debug(cfg: DebugAggregateConfig):
 
     refs: Iterator = simple_backpressure(summarise_shard, iter(task_args), cfg.max_in_flight, fetch_local=True)
 
-    
     # 3. union contamination rate (plus per-test breakdown)
     overall_unique: set[str] = set()
     overall_overlap: set[str] = set()
@@ -212,6 +209,7 @@ def aggregate_debug(cfg: DebugAggregateConfig):
     # Build lookup from dedupe-shard directory name -> original training shard
     # ------------------------------------------------------------------
     training_shard_lookup: dict[str, str] = {}
+
     def _strip_multi_ext(path: str) -> str:
         base = path
         while True:
@@ -233,9 +231,8 @@ def aggregate_debug(cfg: DebugAggregateConfig):
             if idx < 10:
                 print(f"[DEBUG] lookup key[{idx}] = {key} -> {original_path}", flush=True)
     else:
-        print(f"[WARN] No training dataset directory provided", flush=True)
-        print(f"[WARN] No training dataset directory provided\n\n", flush=True)
-
+        print("[WARN] No training dataset directory provided", flush=True)
+        print("[WARN] No training dataset directory provided\n\n", flush=True)
 
     for ref in refs:
         res = ray.get(ref)
@@ -264,7 +261,7 @@ def aggregate_debug(cfg: DebugAggregateConfig):
                 print(f"[DEBUG] Derived rel_key: {rel_key}", flush=True)
                 original_shard_path = training_shard_lookup.get(rel_key)
                 if original_shard_path is None:
-                    print(f"[WARN] rel_key not found in lookup", flush=True)
+                    print("[WARN] rel_key not found in lookup", flush=True)
                 else:
                     print(f"[DEBUG] Found original shard: {original_shard_path}", flush=True)
             except ValueError:
@@ -345,7 +342,7 @@ def aggregate_debug(cfg: DebugAggregateConfig):
 ###############################################################################
 
 # Define which shard counts you'd like to inspect
-SHARD_COUNTS = [1, 50, 100, 1000]  # adjust as needed
+SHARD_COUNTS = [1, 50, 100, 1000, 9999999]  # adjust as needed
 
 steps = []
 for n_shards in SHARD_COUNTS:
