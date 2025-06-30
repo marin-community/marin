@@ -71,14 +71,13 @@ llama_1_4b_dclm = LlamaConfig(
     num_heads=16,
     num_kv_heads=16,
     num_layers=24,
-    use_flash_attention=True,
 )
 
 NUM_TRAIN_TOKENS = int(28.8e9)  # 28.8 billion tokens
 NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (256 * 2048)  # 256 is the batch size, 2048 is the sequence length
 
 training_config = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v4-128", node_count=1),
+    resources=TpuPodConfig(tpu_type="v4-128", slice_count=1),
     train_batch_size=256,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=3e-3,

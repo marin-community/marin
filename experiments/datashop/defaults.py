@@ -6,6 +6,8 @@ from experiments.datashop.default_configs import (
     default_consolidate_config_kwargs,
     default_consolidate_filter_config_kwargs,
     default_dataset_output_processor_config_kwargs,
+    default_engine_kwargs,
+    default_generation_kwargs,
     default_inference_config_kwargs,
     default_medu_config_kwargs,
     default_quality_filter_train_config_kwargs,
@@ -19,11 +21,13 @@ from marin.classifiers.hf.launch_ray_training import LaunchConfig, launch_traini
 from marin.datashop.dataset_processor import DatasetOutputProcessorConfig
 from marin.datashop.pipeline import (
     MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME,
+    CorpusContent,
     MEDUPipelineConfig,
     run_data_filter_prompt_generation_pipeline,
     run_medu_dataset_sampling_pipeline,
 )
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
+from marin.download.filesystem.transfer import TransferConfig, transfer_files
+from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
 from marin.generation.inference import TextGenerationInferenceConfig
 from marin.generation.inference import run_inference as run_generation_inference
 from marin.processing.classification.config.inference_config import InferenceConfig
@@ -31,24 +35,25 @@ from marin.processing.classification.consolidate import ConsolidateConfig, Filte
 from marin.processing.classification.inference import run_inference
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
 from marin.resources import TpuPodConfig
-from operations.download.filesystem.transfer import TransferConfig, transfer_files
 
 
 def default_label(
     documents_to_be_labeled: str | ExecutorStep,
-    targeted_documents: list[list[str] | str],
+    targeted_documents: list[CorpusContent],
     experiment_name: str,
     resource_config: ResourceConfig,
     annotator_model_name_or_path: str = "meta-llama/Llama-3.3-70B-Instruct",
     data_filter_prompt: str | None = None,
     medu_pipeline_config_kwargs: dict | None = None,
-    text_generation_inference_config: dict | None = None,
+    text_generation_inference_config_kwargs: dict | None = None,
 ):
     """Label a set of documents with an LLM given some targeted documents.
 
     Inputs:
         documents_to_be_labeled: Input path to documents to be labeled.
-        targeted_documents: A list of strings or filepaths of documents that is being targeted for labeling.
+        targeted_documents: A list of CorpusContent objects that define the corpus content to use for
+            generating the data filter prompt. It can either point to a filepath or a list of strings that
+            represent the text corpus.
         experiment_name: The name of the experiment.
         data_filter_prompt: The user's prompt for the annotator model.
         medu_pipeline_config_kwargs: Keyword arguments for the MEDU pipeline which is used to generate
@@ -100,7 +105,7 @@ def default_label(
         data_filter_prompt_path = None
 
     # NOTE(chris): Assuming we are filtering from a jsonl.zst file such as DCLM.
-    if text_generation_inference_config is None:
+    if text_generation_inference_config_kwargs is None:
         text_generation_inference_config_kwargs = default_text_generation_config_kwargs
     else:
         text_generation_inference_config_kwargs = {
@@ -203,14 +208,12 @@ def default_train_quality_model(
     return datashop_classifier
 
 
-def default_quality_filter_and_consolidate(
+def default_quality_filter(
     encoder_model: ExecutorStep | str,
     input_data_path: str | ExecutorStep,
     input_data_name: str,
     experiment_name: str,
     inference_config_kwargs: dict | None = None,
-    filter_config_kwargs: dict | None = None,
-    consolidate_config_kwargs: dict | None = None,
 ):
     """Runs quality filtering and consolidation on an input dataset given the quality filter model.
 
@@ -269,6 +272,34 @@ def default_quality_filter_and_consolidate(
         ],
     )
 
+    return attributes
+
+
+def default_consolidate(
+    attributes: ExecutorStep,
+    input_data_path: str | ExecutorStep,
+    input_data_name: str,
+    experiment_name: str,
+    filter_config_kwargs: dict | None = None,
+    consolidate_config_kwargs: dict | None = None,
+):
+    """Runs quality filtering and consolidation on an input dataset given the quality filter model.
+
+    Inputs:
+        encoder_model: The model to use for quality filtering.
+        input_data_path: The path to the input data, usually a large pretraining corpus to filter.
+        input_data_name: The name of the input data used for storage purposes.
+        experiment_name: The name of the experiment.
+        inference_config_kwargs: Keyword arguments for the inference config which uses the encoder
+            model to score documents based on their quality.
+        filter_config_kwargs: Keyword arguments for the filter config which is used to filter the
+            documents based on their quality.
+        consolidate_config_kwargs: Keyword arguments for the consolidate config which is used to
+            consolidate the filtered documents.
+
+    Outputs:
+        An ExecutorStep that represents the filtered documents.
+    """
     if filter_config_kwargs is None:
         filter_config_kwargs = default_consolidate_filter_config_kwargs
     else:
@@ -307,6 +338,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
                 components={"dclm": dclm_components_llama3["dclm_baseline"]}, weights={"dclm": 1.0}
             ),
             resources=TpuPodConfig(tpu_type=tpu_type),
+            use_default_validation=True,
         )
     else:
         return AnnealConfig(
@@ -315,6 +347,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
                 weights={"dclm": 0.70, "candidate": 0.30},
             ),
             resources=TpuPodConfig(tpu_type=tpu_type),
+            use_default_validation=True,
         )
 
 
@@ -354,4 +387,61 @@ def default_candidate_anneal(documents: ExecutorStep | None, tpu_type: str, expe
     return default_anneal(
         name=model_name,
         anneal_config=anneal_config,
+    )
+
+
+def default_synthetic_data_generation(
+    input_path: ExecutorStep | InputName,
+    model_name_or_path: str,
+    data_generation_template: str,
+    input_filetype: str,
+    prompt_column: str,
+    resource_config: ResourceConfig,
+    generated_text_column_name: str = "generated_text",
+    engine_kwargs: dict = default_engine_kwargs,
+    generation_kwargs: dict = default_generation_kwargs,
+    output_path: str | None = None,
+) -> ExecutorStep:
+    """
+    Generates synthetic data using a specified model and prompt template.
+
+    Args:
+        input_path (ExecutorStep | InputName): The input data to generate from. This is usually
+            either a dataset from Huggingface or a filtered dataset from the datashop.
+        model_name_or_path (str): The name or path of the model to use for generation
+            (e.g. "meta-llama/Llama-3.1-8B-Instruct")
+        data_generation_template (str): The template string used to generate prompts for the model.
+            It must include a placeholder for the input data (e.g. "{example}").
+        input_filetype (str): The file type of the input data (e.g., "jsonl.zst").
+            This is used to read the input data correctly.
+        prompt_column (str): The column in the input data to use as the prompt for generation.
+        resource_config (ResourceConfig): The resource configuration specifying hardware requirements.
+        engine_kwargs (dict, optional): Keyword arguments for the model engine.
+            Defaults to default_engine_kwargs.
+        generation_kwargs (dict, optional): Keyword arguments for text generation.
+            Defaults to default_generation_kwargs.
+        output_path (str | None, optional): The output path for the generated data.
+            If None, a default path is used.
+
+    Returns:
+        (ExecutorStep): An ExecutorStep of the synthetic dataset.
+    """
+    return ExecutorStep(
+        name=output_path,
+        fn=run_generation_inference,
+        config=TextGenerationInferenceConfig(
+            input_path=input_path,
+            output_path=this_output_path(),
+            model_name=model_name_or_path,
+            engine_kwargs=engine_kwargs,
+            generation_kwargs=generation_kwargs,
+            template=data_generation_template,
+            tensor_parallel_size=resource_config.num_tpu,
+            prompt_column=prompt_column,
+            filetype=input_filetype,
+            output_filetype_override="jsonl.gz",
+            one_to_one_input_output_mapping=False,
+            generated_text_column_name=generated_text_column_name,
+            resource_config=resource_config,
+        ),
     )
