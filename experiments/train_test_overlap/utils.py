@@ -9,14 +9,15 @@ from marin.core.runtime import simple_backpressure
 from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 from marin.utils import fsspec_glob
 
-SUPPORTED_SHARD_EXTENSIONS = [
+# File types that the dedupe pipeline knows how to handle.
+SUPPORTED_SHARD_EXTENSIONS: tuple[str, ...] = (
     ".parquet",
     ".jsonl.gz",
     ".jsonl.zst",
     ".jsonl",
     ".json.gz",
     ".json.zst",
-]
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -104,13 +105,8 @@ def find_dataset_shards(root_dir: str) -> list[str]:
         A sorted list of unique file paths.
     """
     root = root_dir.rstrip("/")
-    matches: list[str] = []
-
-    # Use recursive globbing to find files at any depth
-    for ext in SUPPORTED_SHARD_EXTENSIONS:
-        # Use ** for recursive globbing (finds both shallow and nested files)
-        pattern = os.path.join(root, f"**/*{ext}")
-        matches.extend(fsspec_glob(pattern))
+    # gather all matching files for each supported extension
+    matches = [fp for ext in SUPPORTED_SHARD_EXTENSIONS for fp in fsspec_glob(os.path.join(root, f"**/*{ext}"))]
 
     if not matches:
         exts = ", ".join(SUPPORTED_SHARD_EXTENSIONS)
@@ -146,9 +142,11 @@ def get_relative_path_no_extension(shard_path: str, dataset_dir: str) -> str:
         # Fallback to just the basename if we can't determine relative path
         relative_path = os.path.basename(shard_path)
 
-    # Remove supported file extensions
+    # Remove the file extension if it's one we know about
     for ext in SUPPORTED_SHARD_EXTENSIONS:
-        relative_path = relative_path.removesuffix(ext)
+        if relative_path.endswith(ext):
+            relative_path = relative_path[: -len(ext)]
+            break
 
     return relative_path
 
@@ -169,5 +167,6 @@ def clean_shard_basename(shard_path: str) -> str:
     """
     basename = os.path.basename(shard_path)
     for ext in SUPPORTED_SHARD_EXTENSIONS:
-        basename = basename.removesuffix(ext)
+        if basename.endswith(ext):
+            return basename[: -len(ext)]
     return basename
