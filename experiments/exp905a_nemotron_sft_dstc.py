@@ -128,11 +128,7 @@ DATASETS = {
     "openthoughts3": "open-thoughts/OpenThoughts3-1.2M",
 }
 
-########### Main ###########
-if __name__ == "__main__":
-    
-
-    
+def download_transform_tokenize_compile_steps():
     ALL_STEPS = []
     TOKENIZATION_STEPS = dict()
     for short_ds_name, full_ds_name in DATASETS.items():
@@ -149,5 +145,9 @@ if __name__ == "__main__":
     
     # Compile token counts
     ALL_STEPS.append(compile_and_store_num_rows_step(TOKENIZATION_STEPS))
-    
+    return ALL_STEPS
+
+########### Main ###########
+if __name__ == "__main__":
+    ALL_STEPS = download_transform_tokenize_compile_steps()
     executor_main(steps=ALL_STEPS)
