@@ -365,8 +365,8 @@ if __name__ == "__main__":
     # Define datasets
     from exp808_sft_mixture import DATASETS as EXP808_DATASETS, mixture_weights as EXP808_mixture_weights
     DATASETS = {
-        # **EXP808_DATASETS,
-        # "nemotron_sft": "nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
+        **EXP808_DATASETS,
+        "nemotron_sft": "nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
         "openthoughts3": "open-thoughts/OpenThoughts3-1.2M",
     }
     
@@ -389,23 +389,8 @@ if __name__ == "__main__":
         TOKENIZATION_STEPS[short_ds_name] = [data_tokenize_step]
     
     # Add the compile token counts step
-    compile_step = compile_and_store_count_step(TOKENIZATION_STEPS)
-    ALL_STEPS.append(compile_step)
-       
-    # Define SFT 
-    # tootsie_8b_hypnotic_spoonbill = dataclasses.replace(
-    #     default_train(
-    #         name="tootsie-8b-hypnotic-spoonbill",
-    #         tokenized=spoonbill_mixture,
-    #         model_config=llama_8b,
-    #         train_config=tootsie_8b_hypnotic_spoonbill_train,
-    #         use_default_validation=True,
-    #         tags=["llama", "8b", "ema", "exp916", "tootsie"],
-    #         # HF is having trouble today so skipping this.
-    #         eval_harness_tasks=[],
-    #     ),
-    #     override_output_path="checkpoints/tootsie-8b-hypnotic-spoonbill-2",
-    # )
+    ALL_STEPS.append(compile_and_store_count_step(TOKENIZATION_STEPS))
+    
     
 
     executor_main(steps=ALL_STEPS)
