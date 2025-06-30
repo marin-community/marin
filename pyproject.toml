@@ -89,13 +89,12 @@ download_transform = [
     "markdownify==0.12.1", # TODO :: Check usage | pin?
     "py7zr",
     "readabilipy",
-    "readability-lxml",
+    "readability-lxml==0.8.1",
     "lxml[html_clean]",
     "warcio",
     "resiliparse",
     "trafilatura",
     "boto3==1.35.23",
-    "htmlmin",
 ]
 
 quality_dedup_consolidate = [
