@@ -2,7 +2,7 @@ import ray
 from ray.util import state  # noqa
 
 
-@ray.remote
+@ray.remote(num_cpus=0, resources={"head_node": 0.0001})
 class StatusActor:
     """
     This class is used to keep track of the status and reference of each output path across various experiments.

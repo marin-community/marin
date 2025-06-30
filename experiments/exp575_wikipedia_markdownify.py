@@ -12,10 +12,10 @@ passed to Markdownify to producing Markdown text that has less noise.
 Reference Issue: https://github.com/marin-community/marin/issues/575
 """
 
+from marin.download.wikipedia.download import DownloadConfig, download
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
-from operations.download.wikipedia.download import DownloadConfig, download
-from operations.transform.wikipedia.transform_wikipedia import WikiExtractionConfig, process_wiki_dump
+from marin.transform.wikipedia.transform_wikipedia import WikiExtractionConfig, process_wiki_dump
 
 # Selectors to remove from the DOM tree, these mostly contain footers, headers, navigation elements,
 # reference sections, link clusters, filler sections, etc.
@@ -106,31 +106,35 @@ wikipedia_resiliparse_with_pf = ExecutorStep(
 )
 
 # Markdownification using our custom fork of Resiliparse
-wikipedia_resiliparse_custom_fork = ExecutorStep(
-    name="documents/wikipedia-resiliparse-custom-fork",
-    fn=process_wiki_dump,
-    config=WikiExtractionConfig(
-        input_path=wikipedia_dump_raw_20241201,
-        revision=versioned("20241201"),
-        output_path=this_output_path(),
-        extract_method="resiliparse",
-        extract_config=ResiliparseConfig(
-            preserve_formatting=True,
-            main_content=True,
-            links=False,
-            skip_elements=WIKI_BLACKLISTED_SELECTORS,
-            use_custom_variant=True,
-            markdownify_config=HtmlToMarkdownConfig(
-                include_images=False,
-                include_links=False,
+wikipedia_resiliparse_custom_fork = (
+    ExecutorStep(
+        name="documents/wikipedia-resiliparse-custom-fork",
+        fn=process_wiki_dump,
+        config=WikiExtractionConfig(
+            input_path=wikipedia_dump_raw_20241201,
+            revision=versioned("20241201"),
+            output_path=this_output_path(),
+            extract_method="resiliparse",
+            extract_config=ResiliparseConfig(
+                preserve_formatting=True,
+                main_content=True,
+                links=False,
+                skip_elements=WIKI_BLACKLISTED_SELECTORS,
+                use_custom_variant=True,
+                markdownify_config=HtmlToMarkdownConfig(
+                    include_images=False,
+                    include_links=False,
+                ),
             ),
+            remove_reference_section=versioned(True),
+            digit_threshold=versioned(50),
+            word_threshold=versioned(70),
+            special_char_threshold=versioned(50),
         ),
-        remove_reference_section=versioned(True),
-        digit_threshold=versioned(50),
-        word_threshold=versioned(70),
-        special_char_threshold=versioned(50),
-    ),
-    pip_dependency_groups=["download_transform"],
+        pip_dependency_groups=["download_transform"],
+    )
+    .with_output_path("documents/wikipedia-resiliparse-custom-fork-2569de")
+    .cd("20241201")
 )
 
 

@@ -7,8 +7,8 @@ from typing import ClassVar
 import fsspec
 import jmp
 import levanter.eval_harness as eval_harness
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.distributed import RayConfig
-from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
 
 from experiments.evals.task_configs import convert_to_levanter_task_config
@@ -62,7 +62,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 ray=RayConfig(auto_start_cluster=False),
             )
 
-            model_config = LlamaConfig()
+            model_config = HFCheckpointConverter.from_hf(model_name_or_path).LevConfigClass()
 
             # convert to the config that Levanter's eval_harness expects
             tasks = convert_to_levanter_task_config(evals)
@@ -80,6 +80,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     max_examples=max_eval_instances,
                     log_samples=False,
                     max_eval_length=4096,
+                    apply_chat_template=model.apply_chat_template,
                 ),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,

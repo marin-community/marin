@@ -9,33 +9,13 @@ this_path = os.path.dirname(os.path.abspath(__file__))
 cluster_template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 vllm_template_path = os.path.join(this_path, "marin-vllm-template.yaml")
 
-# LAtest tahs ABh:  latest 4a47ffc0 20250305
-
-DOCKER_TAGS = {
-    "us-central2": "8b035b60",
-    "us-central2-compress": "8b035b60",
-    "us-central1": "4a47ffc0",
-    "big-run": "4a47ffc0",
-    "us-west4": "89b461b3",
-    "europe-west4": "89b461b3",
-    "us-east1": "89b461b3",
-    "us-east5": "89b461b3",
-    # NB: different naming convention because we have two zones in europe-west4
-    "europe-west4-a": "89b461b3",
-    "asia-northeast1": "89b461b3",
-    "marin-us-east5-b-vllm": "6e804a10",
-    "marin-us-east1-d-vllm": "6e804a10",
-    "europe-west4-vllm": "7fab502e",
-    "marin-us-central2-vllm": "6e804a10",
-}
-
 configs = {
     "marin-us-central2": {
         "NAME": "marin-us-central2",
         "REGION": "us-central2",
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": DOCKER_TAGS["us-central2"],
+        "DOCKER_TAG": "18ee8d6a",
         "tpu_generation": "v4",
         "min_workers": 4,
     },
@@ -44,7 +24,7 @@ configs = {
         "REGION": "us-central2",
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": DOCKER_TAGS["us-central2-compress"],
+        "DOCKER_TAG": "18ee8d6a",
         "tpu_generation": "v4",
         "min_workers": 4,
     },
@@ -53,11 +33,11 @@ configs = {
         "REGION": "us-central1",
         "ZONE": "us-central1-a",
         "BUCKET": "marin-us-central1",
-        "DOCKER_TAG": DOCKER_TAGS["us-central1"],
+        "DOCKER_TAG": "4a47ffc0",
         "tpu_generation": "v5p",
         "min_workers": 1,
         "worker_targets": {
-            "v5p-128": 32,
+            "v5p-32": 8,
         },
     },
     "marin-big-run": {
@@ -65,7 +45,7 @@ configs = {
         "REGION": "us-central2",
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": DOCKER_TAGS["big-run"],
+        "DOCKER_TAG": "18ee8d6a",
         "tpu_generation": "v4",
         "min_workers": 0,
     },
@@ -74,7 +54,7 @@ configs = {
         "REGION": "europe-west4",
         "ZONE": "europe-west4-b",
         "BUCKET": "marin-eu-west4",
-        "DOCKER_TAG": DOCKER_TAGS["europe-west4"],
+        "DOCKER_TAG": "89b461b3",
         "tpu_generation": "v5e",
         "min_workers": 0,
         "worker_targets": {
@@ -86,7 +66,7 @@ configs = {
         "REGION": "us-west4",
         "ZONE": "us-west4-a",
         "BUCKET": "marin-us-west4",
-        "DOCKER_TAG": DOCKER_TAGS["us-west4"],
+        "DOCKER_TAG": "89b461b3",
         "tpu_generation": "v5e",
         "min_workers": 0,
     },
@@ -95,7 +75,7 @@ configs = {
         "REGION": "us-east1",
         "ZONE": "us-east1-d",
         "BUCKET": "marin-us-east1",
-        "DOCKER_TAG": DOCKER_TAGS["us-east1"],
+        "DOCKER_TAG": "89b461b3",
         "tpu_generation": "v6e",
         "min_workers": 0,
         "worker_targets": {
@@ -107,7 +87,7 @@ configs = {
         "REGION": "us-east5",
         "ZONE": "us-east5-b",
         "BUCKET": "marin-us-east5",
-        "DOCKER_TAG": DOCKER_TAGS["us-east5"],
+        "DOCKER_TAG": "89b461b3",
         "tpu_generation": "v6e",
         "min_workers": 0,
         "worker_targets": {
@@ -119,7 +99,7 @@ configs = {
         "REGION": "europe-west4",
         "ZONE": "europe-west4-a",
         "BUCKET": "marin-eu-west4",
-        "DOCKER_TAG": DOCKER_TAGS["europe-west4-a"],
+        "DOCKER_TAG": "89b461b3",
         "tpu_generation": "v6e",
         "min_workers": 0,
         "worker_targets": {
@@ -131,7 +111,7 @@ configs = {
         "REGION": "asia-northeast1",
         "ZONE": "asia-northeast1-b",
         "BUCKET": "marin-asia-northeast1",
-        "DOCKER_TAG": DOCKER_TAGS["asia-northeast1"],
+        "DOCKER_TAG": "89b461b3",
         "tpu_generation": "v6e",
         "min_workers": 0,
     },
@@ -140,7 +120,7 @@ configs = {
         "REGION": "us-east5",
         "ZONE": "us-east5-b",
         "BUCKET": "marin-us-east5",
-        "DOCKER_TAG": DOCKER_TAGS["marin-us-east5-b-vllm"],
+        "DOCKER_TAG": "6e804a10",
         "tpu_generation": "v6e-serve",
         "min_workers": 2,
         "VLLM": True,
@@ -150,7 +130,7 @@ configs = {
         "REGION": "europe-west4",
         "ZONE": "europe-west4-b",
         "BUCKET": "marin-eu-west4",
-        "DOCKER_TAG": DOCKER_TAGS["europe-west4-vllm"],
+        "DOCKER_TAG": "7fab502e",
         "tpu_generation": "v5e",
         "min_workers": 2,
         "VLLM": True,
@@ -160,7 +140,7 @@ configs = {
         "REGION": "us-central2",
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": DOCKER_TAGS["marin-us-central2-vllm"],
+        "DOCKER_TAG": "6e804a10",
         "tpu_generation": "v4-serve",
         "min_workers": 1,
         "VLLM": True,
@@ -170,7 +150,7 @@ configs = {
         "REGION": "us-east1",
         "ZONE": "us-east1-d",
         "BUCKET": "marin-us-east1",
-        "DOCKER_TAG": DOCKER_TAGS["marin-us-east1-d-vllm"],
+        "DOCKER_TAG": "6e804a10",
         "tpu_generation": "v6e-serve",
         "min_workers": 2,
         "VLLM": True,
@@ -181,7 +161,7 @@ generation_configs = {
     "v4": {
         "runtime_version": "tpu-ubuntu2204-base",
         "base_worker": "8",
-        "slices": [16, 32, 64, 128, 256],
+        "slices": [16, 32, 64, 128, 256, 512, 1024, 2048, 4096],
         "num_tpus": 4,
         "tpus_worker": 4,
     },
@@ -195,8 +175,8 @@ generation_configs = {
     "v5p": {
         "runtime_version": "v2-alpha-tpuv5",
         "base_worker": "8",
-        "slices": [8, 16, 32, 64, 128, 256],
-        "num_tpus": 8,
+        "slices": [8, 16, 32, 64, 128, 256, 512, 1024],
+        "num_tpus": 4,
         "tpus_worker": 8,
     },
     "v6e": {

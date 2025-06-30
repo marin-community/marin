@@ -13,7 +13,7 @@ Before you begin, ensure you have the following installed:
 
 This document focuses on basic setup and usage of Marin.
 If you're on a GPU, see [Local GPU Setup](local-gpu.md) for a GPU-specific walkthrough for getting started.
-If you want to set up a TPU cluster, see [TPU Setup](../tutorials/tpu-cluster-setup.md).
+If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
 
 ## Installation
 
@@ -96,7 +96,8 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
 
 - **CPU**: Works out of the box, suitable for small experiments
 - **GPU**: See [Local GPU Setup](local-gpu.md) for CUDA configuration and multi-GPU support
-- **TPU**: See [TPU Setup](../tutorial/tpu-setup.md) for Google Cloud TPU configuration
+- **TPU**: See [TPU Setup](../tutorials/tpu-cluster-setup.md) for Google Cloud TPU configuration
+
 
 ## Trying it Out
 

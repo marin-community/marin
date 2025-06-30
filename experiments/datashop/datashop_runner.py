@@ -19,11 +19,15 @@ from dataclasses import dataclass, field
 
 from experiments.datashop.defaults import (
     default_candidate_anneal,
+    default_consolidate,
     default_label,
-    default_quality_filter_and_consolidate,
+    default_quality_filter,
     default_train_quality_model,
 )
-from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
+from experiments.evals.evals import default_eval
+from experiments.evals.resource_configs import SINGLE_TPU_V6E_8, TPU_V6E_8_STRICT_PACK, ResourceConfig
+from experiments.evals.task_configs import MMLU_5_SHOT
+from marin.datashop.pipeline import CorpusContent
 from marin.execution.executor import executor_main
 
 
@@ -49,7 +53,7 @@ class DatashopRunnerConfig:
     # Defines the corpus content that we will create annotator prompts for
     # In other words, the data that we "care" about finding more of
     # Default: Empty list to represent that the user does not specify a targeted dataset
-    corpus_content_paths: list[str] = field(default_factory=list)
+    corpus_content_paths: list[CorpusContent] = field(default_factory=list)
 
     # Name of the pretraining data path to group the output by in a single directory
     pretraining_data_path_name: str = "datashop-dclm-pretraining-subset"
@@ -81,6 +85,9 @@ class DatashopRunnerConfig:
     # Config for consolidate to allow for changing things like filetype or ray memory usage
     consolidate_config_kwargs: dict | None = None
 
+    # What hardware to use for evaluating the model
+    eval_resource_config: ResourceConfig = field(default_factory=lambda: SINGLE_TPU_V6E_8)
+
 
 class DatashopRunner:
     def __init__(self, config: DatashopRunnerConfig):
@@ -104,12 +111,18 @@ class DatashopRunner:
             self.config.dataset_output_processor_config_kwargs,
             self.config.quality_train_config_kwargs,
         )
-        self.filtered_documents = default_quality_filter_and_consolidate(
+        self.attributes = default_quality_filter(
             self.encoder_model,
             self.config.pretraining_data_path,
             self.config.pretraining_data_path_name,
             self.config.experiment_name,
             self.config.inference_config_kwargs,
+        )
+        self.filtered_documents = default_consolidate(
+            self.attributes,
+            self.config.pretraining_data_path,
+            self.config.pretraining_data_path_name,
+            self.config.experiment_name,
             self.config.filter_config_kwargs,
             self.config.consolidate_config_kwargs,
         )
@@ -123,12 +136,16 @@ class DatashopRunner:
             self.config.training_tpu_type,
             self.config.experiment_name,
         )
+        self.evals = [
+            default_eval(self.control_model, self.config.eval_resource_config, MMLU_5_SHOT),
+            default_eval(self.quality_ablation_model, self.config.eval_resource_config, MMLU_5_SHOT),
+        ]
 
     def get_eval_cluster_steps(self):
         return [self.encoder_model]
 
     def get_all_steps(self):
-        return [self.quality_ablation_model, self.control_model]
+        return self.evals
 
     # NOTE(chris): Run this in the vLLM Cluster
     def run_eval_cluster_steps(self):
