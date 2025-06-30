@@ -12,17 +12,24 @@ Tests four data mixes for cooldown:
 
 Metrics: Paloma Loss, Tulu3 Validation Loss, MMLU Accuracy
 """
+# In this experiment:
+# PT = Pretraining
+# HQ = High Quality
 
 from experiments.anneal_config import AnnealConfig
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
 from experiments.defaults import default_anneal, default_tokenize
 from experiments.dolmino.tokenize_dolmino import dolmino_math_tokenized_llama3, tokenize_dolmino_steps
+from experiments.exp575_wikipedia_markdownify import wikipedia_resiliparse_custom_fork
+from experiments.exp579_ar5iv_markdownify import ar5iv_no_problem_resiliparse_custom_fork
+from experiments.exp822_stackexchange_markdownify import stackexchange_text_resiliparse_custom_fork
 from experiments.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
 from experiments.llama import llama3_tokenizer
 from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
+from marin.resources import TpuPodConfig
 
 # 1. Original mix: DCLM + StarCoder + ProofPile
 original_mix = lm_mixture_data_config(
@@ -65,30 +72,30 @@ medu_mmlu_science_qa_tokenized = default_tokenize(
     name="medu-mmlu-science-qa",
     dataset="gs://marin-us-east1/documents/medu-mmlu-science-llama8b-qa-whole-1a419d",
     tokenizer=llama3_tokenizer,
-)
+).with_output_path("tokenized/medu-mmlu-science-qa-c64fda")
 
 # Wikipedia tokenization
 md_wiki_tokenized = default_tokenize(
     name="wikipedia",
-    dataset="gs://marin-us-central2/documents/wikipedia-resiliparse-custom-fork-2569de/20241201/",
+    dataset=wikipedia_resiliparse_custom_fork,
     tokenizer=llama3_tokenizer,
-)
+).with_output_path("tokenized/wikipedia-6980f2")
 
 # Arxiv tokenization
 md_arxiv_tokenized = default_tokenize(
     name="arxiv-no-problem",
-    dataset="gs://marin-us-central2/documents/ar5iv/ar5iv-04-2024-no-problem-3971ff/resiliparse-custom-fork",
+    dataset=ar5iv_no_problem_resiliparse_custom_fork,
     tokenizer=llama3_tokenizer,
-)
+).with_output_path("tokenized/arxiv-no-problem-a3e054")
 
 # Stackexchange tokenization
 md_stackexchange_tokenized = default_tokenize(
     name="stackexchange",
-    dataset="gs://marin-us-central2/documents/stackexchange-resiliparse-custom-fork-ab41ad",
+    dataset=stackexchange_text_resiliparse_custom_fork,
     tokenizer=llama3_tokenizer,
-)
+).with_output_path("tokenized/stackexchange-621b94")
 
-full_mix_components = {
+pt_vs_hq_components = {
     **tokenize_nemotron_steps(),
     "starcoderdata": dclm_components_llama3["starcoderdata"],
     "proofpile_2": dclm_components_llama3["proofpile_2"],
@@ -100,6 +107,8 @@ full_mix_components = {
     **tokenize_dolmino_steps(),
 }
 
+# weights based on either compressed TB or teratokens, which is roughly equivalent
+# scale of 5 to oversample higher quality data
 full_mix_weights = {
     **{k: v * 0.6 for k, v in NEMOTRON_WEIGHTS.items()},
     "starcoderdata": 0.25,
@@ -115,7 +124,7 @@ full_mix_weights = {
     "medu_science_qa": 0.0012 * 5,
 }
 
-full_mix = lm_mixture_data_config(components=full_mix_components, weights=full_mix_weights)
+full_mix = lm_mixture_data_config(components=pt_vs_hq_components, weights=full_mix_weights)
 
 # Dictionary of all mixes
 data_mixes = {
@@ -143,8 +152,7 @@ def run_cooldown_ablation():
                 data_mix, {"tulu_sft": tulu3_flat_llama_tokenized_as_validation}
             ),
             num_anneal_training_tokens=anneal_tokens,
-            tpu_type=tpu_type,
-            node_count=node_count,
+            resources=TpuPodConfig(tpu_type=tpu_type, slice_count=node_count),
             train_batch_size=2048,
         )
 

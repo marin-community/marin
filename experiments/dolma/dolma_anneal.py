@@ -1,17 +1,17 @@
 """An experiment to evaluate the quality of individual splits of the Dolma dataset.
 
 We cooldown a 8B model on a 30/70 mixture of some high quality Dolma split and Dolmino DCLM.
-Link to issue: https://github.com/stanford-crfm/marin/issues/820
+Link to issue: https://github.com/marin-community/marin/issues/820
 """
 
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
-from experiments.dolmino.tokenize_dolmino import get_dolmino_step
+from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
-dolmino_dclm = get_dolmino_step("dclm")
+dolmino_dclm = get_dolmino_step_llama3("dclm")
 
 starcoder_tokenized = tokenize_dolma_steps()["dolma/starcoder"]
 

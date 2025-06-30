@@ -1,4 +1,4 @@
-FROM rayproject/ray:nightly.240914.bb15a3-py311-cpu
+FROM rayproject/ray:2.43.0-py311-cpu
 ARG VLLM_VERSION=0.6.6.post1
 
 # Install general dependencies
@@ -66,35 +66,21 @@ RUN conda install -c conda-forge ncurses -y
 #RUN VLLM_TARGET_DEVICE="tpu" python3 setup.py develop
 
 # Install Jax for TPU usage, fsspec for GCS access, and transformers for OLMO
-RUN pip install --no-cache-dir -U jax[tpu]==0.5.1 -f https://storage.googleapis.com/jax-releases/libtpu_releases.html fsspec==2024.9.0 transformers==4.49.0
+WORKDIR /tmp/
+RUN pip install --no-cache-dir -U pip setuptools wheel
+RUN pip install --no-cache-dir torch==2.7.0 jax[tpu]==0.5.1 -f https://download.pytorch.org/whl/nightly/cpu -f https://storage.googleapis.com/libtpu-releases/index.html
+COPY pyproject.toml /tmp/
+# re-specify jax/torch/torch_xla to ensure they still work if we bump versions in pyproject.toml
+RUN pip install --no-cache-dir -e . -f https://download.pytorch.org/whl/cpu jax[tpu] torch -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 # Installing all the core dependencies
 # ['draccus>=0.8.0', 'google-api-python-client~=2.0', 'ray', 'gcsfs', 'google-cloud-storage',
 # 'google-cloud-storage-transfer', 's3fs', 'regex', 'requests', 'numpy', 'torch', 'braceexpand', 'deepdiff', 'tqdm',
 # 'tqdm-loggable', 'toml', 'pandas', 'pyarrow', 'jax==0.4.35', 'multiprocess==0.70.16', 'levanter>=1.2.dev1163']
-RUN pip install --no-cache-dir -U draccus==0.10 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests numpy torch braceexpand deepdiff tqdm tqdm-loggable toml pandas pyarrow "levanter>=1.2.dev1207" "haliax>=1.4dev330"
+#RUN pip install --no-cache-dir -U draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests numpy torch>=2.7.0 braceexpand deepdiff tqdm tqdm-loggable toml pandas pyarrow "levanter>=1.2.dev1361" "haliax>=1.4dev348"
 
 
 # NOTE: Try to keep as much "heavy" stuff as possible before this line to avoid re-installing
-
-# (not installing pyproject.toml because it interferes with Ray's RuntimeEnv deps)
-#WORKDIR /tmp/
-#ADD pyproject.toml /tmp/
-#RUN pip install --no-cache-dir . --extra-index-url https://download.pytorch.org/whl/cpu
-
-# copy in the autoscaler hacks
-ENV VENV_PATH=/home/ray/anaconda3/
-RUN sudo mkdir /opt/abhi-ray
-RUN sudo chown -R $(whoami) /opt/abhi-ray
-WORKDIR /opt/abhi-ray
-RUN git clone --branch abhi-2.34.0 --single-branch --depth 1 https://github.com/abhinavg4/ray.git
-RUN rm -rf $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler
-RUN ln -s /opt/abhi-ray/ray/python/ray/autoscaler $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler
-
-# HACK until https://github.com/ray-project/ray/issues/47769 is resolved
-RUN git clone https://github.com/dlwh/ray.git ~/ray --branch tpu_docker_2.34 --depth 1
-RUN cp ~/ray/python/ray/autoscaler/_private/gcp/tpu_command_runner.py $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler/_private/gcp/tpu_command_runner.py
-RUN rm -rf ~/ray
 
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so

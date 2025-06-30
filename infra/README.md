@@ -254,7 +254,7 @@ gcloud alpha compute tpus tpu-vm list --project=hai-gcp-models --zone $CLUSTER |
 ```
 Note that some clusters have an extra letter at the end so you'll need to change the work template i.e.
 ```bash
-export CLUSTER=us-east5-b
+export CLUSTER=us-east5-b-vllm
 gcloud alpha compute tpus tpu-vm list --project=hai-gcp-models --zone $CLUSTER | grep "ray-marin-us-east5-worker" | awk '{print $1}' | xargs -I {} gcloud alpha compute tpus tpu-vm delete {} --zone $CLUSTER --project hai-gcp-models --quiet
 
 # after that's finished then run
@@ -362,3 +362,14 @@ that. You can run it from your laptop.
 
 If you want to change that to, say, two v4-64s, you need to delete the TPU node (using the GCP console) and then run the
 command again with the new TPU type.
+
+
+To reconnect already created nodes (e.g. because you restarted the cluster or Ray lost them), you can run the same
+command with the name of the already created TPU slice:
+
+```bash
+python infra/manual_ray_worker_launch.py --cluster_yaml infra/marin-us-central2.yaml \
+       --reserved --tpu_type v4-128 --head $IP --zone us-central2-b --name ray-manual-worker-deadbeef
+```
+
+If there are a lot of nodes you need to reconnect, you can use the `gcloud` command and a for loop:

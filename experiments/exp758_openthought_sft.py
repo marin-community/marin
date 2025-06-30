@@ -1,9 +1,10 @@
-from experiments.defaults import default_sft
+from experiments.defaults import default_sft, default_tokenize
+from experiments.exp964_custom_chat_tokenizer import llama3_instruct_chat_format
 from experiments.instruction_datasets import get_instruction_dataset
 from experiments.llama import llama3_tokenizer, llama_8b
 from experiments.simple_sft_config import SimpleSFTConfig
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
-from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft
+from marin.execution.executor import executor_main
+from marin.resources import TpuPodConfig
 
 # Get instruction dataset
 openthoughts_dataset = get_instruction_dataset("open-r1/OpenThoughts-114k-math")
@@ -12,26 +13,18 @@ openthoughts_dataset = get_instruction_dataset("open-r1/OpenThoughts-114k-math")
 NUM_TRAIN_STEPS = 2500
 
 # Add tokenization step
-openthoughts_llama_tokenize_step = ExecutorStep(
-    name="tokenized/openthoughts_llama3_tokenizer",
-    fn=levanter_tokenize_sft,
-    config=TokenizeConfig(
-        train_paths=[output_path_of(openthoughts_dataset, "**/*.jsonl.gz")],
-        validation_paths=[],
-        cache_path=this_output_path(),
-        tokenizer=llama3_tokenizer,
-        # fixed to OAI chat format
-        input_field="user",
-        output_field="assistant",
-    ),
-    description="Tokenize chat SFT data",
+openthoughts_llama_tokenize_step = default_tokenize(
+    name="openthoughts_llama3_tokenizer",
+    dataset=openthoughts_dataset / "**/*.jsonl.gz",
+    tokenizer=llama3_tokenizer,
+    format=llama3_instruct_chat_format,
 )
 
 openthoughts_sft_config = SimpleSFTConfig(
     train_batch_size=128,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=5e-6,
-    tpu_type="v4-128",
+    resources=TpuPodConfig(tpu_type="v4-128"),
     tokenizer=llama3_tokenizer,
     model_name_or_path="meta-llama/Llama-3.1-8B",
     max_seq_len=4096,

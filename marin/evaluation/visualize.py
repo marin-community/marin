@@ -14,8 +14,7 @@ from levanter.main.viz_logprobs import main as viz_lm_main
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.executor import ExecutorStep, this_output_path
-from marin.processing.tokenize import lm_mixture_data_config
+from marin.execution.executor import this_output_path
 from marin.utils import remove_tpu_lockfile_on_exit
 
 
@@ -37,7 +36,7 @@ class VizLmConfig:
     checkpoint_is_hf: bool = False
 
 
-@ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1})
+@ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1}, max_calls=1)
 @remove_tpu_lockfile_on_exit
 def do_viz_lm(config: LevanterVizLmConfig) -> None:
     """
@@ -48,24 +47,6 @@ def do_viz_lm(config: LevanterVizLmConfig) -> None:
     """
     # remove_tpu_lockfile_on_exit() isn't sufficient now?
     _separate_process_fn(viz_lm_main, (config,), {})
-
-
-def mixture_for_visualization(inputs: dict[str, ExecutorStep]) -> LMMixtureDatasetConfig:
-    """
-    Creates a mixture of datasets for visualizing log probabilities of a language model.
-
-    Args:
-        inputs (dict[str, ExecutorStep]): The inputs to the mixture.
-
-    Returns:
-        LMMixtureDatasetConfig: The mixture of datasets.
-    """
-    return lm_mixture_data_config(
-        {name: step for name, step in inputs.items()},
-        {name: 1.0 for name in inputs},
-        shuffle=False,
-        missing_weights_are_validation=True,
-    )
 
 
 def visualize_lm_log_probs(config: VizLmConfig) -> None:
