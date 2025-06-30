@@ -1,5 +1,6 @@
 """
 Speedrun code for a nano model based on the LLaMA architecture.
+So tiny that you can run it on your laptop. Used to test the speedrun framework.
 """
 
 import logging
@@ -14,11 +15,11 @@ logger = logging.getLogger("ray")
 
 speedrun_config = SpeedrunConfig(
     author=Author(
-        name="",
-        affiliation="",
-        url="",
+        name="Joel Niklaus  ",
+        affiliation="Niklaus AI",
+        url="https://niklaus.ai",
     ),
-    description="",
+    description="LLaMA-Nano on Fineweb-edu",
     model_config=llama_nano,
     train_config=SimpleTrainConfig(
         TpuPodConfig(tpu_type="v4-32"),
