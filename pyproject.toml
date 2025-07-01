@@ -35,8 +35,6 @@ dependencies = [
     "sentencepiece",
     "lz4",
     "wandb<=0.19.9",
-    "markdownify==0.12.1",
-    "html2text>=2025",
 ]
 
 [project.optional-dependencies]
@@ -52,6 +50,8 @@ dev = [
     "types-PyYAML",
     "types-requests",
     "types-six",
+    "markdownify==0.12.1",
+    "html2text==2024.2.26", # TODO :: Check pin?
 ]
 
 cuda12 = [
