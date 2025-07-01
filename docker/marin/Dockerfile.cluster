@@ -68,7 +68,13 @@ RUN conda install -c conda-forge ncurses -y
 # Install Jax for TPU usage, fsspec for GCS access, and transformers for OLMO
 WORKDIR /tmp/
 RUN pip install --no-cache-dir -U pip setuptools wheel
-RUN pip install --no-cache-dir torch==2.7.0 jax[tpu]==0.5.1 -f https://download.pytorch.org/whl/nightly/cpu -f https://storage.googleapis.com/libtpu-releases/index.html
+RUN pip install --no-cache-dir \
+    --find-links https://storage.googleapis.com/libtpu-releases/index.html \
+    --find-links https://storage.googleapis.com/libtpu-wheels/index.html \
+    torch~=2.7.0 \
+    torch_xla[tpu]~=2.7.0 \
+    transformers~=4.53.0 \
+    jax[tpu]==0.5.3
 COPY pyproject.toml /tmp/
 # re-specify jax/torch/torch_xla to ensure they still work if we bump versions in pyproject.toml
 RUN pip install --no-cache-dir -e . -f https://download.pytorch.org/whl/cpu jax[tpu] torch -f https://storage.googleapis.com/jax-releases/libtpu_releases.html

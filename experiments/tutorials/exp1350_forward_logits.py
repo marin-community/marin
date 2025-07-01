@@ -17,10 +17,11 @@ logits_step = ExecutorStep(
     config=TextLogitsConfig(
         model_name="meta-llama/Meta-Llama-3.1-8B",
         input_path="gs://marin-us-central2/documents/books_txt/gatsby.txt",
-        output_path=this_output_path(),
-        batch_size=8,
+        output_path=this_output_path("logits.parquet"),
+        batch_size=4,
         memory_gb=16,
         span_chars=4096,
+        max_length=100,
     ),
 )
 

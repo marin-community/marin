@@ -41,6 +41,7 @@ def compute_logits(config: TextLogitsConfig) -> None:
     def run(cfg: TextLogitsConfig):
         import torch_xla.core.xla_model as xm
         import torch_xla.distributed.xla_multiprocessing as xmp
+        import torch_xla.runtime as xr  # new runtime API in torch-xla >=2.6
 
         logger.info(
             "[TPU-VM] Starting logits computation with %s on input %s (batch_size=%d, max_len=%d)",
@@ -67,7 +68,7 @@ def compute_logits(config: TextLogitsConfig) -> None:
             else:
                 dataset = read_dataset(cfg.input_path)
                 logger.info("[Core %d] Loaded dataset from %s with %d rows", index, cfg.input_path, len(dataset))
-            world_size = xm.xrt_world_size()
+            world_size = xr.world_size()
             dataset = dataset.shard(world_size, index)
 
             logger.info("[Core %d] Dataset size after sharding: %d", index, len(dataset))
@@ -108,15 +109,28 @@ def compute_logits(config: TextLogitsConfig) -> None:
 
             logger.info("[Core %d] Finished forward pass over %d examples", index, len(dataset))
 
-            shard_path = os.path.join(tmp_dir, f"logits_{index}.jsonl.gz")
+            # Determine shard output path
+            if cfg.output_path.endswith(".parquet"):
+                # Write each core directly to its own parquet file alongside the desired output path
+                base, _ = os.path.splitext(cfg.output_path)
+                shard_path = f"{base}_{index}.parquet"
+            else:
+                shard_path = os.path.join(tmp_dir, f"logits_{index}.jsonl.gz")
+
             write_dataset(dataset, shard_path)
 
             logger.info("[Core %d] Wrote shard to %s", index, shard_path)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            logger.info("[TPU-VM] Spawning processes across %d TPU cores…", xm.xrt_world_size())
-            world_size = xm.xrt_world_size()
+            logger.info("[TPU-VM] Spawning processes across %d TPU cores…", xr.world_size())
+            world_size = xr.world_size()
             xmp.spawn(_mp_fn, args=(cfg, tmp_dir), nprocs=world_size)
+
+            # If we wrote parquet shards directly, merging is optional; simply exit.
+            if cfg.output_path.endswith(".parquet"):
+                logger.info("[TPU-VM] Parquet shards written; merge skipped.")
+                return
+
             import glob
             import datasets
 
