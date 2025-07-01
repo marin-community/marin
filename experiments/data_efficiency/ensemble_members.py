@@ -7,8 +7,39 @@ Hyperparameters are tuned for the baseline of all data at the end of training.
 from experiments.data_efficiency.train import DataEfficiencyConfig, data_efficiency_train_step
 from marin.execution.executor import executor_main
 
-ensemble_members_train_steps = [
-    data_efficiency_train_step(
+# ensemble_members_train_steps_dict = {
+#     (base_train_steps, seed): data_efficiency_train_step(
+#         DataEfficiencyConfig(
+#             train_seed=seed,
+#             data_seed=seed,
+#             data_name="dclm",
+#             epochs=epochs,
+#             base_train_steps=base_train_steps * 1024 / batch_size,
+#             train_batch_size=batch_size,
+#             lr_schedule="cosine",
+#             lr=lr,
+#             weight_decay=weight_decay,
+#             wandb_project_name="suhas-data-efficiency",
+#             wandb_additional_tags=["ensemble-members-6-13"],
+#             model_name=model_name,
+#             nametag=f"-seed{seed}",
+#         )
+#     )
+#     for base_train_steps, epochs, lr, weight_decay in [
+#         (50, 16, 3e-3, 1.6),
+#         (100, 16, 3e-3, 0.8),
+#         (200, 16, 3e-3, 0.4),
+#         (400, 32, 3e-3, 0.8),
+#     ]
+#     for batch_size in [64]
+#     for model_name in ["300m4k"]
+#     for seed in list(range(5))
+# }
+
+# ensemble_members_train_steps = list(ensemble_members_train_steps_dict.values())
+
+ensemble_members_train_steps_dict = {
+    (base_train_steps, epochs, lr, weight_decay, batch_size, model_name, seed): data_efficiency_train_step(
         DataEfficiencyConfig(
             train_seed=seed,
             data_seed=seed,
@@ -20,21 +51,21 @@ ensemble_members_train_steps = [
             lr=lr,
             weight_decay=weight_decay,
             wandb_project_name="suhas-data-efficiency",
-            wandb_additional_tags=["ensemble-members-6-13"],
+            wandb_additional_tags=["best-ensemble-member-6-28"],
             model_name=model_name,
             nametag=f"-seed{seed}",
         )
     )
-    for base_train_steps, epochs, lr, weight_decay in [
-        (50, 16, 3e-3, 1.6),
-        # (100, 16, 3e-3, 0.8),
-        # (200, 16, 3e-3, 0.4),
-        # (400, 32, 3e-3, 0.8),
-    ]
+    for base_train_steps in [50]
+    for epochs in [64]
+    for lr in [1e-3, 3e-3]
+    for weight_decay in [0.4, 0.8, 1.6]
     for batch_size in [64]
     for model_name in ["300m4k"]
-    for seed in list(range(10))
-]
+    for seed in list(range(5))
+}
+
+ensemble_members_train_steps = list(ensemble_members_train_steps_dict.values())
 
 if __name__ == "__main__":
     executor_main(

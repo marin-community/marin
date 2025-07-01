@@ -60,11 +60,17 @@ def parse_run(run):
     run_id = run.id
     run_dict["run_id"] = run_id
     run_json_config = json.loads(run.json_config)
-    assert run_id.count("x") == 1
 
     num_steps = run_json_config["trainer"]["value"]["num_train_steps"]
     batch_size = run_json_config["trainer"]["value"]["train_batch_size"]
     seq_len = run_json_config["model"]["value"]["seq_len"]
+
+    if run_id.startswith("ppl-eval-ensemble-"):
+        run_id = run_id[len("ppl-eval-ensemble-"):]
+        run_dict["ensemble_member_count"] = int(run_id.split("x-")[0])
+        run_id = run_id.split("x-")[1]
+
+    assert run_id.count("x") == 1
 
     run_dict["model_name"] = run_id.split("-")[0]
     run_dict["epochs"] = int(run_id.split("-")[1].split("x")[1])
@@ -73,7 +79,7 @@ def parse_run(run):
     run_dict["lr_schedule"] = run_id.split("-")[3]
     run_dict["lr"] = float(run_id.split("-")[4][2:])
     run_dict["weight_decay"] = float(run_id.split("-")[5][2:])
-    run_dict["batch_size"] = int(run_id.split("-")[6][2:])
+    run_dict["batch_size"] = batch_size
 
     run_history_loss_keys = [f"eval/{run_dict['data_name']}/loss"]
 
@@ -118,7 +124,7 @@ def create_multi_restriction_scatter(run_lists, labels, key, title="Loss vs Base
     # First subplot: Scatter plot with power law fits
     for runs, label, color in zip(run_lists, labels, colors):
         # Get unique base tokens and find best run for each
-        unique_base_tokens = sorted(list(set([run["base_tokens"] for run in runs])))
+        unique_base_tokens = sorted(list(set([run["base_tokens"] for run in runs])))[1:]
 
         best_runs = []
         for tokens in unique_base_tokens:
@@ -190,21 +196,135 @@ def create_multi_restriction_scatter(run_lists, labels, key, title="Loss vs Base
     plt.savefig(output_path, bbox_inches='tight')
     plt.close()
 
+def fit_inverse_curve(x, y):
+    """Fits data to a curve of form y = A/x + B"""
+    def inverse_func(x, A, B):
+        return A/x + B
+    
+    popt, pcov = curve_fit(inverse_func, x, y)
+    return popt[0], popt[1]  # A and B parameters
+
+def create_heatmap(ax, all_fits, target_lr):
+    """Helper function to create a heatmap for a specific learning rate"""
+    lr_fits = [fit for fit in all_fits if fit[0][1] == target_lr]
+    
+    # Get unique epochs and weight decay values
+    epochs = sorted(list(set(fit[0][0] for fit in lr_fits)))
+    wds = sorted(list(set(fit[0][2] for fit in lr_fits)))
+    
+    # Create matrix for heatmap
+    heatmap_data = np.zeros((len(epochs), len(wds)))
+    for i, epoch in enumerate(epochs):
+        for j, wd in enumerate(wds):
+            matching_fits = [fit for fit in lr_fits if fit[0][0] == epoch and fit[0][2] == wd]
+            if matching_fits:
+                heatmap_data[i, j] = matching_fits[0][4]  # B value (asymptote)
+    
+    # Plot heatmap
+    im = ax.imshow(heatmap_data, aspect='auto', cmap=CUSTOM_CMAP)
+    
+    # Add colorbar
+    plt.colorbar(im, ax=ax, label='Asymptotic Loss')
+    
+    # Set ticks and labels
+    ax.set_xticks(range(len(wds)))
+    ax.set_yticks(range(len(epochs)))
+    ax.set_xticklabels([f'{wd:.1f}' for wd in wds])
+    ax.set_yticklabels(epochs)
+    
+    # Add labels
+    ax.set_xlabel('Weight Decay')
+    ax.set_ylabel('Epochs')
+    ax.set_title(f'Asymptotic Loss Heatmap\n(lr={target_lr})')
+    
+    # Add text annotations with values
+    for i in range(len(epochs)):
+        for j in range(len(wds)):
+            text = ax.text(j, i, f'{heatmap_data[i, j]:.3f}',
+                          ha="center", va="center", color="black")
+    
+    return im
+
+def plot_ensemble_scaling():
+    # Create figure with three subplots: one large on left, two smaller stacked on right
+    fig = plt.figure(figsize=(15, 7), dpi=600)
+    gs = plt.GridSpec(2, 2, width_ratios=[2, 1], height_ratios=[1, 1])
+    
+    ax1 = fig.add_subplot(gs[:, 0])  # Main plot takes full height on left
+    ax2 = fig.add_subplot(gs[0, 1])  # Top right
+    ax3 = fig.add_subplot(gs[1, 1])  # Bottom right
+    
+    # Get the data from the last unique key's runs
+    unique_keys = set()
+    for run in run_list:
+        unique_keys.add((run["epochs"], run["lr"], run["weight_decay"]))
+    
+    # Store fits and data for sorting
+    all_fits = []
+    for unique_key in unique_keys:
+        runs = [run for run in run_list if run["epochs"] == unique_key[0] and run["lr"] == unique_key[1] and run["weight_decay"] == unique_key[2]]
+        runs = sorted(runs, key=lambda x: x["ensemble_member_count"])
+        x_data = np.array([run["ensemble_member_count"] for run in runs])
+        y_data = np.array([run["final_dclm_loss"] for run in runs])
+        
+        # Fit 1/x curve
+        A, B = fit_inverse_curve(x_data, y_data)
+        all_fits.append((unique_key, x_data, y_data, A, B))
+    
+    # Sort by asymptote (B value)
+    all_fits.sort(key=lambda x: x[4])
+    
+    # Plot in order of asymptote on first subplot
+    for unique_key, x_data, y_data, A, B in all_fits:
+        # Generate points for smooth curve
+        x_fit = np.linspace(min(x_data), max(x_data), 100)
+        y_fit = A/x_fit + B
+        
+        # Check if this is the specific configuration we want to highlight
+        is_target_config = (unique_key[0] == 16 and unique_key[1] == 0.003 and unique_key[2] == 1.6)
+        
+        # Use different marker and color for the target configuration
+        if is_target_config:
+            ax1.scatter(x_data, y_data, marker='*', s=200)
+            ax1.plot(x_fit, y_fit, '--', label=f'Fit (epochs={unique_key[0]}, lr={unique_key[1]}, wd={unique_key[2]}): {A:.3f}/x + {B:.3f}', linewidth=2)
+        else:
+            ax1.scatter(x_data, y_data)
+            ax1.plot(x_fit, y_fit, '--', label=f'Fit (epochs={unique_key[0]}, lr={unique_key[1]}, wd={unique_key[2]}): {A:.3f}/x + {B:.3f}')
+        
+        print(f"\nFit parameters for configuration {unique_key}:")
+        print(f"A (scaling factor) = {A:.3f}")
+        print(f"B (asymptote) = {B:.3f}")
+    
+    ax1.set_xlabel('Ensemble Member Count')
+    ax1.set_ylabel('DCLM Loss')
+    ax1.set_title('Loss vs Ensemble Size with 1/x Fits')
+    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax1.grid(True)
+
+    # Create heatmaps for both learning rates
+    create_heatmap(ax2, all_fits, 0.003)
+    create_heatmap(ax3, all_fits, 0.001)
+    
+    plt.tight_layout()
+    plt.savefig('plots/ensemble_scaling.png', bbox_inches='tight')
+    plt.close()
+
 # Main execution
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", type=str)
-    parser.add_argument("--build-cache", action="store_true")
+    parser.add_argument("--build_cache", action="store_true")
     args = parser.parse_args()
     mode = args.mode
 
-    key = {
-        "data-scaling-laws-6-10": "data-scaling-laws-6-10",
+    key, project_name = {
+        "data-scaling-laws-6-10": ("data-scaling-laws-6-10", "stanford-mercury/suhas-data-efficiency"),
+        "varying-hparams-experiment": ("varying-hparams-experiment", "stanford-mercury/suhas-eval-data-efficiency"),
     }[args.mode]
 
     if args.build_cache:
         run_list = []
-        runs = wandb.Api().runs("stanford-mercury/suhas-data-efficiency")
+        runs = wandb.Api().runs(project_name)
         for run in tqdm(runs):
             run_dict = parse_run(run)
             if run_dict is not None:
@@ -214,56 +334,73 @@ if __name__ == "__main__":
     else:
         run_list = pickle.load(open(f"cache/{key}_run_list.pkl", "rb"))
 
-    def no_restriction(run):
-        return True
+    if key == "data-scaling-laws-6-10":
+        def no_restriction(run):
+            return True
 
-    def zero_weight_decay_restriction(run):
-        return run["weight_decay"] == 0.0
-    
-    def one_epoch_restriction(run):
-        return run["epochs"] == 1 \
-            # and run["lr"] == 3e-3
-    
-    def one_epoch_zero_weight_decay_restriction(run):
-        return run["weight_decay"] == 0.0 \
-            and run["epochs"] == 1 \
-            # and run["lr"] == 3e-3
+        def zero_weight_decay_restriction(run):
+            return run["weight_decay"] == 0.0
+        
+        def one_epoch_restriction(run):
+            return run["epochs"] == 1 \
+                # and run["lr"] == 3e-3
+        
+        def one_epoch_zero_weight_decay_restriction(run):
+            return run["weight_decay"] == 0.0 \
+                and run["epochs"] == 1 \
+                # and run["lr"] == 3e-3
 
-    # Get unique model sizes
-    unique_models = sorted(list(set([run["model_name"] for run in run_list])))
-    
-    # Create separate plots for each model size
-    for model_size in unique_models:
-        print(f"\nCreating plot for model size: {model_size}")
+        # Get unique model sizes
+        unique_models = sorted(list(set([run["model_name"] for run in run_list])))
         
-        # Filter runs for this model size
-        model_runs = [run for run in run_list if run["model_name"] == model_size]
-        
-        # Create lists of runs for each restriction
-        no_restriction_runs = [run for run in model_runs if no_restriction(run)]
-        zero_wd_runs = [run for run in model_runs if zero_weight_decay_restriction(run)]
-        one_epoch_runs = [run for run in model_runs if one_epoch_restriction(run)]
-        one_epoch_zero_wd_runs = [run for run in model_runs if one_epoch_zero_weight_decay_restriction(run)]
+        # Create separate plots for each model size
+        for model_size in unique_models:
+            print(f"\nCreating plot for model size: {model_size}")
+            
+            # Filter runs for this model size
+            model_runs = [run for run in run_list if run["model_name"] == model_size]
+            
+            # Create lists of runs for each restriction
+            no_restriction_runs = [run for run in model_runs if no_restriction(run)]
+            zero_wd_runs = [run for run in model_runs if zero_weight_decay_restriction(run)]
+            one_epoch_runs = [run for run in model_runs if one_epoch_restriction(run)]
+            one_epoch_zero_wd_runs = [run for run in model_runs if one_epoch_zero_weight_decay_restriction(run)]
 
-        # Create multi-restriction scatter plot
-        run_lists = [no_restriction_runs, zero_wd_runs, one_epoch_runs, one_epoch_zero_wd_runs]
-        labels = ["many epoch, yes wd", "many epoch, no wd", "one epoch, yes wd", "one epoch, no wd"]
-        
-        # Only include restrictions that have data
-        valid_run_lists = []
-        valid_labels = []
-        for runs, label in zip(run_lists, labels):
-            if len(runs) > 0:
-                valid_run_lists.append(runs)
-                valid_labels.append(label)
-        
-        if len(valid_run_lists) > 0:
-            create_multi_restriction_scatter(
-                valid_run_lists, 
-                valid_labels, 
-                f"{key}_{model_size}", 
-                title=f"Loss vs Base Tokens for {value_pretty_name_dict.get(model_size, model_size)}"
-            )
-        else:
-            print(f"No valid runs found for model size {model_size}")
+            # Create multi-restriction scatter plot
+            run_lists = [no_restriction_runs, zero_wd_runs, one_epoch_runs, one_epoch_zero_wd_runs]
+            labels = ["many epoch, yes wd", "many epoch, no wd", "one epoch, yes wd", "one epoch, no wd"]
+            
+            # Only include restrictions that have data
+            valid_run_lists = []
+            valid_labels = []
+            for runs, label in zip(run_lists, labels):
+                if len(runs) > 0:
+                    valid_run_lists.append(runs)
+                    valid_labels.append(label)
+            
+            if len(valid_run_lists) > 0:
+                create_multi_restriction_scatter(
+                    valid_run_lists, 
+                    valid_labels, 
+                    f"{key}_{model_size}", 
+                    title=f"Loss vs Base Tokens for {value_pretty_name_dict.get(model_size, model_size)}"
+                )
+            else:
+                print(f"No valid runs found for model size {model_size}")
 
+    elif key == "varying-hparams-experiment":
+        plot_ensemble_scaling()
+        
+        # Keep the original analysis code
+        unique_keys = set()
+        for run in run_list:
+            unique_keys.add((run["epochs"], run["lr"], run["weight_decay"]))
+        print(unique_keys)
+
+        for unique_key in unique_keys:
+            print(unique_key)
+            runs = [run for run in run_list if run["epochs"] == unique_key[0] and run["lr"] == unique_key[1] and run["weight_decay"] == unique_key[2]]
+            runs = sorted(runs, key=lambda x: x["ensemble_member_count"])
+            ensemble_member_counts = [run["ensemble_member_count"] for run in runs]
+            losses = [run["final_dclm_loss"] for run in runs]
+            

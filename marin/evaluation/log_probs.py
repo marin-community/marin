@@ -109,7 +109,7 @@ def default_ensemble_log_probs(
         checkpoint_is_hf:  Whether the checkpoint is in HF format.
     """
     name = ckpt_path_to_step_name(checkpoints[0])
-    name = f"analysis/log_probs/data-efficiency/ensemble-v14-{len(checkpoints)}x-{name}"
+    name = f"analysis/log_probs/data-efficiency/ensemble-{len(checkpoints)}x-{name}"
     return ExecutorStep(
         name=name,
         fn=evaluate_ensemble_log_probs,
