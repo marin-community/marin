@@ -54,14 +54,14 @@ dev = [
     "html2text==2024.2.26", # TODO :: Check pin?
 ]
 
-cuda12 = [
-    "jax[cuda12]==0.5.1",
-    "torch>=2.7.0",
-]
+#cuda12 = [
+#    "jax[cuda12]==0.5.1",
+#    "torch>=2.7.0",
+#]
 
-tpu = [
-    "jax[tpu]==0.5.1",
-]
+#tpu = [
+#    "jax[tpu]==0.5.1",
+#]
 
 metrics = [
     "google-cloud-logging",
@@ -93,7 +93,7 @@ download_transform = [
     "lxml[html_clean]",
     "warcio",
     "resiliparse",
-    "trafilatura<2.0",
+    "trafilatura>=2.0",
     "boto3==1.35.23",
     "htmlmin",
 ]
