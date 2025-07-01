@@ -35,7 +35,6 @@ dependencies = [
     "sentencepiece",
     "lz4",
     "wandb<=0.19.9",
-    "openai",
 ]
 
 [project.optional-dependencies]
@@ -51,24 +50,18 @@ dev = [
     "types-PyYAML",
     "types-requests",
     "types-six",
-    "openai-responses",
     "markdownify==0.12.1",
     "html2text==2024.2.26", # TODO :: Check pin?
 ]
 
-math = [
-    "pylatexenc",
-    "sympy",
-]
+#cuda12 = [
+#    "jax[cuda12]==0.5.1",
+#    "torch>=2.7.0",
+#]
 
-cuda12 = [
-    "jax[cuda12]==0.5.1",
-    "torch>=2.7.0",
-]
-
-tpu = [
-    "jax[tpu]==0.5.1",
-]
+#tpu = [
+#    "jax[tpu]==0.5.1",
+#]
 
 metrics = [
     "google-cloud-logging",
