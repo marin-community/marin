@@ -112,7 +112,7 @@ def iter_rollout_groups(root_path: str) -> Iterator[RolloutGroup]:
     # We'll accumulate rows with identical group metadata together.
     pending: dict[str, RolloutGroup] = {}
 
-    for record in dataset.to_pylist():
+    for record in dataset.to_table().to_pylist():
         gid: str = record["id"]
         source: str = record["source"]
         created: float = record["created"]
