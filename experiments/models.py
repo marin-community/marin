@@ -174,6 +174,8 @@ if __name__ == "__main__":
         llama_3_1_8b_instruct,
         llama_3_1_8b,
         llama_3_1_70b,
+        llama_3_1_405b,
+        tulu_3_1_8b_instruct,
         tulu_3_1_8b_sft,
         olmo_2_sft_8b,
         olmo_2_base_8b,
