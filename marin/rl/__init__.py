@@ -5,15 +5,9 @@ Only re-export *types* that are intended for public consumption.  Keeping
 heavy dependencies outside of training scripts.
 """
 
-from .types import (
-    AbstractEnvConfig,
-    MarinRlConfig,
-    RlTrainingConfig,
-    Rollout,
-    RolloutGroup,
-    RolloutSink,
-    Turn,
-)
+# Configs now live in .config
+from .config import AbstractEnvConfig, MarinRlConfig, RlTrainingConfig
+from .types import Rollout, RolloutGroup, RolloutSink, Turn
 
 __all__ = [
     "AbstractEnvConfig",

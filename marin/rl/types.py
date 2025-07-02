@@ -6,19 +6,11 @@ components.  Implementation-specific logic should live elsewhere to avoid
 introducing heavy dependencies at import time.
 """
 
-import abc
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from levanter.utils.ray_utils import RayResources
-
-from marin.resources import ResourceConfig
-
 __all__ = [
-    "AbstractEnvConfig",
-    "MarinRlConfig",
-    "RlTrainingConfig",
     "Rollout",
     "RolloutGroup",
     "RolloutSink",
@@ -102,46 +94,5 @@ MarinEnv = Any
 
 
 # ---------------------------------------------------------------------------
-# RL Training & Environment configuration stubs
+# Configs now reside in :pymod:`marin.rl.config`.
 # ---------------------------------------------------------------------------
-
-
-class AbstractEnvConfig(abc.ABC):
-    """Abstract base class that every environment config must implement."""
-
-    @abc.abstractmethod
-    def resources(self) -> RayResources:
-        """Return the Ray resource requirements to instantiate an environment."""
-
-    @abc.abstractmethod
-    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink) -> MarinEnv:
-        """Create the environment instance.
-
-        Parameters
-        ----------
-        inference:
-            A handle or address for an OAI-compatible inference endpoint.
-        rollout_sink:
-            Callable that receives finished rollouts.
-        """
-
-
-@dataclass(slots=True, frozen=True)
-class RlTrainingConfig:
-    """Minimal learner/training hyperparameters."""
-
-    num_steps: int
-    batch_size: int
-    # Additional algorithm-specific fields can be added incrementally.
-
-
-@dataclass(slots=True, frozen=True)
-class MarinRlConfig:
-    """Top-level configuration object that ties everything together."""
-
-    name: str
-    envs: list[AbstractEnvConfig]
-    tokenizer: str
-    inference: InferenceConfig
-    learner: RlTrainingConfig
-    learner_resources: ResourceConfig
