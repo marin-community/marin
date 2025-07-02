@@ -14,6 +14,7 @@
             --num_train_steps=2048 \
             --max_input_length=256 \
             --max_output_length=1025 \
+            --env_name="math" \
             --train_bsize=64 \
             --decode_bsize=1024 \
             --prefill_bsize=16 \
