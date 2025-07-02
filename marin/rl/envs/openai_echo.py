@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import dataclass
 
 import openai
 import ray
@@ -83,6 +84,7 @@ class ChatEchoEnv(AbstractMarinEnv):
         pass
 
 
+@dataclass(frozen=True)
 class ChatEchoEnvConfig(AbstractEnvConfig):
     """Config for :class:`ChatEchoEnv`."""
 

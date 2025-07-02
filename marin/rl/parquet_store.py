@@ -112,46 +112,48 @@ def iter_rollout_groups(root_path: str) -> Iterator[RolloutGroup]:
     # We'll accumulate rows with identical group metadata together.
     pending: dict[str, RolloutGroup] = {}
 
-    for record in dataset.to_table().to_pylist():
-        gid: str = record["id"]
-        source: str = record["source"]
-        created: float = record["created"]
-        group_meta_json: str = record["group_metadata_json"]
-        rollout_meta_json: str = record["rollout_metadata_json"]
+    # Iterate over record batches to avoid loading the full dataset in memory.
+    for batch in dataset.to_batches():
+        for record in batch.to_pylist():
+            gid: str = record["id"]
+            source: str = record["source"]
+            created: float = record["created"]
+            group_meta_json: str = record["group_metadata_json"]
+            rollout_meta_json: str = record["rollout_metadata_json"]
 
-        turns = []
-        for t in record["turns"]:
-            turns.append(
-                Turn(
-                    message=t["message"],
-                    role=t["role"],
-                    logprobs=t.get("logprobs"),
-                    reward=t.get("reward"),
-                    inference_metadata=json.loads(t["inference_metadata_json"]),
+            turns = []
+            for t in record["turns"]:
+                turns.append(
+                    Turn(
+                        message=t["message"],
+                        role=t["role"],
+                        logprobs=t.get("logprobs"),
+                        reward=t.get("reward"),
+                        inference_metadata=json.loads(t["inference_metadata_json"]),
+                    )
                 )
+
+            rollout = Rollout(
+                turns=turns,
+                metadata=json.loads(rollout_meta_json),
             )
 
-        rollout = Rollout(
-            turns=turns,
-            metadata=json.loads(rollout_meta_json),
-        )
-
-        if gid not in pending:
-            pending[gid] = RolloutGroup(
-                id=gid,
-                source=source,
-                created=created,
-                rollouts=[rollout],
-                metadata=json.loads(group_meta_json),
-            )
-        else:
-            grp = pending[gid]
-            pending[gid] = RolloutGroup(
-                id=gid,
-                source=source,
-                created=created,
-                rollouts=[*grp.rollouts, rollout],
-                metadata=grp.metadata,
-            )
+            if gid not in pending:
+                pending[gid] = RolloutGroup(
+                    id=gid,
+                    source=source,
+                    created=created,
+                    rollouts=[rollout],
+                    metadata=json.loads(group_meta_json),
+                )
+            else:
+                grp = pending[gid]
+                pending[gid] = RolloutGroup(
+                    id=gid,
+                    source=source,
+                    created=created,
+                    rollouts=[*grp.rollouts, rollout],
+                    metadata=grp.metadata,
+                )
 
     yield from pending.values()
