@@ -115,6 +115,7 @@ from marin.execution.executor_step_status import (
 from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
 from marin.utilities.executor_utils import get_pip_dependencies
 from marin.utilities.json_encoder import CustomJsonEncoder
+from marin.utilities.ray_utils import is_local_ray_cluster
 
 logger = logging.getLogger("ray")
 
@@ -1076,7 +1077,9 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
 
     time_in = time.time()
     ray.init(
-        namespace="marin", ignore_reinit_error=True
+        namespace="marin",
+        ignore_reinit_error=True,
+        resources={"head_node": 1} if is_local_ray_cluster() else None,
     )  # We need to init ray here to make sure we have the correct namespace for actors
     # (status_actor in particular)
     time_out = time.time()
