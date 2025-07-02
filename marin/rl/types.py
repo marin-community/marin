@@ -81,6 +81,9 @@ class RolloutGroup:
     name, seed, etc.).
     """
 
+    id: str
+    source: str  # name of the environment that produced the rollouts
+    created: float  # POSIX timestamp (seconds since epoch)
     rollouts: list[Rollout]
     metadata: dict[str, Any]
 
