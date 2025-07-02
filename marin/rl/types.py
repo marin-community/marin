@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 __all__ = [
+    "InferenceEndpoint",
     "Rollout",
     "RolloutGroup",
     "RolloutSink",
@@ -87,8 +88,24 @@ class RolloutGroup:
 RolloutSink = Callable[[list[RolloutGroup]], None]
 
 
+# ---------------------------------------------------------------------------
+# Inference endpoint placeholder
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True, frozen=True)
+class InferenceEndpoint:
+    """Location of an OAI-compatible inference server.
+
+    For now this is just a plain address string (e.g. "http://host:8000" or a
+    Ray actor name).  Additional connection metadata can be added later without
+    affecting existing code because the dataclass is frozen and explicit.
+    """
+
+    address: str
+
+
 # Placeholders for inference endpoints and environments.
-InferenceEndpoint = Any
 InferenceConfig = Any
 MarinEnv = Any
 
