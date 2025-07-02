@@ -35,8 +35,6 @@ dependencies = [
     "sentencepiece",
     "lz4",
     "wandb<=0.19.9",
-    "markdownify",
-    "html2text",
 ]
 
 [project.optional-dependencies]
@@ -52,16 +50,18 @@ dev = [
     "types-PyYAML",
     "types-requests",
     "types-six",
+    "markdownify==0.12.1",
+    "html2text==2024.2.26", # TODO :: Check pin?
 ]
 
-cuda12 = [
-    "jax[cuda12]==0.5.1",
-    "torch>=2.7.0",
-]
+#cuda12 = [
+#    "jax[cuda12]==0.5.1",
+#    "torch>=2.7.0",
+#]
 
-tpu = [
-    "jax[tpu]==0.5.1",
-]
+#tpu = [
+#    "jax[tpu]==0.5.1",
+#]
 
 metrics = [
     "google-cloud-logging",
@@ -93,7 +93,7 @@ download_transform = [
     "lxml[html_clean]",
     "warcio",
     "resiliparse",
-    "trafilatura",
+    "trafilatura>=2.0",
     "boto3==1.35.23",
     "htmlmin",
 ]
