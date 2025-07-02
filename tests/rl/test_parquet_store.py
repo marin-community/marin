@@ -1,7 +1,5 @@
 """Round-trip tests for marin.rl.parquet_store."""
 
-from __future__ import annotations
-
 import time
 from dataclasses import asdict
 

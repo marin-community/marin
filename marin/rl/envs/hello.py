@@ -63,8 +63,7 @@ class HelloEnvConfig(AbstractEnvConfig):
     def resources(self) -> RayResources:
         return RayResources(cpu=1)
 
-    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink):
-        # Create a Ray async actor with the requested resources.
+    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, replica_id: int):
         ActorCls = ray.remote(num_cpus=1)(HelloWorldEnv)
         actor = ActorCls.remote(inference, rollout_sink)
         actor.run.remote()  # kick off event loop

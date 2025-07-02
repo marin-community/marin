@@ -209,7 +209,7 @@ class MathEnvConfig(AbstractEnvConfig):
     def resources(self) -> RayResources:
         return RayResources(cpu=1)
 
-    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink):
+    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, replica_id: int):
         ActorCls = ray.remote(num_cpus=1)(MathEnv)
         actor = ActorCls.remote(
             inference,
@@ -218,7 +218,7 @@ class MathEnvConfig(AbstractEnvConfig):
             split=self.split,
             model=self.model,
             max_iters=self.max_iters,
-            seed=self.seed,
+            seed=self.seed + replica_id,
         )
         actor.run.remote()
         return actor

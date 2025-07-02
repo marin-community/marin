@@ -91,7 +91,7 @@ class ChatEchoEnvConfig(AbstractEnvConfig):
     def resources(self) -> RayResources:
         return RayResources(cpu=1)
 
-    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink):
+    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, replica_id: int):
         ActorCls = ray.remote(num_cpus=1)(ChatEchoEnv)
         actor = ActorCls.remote(inference, rollout_sink, prompt=self.prompt)
         actor.run.remote()

@@ -5,8 +5,6 @@ structures remain dependency-free, while configs can import heavier utilities
 (e.g. `RayResources`, `ResourceConfig`).
 """
 
-from __future__ import annotations
-
 import abc
 from dataclasses import dataclass
 from typing import Any
@@ -36,7 +34,7 @@ class AbstractEnvConfig(abc.ABC):
         """Return Ray resource specs (CPU/GPU/TPU etc.) needed per replica."""
 
     @abc.abstractmethod
-    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink) -> ActorHandle:
+    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, replica_id: int) -> ActorHandle:
         """Instantiate the environment.
 
         *inference* can be a URI, Ray handle, or any endpoint object understood
