@@ -12,10 +12,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from levanter.utils.ray_utils import RayResources
+from ray.actor import ActorHandle
 
 from marin.resources import ResourceConfig
-
-from .types import InferenceConfig, InferenceEndpoint, MarinEnv, RolloutSink
+from marin.rl.types import (
+    InferenceConfig,
+    InferenceEndpoint,
+    RolloutSink,
+)
 
 __all__ = [
     "AbstractEnvConfig",
@@ -32,7 +36,7 @@ class AbstractEnvConfig(abc.ABC):
         """Return Ray resource specs (CPU/GPU/TPU etc.) needed per replica."""
 
     @abc.abstractmethod
-    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink) -> MarinEnv:
+    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink) -> ActorHandle:
         """Instantiate the environment.
 
         *inference* can be a URI, Ray handle, or any endpoint object understood

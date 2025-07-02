@@ -107,7 +107,6 @@ class InferenceEndpoint:
 
 # Placeholders for inference endpoints and environments.
 InferenceConfig = Any
-MarinEnv = Any
 
 
 # ---------------------------------------------------------------------------
