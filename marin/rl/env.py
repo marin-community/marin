@@ -8,8 +8,6 @@ Concrete environments should inherit from :class:`AbstractMarinEnv` and
 implement the :pymeth:`run` coroutine.
 """
 
-from __future__ import annotations
-
 import abc
 import asyncio
 import logging

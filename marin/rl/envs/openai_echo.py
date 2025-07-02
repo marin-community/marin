@@ -5,8 +5,6 @@ assistant's response. Reward is set to 0.0.  Useful for smoke-testing the
 end-to-end pipeline with the real OpenAI client or the openai_responses mock.
 """
 
-from __future__ import annotations
-
 import asyncio
 import time
 from dataclasses import dataclass

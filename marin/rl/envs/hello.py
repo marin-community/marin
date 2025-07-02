@@ -6,8 +6,6 @@ response.  Rewards are dummy zeros.  This serves as an integration test for the
 actor, config, and rollout plumbing.
 """
 
-from __future__ import annotations
-
 import asyncio
 import time
 
