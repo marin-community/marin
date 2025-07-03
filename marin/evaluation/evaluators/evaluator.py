@@ -44,6 +44,11 @@ class ModelConfig:
     Additional keyword arguments passed to the SamplingParams for the vLLM engine
     """
 
+    apply_chat_template: bool = False
+    """
+    Whether or not this model was trained with a Chat Template in the tokenizer
+    """
+
     def ensure_downloaded(self, local_path: str | None = None) -> str | None:
         """
         Ensures that the model checkpoint is downloaded to `local_path` if necessary.

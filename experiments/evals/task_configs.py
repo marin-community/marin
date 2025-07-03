@@ -29,6 +29,19 @@ MMLU_0_SHOT = EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot")
 MMLU_5_SHOT = EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")
 MMLU_PRO_5_SHOT = EvalTaskConfig("leaderboard_mmlu_pro", 5, task_alias="mmlu_5shot")
 
+OPEN_LM_LEADERBOARD_MCQ = (
+    EvalTaskConfig("leaderboard_bbh", 3, task_alias="lb_bbh_3shot"),
+    EvalTaskConfig("leaderboard_mmlu_pro", 5, task_alias="lb_mmlu_pro_5shot"),
+    EvalTaskConfig("leaderboard_gpqa", 0, task_alias="lb_gpqa_0shot"),
+    EvalTaskConfig("leaderboard_musr", 0, task_alias="lb_musr_0shot"),
+)
+
+
+OPEN_LM_LEADERBOARD_GEN = (
+    EvalTaskConfig("leaderboard_ifeval", 0, task_alias="lb_ifeval_0shot"),
+    EvalTaskConfig("leaderboard_math_hard", 4, task_alias="lb_math_4shot"),
+)
+
 MMLU_TASKS = (
     MMLU_0_SHOT,
     MMLU_5_SHOT,
