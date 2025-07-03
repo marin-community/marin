@@ -25,13 +25,13 @@ def xla_check_device_with_scheduling_strategy():
 
 
 @pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
-def test_xla_initialization(ray_tpu_cluster):
+def test_xla_initialization(ray_cluster):
     result = ray.get(xla_check_device.remote())
     assert result
 
 
 @pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
-def test_xla_initialization_with_scheduling_strategy(ray_tpu_cluster):
+def test_xla_initialization_with_scheduling_strategy(ray_cluster):
     result = ray.get(xla_check_device_with_scheduling_strategy.remote())
     assert result
 
@@ -50,7 +50,7 @@ class TPUActor:
 
 
 @pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
-def test_not_conflicting_devices(ray_tpu_cluster):
+def test_not_conflicting_devices(ray_cluster):
     num_total_devices = 4
 
     xla_device_id_list = []
