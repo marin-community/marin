@@ -166,7 +166,7 @@ def run_inference(config: TextGenerationInferenceConfig):
             "prompt_column": config.prompt_column,
             "save_templated_prompt": config.save_templated_prompt,
             "apply_chat_template": config.apply_chat_template,
-            "max_doc_length": config.max_doc_length,
+            "max_doc_tokens": config.max_doc_tokens,
             "generated_text_column_name": config.generated_text_column_name,
         },
         **ray_resources_kwarg(config),
