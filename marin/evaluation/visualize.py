@@ -35,7 +35,7 @@ class VizLmConfig:
     comparison_is_hf: bool = False
 
 
-@ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1})
+@ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1}, max_calls=1)
 @remove_tpu_lockfile_on_exit
 def do_viz_lm(config: LevanterVizLmConfig) -> None:
     """

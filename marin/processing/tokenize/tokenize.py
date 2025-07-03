@@ -19,6 +19,7 @@ import abc
 import dataclasses
 import logging
 import os
+import re
 from collections.abc import Sequence
 
 import draccus
@@ -76,6 +77,11 @@ class TokenizeConfig(TokenizeConfigBase):
     The format of the dataset. This is used to determine how to tokenize the data.
     See Levanter's documentation for more details.
     """
+    allow_test_in_train: bool = False
+    """
+    If True, allows 'test' or 'validation' in the train_paths. This is useful for datasets that have
+    'test' or 'validation' in the file names, but are not actually test or validation sets.
+    """
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -112,6 +118,37 @@ class TokenizeConfig(TokenizeConfigBase):
         if isinstance(self.validation_paths, Sequence):
             assert "/" not in self.validation_paths, "don't use the entire fs for validation paths!"
 
+        _validate_train_urls(self.train_paths, self.allow_test_in_train)
+
+
+def _validate_train_urls(train_paths: list[str | InputName], warn):
+    """
+    Validates the training data URLs or InputName attributes to ensure they do not contain forbidden patterns.
+    Raises a ValueError if a forbidden pattern is found.
+    """
+    for item in train_paths:
+        url_or_name_to_check = None
+        if isinstance(item, str):
+            url_or_name_to_check = item
+        elif isinstance(item, InputName):
+            url_or_name_to_check = item.name
+
+        if url_or_name_to_check:
+            # \b doesn't work because of underscores
+            if re.search(r"[^a-zA-Z]test[^a-zA-Z]", url_or_name_to_check) or re.search(
+                r"validation", url_or_name_to_check
+            ):
+                if warn:
+                    logger.warning(
+                        f"Warning: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
+                    )
+                else:
+                    raise ValueError(
+                        f"Error: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
+                        "('test' or 'validation'). "
+                        "Please ensure training data does not include test or validation sets."
+                    )
+
 
 @dataclasses.dataclass(frozen=True)
 class HfTokenizeConfig(TokenizeConfigBase):
@@ -139,12 +176,13 @@ class HfTokenizeConfig(TokenizeConfigBase):
         )
 
 
-def _expand_directories(config: UrlDatasetSourceConfig) -> UrlDatasetSourceConfig:
+def _expand_directories(config: UrlDatasetSourceConfig, allow_test_in_train) -> UrlDatasetSourceConfig:
     """
     Expand directories in the config to globs.
     """
 
     train_paths = _get_filepaths_to_tokenize(config.train_urls)
+    _validate_train_urls(train_paths, allow_test_in_train)
     validation_paths = _get_filepaths_to_tokenize(config.validation_urls)
 
     return dataclasses.replace(config, train_urls=train_paths, validation_urls=validation_paths)
@@ -158,7 +196,7 @@ def tokenize(config: TokenizeConfigBase):
     if isinstance(config, TokenizeConfig):
         # TODO: Levanter doesn't automatically expand directories to globs, but by convention we do in Marin
         # we should backport this to Levanter
-        source_config = _expand_directories(source_config)
+        source_config = _expand_directories(source_config, config.allow_test_in_train)
 
     train_source = source_config.get_shard_source("train")
     validation_source = source_config.get_shard_source("validation")

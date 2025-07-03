@@ -89,7 +89,11 @@ def _impute_model_config(config):
         engine_kwargs = config.engine_kwargs
 
     return ModelConfig(
-        name=model_name, path=model_path, engine_kwargs=engine_kwargs, generation_params=generation_params
+        name=model_name,
+        path=model_path,
+        engine_kwargs=engine_kwargs,
+        generation_params=generation_params,
+        apply_chat_template=config.apply_chat_template,
     )
 
 

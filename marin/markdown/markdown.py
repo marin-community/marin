@@ -391,7 +391,7 @@ class MyMarkdownConverter(MarkdownConverter):
     def indent(self, text, level):
         return markdownify.line_beginning_re.sub("    " * level, text) if text else ""
 
-    def process_tag(self, node, convert_as_inline, children_only=False):
+    def process_tag(self, node, convert_as_inline, children_only=False, parent_tags=None):
         # skip aria-hidden elements
         if node.get("aria-hidden") == "true":
             return ""
