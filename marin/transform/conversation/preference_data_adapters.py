@@ -64,5 +64,7 @@ register_preference_adapter(
         dataset_format=PreferenceDatasetFormat.CHOSEN_REJECTED,
         chosen_column="chosen",
         rejected_column="rejected",
+        role_key="role",
+        content_key="content",
     ),
 )

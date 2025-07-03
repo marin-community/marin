@@ -69,18 +69,24 @@ def transform_rows(rows: list[dict], cfg: TransformPreferenceDatasetConfig, adap
     return transformed
 
 
-def create_shard_output_directory(output_filename: str) -> str:
-    # Remove file suffix and create directory for shards
-    if output_filename.endswith(".jsonl.gz"):
-        output_path = output_filename[:-9]
-    elif output_filename.endswith(".jsonl"):
-        output_path = output_filename[:-6]
-    elif output_filename.endswith(".json"):
-        output_path = output_filename[:-5]
-    else:
-        output_path = output_filename
-    fsspec_mkdirs(output_path)
-    return output_path
+def create_shard_output_directory(output_dir: str) -> str:
+    """Create the output directory for shards.
+
+    Args:
+        output_dir: The directory path to create
+
+    Returns:
+        The same directory path
+
+    Raises:
+        ValueError: If output_dir looks like a file path instead of a directory path
+    """
+    # Raise error if it looks like a file path instead of a directory
+    if any(output_dir.endswith(ext) for ext in [".json", ".jsonl", ".jsonl.gz", ".parquet"]):
+        raise ValueError(f"Output path '{output_dir}' looks like a file path, but we expect a directory path")
+
+    fsspec_mkdirs(output_dir)
+    return output_dir
 
 
 def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local_directory_path: str):
@@ -113,13 +119,17 @@ def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike):
 def get_shard_dir(dir_name: os.PathLike, subset_name: str | None, split: str) -> os.PathLike:
     if (subset_name == "default") or (subset_name is None):
         return os.path.join(dir_name, split)
+
+    logger.info(f"Getting shard dir for {dir_name} {subset_name} {split}")
+    logger.info(f"shard dir (os.path.join(dir_name, subset_name, split)): {os.path.join(dir_name, subset_name, split)}")
     return os.path.join(dir_name, subset_name, split)
 
 
 @ray.remote
 def transform_hf_preference_dataset(cfg: TransformPreferenceDatasetConfig):
-    # 1. Copy data from GCP to local instance
+    # 1. copy data from GCP to local instance
     local_data_dir = copy_dataset_from_gcp_to_local(cfg.input_path)
+
     # 2. Identify subsets
     if cfg.subsets:
         subsets = cfg.subsets
@@ -128,6 +138,8 @@ def transform_hf_preference_dataset(cfg: TransformPreferenceDatasetConfig):
     adapter = get_preference_adapter(cfg.adapter_name or cfg.source)
     if adapter is None:
         raise ValueError(f"No preference adapter found for source: {cfg.adapter_name or cfg.source}")
+
+    # 3. for each subset, get the splits
     for subset in subsets:
         split_values = [x for x in datasets.get_dataset_infos(path=local_data_dir)[subset].splits.values()]
         if isinstance(split_values[0], dict):
@@ -142,12 +154,20 @@ def transform_hf_preference_dataset(cfg: TransformPreferenceDatasetConfig):
                 splits = list(set(splits).intersection(data_splits))
         else:
             splits = data_splits
+
+        # 4. for each split, get the rows and transform them
         for split in splits:
             dataset = datasets.load_dataset(path=local_data_dir, name=subset, split=split)
             rows = [r for r in dataset]
             del dataset
+            logger.info(f"Config output path: {cfg.output_path}")
+            logger.info(f"Subset: {subset}")
+            logger.info(f"Split: {split}")
             subset_output_path = get_shard_dir(cfg.output_path, subset, split)
+            logger.info(f"Subset output path: {subset_output_path}")
             output_path = create_shard_output_directory(subset_output_path)
+
+            # transform rows with sharding, and write to output path
             for idx, shard in enumerate(range(0, len(rows), cfg.shard_size)):
                 shard_rows = rows[shard : min(shard + cfg.shard_size, len(rows))]
                 shard_filename = os.path.join(output_path, f"shard_{idx:05d}.jsonl.gz")
@@ -156,7 +176,8 @@ def transform_hf_preference_dataset(cfg: TransformPreferenceDatasetConfig):
                     transformed_shard_rows = transform_rows(shard_rows, cfg, adapter)
                     for row in transformed_shard_rows:
                         f.write(f"{json.dumps(row)}\n")
-            logging.log(logging.INFO, f"Wrote processed data to {output_path}")
+            logger.info(f"Wrote processed data to {output_path}")
+
     return cfg.output_path
 
 
