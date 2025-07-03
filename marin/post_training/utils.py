@@ -14,11 +14,12 @@ import jax
 import jax.numpy as jnp
 import msgpack
 import numpy as np
-import wandb
 from flax.serialization import from_bytes, from_state_dict, to_bytes, to_state_dict
 from flax.traverse_util import empty_node, flatten_dict, unflatten_dict
 from jax import lax
 from transformers import AutoTokenizer
+
+import wandb
 
 GCLOUD_TOKEN_PATH = os.environ.get("GCLOUD_TOKEN_PATH", None)
 GCLOUD_PROJECT = os.environ.get("GCLOUD_PROJECT", None)
