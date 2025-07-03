@@ -11,6 +11,7 @@ How to retrieve a preference dataset:
 
 Current datasets:
 1. HuggingFaceH4/ultrafeedback_binarized
+   (only train_prefs split included to avoid accidentally training on test_prefs)
 2. allenai/olmo-2-1124-7b-preference-mix
 """
 
@@ -66,7 +67,7 @@ PREFERENCE_DATASET_NAME_TO_CONFIG = {
         wait_for_completion=True,
         metadata_columns=["prompt", "score_chosen", "score_rejected"],
         filetype="parquet",
-        splits=["train_prefs", "test_prefs"],  # Use the actual available split for preferences
+        splits=["train_prefs"],
     ),
     "allenai/olmo-2-1124-7b-preference-mix": PreferenceDatasetConfig(
         hf_dataset_id="allenai/olmo-2-1124-7b-preference-mix",
@@ -74,7 +75,7 @@ PREFERENCE_DATASET_NAME_TO_CONFIG = {
         wait_for_completion=True,
         metadata_columns=["prompt", "chosen_rating", "rejected_rating"],
         filetype="parquet",
-        splits=["train"],  # Use the actual available split for preferences
+        splits=["train"],
     ),
 }
 
