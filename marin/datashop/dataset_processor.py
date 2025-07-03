@@ -14,6 +14,7 @@ class DatasetOutputProcessorConfig:
     input_path: str
     output_path: str
     processor_type: str
+    columns_to_keep: list[str]
 
 
 class DatasetOutputProcessor:
@@ -30,11 +31,10 @@ class DatasetOutputProcessor:
         score_values: The list of score values (the possible values that the score can take on).
     """
 
-    def __init__(self, input_path: str, output_path: str, score_values: list[int]):
+    def __init__(self, input_path: str, output_path: str, columns_to_keep: list[str]):
         self.input_path = input_path
         self.output_path = output_path
-        self.score_values = score_values
-        self.score_distribution = {v: 0 for v in score_values}
+        self.columns_to_keep = columns_to_keep
 
     @abc.abstractmethod
     def extract_score(text: str) -> int:
@@ -48,15 +48,16 @@ class DatasetOutputProcessor:
             self.output_path,
             TaskConfig(),
             False,
-            self.score_values,
             self.extract_score,
+            self.columns_to_keep,
         )
 
+        aggregated_score_distribution = {}
         for score_distribution in ray.get(responses):
             for score, count in score_distribution.items():
-                self.score_distribution[score] = self.score_distribution.get(score, 0) + count
+                aggregated_score_distribution[score] = aggregated_score_distribution.get(score, 0) + count
 
-        return self.score_distribution
+        return aggregated_score_distribution
 
 
 class MeduDatasetOutputProcessor(DatasetOutputProcessor):
@@ -68,8 +69,8 @@ class MeduDatasetOutputProcessor(DatasetOutputProcessor):
         "Useless": 1,
     }
 
-    def __init__(self, input_path: str, output_path: str):
-        super().__init__(input_path, output_path, list(MeduDatasetOutputProcessor.SCORE_OPTIONS_DICT.values()))
+    def __init__(self, input_path: str, output_path: str, columns_to_keep: list[str]):
+        super().__init__(input_path, output_path, columns_to_keep)
 
     @staticmethod
     def extract_score(text: str) -> int:
@@ -86,10 +87,8 @@ class MeduDatasetOutputProcessor(DatasetOutputProcessor):
 class FinalScoreZeroToFiveDatasetOutputProcessor(DatasetOutputProcessor):
     SCORE_OPTIONS_DICT: ClassVar[dict[str, int]] = {str(i): i for i in range(6)}
 
-    def __init__(self, input_path: str, output_path: str):
-        super().__init__(
-            input_path, output_path, list(FinalScoreZeroToFiveDatasetOutputProcessor.SCORE_OPTIONS_DICT.values())
-        )
+    def __init__(self, input_path: str, output_path: str, columns_to_keep: list[str]):
+        super().__init__(input_path, output_path, columns_to_keep)
 
     @staticmethod
     def extract_score(text: str) -> int:
@@ -110,6 +109,6 @@ class AutoDatasetOutputProcessor(DatasetOutputProcessor):
     }
 
     @classmethod
-    def from_processor_type(cls, input_path, output_path, processor_type):
+    def from_processor_type(cls, input_path, output_path, processor_type, columns_to_keep):
         processor_cls = cls._PROCESSOR_TYPE_TO_CLS[processor_type]
-        return processor_cls(input_path, output_path)
+        return processor_cls(input_path, output_path, columns_to_keep)

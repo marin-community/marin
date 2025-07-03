@@ -19,7 +19,7 @@ import ray
 
 from marin.classifiers.types import Attribute, Document, LabeledExample
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
-from marin.utils import fsspec_glob, fsspec_rm, rebase_file_path
+from marin.utils import fsspec_glob, fsspec_isdir, fsspec_rm, rebase_file_path
 
 logger = logging.getLogger("ray")
 
@@ -53,6 +53,26 @@ class CreateDatasetConfig:
     filetype: str = "jsonl.gz"
     merge_dataset_shards: bool = True
     columns_to_keep: list[str] = field(default_factory=lambda: ["text"])
+
+
+@dataclass(frozen=True)
+class SplitDatasetConfig:
+    """Configuration for splitting dataset into training and validation sets
+
+    Attributes:
+        input_file_path (str): Path to the input dataset file.
+        train_file_path (str): Path to the output training dataset file.
+        val_file_path (str): Path to the output validation dataset file.
+        val_frac (float): Fraction of data to be used for validation.
+        seed (int): Seed for random number generator to ensure reproducibility.
+    """
+
+    input_file_path: str
+    train_file_path: str
+    val_file_path: str
+    val_frac: float
+    seed: int
+    filetype: str = "jsonl.gz"
 
 
 def label_documents(
@@ -285,13 +305,29 @@ def merge_dataset_shards(
                     f_out.write(line)
 
 
-def split_dataset(
-    input_file_path: str,
-    train_file_path: str,
-    val_file_path: str,
-    val_frac: float,
-    seed: int,
+@ray.remote
+@cached_or_construct_output(success_suffix="SUCCESS")
+def create_train_val_shard(
+    input_file_path: str, train_file_path: str, val_file_path: str, val_frac: float, seed: int
 ) -> None:
+    """
+    Creates a training and validation shard from a dataset file.
+    """
+    rng = np.random.default_rng(seed=seed)
+
+    with (
+        fsspec.open(input_file_path, "rt", compression="infer") as f_in,
+        fsspec.open(train_file_path, "wt", compression="infer") as f_train,
+        fsspec.open(val_file_path, "wt", compression="infer") as f_val,
+    ):
+        for line in f_in:
+            if rng.random() < val_frac:
+                f_val.write(line)
+            else:
+                f_train.write(line)
+
+
+def split_dataset(config: SplitDatasetConfig) -> None:
     """
     Splits a dataset into training and validation datasets.
 
@@ -302,17 +338,40 @@ def split_dataset(
         val_frac (float): Fraction of data to be used for validation.
         seed (int): Seed for random number generator to ensure reproducibility.
     """
-    rng = np.random.default_rng(seed=seed)
-    with (
-        fsspec.open(train_file_path, "wt", compression="infer") as f_train,
-        fsspec.open(val_file_path, "wt", compression="infer") as f_val,
+    rng = np.random.default_rng(seed=config.seed)
+
+    if fsspec_isdir(config.input_file_path):
+        input_file_paths = fsspec_glob(os.path.join(config.input_file_path, f"**/*.{config.filetype}"))
+    else:
+        input_file_paths = [config.input_file_path]
+
+    logger.info(f"Splitting dataset into training and validation sets. Found {len(input_file_paths)} files.")
+
+    if fsspec_isdir(config.train_file_path):
+        train_file_paths = [
+            rebase_file_path(config.input_file_path, input_file_path, config.train_file_path)
+            for input_file_path in input_file_paths
+        ]
+    else:
+        train_file_paths = [config.train_file_path]
+
+    if fsspec_isdir(config.val_file_path):
+        val_file_paths = [
+            rebase_file_path(config.input_file_path, input_file_path, config.val_file_path)
+            for input_file_path in input_file_paths
+        ]
+    else:
+        val_file_paths = [config.val_file_path]
+
+    responses = []
+    for input_file_path, train_file_path, val_file_path in zip(
+        input_file_paths, train_file_paths, val_file_paths, strict=False
     ):
-        with fsspec.open(input_file_path, "rt", compression="infer") as f_in:
-            for line in f_in:
-                if rng.random() < val_frac:
-                    f_val.write(line)
-                else:
-                    f_train.write(line)
+        responses.append(
+            create_train_val_shard.remote(input_file_path, train_file_path, val_file_path, config.val_frac, config.seed)
+        )
+
+    ray.get(responses)
 
 
 def format_dataset(

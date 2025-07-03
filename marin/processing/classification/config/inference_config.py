@@ -18,7 +18,7 @@ class InferenceConfig:
     model_name: str
     attribute_name: str
 
-    # The type of the model. Currently: fasttext, fineweb, or None.
+    # The type of the model. Currently: fasttext, fineweb, vllm, or None.
     model_type: str | None = None
     output_path: str | None = None
 
@@ -34,5 +34,11 @@ class InferenceConfig:
 
     # The filetype of the input data.
     filetype: str = "jsonl.gz"
+
+    # Batch size for processing documents
+    batch_size: int = 512
+
+    # Whether to resume from existing progress
+    resume: bool = True
 
     classifier_kwargs: dict = field(default_factory=dict)

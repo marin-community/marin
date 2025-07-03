@@ -1,0 +1,18 @@
+# Test configuration for classification inference
+input_path: "test_input"
+output_path: "test_output"
+model_name: "dummy"
+model_type: "dummy"
+attribute_name: "test_quality"
+filetype: "jsonl.gz"
+batch_size: 2
+resume: true
+
+runtime:
+  memory_limit_gb: 1
+  resources: {}
+
+task:
+  max_in_flight: 2
+
+classifier_kwargs: {}

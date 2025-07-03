@@ -24,7 +24,7 @@ from marin.datashop.pipeline import (
     CorpusContent,
     MEDUPipelineConfig,
     run_data_filter_prompt_generation_pipeline,
-    run_medu_dataset_sampling_pipeline,
+    run_medu_dataset_output_processing_pipeline,
 )
 from marin.download.filesystem.transfer import TransferConfig, transfer_files
 from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
@@ -167,9 +167,9 @@ def default_train_quality_model(
 
     dataset = ExecutorStep(
         name=f"documents/datashop-datasets/{experiment_name}",
-        fn=run_medu_dataset_sampling_pipeline,
+        fn=run_medu_dataset_output_processing_pipeline,
         config=dataset_output_processor_config,
-    ).cd("sampled")
+    )
 
     if quality_train_config_kwargs is None:
         quality_train_config_kwargs = default_quality_filter_train_config_kwargs
@@ -391,7 +391,7 @@ def default_candidate_anneal(documents: ExecutorStep | None, tpu_type: str, expe
 
 
 def default_synthetic_data_generation(
-    input_path: ExecutorStep | InputName,
+    input_path: ExecutorStep | InputName | str,
     output_path: str,
     model_name_or_path: str,
     data_generation_template: str,
@@ -446,5 +446,6 @@ def default_synthetic_data_generation(
             resource_config=resource_config,
             checkpoint_id_column=checkpoint_id_column,
             batch_size=512,
+            num_instances=(1, 256),
         ),
     )

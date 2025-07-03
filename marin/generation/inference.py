@@ -7,6 +7,7 @@ import fsspec
 import ray
 from ray.data import DataContext
 from ray.data.datasource import FilenameProvider
+from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
 from marin.generation.pipeline import vLLMTextGeneration
@@ -94,7 +95,7 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
     if config.tensor_parallel_size == 1:
-        return {"resources": {"TPU": 1, f"{config.resource_config.tpu_type}-head": 1}}
+        return {"resources": {"TPU": 1}}
     else:
         return {
             "ray_remote_args_fn": get_ray_remote_args_scheduling_strategy_fn(
@@ -237,7 +238,16 @@ def find_all_finished_ids(checkpoint_path: str, filetype: str, id_column: str | 
     return finished_ids
 
 
-@ray.remote
+@ray.remote(
+    # Run on the head node because the head node is not preemptible.
+    # This makes sure that the inference itself is not preempted.
+    # If it is preemptible, then we would have to
+    # run this entire pipeline again.
+    scheduling_strategy=NodeAffinitySchedulingStrategy(
+        node_id=ray.get_runtime_context().get_node_id(),
+        soft=False,
+    )
+)
 def run_inference(config: TextGenerationInferenceConfig):
     set_ray_data_config(config)
 

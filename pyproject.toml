@@ -37,6 +37,7 @@ dependencies = [
     "wandb<=0.19.9",
     "markdownify",
     "html2text",
+    "fsspec>=2024.04.09",
 ]
 
 [project.optional-dependencies]

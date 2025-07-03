@@ -16,7 +16,6 @@ from marin.datashop.templates import (
     MEDU_BENCHMARK_DESCRIPTION_TEMPLATE,
     MEDU_DOCUMENT_LABELING_PROMPT,
 )
-from marin.generation.dataset import DatasetSampler
 from marin.generation.llm_generation import vLLMProvider
 from marin.generation.ray_utils import scheduling_strategy_fn
 from marin.utils import fsspec_glob
@@ -271,7 +270,7 @@ def run_data_filter_prompt_generation_pipeline(config: MEDUPipelineConfig):
     _write_final_benchmark_description_prompt(final_benchmark_description_prompt, config.output_path)
 
 
-def run_medu_dataset_sampling_pipeline(config: DatasetOutputProcessorConfig):
+def run_medu_dataset_output_processing_pipeline(config: DatasetOutputProcessorConfig):
     """Runs the pipeline that converts the labeled documents into a dataset of sampled documents.
 
     This pipeline is split into two stages:
@@ -279,19 +278,18 @@ def run_medu_dataset_sampling_pipeline(config: DatasetOutputProcessorConfig):
     2. Sample the dataset to get a final dataset of documents with key "text" and "label" corresponding
     to the text and its respective score graded by the model.
     """
-    logger.info(f"Starting MEDU dataset sampling pipeline for {config.input_path}")
+    logger.info(f"Starting MEDU dataset output processing pipeline for {config.input_path}")
 
-    convert_output_path = os.path.join(config.output_path, "converted")
     processor = AutoDatasetOutputProcessor.from_processor_type(
-        config.input_path, convert_output_path, config.processor_type
+        config.input_path, config.output_path, config.processor_type, config.columns_to_keep
     )
     dataset_score_distribution = processor.convert_dataset()
     logger.info(f"Dataset score distribution: {dataset_score_distribution}")
     if -1 in dataset_score_distribution:
         logger.warning(f"Found {dataset_score_distribution[-1]} examples with score -1. These will not be sampled.")
     # Keep all labels equally weighted
-    label_weights = {score: 1 for score in dataset_score_distribution.keys() if score != -1}
-    sampler_output_path = os.path.join(config.output_path, "sampled")
-    sampler = DatasetSampler(convert_output_path, sampler_output_path, label_weights)
-    sampler.sample_dataset()
-    logger.info(f"Finished MEDU dataset sampling pipeline for {sampler_output_path}")
+    # label_weights = {score: 1 for score in dataset_score_distribution.keys() if score != -1}
+    # sampler_output_path = os.path.join(config.output_path, "sampled")
+    # sampler = DatasetSampler(convert_output_path, sampler_output_path, label_weights)
+    # sampler.sample_dataset()
+    # logger.info(f"Finished MEDU dataset sampling pipeline for {sampler_output_path}")

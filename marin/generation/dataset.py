@@ -69,14 +69,13 @@ def sample_file(input_file_path: str, output_file_path: str, label_weights: dict
 
 @ray.remote
 def convert_labeled_documents_to_scores(
-    input_file_path: str, output_file_path: str, score_values: list[int], extract_score_fn: Callable[[str], int]
+    input_file_path: str, output_file_path: str, extract_score_fn: Callable[[str], int], columns_to_keep: list[str]
 ):
     """Converts labeled documents into parsed out scores.
 
     Inputs:
         input_file_path: The path to the input file.
         output_file_path: The path to the output file.
-        score_values: The list of score values (the possible values that the score can take on).
         extract_score_fn: The function to extract the score from the generated text usually through regex parsing.
 
     Outputs:
@@ -84,7 +83,7 @@ def convert_labeled_documents_to_scores(
 
     Writes out a training file for the quality filter model with "text" and "label" columns.
     """
-    score_distribution = {k: 0 for k in score_values}
+    score_distribution = {}
     with fsspec.open(input_file_path, "r", compression="gzip") as input_file:
         with fsspec.open(output_file_path, "w", compression="gzip") as output_file:
             for line in input_file:
@@ -94,13 +93,18 @@ def convert_labeled_documents_to_scores(
                 score = extract_score_fn(generated_text)
 
                 if score != -1 and text != "":
-                    output_file.write(json.dumps({"text": text, "label": score}) + "\n")
+                    result_dict = {}
+                    for column in columns_to_keep:
+                        result_dict[column] = example[column]
+
+                    result_dict["label"] = score
+                    output_file.write(json.dumps(result_dict) + "\n")
                 elif score == -1:
                     if "id" in example:
                         logger.warning(f"Failed to parse score for example {example['id']}: {generated_text}")
                     else:
                         logger.warning(f"Failed to parse score for example: {generated_text}")
-                score_distribution[score] = score_distribution.get(score, 0) + 1
+                    score_distribution[score] = score_distribution.get(score, 0) + 1
 
     return score_distribution
 

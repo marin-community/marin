@@ -31,7 +31,7 @@ from transformers import (
 )
 
 from marin.classifiers.bert.utils import format_example
-from marin.classifiers.utils import format_dataset, merge_dataset_shards, shuffle, split_dataset
+from marin.classifiers.utils import SplitDatasetConfig, format_dataset, merge_dataset_shards, shuffle, split_dataset
 from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, fsspec_rm, remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger("ray")
@@ -341,7 +341,7 @@ def train_model(
 
             merge_dataset_shards(shard_paths, merge_path)
             format_dataset(merge_path, format_example)
-            split_dataset(merge_path, train_path, val_path, val_frac, seed)
+            split_dataset(SplitDatasetConfig(merge_path, train_path, val_path, val_frac, seed))
             shuffle(train_path, train_path, seed)
             shuffle(val_path, val_path, seed)
 

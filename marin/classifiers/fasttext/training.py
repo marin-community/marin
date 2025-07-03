@@ -7,17 +7,47 @@ Train fastText models.
 import logging
 import os
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime
 
 import ray
 
-from marin.classifiers.fasttext.utils import format_example
-from marin.classifiers.utils import format_dataset, merge_dataset_shards, shuffle, split_dataset
+from marin.classifiers.fasttext.utils import make_format_example_fn
+from marin.classifiers.utils import SplitDatasetConfig, format_dataset, merge_dataset_shards, shuffle, split_dataset
 from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, fsspec_rm
 
 
+@dataclass
+class TrainFasttextClassifierConfig:
+    input_path: str
+    output_path: str
+    seed: int
+    val_frac: float
+    memory_req: int
+    fasttext_args: dict
+    preprocess_fn_type: str | None = None
+
+
+def train_model_with_config(cfg: TrainFasttextClassifierConfig) -> None:
+    train_model(
+        input_path=cfg.input_path,
+        output_path=cfg.output_path,
+        seed=cfg.seed,
+        val_frac=cfg.val_frac,
+        memory_req=cfg.memory_req,
+        preprocess_fn_type=cfg.preprocess_fn_type,
+        **cfg.fasttext_args,
+    )
+
+
 def train_model(
-    input_path: str, output_path: str, seed: int, val_frac: float, memory_req: int, **fasttext_args: dict
+    input_path: str,
+    output_path: str,
+    seed: int,
+    val_frac: float,
+    memory_req: int,
+    preprocess_fn_type: str | None,
+    **fasttext_args: dict,
 ) -> None:
     """
     Train a fastText model.
@@ -60,8 +90,8 @@ def train_model(
             model_path = os.path.join(tmp_dir, "model.bin")
 
             merge_dataset_shards(shard_paths, merge_path)
-            format_dataset(merge_path, format_example)
-            split_dataset(merge_path, train_path, val_path, val_frac, seed)
+            format_dataset(merge_path, make_format_example_fn(preprocess_fn_type))
+            split_dataset(SplitDatasetConfig(merge_path, train_path, val_path, val_frac, seed))
             shuffle(train_path, train_path, seed)
 
             model = fasttext.train_supervised(train_path, **fasttext_args)

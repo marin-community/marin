@@ -36,6 +36,7 @@ default_text_generation_config_kwargs = {
 
 default_dataset_output_processor_config_kwargs = {
     "processor_type": "medu",
+    "columns_to_keep": ["text", "metadata"],
 }
 
 default_quality_filter_train_config_kwargs = {

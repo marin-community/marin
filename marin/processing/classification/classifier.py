@@ -5,6 +5,7 @@ import os
 import tempfile
 import time
 import urllib.parse
+from collections.abc import Callable
 from typing import Any, ClassVar
 
 import torch
@@ -21,6 +22,8 @@ try:
     import torch_xla.core.xla_model as xm
 except ImportError:
     xm = None
+
+from marin.classifiers.fasttext.utils import get_preprocess_fn
 
 
 class BaseClassifier:
@@ -58,11 +61,14 @@ class FasttextClassifier(BaseClassifier):
         "julien-c/fasttext-language-id": "lid.176.bin",
     }
 
-    def __init__(self, model_name: str, attribute_name: str, k: int = 2, *args, **kwargs):
+    def __init__(
+        self, model_name: str, attribute_name: str, k: int = 2, preprocess_fn_type: str | None = None, *args, **kwargs
+    ):
         self.model_name = model_name
         self.attribute_name = attribute_name
         self.model = self.load_model()
         self.k = k
+        self.preprocess_fn = get_preprocess_fn(preprocess_fn_type)
 
     def load_model(self):
         from fasttext.FastText import _FastText
@@ -152,7 +158,7 @@ class FasttextClassifier(BaseClassifier):
                 # has multiple newlines then it will appear as if it were
                 # multiple examples. So, we replace `\n` with a space to avoid this.
                 # https://arc.net/l/quote/mfbqvtry
-                text = text.replace("\n", " ")
+                text = self.preprocess_fn(text)
             else:
                 text = ""
             texts.append(text)
@@ -164,10 +170,9 @@ class FasttextClassifier(BaseClassifier):
             fasttext_quality_dict = dict(zip(label_arr[i], score_arr[i], strict=False))
             attributes_arr.append({self.attribute_name: fasttext_quality_dict})
 
-        res = {"id": batch["id"], "attributes": attributes_arr}
         batch.update({"attributes": attributes_arr})
 
-        return res
+        return batch
 
 
 class BERTClassifier(BaseClassifier):
@@ -263,10 +268,24 @@ class GTEClassifier(FinewebEduClassifier):
 
         device = xm.xla_device()
 
-        self.model = AutoModelForSequenceClassification.from_pretrained(
-            model_name, trust_remote_code=True, output_hidden_states=False
-        ).to(device)
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        is_remote_or_local_path: bool = urllib.parse.urlparse(model_name).scheme or os.path.exists(model_name)
+        if is_remote_or_local_path:
+            print(f"Downloading model from {model_name}")
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                fs, fs_path = fsspec.core.url_to_fs(model_name)
+                fs.get(fs_path + "/*", tmp_dir)
+
+                self.model = AutoModelForSequenceClassification.from_pretrained(
+                    tmp_dir, trust_remote_code=True, output_hidden_states=False
+                ).to(device)
+                self.tokenizer = AutoTokenizer.from_pretrained(tmp_dir)
+            print(f"Model downloaded to {tmp_dir}")
+        else:
+            self.model = AutoModelForSequenceClassification.from_pretrained(
+                model_name, trust_remote_code=True, output_hidden_states=False
+            ).to(device)
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+
         self.attribute_name = attribute_name
         self.max_length = max_length
         self.max_label = max_label
@@ -277,8 +296,8 @@ class GTEClassifier(FinewebEduClassifier):
             documents, return_tensors="pt", padding=True, truncation=True, max_length=self.max_length
         ).to(self.model.device)
         outputs = self.model(**inputs)
-        xm.mark_step()
         logits = outputs.logits.squeeze(-1)
+        xm.mark_step()
         return logits.tolist()
 
 
@@ -309,6 +328,94 @@ class CompressionClassifier(BaseClassifier):
         return {"attributes": compression_ratios}
 
 
+class vLLMClassifier(BaseClassifier):
+    """A classifier that uses vLLM for text generation-based classification.
+
+    This classifier uses the vLLMTextGeneration pipeline to generate classification
+    scores or labels by prompting the model with input text and a classification template.
+    Uses dataset processor functions to parse the generated text into scores.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        attribute_name: str,
+        template: str,
+        score_extractor_fn: Callable | None = None,
+        engine_kwargs: dict[str, Any] | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
+        save_original_generation: bool = False,
+        max_doc_tokens: int = 7000,
+        apply_chat_template: bool = True,
+        prompt_column: str = "text",
+        save_templated_prompt: bool = False,
+        generated_text_column_name: str = "generated_text",
+        *args,
+        **kwargs,
+    ):
+        super().__init__(model_name, attribute_name)
+
+        # Import vLLM text generation pipeline
+        from marin.generation.pipeline import vLLMTextGeneration
+
+        self.text_generator = vLLMTextGeneration(
+            model_name=model_name,
+            engine_kwargs=engine_kwargs,
+            generation_kwargs=generation_kwargs,
+            template=template,
+            prompt_column=prompt_column,
+            apply_chat_template=apply_chat_template,
+            save_templated_prompt=save_templated_prompt,
+            max_doc_tokens=max_doc_tokens,
+            generated_text_column_name=generated_text_column_name,
+        )
+        self.save_original_generation = save_original_generation
+        self.score_extractor_fn = score_extractor_fn or self._default_score_extractor
+        self.generated_text_column_name = generated_text_column_name
+        self.prompt_column = prompt_column
+
+        if score_extractor_fn is None:
+            self.save_original_generation = True
+
+    def _default_score_extractor(self, generation: str) -> int:
+        """Default score extractor that looks for numbers 0-5."""
+        import re
+
+        # Try to extract a number from the generation
+        numbers = re.findall(r"\b([0-5])\b", generation.strip())
+        if numbers:
+            return int(numbers[0])
+        else:
+            # Default to middle score if no valid number found
+            return 2
+
+    def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
+        """Process a batch of documents."""
+        # Use the text generation pipeline to generate responses
+        batch_with_generations = self.text_generator(batch)
+
+        # Process the generated text to extract classification scores
+        attributes = []
+        generated_texts = batch_with_generations[self.generated_text_column_name]
+
+        if self.score_extractor_fn is not None:
+            for generated_text in generated_texts:
+                score = self.score_extractor_fn(generated_text)
+
+                result = {"score": score}
+                attributes.append({self.attribute_name: result})
+
+            batch.update({"attributes": attributes})
+
+        if self.save_original_generation:
+            batch[self.generated_text_column_name] = generated_texts
+
+        print("Save original generation: ", self.save_original_generation)
+        print(batch)
+
+        return batch
+
+
 class AutoClassifier(BaseClassifier):
     _MODEL_NAME_TO_CLS_DICT: ClassVar[dict[str, BaseClassifier]] = {
         "fasttext": FasttextClassifier,
@@ -316,6 +423,8 @@ class AutoClassifier(BaseClassifier):
         "gte": GTEClassifier,
         "compression": CompressionClassifier,
         "bert": BERTQualityClassifier,
+        "vllm": vLLMClassifier,
+        "dummy": DummyClassifier,
     }
 
     def __init__(self, model_name: str, attribute_name: str, model_type: str | None, *args, **kwargs):
