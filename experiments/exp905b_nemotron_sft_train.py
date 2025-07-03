@@ -20,23 +20,28 @@ from marin.processing.tokenize import lm_mixture_data_config
 
 # Dataset configurations
 from exp905a_nemotron_sft_dstc import DATASETS, create_tokenization_step
-# Dataset weights set with the naive baseline of the number of documents per dataset
-# TODO: replace this with a loader that reads the output of compile_and_store_num_rows_step
+# Different from exp808, this dict records the number of tokens, not rows.
 mixture_weights = {
-    "acecode_89k": 87149,
-    "smoltalk": 1043917,
-    "verifiable_math_problems": 777457,
-    "dolphin_r1_nonreasoning": 214318,
-    "dolphin_r1_reasoning": 585418,
-    "bespoke_stratos_17k": 16710,
-    "openthoughts_114k_math": 89120,
-    "tulu_3_sft_mixture": 939343,
-    "natural_reasoning": 1145824,
-    "nemotron_sft": 32955418,
-    "openthoughts3": 1200000
+    "acecode_89k": 26032149,
+    "smoltalk": 883494479,
+    "verifiable_math_problems": 382056624,
+    "dolphin_r1_nonreasoning": 319820708,
+    "dolphin_r1_reasoning": 508743187,
+    "bespoke_stratos_17k": 85724829,
+    "openthoughts_114k_math": 72964948,
+    "tulu_3_sft_mixture": 749008790,
+    "natural_reasoning": 966484170,
+    "nemotron_sft": 34739443205,
+    "openthoughts3": 17449811417
 }
 BATCH_SIZE = 128
+EPOCHS = 3
+SEQ_LEN = 4096 # Should change to load from model config
+
 tokenized_datasets = {short_name: create_tokenization_step(hf_name) for short_name, hf_name in DATASETS.items()}
+
+TOTAL_TOKENS = sum(mixture_weights.values())
+NUM_STEPS = TOTAL_TOKENS // (BATCH_SIZE * SEQ_LEN) * EPOCHS
 
 sft_experiments = []
 deeper_sft_config = dataclasses.replace(
@@ -44,7 +49,7 @@ deeper_sft_config = dataclasses.replace(
     learning_rate=1e-4,
     num_train_steps=10228*8, # Num rows is now 8x larger, so we need to train for 8x more steps. We need to be more principled
     train_batch_size=BATCH_SIZE,
-    model_name_or_path=tootsie_8b_deeper_starling,
+    initialize_from_checkpoint_path=tootsie_8b_deeper_starling.cd("checkpoints/step-1399999").nonblocking(),
 )
 
 sft_mixture_llama3 = lm_mixture_data_config(
