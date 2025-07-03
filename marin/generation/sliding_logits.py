@@ -244,7 +244,7 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
     for batch_start in range(0, len(chunks_shard), cfg.batch_size):
         batch_chunks = chunks_shard[batch_start : batch_start + cfg.batch_size]
         texts = [c["text"] for c in batch_chunks]
-
+        print(f"[Core {index}] Tokenizing batch {batch_start} to {batch_start + cfg.batch_size} of {len(chunks_shard)}", flush=True)
         tokens = tokenizer(
             texts,
             truncation=True,
@@ -254,9 +254,11 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
         )
         tokens = {k: v.to(device) for k, v in tokens.items()}
 
+        print(f"[Core {index}] Running forward pass...", flush=True)
         with torch.no_grad():
             outputs = model(**tokens)
 
+        print(f"[Core {index}] Logits computed", flush=True)
         logits = outputs.logits.to(desired_dtype).cpu()
 
         # Compute P(z) for each example
@@ -271,6 +273,8 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
             pz_batch = torch.exp(suffix_lp).tolist()
         else:
             pz_batch = [0.0] * len(batch_chunks)
+
+        print(f"[Core {index}] P(z) computed", flush=True)
 
         # Build PyArrow rows
         rows = []
@@ -295,6 +299,7 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
             c0, c1 = ch["start_idx"], ch["end_idx"]
             char_max_local[c0 : c1 + 1] = np.maximum(char_max_local[c0 : c1 + 1], pz_batch[i])
 
+        print(f"[Core {index}] Building table", flush=True)
         table = pa.Table.from_pylist(rows, schema=schema)
         writer.write_table(table, row_group_size=len(rows))
 
@@ -311,6 +316,25 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
     with fsspec.open(cm_part_path, "wb") as fo:
         np.save(fo, char_max_local)
     logger.info("[Core %d] Wrote char_max part to %s", index, cm_part_path)
+
+
+# ---------------------------------------------------------------------------
+# Ray remote wrapper ---------------------------------------------------------
+# ---------------------------------------------------------------------------
+# When running under the Marin Executor, the step function is executed in a
+# generic Ray task that does **not** request TPU resources.  We provide an
+# explicit remote version that _does_ request the TPU so that the scheduler
+# places the work on the TPU host and libtpu is visible.
+#
+# Usage from client code / experiment:
+#   from marin.generation.sliding_logits import compute_sliding_logits_remote as compute_sliding_logits
+#   ExecutorStep(fn=compute_sliding_logits_remote, ...)
+
+compute_sliding_logits_remote = ray.remote(
+    # Rough memory estimate (adjust if OOM)
+    memory=16 * 1024 * 1024 * 1024,  # 16 GB
+    resources={"TPU": 4, "TPU-v4-8-head": 1},
+)(compute_sliding_logits)
 
 
 if __name__ == "__main__":
