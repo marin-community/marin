@@ -119,7 +119,7 @@ post_training = [
     "jax==0.5.2",
     "transformers",
     "flax==0.10.0",
-    "sentencepiece==0.1.99",
+    "sentencepiece>=0.1.99",
     "wget==3.2",
     "jaxtyping",#==0.2.23",
     "tyro==0.8.11",
@@ -148,7 +148,7 @@ eval = [
 ]
 
 datashop_gpu = [
-    "vllm", # This is the lattest version that supports torch>=2.7.0
+    "vllm>=0.9.0", # This is the lattest version that supports torch>=2.7.0
     "accelerate>=1.7.0",
 ]
 
