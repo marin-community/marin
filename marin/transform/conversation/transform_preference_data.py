@@ -75,9 +75,6 @@ def create_shard_output_directory(output_dir: str) -> str:
     Args:
         output_dir: The directory path to create
 
-    Returns:
-        The same directory path
-
     Raises:
         ValueError: If output_dir looks like a file path instead of a directory path
     """
