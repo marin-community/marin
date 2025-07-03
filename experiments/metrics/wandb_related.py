@@ -1,8 +1,9 @@
 import logging
-import wandb
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+import wandb
 
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
