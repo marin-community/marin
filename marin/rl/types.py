@@ -48,7 +48,7 @@ class Turn:
     """
 
     message: str
-    logprobs: Sequence[float] | None | None
+    logprobs: Sequence[float] | None
     role: str
     reward: float | None | None
     inference_metadata: dict[str, Any]

@@ -101,7 +101,7 @@ class MathEnv(AbstractMarinEnv):
         self._example_idx = 0  # pointer into the shuffled list
 
         # Prepare OpenAI client for the target inference server.
-        self._client = openai.Client(api_key=api_key or openai.api_key, base_url=inference.address)
+        self._client = openai.Client(api_key=api_key, base_url=inference.address)
 
     # ------------------------------------------------------------------
     # Main loop
@@ -177,8 +177,7 @@ class MathEnv(AbstractMarinEnv):
                 metadata={"valid_format": is_valid, "correct": is_correct},
             )
 
-            # Push to learner / sink.
-            self._send_rollouts(group)
+            self._rollout_sink([group])
 
             iteration += 1
             await asyncio.sleep(0)  # yield control to Ray scheduler
@@ -187,7 +186,7 @@ class MathEnv(AbstractMarinEnv):
     # Optional cleanup
     # ------------------------------------------------------------------
 
-    async def close(self) -> None:  # pragma: no cover
+    async def shutdown(self) -> None:  # pragma: no cover
         pass
 
 
@@ -209,7 +208,7 @@ class MathEnvConfig(AbstractEnvConfig):
     def resources(self) -> RayResources:
         return RayResources(cpu=1)
 
-    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, replica_id: int):
+    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, seed: int):
         ActorCls = ray.remote(num_cpus=1)(MathEnv)
         actor = ActorCls.remote(
             inference,
@@ -218,7 +217,7 @@ class MathEnvConfig(AbstractEnvConfig):
             split=self.split,
             model=self.model,
             max_iters=self.max_iters,
-            seed=self.seed + replica_id,
+            seed=self.seed + seed,
         )
         actor.run.remote()
         return actor

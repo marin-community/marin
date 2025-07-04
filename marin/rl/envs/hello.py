@@ -7,6 +7,7 @@ actor, config, and rollout plumbing.
 """
 
 import asyncio
+import logging
 import time
 
 import ray
@@ -21,6 +22,8 @@ from ..types import (
     RolloutSink,
     Turn,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class HelloWorldEnv(AbstractMarinEnv):
@@ -47,14 +50,14 @@ class HelloWorldEnv(AbstractMarinEnv):
                 rollouts=[rollout],
                 metadata={},
             )
-            self._send_rollouts(group)
+            self._rollout_sink([group])
 
             counter += 1
             await asyncio.sleep(1.0)  # yield control and pace output
 
-    async def close(self) -> None:
+    async def shutdown(self) -> None:
         # Example clean-up
-        print("HelloWorldEnv closed")
+        logger.info("HelloWorldEnv closed")
 
 
 class HelloEnvConfig(AbstractEnvConfig):
@@ -63,7 +66,7 @@ class HelloEnvConfig(AbstractEnvConfig):
     def resources(self) -> RayResources:
         return RayResources(cpu=1)
 
-    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, replica_id: int):
+    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, seed: int) -> ray.ActorHandle:
         ActorCls = ray.remote(num_cpus=1)(HelloWorldEnv)
         actor = ActorCls.remote(inference, rollout_sink)
         actor.run.remote()  # kick off event loop

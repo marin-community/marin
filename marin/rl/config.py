@@ -10,14 +10,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from levanter.utils.ray_utils import RayResources
-from ray.actor import ActorHandle
 
-from marin.resources import ResourceConfig
-from marin.rl.types import (
-    InferenceConfig,
-    InferenceEndpoint,
-    RolloutSink,
-)
+from ..resources import ResourceConfig
+from .env import AbstractMarinEnv
+from .types import InferenceConfig, InferenceEndpoint, RolloutSink
 
 __all__ = [
     "AbstractEnvConfig",
@@ -34,12 +30,10 @@ class AbstractEnvConfig(abc.ABC):
         """Return Ray resource specs (CPU/GPU/TPU etc.) needed per replica."""
 
     @abc.abstractmethod
-    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, replica_id: int) -> ActorHandle:
+    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink) -> AbstractMarinEnv:
         """Instantiate the environment.
 
-        *inference* can be a URI, Ray handle, or any endpoint object understood
-        by the environment.  The *rollout_sink* should be called with
-        :class:`~marin.rl.types.RolloutGroup` batches.
+        The *rollout_sink* should be called with :class:`~marin.rl.types.RolloutGroup` batches.
         """
 
 
@@ -58,7 +52,6 @@ class MarinRlConfig:
 
     name: str
     envs: list[AbstractEnvConfig]
-    tokenizer: str
     inference: InferenceConfig
     learner: RlTrainingConfig
     learner_resources: ResourceConfig

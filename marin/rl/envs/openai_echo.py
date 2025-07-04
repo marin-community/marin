@@ -73,12 +73,12 @@ class ChatEchoEnv(AbstractMarinEnv):
                 rollouts=[rollout],
                 metadata={},
             )
-            self._send_rollouts(group)
+            self._rollout_sink([group])
 
             counter += 1
             await asyncio.sleep(0)  # yield control
 
-    async def close(self) -> None:
+    async def shutdown(self) -> None:
         pass
 
 
@@ -91,7 +91,7 @@ class ChatEchoEnvConfig(AbstractEnvConfig):
     def resources(self) -> RayResources:
         return RayResources(cpu=1)
 
-    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, replica_id: int):
+    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, seed: int):
         ActorCls = ray.remote(num_cpus=1)(ChatEchoEnv)
         actor = ActorCls.remote(inference, rollout_sink, prompt=self.prompt)
         actor.run.remote()
