@@ -34,6 +34,8 @@ sliding_logits_step = ExecutorStep(
         num_devices=4,
         uncompress=False,
         batches_per_save=50,
+        background_queue=True,
+        num_background_writers=2,
     ),
 )
 

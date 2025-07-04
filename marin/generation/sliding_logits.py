@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Any
+import threading
+import queue
 
 import fsspec
 import numpy as np
@@ -130,6 +132,42 @@ class SlidingLogitsConfig:
     # Larger values reduce write overhead but increase peak memory usage.
     batches_per_save: int = 1
 
+    # If True, batches are handed off to background threads for writing so that
+    # the forward-pass loop does not block on I/O. When False, writes happen
+    # synchronously as before.
+    background_queue: bool = False
+
+    # Number of background writer threads. Only used when
+    # ``background_queue`` is True.
+    num_background_writers: int = 1
+
+
+def _writer_loop(batch_queue: queue.Queue, cfg: SlidingLogitsConfig, error_list: list[Exception]) -> None:
+    """Background thread function to write batches to disk.
+
+    Parameters are shared via a queue to avoid blocking the main TPU worker.
+    Any exception is stored in ``error_list`` so the caller can re-raise it
+    after all threads join.
+    """
+    try:
+        for payload in iter(batch_queue.get, None):
+            data_dict, batch_path = payload
+            try:
+                with fsspec.open(batch_path, "wb", block_size=cfg.block_size) as fo:
+                    if cfg.uncompress:
+                        np.save(
+                            fo,
+                            data_dict,
+                            allow_pickle=True,
+                            pickle_kwargs={"protocol": 4},
+                        )
+                    else:
+                        np.savez_compressed(fo, **data_dict)
+            finally:
+                batch_queue.task_done()
+    except Exception as exc:  # pragma: no cover - background thread
+        error_list.append(exc)
+
 
 # Decorator to ensure TPU lockfile cleanup in case of errors
 @remove_tpu_lockfile_on_exit
@@ -230,6 +268,23 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
     # Per-core character-level max-prob array
     text_len = len(full_text)
     char_max_local = np.zeros(text_len, dtype=np.float32)
+
+    batch_queue: queue.Queue | None = None
+    writer_threads: list[threading.Thread] = []
+    writer_errors: list[Exception] = []
+    if cfg.background_queue:
+        queue_size = cfg.num_background_writers * 2
+        batch_queue = queue.Queue(maxsize=queue_size)
+        # Launch a pool of writer threads. Batches are distributed roughly
+        # evenly as each thread pulls work from the queue.
+        for _ in range(cfg.num_background_writers):
+            t = threading.Thread(
+                target=_writer_loop,
+                args=(batch_queue, cfg, writer_errors),
+                daemon=True,
+            )
+            t.start()
+            writer_threads.append(t)
 
     total_batches = (len(chunks_shard) + cfg.batch_size - 1) // cfg.batch_size
     start_time = time.time()
@@ -363,33 +418,30 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
 
             ext = "npy" if cfg.uncompress else "npz"
             batch_path = f"{shard_path_prefix}_part{save_counter}.{ext}"
-            with fsspec.open(batch_path, "wb", block_size=cfg.block_size) as fo:
-                if cfg.uncompress:
-                    np.save(
-                        fo,
-                        {
-                            "input_ids": out_input_ids,
-                            "start_idx": out_start_idx,
-                            "end_idx": out_end_idx,
-                            "text_len": out_text_len,
-                            "text": out_text,
-                            "logits": out_logits,
-                            "pz": out_pz,
-                        },
-                        allow_pickle=True,
-                        pickle_kwargs={'protocol': 4},
-                    )
-                else:
-                    np.savez_compressed(
-                        fo,
-                        input_ids=out_input_ids,
-                        start_idx=out_start_idx,
-                        end_idx=out_end_idx,
-                        text_len=out_text_len,
-                        text=out_text,
-                        logits=out_logits,
-                        pz=out_pz,
-                    )
+            data_dict = {
+                "input_ids": out_input_ids,
+                "start_idx": out_start_idx,
+                "end_idx": out_end_idx,
+                "text_len": out_text_len,
+                "text": out_text,
+                "logits": out_logits,
+                "pz": out_pz,
+            }
+
+            if cfg.background_queue:
+                assert batch_queue is not None
+                batch_queue.put((data_dict, batch_path))
+            else:
+                with fsspec.open(batch_path, "wb", block_size=cfg.block_size) as fo:
+                    if cfg.uncompress:
+                        np.save(
+                            fo,
+                            data_dict,
+                            allow_pickle=True,
+                            pickle_kwargs={"protocol": 4},
+                        )
+                    else:
+                        np.savez_compressed(fo, **data_dict)
             table_time = time.time() - table_start
             print(f"[Core {index}] Table build/write: {table_time:.2f}s", flush=True)
             save_counter += 1
@@ -427,33 +479,30 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
 
         ext = "npy" if cfg.uncompress else "npz"
         batch_path = f"{shard_path_prefix}_part{save_counter}.{ext}"
-        with fsspec.open(batch_path, "wb", block_size=cfg.block_size) as fo:
-            if cfg.uncompress:
-                np.save(
-                    fo,
-                    {
-                        "input_ids": out_input_ids,
-                        "start_idx": out_start_idx,
-                        "end_idx": out_end_idx,
-                        "text_len": out_text_len,
-                        "text": out_text,
-                        "logits": out_logits,
-                        "pz": out_pz,
-                    },
-                    allow_pickle=True,
-                    pickle_kwargs={'protocol': 4},
-                )
-            else:
-                np.savez_compressed(
-                    fo,
-                    input_ids=out_input_ids,
-                    start_idx=out_start_idx,
-                    end_idx=out_end_idx,
-                    text_len=out_text_len,
-                    text=out_text,
-                    logits=out_logits,
-                    pz=out_pz,
-                )
+        data_dict = {
+            "input_ids": out_input_ids,
+            "start_idx": out_start_idx,
+            "end_idx": out_end_idx,
+            "text_len": out_text_len,
+            "text": out_text,
+            "logits": out_logits,
+            "pz": out_pz,
+        }
+
+        if cfg.background_queue:
+            assert batch_queue is not None
+            batch_queue.put((data_dict, batch_path))
+        else:
+            with fsspec.open(batch_path, "wb", block_size=cfg.block_size) as fo:
+                if cfg.uncompress:
+                    np.save(
+                        fo,
+                        data_dict,
+                        allow_pickle=True,
+                        pickle_kwargs={"protocol": 4},
+                    )
+                else:
+                    np.savez_compressed(fo, **data_dict)
         table_time = time.time() - table_start
         print(f"[Core {index}] Table build/write: {table_time:.2f}s", flush=True)
 
@@ -476,9 +525,19 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
         avg_time_str = f"{avg_time_per_batch/3600:.1f}h"
 
     print(
-        f"[Core {index}] Completed {total_batches} batches in {total_time_str} " f"(avg: {avg_time_str}/batch)",
+        f"[Core {index}] Completed {total_batches} batches in {total_time_str} "
+        f"(avg: {avg_time_str}/batch)",
         flush=True,
     )
+
+    if cfg.background_queue and batch_queue is not None:
+        for _ in writer_threads:
+            batch_queue.put(None)
+        batch_queue.join()
+        for t in writer_threads:
+            t.join()
+        if writer_errors:
+            raise writer_errors[0]
 
     logger.info("[Core %d] Finished writing shard files with prefix %s", index, shard_path_prefix)
 
