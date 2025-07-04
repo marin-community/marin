@@ -21,8 +21,7 @@ Notes
 1. The heavy lifting is performed by Dolma via `marin.processing.classification.dedupe.dedupe`.
 2. Shard discovery and Ray back-pressure logic lives in
    `experiments.train_test_overlap.utils`.
-3. To add a new dataset simply append a `(name, path, max_in_flight)` tuple
-   to `DATASET_CONFIGS`.
+3. To add a new dataset simply append a DatasetConfig to `DATASET_CONFIGS`.
 """
 import logging
 
@@ -34,7 +33,7 @@ from experiments.pretraining_datasets import (
     proofpile_2,
     starcoderdata,
 )
-from experiments.train_test_overlap.utils import ShardedDedupeConfig, run_all_shards
+from experiments.train_test_overlap.utils import DatasetConfig, ShardedDedupeConfig, run_all_shards
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 
 # Configure logging
@@ -42,30 +41,30 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 DATASET_CONFIGS = [
-    ("finemath", finemath_3_plus, 64),
-    ("dclm", dclm_baseline, 64),
-    ("starcoder", starcoderdata, 64),
-    ("proofpile", proofpile_2, 128),
-    ("dolmino_1e-12", dolmino, 128),
-    ("nemotron_cc", nemotron_cc, 64),
+    DatasetConfig(name="finemath", path=finemath_3_plus, max_in_flight=64),
+    DatasetConfig(name="dclm", path=dclm_baseline, max_in_flight=64),
+    DatasetConfig(name="starcoder", path=starcoderdata, max_in_flight=64),
+    DatasetConfig(name="proofpile", path=proofpile_2, max_in_flight=128),
+    DatasetConfig(name="dolmino_1e-12", path=dolmino, max_in_flight=128),
+    DatasetConfig(name="nemotron_cc", path=nemotron_cc, max_in_flight=64),
 ]
 
 
-def build_step(name: str, dataset_dir: str, max_in_flight: int) -> ExecutorStep:
+def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
     cfg = ShardedDedupeConfig(
-        dataset_dir=dataset_dir,
+        dataset_dir=dataset_config.path,
         output_path=this_output_path(),
-        max_in_flight=max_in_flight,
+        max_in_flight=dataset_config.max_in_flight,
     )
     return ExecutorStep(
-        name=f"train_test_overlap/dolma/total/{name}",
+        name=f"train_test_overlap/dolma/total/{dataset_config.name}",
         fn=run_all_shards,
         config=cfg,
-        description=f"Run dedupe train-test overlap on {name} shards",
+        description=f"Run dedupe train-test overlap on {dataset_config.name} shards",
     )
 
 
-STEPS = [build_step(n, d, m) for n, d, m in DATASET_CONFIGS]
+STEPS = [build_step(config) for config in DATASET_CONFIGS]
 
 if __name__ == "__main__":
     executor_main(

@@ -40,12 +40,18 @@ Make sure you have:
 The easiest way to get started is to run overlap detection on the pre-configured datasets:
 
 ```bash
-# Step 1: Run deduplication on all configured datasets
+# Step 1: Run N-gram overlap between each train shard for selected training dataset and selected test datasets
 python experiments/train_test_overlap/train_test_total.py --prefix gs://${BUCKET}
 
 # Step 2: Aggregate results across datasets
-python experiments/train_test_overlap/aggregate_total.py --prefix gs://your-bucket
+python experiments/train_test_overlap/aggregate_total.py --prefix gs://${BUCKET}
 ```
+
+**Concretely, this process will:**
+
+1. **Generate a Bloom filter for each training shard using the configured N-gram settings**
+2. **Read all specified test datasets and check them against the Bloom filter in read-only mode**
+3. **Output attribute files that specify the overlap between each training shard and all test datasets**
 
 This will process these datasets:
 - **Training**: FineMath, DCLM, StarCoder, ProofPile, Dolmino, Nemotron-CC
@@ -56,7 +62,7 @@ This will process these datasets:
 After running both scripts, you'll find:
 
 ```
-your-prefix/
+${PREFIX}/
 ├── train_test_overlap/dolma/total/
 │   ├── finemath-abc123/          # Per-dataset results
 │   ├── dclm-def456/
@@ -95,10 +101,17 @@ SUPPORTED_FORMATS = [
 Edit `experiments/train_test_overlap/train_test_total.py` and add your dataset:
 
 ```python
+# Import the DatasetConfig class
+from experiments.train_test_overlap.utils import DatasetConfig, ShardedDedupeConfig, run_all_shards
+
 # Add your dataset to DATASET_CONFIGS
 DATASET_CONFIGS = [
     # ... existing datasets ...
-    ("your_dataset_name", "gs://your-bucket/path/to/dataset", 64),  # (name, path, max_in_flight)
+    DatasetConfig(
+        name="${DATASET_NAME}",
+        path="gs://${BUCKET}/path/to/${DATASET_NAME}",
+        max_in_flight=64
+    ),
 ]
 ```
 
@@ -110,7 +123,7 @@ DATASET_CONFIGS = [
 ### Step 3: Run Detection
 
 ```bash
-python experiments/train_test_overlap/train_test_total.py --prefix gs://your-bucket
+python experiments/train_test_overlap/train_test_total.py --prefix gs://${BUCKET}
 ```
 
 The system will automatically:
@@ -148,7 +161,11 @@ Adjust parallelism based on your resources:
 
 ```python
 # In DATASET_CONFIGS - max tasks per dataset
-("dataset_name", "path", 128),  # High parallelism for large datasets
+DatasetConfig(
+    name="dataset_name",
+    path="path",
+    max_in_flight=128  # High parallelism for large datasets
+),
 
 # In BASE_DEDUPE_CONFIG - processes per task
 processes=32,  # More processes = more memory usage
@@ -206,7 +223,7 @@ step = ExecutorStep(
     name="custom_overlap_analysis",
     fn=run_all_shards,
     config=ShardedDedupeConfig(
-        dataset_dir="gs://your-dataset",
+        dataset_dir="gs://${BUCKET}/${DATASET_NAME}",
         output_path=this_output_path(),
         max_in_flight=32,
     ),
@@ -227,7 +244,11 @@ BASE_DEDUPE_CONFIG = dataclasses.replace(
 
 # Use smaller batch sizes
 DATASET_CONFIGS = [
-    ("large_dataset", "gs://path", 16),  # Lower max_in_flight
+    DatasetConfig(
+        name="${DATASET_NAME}",
+        path="gs://${BUCKET}/${DATASET_NAME}",
+        max_in_flight=16  # Lower max_in_flight
+    ),
 ]
 ```
 
@@ -242,7 +263,7 @@ DATASET_CONFIGS = [
 
    **Solution**: Verify your dataset path contains files with supported extensions:
    ```bash
-   gsutil ls -r gs://your-dataset-path/**/*.{parquet,jsonl.gz,json.gz}
+   gsutil ls -r gs://${BUCKET}/${DATASET_NAME}/**/*.{parquet,jsonl.gz,json.gz}
    ```
 
 2. **Empty dataset early exit**
@@ -252,7 +273,7 @@ DATASET_CONFIGS = [
 
    **Solution**: Check that your files contain actual data:
    ```bash
-   gsutil du -s gs://your-dataset-path/*
+   gsutil du -s gs://${BUCKET}/${DATASET_NAME}/*
    ```
 
 3. **Out of memory errors**
@@ -288,25 +309,33 @@ DATASET_CONFIGS = [
 - **Batch processing**: Process datasets separately if you hit resource limits
 
 
-## Example Workflow
+### Example Workflow
 
 Here's a complete workflow for checking a new training dataset against all evaluation benchmarks:
 
+**1. Add your dataset to train_test_total.py**
 ```python
-# 1. Add your dataset to train_test_total.py
 DATASET_CONFIGS = [
     # ... existing datasets ...
-    ("my_new_dataset", "gs://my-bucket/my-training-data", 64),
+    DatasetConfig(
+        name="${DATASET_NAME}",
+        path="gs://${BUCKET}/${DATASET_NAME}",
+        max_in_flight=64
+    ),
 ]
+```
 
-# 2. Run deduplication
-# python experiments/train_test_overlap/train_test_total.py --prefix gs://output-bucket
-
-# 3. Run aggregation
-# python experiments/train_test_overlap/aggregate_total.py --prefix gs://output-bucket
-
-# 4. Analyze results
-# Check: gs://output-bucket/train_test_overlap/dolma/aggregate_total_final-*/contamination_matrix.csv
+**2. Run deduplication**
+```bash
+python experiments/train_test_overlap/train_test_total.py --prefix gs://${BUCKET}
+```
+**3. Run aggregation**
+```bash
+python experiments/train_test_overlap/aggregate_total.py --prefix gs://${BUCKET}
+```
+**4. Analyze results**
+```bash
+gsutil cat gs://${BUCKET}/train_test_overlap/dolma/aggregate_total_final-*/contamination_matrix.csv
 ```
 
 This will give you contamination percentages for your training data against all standard evaluation benchmarks, helping you make informed decisions about data quality and evaluation validity.

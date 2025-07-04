@@ -25,6 +25,20 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class DatasetConfig:
+    """Configuration for a single dataset to process for train-test overlap detection."""
+
+    name: str
+    """Human-readable name for the dataset (used in output paths)."""
+
+    path: str
+    """Path to the dataset directory (local, GCS, or S3)."""
+
+    max_in_flight: int
+    """Maximum number of parallel tasks to run for this dataset."""
+
+
+@dataclass(frozen=True)
 class ShardedDedupeConfig:
     """Configuration for running dedupe across multiple shards with backpressure."""
 
