@@ -49,7 +49,7 @@ python experiments/train_test_overlap/aggregate_total.py --prefix gs://your-buck
 
 This will process these datasets:
 - **Training**: FineMath, DCLM, StarCoder, ProofPile, Dolmino, Nemotron-CC
-- **Evaluation data**: GSM8K, MATH, TruthfulQA, BBH, MMLU, HumanEval, and more
+- **Evaluation **: GSM8K, MATH, TruthfulQA, BBH, MMLU, HumanEval, and more
 
 ### Understanding the Output
 
