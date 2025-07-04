@@ -20,6 +20,8 @@ local_path = get_model_local_path(gemstone_768x45)
 ```
 """
 
+# nodryrun
+
 import re
 from dataclasses import dataclass
 
