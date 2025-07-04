@@ -213,8 +213,8 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
 
     shard_path = os.path.join(cfg.output_dir, f"sliding_logits_{index}.parquet")
 
-    # Build PyArrow schema (logits as list<list<float16|float32>>)
-    value_type = pa.float16() if cfg.precision == Precision.FLOAT16 else pa.float32()
+    # Build PyArrow schema (logits as list<list<float32>>)
+    # Note: Using pa.float32() for compatibility with Python native floats from .tolist()
     schema = pa.schema(
         [
             ("input_ids", pa.list_(pa.int32())),
@@ -222,7 +222,7 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
             ("end_idx", pa.int32()),
             ("text_len", pa.int32()),
             ("text", pa.string()),
-            ("logits", pa.list_(pa.list_(value_type))),
+            ("logits", pa.list_(pa.list_(pa.float32()))),
             ("pz", pa.float32()),
         ]
     )
@@ -321,7 +321,7 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
         prep_start = time.time()
 
         # Move logits to CPU and numpy for Arrow conversion
-        logits = logits_device.cpu()
+        logits = logits.cpu()
         logits_np = logits.numpy()
 
         # Build Python rows to avoid Arrow type mismatches
@@ -337,9 +337,7 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
                     "end_idx": ch["end_idx"],
                     "text_len": ch["text_len"],
                     "text": ch["text"],
-                    "logits": (
-                        logits_np[i].astype(np.float16 if cfg.precision == Precision.FLOAT16 else np.float32).tolist()
-                    ),
+                    "logits": logits_np[i].astype(np.float16 if cfg.precision == Precision.FLOAT16 else np.float32).tolist(),
                     "pz": pz_batch[i],
                 }
             )
