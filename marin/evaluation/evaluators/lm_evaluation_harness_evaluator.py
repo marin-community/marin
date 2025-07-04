@@ -74,7 +74,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
 
                 wandb_args_dict = simple_parse_args_string(f"project=marin,job_type=eval,name={model.name}")
                 wandb_config_args_dict = simple_parse_args_string("")
-                wandb_logger = WandbLogger(**wandb_args_dict, **wandb_config_args_dict)
+                wandb_logger = WandbLogger(init_args=wandb_args_dict, config_args=wandb_config_args_dict)
 
                 results = simple_evaluate(
                     model="vllm",
