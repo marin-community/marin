@@ -9,8 +9,6 @@ from typing import Any
 
 import fsspec
 import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
 import ray
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -93,7 +91,7 @@ class SlidingLogitsConfig:
 
     model_name: str
     input_path: str  # path to raw txt (local or gs://)
-    output_dir: str  # directory where parquet + plot will be written
+    output_dir: str  # directory where npz shards + plot will be written
 
     # Runtime / batching --------------------------------------------------
     batch_size: int = 8
@@ -211,25 +209,7 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
     model.to(device)
     model.eval()
 
-    shard_path = os.path.join(cfg.output_dir, f"sliding_logits_{index}.parquet")
-
-    # Build PyArrow schema (logits as list<list<float32>>)
-    # Note: Using pa.float32() for compatibility with Python native floats from .tolist()
-    schema = pa.schema(
-        [
-            ("input_ids", pa.list_(pa.int32())),
-            ("start_idx", pa.int32()),
-            ("end_idx", pa.int32()),
-            ("text_len", pa.int32()),
-            ("text", pa.string()),
-            ("logits", pa.list_(pa.list_(pa.float32()))),
-            ("pz", pa.float32()),
-        ]
-    )
-
-    # Open ParquetWriter on remote path via Arrow filesystem abstraction
-    filesystem, path_within_fs = pa.fs.FileSystem.from_uri(shard_path)
-    writer = pq.ParquetWriter(path_within_fs, schema, filesystem=filesystem, compression="zstd")
+    shard_path_prefix = os.path.join(cfg.output_dir, f"sliding_logits_{index}")
 
     prompt_len = cfg.prompt_tokens if cfg.prompt_tokens is not None else cfg.chunk_size // 2
 
@@ -320,41 +300,41 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
         # Data preparation timing
         prep_start = time.time()
 
-        # Move logits to CPU and numpy for Arrow conversion
-        logits = logits.cpu()
-        logits_np = logits.numpy()
+        logits_np = logits.cpu().numpy()
 
-        # Build Python rows to avoid Arrow type mismatches
-        rows = []
+        batch_input_ids = np.array([ch["input_ids"] for ch in batch_chunks], dtype=np.int32)
+        batch_start_idx = np.array([ch["start_idx"] for ch in batch_chunks], dtype=np.int32)
+        batch_end_idx = np.array([ch["end_idx"] for ch in batch_chunks], dtype=np.int32)
+        batch_text_len = np.array([ch["text_len"] for ch in batch_chunks], dtype=np.int32)
+        batch_text = np.array([ch["text"] for ch in batch_chunks], dtype=object)
+        batch_pz = np.array(pz_batch, dtype=np.float32)
+
         for i, ch in enumerate(batch_chunks):
             c0, c1 = ch["start_idx"], ch["end_idx"]
-            char_max_local[c0 : c1 + 1] = np.maximum(char_max_local[c0 : c1 + 1], pz_batch[i])
+            char_max_local[c0 : c1 + 1] = np.maximum(char_max_local[c0 : c1 + 1], batch_pz[i])
 
-            rows.append(
-                {
-                    "input_ids": ch["input_ids"],
-                    "start_idx": ch["start_idx"],
-                    "end_idx": ch["end_idx"],
-                    "text_len": ch["text_len"],
-                    "text": ch["text"],
-                    "logits": logits_np[i].astype(np.float16 if cfg.precision == Precision.FLOAT16 else np.float32).tolist(),
-                    "pz": pz_batch[i],
-                }
-            )
-
-        batch_table = pa.Table.from_pylist(rows, schema=schema)
         prep_time = time.time() - prep_start
         print(f"[Core {index}] Data preparation: {prep_time:.2f}s", flush=True)
 
-        # Table building and writing timing
         table_start = time.time()
-        writer.write_table(batch_table, row_group_size=len(batch_chunks))
+        batch_path = f"{shard_path_prefix}_batch{batch_idx}.npz"
+        with fsspec.open(batch_path, "wb") as fo:
+            np.savez_compressed(
+                fo,
+                input_ids=batch_input_ids,
+                start_idx=batch_start_idx,
+                end_idx=batch_end_idx,
+                text_len=batch_text_len,
+                text=batch_text,
+                logits=logits_np,
+                pz=batch_pz,
+            )
         table_time = time.time() - table_start
         print(f"[Core {index}] Table build/write: {table_time:.2f}s", flush=True)
 
         # Cleanup timing
         cleanup_start = time.time()
-        del logits, tokens, outputs, batch_table
+        del logits, tokens, outputs
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
         xm.mark_step()
         cleanup_time = time.time() - cleanup_start
@@ -388,8 +368,7 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
         flush=True,
     )
 
-    writer.close()
-    logger.info("[Core %d] Finished writing shard to %s", index, shard_path)
+    logger.info("[Core %d] Finished writing shard files with prefix %s", index, shard_path_prefix)
 
     # Write per-core char_max array directly to GCS
     cm_part_path = os.path.join(cfg.output_dir, f"char_max_part_{index}.npy")
