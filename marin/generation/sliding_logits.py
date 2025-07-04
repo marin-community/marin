@@ -11,6 +11,7 @@ import queue
 
 import fsspec
 import numpy as np
+import gc
 import ray
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -130,6 +131,7 @@ class SlidingLogitsConfig:
 
     # Number of batches to accumulate in memory before writing to disk.
     # Larger values reduce write overhead but increase peak memory usage.
+    # Probably just keep this at 1 otherwise the node will run out of memory.
     batches_per_save: int = 1
 
     # If True, batches are handed off to background threads for writing so that
@@ -149,24 +151,54 @@ def _writer_loop(batch_queue: queue.Queue, cfg: SlidingLogitsConfig, error_list:
     Any exception is stored in ``error_list`` so the caller can re-raise it
     after all threads join.
     """
+    import threading
+    thread_id = threading.get_ident()
+    print(f"[Writer {thread_id}] Background writer thread started", flush=True)
+    
     try:
+        write_count = 0
         for payload in iter(batch_queue.get, None):
+            write_start_time = time.time()
             data_dict, batch_path = payload
+            
+            print(f"[Writer {thread_id}] Starting write #{write_count} to {batch_path}", flush=True)
+            print(f"[Writer {thread_id}] Queue size: {batch_queue.qsize()}", flush=True)
+            
             try:
+                # Time the file opening
+                open_start = time.time()
                 with fsspec.open(batch_path, "wb", block_size=cfg.block_size) as fo:
+                    open_time = time.time() - open_start
+                    print(f"[Writer {thread_id}] File opened in {open_time:.2f}s", flush=True)
+                    
+                    # Time the actual write
+                    write_data_start = time.time()
                     if cfg.uncompress:
                         np.save(
                             fo,
                             data_dict,
                             allow_pickle=True,
-                            pickle_kwargs={"protocol": 4},
                         )
                     else:
                         np.savez_compressed(fo, **data_dict)
+                    write_data_time = time.time() - write_data_start
+                    print(f"[Writer {thread_id}] Data written in {write_data_time:.2f}s", flush=True)
+                    
+            except Exception as write_exc:
+                print(f"[Writer {thread_id}] ERROR during write: {write_exc}", flush=True)
+                raise write_exc
             finally:
                 batch_queue.task_done()
+            
+            total_write_time = time.time() - write_start_time
+            print(f"[Writer {thread_id}] Completed write #{write_count} in {total_write_time:.2f}s total", flush=True)
+            write_count += 1
+            
     except Exception as exc:  # pragma: no cover - background thread
+        print(f"[Writer {thread_id}] FATAL ERROR: {exc}", flush=True)
         error_list.append(exc)
+    
+    print(f"[Writer {thread_id}] Background writer thread exiting after {write_count} writes", flush=True)
 
 
 # Decorator to ensure TPU lockfile cleanup in case of errors
@@ -273,7 +305,7 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
     writer_threads: list[threading.Thread] = []
     writer_errors: list[Exception] = []
     if cfg.background_queue:
-        queue_size = cfg.num_background_writers * 2
+        queue_size = cfg.num_background_writers * 3  # Increased buffer
         batch_queue = queue.Queue(maxsize=queue_size)
         # Launch a pool of writer threads. Batches are distributed roughly
         # evenly as each thread pulls work from the queue.
@@ -377,6 +409,9 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
         pz_time = time.time() - pz_start
         print(f"[Core {index}] P(z) computation: {pz_time:.2f}s", flush=True)
 
+        del shift_logits, shift_labels, log_probs, token_lp, suffix_lp
+        gc.collect()
+
         # Data preparation timing
         prep_start = time.time()
 
@@ -430,15 +465,23 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
 
             if cfg.background_queue:
                 assert batch_queue is not None
+                queue_start = time.time()
+                print(f"[Core {index}] Queuing data for background write. Queue size before: {batch_queue.qsize()}", flush=True)
                 batch_queue.put((data_dict, batch_path))
+                queue_time = time.time() - queue_start
+                print(f"[Core {index}] Data queued in {queue_time:.2f}s. Queue size after: {batch_queue.qsize()}", flush=True)
+
+                data_dict_delete_start = time.time()
+                del data_dict
+                gc.collect()
+                data_dict_delete_time = time.time() - data_dict_delete_start
+                print(f"[Core {index}] Data dict deleted in {data_dict_delete_time:.2f}s", flush=True)
             else:
                 with fsspec.open(batch_path, "wb", block_size=cfg.block_size) as fo:
                     if cfg.uncompress:
                         np.save(
                             fo,
                             data_dict,
-                            allow_pickle=True,
-                            pickle_kwargs={"protocol": 4},
                         )
                     else:
                         np.savez_compressed(fo, **data_dict)
@@ -459,6 +502,7 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
         del logits, tokens, outputs
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
         xm.mark_step()
+        gc.collect()
         cleanup_time = time.time() - cleanup_start
         print(f"[Core {index}] Cleanup: {cleanup_time:.2f}s", flush=True)
 
@@ -491,15 +535,17 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
 
         if cfg.background_queue:
             assert batch_queue is not None
+            queue_start = time.time()
+            print(f"[Core {index}] Queuing final batch for background write. Queue size before: {batch_queue.qsize()}", flush=True)
             batch_queue.put((data_dict, batch_path))
+            queue_time = time.time() - queue_start
+            print(f"[Core {index}] Final batch queued in {queue_time:.2f}s. Queue size after: {batch_queue.qsize()}", flush=True)
         else:
             with fsspec.open(batch_path, "wb", block_size=cfg.block_size) as fo:
                 if cfg.uncompress:
                     np.save(
                         fo,
                         data_dict,
-                        allow_pickle=True,
-                        pickle_kwargs={"protocol": 4},
                     )
                 else:
                     np.savez_compressed(fo, **data_dict)
@@ -531,20 +577,35 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
     )
 
     if cfg.background_queue and batch_queue is not None:
-        for _ in writer_threads:
+        print(f"[Core {index}] Shutting down {len(writer_threads)} background writers...", flush=True)
+        print(f"[Core {index}] Queue size at shutdown: {batch_queue.qsize()}", flush=True)
+        
+        # Send shutdown signal to all writers
+        for i in range(len(writer_threads)):
+            print(f"[Core {index}] Sending shutdown signal to writer {i+1}/{len(writer_threads)}", flush=True)
             batch_queue.put(None)
+        
+        print(f"[Core {index}] Waiting for all queued work to complete...", flush=True)
         batch_queue.join()
-        for t in writer_threads:
+        print(f"[Core {index}] All queued work completed", flush=True)
+        
+        print(f"[Core {index}] Waiting for writer threads to exit...", flush=True)
+        for i, t in enumerate(writer_threads):
             t.join()
+            print(f"[Core {index}] Writer thread {i+1}/{len(writer_threads)} exited", flush=True)
+        
         if writer_errors:
+            print(f"[Core {index}] ERROR: {len(writer_errors)} writer errors occurred", flush=True)
             raise writer_errors[0]
+        else:
+            print(f"[Core {index}] All background writers shut down successfully", flush=True)
 
     logger.info("[Core %d] Finished writing shard files with prefix %s", index, shard_path_prefix)
 
     # Write per-core char_max array directly to GCS
     cm_part_path = os.path.join(cfg.output_dir, f"char_max_part_{index}.npy")
     with fsspec.open(cm_part_path, "wb") as fo:
-        np.save(fo, char_max_local, allow_pickle=True, pickle_kwargs={'protocol': 4})
+        np.save(fo, char_max_local, allow_pickle=True)
     logger.info("[Core %d] Wrote char_max part to %s", index, cm_part_path)
 
 
@@ -562,7 +623,7 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
 
 compute_sliding_logits_remote = ray.remote(
     # Rough memory estimate (adjust if OOM)
-    memory=16 * 1024 * 1024 * 1024,  # 16 GB
+    memory=64 * 1024 * 1024 * 1024,  # 64 GB
     resources={"TPU": 4, "TPU-v4-8-head": 1},
 )(compute_sliding_logits)
 
