@@ -294,21 +294,21 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
 
         # Logits processing timing
         logits_start = time.time()
-        logits = outputs.logits.to(desired_dtype).cpu()
+        logits = outputs.logits.to(desired_dtype)
         logits_time = time.time() - logits_start
         print(f"[Core {index}] Logits processing: {logits_time:.2f}s", flush=True)
 
         # P(z) computation timing
         pz_start = time.time()
         shift_logits = logits[:, :-1, :]
-        shift_labels = tokens["input_ids"][:, 1:].cpu()
+        shift_labels = tokens["input_ids"][:, 1:]
         log_probs = torch.log_softmax(shift_logits, dim=-1)
         token_lp = log_probs.gather(-1, shift_labels.unsqueeze(-1)).squeeze(-1)
 
         suffix_start = max(0, prompt_len - 1)
         if suffix_start < token_lp.size(1):
             suffix_lp = token_lp[:, suffix_start:].sum(dim=-1)
-            pz_batch = torch.exp(suffix_lp).tolist()
+            pz_batch = torch.exp(suffix_lp).cpu().tolist()
         else:
             pz_batch = [0.0] * len(batch_chunks)
         pz_time = time.time() - pz_start
@@ -316,40 +316,44 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
 
         # Data preparation timing
         prep_start = time.time()
-        rows = []
-        for i, ch in enumerate(batch_chunks):
-            rows.append(
-                {
-                    "input_ids": ch["input_ids"],
-                    "start_idx": ch["start_idx"],
-                    "end_idx": ch["end_idx"],
-                    "text_len": ch["text_len"],
-                    "text": ch["text"],
-                    "logits": (
-                        [[np.float16(v) for v in row] for row in logits[i].tolist()]
-                        if cfg.precision == Precision.FLOAT16
-                        else [[float(v) for v in row] for row in logits[i].tolist()]
-                    ),
-                    "pz": pz_batch[i],
-                }
-            )
+        logits_np = logits.cpu().numpy()
+        input_ids_col = pa.array([c["input_ids"] for c in batch_chunks], type=pa.list_(pa.int32()))
+        start_idx_col = pa.array([c["start_idx"] for c in batch_chunks], type=pa.int32())
+        end_idx_col = pa.array([c["end_idx"] for c in batch_chunks], type=pa.int32())
+        text_len_col = pa.array([c["text_len"] for c in batch_chunks], type=pa.int32())
+        text_col = pa.array([c["text"] for c in batch_chunks], type=pa.string())
+        logits_col = pa.array(logits_np.tolist(), type=pa.list_(pa.list_(value_type)))
+        pz_col = pa.array(pz_batch, type=pa.float32())
 
-            # update char_max_local for this window
+        batch = pa.record_batch(
+            [
+                input_ids_col,
+                start_idx_col,
+                end_idx_col,
+                text_len_col,
+                text_col,
+                logits_col,
+                pz_col,
+            ],
+            schema=schema,
+        )
+
+        for ch, pz_val in zip(batch_chunks, pz_batch):
             c0, c1 = ch["start_idx"], ch["end_idx"]
-            char_max_local[c0 : c1 + 1] = np.maximum(char_max_local[c0 : c1 + 1], pz_batch[i])
+            char_max_local[c0 : c1 + 1] = np.maximum(char_max_local[c0 : c1 + 1], pz_val)
+
         prep_time = time.time() - prep_start
         print(f"[Core {index}] Data preparation: {prep_time:.2f}s", flush=True)
 
         # Table building and writing timing
         table_start = time.time()
-        table = pa.Table.from_pylist(rows, schema=schema)
-        writer.write_table(table, row_group_size=len(rows))
+        writer.write_batch(batch)
         table_time = time.time() - table_start
         print(f"[Core {index}] Table build/write: {table_time:.2f}s", flush=True)
 
         # Cleanup timing
         cleanup_start = time.time()
-        del logits, tokens, outputs, rows, table
+        del logits, tokens, outputs, batch, logits_np
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
         xm.mark_step()
         cleanup_time = time.time() - cleanup_start
