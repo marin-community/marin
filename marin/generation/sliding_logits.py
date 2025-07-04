@@ -91,7 +91,7 @@ class SlidingLogitsConfig:
 
     model_name: str
     input_path: str  # path to raw txt (local or gs://)
-    output_dir: str  # directory where npz shards + plot will be written
+    output_dir: str  # directory where output shards (.npz/.npy) and plot will be written
 
     # Runtime / batching --------------------------------------------------
     batch_size: int = 8
@@ -115,6 +115,19 @@ class SlidingLogitsConfig:
 
     # TPU device count (set TPU_NUM_DEVICES). If None, use all visible cores.
     num_devices: int | None = None
+
+    # If True, write uncompressed .npy files with np.save instead of
+    # compressed .npz archives. Allows faster writes at the cost of larger
+    # output files.
+    uncompress: bool = False
+
+    # Block size for fsspec writes in bytes. This controls the chunk size
+    # used when streaming data to remote filesystems (e.g., GCS).
+    block_size: int = 4 * 1024 * 1024
+
+    # Number of batches to accumulate in memory before writing to disk.
+    # Larger values reduce write overhead but increase peak memory usage.
+    batches_per_save: int = 10
 
 
 # Decorator to ensure TPU lockfile cleanup in case of errors
@@ -220,6 +233,17 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
     total_batches = (len(chunks_shard) + cfg.batch_size - 1) // cfg.batch_size
     start_time = time.time()
 
+    save_counter = 0
+    accum_batches = 0
+
+    accum_logits: list[np.ndarray] = []
+    accum_input_ids: list[np.ndarray] = []
+    accum_start_idx: list[np.ndarray] = []
+    accum_end_idx: list[np.ndarray] = []
+    accum_text_len: list[np.ndarray] = []
+    accum_text: list[np.ndarray] = []
+    accum_pz: list[np.ndarray] = []
+
     for batch_idx, batch_start in enumerate(range(0, len(chunks_shard), cfg.batch_size)):
         batch_start_time = time.time()
 
@@ -316,21 +340,64 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
         prep_time = time.time() - prep_start
         print(f"[Core {index}] Data preparation: {prep_time:.2f}s", flush=True)
 
-        table_start = time.time()
-        batch_path = f"{shard_path_prefix}_batch{batch_idx}.npz"
-        with fsspec.open(batch_path, "wb") as fo:
-            np.savez_compressed(
-                fo,
-                input_ids=batch_input_ids,
-                start_idx=batch_start_idx,
-                end_idx=batch_end_idx,
-                text_len=batch_text_len,
-                text=batch_text,
-                logits=logits_np,
-                pz=batch_pz,
-            )
-        table_time = time.time() - table_start
-        print(f"[Core {index}] Table build/write: {table_time:.2f}s", flush=True)
+        accum_logits.append(logits_np)
+        accum_input_ids.append(batch_input_ids)
+        accum_start_idx.append(batch_start_idx)
+        accum_end_idx.append(batch_end_idx)
+        accum_text_len.append(batch_text_len)
+        accum_text.append(batch_text)
+        accum_pz.append(batch_pz)
+        accum_batches += 1
+
+        table_time = 0.0
+        if accum_batches >= cfg.batches_per_save:
+            table_start = time.time()
+            out_logits = np.concatenate(accum_logits, axis=0)
+            out_input_ids = np.concatenate(accum_input_ids, axis=0)
+            out_start_idx = np.concatenate(accum_start_idx, axis=0)
+            out_end_idx = np.concatenate(accum_end_idx, axis=0)
+            out_text_len = np.concatenate(accum_text_len, axis=0)
+            out_text = np.concatenate(accum_text, axis=0)
+            out_pz = np.concatenate(accum_pz, axis=0)
+
+            ext = "npy" if cfg.uncompress else "npz"
+            batch_path = f"{shard_path_prefix}_part{save_counter}.{ext}"
+            with fsspec.open(batch_path, "wb", block_size=cfg.block_size) as fo:
+                if cfg.uncompress:
+                    np.save(
+                        fo,
+                        {
+                            "input_ids": out_input_ids,
+                            "start_idx": out_start_idx,
+                            "end_idx": out_end_idx,
+                            "text_len": out_text_len,
+                            "text": out_text,
+                            "logits": out_logits,
+                            "pz": out_pz,
+                        },
+                    )
+                else:
+                    np.savez_compressed(
+                        fo,
+                        input_ids=out_input_ids,
+                        start_idx=out_start_idx,
+                        end_idx=out_end_idx,
+                        text_len=out_text_len,
+                        text=out_text,
+                        logits=out_logits,
+                        pz=out_pz,
+                    )
+            table_time = time.time() - table_start
+            print(f"[Core {index}] Table build/write: {table_time:.2f}s", flush=True)
+            save_counter += 1
+            accum_batches = 0
+            accum_logits.clear()
+            accum_input_ids.clear()
+            accum_start_idx.clear()
+            accum_end_idx.clear()
+            accum_text_len.clear()
+            accum_text.clear()
+            accum_pz.clear()
 
         # Cleanup timing
         cleanup_start = time.time()
@@ -344,6 +411,46 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
         batch_total_time = time.time() - batch_start_time
         print(f"[Core {index}] Total batch time: {batch_total_time:.2f}s", flush=True)
         print("---", flush=True)
+
+    if accum_batches > 0:
+        table_start = time.time()
+        out_logits = np.concatenate(accum_logits, axis=0)
+        out_input_ids = np.concatenate(accum_input_ids, axis=0)
+        out_start_idx = np.concatenate(accum_start_idx, axis=0)
+        out_end_idx = np.concatenate(accum_end_idx, axis=0)
+        out_text_len = np.concatenate(accum_text_len, axis=0)
+        out_text = np.concatenate(accum_text, axis=0)
+        out_pz = np.concatenate(accum_pz, axis=0)
+
+        ext = "npy" if cfg.uncompress else "npz"
+        batch_path = f"{shard_path_prefix}_part{save_counter}.{ext}"
+        with fsspec.open(batch_path, "wb", block_size=cfg.block_size) as fo:
+            if cfg.uncompress:
+                np.save(
+                    fo,
+                    {
+                        "input_ids": out_input_ids,
+                        "start_idx": out_start_idx,
+                        "end_idx": out_end_idx,
+                        "text_len": out_text_len,
+                        "text": out_text,
+                        "logits": out_logits,
+                        "pz": out_pz,
+                    },
+                )
+            else:
+                np.savez_compressed(
+                    fo,
+                    input_ids=out_input_ids,
+                    start_idx=out_start_idx,
+                    end_idx=out_end_idx,
+                    text_len=out_text_len,
+                    text=out_text,
+                    logits=out_logits,
+                    pz=out_pz,
+                )
+        table_time = time.time() - table_start
+        print(f"[Core {index}] Table build/write: {table_time:.2f}s", flush=True)
 
     # Final timing summary
     total_time = time.time() - start_time
