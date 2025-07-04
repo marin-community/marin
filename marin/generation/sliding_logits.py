@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Any, Dict
@@ -241,10 +242,38 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
     text_len = len(full_text)
     char_max_local = np.zeros(text_len, dtype=np.float32)
 
-    for batch_start in range(0, len(chunks_shard), cfg.batch_size):
+    total_batches = (len(chunks_shard) + cfg.batch_size - 1) // cfg.batch_size
+    start_time = time.time()
+    
+    for batch_idx, batch_start in enumerate(range(0, len(chunks_shard), cfg.batch_size)):
+        batch_start_time = time.time()
+        
         batch_chunks = chunks_shard[batch_start : batch_start + cfg.batch_size]
         texts = [c["text"] for c in batch_chunks]
-        print(f"[Core {index}] Tokenizing batch {batch_start} to {batch_start + cfg.batch_size} of {len(chunks_shard)}", flush=True)
+        
+        # Calculate progress and timing estimates
+        progress_percent = (batch_idx + 1) / total_batches * 100
+        elapsed_time = time.time() - start_time
+        
+        if batch_idx > 0:  # Skip time estimate for first batch
+            avg_time_per_batch = elapsed_time / batch_idx
+            remaining_batches = total_batches - batch_idx - 1
+            eta_seconds = avg_time_per_batch * remaining_batches
+            
+            # Format time estimates
+            if eta_seconds < 60:
+                eta_str = f"{eta_seconds:.0f}s"
+            elif eta_seconds < 3600:
+                eta_str = f"{eta_seconds/60:.1f}m"
+            else:
+                eta_str = f"{eta_seconds/3600:.1f}h"
+                
+            print(f"[Core {index}] Processing batch {batch_idx + 1}/{total_batches} ({progress_percent:.1f}%) - ETA: {eta_str}", flush=True)
+        else:
+            print(f"[Core {index}] Processing batch {batch_idx + 1}/{total_batches} ({progress_percent:.1f}%)", flush=True)
+        
+        # Tokenization timing
+        tokenize_start = time.time()
         tokens = tokenizer(
             texts,
             truncation=True,
@@ -253,15 +282,24 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
             return_tensors="pt",
         )
         tokens = {k: v.to(device) for k, v in tokens.items()}
+        tokenize_time = time.time() - tokenize_start
+        print(f"[Core {index}] Tokenization: {tokenize_time:.2f}s", flush=True)
 
-        print(f"[Core {index}] Running forward pass...", flush=True)
+        # Forward pass timing
+        forward_start = time.time()
         with torch.no_grad():
             outputs = model(**tokens)
+        forward_time = time.time() - forward_start
+        print(f"[Core {index}] Forward pass: {forward_time:.2f}s", flush=True)
 
-        print(f"[Core {index}] Logits computed", flush=True)
+        # Logits processing timing
+        logits_start = time.time()
         logits = outputs.logits.to(desired_dtype).cpu()
+        logits_time = time.time() - logits_start
+        print(f"[Core {index}] Logits processing: {logits_time:.2f}s", flush=True)
 
-        # Compute P(z) for each example
+        # P(z) computation timing
+        pz_start = time.time()
         shift_logits = logits[:, :-1, :]
         shift_labels = tokens["input_ids"][:, 1:].cpu()
         log_probs = torch.log_softmax(shift_logits, dim=-1)
@@ -273,10 +311,11 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
             pz_batch = torch.exp(suffix_lp).tolist()
         else:
             pz_batch = [0.0] * len(batch_chunks)
+        pz_time = time.time() - pz_start
+        print(f"[Core {index}] P(z) computation: {pz_time:.2f}s", flush=True)
 
-        print(f"[Core {index}] P(z) computed", flush=True)
-
-        # Build PyArrow rows
+        # Data preparation timing
+        prep_start = time.time()
         rows = []
         for i, ch in enumerate(batch_chunks):
             rows.append(
@@ -298,16 +337,49 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
             # update char_max_local for this window
             c0, c1 = ch["start_idx"], ch["end_idx"]
             char_max_local[c0 : c1 + 1] = np.maximum(char_max_local[c0 : c1 + 1], pz_batch[i])
+        prep_time = time.time() - prep_start
+        print(f"[Core {index}] Data preparation: {prep_time:.2f}s", flush=True)
 
-        print(f"[Core {index}] Building table", flush=True)
+        # Table building and writing timing
+        table_start = time.time()
         table = pa.Table.from_pylist(rows, schema=schema)
         writer.write_table(table, row_group_size=len(rows))
+        table_time = time.time() - table_start
+        print(f"[Core {index}] Table build/write: {table_time:.2f}s", flush=True)
 
-        # free tensors ASAP
+        # Cleanup timing
+        cleanup_start = time.time()
         del logits, tokens, outputs, rows, table
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
         xm.mark_step()
+        cleanup_time = time.time() - cleanup_start
+        print(f"[Core {index}] Cleanup: {cleanup_time:.2f}s", flush=True)
+        
+        # Total batch time
+        batch_total_time = time.time() - batch_start_time
+        print(f"[Core {index}] Total batch time: {batch_total_time:.2f}s", flush=True)
+        print("---", flush=True)
 
+    # Final timing summary
+    total_time = time.time() - start_time
+    avg_time_per_batch = total_time / total_batches
+    
+    if total_time < 60:
+        total_time_str = f"{total_time:.1f}s"
+    elif total_time < 3600:
+        total_time_str = f"{total_time/60:.1f}m"
+    else:
+        total_time_str = f"{total_time/3600:.1f}h"
+        
+    if avg_time_per_batch < 60:
+        avg_time_str = f"{avg_time_per_batch:.1f}s"
+    elif avg_time_per_batch < 3600:
+        avg_time_str = f"{avg_time_per_batch/60:.1f}m"
+    else:
+        avg_time_str = f"{avg_time_per_batch/3600:.1f}h"
+    
+    print(f"[Core {index}] Completed {total_batches} batches in {total_time_str} (avg: {avg_time_str}/batch)", flush=True)
+    
     writer.close()
     logger.info("[Core %d] Finished writing shard to %s", index, shard_path)
 

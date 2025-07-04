@@ -16,15 +16,15 @@ from marin.generation.sliding_logits import Precision, SlidingLogitsConfig, comp
 # -----------------------------------------------------------------------------
 
 sliding_logits_step = ExecutorStep(
-    name="extraction/sliding-forward-logits_v2",
+    name="extraction/sliding-forward-logits_v2_batch32",
     description="Run sliding-window LM forward pass over a text file, store logits + generate heat-map.",
     fn=compute_sliding_logits_remote,
     config=SlidingLogitsConfig(
         model_name="meta-llama/Meta-Llama-3.1-8B",
         input_path="gs://marin-us-central2/documents/books_txt/gatsby.txt",
         output_dir=this_output_path(),  # executor will create a hashed directory
-        batch_size=2,  # smaller batch to reduce host-transfer memory with full-vocab logits
-        memory_gb=16,
+        batch_size=32,  # smaller batch to reduce host-transfer memory with full-vocab logits
+        memory_gb=32,
         chunk_size=100,
         slice_length=2000,
         cursor_inc=10,
