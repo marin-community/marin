@@ -163,6 +163,21 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
             shutil.rmtree(config.hf_checkpoint, ignore_errors=True)
             print(f"Deleted local checkpoint at {config.checkpoint_path}.")
 
+    try:
+        if config.hf_checkpoint and is_remote_path(config.hf_checkpoint):
+            local_path = os.path.join("/dev/shm/levanter-lm-eval", ckpt_path_to_step_name(config.hf_checkpoint))
+            download_from_gcs(
+                gcs_path=config.hf_checkpoint,
+                destination_path=local_path,
+            )
+            config.hf_checkpoint = local_path
+            print(f"Downloaded model checkpoint to {local_path}: {os.listdir(local_path)}")
+        eval_lm_main(config)
+    finally:
+        if config.hf_checkpoint and os.path.exists(config.hf_checkpoint):
+            shutil.rmtree(config.hf_checkpoint, ignore_errors=True)
+            print(f"Deleted local checkpoint at {config.checkpoint_path}.")
+
 @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1}, max_calls=1)
 # @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU-v4-128-head": 1}, max_calls=1)
 # @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 1, "TPU-v4-128-head": 1}, runtime_env={"env_vars": {"PJRT_DEVICE": "TPU"}}, max_calls=1)
