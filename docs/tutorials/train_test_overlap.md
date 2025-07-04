@@ -41,7 +41,7 @@ The easiest way to get started is to run overlap detection on the pre-configured
 
 ```bash
 # Step 1: Run deduplication on all configured datasets
-python experiments/train_test_overlap/train_test_total.py --prefix gs://your-bucket
+python experiments/train_test_overlap/train_test_total.py --prefix gs://${BUCKET}
 
 # Step 2: Aggregate results across datasets
 python experiments/train_test_overlap/aggregate_total.py --prefix gs://your-bucket
