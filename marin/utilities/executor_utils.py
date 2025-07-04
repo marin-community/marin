@@ -90,7 +90,9 @@ def ckpt_path_to_step_name(path: str | InputName) -> str:
 
     if isinstance(path, str):
         # see if it looks like an hf hub path: "org/model". If so, just return the last component
-        if re.match("^[^/]+/[^/]+$", path):  # exactly 1 slash
+        if (
+            re.match("^[^/]+/[^/]+$", path) or "gcsfuse_mount/models" in path
+        ):  # exactly 1 slash or in the pretrained gcsfuse dir
             return path.split("/")[-1]
 
         # we want llama-8b-tootsie-phase2-730000
@@ -103,10 +105,14 @@ def ckpt_path_to_step_name(path: str | InputName) -> str:
     elif isinstance(path, InputName):
         name = path.step.name
         name = name.split("/")[-1]
-        components = path.name.split("/")
-        if not components[-1]:
-            components = components[:-1]
-        step = _get_step(components[-1])
+        if path.name:
+            components = path.name.split("/")
+            if not components[-1]:
+                components = components[:-1]
+            step = _get_step(components[-1])
+        else:
+            return name
+
     else:
         raise ValueError(f"Unknown type for path: {path}")
 
