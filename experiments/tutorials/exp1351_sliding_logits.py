@@ -16,7 +16,7 @@ from marin.generation.sliding_logits import Precision, SlidingLogitsConfig, comp
 # -----------------------------------------------------------------------------
 
 sliding_logits_step = ExecutorStep(
-    name="extraction/sliding-forward-logits_v2_batch32",
+    name="extraction/sliding-forward-logits_v2_batch32_compress_batchesper100",
     description="Run sliding-window LM forward pass over a text file, store logits + generate heat-map.",
     fn=compute_sliding_logits_remote,
     config=SlidingLogitsConfig(
@@ -32,6 +32,8 @@ sliding_logits_step = ExecutorStep(
         prompt_tokens=50,
         precision=Precision.FLOAT16,
         num_devices=4,
+        uncompress=False,
+        batches_per_save=50,
     ),
 )
 

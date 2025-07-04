@@ -123,11 +123,12 @@ class SlidingLogitsConfig:
 
     # Block size for fsspec writes in bytes. This controls the chunk size
     # used when streaming data to remote filesystems (e.g., GCS).
-    block_size: int = 4 * 1024 * 1024
+    #TODO: figure out what's reasonable for this
+    block_size: int = 64 * 1024 * 1024
 
     # Number of batches to accumulate in memory before writing to disk.
     # Larger values reduce write overhead but increase peak memory usage.
-    batches_per_save: int = 10
+    batches_per_save: int = 1
 
 
 # Decorator to ensure TPU lockfile cleanup in case of errors
@@ -375,6 +376,8 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
                             "logits": out_logits,
                             "pz": out_pz,
                         },
+                        allow_pickle=True,
+                        pickle_kwargs={'protocol': 4},
                     )
                 else:
                     np.savez_compressed(
@@ -437,6 +440,8 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
                         "logits": out_logits,
                         "pz": out_pz,
                     },
+                    allow_pickle=True,
+                    pickle_kwargs={'protocol': 4},
                 )
             else:
                 np.savez_compressed(
@@ -480,7 +485,7 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
     # Write per-core char_max array directly to GCS
     cm_part_path = os.path.join(cfg.output_dir, f"char_max_part_{index}.npy")
     with fsspec.open(cm_part_path, "wb") as fo:
-        np.save(fo, char_max_local)
+        np.save(fo, char_max_local, allow_pickle=True, pickle_kwargs={'protocol': 4})
     logger.info("[Core %d] Wrote char_max part to %s", index, cm_part_path)
 
 
