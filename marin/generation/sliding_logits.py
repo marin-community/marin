@@ -9,8 +9,6 @@ from typing import Any
 
 import fsspec
 import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
 import ray
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -93,7 +91,7 @@ class SlidingLogitsConfig:
 
     model_name: str
     input_path: str  # path to raw txt (local or gs://)
-    output_dir: str  # directory where parquet + plot will be written
+    output_dir: str  # directory where output shards (.npz/.npy) and plot will be written
 
     # Runtime / batching --------------------------------------------------
     batch_size: int = 8
@@ -117,6 +115,19 @@ class SlidingLogitsConfig:
 
     # TPU device count (set TPU_NUM_DEVICES). If None, use all visible cores.
     num_devices: int | None = None
+
+    # If True, write uncompressed .npy files with np.save instead of
+    # compressed .npz archives. Allows faster writes at the cost of larger
+    # output files.
+    uncompress: bool = False
+
+    # Block size for fsspec writes in bytes. This controls the chunk size
+    # used when streaming data to remote filesystems (e.g., GCS).
+    block_size: int = 4 * 1024 * 1024
+
+    # Number of batches to accumulate in memory before writing to disk.
+    # Larger values reduce write overhead but increase peak memory usage.
+    batches_per_save: int = 10
 
 
 # Decorator to ensure TPU lockfile cleanup in case of errors
@@ -211,25 +222,7 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
     model.to(device)
     model.eval()
 
-    shard_path = os.path.join(cfg.output_dir, f"sliding_logits_{index}.parquet")
-
-    # Build PyArrow schema (logits as list<list<float32>>)
-    # Note: Using pa.float32() for compatibility with Python native floats from .tolist()
-    schema = pa.schema(
-        [
-            ("input_ids", pa.list_(pa.int32())),
-            ("start_idx", pa.int32()),
-            ("end_idx", pa.int32()),
-            ("text_len", pa.int32()),
-            ("text", pa.string()),
-            ("logits", pa.list_(pa.list_(pa.float32()))),
-            ("pz", pa.float32()),
-        ]
-    )
-
-    # Open ParquetWriter on remote path via Arrow filesystem abstraction
-    filesystem, path_within_fs = pa.fs.FileSystem.from_uri(shard_path)
-    writer = pq.ParquetWriter(path_within_fs, schema, filesystem=filesystem, compression="zstd")
+    shard_path_prefix = os.path.join(cfg.output_dir, f"sliding_logits_{index}")
 
     prompt_len = cfg.prompt_tokens if cfg.prompt_tokens is not None else cfg.chunk_size // 2
 
@@ -239,6 +232,17 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
 
     total_batches = (len(chunks_shard) + cfg.batch_size - 1) // cfg.batch_size
     start_time = time.time()
+
+    save_counter = 0
+    accum_batches = 0
+
+    accum_logits: list[np.ndarray] = []
+    accum_input_ids: list[np.ndarray] = []
+    accum_start_idx: list[np.ndarray] = []
+    accum_end_idx: list[np.ndarray] = []
+    accum_text_len: list[np.ndarray] = []
+    accum_text: list[np.ndarray] = []
+    accum_pz: list[np.ndarray] = []
 
     for batch_idx, batch_start in enumerate(range(0, len(chunks_shard), cfg.batch_size)):
         batch_start_time = time.time()
@@ -320,41 +324,84 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
         # Data preparation timing
         prep_start = time.time()
 
-        # Move logits to CPU and numpy for Arrow conversion
-        logits = logits.cpu()
-        logits_np = logits.numpy()
+        logits_np = logits.cpu().numpy()
 
-        # Build Python rows to avoid Arrow type mismatches
-        rows = []
+        batch_input_ids = np.array([ch["input_ids"] for ch in batch_chunks], dtype=np.int32)
+        batch_start_idx = np.array([ch["start_idx"] for ch in batch_chunks], dtype=np.int32)
+        batch_end_idx = np.array([ch["end_idx"] for ch in batch_chunks], dtype=np.int32)
+        batch_text_len = np.array([ch["text_len"] for ch in batch_chunks], dtype=np.int32)
+        batch_text = np.array([ch["text"] for ch in batch_chunks], dtype=object)
+        batch_pz = np.array(pz_batch, dtype=np.float32)
+
         for i, ch in enumerate(batch_chunks):
             c0, c1 = ch["start_idx"], ch["end_idx"]
-            char_max_local[c0 : c1 + 1] = np.maximum(char_max_local[c0 : c1 + 1], pz_batch[i])
+            char_max_local[c0 : c1 + 1] = np.maximum(char_max_local[c0 : c1 + 1], batch_pz[i])
 
-            rows.append(
-                {
-                    "input_ids": ch["input_ids"],
-                    "start_idx": ch["start_idx"],
-                    "end_idx": ch["end_idx"],
-                    "text_len": ch["text_len"],
-                    "text": ch["text"],
-                    "logits": logits_np[i].astype(np.float16 if cfg.precision == Precision.FLOAT16 else np.float32).tolist(),
-                    "pz": pz_batch[i],
-                }
-            )
-
-        batch_table = pa.Table.from_pylist(rows, schema=schema)
         prep_time = time.time() - prep_start
         print(f"[Core {index}] Data preparation: {prep_time:.2f}s", flush=True)
 
-        # Table building and writing timing
-        table_start = time.time()
-        writer.write_table(batch_table, row_group_size=len(batch_chunks))
-        table_time = time.time() - table_start
-        print(f"[Core {index}] Table build/write: {table_time:.2f}s", flush=True)
+        accum_logits.append(logits_np)
+        accum_input_ids.append(batch_input_ids)
+        accum_start_idx.append(batch_start_idx)
+        accum_end_idx.append(batch_end_idx)
+        accum_text_len.append(batch_text_len)
+        accum_text.append(batch_text)
+        accum_pz.append(batch_pz)
+        accum_batches += 1
+
+        table_time = 0.0
+        if accum_batches >= cfg.batches_per_save:
+            table_start = time.time()
+            out_logits = np.concatenate(accum_logits, axis=0)
+            out_input_ids = np.concatenate(accum_input_ids, axis=0)
+            out_start_idx = np.concatenate(accum_start_idx, axis=0)
+            out_end_idx = np.concatenate(accum_end_idx, axis=0)
+            out_text_len = np.concatenate(accum_text_len, axis=0)
+            out_text = np.concatenate(accum_text, axis=0)
+            out_pz = np.concatenate(accum_pz, axis=0)
+
+            ext = "npy" if cfg.uncompress else "npz"
+            batch_path = f"{shard_path_prefix}_part{save_counter}.{ext}"
+            with fsspec.open(batch_path, "wb", block_size=cfg.block_size) as fo:
+                if cfg.uncompress:
+                    np.save(
+                        fo,
+                        {
+                            "input_ids": out_input_ids,
+                            "start_idx": out_start_idx,
+                            "end_idx": out_end_idx,
+                            "text_len": out_text_len,
+                            "text": out_text,
+                            "logits": out_logits,
+                            "pz": out_pz,
+                        },
+                    )
+                else:
+                    np.savez_compressed(
+                        fo,
+                        input_ids=out_input_ids,
+                        start_idx=out_start_idx,
+                        end_idx=out_end_idx,
+                        text_len=out_text_len,
+                        text=out_text,
+                        logits=out_logits,
+                        pz=out_pz,
+                    )
+            table_time = time.time() - table_start
+            print(f"[Core {index}] Table build/write: {table_time:.2f}s", flush=True)
+            save_counter += 1
+            accum_batches = 0
+            accum_logits.clear()
+            accum_input_ids.clear()
+            accum_start_idx.clear()
+            accum_end_idx.clear()
+            accum_text_len.clear()
+            accum_text.clear()
+            accum_pz.clear()
 
         # Cleanup timing
         cleanup_start = time.time()
-        del logits, tokens, outputs, batch_table
+        del logits, tokens, outputs
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
         xm.mark_step()
         cleanup_time = time.time() - cleanup_start
@@ -364,6 +411,46 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
         batch_total_time = time.time() - batch_start_time
         print(f"[Core {index}] Total batch time: {batch_total_time:.2f}s", flush=True)
         print("---", flush=True)
+
+    if accum_batches > 0:
+        table_start = time.time()
+        out_logits = np.concatenate(accum_logits, axis=0)
+        out_input_ids = np.concatenate(accum_input_ids, axis=0)
+        out_start_idx = np.concatenate(accum_start_idx, axis=0)
+        out_end_idx = np.concatenate(accum_end_idx, axis=0)
+        out_text_len = np.concatenate(accum_text_len, axis=0)
+        out_text = np.concatenate(accum_text, axis=0)
+        out_pz = np.concatenate(accum_pz, axis=0)
+
+        ext = "npy" if cfg.uncompress else "npz"
+        batch_path = f"{shard_path_prefix}_part{save_counter}.{ext}"
+        with fsspec.open(batch_path, "wb", block_size=cfg.block_size) as fo:
+            if cfg.uncompress:
+                np.save(
+                    fo,
+                    {
+                        "input_ids": out_input_ids,
+                        "start_idx": out_start_idx,
+                        "end_idx": out_end_idx,
+                        "text_len": out_text_len,
+                        "text": out_text,
+                        "logits": out_logits,
+                        "pz": out_pz,
+                    },
+                )
+            else:
+                np.savez_compressed(
+                    fo,
+                    input_ids=out_input_ids,
+                    start_idx=out_start_idx,
+                    end_idx=out_end_idx,
+                    text_len=out_text_len,
+                    text=out_text,
+                    logits=out_logits,
+                    pz=out_pz,
+                )
+        table_time = time.time() - table_start
+        print(f"[Core {index}] Table build/write: {table_time:.2f}s", flush=True)
 
     # Final timing summary
     total_time = time.time() - start_time
@@ -388,8 +475,7 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
         flush=True,
     )
 
-    writer.close()
-    logger.info("[Core %d] Finished writing shard to %s", index, shard_path)
+    logger.info("[Core %d] Finished writing shard files with prefix %s", index, shard_path_prefix)
 
     # Write per-core char_max array directly to GCS
     cm_part_path = os.path.join(cfg.output_dir, f"char_max_part_{index}.npy")
