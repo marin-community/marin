@@ -6,7 +6,7 @@ The goal was to see if there were any structural differences in the log probabil
 """
 
 from experiments.defaults import default_validation_sets
-from experiments.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
+from experiments.posttrain.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
 from experiments.tootsie.exp600_tootsie import llama3_tokenizer, llama_8b
 from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs
 from marin.execution.executor import ExecutorStep, executor_main, versioned
