@@ -2,24 +2,19 @@ from __future__ import annotations
 
 import logging
 import os
-import tempfile
 import time
 from dataclasses import dataclass
-from io import BytesIO
-from typing import Any, Dict
 from enum import Enum, auto
+from typing import Any
 
-import ray
-import numpy as np
-import matplotlib.pyplot as plt
-from transformers import AutoModelForCausalLM, AutoTokenizer
 import fsspec
-import datasets
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import ray
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from marin.processing.classification.inference import write_dataset
-from marin.utils import remove_tpu_lockfile_on_exit, fsspec_mkdirs
+from marin.utils import fsspec_mkdirs, remove_tpu_lockfile_on_exit
 
 
 def chunk_text_to_sliding_window_token_chunks(
@@ -29,21 +24,21 @@ def chunk_text_to_sliding_window_token_chunks(
     chunk_size: int = 100,
     slice_length: int = 2000,
     cursor_inc: int = 10,
-) -> list[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Tokenise *text* into overlapping `chunk_size`-token windows.
 
     Replicates the logic in ``careless.py`` almost verbatim but drops the
     torch-specific bits.  Returns a list of dictionaries with keys:
 
-    ``input_ids``          – *list[int]* of length ``chunk_size``
-    ``start_idx``          – start character index in *text*
-    ``end_idx``            – end character index (inclusive) in *text*
-    ``text``               – decoded chunk text (useful for debugging)
-    ``attention_mask``     – list[int] same length as ``input_ids``
-    ``text_len``           – length of decoded text in characters
+    ``input_ids``          - *list[int]* of length ``chunk_size``
+    ``start_idx``          - start character index in *text*
+    ``end_idx``            - end character index (inclusive) in *text*
+    ``text``               - decoded chunk text (useful for debugging)
+    ``attention_mask``     - list[int] same length as ``input_ids``
+    ``text_len``           - length of decoded text in characters
     """
 
-    all_chunks: list[Dict[str, Any]] = []
+    all_chunks: list[dict[str, Any]] = []
     text_cursor = 0
     text_len = len(text)
 
@@ -114,7 +109,7 @@ class SlidingLogitsConfig:
 
     # Prompt / suffix split ----------------------------------------------
     # Number of tokens treated as the prompt; if None, defaults to
-    # `chunk_size // 2` (50 / 50 split).
+    # `chunk_size // 2` (50/50 split).
     prompt_tokens: int | None = None
 
     # Numerical precision for model weights + saved logits.
@@ -133,7 +128,7 @@ def compute_sliding_logits(cfg: SlidingLogitsConfig) -> None:
         "Computing sliding-window logits for %s using %s",
         cfg.input_path,
         cfg.model_name,
-    )   
+    )
 
     # Ensure output directory exists (works for GCS/local)
     fsspec_mkdirs(cfg.output_dir)
@@ -176,14 +171,14 @@ def compute_sliding_logits(cfg: SlidingLogitsConfig) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # type: ignore
+def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # type: ignore
     """Per-XLA-core worker. Runs inside torch-xla xmp.spawn process."""
 
     # Import torch_xla *inside* worker process, after PJRT runtime decided on
     # device topology.
+    import torch
     import torch_xla.core.xla_model as xm
     import torch_xla.runtime as xr
-    import torch
 
     # ------------------------------------------------------------------
     # 1. Load raw text --------------------------------------------------
@@ -209,7 +204,7 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
 
     # Shard across world size so each XLA core gets a slice.
     world_size = xr.world_size()
-    chunks_shard = chunks[index :: world_size]
+    chunks_shard = chunks[index::world_size]
     logger.info("[Core %d] Shard size: %d windows", index, len(chunks_shard))
 
     device = xm.xla_device()
@@ -244,22 +239,22 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
 
     total_batches = (len(chunks_shard) + cfg.batch_size - 1) // cfg.batch_size
     start_time = time.time()
-    
+
     for batch_idx, batch_start in enumerate(range(0, len(chunks_shard), cfg.batch_size)):
         batch_start_time = time.time()
-        
+
         batch_chunks = chunks_shard[batch_start : batch_start + cfg.batch_size]
         texts = [c["text"] for c in batch_chunks]
-        
+
         # Calculate progress and timing estimates
         progress_percent = (batch_idx + 1) / total_batches * 100
         elapsed_time = time.time() - start_time
-        
+
         if batch_idx > 0:  # Skip time estimate for first batch
             avg_time_per_batch = elapsed_time / batch_idx
             remaining_batches = total_batches - batch_idx - 1
             eta_seconds = avg_time_per_batch * remaining_batches
-            
+
             # Format time estimates
             if eta_seconds < 60:
                 eta_str = f"{eta_seconds:.0f}s"
@@ -267,11 +262,18 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
                 eta_str = f"{eta_seconds/60:.1f}m"
             else:
                 eta_str = f"{eta_seconds/3600:.1f}h"
-                
-            print(f"[Core {index}] Processing batch {batch_idx + 1}/{total_batches} ({progress_percent:.1f}%) - ETA: {eta_str}", flush=True)
+
+            print(
+                f"[Core {index}] Processing batch {batch_idx + 1}/{total_batches} "
+                f"({progress_percent:.1f}%) - ETA: {eta_str}",
+                flush=True,
+            )
         else:
-            print(f"[Core {index}] Processing batch {batch_idx + 1}/{total_batches} ({progress_percent:.1f}%)", flush=True)
-        
+            print(
+                f"[Core {index}] Processing batch {batch_idx + 1}/{total_batches} " f"({progress_percent:.1f}%)",
+                flush=True,
+            )
+
         # Tokenization timing
         tokenize_start = time.time()
         tokens = tokenizer(
@@ -294,14 +296,14 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
 
         # Logits processing timing
         logits_start = time.time()
-        logits = outputs.logits.to(desired_dtype).cpu()
+        logits_device = outputs.logits.to(desired_dtype)
         logits_time = time.time() - logits_start
         print(f"[Core {index}] Logits processing: {logits_time:.2f}s", flush=True)
 
-        # P(z) computation timing
+        # P(z) computation timing (keep on device for speed)
         pz_start = time.time()
-        shift_logits = logits[:, :-1, :]
-        shift_labels = tokens["input_ids"][:, 1:].cpu()
+        shift_logits = logits_device[:, :-1, :]
+        shift_labels = tokens["input_ids"][:, 1:]
         log_probs = torch.log_softmax(shift_logits, dim=-1)
         token_lp = log_probs.gather(-1, shift_labels.unsqueeze(-1)).squeeze(-1)
 
@@ -316,8 +318,17 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
 
         # Data preparation timing
         prep_start = time.time()
+
+        # Move logits to CPU and numpy for Arrow conversion
+        logits = logits_device.cpu()
+        logits_np = logits.numpy()
+
+        # Build Python rows to avoid Arrow type mismatches
         rows = []
         for i, ch in enumerate(batch_chunks):
+            c0, c1 = ch["start_idx"], ch["end_idx"]
+            char_max_local[c0 : c1 + 1] = np.maximum(char_max_local[c0 : c1 + 1], pz_batch[i])
+
             rows.append(
                 {
                     "input_ids": ch["input_ids"],
@@ -326,35 +337,30 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
                     "text_len": ch["text_len"],
                     "text": ch["text"],
                     "logits": (
-                        [[np.float16(v) for v in row] for row in logits[i].tolist()]
-                        if cfg.precision == Precision.FLOAT16
-                        else [[float(v) for v in row] for row in logits[i].tolist()]
+                        logits_np[i].astype(np.float16 if cfg.precision == Precision.FLOAT16 else np.float32).tolist()
                     ),
                     "pz": pz_batch[i],
                 }
             )
 
-            # update char_max_local for this window
-            c0, c1 = ch["start_idx"], ch["end_idx"]
-            char_max_local[c0 : c1 + 1] = np.maximum(char_max_local[c0 : c1 + 1], pz_batch[i])
+        batch_table = pa.Table.from_pylist(rows, schema=schema)
         prep_time = time.time() - prep_start
         print(f"[Core {index}] Data preparation: {prep_time:.2f}s", flush=True)
 
         # Table building and writing timing
         table_start = time.time()
-        table = pa.Table.from_pylist(rows, schema=schema)
-        writer.write_table(table, row_group_size=len(rows))
+        writer.write_table(batch_table, row_group_size=len(batch_chunks))
         table_time = time.time() - table_start
         print(f"[Core {index}] Table build/write: {table_time:.2f}s", flush=True)
 
         # Cleanup timing
         cleanup_start = time.time()
-        del logits, tokens, outputs, rows, table
+        del logits, tokens, outputs, batch_table
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
         xm.mark_step()
         cleanup_time = time.time() - cleanup_start
         print(f"[Core {index}] Cleanup: {cleanup_time:.2f}s", flush=True)
-        
+
         # Total batch time
         batch_total_time = time.time() - batch_start_time
         print(f"[Core {index}] Total batch time: {batch_total_time:.2f}s", flush=True)
@@ -363,23 +369,26 @@ def _sliding_logits_worker(index: int, cfg: "SlidingLogitsConfig") -> None:  # t
     # Final timing summary
     total_time = time.time() - start_time
     avg_time_per_batch = total_time / total_batches
-    
+
     if total_time < 60:
         total_time_str = f"{total_time:.1f}s"
     elif total_time < 3600:
         total_time_str = f"{total_time/60:.1f}m"
     else:
         total_time_str = f"{total_time/3600:.1f}h"
-        
+
     if avg_time_per_batch < 60:
         avg_time_str = f"{avg_time_per_batch:.1f}s"
     elif avg_time_per_batch < 3600:
         avg_time_str = f"{avg_time_per_batch/60:.1f}m"
     else:
         avg_time_str = f"{avg_time_per_batch/3600:.1f}h"
-    
-    print(f"[Core {index}] Completed {total_batches} batches in {total_time_str} (avg: {avg_time_str}/batch)", flush=True)
-    
+
+    print(
+        f"[Core {index}] Completed {total_batches} batches in {total_time_str} " f"(avg: {avg_time_str}/batch)",
+        flush=True,
+    )
+
     writer.close()
     logger.info("[Core %d] Finished writing shard to %s", index, shard_path)
 
@@ -416,4 +425,4 @@ if __name__ == "__main__":
     def main(cfg: SlidingLogitsConfig):  # pragma: no cover
         compute_sliding_logits(cfg)
 
-    main() 
+    main()
