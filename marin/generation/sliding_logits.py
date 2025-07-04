@@ -296,13 +296,14 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
 
         # Logits processing timing
         logits_start = time.time()
-        logits_device = outputs.logits.to(desired_dtype)
+        logits = outputs.logits.to(desired_dtype)
         logits_time = time.time() - logits_start
         print(f"[Core {index}] Logits processing: {logits_time:.2f}s", flush=True)
 
         # P(z) computation timing (keep on device for speed)
         pz_start = time.time()
-        shift_logits = logits_device[:, :-1, :]
+
+        shift_logits = logits[:, :-1, :]
         shift_labels = tokens["input_ids"][:, 1:]
         log_probs = torch.log_softmax(shift_logits, dim=-1)
         token_lp = log_probs.gather(-1, shift_labels.unsqueeze(-1)).squeeze(-1)
@@ -310,7 +311,7 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
         suffix_start = max(0, prompt_len - 1)
         if suffix_start < token_lp.size(1):
             suffix_lp = token_lp[:, suffix_start:].sum(dim=-1)
-            pz_batch = torch.exp(suffix_lp).tolist()
+            pz_batch = torch.exp(suffix_lp).cpu().tolist()
         else:
             pz_batch = [0.0] * len(batch_chunks)
         pz_time = time.time() - pz_start
