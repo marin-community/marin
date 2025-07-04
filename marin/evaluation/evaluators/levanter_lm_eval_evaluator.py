@@ -6,9 +6,11 @@ from typing import ClassVar
 
 import fsspec
 import jmp
+import levanter
 import levanter.eval_harness as eval_harness
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.distributed import RayConfig
+from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from experiments.evals.task_configs import convert_to_levanter_task_config
@@ -25,8 +27,9 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
     _pip_packages: ClassVar[list[Dependency]] = [
         *LevanterTpuEvaluator.DEFAULT_PIP_PACKAGES,
         Dependency(name="jax[tpu]==0.5.1"),
-        Dependency(name="haliax==1.4.dev343"),
-        Dependency(name="levanter==1.2.dev1313"),
+        Dependency(name="haliax==1.4.dev348"),
+        Dependency(name="levanter==1.2.dev1359"),
+        Dependency(name="statsmodels==0.14.4"),
     ]
 
     def evaluate(
@@ -51,12 +54,14 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         try:
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
-
+            name = model.name + "_lmeval_" + "-".join([eval_task.name for eval_task in evals])
+            logger.info(f"WandB Run Name: {name}")
             logger.info(f"Running eval harness on model: {model_name_or_path}")
 
             # NOTE(chris): Before, the batch size was 16, but this is too large for the 8B model.
             # In the future, we should make this user-configurable.
             trainer_config = TrainerConfig(
+                tracker=WandbConfig(project="marin", tags=["lm_eval_harness"], name=name),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 per_device_eval_parallelism=8,
                 ray=RayConfig(auto_start_cluster=False),
@@ -66,6 +71,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
             # convert to the config that Levanter's eval_harness expects
             tasks = convert_to_levanter_task_config(evals)
+            logger.info(f"Tasks: {tasks}")
 
             model_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.path)
 
@@ -102,13 +108,13 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 with fs.open(output_path, "w") as f:
                     json.dump(results, f, indent=2)
 
+                levanter.tracker.current_tracker().finish()
                 logger.info("Upload completed successfully.")
 
             except Exception as upload_error:
                 logger.info(f"Failed to upload results to GCS: {upload_error}")
 
         except Exception as e:
-
             logger.error(f"Error running eval harness: {e}")
             raise e
 
