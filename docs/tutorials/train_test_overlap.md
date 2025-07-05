@@ -30,8 +30,7 @@ The system uses a two-step process:
 
 ### Prerequisites
 
-Make sure you have:
-- Marin installed and configured
+- Make sure you've followed the [installation guide](installation.md) to do the basic installation.
 - Access to your training and evaluation datasets
 - Ray cluster set up (if running distributed)
 
@@ -145,30 +144,48 @@ BASE_DEDUPE_CONFIG = DedupeConfig(
         overlap_threshold=1e-6,   # Minimum overlap to report
         stride=0,                 # Stride between n-grams (0 = every position)
     ),
-    processes=16,                 # Parallel processes per shard
+    processes=16,                 # Parallel processes per shard (see explanation below)
     false_positive_rate=1e-12,    # Bloom filter false positive rate
 )
 ```
 
+**Understanding the `processes` Parameter:**
+
+The `processes` parameter controls how many parallel processes dolma uses **per training shard**. Here's how it works:
+
+- **What it does**: Each training shard gets split into `processes` number of sub-shards for parallel processing
+- **Performance trade-off**: More processes = faster Bloom filter creation but higher CPU/memory usage
+- **Resource impact**: Each process loads a portion of the shard into memory simultaneously
+- **Typical values**: 8-32 processes depending on your cluster's CPU and memory capacity
+
+Example: If you have a 1GB training shard and set `processes=16`, the system will:
+1. Split the shard into 16 smaller chunks
+2. Process each chunk in parallel to build the Bloom filter
+3. Use 16x more CPU cores but complete ~16x faster
+
 **Common configurations**:
-- **Fast screening**: `ngram_length=[15]`, `false_positive_rate=1e-9`
-- **Thorough analysis**: `ngram_length=[10, 15, 20]`, `false_positive_rate=1e-12`
-- **Memory-constrained**: Increase `false_positive_rate` to `1e-8` or `1e-6`
+- **Fast screening**: `ngram_length=[15]`, `false_positive_rate=1e-9`, `processes=8`
+- **Thorough analysis**: `ngram_length=[10, 15, 20]`, `false_positive_rate=1e-12`, `processes=16`
+- **Memory-constrained**: `false_positive_rate=1e-6`, `processes=4` (fewer processes = less memory)
 
 ### Parallel Processing
 
-Adjust parallelism based on your resources:
+The system has two levels of parallelism that you can adjust:
 
+**1. Dataset-level parallelism (`max_in_flight`):**
 ```python
-# In DATASET_CONFIGS - max tasks per dataset
+# In DATASET_CONFIGS - how many shards to process simultaneously
 DatasetConfig(
     name="dataset_name",
     path="path",
-    max_in_flight=128  # High parallelism for large datasets
+    max_in_flight=128  # Process 128 shards at once
 ),
+```
 
-# In BASE_DEDUPE_CONFIG - processes per task
-processes=32,  # More processes = more memory usage
+**2. Shard-level parallelism (`processes`):**
+```python
+# In BASE_DEDUPE_CONFIG - how many processes per shard
+processes=32,  # Split each shard into 32 parallel processes
 ```
 
 ### Custom Evaluation Datasets
@@ -232,25 +249,30 @@ step = ExecutorStep(
 
 ### Memory Optimization
 
-For very large datasets:
+For very large datasets or memory-constrained environments:
 
 ```python
-# Reduce memory usage
+# Reduce memory usage at the shard level
 BASE_DEDUPE_CONFIG = dataclasses.replace(
     BASE_DEDUPE_CONFIG,
-    false_positive_rate=1e-6,     # Higher false positive rate = less memory
-    processes=8,                   # Fewer parallel processes
+    false_positive_rate=1e-6,     # Higher false positive rate = smaller Bloom filters
+    processes=8,                   # Fewer processes per shard = less concurrent memory usage
 )
 
-# Use smaller batch sizes
+# Reduce memory usage at the dataset level
 DATASET_CONFIGS = [
     DatasetConfig(
         name="${DATASET_NAME}",
         path="gs://${BUCKET}/${DATASET_NAME}",
-        max_in_flight=16  # Lower max_in_flight
+        max_in_flight=16  # Process fewer shards simultaneously
     ),
 ]
 ```
+
+**Memory calculation**: Each process loads part of a shard into memory, so:
+- `max_in_flight=16` × `processes=8` = 128 total processes
+- Compare to default: `max_in_flight=64` × `processes=16` = 1,024 total processes
+- **Result**: ~8x less memory usage but proportionally slower processing
 
 ## Gotchas and Troubleshooting
 
@@ -278,26 +300,26 @@ DATASET_CONFIGS = [
 
 3. **Out of memory errors**
 
-   **Solution**: Reduce memory usage:
+   **Solution**: Reduce memory usage by lowering parallelism:
    ```python
-   # Increase false positive rate
+   # Increase false positive rate (uses less memory for Bloom filters)
    false_positive_rate=1e-6,  # Instead of 1e-12
 
-   # Reduce parallel processes
+   # Reduce shard-level parallelism (fewer processes per shard)
    processes=8,  # Instead of 16
 
-   # Lower max_in_flight
+   # Reduce dataset-level parallelism (fewer concurrent shards)
    max_in_flight=16,  # Instead of 64
    ```
 
 4. **Slow processing**
 
-   **Solution**: Increase parallelism (if you have resources):
+   **Solution**: Increase parallelism (if you have resources). Be careful because this can crash the head node!
    ```python
-   # More parallel tasks
+   # More concurrent shards
    max_in_flight=128,
 
-   # More processes per task
+   # More processes per shard (splits each shard into more parallel chunks)
    processes=32,
    ```
 
