@@ -1,6 +1,6 @@
 from marin.post_training.environments.math_env import MathEnv
-from marin.post_training.environments.olym_math_env import OlymMathEnv
 from marin.post_training.environments.math_utils import grade_answer
+from marin.post_training.environments.olym_math_env import OlymMathEnv
 
 
 def test_math_env_loaded():
@@ -46,9 +46,9 @@ def test_grade_answer_with_olym_math_env():
 
     example = hard_olymp_math_env.eval_examples[16]
     assert grade_answer(given_answer="2\\sqrt{2}-1", ground_truth=example["answer"]) is True
-    assert grade_answer(given_answer="2\sqrt{2}-1", ground_truth=example["answer"]) is True
-    assert grade_answer(given_answer="2*\sqrt{2} - 1", ground_truth=example["answer"]) is True
-    assert grade_answer(given_answer="-1+2\sqrt{2}", ground_truth=example["answer"]) is True
+    assert grade_answer(given_answer=r"2\sqrt{2}-1", ground_truth=example["answer"]) is True
+    assert grade_answer(given_answer=r"2*\sqrt{2} - 1", ground_truth=example["answer"]) is True
+    assert grade_answer(given_answer=r"-1+2\sqrt{2}", ground_truth=example["answer"]) is True
 
-    assert grade_answer(given_answer="2\sqrt{3}-1", ground_truth=example["answer"]) is False
-    assert grade_answer(given_answer="2\sqrt{2} + 1", ground_truth=example["answer"]) is False
+    assert grade_answer(given_answer=r"2\sqrt{3}-1", ground_truth=example["answer"]) is False
+    assert grade_answer(given_answer=r"2\sqrt{2} + 1", ground_truth=example["answer"]) is False

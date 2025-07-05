@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 import datasets
 
 from .math_env import MathEnv
@@ -28,9 +30,9 @@ class OlymMathEnv(MathEnv):
     }
     """
 
-    HF_DATASET_NAME: str = "RUC-AIBOX/OlymMATH"
-    SUPPORTED_DIFFICULTIES: list[str] = ["easy", "hard"]
-    SUPPORTED_LANGUAGES: list[str] = ["en", "zh"]
+    HF_DATASET_NAME: ClassVar[str] = "RUC-AIBOX/OlymMATH"
+    SUPPORTED_DIFFICULTIES: ClassVar[list[str]] = ["easy", "hard"]
+    SUPPORTED_LANGUAGES: ClassVar[list[str]] = ["en", "zh"]
 
     # Seed for reproducibility when splitting the dataset
     SPLIT_RANDOM_SEED: int = 42
