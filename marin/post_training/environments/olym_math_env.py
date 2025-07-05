@@ -1,5 +1,3 @@
-from typing import ClassVar
-
 import datasets
 
 from .math_env import MathEnv
@@ -30,9 +28,9 @@ class OlymMathEnv(MathEnv):
     }
     """
 
-    HF_DATASET_NAME: ClassVar[str] = "RUC-AIBOX/OlymMATH"
-    SUPPORTED_DIFFICULTIES: ClassVar[list[str]] = ["easy", "hard"]
-    SUPPORTED_LANGUAGES: ClassVar[list[str]] = ["en", "zh"]
+    HF_DATASET_NAME: str = "RUC-AIBOX/OlymMATH"
+    SUPPORTED_DIFFICULTIES: list[str] = ["easy", "hard"]
+    SUPPORTED_LANGUAGES: list[str] = ["en", "zh"]
 
     # Seed for reproducibility when splitting the dataset
     SPLIT_RANDOM_SEED: int = 42
@@ -42,18 +40,20 @@ class OlymMathEnv(MathEnv):
 
         # Determine which subset of OlymMATH to use based on the initialization arguments
         difficulty: str = kwargs.get("difficulty", "easy")
-        assert (
-            difficulty in self.SUPPORTED_DIFFICULTIES
-        ), f"Unsupported difficulty '{difficulty}'. Supported difficulties are: {self.SUPPORTED_DIFFICULTIES}"
+        assert difficulty in self.SUPPORTED_DIFFICULTIES, (
+            f"Unsupported difficulty '{difficulty}'. Supported difficulties are: {self.SUPPORTED_DIFFICULTIES}"
+        )
         language: str = kwargs.get("language", "en")
-        assert (
-            language in self.SUPPORTED_LANGUAGES
-        ), f"Unsupported language '{language}'. Supported languages are: {self.SUPPORTED_LANGUAGES}"
+        assert language in self.SUPPORTED_LANGUAGES, (
+            f"Unsupported language '{language}'. Supported languages are: {self.SUPPORTED_LANGUAGES}"
+        )
         hf_subset_name: str = f"{language}-{difficulty}"
 
         # Load the dataset from HuggingFace.
         # Since only a test split is available, reserve 20% for evals and 80% for training.
-        hf_dataset = datasets.load_dataset(self.HF_DATASET_NAME, hf_subset_name, split="test", trust_remote_code=True)
+        hf_dataset = datasets.load_dataset(
+            self.HF_DATASET_NAME, hf_subset_name, split="test", trust_remote_code=True
+        )
         splits = hf_dataset.train_test_split(test_size=0.2, seed=self.SPLIT_RANDOM_SEED, shuffle=True)
 
         self.train_examples = []

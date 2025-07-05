@@ -4,15 +4,20 @@ from typing import Any
 import datasets
 import jax
 import numpy as np
-from post_training.inference import batch_inference
-from post_training.utils import validate_format
 from tqdm.auto import tqdm
 
+from marin.post_training.inference import batch_inference
+from marin.post_training.utils import validate_format
 from .marin_env import EnvStep, MarinEnv
 from .math_utils import grade_answer, last_boxed_only_string, remove_boxed
 
 
 class MathEnv(MarinEnv):
+    INSTRUCTION: str = (
+        "Show your work in <think> </think> tags. And return the final answer in <answer> </answer> "
+        "tags. Assistant: Let me solve this step by step. <think>"
+    )
+
     def __init__(self, tokenizer, **kwargs):
         self.tokenizer = tokenizer
 
@@ -23,14 +28,9 @@ class MathEnv(MarinEnv):
         test_dataset = dataset["test"]
 
         # Convert to the format expected by the training code and pre-tokenize
-        instruction = (
-            "Show your work in <think> </think> tags. And return the final answer in <answer> </answer> "
-            "tags. Assistant: Let me solve this step by step. <think>"
-        )
-
         self.train_examples = []
         for item in tqdm(train_dataset, desc="Processing train set"):
-            prompt = f"{item['problem']} {instruction}"
+            prompt = f"{item['problem']} {self.INSTRUCTION}"
             answer = remove_boxed(last_boxed_only_string(item["solution"]))
 
             self.train_examples.append(
@@ -42,7 +42,7 @@ class MathEnv(MarinEnv):
 
         self.eval_examples = []
         for item in tqdm(test_dataset, desc="Processing test set"):
-            prompt = f"{item['problem']} {instruction}"
+            prompt = f"{item['problem']} {self.INSTRUCTION}"
             answer = remove_boxed(last_boxed_only_string(item["solution"]))
 
             self.eval_examples.append(
@@ -54,7 +54,7 @@ class MathEnv(MarinEnv):
 
         print(
             f"Initialized MathEnv with {len(self.train_examples)} train examples "
-            "and {len(self.eval_examples)} eval examples"
+            f"and {len(self.eval_examples)} eval examples."
         )
 
     def step(
@@ -145,9 +145,9 @@ class MathEnv(MarinEnv):
         all_lens = np.asarray(all_lens)
 
         metrics = {
-            "train_rewardss": np.mean(all_rewards),
+            "train_rewards": np.mean(all_rewards),
             "train_format_rewards": np.mean(all_format_rewards),
-            "train_correct_rewardss": np.mean(all_correct_rewards),
+            "train_correct_rewards": np.mean(all_correct_rewards),
             "train_output_len": np.mean(all_lens),
         }
 
