@@ -21,59 +21,12 @@ from dataclasses import dataclass
 import fsspec
 import ray
 
-# ---------------------------------------------------------------------------
-# Import evaluation dataset conversion steps so executor can resolve paths and
-# we can count their sizes on-the-fly.
-# ---------------------------------------------------------------------------
-from experiments.train_test_overlap.eval_datasets_overlap import (
-    ai2_arc_convert_dolma,
-    bbh_convert_dolma,
-    boolq_convert_dolma,
-    commonsense_qa_convert_dolma,
-    gpqa_convert_dolma,
-    gsm8k_convert_dolma,
-    hellaswag_convert_dolma,
-    humaneval_convert_dolma,
-    instruction_following_convert_dolma,
-    lambada_openai_convert_dolma,
-    math_convert_dolma,
-    mmlu_convert_dolma,
-    mmlu_pro_convert_dolma,
-    musr_convert_dolma,
-    openbookqa_convert_dolma,
-    piqa_convert_dolma,
-    truthful_qa_convert_dolma,
-    winograd_wsc_convert_dolma,
-)
-
-# Re-use helper functions + remote task from the existing aggregator
+from experiments.train_test_overlap.utils import EVAL_DATASET_STEPS
 from marin.core.runtime import simple_backpressure
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
-
-# List of evaluator conversion steps
-EVAL_DATASET_STEPS: list[ExecutorStep] = [
-    gsm8k_convert_dolma,
-    math_convert_dolma,
-    truthful_qa_convert_dolma,
-    bbh_convert_dolma,
-    mmlu_convert_dolma,
-    humaneval_convert_dolma,
-    instruction_following_convert_dolma,
-    gpqa_convert_dolma,
-    musr_convert_dolma,
-    mmlu_pro_convert_dolma,
-    hellaswag_convert_dolma,
-    ai2_arc_convert_dolma,
-    boolq_convert_dolma,
-    commonsense_qa_convert_dolma,
-    lambada_openai_convert_dolma,
-    openbookqa_convert_dolma,
-    piqa_convert_dolma,
-    winograd_wsc_convert_dolma,
-]
 
 
 @ray.remote

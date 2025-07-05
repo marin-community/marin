@@ -49,8 +49,56 @@ def _normalise_to_gz(path: str) -> str:
     return path
 
 
-def _check_input_size(input_path: str) -> dict:
+def _check_input_size(input_path: str | list[str]) -> dict:
     """Check if input has processable content before downloading"""
+
+    # Handle list of paths
+    if isinstance(input_path, list):
+        total_size = 0
+        total_file_count = 0
+        has_any_content = True
+        errors = []
+
+        for path in input_path:
+            try:
+                if fsspec_isdir(path):
+                    # For directories, check if any files exist and get total size
+                    patterns = [f"**/*{ext}" for ext in SUPPORTED_JSONL_EXTENSIONS] + ["**/*.parquet"]
+                    path_size = 0
+                    path_file_count = 0
+                    for pattern in patterns:
+                        files = fsspec_glob(f"{path.rstrip('/')}/{pattern}")
+                        for f in files:
+                            path_size += fsspec_size(f)
+                            path_file_count += 1
+                else:
+                    # Single file
+                    path_size = fsspec_size(path)
+                    path_file_count = 1 if path_size > 0 else 0
+
+                total_size += path_size
+                total_file_count += path_file_count
+
+                # If ANY path has no content, mark has_content as False
+                if path_size <= 100:
+                    has_any_content = False
+
+            except Exception as e:
+                has_any_content = False
+                errors.append(f"{path}: {e!s}")
+
+        print(f"total_size: {total_size}, file_count: {total_file_count}, paths: {len(input_path)}\n\n", flush=True)
+        result = {
+            "has_content": has_any_content,
+            "total_size_bytes": total_size,
+            "file_count": total_file_count,
+            "path_count": len(input_path),
+        }
+        if errors:
+            result["errors"] = errors
+        return result
+
+    # Handle single path (original logic)
     try:
         if fsspec_isdir(input_path):
             # For directories, check if any files exist and get total size
@@ -174,7 +222,7 @@ class DedupeConfig:
     expensive downloads and processing of empty datasets.
 
     Attributes:
-        input_path (str): Path of files to apply deduplication to.
+        input_path (str | list[str]): Path(s) of files to apply deduplication to.
         output_path (str): Path for storing results of deduplication (char spans in docs that are duplicate)
         attribute_name (str): Name for key to store duplicate span info in json
         min_length (int): min length of document to be deduplicated
@@ -192,7 +240,7 @@ class DedupeConfig:
         bloom_filter_path: str = "deduper_bloom_filter.bin"
     """
 
-    input_path: str
+    input_path: str | list[str]
     output_path: str
     attribute_name: str = "duplicate_text"
     min_length: int = 0
@@ -268,6 +316,28 @@ def _parquet_to_jsonl_gz(input_path: str, docs_dir: str) -> None:
                     rec["id"] = f"synthetic_{hash(str(rec))}"
 
                 f.write(json.dumps(rec) + "\n")
+
+
+def _format_input_paths_for_error(input_paths: str | list[str], max_paths: int = 3) -> str:
+    """Helper function to format input paths for error messages."""
+    if isinstance(input_paths, list):
+        if len(input_paths) <= max_paths:
+            return f"[{', '.join(input_paths)}]"
+        else:
+            shown_paths = ", ".join(input_paths[:max_paths])
+            remaining = len(input_paths) - max_paths
+            return f"[{shown_paths}, ... and {remaining} more]"
+    else:
+        return input_paths
+
+
+def _copy_multiple_inputs(input_paths: str | list[str], local_base_dir: str) -> None:
+    """Helper function to copy files from single path or list of paths."""
+    if isinstance(input_paths, list):
+        for path in input_paths:
+            copy_files_in(path, local_base_dir)
+    else:
+        copy_files_in(input_paths, local_base_dir)
 
 
 def copy_files_in(input_path, local_base_dir):
@@ -666,7 +736,12 @@ def _run_decontamination(config: DedupeConfig):
     # Check input sizes first before any processing
     input_check = _check_input_size(config.input_path)
     if not input_check["has_content"]:
-        return {"success": True, "reason": "empty_input", "input_path": config.input_path, **input_check}
+        return {
+            "success": True,
+            "reason": "empty_input",
+            "input_path": _format_input_paths_for_error(config.input_path),
+            **input_check,
+        }
 
     if not config.decontaminate_source:
         raise ValueError("decontaminate_source is required in DECONTAMINATE mode")
@@ -701,7 +776,7 @@ def _run_decontamination(config: DedupeConfig):
         # 2) clear out JSONLs
         delete_jsonl_files(tmpdir)
         # 3) apply filter to real input
-        copy_files_in(config.input_path, tmpdir)
+        _copy_multiple_inputs(config.input_path, tmpdir)
         do_dedup(
             tmpdir,
             config.attribute_name,
@@ -734,11 +809,16 @@ def _run_deduplication(config: DedupeConfig):
     # Check input size first before any processing
     input_check = _check_input_size(config.input_path)
     if not input_check["has_content"]:
-        return {"success": True, "reason": "empty_input", "input_path": config.input_path, **input_check}
+        return {
+            "success": True,
+            "reason": "empty_input",
+            "input_path": _format_input_paths_for_error(config.input_path),
+            **input_check,
+        }
 
     with tempfile.TemporaryDirectory(dir="/tmp", prefix="marin_dedupe_") as tmpdir:
         # run standard deduplication
-        copy_files_in(config.input_path, tmpdir)
+        _copy_multiple_inputs(config.input_path, tmpdir)
         do_dedup(
             tmpdir,
             config.attribute_name,
@@ -799,7 +879,12 @@ def _run_train_test_overlap(config: DedupeConfig):
     # Check input sizes first before any processing
     input_check = _check_input_size(config.input_path)
     if not input_check["has_content"]:
-        return {"success": True, "reason": "empty_input", "input_path": config.input_path, **input_check}
+        return {
+            "success": True,
+            "reason": "empty_input",
+            "input_path": _format_input_paths_for_error(config.input_path),
+            **input_check,
+        }
 
     if not config.decontaminate_source:
         raise ValueError("decontaminate_source is required in TRAIN_TEST_OVERLAP mode")
@@ -847,7 +932,7 @@ def _run_train_test_overlap(config: DedupeConfig):
         print("Training data sharded and originals removed")
 
         # 4) Stage test data under a separate directory
-        copy_files_in(config.input_path, tmpdir)
+        _copy_multiple_inputs(config.input_path, tmpdir)
         test_dir = os.path.join(tmpdir, "documents_test")
         os.rename(os.path.join(tmpdir, "documents"), test_dir)
 

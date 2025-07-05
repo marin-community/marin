@@ -5,7 +5,29 @@ from dataclasses import dataclass
 
 import ray
 
+# Import evaluation dataset conversion steps so executor can resolve paths
+from experiments.train_test_overlap.eval_datasets_overlap import (
+    ai2_arc_convert_dolma,
+    bbh_convert_dolma,
+    boolq_convert_dolma,
+    commonsense_qa_convert_dolma,
+    gpqa_convert_dolma,
+    gsm8k_convert_dolma,
+    hellaswag_convert_dolma,
+    humaneval_convert_dolma,
+    instruction_following_convert_dolma,
+    lambada_openai_convert_dolma,
+    math_convert_dolma,
+    mmlu_convert_dolma,
+    mmlu_pro_convert_dolma,
+    musr_convert_dolma,
+    openbookqa_convert_dolma,
+    piqa_convert_dolma,
+    truthful_qa_convert_dolma,
+    winograd_wsc_convert_dolma,
+)
 from marin.core.runtime import simple_backpressure
+from marin.execution.executor import ExecutorStep
 from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 from marin.utils import fsspec_glob
 
@@ -22,6 +44,28 @@ SUPPORTED_SHARD_EXTENSIONS: tuple[str, ...] = (
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+# List of evaluation dataset steps - same as in aggregate_total.py
+EVAL_DATASET_STEPS: list[ExecutorStep] = [
+    gsm8k_convert_dolma,
+    math_convert_dolma,
+    truthful_qa_convert_dolma,
+    bbh_convert_dolma,
+    mmlu_convert_dolma,
+    humaneval_convert_dolma,
+    instruction_following_convert_dolma,
+    gpqa_convert_dolma,
+    musr_convert_dolma,
+    mmlu_pro_convert_dolma,
+    hellaswag_convert_dolma,
+    ai2_arc_convert_dolma,
+    boolq_convert_dolma,
+    commonsense_qa_convert_dolma,
+    lambada_openai_convert_dolma,
+    openbookqa_convert_dolma,
+    piqa_convert_dolma,
+    winograd_wsc_convert_dolma,
+]
 
 
 @dataclass(frozen=True)
@@ -45,11 +89,12 @@ class ShardedDedupeConfig:
     dataset_dir: str
     output_path: str
     max_in_flight: int = 16
+    eval_dataset_steps: list[ExecutorStep] = None  # Evaluation dataset steps for path resolution
 
 
 # Base dedupe configuration - modify this to change n-gram settings, processes, etc.
 BASE_DEDUPE_CONFIG = DedupeConfig(
-    input_path="gs://marin-us-central2/decontamination/",
+    input_path=[],  # Will be replaced with resolved evaluation dataset paths
     output_path="",  # Will be replaced per shard
     attribute_name="ngram_overlap",
     false_positive_rate=1e-12,
@@ -65,17 +110,36 @@ BASE_DEDUPE_CONFIG = DedupeConfig(
 
 
 def make_task(
-    shard_path: str, base_output_path: str, dataset_dir: str, base_config: DedupeConfig = BASE_DEDUPE_CONFIG
+    shard_path: str,
+    base_output_path: str,
+    dataset_dir: str,
+    eval_dataset_steps: list[ExecutorStep],
+    base_config: DedupeConfig = BASE_DEDUPE_CONFIG,
 ) -> DedupeConfig:
-    """Create a DedupeConfig for a single shard using the base config."""
+    """Create a DedupeConfig for a single shard using the base config.
+
+    Args:
+        shard_path: Path to the training shard file
+        base_output_path: Base output directory for results
+        dataset_dir: Root dataset directory (used for relative path calculation)
+        eval_dataset_steps: List of evaluation dataset ExecutorSteps to resolve paths for
+        base_config: Base configuration to modify for this shard
+
+    Returns:
+        DedupeConfig configured for this specific shard with resolved evaluation dataset paths
+    """
 
     # Get relative path from dataset_dir to preserve directory structure
     relative_path = get_relative_path_no_extension(shard_path, dataset_dir)
     output_path = os.path.join(base_output_path, relative_path)
 
+    # Resolve evaluation dataset paths using the executor framework
+    eval_dataset_paths = [step.get_output_path() for step in eval_dataset_steps]
+
     # Use dataclasses.replace to create a new config with the shard-specific values
     return dataclasses.replace(
         base_config,
+        input_path=eval_dataset_paths,  # Resolved evaluation dataset paths
         output_path=output_path,
         decontaminate_source=shard_path,
     )
@@ -85,13 +149,26 @@ def make_task(
 def run_all_shards(config: ShardedDedupeConfig) -> str:
     """
     Discover all dataset shards and launch dedupe tasks with backpressure.
+
+    Automatically resolves evaluation dataset paths using the executor framework
+    and runs train-test overlap detection between each training shard and all
+    evaluation datasets.
+
+    Args:
+        config: Configuration including dataset directory, output path, and evaluation dataset steps
+
+    Returns:
+        Success message with number of shards processed
     """
     logger.info(f"Looking for dataset shards in {config.dataset_dir}")
     # Find all supported dataset shards under root (Parquet or compressed JSONL)
 
     shard_paths = find_dataset_shards(config.dataset_dir)
     # Generator of arguments for each Ray task - now includes dataset_dir
-    task_generator = ((make_task(shard_path, config.output_path, config.dataset_dir),) for shard_path in shard_paths)
+    task_generator = (
+        (make_task(shard_path, config.output_path, config.dataset_dir, config.eval_dataset_steps),)
+        for shard_path in shard_paths
+    )
 
     # Launch tasks with simple backpressure
     for ref in simple_backpressure(

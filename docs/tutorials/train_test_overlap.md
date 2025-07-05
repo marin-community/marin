@@ -1,6 +1,6 @@
 # Train-Test Overlap Detection
 
-This tutorial will teach you how to use Marin's train-test overlap detection system to identify contamination between your training datasets and evaluation benchmarks. This is crucial for ensuring the validity of your model evaluations.
+This tutorial will teach you how to use Marin's train-test overlap script (which is a wrapper around the dolma deduplication toolkit) to identify contamination between your training datasets and evaluation benchmarks. This is crucial for calibrating the results of your model evaluations.
 
 ## What is Train-Test Overlap?
 
@@ -17,8 +17,9 @@ Marin's system detects overlap by finding shared n-grams (sequences of words) be
 The system uses a two-step process:
 
 1. **Deduplication Step** (`train_test_total.py`):
+   - Automatically discovers and resolves all evaluation dataset paths using the executor framework
    - Builds Bloom filters from training data n-grams
-   - Scans evaluation datasets for matching n-grams
+   - Scans all evaluation datasets for matching n-grams
    - Outputs contaminated examples with overlap statistics
 
 2. **Aggregation Step** (`aggregate_total.py`):
@@ -54,7 +55,8 @@ python experiments/train_test_overlap/aggregate_total.py --prefix gs://${BUCKET}
 
 This will process these datasets:
 - **Training**: FineMath, DCLM, StarCoder, ProofPile, Dolmino, Nemotron-CC
-- **Evaluation **: GSM8K, MATH, TruthfulQA, BBH, MMLU, HumanEval, and more
+- **Evaluation**: All datasets defined in `eval_datasets_overlap.py`
+  - Currently includes: GSM8K, MATH, TruthfulQA, BBH, MMLU, HumanEval, and more
 
 ### Understanding the Output
 
@@ -219,7 +221,7 @@ my_eval_convert_dolma = ExecutorStep(
 )
 ```
 
-Then add it to the `EVAL_DATASET_STEPS` list in `aggregate_total.py`.
+Then add it to the `EVAL_DATASET_STEPS` list in both `eval_datasets_overlap.py` and `utils.py`. The train-test overlap detection will automatically include your new evaluation dataset in all future runs.
 
 ## Advanced Usage
 
