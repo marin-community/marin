@@ -67,11 +67,18 @@ RUN conda install -c conda-forge ncurses -y
 
 # Install Jax for TPU usage, fsspec for GCS access, and transformers for OLMO
 WORKDIR /tmp/
-RUN pip install --no-cache-dir -U pip setuptools wheel
-RUN pip install --no-cache-dir torch==2.7.0 jax[tpu]==0.5.1 -f https://download.pytorch.org/whl/nightly/cpu -f https://storage.googleapis.com/libtpu-releases/index.html
+RUN pip install --no-cache-dir -U pip setuptools wheel uv
+
+# Create an isolated virtual environment with uv and use its uv for installations
+RUN uv venv /opt/marin/venv
+ENV VIRTUAL_ENV=/opt/marin/venv
+ENV PATH=/opt/marin/venv/bin:$PATH
+
+# Install core ML libraries inside the created virtual environment
+RUN uv pip install --no-cache-dir torch==2.7.0 jax[tpu]==0.5.1 -f https://download.pytorch.org/whl/nightly/cpu -f https://storage.googleapis.com/libtpu-releases/index.html
 COPY pyproject.toml /tmp/
 # re-specify jax/torch/torch_xla to ensure they still work if we bump versions in pyproject.toml
-RUN pip install --no-cache-dir -e . -f https://download.pytorch.org/whl/cpu jax[tpu] torch -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+RUN uv pip install --no-cache-dir -e . -f https://download.pytorch.org/whl/cpu jax[tpu] torch -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 # Installing all the core dependencies
 # ['draccus>=0.8.0', 'google-api-python-client~=2.0', 'ray', 'gcsfs', 'google-cloud-storage',
