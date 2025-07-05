@@ -1,10 +1,11 @@
 from exp1361_datashop_medical import datashop_runner as medical_datashop_runner
 
 from experiments.evals.resource_configs import SINGLE_TPU_V6E_8, TPU_V6E_8_STRICT_PACK
+from experiments.exp605_dolmino_quality_classifiers import pes2o_dolma_format, wiki_longer_than_256_chars
 from marin.classifiers.fasttext.training import TrainFasttextClassifierConfig, train_model_with_config
 from marin.classifiers.hf.launch_ray_training import LaunchConfig, launch_training_with_ray
 from marin.classifiers.hf.train_classifier import HFTrainingConfig
-from marin.classifiers.utils import SplitDatasetConfig, split_dataset
+from marin.classifiers.utils import CreateDatasetConfig, SplitDatasetConfig, create_dataset, split_dataset
 from marin.datashop.pipeline import DatasetOutputProcessorConfig, run_medu_dataset_output_processing_pipeline
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.processing.classification.eval.evaluate_classifier import EvaluateClassifierConfig, run_evaluate_classifier
@@ -199,13 +200,37 @@ evaluate_fasttext_model_normalize_megamath = ExecutorStep(
     pip_dependency_groups=["fasttext"],
 )
 
+wiki_eval_subset = ExecutorStep(
+    name="documents/datashop-datasets/wiki-eval-subset",
+    fn=create_dataset,
+    config=CreateDatasetConfig(
+        input_doc_path=wiki_longer_than_256_chars,
+        output_dataset_path=this_output_path(),
+        max_sample_size=5_000,
+        filetype="jsonl.gz",
+        merge_dataset_shards=True,
+        columns_to_keep=["text", "id"],
+    ),
+)
+
+pes2o_eval_subset = ExecutorStep(
+    name="documents/datashop-datasets/pes2o-eval-subset",
+    fn=create_dataset,
+    config=CreateDatasetConfig(
+        input_doc_path=pes2o_dolma_format,
+        output_dataset_path=this_output_path(),
+        max_sample_size=5_000,
+        filetype="jsonl.gz",
+        merge_dataset_shards=False,
+        columns_to_keep=["text", "id"],
+    ),
+)
+
+
 if __name__ == "__main__":
     executor_main(
         [
-            *sweeps,
-            fasttext_datashop_medical,
-            evaluate_fasttext_model,
-            evaluate_fasttext_model_normalize,
-            evaluate_fasttext_model_normalize_megamath,
+            wiki_eval_subset,
+            pes2o_eval_subset,
         ]
     )

@@ -8,6 +8,7 @@ from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK
 from experiments.exp1361_datashop_medical import datashop_runner
 from experiments.llama import llama3_tokenizer
 from marin.execution.executor import executor_main, output_path_of
+from marin.export.hf_upload import upload_dir_to_hf
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.resources import TpuPodConfig
 
@@ -65,5 +66,11 @@ anneal_model = default_anneal(
     ),
 )
 
+datashop_medical_synthetic_exported = upload_dir_to_hf(
+    "gs://marin-us-east1/documents/datashop-medical-qa-whole-fe2400",
+    "marin-community/datashop-medical-qa",
+    "dataset",
+)
+
 if __name__ == "__main__":
-    executor_main([anneal_model])
+    executor_main([datashop_medical_synthetic_exported])
