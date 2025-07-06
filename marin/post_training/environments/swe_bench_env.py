@@ -17,7 +17,7 @@ from tqdm.auto import tqdm
 from .marin_env import EnvStep, MarinEnv
 
 
-@dataclass
+@dataclass(frozen=True)
 class EvaluationTask:
     """Data class to hold evaluation task information."""
 
