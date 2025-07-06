@@ -219,6 +219,9 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
             except Exception as e:
                 logger.exception(f"Failed to load subset '{subset}' and split '{split}': {e}")
 
+    if len(datasets) != len(subsets):
+        raise ValueError(f"Not all subsets succeeded from {subsets} for {input_path} only ")
+
     return datasets
 
 
@@ -466,7 +469,8 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                     elif cfg.answer_text_ignore:
                         answer_text = ""
                         options = ["" for _ in range(len(cfg.answer_labels))]
-                    else:
+                    elif cfg.output_format.value == "evaluation":
+                        # Evaluations Need Answers
                         raise ValueError("No answer text was found. Please review config.")
                 # set various metadata
                 if options:
