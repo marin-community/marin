@@ -62,7 +62,7 @@ class vLLMTextGeneration(TextGeneration):
         prompt_column: str = "text",
         apply_chat_template: bool = True,
         save_templated_prompt: bool = False,
-        max_doc_length: int = 7000,
+        max_doc_tokens: int = 7000,
         generated_text_column_name: str = "generated_text",
     ):
         # Initialize the LLM Provider here for the pipeline since we need the model
@@ -73,7 +73,7 @@ class vLLMTextGeneration(TextGeneration):
             llm, template, num_generations, prompt_column, save_templated_prompt, generated_text_column_name
         )
         self.apply_chat_template = apply_chat_template
-        self.max_doc_tokens = max_doc_length
+        self.max_doc_tokens = max_doc_tokens
 
     def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
         tokenizer = self.llm.llm.get_tokenizer()

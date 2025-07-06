@@ -111,6 +111,7 @@ def evaluate_lm_evaluation_harness(
             evals=evals,
             max_eval_instances=max_eval_instances,
             launch_with_ray=True,
+            discover_latest_checkpoint=True,
             engine_kwargs=engine_kwargs,
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
@@ -228,6 +229,7 @@ def evaluate_levanter_lm_evaluation_harness(
     """
     Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
     """
+    logger.info(f"Running evals on the following tasks: {evals}")
     return ExecutorStep(
         name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
         fn=evaluate,
