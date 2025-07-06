@@ -152,6 +152,11 @@ def fsspec_isdir(dir_path):
     """
     Check if a path is a directory in fsspec filesystem.
     """
+    protocol, _ = fsspec.core.split_protocol(dir_path)
+    basename = os.path.basename(dir_path)
+    if "." not in basename:
+        return True
+
     fs, _ = fsspec.core.url_to_fs(dir_path)
     return fs.isdir(dir_path)
 
