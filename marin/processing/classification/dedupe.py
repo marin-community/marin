@@ -1,3 +1,18 @@
+"""
+Major problems with getting dedupe to work currently.
+
+Dolma requires some pretty old dependencies:
+1. tokenizers <=0.19.1 means that no modern transformers can be used hence why we have to use
+transformers==4.44.0.
+2. s3fs==2023.06 means that a pretty old version of s3fs needs to be used which means
+an old fsspec needs to be used. This is a problem because this version will not recognize
+the recursive glob pattern **/*.jsonl.gz correctly!
+
+We circumvent this using a custom runtime environment with just the required packages for
+just the Dolma package. We then schedule it directly on the node that is used to
+copy the files in to make sure there is data locality.
+"""
+
 import os
 import subprocess
 import tempfile
@@ -105,6 +120,7 @@ def copy_files_in(input_path, local_base_dir):
     print(f"Copied {len(input_files)} files to {os.path.join(local_base_dir, 'documents')}")
 
 
+@ray.remote
 def do_dedup(
     local_base_dir,
     attribute_name,
@@ -320,16 +336,29 @@ def dolma_dedup(
                 )
             else:
                 copy_files_in(input_path, tmpdir)
-                do_dedup(
-                    tmpdir,
-                    attribute_name,
-                    min_length,
-                    min_words,
-                    bloom_filter_size,
-                    estimated_doc_count,
-                    false_positive_rate,
-                    ngram,
-                    processes,
+                ray.get(
+                    do_dedup.options(
+                        scheduling_strategy=ray.util.scheduling_strategies.NodeAffinitySchedulingStrategy(
+                            node_id=ray.get_runtime_context().get_node_id(),
+                            soft=False,
+                        ),
+                        runtime_env={
+                            "pip": [
+                                "dolma",
+                                "transformers==4.44.0",
+                            ]
+                        },
+                    ).remote(
+                        tmpdir,
+                        attribute_name,
+                        min_length,
+                        min_words,
+                        bloom_filter_size,
+                        estimated_doc_count,
+                        false_positive_rate,
+                        ngram,
+                        processes,
+                    )
                 )
 
             # copy files out stays the same.

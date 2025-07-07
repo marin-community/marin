@@ -1,14 +1,3 @@
-"""
-Major problems with getting dedupe to work currently.
-
-Dolma requires some pretty bad dependencies:
-1. tokenizers <=0.19.1 means that no modern transformers can be used hence why we have to use
-transformers==4.44.0.
-2. s3fs==2023.06 means that a pretty old version of s3fs needs to be used which means
-an old fsspec needs to be used. This is a problem because this version will not recognize
-the recursive glob pattern **/*.jsonl.gz correctly!
-"""
-
 import json
 import os
 
@@ -18,8 +7,8 @@ import ray
 
 from marin.processing.classification.dedupe import DedupeConfig, NGramConfig, dedupe
 
-BASE_INPUT_DIR = "gs://marin-us-east1/documents/test-data"
-BASE_ATTRIBUTE_OUTPUT_DIR = "gs://marin-us-east1/attributes/test-data"
+BASE_INPUT_DIR = "gs://marin-us-east1/documents/test-data/deduplication"
+BASE_ATTRIBUTE_OUTPUT_DIR = "gs://marin-us-east1/attributes/test-data/deduplication"
 
 
 @pytest.fixture
@@ -68,11 +57,7 @@ def current_runtime_env_with_additional_pip_packages(pip_packages):
     return {"pip": all_packages}
 
 
-@ray.remote(
-    runtime_env=current_runtime_env_with_additional_pip_packages(
-        ["dolma@git+https://github.com/allenai/dolma.git", "transformers==4.44.0"]
-    )
-)
+@ray.remote
 def _run_dedupe(dedupe_config):
     ray.get(dedupe.remote(dedupe_config))
 
