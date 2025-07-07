@@ -6,6 +6,7 @@ response.  Rewards are dummy zeros.  This serves as an integration test for the
 actor, config, and rollout plumbing.
 """
 
+import asyncio
 import logging
 import time
 
@@ -14,7 +15,7 @@ from levanter.utils.ray_utils import RayResources
 from ray.actor import ActorHandle
 
 from ..config import AbstractEnvConfig
-from ..env import SimpleEnv
+from ..env import AbstractMarinEnv
 from ..types import (
     InferenceEndpoint,
     Rollout,
@@ -26,35 +27,34 @@ from ..types import (
 logger = logging.getLogger(__name__)
 
 
-class HelloWorldEnv(SimpleEnv):
+class HelloWorldEnv(AbstractMarinEnv):
     """Simple environment that produces deterministic dummy rollouts."""
 
-    def do_rollout(self) -> list[RolloutGroup]:
-        if not hasattr(self, "_counter"):
-            self._counter = 0
+    async def run(self) -> None:
+        counter = 0
+        while not await self._should_stop():
+            # Simulate calling the inference server (here we just echo text)
+            response_text = f"Hello #{counter} from {self._inference.address}"
 
-        # Simulate calling the inference server (here we just echo text)
-        response_text = f"Hello #{self._counter} from {self._inference.address}"
+            turn = Turn(
+                message=response_text,
+                role="assistant",
+                logprobs=None,
+                reward=0.0,
+                inference_metadata={"model": "dummy"},
+            )
+            rollout = Rollout(turns=[turn], metadata={"iteration": counter})
+            group = RolloutGroup(
+                id=f"hello-{counter}",
+                source="hello_env",
+                created=time.time(),
+                rollouts=[rollout],
+                metadata={},
+            )
+            self._rollout_sink([group])
 
-        turn = Turn(
-            message=response_text,
-            role="assistant",
-            logprobs=None,
-            reward=0.0,
-            inference_metadata={"model": "dummy"},
-        )
-        rollout = Rollout(turns=[turn], metadata={"iteration": self._counter})
-        group = RolloutGroup(
-            id=f"hello-{self._counter}",
-            source="hello_env",
-            created=time.time(),
-            rollouts=[rollout],
-            metadata={},
-        )
-
-        self._counter += 1
-        time.sleep(1.0)  # pace output without async knowledge
-        return [group]
+            counter += 1
+            await asyncio.sleep(1.0)  # yield control and pace output
 
     async def shutdown(self) -> None:
         # Example clean-up
