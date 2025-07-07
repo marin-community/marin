@@ -1,12 +1,11 @@
-from typing import Any
 import json
+from typing import Any
 
 from transformers import AutoTokenizer
 
 from .environments.marin_env import MarinEnv
 from .environments.math_env import MathEnv
 from .environments.olym_math_env import OlymMathEnv
-
 
 # Specify environments here
 ENVIRONMENT_NAME_TO_CLASS = {
@@ -41,7 +40,7 @@ def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer) -> MarinEnv:
     env_cls = ENVIRONMENT_NAME_TO_CLASS[cls_name]
     kwargs: dict[str, Any] = {}
     if arg_str:
-        for pair in arg_str.split(','):
+        for pair in arg_str.split(","):
             if not pair.strip():
                 continue
             key, value = map(str.strip, pair.split("="))
