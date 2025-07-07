@@ -73,11 +73,11 @@ head_node_type: head_default
 
 # List of Available Node Types
 available_node_types:
-  # Head Node =>> On-Demand, sets Min/Max Workers = 0 (Prevent Scheduling Tasks on Head Node)
+  # Head Node =>> On-Demand, sets Min/Max Workers = 0 (Prevent Creating New "Head Node" Instances)
   head_default:
     min_workers: 0
     max_workers: 0
-    resources: {"CPU": 0, "head_node": 1}
+    resources: {"CPU": 4, "head_node": 1}
 
     # GCP-Specific Configuration; by default, Ray will configure unspecified fields (e.g., subnets, ssh-keys)
     #   => Ref: https://cloud.google.com/compute/docs/reference/rest/v1/instances/insert
