@@ -23,7 +23,7 @@ jobs:
       - name: Install MkDocs and plugins
         run: |
           python -m pip install uv
-          uv pip install mkdocs mkdocs-material mkdocstrings[python] mkdocs-include-markdown-plugin
+          uv pip install --system mkdocs mkdocs-material mkdocstrings[python] mkdocs-include-markdown-plugin
 
       - name: Build documentation
         run: |

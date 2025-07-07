@@ -44,8 +44,8 @@ jobs:
         shell: bash -l {0}
         run: |
           python -m pip install uv
-          uv pip install toml
-          python scripts/install_all_pip_dep.py
+          uv pip install --system toml
+          TPU_CI=1 python scripts/install_all_pip_dep.py
 
       # Start Ray cluster locally; We give cpus as 64 since we don't want Ray to get stuck in infinite loop trying to
       # get the resources
