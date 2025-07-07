@@ -1,13 +1,8 @@
-import os
-
-import pytest
-
 from marin.post_training.environments.math_env import MathEnv
 from marin.post_training.environments.math_utils import grade_answer
 from marin.post_training.environments.olym_math_env import OlymMathEnv
 
 
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
 def test_math_env_loaded():
     """Test whether MathEnv examples are loaded correctly."""
     math_env = MathEnv(tokenizer=None)
@@ -15,7 +10,6 @@ def test_math_env_loaded():
     assert len(math_env.eval_examples) == 5000, "MathEnv eval examples should not be empty"
 
 
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
 def test_olym_math_env_loaded():
     """Test whether OlymMathEnv examples are loaded correctly."""
     olymp_math_env = OlymMathEnv(tokenizer=None, difficulty="easy", language="en")
@@ -43,7 +37,6 @@ def test_olym_math_env_loaded():
     )
 
 
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
 def test_grade_answer_with_olym_math_env():
     """
     Test whether `grade_answer` works correctly with OlymMathEnv
