@@ -98,7 +98,6 @@ class SlidingLogitsConfig:
 
     # Runtime / batching --------------------------------------------------
     batch_size: int = 8
-    memory_gb: int = 10
 
     # Chunk parameters ----------------------------------------------------
     chunk_size: int = 100
@@ -157,7 +156,15 @@ def _writer_loop(batch_queue: queue.Queue, cfg: SlidingLogitsConfig, error_list:
     
     try:
         write_count = 0
-        for payload in iter(batch_queue.get, None):
+        while True:
+            payload = batch_queue.get()
+            
+            # Handle shutdown signal
+            if payload is None:
+                print(f"[Writer {thread_id}] Received shutdown signal", flush=True)
+                batch_queue.task_done()  # Mark shutdown signal as done
+                break
+            
             write_start_time = time.time()
             data_dict, batch_path = payload
             
@@ -188,7 +195,7 @@ def _writer_loop(batch_queue: queue.Queue, cfg: SlidingLogitsConfig, error_list:
                 print(f"[Writer {thread_id}] ERROR during write: {write_exc}", flush=True)
                 raise write_exc
             finally:
-                batch_queue.task_done()
+                batch_queue.task_done()  # Mark work item as done
             
             total_write_time = time.time() - write_start_time
             print(f"[Writer {thread_id}] Completed write #{write_count} in {total_write_time:.2f}s total", flush=True)
@@ -603,10 +610,22 @@ def _sliding_logits_worker(index: int, cfg: SlidingLogitsConfig) -> None:  # typ
     logger.info("[Core %d] Finished writing shard files with prefix %s", index, shard_path_prefix)
 
     # Write per-core char_max array directly to GCS
+    print(f"[Core {index}] About to write char_max array...", flush=True)
     cm_part_path = os.path.join(cfg.output_dir, f"char_max_part_{index}.npy")
-    with fsspec.open(cm_part_path, "wb") as fo:
-        np.save(fo, char_max_local, allow_pickle=True)
+    print(f"[Core {index}] Opening file: {cm_part_path}", flush=True)
+    
+    try:
+        with fsspec.open(cm_part_path, "wb") as fo:
+            print(f"[Core {index}] File opened successfully, writing data...", flush=True)
+            np.save(fo, char_max_local, allow_pickle=True)
+            print(f"[Core {index}] Data written successfully", flush=True)
+    except Exception as e:
+        print(f"[Core {index}] ERROR writing char_max: {e}", flush=True)
+        raise
+    
+    print(f"[Core {index}] About to log completion...", flush=True)
     logger.info("[Core %d] Wrote char_max part to %s", index, cm_part_path)
+    print(f"[Core {index}] Worker function completing normally", flush=True)
 
 
 # ---------------------------------------------------------------------------
