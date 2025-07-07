@@ -3,7 +3,7 @@
 This script updates the `docs/reports/index.md` file with new experiment GitHub issues.
 
 Usage:
-pip install PyGithub
+uv pip install PyGithub
 python scripts/itemize_experiment_issues.py
 """
 

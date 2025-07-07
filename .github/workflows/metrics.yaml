@@ -42,7 +42,7 @@ jobs:
         shell: bash -l {0}
         run: |
           conda activate marin_metrics_env
-          pip install -e .[extras,metrics]
+          uv pip install -e .[extras,metrics]
           
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2

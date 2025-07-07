@@ -7,14 +7,14 @@ This guide explains how to build, test, and maintain the Marin documentation.
 Before you begin, ensure you have the following installed:
 
 - Python 3.12 or higher
-- pip (Python package manager)
+- uv (Python dependency manager)
 - Git
 
 ## Installation
 
 1. Install the documentation dependencies:
    ```bash
-   pip install -e ".[docs]"
+   uv pip install -e ".[docs]"
    ```
 
 ## Building Documentation
