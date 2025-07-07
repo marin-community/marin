@@ -13,7 +13,6 @@ from experiments.eval_datasets import (
     lambada_openai_raw,
     math_raw,
     mmlu_pro_raw,
-    mmlu_raw,
     musr_raw,
     openbookqa_raw,
     truthful_qa_raw,
@@ -22,7 +21,9 @@ from experiments.eval_datasets import (
 from experiments.eval_datasets import (
     piqa_baber_raw as piqa_raw,
 )
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.download.huggingface.download import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """
@@ -40,6 +41,20 @@ The script follows the pattern from eval_datasets.py but focuses only on the dec
 # Convert datasets to dolma format for decontamination
 ############################################################
 
+# the one in eval_datasets.py is the wrong flattened version
+# for some reason that doesn't have test splits
+mmlu_raw = ExecutorStep(
+    name="raw/cais/mmlu_raw",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="cais/mmlu",
+        revision=versioned("c30699e"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="raw/cais/mmlu_raw",
+)
 # Convert gsm8k to dolma format
 gsm8k_convert_dolma = ExecutorStep(
     name="decontamination/gsm8k-dolma",
@@ -126,6 +141,7 @@ mmlu_convert_dolma = ExecutorStep(
         options_key="choices",
         answer_idx_key="answer",
         answer_labels=["A", "B", "C", "D"],
+        exclude_subsets=["auxiliary_train"],
     ),
 )
 
@@ -376,6 +392,8 @@ winograd_wsc_convert_dolma = ExecutorStep(
 if __name__ == "__main__":
     executor_main(
         steps=[
+            mmlu_raw,
+            mmlu_convert_dolma,
             gsm8k_raw,
             math_raw,
             truthful_qa_raw,

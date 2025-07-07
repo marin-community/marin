@@ -50,8 +50,8 @@ DATASET_CONFIGS = [
     DatasetConfig(name="finemath", path=finemath_3_plus, max_in_flight=64),
     DatasetConfig(name="dclm", path=dclm_baseline, max_in_flight=64),
     DatasetConfig(name="starcoder", path=starcoderdata, max_in_flight=64),
-    DatasetConfig(name="proofpile", path=proofpile_2, max_in_flight=128),
-    DatasetConfig(name="dolmino_1e-12", path=dolmino, max_in_flight=128),
+    DatasetConfig(name="proofpile", path=proofpile_2, max_in_flight=64),
+    DatasetConfig(name="dolmino", path=dolmino, max_in_flight=64),
     DatasetConfig(name="nemotron_cc", path=nemotron_cc, max_in_flight=64),
 ]
 

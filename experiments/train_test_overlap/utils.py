@@ -97,7 +97,7 @@ BASE_DEDUPE_CONFIG = DedupeConfig(
     input_path=[],  # Will be replaced with resolved evaluation dataset paths
     output_path="",  # Will be replaced per shard
     attribute_name="ngram_overlap",
-    false_positive_rate=1e-12,
+    false_positive_rate=1e-20,
     ngram=NGramConfig(
         ngram_length=[15],  # Multiple n-gram sizes - modify this to change n-grams
         overlap_threshold=1e-6,
@@ -133,13 +133,10 @@ def make_task(
     relative_path = get_relative_path_no_extension(shard_path, dataset_dir)
     output_path = os.path.join(base_output_path, relative_path)
 
-    # Resolve evaluation dataset paths using the executor framework
-    eval_dataset_paths = [step.get_output_path() for step in eval_dataset_steps]
-
     # Use dataclasses.replace to create a new config with the shard-specific values
     return dataclasses.replace(
         base_config,
-        input_path=eval_dataset_paths,  # Resolved evaluation dataset paths
+        input_path=eval_dataset_steps,
         output_path=output_path,
         decontaminate_source=shard_path,
     )
