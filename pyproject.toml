@@ -13,8 +13,10 @@ dependencies = [
     "draccus>=0.11.5",
     "google-api-python-client~=2.0",
     "ray",
+    "gcsfs",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
+    "s3fs>=2024",
     "regex",
     "requests",
     "numpy",
@@ -28,6 +30,7 @@ dependencies = [
     "pyarrow", # # Only needed by Fileprovider in inference.py
     # We have levanter deps for now. @TODO :: Remove them
     "multiprocess==0.70.16",
+    "levanter>=1.2.dev1359",
     "haliax>=1.4.dev348",
     "sentencepiece",
     "lz4",
