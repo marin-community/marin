@@ -12,6 +12,7 @@ import time
 
 import ray
 from levanter.utils.ray_utils import RayResources
+from ray.actor import ActorHandle
 
 from ..config import AbstractEnvConfig
 from ..env import AbstractMarinEnv
@@ -66,7 +67,7 @@ class HelloEnvConfig(AbstractEnvConfig):
     def resources(self) -> RayResources:
         return RayResources(cpu=1)
 
-    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, seed: int) -> ray.ActorHandle:
+    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, seed: int) -> ActorHandle:
         ActorCls = ray.remote(num_cpus=1)(HelloWorldEnv)
         actor = ActorCls.remote(inference, rollout_sink)
         actor.run.remote()  # kick off event loop

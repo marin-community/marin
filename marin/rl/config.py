@@ -10,9 +10,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from levanter.utils.ray_utils import RayResources
+from ray.actor import ActorHandle
 
 from ..resources import ResourceConfig
-from .env import AbstractMarinEnv
 from .types import InferenceConfig, InferenceEndpoint, RolloutSink
 
 __all__ = [
@@ -30,7 +30,7 @@ class AbstractEnvConfig(abc.ABC):
         """Return Ray resource specs (CPU/GPU/TPU etc.) needed per replica."""
 
     @abc.abstractmethod
-    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink) -> AbstractMarinEnv:
+    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, seed: int) -> ActorHandle:
         """Instantiate the environment.
 
         The *rollout_sink* should be called with :class:`~marin.rl.types.RolloutGroup` batches.
