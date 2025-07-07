@@ -5,8 +5,8 @@ from transformers import AutoTokenizer
 
 from .environments.marin_env import MarinEnv
 from .environments.math_env import MathEnv
-from .environments.swe_bench_env import SWEBenchEnv
 from .environments.olym_math_env import OlymMathEnv
+from .environments.swe_bench_env import SWEBenchEnv
 
 # Specify environments here
 ENVIRONMENT_NAME_TO_CLASS = {
