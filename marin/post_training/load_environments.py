@@ -1,12 +1,11 @@
-import json
 from typing import Any
+import json
 
 from transformers import AutoTokenizer
 
 from .environments.marin_env import MarinEnv
 from .environments.math_env import MathEnv
 from .environments.olym_math_env import OlymMathEnv
-from .environments.swe_bench_env import SWEBenchEnv
 
 # Specify environments here
 ENVIRONMENT_NAME_TO_CLASS = {
@@ -15,8 +14,8 @@ ENVIRONMENT_NAME_TO_CLASS = {
 }
 
 
-def str_to_val(v: str) -> Any:
-    """Best effort convert string to bool/int/float, else keep str."""
+def _str_to_val(v: str):
+    """Best‑effort convert string to bool/int/float, else keep str."""
     v = v.strip()
     if v.lower() in {"true", "false"}:
         return v.lower() == "true"
@@ -41,11 +40,11 @@ def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer) -> MarinEnv:
     env_cls = ENVIRONMENT_NAME_TO_CLASS[cls_name]
     kwargs: dict[str, Any] = {}
     if arg_str:
-        for pair in arg_str.split(","):
+        for pair in arg_str.split(','):
             if not pair.strip():
                 continue
             key, value = map(str.strip, pair.split("="))
-            kwargs[key] = str_to_val(value)
+            kwargs[key] = _str_to_val(value)
     return env_cls(tokenizer=tokenizer, **kwargs)
 
 
