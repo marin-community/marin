@@ -14,8 +14,8 @@ ENVIRONMENT_NAME_TO_CLASS = {
 }
 
 
-def _str_to_val(v: str):
-    """Best‑effort convert string to bool/int/float, else keep str."""
+def str_to_val(v: str) -> Any:
+    """Best effort convert string to bool/int/float, else keep str."""
     v = v.strip()
     if v.lower() in {"true", "false"}:
         return v.lower() == "true"
@@ -44,7 +44,7 @@ def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer) -> MarinEnv:
             if not pair.strip():
                 continue
             key, value = map(str.strip, pair.split("="))
-            kwargs[key] = _str_to_val(value)
+            kwargs[key] = str_to_val(value)
     return env_cls(tokenizer=tokenizer, **kwargs)
 
 
