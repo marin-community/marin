@@ -1,7 +1,3 @@
-import functools
-import gzip
-import json
-import logging
 """
 Major problems with getting dedupe to work currently.
 
@@ -17,6 +13,10 @@ just the Dolma package. We then schedule it directly on the node that is used to
 copy the files in to make sure there is data locality.
 """
 
+import functools
+import gzip
+import json
+import logging
 import os
 import subprocess
 import tempfile
