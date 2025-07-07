@@ -19,3 +19,4 @@ pylatexenc
 ipython
 datasets
 scalax @ git+https://github.com/Sea-Snell/scalax.git@main
+swebench
