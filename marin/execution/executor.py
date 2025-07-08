@@ -520,15 +520,16 @@ class Executor:
         self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
+        if not is_local_ray_cluster():
+            strategy = NodeAffinitySchedulingStrategy(node_id=ray.get_runtime_context().get_node_id(), soft=False, )
+        else:
+            strategy = None
         self.status_actor: StatusActor = StatusActor.options(
             name="status_actor",
             get_if_exists=True,
             lifetime="detached",
             # This is to ensure that the status actor is only schduled on the headnode
-            scheduling_strategy=NodeAffinitySchedulingStrategy(
-                node_id=ray.get_runtime_context().get_node_id(),
-                soft=False,
-            ),
+            scheduling_strategy=strategy,
         ).remote()
         # TODO: Add a design docstring of how status_actor works
 

@@ -11,12 +11,14 @@ license = {file = "LICENSE"}
 requires-python = ">=3.10"
 dependencies = [
     "draccus>=0.11.5",
-    "google-api-python-client~=2.0",
+    "google-api-python-client>=2.175.0",
     "ray==2.45",
     "gcsfs",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
+    "cryptography>=45",
     "s3fs>=2024",
+    "datasets",
     "regex",
     "requests",
     "numpy",
@@ -38,29 +40,23 @@ dependencies = [
     "openai",
 ]
 
-[project.optional-dependencies]
-dev = [
+[dependency-groups]
 
+test = [
+    "pytest>=8.3.2",
+    "pytest-asyncio",
+    "pytest-xdist",
+    "pytest-cov",
 ]
-
-math = [
-    "pylatexenc",
-    "sympy",
+lint = [
+    "ruff>=0.5.7",
+    "black>=24.8.0",
+    "pre-commit",
+    "mypy>=1.4.1",
+    "types-PyYAML",
+    "types-requests",
+    "types-six",
 ]
-
-cuda12 = [
-    "jax[cuda12]>=0.5.1",
-    "torch>=2.7.0",
-]
-
-tpu = [
-    "jax[tpu]>=0.5.1",
-]
-
-metrics = [
-    "google-cloud-logging",
-]
-
 docs = [
     "mkdocs>=1.5.0",
     "mkdocs-material>=9.5.0",
@@ -72,7 +68,19 @@ docs = [
     "mkdocs-minify-plugin>=0.7.0",
     "mkdocs-include-markdown-plugin>=7.1.5",
 ]
-
+gcp = [
+  "google-api-python-client>=2.175.0",  # ray GCP workaround
+  "cryptography>=45",
+  "google-cloud-storage",
+  "google-cloud-storage-transfer",
+]
+math = [
+  "pylatexenc",
+  "sympy",
+]
+metrics = [
+  "google-cloud-logging",
+]
 download_transform = [
     "chardet",
     "datasets>=2.18.0",
@@ -142,6 +150,28 @@ eval = [
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
 
+transform_test_deps = [
+    "trafilatura>=2.0",
+    "readabilipy",
+    "readability-lxml",
+    "warcio"
+]
+
+
+[tool.uv]
+default-groups = ["test", "lint", "docs", "gcp", "math", "transform_test_deps"]
+
+[project.optional-dependencies]
+
+cuda12 = [
+    "jax[cuda12]>=0.5.1",
+    "torch>=2.7.0",
+]
+
+tpu = [
+    "jax[tpu]>=0.5.1",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["cache", "infra"]
@@ -188,27 +218,4 @@ exclude = [
 [tool.uv.sources]
 resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
 
-[dependency-groups]
-dev = [
-    "google-api-python-client>=2.175.0",
-    # ray gcp needs this but doesn't declare it?!?
-    "cryptography>=45",
-    "black>=24.8.0",
-    "ipython",
-    "mypy>=1.4.1",
-    "pre-commit",
-    "pytest>=8.3.2",
-    "pytest-asyncio",
-    "pytest-xdist",
-    "ruff>=0.5.7",
-    "types-PyYAML",
-    "types-requests",
-    "types-six",
-    "openai-responses",
-    "markdownify==0.12.1",
-    "html2text==2024.2.26", # TODO :: Check pin?
-]
-gcp = [
-    "google-api-python-client>=2.175.0",
-    "cryptography>=45",
-]
+
