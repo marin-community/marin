@@ -6,11 +6,12 @@ build:
     python: "3"
   jobs:
     pre_install:
-      - pip install mkdocs
-      - pip install mkdocs-material
-      - pip install mkdocstrings[python]
-      - pip install markdown-include
-      - pip install mkdocs-include-markdown-plugin
+      - python -m pip install uv
+      - uv pip install --system mkdocs
+      - uv pip install --system mkdocs-material
+      - uv pip install --system mkdocstrings[python]
+      - uv pip install --system markdown-include
+      - uv pip install --system mkdocs-include-markdown-plugin
 
 mkdocs:
   configuration: mkdocs.yml
