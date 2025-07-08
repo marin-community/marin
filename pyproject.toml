@@ -40,20 +40,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "black>=24.8.0",
-    "ipython",
-    "mypy>=1.4.1",
-    "pre-commit",
-    "pytest>=8.3.2",
-    "pytest-asyncio",
-    "pytest-xdist",
-    "ruff>=0.5.7",
-    "types-PyYAML",
-    "types-requests",
-    "types-six",
-    "openai-responses",
-    "markdownify==0.12.1",
-    "html2text==2024.2.26", # TODO :: Check pin?
+
 ]
 
 math = [
@@ -200,3 +187,28 @@ exclude = [
 
 [tool.uv.sources]
 resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
+
+[dependency-groups]
+dev = [
+    "google-api-python-client>=2.175.0",
+    # ray gcp needs this but doesn't declare it?!?
+    "cryptography>=45",
+    "black>=24.8.0",
+    "ipython",
+    "mypy>=1.4.1",
+    "pre-commit",
+    "pytest>=8.3.2",
+    "pytest-asyncio",
+    "pytest-xdist",
+    "ruff>=0.5.7",
+    "types-PyYAML",
+    "types-requests",
+    "types-six",
+    "openai-responses",
+    "markdownify==0.12.1",
+    "html2text==2024.2.26", # TODO :: Check pin?
+]
+gcp = [
+    "google-api-python-client>=2.175.0",
+    "cryptography>=45",
+]
