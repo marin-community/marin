@@ -179,6 +179,11 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     train_config = config.train_config
     train_config = _suppress_ray_config(train_config)
 
+    # disable accelerator requirement when running without GPU/TPU resources
+    if hw_config.accelerator_descriptor() is None:
+        trainer = replace(train_config.trainer, require_accelerator=False)
+        train_config = replace(train_config, trainer=trainer)
+
     if not config.allow_out_of_region and not isinstance(hw_config, CpuOnlyConfig):
         # run this on the Ray cluster to get the right region
         # doesn't need to be a TPU because ray insists that all VMs are in the same region
