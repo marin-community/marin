@@ -10,9 +10,10 @@ python marin/run/ray_run.py \
 """
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.generation.sliding_logits import Precision, SlidingLogitsConfig, compute_sliding_logits_remote
+from marin.generation.plot_sliding_logits import PlotSlidingLogitsConfig, create_sliding_logits_plot
 
 # -----------------------------------------------------------------------------
-# Single-step experiment: sliding-window forward pass + plot generation
+# Step 1: Sliding-window forward pass + logits extraction
 # -----------------------------------------------------------------------------
 
 sliding_logits_step = ExecutorStep(
@@ -38,5 +39,26 @@ sliding_logits_step = ExecutorStep(
     ),
 )
 
+# -----------------------------------------------------------------------------
+# Step 2: Plot generation from sliding logits results
+# -----------------------------------------------------------------------------
+
+plot_step = ExecutorStep(
+    name="visualization/sliding-logits-plot",
+    description="Create character-level heatmap visualization from sliding logits results.",
+    fn=create_sliding_logits_plot,
+    config=PlotSlidingLogitsConfig(
+        input_path=sliding_logits_step,  # Automatically resolves to sliding_logits_step's output_path
+        original_text_path="gs://marin-us-central2/documents/books_txt/gatsby.txt",
+        output_path=this_output_path(),  # This step's output directory
+        plot_title="Sliding Logits: Great Gatsby Character Analysis",
+        colormap="Blues",
+        figsize=(20, 3),
+        dpi=300,
+        save_combined_arrays=True,
+        compute_extraction_stats=True,
+    ),
+)
+
 if __name__ == "__main__":
-    executor_main([sliding_logits_step]) 
+    executor_main([sliding_logits_step, plot_step]) 
