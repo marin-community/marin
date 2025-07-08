@@ -16,6 +16,7 @@ from experiments.tootsie.exp600_tootsie import tootsie_8b_deeper_starling
 from experiments.tootsie.exp916_tootsie_spoonbill_cooldown import spoonbill_zloss_tulu3_sft_config
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
+from marin.resources import TpuPodConfig
 
 
 # Dataset configurations
@@ -49,7 +50,8 @@ deeper_sft_config = dataclasses.replace(
     learning_rate=1e-4,
     num_train_steps=10228*8, # Num rows is now 8x larger, so we need to train for 8x more steps. We need to be more principled
     train_batch_size=BATCH_SIZE,
-    initialize_from_checkpoint_path=tootsie_8b_deeper_starling.cd("checkpoints/step-1399999").nonblocking(),
+    resources=TpuPodConfig(tpu_type="v4-128", slice_count=2),
+    initialize_from_checkpoint_path=tootsie_8b_deeper_starling.cd("checkpoints/step-1400000").nonblocking(),
 )
 
 sft_mixture_llama3 = lm_mixture_data_config(

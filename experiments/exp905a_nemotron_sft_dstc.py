@@ -2,7 +2,7 @@
 # token counts for SFT datasets.
 # In addition to previous SFT datasets, we include Nemotron SFT and OpenThoughts3-1.2M.
 
-from instruction_datasets import (
+from experiments.posttrain.instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
     transform_dataset_step,
     download_dataset_step,
