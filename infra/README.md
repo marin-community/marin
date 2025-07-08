@@ -373,3 +373,8 @@ python infra/manual_ray_worker_launch.py --cluster_yaml infra/marin-us-central2.
 ```
 
 If there are a lot of nodes you need to reconnect, you can use the `gcloud` command and a for loop:
+
+Manual workers created with `manual_ray_worker_launch.py` are tagged with the
+cluster name. After a cluster reboot you can run
+`python infra/reconnect_reserved_tpus.py` to automatically reconnect any tagged
+workers.
