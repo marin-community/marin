@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 dependencies = [
     "draccus>=0.11.5",
     "google-api-python-client~=2.0",
-    "ray",
+    "ray==2.45",
     "gcsfs",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
@@ -62,12 +62,12 @@ math = [
 ]
 
 cuda12 = [
-    "jax[cuda12]==0.5.1",
+    "jax[cuda12]>=0.5.1",
     "torch>=2.7.0",
 ]
 
 tpu = [
-    "jax[tpu]==0.5.1",
+    "jax[tpu]>=0.5.1",
 ]
 
 metrics = [
@@ -127,7 +127,7 @@ post_training = [
     "jax==0.5.2",
     "transformers",
     "flax==0.10.0",
-    "sentencepiece==0.1.99",
+    "sentencepiece>=0.1.99",
     "wget==3.2",
     "jaxtyping",#==0.2.23",
     "tyro==0.8.11",
