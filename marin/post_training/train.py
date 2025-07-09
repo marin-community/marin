@@ -18,14 +18,13 @@ from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
 from .environments.marin_env import MarinEnv
-from .environments.math_env import MathEnv
-from .environments.swe_bench_env import SWEBenchEnv
 from .inference import GenerationConfig, batch_inference, build_sampler
 from .llama3 import (
     LLAMA_STANDARD_CONFIGS,
     FlaxLLaMAForCausalLM,
     LLaMAConfig,
 )
+from .load_environments import load_environments_from_config
 from .optimizer import load_adamw_optimizer
 from .rl_dataset import create_dataset_from_environment
 from .utils import (
@@ -443,7 +442,7 @@ def main(
     num_eval_examples: int,
     save_model_freq: int,
     wandb_project: str,
-    env_name: str = "math",
+    environment_conf_path: str = "environments.conf",
     inference_param_dtype: str = "bf16",
     inference_activation_dtype: str = "bf16",
     training_param_dtype: str = "fp32",
@@ -598,12 +597,8 @@ def main(
         if tokenizer_is_temp:
             os.remove(model_paths["tokenizer"])
 
-        if env_name == "math":
-            environment = MathEnv(tokenizer=tokenizer)
-        elif env_name == "swe_bench":
-            environment = SWEBenchEnv(tokenizer=tokenizer)
-        else:
-            raise ValueError(f"Unknown env_name: {env_name}")
+        # Initialize environment with tokenization parameters
+        environment = load_environments_from_config(environment_conf_path, tokenizer)
 
         # Initialize logger
         if "enable" not in logger_config:
