@@ -144,6 +144,9 @@ class SlidingLogitsTPConfig:
     # Tensor parallel specific parameters
     # Mesh shape for tensor parallelism - typically (1, num_devices) for model parallel
     mesh_shape: tuple[int, int] | None = None
+    
+    # Debug flag to control verbosity of logging
+    debug: bool = False
 
 
 def _writer_loop(batch_queue: queue.Queue, cfg: SlidingLogitsTPConfig, error_list: list[Exception]) -> None:
@@ -155,7 +158,8 @@ def _writer_loop(batch_queue: queue.Queue, cfg: SlidingLogitsTPConfig, error_lis
     """
     import threading
     thread_id = threading.get_ident()
-    print(f"[Writer {thread_id}] Background writer thread started", flush=True)
+    if cfg.debug:
+        print(f"[Writer {thread_id}] Background writer thread started", flush=True)
     
     try:
         write_count = 0
@@ -164,22 +168,25 @@ def _writer_loop(batch_queue: queue.Queue, cfg: SlidingLogitsTPConfig, error_lis
             
             # Handle shutdown signal
             if payload is None:
-                print(f"[Writer {thread_id}] Received shutdown signal", flush=True)
+                if cfg.debug:
+                    print(f"[Writer {thread_id}] Received shutdown signal", flush=True)
                 batch_queue.task_done()  # Mark shutdown signal as done
                 break
             
             write_start_time = time.time()
             data_dict, batch_path = payload
             
-            print(f"[Writer {thread_id}] Starting write #{write_count} to {batch_path}", flush=True)
-            print(f"[Writer {thread_id}] Queue size: {batch_queue.qsize()}", flush=True)
+            if cfg.debug:
+                print(f"[Writer {thread_id}] Starting write #{write_count} to {batch_path}", flush=True)
+                print(f"[Writer {thread_id}] Queue size: {batch_queue.qsize()}", flush=True)
             
             try:
                 # Time the file opening
                 open_start = time.time()
                 with fsspec.open(batch_path, "wb", block_size=cfg.block_size) as fo:
                     open_time = time.time() - open_start
-                    print(f"[Writer {thread_id}] File opened in {open_time:.2f}s", flush=True)
+                    if cfg.debug:
+                        print(f"[Writer {thread_id}] File opened in {open_time:.2f}s", flush=True)
                     
                     # Time the actual write
                     write_data_start = time.time()
@@ -192,7 +199,8 @@ def _writer_loop(batch_queue: queue.Queue, cfg: SlidingLogitsTPConfig, error_lis
                     else:
                         np.savez_compressed(fo, **data_dict)
                     write_data_time = time.time() - write_data_start
-                    print(f"[Writer {thread_id}] Data written in {write_data_time:.2f}s", flush=True)
+                    if cfg.debug:
+                        print(f"[Writer {thread_id}] Data written in {write_data_time:.2f}s", flush=True)
                     
             except Exception as write_exc:
                 print(f"[Writer {thread_id}] ERROR during write: {write_exc}", flush=True)
@@ -201,22 +209,25 @@ def _writer_loop(batch_queue: queue.Queue, cfg: SlidingLogitsTPConfig, error_lis
                 batch_queue.task_done()  # Mark work item as done
             
             total_write_time = time.time() - write_start_time
-            print(f"[Writer {thread_id}] Completed write #{write_count} in {total_write_time:.2f}s total", flush=True)
+            if cfg.debug:
+                print(f"[Writer {thread_id}] Completed write #{write_count} in {total_write_time:.2f}s total", flush=True)
             write_count += 1
             
     except Exception as exc:  # pragma: no cover - background thread
         print(f"[Writer {thread_id}] FATAL ERROR: {exc}", flush=True)
         error_list.append(exc)
     
-    print(f"[Writer {thread_id}] Background writer thread exiting after {write_count} writes", flush=True)
+    if cfg.debug:
+        print(f"[Writer {thread_id}] Background writer thread exiting after {write_count} writes", flush=True)
 
 
-def _apply_tensor_parallel_sharding(model, mesh):
+def _apply_tensor_parallel_sharding(model, mesh, debug=False):
     """Apply tensor parallel sharding to model parameters."""
     import torch_xla.distributed.spmd as xs
     
     print(f"[TP] Applying tensor parallel sharding to model parameters", flush=True)
-    print(f"[TP] Mesh shape: {mesh.shape()}", flush=True)
+    if debug:
+        print(f"[TP] Mesh shape: {mesh.shape()}", flush=True)
     
     # Get all named parameters
     param_count = 0
@@ -225,7 +236,8 @@ def _apply_tensor_parallel_sharding(model, mesh):
     for name, param in model.named_parameters():
         param_count += 1
         param_shape = param.shape
-        print(f"[TP] Parameter {name}: shape={param_shape}, numel={param.numel()}", flush=True)
+        if debug:
+            print(f"[TP] Parameter {name}: shape={param_shape}, numel={param.numel()}", flush=True)
         
         # Apply sharding based on parameter type and shape
         if len(param_shape) >= 2:
@@ -235,12 +247,15 @@ def _apply_tensor_parallel_sharding(model, mesh):
                 partition_spec = tuple(None for _ in range(len(param_shape) - 1)) + ('model',)
                 xs.mark_sharding(param, mesh, partition_spec)
                 sharded_count += 1
-                print(f"[TP] Sharded {name} with spec {partition_spec}", flush=True)
+                if debug:
+                    print(f"[TP] Sharded {name} with spec {partition_spec}", flush=True)
             else:
-                print(f"[TP] Replicated {name} (dimension too small for sharding)", flush=True)
+                if debug:
+                    print(f"[TP] Replicated {name} (dimension too small for sharding)", flush=True)
         else:
             # For 1D tensors (biases, etc.), replicate across all devices
-            print(f"[TP] Replicated {name} (1D tensor)", flush=True)
+            if debug:
+                print(f"[TP] Replicated {name} (1D tensor)", flush=True)
     
     print(f"[TP] Applied sharding to {sharded_count}/{param_count} parameters", flush=True)
     return model
@@ -292,27 +307,31 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
     num_devices = xr.global_runtime_device_count()
     print(f"[TP] Total devices available: {num_devices}", flush=True)
     
-    device_attrs = xr.global_runtime_device_attributes()
-    print(f"[TP] Device attributes:", flush=True)
-    for i, attr in enumerate(device_attrs):
-        print(f"[TP]   Device {i}: {attr}", flush=True)
+    if cfg.debug:
+        device_attrs = xr.global_runtime_device_attributes()
+        print(f"[TP] Device attributes:", flush=True)
+        for i, attr in enumerate(device_attrs):
+            print(f"[TP]   Device {i}: {attr}", flush=True)
 
     # Create mesh for tensor parallelism
     mesh_shape = cfg.mesh_shape if cfg.mesh_shape is not None else (1, num_devices)
     print(f"[TP] Creating mesh with shape: {mesh_shape}", flush=True)
     
-    device_ids = np.array(range(num_devices))
-    print(f"[TP] Device IDs: {device_ids}", flush=True)
+    if cfg.debug:
+        device_ids = np.array(range(num_devices))
+        print(f"[TP] Device IDs: {device_ids}", flush=True)
     
+    device_ids = np.array(range(num_devices))
     mesh = Mesh(device_ids, mesh_shape, ('data', 'model'))
-    print(f"[TP] Created mesh:", flush=True)
-    print(f"[TP]   Mesh shape: {mesh.shape()}", flush=True)
-    print(f"[TP]   Logical mesh:\n{mesh.get_logical_mesh()}", flush=True)
+    print(f"[TP] Created mesh with shape: {mesh.shape()}", flush=True)
+    if cfg.debug:
+        print(f"[TP]   Logical mesh:\n{mesh.get_logical_mesh()}", flush=True)
 
     # ------------------------------------------------------------------
     # Load text and create chunks
     # ------------------------------------------------------------------
-    print(f"[TP] Loading text from {cfg.input_path}", flush=True)
+    if cfg.debug:
+        print(f"[TP] Loading text from {cfg.input_path}", flush=True)
     fs_file = fsspec.open(cfg.input_path, "r")
     with fs_file as f:
         full_text: str = f.read()
@@ -321,7 +340,8 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
     tokenizer.pad_token = tokenizer.eos_token
-    print(f"[TP] Loaded tokenizer", flush=True)
+    if cfg.debug:
+        print(f"[TP] Loaded tokenizer", flush=True)
 
     chunks = chunk_text_to_sliding_window_token_chunks(
         full_text,
@@ -343,12 +363,13 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
 
     # Move model to XLA device
     device = xm.xla_device()
-    print(f"[TP] Moving model to XLA device: {device}", flush=True)
+    if cfg.debug:
+        print(f"[TP] Moving model to XLA device: {device}", flush=True)
     model.to(device)
     model.eval()
 
     # Apply tensor parallel sharding
-    model = _apply_tensor_parallel_sharding(model, mesh)
+    model = _apply_tensor_parallel_sharding(model, mesh, debug=cfg.debug)
     print(f"[TP] Model sharding applied successfully", flush=True)
 
     # ------------------------------------------------------------------
@@ -360,7 +381,8 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
     # Character-level max-prob array
     text_len = len(full_text)
     char_max_local = np.zeros(text_len, dtype=np.float32)
-    print(f"[TP] Initialized char_max array with length {text_len}", flush=True)
+    if cfg.debug:
+        print(f"[TP] Initialized char_max array with length {text_len}", flush=True)
 
     # Setup background queue if enabled
     batch_queue: queue.Queue | None = None
@@ -369,7 +391,8 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
     if cfg.background_queue:
         queue_size = cfg.num_background_writers * 3
         batch_queue = queue.Queue(maxsize=queue_size)
-        print(f"[TP] Setting up {cfg.num_background_writers} background writer threads", flush=True)
+        if cfg.debug:
+            print(f"[TP] Setting up {cfg.num_background_writers} background writer threads", flush=True)
         for i in range(cfg.num_background_writers):
             t = threading.Thread(
                 target=_writer_loop,
@@ -378,7 +401,8 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
             )
             t.start()
             writer_threads.append(t)
-            print(f"[TP] Started background writer thread {i+1}", flush=True)
+            if cfg.debug:
+                print(f"[TP] Started background writer thread {i+1}", flush=True)
 
     # ------------------------------------------------------------------
     # Process chunks sequentially (tensor parallel processes same data)
@@ -448,20 +472,23 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
             xs.mark_sharding(v, mesh, (None, None))  # Replicate batch and sequence dims
         
         tokenize_time = time.time() - tokenize_start
-        print(f"[TP] Tokenization: {tokenize_time:.2f}s", flush=True)
+        if cfg.debug:
+            print(f"[TP] Tokenization: {tokenize_time:.2f}s", flush=True)
 
         # Forward pass timing
         forward_start = time.time()
         with torch.no_grad():
             outputs = model(**tokens)
         forward_time = time.time() - forward_start
-        print(f"[TP] Forward pass: {forward_time:.2f}s", flush=True)
+        if cfg.debug:
+            print(f"[TP] Forward pass: {forward_time:.2f}s", flush=True)
 
         # Logits processing timing
         logits_start = time.time()
         logits = outputs.logits.to(desired_dtype)
         logits_time = time.time() - logits_start
-        print(f"[TP] Logits processing: {logits_time:.2f}s", flush=True)
+        if cfg.debug:
+            print(f"[TP] Logits processing: {logits_time:.2f}s", flush=True)
 
         # P(z) computation timing
         pz_start = time.time()
@@ -477,7 +504,8 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
         else:
             pz_value = 0.0
         pz_time = time.time() - pz_start
-        print(f"[TP] P(z) computation: {pz_time:.2f}s, pz={pz_value:.6f}", flush=True)
+        if cfg.debug:
+            print(f"[TP] P(z) computation: {pz_time:.2f}s, pz={pz_value:.6f}", flush=True)
 
         del shift_logits, shift_labels, log_probs, token_lp, suffix_lp
         gc.collect()
@@ -499,7 +527,8 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
         char_max_local[c0 : c1 + 1] = np.maximum(char_max_local[c0 : c1 + 1], pz_value)
 
         prep_time = time.time() - prep_start
-        print(f"[TP] Data preparation: {prep_time:.2f}s", flush=True)
+        if cfg.debug:
+            print(f"[TP] Data preparation: {prep_time:.2f}s", flush=True)
 
         # Accumulate data
         accum_logits.append(logits_np)
@@ -536,7 +565,8 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
 
             if cfg.background_queue:
                 assert batch_queue is not None
-                print(f"[TP] Queuing data for background write. Queue size: {batch_queue.qsize()}", flush=True)
+                if cfg.debug:
+                    print(f"[TP] Queuing data for background write. Queue size: {batch_queue.qsize()}", flush=True)
                 batch_queue.put((data_dict, batch_path))
                 del data_dict
                 gc.collect()
@@ -548,7 +578,8 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
                         np.savez_compressed(fo, **data_dict)
 
             save_time = time.time() - save_start
-            print(f"[TP] Save operation: {save_time:.2f}s", flush=True)
+            if cfg.debug:
+                print(f"[TP] Save operation: {save_time:.2f}s", flush=True)
             
             save_counter += 1
             accum_batches = 0
@@ -567,12 +598,14 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
         xm.mark_step()
         gc.collect()
         cleanup_time = time.time() - cleanup_start
-        print(f"[TP] Cleanup: {cleanup_time:.2f}s", flush=True)
+        if cfg.debug:
+            print(f"[TP] Cleanup: {cleanup_time:.2f}s", flush=True)
 
         # Total chunk time
         chunk_total_time = time.time() - chunk_start_time
-        print(f"[TP] Total chunk time: {chunk_total_time:.2f}s", flush=True)
-        print("---", flush=True)
+        if cfg.debug:
+            print(f"[TP] Total chunk time: {chunk_total_time:.2f}s", flush=True)
+            print("---", flush=True)
 
     # Save any remaining accumulated data
     if accum_batches > 0:
@@ -599,7 +632,8 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
 
         if cfg.background_queue:
             assert batch_queue is not None
-            print(f"[TP] Queuing final batch for background write. Queue size: {batch_queue.qsize()}", flush=True)
+            if cfg.debug:
+                print(f"[TP] Queuing final batch for background write. Queue size: {batch_queue.qsize()}", flush=True)
             batch_queue.put((data_dict, batch_path))
         else:
             with fsspec.open(batch_path, "wb", block_size=cfg.block_size) as fo:
@@ -609,7 +643,8 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
                     np.savez_compressed(fo, **data_dict)
         
         save_time = time.time() - save_start
-        print(f"[TP] Final save operation: {save_time:.2f}s", flush=True)
+        if cfg.debug:
+            print(f"[TP] Final save operation: {save_time:.2f}s", flush=True)
 
     # Final timing summary
     total_time = time.time() - start_time
@@ -637,45 +672,57 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
 
     # Shutdown background writers
     if cfg.background_queue and batch_queue is not None:
-        print(f"[TP] Shutting down {len(writer_threads)} background writers...", flush=True)
-        print(f"[TP] Queue size at shutdown: {batch_queue.qsize()}", flush=True)
+        if cfg.debug:
+            print(f"[TP] Shutting down {len(writer_threads)} background writers...", flush=True)
+            print(f"[TP] Queue size at shutdown: {batch_queue.qsize()}", flush=True)
         
         for i in range(len(writer_threads)):
-            print(f"[TP] Sending shutdown signal to writer {i+1}/{len(writer_threads)}", flush=True)
+            if cfg.debug:
+                print(f"[TP] Sending shutdown signal to writer {i+1}/{len(writer_threads)}", flush=True)
             batch_queue.put(None)
         
-        print(f"[TP] Waiting for all queued work to complete...", flush=True)
+        if cfg.debug:
+            print(f"[TP] Waiting for all queued work to complete...", flush=True)
         batch_queue.join()
-        print(f"[TP] All queued work completed", flush=True)
+        if cfg.debug:
+            print(f"[TP] All queued work completed", flush=True)
         
-        print(f"[TP] Waiting for writer threads to exit...", flush=True)
+        if cfg.debug:
+            print(f"[TP] Waiting for writer threads to exit...", flush=True)
         for i, t in enumerate(writer_threads):
             t.join()
-            print(f"[TP] Writer thread {i+1}/{len(writer_threads)} exited", flush=True)
+            if cfg.debug:
+                print(f"[TP] Writer thread {i+1}/{len(writer_threads)} exited", flush=True)
         
         if writer_errors:
             print(f"[TP] ERROR: {len(writer_errors)} writer errors occurred", flush=True)
             raise writer_errors[0]
         else:
-            print(f"[TP] All background writers shut down successfully", flush=True)
+            if cfg.debug:
+                print(f"[TP] All background writers shut down successfully", flush=True)
 
     print(f"[TP] Finished writing shard files with prefix {shard_path_prefix}", flush=True)
 
     # Write character max array
-    print(f"[TP] About to write char_max array...", flush=True)
+    if cfg.debug:
+        print(f"[TP] About to write char_max array...", flush=True)
     cm_path = os.path.join(cfg.output_dir, f"char_max_tp.npy")
-    print(f"[TP] Opening file: {cm_path}", flush=True)
+    if cfg.debug:
+        print(f"[TP] Opening file: {cm_path}", flush=True)
     
     try:
         with fsspec.open(cm_path, "wb") as fo:
-            print(f"[TP] File opened successfully, writing data...", flush=True)
+            if cfg.debug:
+                print(f"[TP] File opened successfully, writing data...", flush=True)
             np.save(fo, char_max_local, allow_pickle=True)
-            print(f"[TP] Data written successfully", flush=True)
+            if cfg.debug:
+                print(f"[TP] Data written successfully", flush=True)
     except Exception as e:
         print(f"[TP] ERROR writing char_max: {e}", flush=True)
         raise
     
-    print(f"[TP] About to log completion...", flush=True)
+    if cfg.debug:
+        print(f"[TP] About to log completion...", flush=True)
     logger.info("[TP] Wrote char_max to %s", cm_path)
     print(f"[TP] Tensor parallel sliding logits processing completed successfully", flush=True)
 

@@ -38,6 +38,7 @@ sliding_logits_tp_step = ExecutorStep(
         batches_per_save=1, 
         background_queue=True,
         num_background_writers=4,
+        debug=False,  # Set to True for detailed logging
     ),
 )
 
