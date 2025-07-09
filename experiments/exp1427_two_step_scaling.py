@@ -7,6 +7,7 @@ from experiments.exp1342_gemstones_scaling_law import (
     gemstone_splits,
     roughly_equals,
 )
+from experiments.models import ModelConfig, download_model_step
 from marin.execution.executor import executor_main, output_path_of
 
 
@@ -33,10 +34,28 @@ def create_eval_steps() -> list:
                     evals=tasks,
                     resource_config=SINGLE_TPU_V4_8,
                 )
+                break
                 steps.append(step)
             except ValueError as e:
                 print(f"Skipping {model}/{revision}: {e}")
 
+    big_models = [
+        ("allenai/OLMo-2-1124-7B", "7df9a82"),
+        ("allenai/OLMo-2-1124-13B", "3fefddc"),
+        ("meta-llama/Llama-3.1-8B", "d04e592"),
+        ("common-pile/comma-v0.1-2t", "3fba893"),
+    ]
+    for model, revision in big_models:
+        model_instance = download_model_step(ModelConfig(hf_repo_id=model, hf_revision=revision))
+
+        step = evaluate_levanter_lm_evaluation_harness(
+            model_name=f"{model}@{revision}",
+            model_path=output_path_of(model_instance),
+            evals=tasks,
+            resource_config=SINGLE_TPU_V4_8,
+        )
+        steps.append(step)
+    print(steps)
     return steps
 
 
