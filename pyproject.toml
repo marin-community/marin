@@ -95,6 +95,7 @@ transform_test_deps = [
     "readability-lxml",
     "warcio",
     "markdownify==0.12.1",
+    "resiliparse",
 ]
 
 
