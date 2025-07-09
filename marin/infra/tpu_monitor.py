@@ -8,7 +8,7 @@ import yaml
 from google.cloud import tpu_v2alpha1
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 BAD_STATES = {
     tpu_v2alpha1.Node.State.PREEMPTED,
@@ -29,6 +29,7 @@ class TPUMonitor:
         *,
         wait_seconds: int = 600,
         config_path: str | Path = "~/ray_bootstrap_config.yaml",
+        dry_run: bool = False,
     ) -> None:
         path = Path(config_path).expanduser()
         cfg = {}
@@ -45,11 +46,8 @@ class TPUMonitor:
         self.cluster_name = cluster_name or cfg.get("cluster_name")
         self.wait_seconds = wait_seconds
         self.tpu_client = tpu_v2alpha1.TpuClient()
-        self.missing_since: dict[str, float] = {}
+        self.dry_run = dry_run
         self.incomplete_since: dict[str, float] = {}
-
-    def _list_ray_hostnames(self) -> set[str]:
-        return {node["NodeManagerHostname"] for node in ray.nodes() if node.get("Alive", False)}
 
     def _cluster_resources(self) -> dict[str, float]:
         """Return cluster resource counts."""
@@ -61,13 +59,14 @@ class TPUMonitor:
 
     def _delete_node(self, name: str, reason: str) -> None:
         logger.warning("Deleting TPU %s due to %s", name, reason)
+        if self.dry_run:
+            return
         try:
             self.tpu_client.delete_node(name=name)
         except Exception as e:
             logger.error("Failed to delete TPU %s: %s", name, e)
 
     def check_once(self) -> None:
-        hostnames = self._list_ray_hostnames()
         resources = self._cluster_resources()
         parent = f"projects/{self.project}/locations/{self.zone}"
         nodes: Iterable[tpu_v2alpha1.Node] = self.tpu_client.list_nodes(parent=parent)
@@ -84,14 +83,6 @@ class TPUMonitor:
                 continue
             if node.state != GOOD_STATE:
                 continue
-
-            if name not in hostnames:
-                first = self.missing_since.setdefault(name, now)
-                if now - first > self.wait_seconds:
-                    self._delete_node(node.name, "missing from ray")
-                    self.missing_since.pop(name, None)
-            else:
-                self.missing_since.pop(name, None)
 
             expected = len(getattr(node, "network_endpoints", []))
             actual = int(resources.get(name, 0))
@@ -110,7 +101,15 @@ class TPUMonitor:
             time.sleep(interval_s)
 
 
-def start_tpu_monitor_on_head(*args, **kwargs):
+def start_tpu_monitor_on_head(
+    project: str | None = None,
+    zone: str | None = None,
+    cluster_name: str | None = None,
+    *,
+    wait_seconds: int = 600,
+    config_path: str | Path = "~/ray_bootstrap_config.yaml",
+    dry_run: bool = False,
+):
     """Launch :class:`TPUMonitor` on the Ray head node."""
 
     head_ip = ray.util.get_node_ip_address()
@@ -129,4 +128,11 @@ def start_tpu_monitor_on_head(*args, **kwargs):
         lifetime="detached",
         name="tpu_monitor",
         get_if_exists=True,
-    ).remote(*args, **kwargs)
+    ).remote(
+        project=project,
+        zone=zone,
+        cluster_name=cluster_name,
+        wait_seconds=wait_seconds,
+        config_path=config_path,
+        dry_run=dry_run,
+    )
