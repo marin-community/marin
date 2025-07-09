@@ -49,6 +49,7 @@ test = [
     "pytest-cov",
     # need this for integration tests
     "pip",
+    "openai-responses",
 ]
 lint = [
     "ruff>=0.5.7",
@@ -70,16 +71,19 @@ docs = [
     "mkdocs-minify-plugin>=0.7.0",
     "mkdocs-include-markdown-plugin>=7.1.5",
 ]
+
 gcp = [
   "google-api-python-client>=2.175.0",  # ray GCP workaround
   "cryptography>=45",
   "google-cloud-storage",
   "google-cloud-storage-transfer",
 ]
+
 math = [
   "pylatexenc",
   "sympy",
 ]
+
 metrics = [
   "google-cloud-logging",
 ]
@@ -89,7 +93,8 @@ transform_test_deps = [
     "trafilatura>=2.0",
     "readabilipy",
     "readability-lxml",
-    "warcio"
+    "warcio",
+    "markdownify==0.12.1",
 ]
 
 

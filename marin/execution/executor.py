@@ -611,7 +611,8 @@ class Executor:
             if not running:
                 break
 
-            done_refs, _ = ray.wait([ref for ref, _ in running.values()], num_returns=1)
+            print(f"!!! {running.values()}")
+            done_refs = self._filter_unique_waitables(running)
             for ref in done_refs:
                 finished_step = next(step for step, r in running.items() if r[0] == ref)
                 status_path = get_status_path(self.output_paths[finished_step])
@@ -631,6 +632,17 @@ class Executor:
                     remaining_deps[child].remove(finished_step)
                     if not remaining_deps[child]:
                         ready.append(child)
+
+    def _filter_unique_waitables(self, running):
+        # Ray now requires the waitables be unique, so we filter them out.
+        unique_refs = set()
+        out = []
+        for ref, _ in running.values():
+            if ref not in unique_refs:
+                unique_refs.add(ref)
+                out.append(ref)
+        done_refs, _ = ray.wait(out, num_returns=1)
+        return done_refs
 
     def _launch_step(self, step: ExecutorStep, *, dry_run: bool, force_run_failed: bool) -> tuple[ray.ObjectRef, bool]:
         config = self.configs[step]
