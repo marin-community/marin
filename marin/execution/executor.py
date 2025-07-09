@@ -521,7 +521,10 @@ class Executor:
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
         if not is_local_ray_cluster():
-            strategy = NodeAffinitySchedulingStrategy(node_id=ray.get_runtime_context().get_node_id(), soft=False, )
+            strategy = NodeAffinitySchedulingStrategy(
+                node_id=ray.get_runtime_context().get_node_id(),
+                soft=False,
+            )
         else:
             strategy = None
         self.status_actor: StatusActor = StatusActor.options(
@@ -645,6 +648,8 @@ class Executor:
         else:
             pip_dependencies = None
 
+        logger.info(f"  pip_dependencies = {pip_dependencies}")
+
         if not dry_run:
             step_name = f"{step.name}: {get_fn_name(step.fn)}"
 
@@ -662,16 +667,22 @@ class Executor:
 
             append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
 
+            runtime_env = RuntimeEnv(pip=pip_dependencies)
+
+            # see if we should be using uv:
+            # cf https://www.anyscale.com/blog/uv-ray-pain-free-python-dependencies-in-clusters#using-uv-in-a-ray-job
+            if os.system("which uv >/dev/null 2>&1") == 0:
+                runtime_env["py_executable"] = "uv run --active"
+
             if isinstance(step.fn, ray.remote_function.RemoteFunction):
                 ref = step.fn.options(
-                    name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
-                    runtime_env=RuntimeEnv(pip=pip_dependencies),
+                    name=f"{get_fn_name(step.fn, short=True)}:{step.name}", runtime_env=runtime_env
                 ).remote(config)
             else:
                 remote_fn = ray.remote(step.fn)
                 ref = remote_fn.options(
                     name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
-                    runtime_env=RuntimeEnv(pip=pip_dependencies),
+                    runtime_env=runtime_env,
                 ).remote(config)
 
             return ref, True

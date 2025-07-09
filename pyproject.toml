@@ -47,6 +47,8 @@ test = [
     "pytest-asyncio",
     "pytest-xdist",
     "pytest-cov",
+    # need this for integration tests
+    "pip",
 ]
 lint = [
     "ruff>=0.5.7",
@@ -81,6 +83,30 @@ math = [
 metrics = [
   "google-cloud-logging",
 ]
+
+
+transform_test_deps = [
+    "trafilatura>=2.0",
+    "readabilipy",
+    "readability-lxml",
+    "warcio"
+]
+
+
+[tool.uv]
+default-groups = ["test", "lint", "docs", "gcp", "math", "transform_test_deps"]
+
+[project.optional-dependencies]
+
+cuda12 = [
+    "jax[cuda12]>=0.5.1",
+    "torch>=2.7.0",
+]
+
+tpu = [
+    "jax[tpu]>=0.5.1",
+]
+
 download_transform = [
     "chardet",
     "datasets>=2.18.0",
@@ -150,28 +176,6 @@ eval = [
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
 
-transform_test_deps = [
-    "trafilatura>=2.0",
-    "readabilipy",
-    "readability-lxml",
-    "warcio"
-]
-
-
-[tool.uv]
-default-groups = ["test", "lint", "docs", "gcp", "math", "transform_test_deps"]
-
-[project.optional-dependencies]
-
-cuda12 = [
-    "jax[cuda12]>=0.5.1",
-    "torch>=2.7.0",
-]
-
-tpu = [
-    "jax[tpu]>=0.5.1",
-]
-
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["cache", "infra"]
@@ -217,5 +221,3 @@ exclude = [
 
 [tool.uv.sources]
 resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
-
-
