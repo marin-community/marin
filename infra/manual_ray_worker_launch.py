@@ -128,6 +128,23 @@ def main():
         node_count=1,
     )
 
+    # tag the TPU so we can automatically reconnect it later
+    try:
+        run_command(
+            "gcloud",
+            "alpha",
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "update",
+            tpu_name,
+            f"--zone={zone}",
+            f"--update-labels=ray-cluster-name={cluster_name}",
+            "--quiet",
+        )
+    except subprocess.CalledProcessError as e:
+        logger.warning("Failed to label TPU %s: %s", tpu_name, e)
+
     setup_vm_docker(
         tpu_name=tpu_name,
         zone=zone,
