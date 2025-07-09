@@ -28,8 +28,9 @@ conda init bash
 conda create -n llama3_train python=3.10 -y
 conda activate llama3_train
 cd ~/llama3_train/post_training
-python -m pip install -r requirements.txt
-python -m pip install -U "jax[tpu]==0.4.29" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+python -m pip install uv
+uv pip install -r requirements.txt
+uv pip install -U "jax[tpu]==0.4.29" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 # clean up
 cd ~/

@@ -6,6 +6,9 @@ FROM vllm/vllm-tpu:nightly
 RUN apt-get update && apt-get install lsb-release rsync docker.io -y
 RUN usermod -aG docker $(whoami)
 
+# Install uv for faster dependency management
+RUN pip install uv
+
 RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | tee /etc/apt/sources.list.d/gcsfuse.list
 RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
 RUN apt-get update && apt-get install fuse gcsfuse -y
@@ -18,7 +21,7 @@ RUN curl -sSL https://sdk.cloud.google.com > /tmp/gcl && \
     && chown -R $(whoami) /root/gcloud
 
 # Install core dependencies
-RUN pip install --no-cache-dir draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1190 haliax==1.4.dev327
+RUN uv pip install --no-cache-dir draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1190 haliax==1.4.dev327
 
 # NOTE(chris): We fix the lm-evaluation-harness commit hash for now since the newest main is broken because of
 # the new eval_logger change they made
@@ -29,10 +32,10 @@ cd /opt/lm_eval && \
 git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness && \
 cd lm-evaluation-harness && \
 git fetch origin $LM_EVAL_EVAL_COMMIT_HASH && \
-git checkout $LM_EVAL_EVAL_COMMIT_HASH && pip install --no-cache-dir -e ".[ifeval, math]"
+git checkout $LM_EVAL_EVAL_COMMIT_HASH && uv pip install --no-cache-dir -e ".[ifeval, math]"
 
 # Need the latest accelerate due to some deprecations in the newest pytorch
-RUN pip install --no-cache-dir https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
+RUN uv pip install --no-cache-dir https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
 
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
