@@ -611,7 +611,6 @@ class Executor:
             if not running:
                 break
 
-            print(f"!!! {running.values()}")
             done_refs = self._filter_unique_waitables(running)
             for ref in done_refs:
                 finished_step = next(step for step, r in running.items() if r[0] == ref)
