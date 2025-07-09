@@ -23,14 +23,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
-      - name: Set up Conda
-        uses: conda-incubator/setup-miniconda@v2
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
         with:
-          auto-update-conda: true
           python-version: ${{ matrix.python-version }}
-          activate-environment: marin_unit_test_env
-          auto-activate-base: false
 
       - name: Cache pip dependencies
         uses: actions/cache@v3
@@ -38,15 +34,13 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.cache/uv
-          key: ${{ runner.os }}-${{ matrix.python-version }}-quickstart
+          key: ${{ runner.os }}-${{ matrix.python-version }}-quickstart-2
 
       - name: Install dependencies
-        shell: bash -l {0}
         run: |
-          conda install -c conda-forge pandoc
-          npm install -g pandiff
-          python -m pip install --upgrade pip
-          pip install "uv>=0.7.19" toml
+          # install uv
+          pip install uv
+          uv venv
           uv sync
 
       # Start Ray cluster locally; We give cpus as 64 since we don't want Ray to get stuck in infinite loop trying to
