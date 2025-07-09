@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from marin.download.huggingface.download import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.utils import get_directory_friendly_name
 
 
@@ -41,9 +41,8 @@ GCS_FUSE_MOUNT_PATH = "gcsfuse_mount/models"
 
 def download_model_step(model_config: ModelConfig) -> ExecutorStep:
     model_name = get_directory_friendly_name(model_config.hf_repo_id)
-    model_revision = get_directory_friendly_name(model_config.hf_revision)
     download_step = ExecutorStep(
-        name=f"{GCS_FUSE_MOUNT_PATH}/{model_name}--{model_revision}",
+        name=f"{GCS_FUSE_MOUNT_PATH}/{model_name}",
         fn=download_hf,
         config=DownloadConfig(
             hf_dataset_id=model_config.hf_repo_id,
@@ -54,7 +53,7 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
         ),
         # must override because it because if we don't then it will end in a hash
         # if it ends in a hash, then we cannot determine the local path
-        override_output_path=f"{GCS_FUSE_MOUNT_PATH}/{model_name}--{model_revision}",
+        override_output_path=f"{GCS_FUSE_MOUNT_PATH}/{model_name}",
     )
 
     return download_step
@@ -108,6 +107,20 @@ llama_3_1_8b = download_model_step(
     )
 )
 
+llama_3_1_70b = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Llama-3.1-70B",
+        hf_revision="d4cd2f9",
+    )
+)
+
+llama_3_1_405b = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Llama-3.1-405B",
+        hf_revision="b906e4d",
+    )
+)
+
 tulu_3_1_8b_sft = download_model_step(
     ModelConfig(
         hf_repo_id="allenai/Llama-3.1-Tulu-3-8B-SFT",
@@ -149,3 +162,29 @@ map_neo_7b = download_model_step(
         hf_revision="81bad32",
     )
 )
+
+
+if __name__ == "__main__":
+    # Collect all model download steps
+    all_models = [
+        # smollm2_1_7b_instruct,
+        # qwen2_5_7b_instruct,
+        # qwen2_5_72b_instruct,
+        # llama_3_3_70b_instruct,
+        # llama_3_1_8b_instruct,
+        llama_3_1_8b,
+        llama_3_1_70b,
+        # llama_3_1_405b,
+        # tulu_3_1_8b_instruct,
+        # tulu_3_1_8b_sft,
+        # olmo_2_sft_8b,
+        # olmo_2_base_8b,
+        # amber_base_7b,
+        # map_neo_7b,
+    ]
+
+    # Run all model downloads
+    executor_main(
+        steps=all_models,
+        description="Download all models from HuggingFace",
+    )
