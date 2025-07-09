@@ -96,6 +96,22 @@ transform_test_deps = [
 [tool.uv]
 default-groups = ["test", "lint", "docs", "gcp", "math", "transform_test_deps"]
 
+conflicts = [
+    [
+        { extra = "crawl" },
+        { extra = "post-training" },
+    ],
+    [
+        { extra = "crawl" },
+        { extra = "download-transform" },
+    ],
+    [
+        { extra = "crawl" },
+        { group = "transform-test-deps" },
+    ],
+
+]
+
 [project.optional-dependencies]
 
 cuda12 = [
@@ -177,6 +193,7 @@ tokenize_train = [
     "tiktoken",
 ]
 
+
 post_training = [
     "gcsfs",
     "jax==0.5.2",
@@ -209,6 +226,7 @@ eval = [
     "levanter>=1.2.dev1359",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
+
 
 [tool.setuptools.packages.find]
 where = ["."]
