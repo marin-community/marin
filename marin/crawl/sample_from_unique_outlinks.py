@@ -131,6 +131,7 @@ def sample_from_shuffled_unique_outlinks(
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     # Discover and sort shards for reproducibility
+    logger.info(f"Sampling from {input_pattern}")
     shard_paths = sorted(fsspec_glob(input_pattern))
     logger.info(f"Found {len(shard_paths)} shards matching pattern.")
 
@@ -239,7 +240,7 @@ def write_sharded_examples(sharded_examples: list[list[Outlink]], output_prefix:
 
 
 @draccus.wrap()
-def main(cfg: OutlinksSamplingConfig):
+def sample_outlinks(cfg: OutlinksSamplingConfig):
     ray.get(
         sample_from_shuffled_unique_outlinks.remote(
             cfg.input_pattern, cfg.num_to_sample, cfg.shard_size, cfg.output_prefix, cfg.start_from
@@ -248,4 +249,4 @@ def main(cfg: OutlinksSamplingConfig):
 
 
 if __name__ == "__main__":
-    main()
+    sample_outlinks()

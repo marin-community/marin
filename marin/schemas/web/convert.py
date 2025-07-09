@@ -143,7 +143,7 @@ class ResiliparseConfig(ExtractionConfig):
         return {
             f.name: getattr(self, f.name)
             for f in fields(self)
-            if f.name not in exclude and (self.use_custom_variant and f.name != "preserve_formatting")
+            if f.name not in exclude or (self.use_custom_variant and f.name == "preserve_formatting")
         }
 
     @property

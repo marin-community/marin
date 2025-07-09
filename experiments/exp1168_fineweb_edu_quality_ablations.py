@@ -24,7 +24,7 @@ fineweb_edu_tokenized = default_tokenize(
 )
 
 fineweb_edu_raw_tokenized = default_tokenize(
-    "fineweb-edu-raw",
+    "fineweb-edu-control",
     InputName.hardcoded(
         "gs://marin-us-central2/raw/fineweb-edu-c2beb4/3c452cb/huggingface.co/datasets/HuggingFaceFW/fineweb-edu/resolve/3c452cb/data"
     ),

@@ -23,7 +23,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-@ray.remote(memory=4 * 1024 * 1024 * 1024)  # 4 GB
+@ray.remote(memory=4 * 1024 * 1024 * 1024, max_retries=5)  # 4 GB
 @cached_or_construct_output(
     success_suffix="SUCCESS", verbose=False
 )  # We use this decorator to make this function idempotent
@@ -102,7 +102,7 @@ def process_one_shard(
         for _, row in df.iterrows():
             out = row.to_dict()
             # If this example failed decoding, don't write it out
-            if not out["html"]:
+            if "html" not in out or not out["html"]:
                 continue
 
             if "id" not in out:
@@ -124,6 +124,7 @@ def process_one_shard(
         f"in {input_path} . {num_urls_failed_decoding} failed HTML decoding "
         f"AWS URL: {s3_url}"
         f"Found {length_warc} records in the WARC file"
+        f"Saving at {output_path}"
     )
 
 
@@ -247,7 +248,7 @@ def process_parquet(cfg: HtmlExtractionConfig):
     num_shards_to_process = len(shard_indices_to_process)
 
     # Set a limit on the number of concurrent tasks so we don't overwhelm CC
-    MAX_CONCURRENT_TASKS = 500
+    MAX_CONCURRENT_TASKS = 750
 
     # Shuffle to encourage different workers to hit different AWS prefixes,
     # so we don't run into per-prefix rate limits.
@@ -265,7 +266,10 @@ def process_parquet(cfg: HtmlExtractionConfig):
         # shard_path_to_process is of form gs://<output_path>/0_warc_examples.parquet
         shard_path = os.path.join(cfg.output_path, f"{shard_index}_warc_examples.parquet")
         # shard_output_path is of form gs://<output_path>/open-web-math_0.jsonl.gz
-        shard_output_path = os.path.join(cfg.output_path, f"{cfg.source_name}_{shard_index}.jsonl.gz")
+        if "/" in cfg.source_name:
+            shard_output_path = os.path.join(cfg.output_path, f"{cfg.source_name.split('/')[-1]}_{shard_index}.jsonl.gz")
+        else:
+            shard_output_path = os.path.join(cfg.output_path, f"{cfg.source_name}_{shard_index}.jsonl.gz")
 
         unfinished.append(
             process_one_shard.remote(

@@ -1,4 +1,9 @@
+import logging
+
 from resiliparse.parse.encoding import bytes_to_str, detect_encoding
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 
 def decode_html(html: bytes) -> str | None:
@@ -7,7 +12,7 @@ def decode_html(html: bytes) -> str | None:
     utf-8. If that doesn't work, try to detect the encoding.
     """
     try:
-        html = bytes_to_str(html, "ut  f-8")
+        html = bytes_to_str(html, "utf-8")
     except Exception:
         encoding = detect_encoding(html)
         if encoding is None or encoding == "utf-8":
@@ -15,5 +20,6 @@ def decode_html(html: bytes) -> str | None:
         try:
             html = bytes_to_str(html, encoding)
         except Exception:
+            logger.error(f"Failed to decode HTML with encoding {encoding}")
             return
     return html

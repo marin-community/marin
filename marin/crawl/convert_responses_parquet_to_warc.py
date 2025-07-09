@@ -141,7 +141,7 @@ def convert_shards_to_warc(cfg: ConvertResponsesToWARCConfig):
     refs = []
     for shard_index in shard_indices_to_process:
         input_path = os.path.join(cfg.input_directory, f"fetched_links.{shard_index}.parquet")
-        output_path = os.path.join(cfg.input_directory, f"links.{shard_index}.warc.gz")
+        output_path = os.path.join(cfg.output_path, f"links.{shard_index}.warc.gz")
         refs.append(convert_parquet_to_warc.remote(input_path, output_path))
     ray.get(refs)
 
