@@ -20,7 +20,7 @@ sft_experiments = []
 swe_smith_sft_config = dataclasses.replace(
     spoonbill_zloss_tulu3_sft_config,
     learning_rate=1e-4,
-    num_train_steps=2500,
+    num_train_steps=600,
     max_seq_len=32768,
     train_batch_size=16,
     resources=TpuPodConfig(tpu_type="v5p-32", slice_count=1),
@@ -54,18 +54,30 @@ yarn_llama_8b = dataclasses.replace(
     seq_len=32768,
 )
 
+no_yarn_llama_8b = dataclasses.replace(
+    llama_8b,
+    seq_len=32768,
+)
+
 
 marin_8b_swe_smith_sft = default_sft(
-    name="sft/marin-swe-smith-8b-yarn",
+    name="sft/marin-swe-smith-8b-yarn-3epoch",
     tokenized=tokenized_swe_smith_trajectories,
     model_config=yarn_llama_8b,
     sft_config=swe_smith_sft_config,
     tags=["marin-8b", "sft", "agent"],
-).with_output_path("checkpoints/sft/marin-swe-smith-8b-yarn")
+).with_output_path("checkpoints/sft/marin-swe-smith-8b-yarn-3epoch")
 
+marin_8b_swe_smith_sft_no_yarn = default_sft(
+    name="sft/marin-swe-smith-8b-no-yarn-3epoch",
+    tokenized=tokenized_swe_smith_trajectories,
+    model_config=no_yarn_llama_8b,
+    sft_config=swe_smith_sft_config,
+    tags=["marin-8b", "sft", "agent"],
+).with_output_path("checkpoints/sft/marin-swe-smith-8b-no-yarn-3epoch")
 
 if __name__ == "__main__":
     executor_main(
-        [marin_8b_swe_smith_sft],
+        [marin_8b_swe_smith_sft, marin_8b_swe_smith_sft_no_yarn],
         description="SWE Agent SFT for Marin 8B",
     )
