@@ -6,12 +6,15 @@ from transformers import AutoTokenizer
 from .environments.marin_env import MarinEnv
 from .environments.math_env import MathEnv
 from .environments.olym_math_env import OlymMathEnv
+from .environments.open_math_reasoning_env import OpenMathReasoningEnv
 from .environments.swe_bench_env import SWEBenchEnv
 
 # Specify environments here
 ENVIRONMENT_NAME_TO_CLASS = {
     "math": MathEnv,
     "olym_math": OlymMathEnv,
+    "open_math_reasoning": OpenMathReasoningEnv,
+    "swe_bench": SWEBenchEnv,
 }
 
 
