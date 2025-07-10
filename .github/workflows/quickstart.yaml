@@ -51,6 +51,7 @@ jobs:
           uv run ray start --head --num-cpus=64 --resources='{"head_node": 1}'
           df -h
           sudo du  -h / | sort -hr | head -n 40
+          sudo du -h /home/runner/work/marin/marin/.venv/lib/python3.12/site-packages | sort -hr | head -n 50
 
       - name: Run the quickstart script
         shell: bash -l {0}
