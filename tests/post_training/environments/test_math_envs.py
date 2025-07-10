@@ -44,6 +44,27 @@ def test_olym_math_env_loaded():
 
 
 @pytest.mark.skip(reason="Need to fix environment import.")
+def test_open_math_reasoning_env_loaded():
+    from marin.post_training.environments.open_math_reasoning_env import OpenMathReasoningEnv
+
+    env = OpenMathReasoningEnv(tokenizer=None)
+    assert len(env.train_examples) == 234_572
+    assert len(env.eval_examples) == 58_644
+
+    # Ensure we get the same examples every time we load the environment
+    assert env.train_examples[0]["prompt"].startswith(
+        "Solve for \\( x \\): \\( |ax - 2| \\geq bx \\) given \\( a > 0 \\) and \\( b > 0 \\)"
+    )
+    assert env.train_examples[0]["answer"] == (
+        "\\( x \\geq \\frac{2}{a-b} \\) or \\( x \\leq \\frac{2}{a+b} \\) or \\( x \\leq 0 \\)"
+    )
+    assert env.eval_examples[16]["prompt"].startswith(
+        "Find all triples $(x, y, z)$ of real numbers such that:\n\\[ x^3 = 3x - 12y + 50 \\]\n\\"
+        "[ y^3 = 12y + 3z - 2 \\]\n\\[ z^3 = 27z + 27x \\]"
+    )
+
+
+@pytest.mark.skip(reason="Need to fix environment import.")
 def test_grade_answer_with_olym_math_env():
     """
     Test whether `grade_answer` works correctly with OlymMathEnv
@@ -61,3 +82,38 @@ def test_grade_answer_with_olym_math_env():
 
     assert grade_answer(given_answer=r"2\sqrt{3}-1", ground_truth=example["answer"]) is False
     assert grade_answer(given_answer=r"2\sqrt{2} + 1", ground_truth=example["answer"]) is False
+
+
+@pytest.mark.skip(reason="Need to fix environment import.")
+def test_grade_answer_with_open_math_reasoning_env():
+    """
+    Test whether `grade_answer` works correctly with OpenMathReasoningEnv
+    by ensuring a solution for one of the examples is verifiable.
+    """
+    from marin.post_training.environments.open_math_reasoning_env import OpenMathReasoningEnv
+
+    env = OpenMathReasoningEnv(tokenizer=None)
+
+    answer = env.train_examples[0]["answer"]
+    assert grade_answer(
+        given_answer='\\( x \\geq \\frac{2}{a-b} \\) or \\( x \\leq \\frac{2}{a+b} \\) or \\( x \\leq 0 \\)',
+        ground_truth=answer
+    ) is True
+    assert grade_answer(
+        given_answer='\\( x \\geq \\frac{2}{a-b} \\), \\( x \\leq \\frac{2}{a+b} \\), \\( x \\leq 0 \\)',
+        ground_truth=answer
+    ) is True
+    assert grade_answer(
+        given_answer='\\( x \\geq \\frac{2}{a-b} \\) or \\( x \\leq \\frac{2}{a+b} \\) or \\( x \\geq 0 \\)',
+        ground_truth=answer
+    ) is False
+
+    answer = env.train_examples[1]["answer"]
+    assert grade_answer(given_answer=" 20", ground_truth=answer) is True
+    assert grade_answer(given_answer=" 19", ground_truth=answer) is False
+
+    answer = env.train_examples[2]["answer"]
+    assert grade_answer(given_answer="\\(-\\frac{2}{3}\\)", ground_truth=answer) is True
+    assert grade_answer(given_answer="-\\frac{2}{3}", ground_truth=answer) is True
+    assert grade_answer(given_answer="\\(-\\frac{4}{3}\\)", ground_truth=answer) is False
+    assert grade_answer(given_answer="-\\frac{1}{3}", ground_truth=answer) is False
