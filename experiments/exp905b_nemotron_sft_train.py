@@ -51,7 +51,7 @@ deeper_sft_config = dataclasses.replace(
     num_train_steps=10228*8, # Num rows is now 8x larger, so we need to train for 8x more steps. We need to be more principled
     train_batch_size=BATCH_SIZE,
     resources=TpuPodConfig(tpu_type="v4-128", slice_count=2),
-    initialize_from_checkpoint_path=tootsie_8b_deeper_starling.cd("checkpoints/step-1400000").nonblocking(),
+    initialize_from_checkpoint_path=tootsie_8b_deeper_starling.cd("checkpoints/step-1419967").nonblocking(),
 )
 
 sft_mixture_llama3 = lm_mixture_data_config(
