@@ -40,15 +40,15 @@ jobs:
         run: |
           # install uv
           pip install uv
-          uv venv
-          uv sync  --torch-backend=cpu
+          uv pip install --system -e . --torch_backend=cpu
+        
 
       # Start Ray cluster locally; We give cpus as 64 since we don't want Ray to get stuck in infinite loop trying to
       # get the resources
       - name: Start Ray cluster locally
         shell: bash -l {0}
         run: |
-          uv run ray start --head --num-cpus=64 --resources='{"head_node": 1}'
+          ray start --head --num-cpus=64 --resources='{"head_node": 1}'
           df -h
           sudo du  -h / | sort -hr | head -n 40
           sudo du -h /home/runner/work/marin/marin/.venv/lib/python3.12/site-packages | sort -hr | head -n 50
@@ -56,7 +56,7 @@ jobs:
       - name: Run the quickstart script
         shell: bash -l {0}
         run: |
-         uv run python tests/integration_test.py
+         python tests/integration_test.py
         env: # Or as an environment variable
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           JAX_TRACEBACK_FILTERING: off
