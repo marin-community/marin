@@ -34,14 +34,14 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.cache/uv
-          key: ${{ runner.os }}-${{ matrix.python-version }}-quickstart-2
+          key: ${{ runner.os }}-${{ matrix.python-version }}-quickstart-3
 
       - name: Install dependencies
         run: |
           # install uv
           pip install uv
           uv venv
-          uv sync
+          uv sync  --torch-backend=cpu
 
       # Start Ray cluster locally; We give cpus as 64 since we don't want Ray to get stuck in infinite loop trying to
       # get the resources
