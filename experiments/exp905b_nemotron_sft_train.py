@@ -83,7 +83,7 @@ if __name__ == "__main__":
     executor_main(
         [
             mixture_sft_deeper_starling_with_nemotron_and_openthoughts3,
-            *default_sft_eval(mixture_sft_deeper_starling_with_nemotron_and_openthoughts3),
+            # *default_sft_eval(mixture_sft_deeper_starling_with_nemotron_and_openthoughts3),
         ],
         description="SFT for Deeper Starling Model with addition of Nemotron and OpenThoughts3-1.2M",
     )

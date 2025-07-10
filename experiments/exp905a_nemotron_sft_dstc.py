@@ -9,16 +9,17 @@ from experiments.posttrain.instruction_datasets import (
     get_instruction_dataset,
 )
 from levanter.data.text import ChatLmDatasetFormat
-from dataclasses import dataclass
 
-from experiments.defaults import default_tokenize, this_output_path
+from experiments.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
 )
-import json
-import fsspec
+from experiments.data_utils.count_dataset import (
+    compile_and_store_num_rows_step, 
+    compile_and_store_num_tokens_step
+)
 
 import logging
 logger = logging.getLogger("ray")
@@ -56,158 +57,6 @@ def create_tokenization_step(dataset_name: str) -> ExecutorStep:
     )
 
 
-########### Compiling token counts ###########
-@dataclass
-class CompileTokenCountsConfig:
-    tokenization_steps: dict[str, str]
-    output_path: str = this_output_path()
-
-def get_num_rows_from_tokenized_datasets(transform_executor_steps: dict[str, str]) -> dict[str, int]:
-    size_dict = dict()
-    for ds_short_name, gcs_tokenized_path in transform_executor_steps.items():
-        json_path = f"{gcs_tokenized_path}/train/shard_ledger.json"
-        # Use fsspec to read from GCS
-        with fsspec.open(json_path, 'r') as f:
-            shard_ledger = json.load(f)
-        size_dict[ds_short_name] = shard_ledger['total_num_rows']
-    return size_dict
-
-def _compile_and_store_num_rows(config: CompileTokenCountsConfig) -> str:
-    """Helper function to compile counts and store as JSON"""
-    import json
-    import fsspec
-    
-    # Get token counts
-    token_counts = get_num_rows_from_tokenized_datasets(config.tokenization_steps)
-    
-    # Store as JSON using fsspec for GCS compatibility
-    output_path = config.output_path
-    output_file_path = f"{output_path}/row_counts.json"
-    
-    # Create directory if it doesn't exist
-    fs, path = fsspec.core.url_to_fs(output_path)
-    fs.makedirs(path, exist_ok=True)
-    
-    # Write JSON file using fsspec
-    with fsspec.open(output_file_path, 'w') as f:
-        json.dump(token_counts, f, indent=2)
-        logger.info(f"Wrote row counts to {output_file_path}")
-    
-    return output_file_path
-
-def compile_and_store_num_rows_step(tokenization_steps: dict[str, list[ExecutorStep]]) -> ExecutorStep:
-    """
-    Creates an ExecutorStep that compiles token counts from tokenized datasets.
-    We need this to 1) calculate number of epochs, 2) decide how to sample given a token budget
-    
-    Previously, we manually compute and compile this dict, which makes it impossible to run
-    experiments end-to-end.
-    
-    Args:
-        tokenization_steps: Dictionary mapping dataset short names to their tokenization ExecutorSteps
-        
-    Returns:
-        ExecutorStep that computes and returns token counts as dictionary
-    """
-
-    # Flatten the tokenization steps (each value is a list with one step)
-    flattened_steps = {name: steps[0] for name, steps in tokenization_steps.items()}
-    
-    return ExecutorStep(
-        name="scratch/thinking_sft/compile_row_counts",
-        fn=_compile_and_store_num_rows,
-        config=CompileTokenCountsConfig(tokenization_steps=flattened_steps),
-    )
-
-
-def get_num_tokens_from_tokenized_datasets(transform_executor_steps: dict[str, str]) -> dict[str, int]:
-    """
-    Get the number of tokens from tokenized datasets stored in GCS.
-    
-    Args:
-        transform_executor_steps: Dictionary mapping dataset short names to their GCS tokenized paths
-        
-    Returns:
-        Dictionary mapping dataset names to their total token counts
-    """
-    from levanter.data.text import load_lm_dataset_cache, TextLmDatasetFormat
-    from levanter.compat.hf_checkpoints import load_tokenizer
-    from experiments.marin_models import marin_tokenizer
-    
-    # Load the actual tokenizer object
-    tokenizer = load_tokenizer(marin_tokenizer)
-    
-    token_counts = {}
-    
-    for ds_short_name, gcs_tokenized_path in transform_executor_steps.items():
-        # Construct the cache path for the train split
-        cache_path = f"{gcs_tokenized_path}/train"
-        
-        # Load the cache using Levanter's load_lm_dataset_cache function
-        # We use TextLmDatasetFormat as the default format since we're just counting tokens
-        cache = load_lm_dataset_cache(
-            cache_path,
-            format=TextLmDatasetFormat(),
-            tokenizer=tokenizer,
-            enforce_eos=True
-        )
-        
-        # Wait for the cache to be fully loaded
-        cache.await_finished()
-        
-        # Get the total number of tokens from the input_ids store
-        total_tokens = cache.store.tree["input_ids"].data_size
-        token_counts[ds_short_name] = total_tokens
-        
-        logger.info(f"Dataset {ds_short_name}: {total_tokens:,} tokens")
-    
-    return token_counts
-
-def _compile_and_store_num_tokens(config: CompileTokenCountsConfig) -> str:
-    """Helper function to compile token counts and store as JSON"""
-    token_counts = get_num_tokens_from_tokenized_datasets(config.tokenization_steps)
-    
-    # Store as JSON using fsspec for GCS compatibility
-    output_path = config.output_path
-    output_file_path = f"{output_path}/token_counts.json"
-    
-    # Create directory if it doesn't exist
-    fs, path = fsspec.core.url_to_fs(output_path)
-    fs.makedirs(path, exist_ok=True)
-    
-    # Write JSON file using fsspec
-    with fsspec.open(output_file_path, 'w') as f:
-        json.dump(token_counts, f, indent=2)
-        logger.info(f"Wrote token counts to {output_file_path}")
-    
-    return output_file_path
-
-def compile_and_store_num_tokens_step(tokenization_steps: dict[str, list[ExecutorStep]]) -> ExecutorStep:
-    """
-    Creates an ExecutorStep that compiles token counts from tokenized datasets.
-    We need this to 1) calculate number of epochs, 2) decide how to sample given a token budget
-    
-    Previously, we manually compute and compile this dict, which makes it impossible to run
-    experiments end-to-end.
-    
-    Args:
-        tokenization_steps: Dictionary mapping dataset short names to their tokenization ExecutorSteps
-        
-    Returns:
-        ExecutorStep that computes and returns token counts as dictionary
-    """
-    # Flatten the tokenization steps (each value is a list with one step)
-    flattened_steps = {name: steps[0] for name, steps in tokenization_steps.items()}
-    
-    return ExecutorStep(
-        name="scratch/thinking_sft/compile_token_counts",
-        fn=_compile_and_store_num_tokens,
-        config=CompileTokenCountsConfig(tokenization_steps=flattened_steps),
-    )
-
-
-
-
 # Define datasets
 from exp808_sft_mixture import DATASETS as EXP808_DATASETS
 DATASETS = {
@@ -234,6 +83,7 @@ def download_transform_tokenize_compile_steps():
     # Compile token counts
     ALL_STEPS.append(compile_and_store_num_rows_step(TOKENIZATION_STEPS))
     ALL_STEPS.append(compile_and_store_num_tokens_step(TOKENIZATION_STEPS))
+    
     return ALL_STEPS
 
 ########### Main ###########
