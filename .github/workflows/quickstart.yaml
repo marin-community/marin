@@ -40,7 +40,7 @@ jobs:
         run: |
           # install uv
           pip install uv
-          uv pip install --system -e . --torch_backend=cpu
+          uv pip install --system -e . --torch-backend=cpu
         
 
       # Start Ray cluster locally; We give cpus as 64 since we don't want Ray to get stuck in infinite loop trying to
