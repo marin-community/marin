@@ -520,15 +520,19 @@ class Executor:
         self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
+        if not is_local_ray_cluster():
+            strategy = NodeAffinitySchedulingStrategy(
+                node_id=ray.get_runtime_context().get_node_id(),
+                soft=False,
+            )
+        else:
+            strategy = None
         self.status_actor: StatusActor = StatusActor.options(
             name="status_actor",
             get_if_exists=True,
             lifetime="detached",
             # This is to ensure that the status actor is only schduled on the headnode
-            scheduling_strategy=NodeAffinitySchedulingStrategy(
-                node_id=ray.get_runtime_context().get_node_id(),
-                soft=False,
-            ),
+            scheduling_strategy=strategy,
         ).remote()
         # TODO: Add a design docstring of how status_actor works
 
@@ -570,14 +574,131 @@ class Executor:
             logger.info(f"### Running {len(steps_to_run)} steps out of {len(self.steps)} ###")
 
         logger.info(f"### Launching {len(steps_to_run)} steps ###")
-        for step in steps_to_run:
-            self.run_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
+
+        self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
 
         logger.info("### Writing metadata ###")
         self.write_infos()
 
         logger.info("### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
+
+    def _run_steps(
+        self,
+        steps_to_run: list[ExecutorStep],
+        *,
+        dry_run: bool,
+        force_run_failed: bool,
+    ) -> None:
+        remaining_deps: dict[ExecutorStep, set[ExecutorStep]] = {
+            step: set(dep for dep in self.dependencies[step] if dep in steps_to_run) for step in steps_to_run
+        }
+        dependents: dict[ExecutorStep, list[ExecutorStep]] = {step: [] for step in steps_to_run}
+        for step, deps in remaining_deps.items():
+            for dep in deps:
+                dependents[dep].append(step)
+
+        ready = [step for step, deps in remaining_deps.items() if not deps]
+        running: dict[ExecutorStep, tuple[ray.ObjectRef, bool]] = {}
+
+        while ready or running:
+            while ready:
+                step = ready.pop()
+                ref, ran = self._launch_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
+                self.refs[step] = ref
+                running[step] = (ref, ran)
+
+            if not running:
+                break
+
+            done_refs = self._filter_unique_waitables(running)
+            for ref in done_refs:
+                finished_step = next(step for step, r in running.items() if r[0] == ref)
+                status_path = get_status_path(self.output_paths[finished_step])
+                ran = running[finished_step][1]
+                try:
+                    ray.get(ref)
+                except Exception:
+                    message = traceback.format_exc()
+                    append_status(status_path, STATUS_FAILED, message=message)
+                    raise
+                else:
+                    if ran:
+                        append_status(status_path, STATUS_SUCCESS)
+
+                running.pop(finished_step)
+                for child in dependents.get(finished_step, []):
+                    remaining_deps[child].remove(finished_step)
+                    if not remaining_deps[child]:
+                        ready.append(child)
+
+    def _filter_unique_waitables(self, running):
+        # Ray now requires the waitables be unique, so we filter them out.
+        unique_refs = set()
+        out = []
+        for ref, _ in running.values():
+            if ref not in unique_refs:
+                unique_refs.add(ref)
+                out.append(ref)
+        done_refs, _ = ray.wait(out, num_returns=1)
+        return done_refs
+
+    def _launch_step(self, step: ExecutorStep, *, dry_run: bool, force_run_failed: bool) -> tuple[ray.ObjectRef, bool]:
+        config = self.configs[step]
+        config_version = self.versions[step]["config"]
+        output_path = self.output_paths[step]
+
+        logger.info(f"{step.name}: {get_fn_name(step.fn)}")
+        logger.info(f"  output_path = {output_path}")
+        logger.info(f"  config = {json.dumps(config_version, cls=CustomJsonEncoder)}")
+        for i, dep in enumerate(self.dependencies[step]):
+            logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
+
+        if step.pip_dependency_groups is not None:
+            pip_dependencies = get_pip_dependencies(step.pip_dependency_groups)
+        else:
+            pip_dependencies = None
+
+        logger.info(f"  pip_dependencies = {pip_dependencies}")
+
+        if not dry_run:
+            step_name = f"{step.name}: {get_fn_name(step.fn)}"
+
+            ray_task_id = ray.get_runtime_context().get_task_id()
+            should_execute = should_run(output_path, step_name, self.status_actor, ray_task_id, force_run_failed)
+            status_path = get_status_path(output_path)
+            if not should_execute:
+                append_status(
+                    status_path,
+                    STATUS_SUCCESS,
+                    ray_task_id=ray_task_id,
+                    message="Step was already successful",
+                )
+                return self._dry_run_result, False
+
+            append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
+
+            runtime_env = RuntimeEnv(pip=pip_dependencies)
+
+            # see if we should be using uv:
+            # cf https://www.anyscale.com/blog/uv-ray-pain-free-python-dependencies-in-clusters#using-uv-in-a-ray-job
+            if os.system("which uv >/dev/null 2>&1") == 0:
+                runtime_env["py_executable"] = "uv run --active"
+
+            if isinstance(step.fn, ray.remote_function.RemoteFunction):
+                ref = step.fn.options(
+                    name=f"{get_fn_name(step.fn, short=True)}:{step.name}", runtime_env=runtime_env
+                ).remote(config)
+            else:
+                remote_fn = ray.remote(step.fn)
+                ref = remote_fn.options(
+                    name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
+                    runtime_env=runtime_env,
+                ).remote(config)
+
+            return ref, True
+
+        return self._dry_run_result, False
 
     def _compute_transitive_deps(self, steps: list[ExecutorStep], run_steps: list[str]) -> list[ExecutorStep]:
         """
@@ -786,52 +907,6 @@ class Executor:
         with fsspec.open(self.executor_info_path, "w") as f:
             print(json.dumps(asdict(self.executor_info), indent=2, cls=CustomJsonEncoder), file=f)
 
-    def run_step(self, step: ExecutorStep, dry_run: bool, force_run_failed: bool) -> None:
-        """
-        Return a Ray object reference to the result of running the `step`.
-
-        If the step has already been run, returns the result of the previous run.
-
-        Args:
-            step: The step to run.
-            dry_run: If True, only print out what needs to be done.
-            force_run_failed: If True, run step even if is already ran (including if it failed)
-        """
-        config = self.configs[step]
-        config_version = self.versions[step]["config"]
-        output_path = self.output_paths[step]
-
-        # Print information about this step
-        logger.info(f"{step.name}: {get_fn_name(step.fn)}")
-        logger.info(f"  output_path = {output_path}")
-        logger.info(f"  config = {json.dumps(config_version, cls=CustomJsonEncoder)}")
-        for i, dep in enumerate(self.dependencies[step]):
-            logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
-
-        dependencies = [self.refs[dep] for dep in self.dependencies[step] if dep in self.refs]
-        name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
-
-        if step.pip_dependency_groups is not None:
-            pip_dependencies = get_pip_dependencies(step.pip_dependency_groups)
-        else:
-            pip_dependencies = None
-
-        if not dry_run:
-            step_name = f"{step.name}: {get_fn_name(step.fn)}"
-            self.refs[step] = execute_after_dependencies.options(
-                name=name,
-                runtime_env=RuntimeEnv(
-                    pip=pip_dependencies,
-                ),
-                # TODO: this is kind of gross, but the overhead of instantiating a separate ray task
-                # that only blocks is pretty wasteful. Would be better to not make 1 task per step, but
-                # this is a good first start
-                num_cpus=0.001 if isinstance(step.fn, ray.remote_function.RemoteFunction) else 1,
-            ).remote(step.fn, step_name, config, dependencies, output_path, self.status_actor, force_run_failed)
-        else:
-            # Necessary as we call ray.get on all the deps in execute_after_dependencies
-            self.refs[step] = self._dry_run_result
-
     # caching saves ~10% off some tests
     @cached_property
     def _dry_run_result(self):
@@ -956,68 +1031,6 @@ def should_run(
     else:
         logger.info(f"Step {step_name} has already succeeded. Status: {status}")
         return False
-
-
-@ray.remote
-def execute_after_dependencies(
-    fn: ExecutorFunction,
-    step_name: str,
-    config: dataclass,
-    dependencies: list[ray.ObjectRef],
-    output_path: str,
-    status_actor: StatusActor,
-    force_run_failed: bool = False,
-):
-    """
-    Run a function `fn` with the given `config`, after all the `dependencies` have finished.
-
-    """
-
-    ray_task_id = ray.get_runtime_context().get_task_id()
-
-    status_path = get_status_path(output_path)
-
-    try:
-        if not should_run(output_path, step_name, status_actor, ray_task_id, force_run_failed):
-            append_status(status_path, STATUS_SUCCESS, ray_task_id=ray_task_id, message="Step was already successful")
-            return
-    except PreviousTaskFailedError as e:
-        # Failed due to some exception
-        message = traceback.format_exc()
-        append_status(status_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
-        raise e
-    except Exception as e:
-        logger.error(f"Error while checking if the step should run [This is a Ray related Error]: {e}")
-        raise e
-
-    append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
-
-    # Get all the dependencies
-    try:
-        ray.get(dependencies)
-    except Exception as e:
-        # Failed due to some exception
-        message = traceback.format_exc()
-        append_status(status_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id)
-        raise e
-
-    # Call fn(config)
-    append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
-    try:
-        if isinstance(fn, ray.remote_function.RemoteFunction):
-            ray.get(fn.remote(config))
-        elif isinstance(fn, Callable):
-            fn(config)
-        else:
-            raise ValueError(f"Expected a Callable or Ray function, but got {fn}")
-    except Exception as e:
-        # Failed due to some exception
-        message = traceback.format_exc()
-        # Release the lock
-        append_status(status_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
-        raise e
-
-    append_status(status_path, STATUS_SUCCESS, ray_task_id=ray_task_id)
 
 
 def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool = False):
