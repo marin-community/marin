@@ -49,8 +49,6 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         # From https://github.com/EleutherAI/lm-evaluation-harness?tab=readme-ov-file#model-apis-and-inference-servers
         # Run lm_eval with the model and the specified evals
         try:
-            # NOTE(chris): This is not supported on TPUs
-            # set_cuda_visible_devices()
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
 
@@ -76,7 +74,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
 
                 wandb_args_dict = simple_parse_args_string(f"project=marin,job_type=eval,name={model.name}")
                 wandb_config_args_dict = simple_parse_args_string("")
-                wandb_logger = WandbLogger(**wandb_args_dict, **wandb_config_args_dict)
+                wandb_logger = WandbLogger(init_args=wandb_args_dict, config_args=wandb_config_args_dict)
 
                 results = simple_evaluate(
                     model="vllm",
