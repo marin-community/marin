@@ -56,6 +56,9 @@ jobs:
       - name: Run the quickstart script
         shell: bash -l {0}
         run: |
-         JAX_TRACEBACK_FILTERING=off PYTHONPATH=. uv run python tests/integration_test.py
+         uv run python tests/integration_test.py
         env: # Or as an environment variable
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          JAX_TRACEBACK_FILTERING: off
+          PYTHONPATH: .:${{ github.workspace }}/src:${{ github.workspace }}/tests
+          WANDB_MODE: offline
