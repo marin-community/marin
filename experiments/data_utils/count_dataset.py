@@ -28,7 +28,7 @@ class CompileCountsConfig:
         output_path: Path where the compiled counts will be stored
     """
     tokenization_steps: dict[str, str]
-    output_dir: str = this_output_path()
+    output_path: str = this_output_path()
 
 def get_num_rows_from_tokenized_datasets(transform_executor_steps: dict[str, str]) -> dict[str, int]:
     """
@@ -60,7 +60,7 @@ def get_num_rows_from_tokenized_datasets(transform_executor_steps: dict[str, str
     return size_dict
 
 def _compile_and_store_num_rows(
-    config: CompileCountsConfig,
+        config: CompileCountsConfig,
     ) -> str:
     """
     Helper function to compile row counts and store as JSON.
@@ -84,7 +84,7 @@ def _compile_and_store_num_rows(
     token_counts = get_num_rows_from_tokenized_datasets(config.tokenization_steps)
     
     # Store as JSON using fsspec for GCS compatibility
-    output_path = config.output_dir
+    output_path = config.output_path
     output_filepath = f"{output_path}/row_counts.json"
     
     # Create directory if it doesn't exist
@@ -135,12 +135,12 @@ def compile_and_store_num_rows_step(
         output_dir = this_output_path()
     
     return ExecutorStep(
-        name="scratch/thinking_sft/compile_row_counts",
+        name="compile_row_counts",
         fn=_compile_and_store_num_rows,
         config=CompileCountsConfig(
             tokenization_steps=flattened_steps,
-            output_dir=output_dir,
         ),
+        override_output_path=output_dir,
     )
 
 
@@ -203,7 +203,7 @@ def _compile_and_store_num_tokens(
     token_counts = get_num_tokens_from_tokenized_datasets(config.tokenization_steps)
     
     # Store as JSON using fsspec for GCS compatibility
-    output_dir = config.output_dir
+    output_dir = config.output_path
     output_filepath = f"{output_dir}/token_counts.json"
     
     # Create directory if it doesn't exist
@@ -257,12 +257,12 @@ def compile_and_store_num_tokens_step(
         output_dir = this_output_path()
     
     return ExecutorStep(
-        name="scratch/thinking_sft/compile_token_counts",
+        name="compile_token_counts",
         fn=_compile_and_store_num_tokens,
         config=CompileCountsConfig(
             tokenization_steps=flattened_steps,
-            output_dir=output_dir,
         ),
+        override_output_path=output_dir,
     )
 
 
