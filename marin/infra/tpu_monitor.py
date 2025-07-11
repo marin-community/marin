@@ -159,3 +159,31 @@ def start_tpu_monitor_on_head(
         config_path=config_path,
         dry_run=dry_run,
     )
+
+
+if __name__ == "__main__":
+    import argparse
+
+    ray.init("auto", namespace="marin")
+
+    args = argparse.ArgumentParser(description="Start a TPU monitor on the Ray head node.")
+    args.add_argument("--project", type=str, help="GCP project ID", default=None)
+    args.add_argument("--zone", type=str, help="GCP zone", default=None)
+    args.add_argument("--cluster_name", type=str, help="Ray cluster name", default=None)
+    args.add_argument("--wait_seconds", type=int, help="Wait time before deleting a TPU", default=600)
+    args.add_argument(
+        "--config_path", type=str, help="Path to Ray bootstrap config", default="~/ray_bootstrap_config.yaml"
+    )
+    args.add_argument("--dry_run", action="store_true", help="Run in dry run mode (do not delete TPUs)")
+
+    args = args.parse_args()
+
+    monitor = start_tpu_monitor_on_head(
+        project=args.project,
+        zone=args.zone,
+        cluster_name=args.cluster_name,
+        wait_seconds=args.wait_seconds,
+        config_path=args.config_path,
+        dry_run=args.dry_run,
+    )
+    print("TPU Monitor started:", monitor)
