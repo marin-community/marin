@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -10,6 +11,7 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 logger = logging.getLogger("ray")
 
+
 BAD_STATES = {
     tpu_v2alpha1.Node.State.PREEMPTED,
     tpu_v2alpha1.Node.State.TERMINATED,
@@ -19,7 +21,11 @@ GOOD_STATE = tpu_v2alpha1.Node.State.READY
 
 @ray.remote
 class TPUMonitor:
-    """Monitor TPUs in a Ray cluster and clean up stale ones."""
+    """
+    Monitor TPUs in a Ray cluster and clean up stale ones.
+    Automatically deletes TPUs that are in a bad state or have an incorrect number of workers
+    registered in Ray (after a specified wait time).
+    """
 
     def __init__(
         self,
@@ -49,6 +55,15 @@ class TPUMonitor:
         self.dry_run = dry_run
         self.incomplete_since: dict[str, float] = {}
 
+        # start a background thread to run the monitor
+        self._stop_event = threading.Event()
+        self._monitor_thread = threading.Thread(
+            target=self._run,
+            kwargs={"interval_s": 60},
+            daemon=True,
+        )
+        self._monitor_thread.start()
+
     def _cluster_resources(self) -> dict[str, float]:
         """Return cluster resource counts."""
         try:
@@ -58,15 +73,18 @@ class TPUMonitor:
             return {}
 
     def _delete_node(self, name: str, reason: str) -> None:
-        logger.warning("Deleting TPU %s due to %s", name, reason)
         if self.dry_run:
+            logger.warning(
+                "Would delete TPU %s due to %s (dry run mode)",
+            )
             return
         try:
+            logger.warning("Deleting TPU %s due to %s", name, reason)
             self.tpu_client.delete_node(name=name)
         except Exception as e:
             logger.error("Failed to delete TPU %s: %s", name, e)
 
-    def check_once(self) -> None:
+    def _check_once(self) -> None:
         resources = self._cluster_resources()
         parent = f"projects/{self.project}/locations/{self.zone}"
         nodes: Iterable[tpu_v2alpha1.Node] = self.tpu_client.list_nodes(parent=parent)
@@ -87,17 +105,22 @@ class TPUMonitor:
             expected = len(getattr(node, "network_endpoints", []))
             actual = int(resources.get(name, 0))
             if actual != expected:
-                first = self.incomplete_since.setdefault(name, now)
-                if now - first > self.wait_seconds:
-                    self._delete_node(node.name, "wrong worker count")
-                    self.incomplete_since.pop(name, None)
+                if actual > expected:
+                    logger.warning("TPU %s has more workers (%d) than expected (%d). Deleting.", name, actual, expected)
+                    self._delete_node(node.name, "too many workers")
+                    continue
+                else:
+                    first = self.incomplete_since.setdefault(name, now)
+                    if now - first > self.wait_seconds:
+                        self._delete_node(node.name, "wrong worker count")
+                        self.incomplete_since.pop(name, None)
             else:
                 self.incomplete_since.pop(name, None)
 
-    def run(self, interval_s: int = 60) -> None:
+    def _run(self, interval_s: int = 60) -> None:
         """Run the monitor loop."""
-        while True:
-            self.check_once()
+        while not self._stop_event.is_set():
+            self._check_once()
             time.sleep(interval_s)
 
 
@@ -110,7 +133,7 @@ def start_tpu_monitor_on_head(
     config_path: str | Path = "~/ray_bootstrap_config.yaml",
     dry_run: bool = False,
 ):
-    """Launch :class:`TPUMonitor` on the Ray head node."""
+    """Launch TpuMonitor on the Ray head node."""
 
     head_ip = ray.util.get_node_ip_address()
     node_id = next(
