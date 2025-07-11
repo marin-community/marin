@@ -114,18 +114,27 @@ def test_grade_answer_with_open_math_reasoning_env():
     env = OpenMathReasoningEnv(tokenizer=None)
 
     answer = env.train_examples[0]["answer"]
-    assert grade_answer(
-        given_answer='\\( x \\geq \\frac{2}{a-b} \\) or \\( x \\leq \\frac{2}{a+b} \\) or \\( x \\leq 0 \\)',
-        ground_truth=answer
-    ) is True
-    assert grade_answer(
-        given_answer='\\( x \\geq \\frac{2}{a-b} \\), \\( x \\leq \\frac{2}{a+b} \\), \\( x \\leq 0 \\)',
-        ground_truth=answer
-    ) is True
-    assert grade_answer(
-        given_answer='\\( x \\geq \\frac{2}{a-b} \\) or \\( x \\leq \\frac{2}{a+b} \\) or \\( x \\geq 0 \\)',
-        ground_truth=answer
-    ) is False
+    assert (
+        grade_answer(
+            given_answer="\\( x \\geq \\frac{2}{a-b} \\) or \\( x \\leq \\frac{2}{a+b} \\) or \\( x \\leq 0 \\)",
+            ground_truth=answer,
+        )
+        is True
+    )
+    assert (
+        grade_answer(
+            given_answer="\\( x \\geq \\frac{2}{a-b} \\), \\( x \\leq \\frac{2}{a+b} \\), \\( x \\leq 0 \\)",
+            ground_truth=answer,
+        )
+        is True
+    )
+    assert (
+        grade_answer(
+            given_answer="\\( x \\geq \\frac{2}{a-b} \\) or \\( x \\leq \\frac{2}{a+b} \\) or \\( x \\geq 0 \\)",
+            ground_truth=answer,
+        )
+        is False
+    )
 
     answer = env.train_examples[1]["answer"]
     assert grade_answer(given_answer=" 20", ground_truth=answer) is True
@@ -145,6 +154,6 @@ def test_grade_answer_with_numina_math_env():
     env = NuminaMathEnv(tokenizer=None)
 
     answer = env.train_examples[0]["answer"]
-    assert grade_answer(given_answer='\\frac{13}{6}', ground_truth=answer) is True
-    assert grade_answer(given_answer='+\\frac{13}{6}', ground_truth=answer) is True
-    assert grade_answer(given_answer='-\\frac{13}{6}', ground_truth=answer) is False
+    assert grade_answer(given_answer="\\frac{13}{6}", ground_truth=answer) is True
+    assert grade_answer(given_answer="+\\frac{13}{6}", ground_truth=answer) is True
+    assert grade_answer(given_answer="-\\frac{13}{6}", ground_truth=answer) is False
