@@ -444,7 +444,7 @@ def main(
     num_eval_examples: int,
     save_model_freq: int,
     wandb_project: str,
-    env_name: str = "math",
+    environments_path: str = "environments.json",
     inference_param_dtype: str = "bf16",
     inference_activation_dtype: str = "bf16",
     training_param_dtype: str = "fp32",
@@ -599,12 +599,8 @@ def main(
         if tokenizer_is_temp:
             os.remove(model_paths["tokenizer"])
 
-        if env_name == "math":
-            environment = MathEnv(tokenizer=tokenizer)
-        elif env_name == "swe_bench":
-            environment = SWEBenchEnv(tokenizer=tokenizer)
-        else:
-            raise ValueError(f"Unknown env_name: {env_name}")
+        # Initialize environment with tokenization parameters
+        environment = load_environments_from_config(environments_path, tokenizer)
 
         # Initialize logger
         if "enable" not in logger_config:

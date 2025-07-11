@@ -65,6 +65,25 @@ def test_open_math_reasoning_env_loaded():
 
 
 @pytest.mark.skip(reason="Need to fix environment import.")
+def test_numina_math_env_loaded():
+    from marin.post_training.environments.numina_math_env import NuminaMathEnv
+
+    env = NuminaMathEnv(tokenizer=None)
+
+    assert len(env.train_examples) == 836_291
+    assert len(env.eval_examples) == 98
+
+    # Ensure we get the same examples every time we load the environment
+    assert env.train_examples[0]["prompt"].startswith(
+        "Consider the terms of an arithmetic sequence: $-\\frac{1}{3}, y+2, 4y, \\ldots$. Solve for $y$."
+    )
+    assert env.eval_examples[16]["prompt"].startswith(
+        "Given that the sequence $\\{a_n\\}$ is an arithmetic sequence, if $a_3 + a_{11} = 24$ and "
+        "$a_4 = 3$, then the common difference of the sequence $\\{a_n\\}$ is ______."
+    )
+
+
+@pytest.mark.skip(reason="Need to fix environment import.")
 def test_grade_answer_with_olym_math_env():
     """
     Test whether `grade_answer` works correctly with OlymMathEnv
@@ -117,3 +136,15 @@ def test_grade_answer_with_open_math_reasoning_env():
     assert grade_answer(given_answer="-\\frac{2}{3}", ground_truth=answer) is True
     assert grade_answer(given_answer="\\(-\\frac{4}{3}\\)", ground_truth=answer) is False
     assert grade_answer(given_answer="-\\frac{1}{3}", ground_truth=answer) is False
+
+
+@pytest.mark.skip(reason="Need to fix environment import.")
+def test_grade_answer_with_numina_math_env():
+    from marin.post_training.environments.numina_math_env import NuminaMathEnv
+
+    env = NuminaMathEnv(tokenizer=None)
+
+    answer = env.train_examples[0]["answer"]
+    assert grade_answer(given_answer='\\frac{13}{6}', ground_truth=answer) is True
+    assert grade_answer(given_answer='+\\frac{13}{6}', ground_truth=answer) is True
+    assert grade_answer(given_answer='-\\frac{13}{6}', ground_truth=answer) is False
