@@ -20,7 +20,7 @@ GOOD_STATE = tpu_v2alpha1.Node.State.READY
 
 
 @ray.remote
-class TPUMonitor:
+class TpuMonitor:
     """
     Monitor TPUs in a Ray cluster and clean up stale ones.
     Automatically deletes TPUs that are in a bad state or have an incorrect number of workers
@@ -63,6 +63,7 @@ class TPUMonitor:
             daemon=True,
         )
         self._monitor_thread.start()
+        logger.info(f"TpuMonitor started for project={self.project}, zone={self.zone}, cluster_name={self.cluster_name}")
 
     def _cluster_resources(self) -> dict[str, float]:
         """Return cluster resource counts."""
@@ -134,6 +135,7 @@ def start_tpu_monitor_on_head(
     dry_run: bool = False,
 ):
     """Launch TpuMonitor on the Ray head node."""
+    logger.info("Ensuring TpuMonitor is running on the Ray head node...")
 
     head_ip = ray.util.get_node_ip_address()
     node_id = next(
@@ -145,7 +147,7 @@ def start_tpu_monitor_on_head(
 
     strategy = NodeAffinitySchedulingStrategy(node_id=node_id, soft=False)
 
-    return TPUMonitor.options(
+    return TpuMonitor.options(
         num_cpus=0,
         scheduling_strategy=strategy,
         lifetime="detached",

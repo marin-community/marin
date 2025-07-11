@@ -1,5 +1,5 @@
 """Infrastructure helpers."""
 
-from .tpu_monitor import TPUMonitor, start_tpu_monitor_on_head
+from .tpu_monitor import TpuMonitor, start_tpu_monitor_on_head
 
-__all__ = ["TPUMonitor", "start_tpu_monitor_on_head"]
+__all__ = ["TpuMonitor", "start_tpu_monitor_on_head"]
