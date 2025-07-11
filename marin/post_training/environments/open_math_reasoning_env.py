@@ -44,9 +44,7 @@ class OpenMathReasoningEnv(MathEnv):
 
         # Load the dataset from HuggingFace.
         # Since only a test split is available, reserve 20% for evals and 80% for training.
-        hf_dataset = datasets.load_dataset(
-            self.HF_DATASET_NAME, split="cot", streaming=True, trust_remote_code=True
-        )
+        hf_dataset = datasets.load_dataset(self.HF_DATASET_NAME, split="cot", streaming=True, trust_remote_code=True)
 
         all_examples: list[dict] = []
         seen_examples: set[str] = set()
