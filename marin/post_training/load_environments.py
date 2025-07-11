@@ -5,6 +5,7 @@ from transformers import AutoTokenizer
 
 from .environments.marin_env import MarinEnv
 from .environments.math_env import MathEnv
+from .environments.numina_math_env import NuminaMathEnv
 from .environments.olym_math_env import OlymMathEnv
 from .environments.open_math_reasoning_env import OpenMathReasoningEnv
 from .environments.swe_bench_env import SWEBenchEnv
@@ -12,6 +13,7 @@ from .environments.swe_bench_env import SWEBenchEnv
 # Specify environments here
 ENVIRONMENT_NAME_TO_CLASS = {
     "math": MathEnv,
+    "numina_math": NuminaMathEnv,
     "olym_math": OlymMathEnv,
     "open_math_reasoning": OpenMathReasoningEnv,
     "swe_bench": SWEBenchEnv,
@@ -52,13 +54,13 @@ def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer) -> MarinEnv:
     return env_cls(tokenizer=tokenizer, **kwargs)
 
 
-def load_environments_from_config(conf_path: str, tokenizer: AutoTokenizer) -> MarinEnv:
+def load_environments_from_config(json_path: str, tokenizer: AutoTokenizer) -> MarinEnv:
     """
     Load first environment entry from a JSON config file.
 
     # TODO: support multiple environments. For now, we only load the first one.
     """
-    with open(conf_path, "r", encoding="utf-8") as f:
+    with open(json_path, "r", encoding="utf-8") as f:
         conf = json.load(f)
     entries = conf.get("entries", [])
     if not entries:
