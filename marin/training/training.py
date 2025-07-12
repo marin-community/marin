@@ -13,6 +13,7 @@ from levanter.main import train_lm
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
+from marin.infra import start_tpu_monitor_on_head
 from marin.resources import CpuOnlyConfig, ResourceConfig, TpuPodConfig
 from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
 
@@ -195,6 +196,9 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     # TODO: abstract this?
     if isinstance(hw_config, TpuPodConfig):
+        # ensure we're running the TPu monitor
+        start_tpu_monitor_on_head()
+
         if hw_config.slice_count == 1:
             return run_on_pod_resumable(train_lm_task, config.resources.accelerator_descriptor(), max_retries_failure=10)
         else:
