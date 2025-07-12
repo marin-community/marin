@@ -35,8 +35,7 @@ dependencies = [
     "sentencepiece",
     "lz4",
     "wandb<=0.19.9",
-    "markdownify",
-    "html2text",
+    "openai",
 ]
 
 [project.optional-dependencies]
@@ -52,6 +51,14 @@ dev = [
     "types-PyYAML",
     "types-requests",
     "types-six",
+    "openai-responses",
+    "markdownify==0.12.1",
+    "html2text==2024.2.26", # TODO :: Check pin?
+]
+
+math = [
+    "pylatexenc",
+    "sympy",
 ]
 
 cuda12 = [
@@ -79,6 +86,40 @@ docs = [
     "mkdocs-include-markdown-plugin>=7.1.5",
 ]
 
+crawl = [
+    "w3lib",
+    "datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
+    "datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
+    "beautifulsoup4",
+    "resiliparse",
+    "trafilatura",
+    "warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi",
+    "rbloom-gcs==1.5.6",
+    "google-cloud-bigquery",
+    "google-cloud-storage-transfer~=1.0",
+    "boto3==1.35.23",
+    "readabilipy",
+    "readability-lxml",
+    "py7zr",
+    "markdownify==0.12.1",
+    "htmlmin",
+    "datasets>=2.18.0",
+    "py-asciimath",
+    "scipy==1.13.1",
+    "spacy",
+    "cupy-cuda12x==13.3.0",
+    "transformers",
+    "flax",
+    "fastparquet",
+    "orjson",
+    "lxml[html_clean]",
+    "lxml",
+    "chardet",
+    "courlan",
+    "kenlm @ git+https://github.com/FredHaa/kenlm@fix-build-with-cmake-4.0",
+    "jax[tpu]",
+]
+
 download_transform = [
     "chardet",
     "datasets>=2.18.0",
@@ -93,7 +134,7 @@ download_transform = [
     "lxml[html_clean]",
     "warcio",
     "resiliparse",
-    "trafilatura",
+    "trafilatura>=2.0",
     "boto3==1.35.23",
     "htmlmin",
 ]
@@ -106,7 +147,6 @@ quality_dedup_consolidate = [
     "transformers",
 ]
 tokenize_train = [
-    # "jax[tpu]==0.5.1",
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1359",
     "haliax>=1.4.dev348",
@@ -116,12 +156,36 @@ tokenize_train = [
     "tiktoken",
 ]
 
+post_training = [
+    "gcsfs",
+    "jax==0.5.2",
+    "transformers",
+    "flax==0.10.0",
+    "sentencepiece==0.1.99",
+    "wget==3.2",
+    "jaxtyping",#==0.2.23",
+    "tyro==0.8.11",
+    "tqdm",
+    "wandb",
+    "einops==0.8.0",
+    "numpy<2.0.0",
+    "ringattention==0.1.2",
+    "redis==4.3.4",
+    "Flask==3.0.3",
+    "flask-cors==5.0.0",
+    "sympy",
+    "pylatexenc",
+    "ipython",
+    "datasets",
+    "scalax@git+https://github.com/Sea-Snell/scalax.git",
+]
+
 data_browser = [
     "zstandard==0.23.0",
 ]
 
 eval = [
-    "levanter>=1.2.dev1312",
+    "levanter>=1.2.dev1359",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
 

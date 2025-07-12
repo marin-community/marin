@@ -152,7 +152,7 @@ jobs:
       - name: Start Ray cluster locally
         shell: bash -l {0}
         run: |
-          ray start --head
+          ray start --head --resources='{"head_node": 1}'
 
       - name: Test with pytest
         shell: bash -l {0}
@@ -160,4 +160,4 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           export CI=true # Set CI environment variable; It's needed for tokenization
-          CI=true PYTHONPATH=tests:. pytest --durations=0 --tb=no -v tests/
+          CI=true PYTHONPATH=tests:. pytest --durations=0 --tb=long -vv tests/
