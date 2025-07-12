@@ -176,11 +176,11 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 4
+      TPU: 8
 
   tpu_slice_v5p_512:
     max_workers: 1024
-    min_workers: 8
+    min_workers: 0
     node_config:
       acceleratorType: v5p-512
       runtimeVersion: v2-alpha-tpuv5
@@ -188,7 +188,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 4
+      TPU: 8
 
   tpu_slice_v5p_1024:
     max_workers: 1024
@@ -200,4 +200,4 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 4
+      TPU: 8

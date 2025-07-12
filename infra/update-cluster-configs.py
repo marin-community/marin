@@ -9,10 +9,8 @@ this_path = os.path.dirname(os.path.abspath(__file__))
 cluster_template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 vllm_template_path = os.path.join(this_path, "marin-vllm-template.yaml")
 
-# LAtest tahs ABh:  latest 4a47ffc0 20250305
-
 DOCKER_TAGS = {
-    "us-central2": "8b035b60",
+    "us-central2": "49c6251f",
     "us-central2-compress": "8b035b60",
     "us-central1": "4a47ffc0",
     "big-run": "8b035b60",
@@ -196,7 +194,7 @@ generation_configs = {
         "runtime_version": "v2-alpha-tpuv5",
         "base_worker": "8",
         "slices": [8, 16, 32, 64, 128, 256, 512, 1024],
-        "num_tpus": 8,
+        "num_tpus": 4,
         "tpus_worker": 8,
     },
     "v6e": {
