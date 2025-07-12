@@ -13,7 +13,7 @@ from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_con
 from experiments.pretraining_datasets import dolmino
 from experiments.quality_classifier_experiment_utils import create_steps
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
-from operations.transform.dolmino.filter_dolmino import FilterDolminoConfig, filter_dolmino
+from marin.transform.dolmino.filter_dolmino import FilterDolminoConfig, filter_dolmino
 
 dolmino_stackexchange_jsonl = ExecutorStep(
     name="documents/dolmino_stackexchange",

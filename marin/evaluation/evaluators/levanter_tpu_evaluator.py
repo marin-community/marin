@@ -18,8 +18,12 @@ class LevanterTpuEvaluator(Evaluator, ABC):
 
     # pip packages to install for running levanter's eval_harness on TPUs
     DEFAULT_PIP_PACKAGES: ClassVar[list[Dependency]] = [
-        Dependency(name="levanter>=1.2.dev1163"),
-        Dependency(name="lm-eval @ git+https://github.com/nikil-ravi/lm-evaluation-harness.git@bpb-changes"),
+        Dependency(name="levanter==1.2.dev1359"),
+        Dependency(
+            name=(
+                "git+https://github.com/stanford-crfm/lm-evaluation-harness.git@b1b56a3694ba53534da8445ad9a736e0887c65a5"
+            )
+        ),
     ]
 
     # Where to store checkpoints, cache inference results, etc.
@@ -87,8 +91,9 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         """
 
         @ray.remote(
-            scheduling_strategy=self.scheduling_strategy_fn(resource_config.num_tpu, resource_config.strategy),
+            scheduling_strategy=self._get_scheduling_strategy(resource_config),
             runtime_env=self.get_runtime_env(),
+            max_calls=1,
         )
         @remove_tpu_lockfile_on_exit
         def launch(

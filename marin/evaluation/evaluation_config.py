@@ -73,3 +73,13 @@ class EvaluationConfig:
     """
     Additional keyword arguments to pass to the Ray resources.
     """
+
+    generation_params: dict | None = None
+    """
+    Additional keyword arguments passed to the vLLM sampling params engine
+    """
+
+    apply_chat_template: bool = False
+    """
+    Whether or not this model was trained with a Chat Template in the tokenizer
+    """

@@ -56,7 +56,7 @@ might be:
 
 - If you prefer to manage the output paths yourself, you can not use `versioned`
   fields and specify everything you want in the name.  Note the version will
-  still depend on upstream dependencies.
+  still depend on upstream dependencies and "pseudo-dependencies."
 
 - The pipeline might get too big and unwieldy, in which case we can cut it up by
   specifying a hard-coded path as the input to a step.  Or perhaps we can have
@@ -65,8 +65,15 @@ might be:
 
 - If we decide to rename fields, we can extend `versioned` to take a string of
   the old field name to preserve backward compatibility.
+
+- "Pseudo-dependencies" are dependencies that do not block the execution of
+  the step, but are still included in the version.  This is useful for depending
+   on checkpoints of in-progress training runs, for example. When you run a step
+  that has a pseudo-dependency, it will not wait for the pseudo-dependency to
+  finish executing (or even check if it is executing or failed) before running.
 """
 
+import dataclasses
 import hashlib
 import inspect
 import json
@@ -80,11 +87,13 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import datetime
+from functools import cached_property
 from typing import Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import draccus
 import fsspec
+import levanter.utils.fsspec_utils as fsspec_utils
 import ray
 import ray.remote_function
 from ray.runtime_env import RuntimeEnv
@@ -106,6 +115,7 @@ from marin.execution.executor_step_status import (
 from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
 from marin.utilities.executor_utils import get_pip_dependencies
 from marin.utilities.json_encoder import CustomJsonEncoder
+from marin.utilities.ray_utils import is_local_ray_cluster
 
 logger = logging.getLogger("ray")
 
@@ -157,6 +167,10 @@ class ExecutorStep(Generic[ConfigT]):
         """Refer to the `name` under `self`'s output_path."""
         return InputName(self, name=name)
 
+    def __truediv__(self, other: str) -> "InputName":
+        """Alias for `cd`. That looks more Pythonic."""
+        return InputName(self, name=other)
+
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
         return hash(id(self))
@@ -165,20 +179,49 @@ class ExecutorStep(Generic[ConfigT]):
         """Return a copy of the step with the given output_path."""
         return replace(self, override_output_path=output_path)
 
+    def as_input_name(self) -> "InputName":
+        return InputName(step=self, name=None)
+
 
 @dataclass(frozen=True)
 class InputName:
     """To be interpreted as a previous `step`'s output_path joined with `name`."""
 
-    step: ExecutorStep
+    step: ExecutorStep | None
     name: str | None
+    block_on_step: bool = True
+    """
+    If False, the step that uses this InputName
+    will not block (or attempt to execute) `step`. We use this for
+    documenting dependencies in the config, but where that step might not have technically finished...
+
+    For instance, we sometimes use training checkpoints before the training step has finished.
+
+    These "pseudo-dependencies" still impact the hash of the step, but they don't block execution.
+    """
 
     def cd(self, name: str) -> "InputName":
         return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
 
     def __truediv__(self, other: str) -> "InputName":
-        """Alias for `cd`. That looks more Pythonic."""
-        return InputName(self.step, name=os.path.join(self.name, other) if self.name else other)
+        """Alias for `cd` that looks more Pythonic."""
+        return self.cd(other)
+
+    @staticmethod
+    def hardcoded(path: str) -> "InputName":
+        """
+        Sometimes we want to specify a path that is not part of the pipeline but is still relative to the prefix.
+        Try to use this sparingly.
+        """
+        return InputName(None, name=path)
+
+    def nonblocking(self) -> "InputName":
+        """
+        the step will not block on (or attempt to execute) the parent step.
+
+         (Note that if another step depends on the parent step, it will still block on it.)
+        """
+        return dataclasses.replace(self, block_on_step=False)
 
 
 def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
@@ -194,7 +237,10 @@ def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
     if isinstance(run, ExecutorStep):
         return run
     elif isinstance(run, InputName):
-        return run.step
+        step = run.step
+        if step is None:
+            raise ValueError(f"Hardcoded path {run.name} is not part of the pipeline")
+        return step
     else:
         raise ValueError(f"Unexpected type {type(run)} for run: {run}")
 
@@ -228,7 +274,18 @@ class VersionedValue(Generic[T_co]):
 def versioned(value: T_co) -> VersionedValue[T_co]:
     if isinstance(value, VersionedValue):
         raise ValueError("Can't nest VersionedValue")
+    elif isinstance(value, InputName):
+        # TODO: We have also run into Versioned([InputName(...), ...])
+        raise ValueError("Can't version an InputName")
+
     return VersionedValue(value)
+
+
+def ensure_versioned(value: VersionedValue[T_co] | T_co) -> VersionedValue[T_co]:
+    """
+    Ensure that the value is wrapped in a VersionedValue. If it is already wrapped, return it as is.
+    """
+    return value if isinstance(value, VersionedValue) else VersionedValue(value)
 
 
 def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
@@ -292,7 +349,7 @@ class ExecutorInfo:
     steps: list[ExecutorStepInfo]
 
 
-def get_info_path(output_path: str) -> str:
+def _get_info_path(output_path: str) -> str:
     """Return the `path` of the info file associated with `output_path`."""
     return os.path.join(output_path, ".executor_info")
 
@@ -304,7 +361,22 @@ def dependency_index_str(i: int) -> str:
     return f"DEP[{i}]"
 
 
-def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep], version: dict[str, Any]):
+@dataclass(frozen=True)
+class _Dependencies:
+    """
+    Contains the dependencies of a step, the pseudo-dependencies, and the version of the dependencies.
+    Internal use.
+    """
+
+    dependencies: list[ExecutorStep]
+    """List of dependencies."""
+    pseudo_dependencies: list[ExecutorStep]
+    """List of pseudo-dependencies."""
+    version: dict[str, Any]
+    """Version of the dependencies."""
+
+
+def collect_dependencies_and_version(obj: Any) -> _Dependencies:
     """Recurse through `obj` to find all the versioned values, and return them
     as a dict where the key is the sequence of fields identifying where the
     value resides in obj.  Example:
@@ -316,7 +388,18 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
         {"a": 1, "b.c": 2}
 
     Along the way, compute the list of dependencies.
+
+    Returns:
+        - dependencies: list of `ExecutorStep`s that are dependencies of the
+          current step.
+        - version: dict of versioned values, where the key is the sequence of
+          fields identifying where the value resides in obj.
+        - pseudo_dependencies: list of `ExecutorStep`s that are dependencies of the step but that we won't
+            actually block on
     """
+    pseudo_dependencies: list[ExecutorStep] = []
+    dependencies: list[ExecutorStep] = []
+    version: dict[str, Any] = {}
 
     def recurse(obj: Any, prefix: str):
         new_prefix = prefix + "." if prefix else ""
@@ -325,13 +408,18 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
             obj = output_path_of(obj, None)
 
         if isinstance(obj, VersionedValue):
-            # Just extract the value
             version[prefix] = obj.value
         elif isinstance(obj, InputName):
             # Put string i for the i-th dependency
-            index = len(dependencies)
-            dependencies.append(obj.step)
-            version[prefix] = dependency_index_str(index) + ("/" + obj.name if obj.name else "")
+            if obj.step is not None:
+                index = len(dependencies) + len(pseudo_dependencies)
+                if not obj.block_on_step:
+                    pseudo_dependencies.append(obj.step)
+                else:
+                    dependencies.append(obj.step)
+                version[prefix] = dependency_index_str(index) + ("/" + obj.name if obj.name else "")
+            else:
+                version[prefix] = obj.name
         elif is_dataclass(obj):
             # Recurse through dataclasses
             for field in fields(obj):
@@ -350,8 +438,12 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
 
     recurse(obj, "")
 
+    return _Dependencies(dependencies, pseudo_dependencies, version)
 
-def instantiate_config(config: dataclass, output_path: str, output_paths: dict[ExecutorStep, str]) -> dataclass:
+
+def instantiate_config(
+    config: dataclass, output_path: str, output_paths: dict[ExecutorStep, str], prefix: str
+) -> dataclass:
     """
     Return a "real" config where all the special values (e.g., `InputName`,
     `OutputName`, and `VersionedValue`) have been replaced with
@@ -371,7 +463,10 @@ def instantiate_config(config: dataclass, output_path: str, output_paths: dict[E
             obj = output_path_of(obj)
 
         if isinstance(obj, InputName):
-            return join_path(output_paths[obj.step], obj.name)
+            if obj.step is None:
+                return _make_prefix_absolute_path(prefix, obj.name)
+            else:
+                return join_path(output_paths[obj.step], obj.name)
         elif isinstance(obj, OutputName):
             return join_path(output_path, obj.name)
         elif isinstance(obj, VersionedValue):
@@ -415,6 +510,9 @@ class Executor:
         self.configs: dict[ExecutorStep, dataclass] = {}
         self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
         self.versions: dict[ExecutorStep, dict[str, Any]] = {}
+        # pseudo-dependencies only impact version but don't block execution of descendants
+        # this dict contains is True for steps that are only used as pseudo-dependencies
+        self.is_pseudo_dep: dict[ExecutorStep, bool] = {}
         self.version_strs: dict[ExecutorStep, str] = {}
         self.version_str_to_step: dict[str, ExecutorStep] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
@@ -446,7 +544,7 @@ class Executor:
         Run the pipeline of `ExecutorStep`s.
 
         Args:
-            step: The step to run.
+            steps: The steps to run.
             dry_run: If True, only print out what needs to be done.
             run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
@@ -457,7 +555,8 @@ class Executor:
         for step in steps:
             if isinstance(step, InputName):  # Interpret InputName as the underlying step
                 step = step.step
-            self.compute_version(step)
+            if step is not None:
+                self.compute_version(step, is_pseudo_dep=False)
 
         self.get_infos()
         logger.info(f"### Reading {len(self.steps)} statuses ###")
@@ -465,7 +564,7 @@ class Executor:
         if run_only is not None:
             steps_to_run = self._compute_transitive_deps(self.steps, run_only)
         else:
-            steps_to_run = self.steps
+            steps_to_run = [step for step in self.steps if not self.is_pseudo_dep[step]]
 
         if steps_to_run != self.steps:
             logger.info(f"### Running {len(steps_to_run)} steps out of {len(self.steps)} ###")
@@ -499,6 +598,8 @@ class Executor:
                 if regex.search(step.name):
                     used_regexes.add(i)
                     return True
+
+            return False
 
         # Compute the transitive dependencies of the steps that match the run_steps list
         to_run: list[ExecutorStep] = []
@@ -536,35 +637,35 @@ class Executor:
 
         return to_run
 
-    def compute_hashed_version_str(self, step: ExecutorStep) -> str:
-        version = {
-            "name": step.name,
-            "config": self.versions[step]["config"],
-            "dependencies": [self.versions[dep] for dep in self.dependencies[step]],
-        }
-        return json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)
-
-    def compute_version(self, step: ExecutorStep):
+    def compute_version(self, step: ExecutorStep, is_pseudo_dep: bool):
         if step in self.versions:
+            if not is_pseudo_dep and self.is_pseudo_dep[step]:
+                logger.info(f"Step {step.name} was previously marked as skippable, but is not anymore.")
+                self.is_pseudo_dep[step] = False
+
             return
 
         # Collect dependencies and the config version
-        dependencies: list[ExecutorStep] = []
-        config_version: dict[str, Any] = {}
-        collect_dependencies_and_version(obj=step.config, dependencies=dependencies, version=config_version)
-
+        computed_deps = collect_dependencies_and_version(obj=step.config)
         # Recurse on dependencies
-        for dep in dependencies:
-            self.compute_version(dep)
+        for dep in computed_deps.dependencies:
+            self.compute_version(dep, is_pseudo_dep=is_pseudo_dep)
+
+        for dep in computed_deps.pseudo_dependencies:
+            self.compute_version(dep, is_pseudo_dep=True)
 
         # The version specifies precisely all the information that uniquely
         # identifies this step.  Note that the fn name is not part of the
         # version.
         version = {
             "name": step.name,
-            "config": config_version,
-            "dependencies": [self.versions[dep] for dep in dependencies],
+            "config": computed_deps.version,
+            "dependencies": [self.versions[dep] for dep in computed_deps.dependencies],
         }
+
+        if computed_deps.pseudo_dependencies:
+            # don't put this in the literal to avoid changing the hash for runs without pseudo-deps
+            version["pseudo_dependencies"] = [self.versions[dep] for dep in computed_deps.pseudo_dependencies]
 
         # Compute output path
         version_str = json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)
@@ -574,8 +675,7 @@ class Executor:
         # Override output path if specified
         override_path = step.override_output_path
         if override_path is not None:
-            if _is_relative_path(override_path):
-                override_path = os.path.join(self.prefix, override_path)
+            override_path = _make_prefix_absolute_path(self.prefix, override_path)
 
             if output_path != override_path:
                 logger.warning(
@@ -596,15 +696,18 @@ class Executor:
             logger.warning(
                 f"Multiple `ExecutorStep`s (named {step.name}) have the same version; try to instantiate only once."
             )
+
         self.configs[step] = instantiate_config(
             config=step.config,
             output_path=output_path,
             output_paths=self.output_paths,
+            prefix=self.prefix,
         )
-        self.dependencies[step] = list(map(self.canonicalize, dependencies))
+        self.dependencies[step] = list(map(self.canonicalize, computed_deps.dependencies))
         self.versions[step] = version
         self.version_strs[step] = version_str
         self.output_paths[step] = output_path
+        self.is_pseudo_dep[step] = is_pseudo_dep
 
     def canonicalize(self, step: ExecutorStep) -> ExecutorStep:
         """Multiple instances of `ExecutorStep` might have the same version."""
@@ -628,9 +731,10 @@ class Executor:
             )
 
         # Compute info for the entire execution
+        path = get_caller_path()
         self.executor_info = ExecutorInfo(
             git_commit=get_git_commit(),
-            caller_path=get_caller_path(),
+            caller_path=path,
             created_date=datetime.now().isoformat(),
             user=get_user(),
             ray_job_id=ray.get_runtime_context().get_job_id(),
@@ -643,7 +747,7 @@ class Executor:
         """Return the URL where the experiment can be viewed."""
         # TODO: remove hardcoding
         if self.prefix.startswith("gs://"):
-            host = "https://crfm.stanford.edu/marin/data_browser"
+            host = "https://marin.community/data-browser"
         else:
             host = "http://localhost:5000"
 
@@ -670,14 +774,15 @@ class Executor:
         logger.info("")
         logger.info(self.get_experiment_url())
         logger.info("")
-
         # Write out info for each step
         for step, info in zip(self.steps, self.step_infos, strict=True):
-            info_path = get_info_path(self.output_paths[step])
+            info_path = _get_info_path(self.output_paths[step])
+            fsspec_utils.mkdirs(os.path.dirname(info_path))
             with fsspec.open(info_path, "w") as f:
                 print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
 
         # Write out info for the entire execution
+        fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
         with fsspec.open(self.executor_info_path, "w") as f:
             print(json.dumps(asdict(self.executor_info), indent=2, cls=CustomJsonEncoder), file=f)
 
@@ -718,9 +823,19 @@ class Executor:
                 runtime_env=RuntimeEnv(
                     pip=pip_dependencies,
                 ),
+                # TODO: this is kind of gross, but the overhead of instantiating a separate ray task
+                # that only blocks is pretty wasteful. Would be better to not make 1 task per step, but
+                # this is a good first start
+                num_cpus=0.001 if isinstance(step.fn, ray.remote_function.RemoteFunction) else 1,
             ).remote(step.fn, step_name, config, dependencies, output_path, self.status_actor, force_run_failed)
         else:
-            self.refs[step] = ray.put(None)  # Necessary as we call ray.get on all the deps in execute_after_dependencies
+            # Necessary as we call ray.get on all the deps in execute_after_dependencies
+            self.refs[step] = self._dry_run_result
+
+    # caching saves ~10% off some tests
+    @cached_property
+    def _dry_run_result(self):
+        return ray.put(None)
 
 
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
@@ -737,9 +852,12 @@ def _get_ray_status(current_owner_task_id: str | None) -> str | None:
     if current_owner_task_id is None:
         return current_owner_ray_status
 
-    current_owner = ray.util.state.get_task(current_owner_task_id)
-    if type(current_owner) is list:  # Due to retries in ray, task_state can be a list of states
-        current_owner = current_owner[-1]
+    try:
+        current_owner = ray.util.state.get_task(current_owner_task_id)
+        if type(current_owner) is list:  # Due to retries in ray, task_state can be a list of states
+            current_owner = current_owner[-1]
+    except ray.util.state.exception.RayStateApiException:
+        current_owner = None
 
     if current_owner is None:  # We need to retry. Ray still does not have the status of the task
         current_owner_ray_status = STATUS_UNKNOWN
@@ -785,7 +903,7 @@ def get_status(output_path: str, current_owner_task_id: str | None, states: dict
     if current_owner_gcs_status in [STATUS_RUNNING, STATUS_WAITING]:
         logger.info(
             f"Status of {output_path = } is {current_owner_gcs_status} as per GCP. "
-            f"But as per Ray, the task has terminated, it's likely that this task was cancelled previously"
+            "But as per Ray, the task has terminated, it's likely that this task was cancelled previously"
         )
         current_owner_gcs_status = STATUS_CANCELLED
 
@@ -955,12 +1073,18 @@ class ExecutorMainConfig:
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    time_in = time.time()
     ray.init(
-        namespace="marin", ignore_reinit_error=True
+        namespace="marin",
+        ignore_reinit_error=True,
+        resources={"head_node": 1} if is_local_ray_cluster() else None,
     )  # We need to init ray here to make sure we have the correct namespace for actors
     # (status_actor in particular)
-
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    time_out = time.time()
+    logger.info(f"Ray init took {time_out - time_in:.2f}s")
+    time_in = time.time()
 
     prefix = config.prefix
     if prefix is None:
@@ -988,6 +1112,11 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     )
 
     executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
+    time_out = time.time()
+    logger.info(f"Executor run took {time_out - time_in:.2f}s")
+    # print json path again so it's easy to copy
+    logger.info(f"Executor info written to {executor.executor_info_path}")
+    logger.info(f"View the experiment at {executor.get_experiment_url()}")
 
 
 def _is_relative_path(url_or_path):
@@ -999,3 +1128,9 @@ def _is_relative_path(url_or_path):
 
     # otherwise if it starts with a slash, it's not a relative path
     return not url_or_path.startswith("/")
+
+
+def _make_prefix_absolute_path(prefix, override_path):
+    if _is_relative_path(override_path):
+        override_path = os.path.join(prefix, override_path)
+    return override_path

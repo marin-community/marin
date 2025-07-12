@@ -9,10 +9,11 @@ from bs4 import BeautifulSoup
 from experiments.exp575_wikipedia_markdownify import WIKI_BLACKLISTED_SELECTORS
 from experiments.exp579_ar5iv_markdownify import ARXIV_BLACKLISTED_SELECTORS
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig, TrafilaturaConfig
+from marin.transform.ar5iv.transform_ar5iv import clean_html
+from marin.transform.wikipedia.transform_wikipedia import clean_wiki_html
 from marin.web.convert import convert_page
-from operations.transform.ar5iv.transform_ar5iv import clean_html
-from operations.transform.wikipedia.transform_wikipedia import clean_wiki_html
 from tests.snapshots.stackexchange.accept_changes import prepare_expected_output
+from tests.test_utils import skip_if_module_missing
 
 my_path = os.path.dirname(os.path.realpath(__file__))
 
@@ -125,6 +126,7 @@ def test_generate_markdown_from_html_with_readability(input_name):
     compare_outputs(input_name, expected_file, output_file, os.path.join(web_diff_path, "readability"))
 
 
+@skip_if_module_missing("resiliparse_dom")
 @parametrize_files
 def test_generate_markdown_from_html_with_resiliparse(input_name):
     """Test the Markdown generation from HTML and compare outputs using the Resiliparse method[NON MARKDOWN]."""
@@ -168,6 +170,7 @@ def test_generate_markdown_from_html_with_trafilatura(input_name):
     compare_outputs(input_name, expected_file, output_file, os.path.join(web_diff_path, "trafilatura"))
 
 
+@skip_if_module_missing("resiliparse_dom")
 @parametrize_files(split="wiki")
 def test_markdownify_wikipedia(input_name):
     """Test the Markdownify method on Wikipedia."""
@@ -204,6 +207,7 @@ def test_markdownify_wikipedia(input_name):
     compare_outputs(input_name, expected_file, output_file, wiki_diff_path)
 
 
+@skip_if_module_missing("resiliparse_dom")
 @parametrize_files(split="ar5iv")
 def test_markdownify_ar5iv(input_name):
     """Test the Markdownify method on ar5iv."""
@@ -249,6 +253,7 @@ def test_markdownify_ar5iv(input_name):
     compare_outputs(input_name, expected_file, output_file, ar5iv_diff_path)
 
 
+@skip_if_module_missing("resiliparse_dom")
 @parametrize_files(split="stackexchange", ext=".json")
 def test_markdownify_stackexchange(input_name):
     """Test the Markdownify method on stackexchange."""
