@@ -298,57 +298,59 @@ def dolma_dedup(
     decontaminate,
 ):
 
+    dolma_dedupe_ray_remote_args = {
+        "scheduling_strategy": ray.util.scheduling_strategies.NodeAffinitySchedulingStrategy(
+            node_id=ray.get_runtime_context().get_node_id(),
+            soft=False,
+        ),
+        "runtime_env": {
+            "pip": ["dolma", "transformers==4.44.0"],
+        },
+    }
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             if decontaminate:
                 # First we copy the files to the temporary directory to get bloom filter
                 copy_files_in(decomtaminate_dir, tmpdir)
-                do_dedup(
-                    tmpdir,
-                    attribute_name,
-                    min_length,
-                    min_words,
-                    bloom_filter_size,
-                    estimated_doc_count,
-                    false_positive_rate,
-                    ngram,
-                    processes,
-                    read_only=False,
-                    bloom_filter_file="decontaminated_bloom_filter.bin",
+                ray.get(
+                    do_dedup.options(**dolma_dedupe_ray_remote_args).remote(
+                        tmpdir,
+                        attribute_name,
+                        min_length,
+                        min_words,
+                        bloom_filter_size,
+                        estimated_doc_count,
+                        false_positive_rate,
+                        ngram,
+                        processes,
+                        read_only=False,
+                        bloom_filter_file="decontaminated_bloom_filter.bin",
+                    )
                 )
 
                 # Delete all JSONL files in the temporary directory since we have bloom filter
                 delete_jsonl_files(tmpdir)
                 # Then copy files of interest and apply bloom filter read only
                 copy_files_in(input_path, tmpdir)
-                do_dedup(
-                    tmpdir,
-                    attribute_name,
-                    min_length,
-                    min_words,
-                    bloom_filter_size,
-                    estimated_doc_count,
-                    false_positive_rate,
-                    ngram,
-                    processes,
-                    read_only=True,
-                    bloom_filter_file="decontaminated_bloom_filter.bin",
+                ray.get(
+                    do_dedup.options(**dolma_dedupe_ray_remote_args).remote(
+                        tmpdir,
+                        attribute_name,
+                        min_length,
+                        min_words,
+                        bloom_filter_size,
+                        estimated_doc_count,
+                        false_positive_rate,
+                        ngram,
+                        processes,
+                        read_only=True,
+                        bloom_filter_file="decontaminated_bloom_filter.bin",
+                    )
                 )
             else:
                 copy_files_in(input_path, tmpdir)
                 ray.get(
-                    do_dedup.options(
-                        scheduling_strategy=ray.util.scheduling_strategies.NodeAffinitySchedulingStrategy(
-                            node_id=ray.get_runtime_context().get_node_id(),
-                            soft=False,
-                        ),
-                        runtime_env={
-                            "pip": [
-                                "dolma",
-                                "transformers==4.44.0",
-                            ]
-                        },
-                    ).remote(
+                    do_dedup.options(**dolma_dedupe_ray_remote_args).remote(
                         tmpdir,
                         attribute_name,
                         min_length,
