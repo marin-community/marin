@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.7.19,<0.8.0"]
+build-backend = "uv_build"
 
 [project]
 name = "marin"
@@ -33,7 +33,7 @@ dependencies = [
     # We have levanter deps for now. @TODO :: Remove them
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1359",
-    "haliax>=1.4.dev348",
+    "haliax>=1.4.dev381",
     "sentencepiece",
     "lz4",
     "wandb<=0.19.9",

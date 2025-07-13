@@ -94,6 +94,19 @@ configs = {
             "v6e-128": 8,
         },
     },
+    "marin-us-east5-a": {
+        "NAME": "marin-us-east5-a",
+        "REGION": "us-east5",
+        "ZONE": "us-east5-a",
+        "BUCKET": "marin-us-east5",
+        "DOCKER_TAG": "20250712",
+        "tpu_generation": "v5p",
+        "min_workers": 1,
+        "worker_targets": {
+            "v5p-8": 1,
+            "v5p-32": 8,
+        },
+    },
     "marin-eu-west4-a": {
         "NAME": "marin-eu-west4-a",
         "REGION": "europe-west4",
