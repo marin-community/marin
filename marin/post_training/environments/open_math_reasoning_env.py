@@ -37,7 +37,7 @@ class OpenMathReasoningEnv(MathEnv):
     # Seed for reproducibility when splitting the dataset
     SPLIT_RANDOM_SEED: int = 42
 
-    TRAIN_SPLIT_RATIO: ClassVar[float] = 0.8
+    VAL_SIZE: ClassVar[int] = 1000
 
     def __init__(self, tokenizer, **kwargs):
         self.tokenizer = tokenizer
@@ -57,7 +57,7 @@ class OpenMathReasoningEnv(MathEnv):
                 continue
 
             seen_examples.add(key)
-            prompt: str = f"{problem} {self.INSTRUCTION}"
+            prompt: str = self.add_instruction(problem)
             all_examples.append({"prompt": prompt, "answer": answer})
 
         # Fix random seed before splitting the dataset for reproducibility
@@ -65,7 +65,7 @@ class OpenMathReasoningEnv(MathEnv):
 
         # Reserve 20% for evals and 80% for training
         random.shuffle(all_examples)
-        split_index: int = int(len(all_examples) * self.TRAIN_SPLIT_RATIO)
+        split_index: int = len(all_examples) - self.VAL_SIZE
         self.train_examples = all_examples[:split_index]
         self.eval_examples = all_examples[split_index:]
 
