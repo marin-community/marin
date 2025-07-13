@@ -69,6 +69,6 @@ class NuminaMathEnv(MathEnv):
                 print(f"Error processing item {item}: {e}")
                 continue
 
-            prompt: str = f"{item['problem']} {self.INSTRUCTION}"
+            prompt: str = self.add_instruction(item["problem"])
             examples.append({"prompt": prompt, "answer": answer})
         return examples
