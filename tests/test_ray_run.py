@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-from marin.run.ray_run import parse_pip_requirements
+import pytest
+
+from marin.run.ray_run import parse_pip_requirements, tpus_per_node
 
 
 def test_parse_pip_requirements():
@@ -21,3 +23,12 @@ def test_parse_pip_requirements():
         "datatrove[io,processing] @ git+https://github.com/nelson-liu/datatrove@tqdm_loggable",
         "scipy",
     ]
+
+
+def test_tpus_per_node():
+    assert tpus_per_node("v4-8") == 4
+    assert tpus_per_node("v5p-8") == 4
+    assert tpus_per_node("v5e-4") == 4
+    assert tpus_per_node("v5e-2") == 2
+    with pytest.raises(ValueError):
+        tpus_per_node("v5e-16")
