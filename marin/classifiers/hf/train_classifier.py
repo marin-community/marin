@@ -38,7 +38,7 @@ class HFTrainingConfig:
     num_labels: int = field(default=1)
     target_column: str = field(default="label")
     output_dir: str = field(default="", metadata={"help": "Path to the output directory"})
-    tpu_num_cores: int = field(default=1, metadata={"help": "Number of TPU cores"})
+    tpu_num_cores: int = field(default=0, metadata={"help": "Number of TPU cores"})
     train_size: float = field(default=0.9, metadata={"help": "Fraction of training data to use"})
     eval_steps: int = field(default=200, metadata={"help": "Number of evaluation steps"})
     save_steps: int = field(default=200, metadata={"help": "Number of save steps"})
@@ -72,7 +72,7 @@ class DataCollator:
             max_length=self.max_length,
         )
 
-        labels = torch.tensor([item["label"] for item in items])
+        labels = torch.tensor([item["label"] for item in items], dtype=torch.float32)
 
         batch["labels"] = labels
         return batch

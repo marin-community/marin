@@ -9,7 +9,7 @@ import fsspec
 import ray
 from transformers import AutoTokenizer
 
-from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
+from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK
 from marin.datashop.dataset_processor import AutoDatasetOutputProcessor, DatasetOutputProcessorConfig
 from marin.datashop.templates import (
     MEDU_BENCHMARK_DESCRIPTION_MERGING_TEMPLATE,
@@ -18,7 +18,7 @@ from marin.datashop.templates import (
 )
 from marin.generation.dataset import DatasetSampler
 from marin.generation.llm_generation import vLLMProvider
-from marin.generation.ray_utils import scheduling_strategy_fn
+from marin.resources import ResourceConfig
 from marin.utils import fsspec_glob
 
 logger = logging.getLogger("ray")
@@ -240,11 +240,11 @@ def _write_final_benchmark_description_prompt(final_benchmark_description_prompt
 
 
 def _run_benchmark_prompt_generation_pipeline(config: MEDUPipelineConfig):
-    scheduling_strategy = scheduling_strategy_fn(config.resource_config.num_tpu, config.resource_config.strategy)
+    scheduling_strategy = config.resource_config.as_ray_scheduling_strategy()
     pipeline = MEDUPipeline.options(scheduling_strategy=scheduling_strategy).remote(
         config.model_name,
         config.corpus_contents,
-        config.resource_config.num_tpu,
+        config.resource_config.chip_count,
         config.engine_kwargs,
         config.generation_kwargs,
         config.medu_benchmark_description_template,
