@@ -245,11 +245,11 @@ This setup provides a complete pipeline for analyzing how large language models 
 
  python marin/run/ray_run.py  --env_vars XLA_USE_F16 1 --env_vars XLA_USE_BF16 0 --env_vars XLA_DOWNCAST_BF16 0  --env_vars HF_TOKEN $HF_TOKEN   --env_vars WANDB_API_KEY $WANDB_API_KEY  -- python experiments/tutorials/exp1353_sliding_logits_tp_70b.py --force_run_failed True 
 
+
 The FP32 variant below demonstrates multi-host tensor parallelism on a
 v6e‑16 slice.  We use a Ray placement group to allocate 16 TPU devices
 across both hosts.
 
-Run the FP32 variant with:
 
 ```bash
 python marin/run/ray_run.py \

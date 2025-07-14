@@ -27,7 +27,7 @@ from marin.generation.sliding_logits_tp_fp32 import (
 
 sliding_logits_tp_fp32_step = ExecutorStep(
     name="extraction/sliding-forward-logits-tp_70b_fp32_multi",
-    description="Run tensor-parallel sliding-window LM forward pass on a v6e-16 slice using two hosts.",
+    description="Run tensor-parallel sliding-window LM forward pass on a v6e-16 slice.",
     fn=compute_sliding_logits_tp_fp32_remote,
     config=SlidingLogitsTPFP32Config(
         model_name=get_model_local_path(llama_3_1_70b),
@@ -40,7 +40,6 @@ sliding_logits_tp_fp32_step = ExecutorStep(
         max_length=100,
         prompt_tokens=50,
         precision=Precision.FLOAT32,
-        # Use all 16 devices across both hosts
         num_devices=16,
         mesh_shape=(1, 16),
         uncompress=True,
