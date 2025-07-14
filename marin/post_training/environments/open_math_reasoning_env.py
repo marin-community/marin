@@ -1,9 +1,14 @@
+import logging
 import random
 from typing import ClassVar
 
 import datasets
+from tqdm.auto import tqdm
 
 from .math_env import MathEnv
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class OpenMathReasoningEnv(MathEnv):
@@ -43,13 +48,12 @@ class OpenMathReasoningEnv(MathEnv):
         self.tokenizer = tokenizer
 
         # Load the dataset from HuggingFace.
-        # Since only a test split is available, reserve 20% for evals and 80% for training.
         hf_dataset = datasets.load_dataset(self.HF_DATASET_NAME, split="cot", streaming=True, trust_remote_code=True)
 
         all_examples: list[dict] = []
         seen_examples: set[str] = set()
 
-        for row in hf_dataset:
+        for row in tqdm(hf_dataset, desc="Processing OpenMathReasoning dataset"):
             problem: str = row["problem"]
             answer: str | int | float = row["expected_answer"]
             key: str = f"{problem}_{answer}"
@@ -63,13 +67,13 @@ class OpenMathReasoningEnv(MathEnv):
         # Fix random seed before splitting the dataset for reproducibility
         random.seed(self.SPLIT_RANDOM_SEED)
 
-        # Reserve 20% for evals and 80% for training
+        # Reserve 1000 examples for evaluation, the rest for training
         random.shuffle(all_examples)
         split_index: int = len(all_examples) - self.VAL_SIZE
         self.train_examples = all_examples[:split_index]
         self.eval_examples = all_examples[split_index:]
 
-        print(
+        logger.info(
             f"Initialized OpenMathReasoningEnv with {len(self.train_examples)} train examples "
             f"and {len(self.eval_examples)} eval examples"
         )
