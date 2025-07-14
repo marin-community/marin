@@ -62,6 +62,7 @@ To submit jobs, we use the
 [Jobs API](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/quickstart.html#submitting-a-job).
 This requires that your Python script is formatted in a certain way, calling some boilerplate Ray functions prior to
 launching tasks -- see [test_integration_test.py](https://github.com/marin-community/marin/blob/main/tests/test_integration_test.py) for a minimal example. To launch:
+
 ```bash
 # [Terminal 2] Submit a Ray Job (specified via a Python script)
 #   =>> Will output a Job ID like `raysubmit_pAJM8vKfHPhiyHBa`
