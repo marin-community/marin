@@ -9,7 +9,7 @@ Usage:
     python scripts/replace_crfm_links.py [--dry-run]
 
 Requires:
-    pip install PyGithub
+    uv pip install PyGithub
     export GITHUB_TOKEN=your_token
 """
 

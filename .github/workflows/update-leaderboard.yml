@@ -20,8 +20,8 @@ jobs:
       # install required dependencies
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install fsspec
+          python -m pip install uv
+          uv pip install --system fsspec
       
       # run the leaderboard generation script (but don't commit changes to Marin)
       - name: Generate leaderboard data

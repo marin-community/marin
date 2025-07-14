@@ -86,6 +86,7 @@ nav:
     - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
     - Internal Guidelines: dev-guide/guidelines-internal.md
     - Building Docs: dev-guide/building-docs.md
+    - Using uv in Docker: dev-guide/using-uv-in-docker.md
     - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
     - Specifying Hardware Resources: references/resource-config.md

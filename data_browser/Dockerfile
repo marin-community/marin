@@ -14,7 +14,8 @@ RUN npm install
 
 COPY pyproject.toml .
 COPY poetry.lock .
-RUN pip install poetry && \
+RUN pip install uv && \
+    uv pip install --system poetry && \
     poetry config virtualenvs.create false && \
     poetry install --no-root
 

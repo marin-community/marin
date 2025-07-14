@@ -6,7 +6,7 @@ This script:
 - Writes the summary to `docs/reports/summary.md`.
 
 Usage:
-pip install PyGithub openai
+uv pip install PyGithub openai
 python scripts/generate_experiment_summary.py
 """
 

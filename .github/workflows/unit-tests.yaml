@@ -61,9 +61,9 @@ jobs:
         run: |
           conda install -c conda-forge pandoc
           npm install -g pandiff
-          python -m pip install --upgrade pip
-          pip install uv==0.5.11 toml
-          python scripts/install_all_pip_dep.py
+          python -m pip install uv
+          uv pip install --system toml
+          TPU_CI=1 python scripts/install_all_pip_dep.py
       
 #      - name: Install Resiliparse DOM
 #        shell: bash -l {0}
