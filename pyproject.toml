@@ -272,3 +272,7 @@ exclude = [
 
 [tool.uv.sources]
 resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
+
+
+[tool.uv_build]
+package-dir = "src"
