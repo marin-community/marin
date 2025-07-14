@@ -245,7 +245,12 @@ This setup provides a complete pipeline for analyzing how large language models 
 
  python marin/run/ray_run.py  --env_vars XLA_USE_F16 1 --env_vars XLA_USE_BF16 0 --env_vars XLA_DOWNCAST_BF16 0  --env_vars HF_TOKEN $HF_TOKEN   --env_vars WANDB_API_KEY $WANDB_API_KEY  -- python experiments/tutorials/exp1353_sliding_logits_tp_70b.py --force_run_failed True 
 
-For multi-host slices such as a v6e-16, use the FP32 variant:
+For slices larger than a single host (e.g. v6e‑16), Ray currently
+launches one worker per host. The FP32 variant below runs on a single
+host with eight devices. Extending this example to true multi-host
+tensor parallelism would require a custom placement group setup.
+
+Use the FP32 variant with:
 
 ```bash
 python marin/run/ray_run.py \

@@ -40,8 +40,10 @@ sliding_logits_tp_fp32_step = ExecutorStep(
         max_length=100,
         prompt_tokens=50,
         precision=Precision.FLOAT32,
-        num_devices=16,
-        mesh_shape=(1, 16),
+        # Run on a single host with 8 devices. Multi-host execution
+        # requires a custom Ray setup not shown here.
+        num_devices=8,
+        mesh_shape=(1, 8),
         uncompress=True,
         batches_per_save=1,
         background_queue=True,
