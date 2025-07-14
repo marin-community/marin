@@ -1,3 +1,4 @@
+import logging
 from typing import ClassVar
 
 import datasets
@@ -5,6 +6,9 @@ from tqdm.auto import tqdm
 
 from .math_env import MathEnv
 from .math_utils import last_boxed_only_string, remove_boxed
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class NuminaMathEnv(MathEnv):
@@ -53,7 +57,7 @@ class NuminaMathEnv(MathEnv):
         self.train_examples = self._process_split(hf_dataset["train"])
         self.eval_examples = self._process_split(hf_dataset["test"])
 
-        print(
+        logger.info(
             f"Initialized NuminaMathEnv with {len(self.train_examples)} train examples "
             f"and {len(self.eval_examples)} eval examples"
         )
@@ -66,7 +70,7 @@ class NuminaMathEnv(MathEnv):
                 answer: str = item["solution"]
                 answer = remove_boxed(last_boxed_only_string(answer))
             except Exception as e:
-                print(f"Error processing item {item}: {e}")
+                logger.error(f"Error processing item {item}: {e}")
                 continue
 
             prompt: str = self.add_instruction(item["problem"])

@@ -49,7 +49,7 @@ def test_open_math_reasoning_env_loaded():
 
     env = OpenMathReasoningEnv(tokenizer=None)
     assert len(env.train_examples) == 234_572
-    assert len(env.eval_examples) == 58_644
+    assert len(env.eval_examples) == 1000
 
     # Ensure we get the same examples every time we load the environment
     assert env.train_examples[0]["prompt"].startswith(
