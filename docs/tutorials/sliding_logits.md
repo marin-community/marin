@@ -244,3 +244,15 @@ if __name__ == "__main__":
 This setup provides a complete pipeline for analyzing how large language models process and predict text, revealing insights into their internal representations and decision-making processes. 
 
  python marin/run/ray_run.py  --env_vars XLA_USE_F16 1 --env_vars XLA_USE_BF16 0 --env_vars XLA_DOWNCAST_BF16 0  --env_vars HF_TOKEN $HF_TOKEN   --env_vars WANDB_API_KEY $WANDB_API_KEY  -- python experiments/tutorials/exp1353_sliding_logits_tp_70b.py --force_run_failed True 
+
+For multi-host slices such as a v6e-16, use the FP32 variant:
+
+```bash
+python marin/run/ray_run.py \
+    --env_vars XLA_USE_F16 0 \
+    --env_vars XLA_USE_BF16 0 \
+    --env_vars XLA_DOWNCAST_BF16 0 \
+    --env_vars HF_TOKEN $HF_TOKEN \
+    --env_vars WANDB_API_KEY $WANDB_API_KEY \
+    -- python experiments/tutorials/exp1354_sliding_logits_tp_fp32_multi.py --force_run_failed True
+```
