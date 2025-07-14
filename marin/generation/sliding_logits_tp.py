@@ -375,7 +375,7 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
     # ------------------------------------------------------------------
     # Setup output and processing
     # ------------------------------------------------------------------
-    shard_path_prefix = os.path.join(cfg.output_dir, f"sliding_logits_tp")
+    shard_path_prefix = os.path.join(cfg.output_dir, f"sliding_logits")
     prompt_len = cfg.prompt_tokens if cfg.prompt_tokens is not None else cfg.chunk_size // 2
 
     # Character-level max-prob array
@@ -706,7 +706,7 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
     # Write character max array
     if cfg.debug:
         print(f"[TP] About to write char_max array...", flush=True)
-    cm_path = os.path.join(cfg.output_dir, f"char_max_tp.npy")
+    cm_path = os.path.join(cfg.output_dir, f"char_max.npy")
     if cfg.debug:
         print(f"[TP] Opening file: {cm_path}", flush=True)
     

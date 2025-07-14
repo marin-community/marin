@@ -3,12 +3,11 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Any
+from typing import Dict, Any
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from marin.execution.executor import InputName, OutputName
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_mkdirs, fsspec_size
 
 logger = logging.getLogger(__name__)
@@ -60,12 +59,33 @@ def create_sliding_logits_plot(cfg: PlotSlidingLogitsConfig) -> Dict[str, Any]:
     # Step 1: Discover char_max shard files using marin's fsspec utilities
     logger.info("Discovering char_max shard files...")
     
+    # First try the multi-core pattern (char_max_part_*.npy)
     search_pattern = os.path.join(cfg.input_path, "char_max_part_*.npy")
     logger.info("Searching for files matching: %s", search_pattern)
     
     char_max_files = fsspec_glob(search_pattern)
+    
+    # If no multi-core files found, try the tensor parallel patterns
     if not char_max_files:
-        raise FileNotFoundError(f"No char_max_part_*.npy files found in {cfg.input_path}")
+        # Try different tensor parallel patterns
+        tp_patterns = [
+            os.path.join(cfg.input_path, "char_max_tp.npy"),  # Actual pattern from gsutil ls
+            os.path.join(cfg.input_path, "char_max.npy"),     # Original expected pattern
+        ]
+        
+        for tp_pattern in tp_patterns:
+            logger.info("No multi-core files found, searching for tensor parallel file: %s", tp_pattern)
+            if fsspec_exists(tp_pattern):
+                char_max_files = [tp_pattern]
+                logger.info("Found tensor parallel char_max file: %s", tp_pattern)
+                break
+        else:
+            raise FileNotFoundError(
+                f"No char_max files found in {cfg.input_path}. "
+                f"Searched for 'char_max_part_*.npy' (multi-core), 'char_max_tp.npy', and 'char_max.npy' (tensor parallel)"
+            )
+    else:
+        logger.info("Found multi-core char_max files")
     
     char_max_files.sort()  # Ensure consistent ordering
     
@@ -221,8 +241,17 @@ def create_sliding_logits_plot(cfg: PlotSlidingLogitsConfig) -> Dict[str, Any]:
         
         try:
             # Look for the main sliding_logits files (not just char_max)
-            logits_pattern = os.path.join(cfg.input_path, "sliding_logits_*_part*.np*")
-            logits_files = fsspec_glob(logits_pattern)
+            # Try both patterns: multi-core and tensor parallel
+            logits_pattern_multicore = os.path.join(cfg.input_path, "sliding_logits_*_part*.np*")
+            logits_pattern_tp = os.path.join(cfg.input_path, "sliding_logits_tp_part*.np*")  # Actual pattern from gsutil ls
+            logits_pattern_tp_alt = os.path.join(cfg.input_path, "sliding_logits_part*.np*")  # Alternative pattern
+            
+            logits_files = fsspec_glob(logits_pattern_multicore)
+            if not logits_files:
+                logger.info("No multi-core logits files found, trying tensor parallel patterns")
+                logits_files = fsspec_glob(logits_pattern_tp)
+                if not logits_files:
+                    logits_files = fsspec_glob(logits_pattern_tp_alt)
             
             if logits_files:
                 logger.info("Found %d logits shard files for extraction statistics", len(logits_files))
