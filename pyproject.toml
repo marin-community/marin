@@ -234,13 +234,6 @@ eval = [
 ]
 
 
-[tool.setuptools.packages.find]
-where = ["."]
-exclude = ["cache", "infra"]
-
-[tool.setuptools.package-data]
-"marin" = ["py.typed"]
-
 [tool.black]
 line-length = 121
 target-version = ["py310"]
