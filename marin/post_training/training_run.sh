@@ -23,7 +23,7 @@
             --log_freq=8 \
             --num_eval_examples=1024 \
             --save_model_freq=0 \
-            --environments_path="environments.json" \
+            --environments_path="post_training/environments.json" \
             --wandb_project="math_rloo_math_test_experiments" \
             --inference_param_dtype="bf16" \
             --inference_activation_dtype="bf16" \
