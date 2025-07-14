@@ -50,21 +50,24 @@ def create_sliding_logits_plot(cfg: PlotSlidingLogitsConfig) -> Dict[str, Any]:
         Dictionary with paths and summary statistics
     """
     
+    print(f"Creating sliding logits plot from {cfg.input_path}", flush=True)
     logger.info("Creating sliding logits plot from %s", cfg.input_path)
     
     # Ensure output directory exists
     logger.info("Creating output directory: %s", cfg.output_path)
+    print(f"Creating output directory: {cfg.output_path}", flush=True)
     fsspec_mkdirs(cfg.output_path)
     
     # Step 1: Discover char_max shard files using marin's fsspec utilities
     logger.info("Discovering char_max shard files...")
+    print(f"Discovering char_max shard files...", flush=True)
     
     # First try the multi-core pattern (char_max_part_*.npy)
     search_pattern = os.path.join(cfg.input_path, "char_max_part_*.npy")
     logger.info("Searching for files matching: %s", search_pattern)
-    
+    print(f"Searching for files matching: {search_pattern}", flush=True)
     char_max_files = fsspec_glob(search_pattern)
-    
+    print(f"Found {len(char_max_files)} char_max shard files", flush=True)
     # If no multi-core files found, try the tensor parallel patterns
     if not char_max_files:
         # Try different tensor parallel patterns
@@ -72,11 +75,13 @@ def create_sliding_logits_plot(cfg: PlotSlidingLogitsConfig) -> Dict[str, Any]:
             os.path.join(cfg.input_path, "char_max_tp.npy"),  # Actual pattern from gsutil ls
             os.path.join(cfg.input_path, "char_max.npy"),     # Original expected pattern
         ]
-        
+        print(f"No multi-core files found, searching for tensor parallel file: {tp_patterns}", flush=True)
         for tp_pattern in tp_patterns:
+            print(f"Searching for tensor parallel file: {tp_pattern}", flush=True)
             logger.info("No multi-core files found, searching for tensor parallel file: %s", tp_pattern)
             if fsspec_exists(tp_pattern):
                 char_max_files = [tp_pattern]
+                print(f"Found tensor parallel char_max file: {tp_pattern}", flush=True)
                 logger.info("Found tensor parallel char_max file: %s", tp_pattern)
                 break
         else:
@@ -90,41 +95,46 @@ def create_sliding_logits_plot(cfg: PlotSlidingLogitsConfig) -> Dict[str, Any]:
     char_max_files.sort()  # Ensure consistent ordering
     
     logger.info("Found %d char_max shard files", len(char_max_files))
+    print(f"Found {len(char_max_files)} char_max shard files", flush=True)
     for i, file_path in enumerate(char_max_files):
         try:
             file_size = fsspec_size(file_path)
+            print(f"  Shard {i}: {file_path} (size: {file_size} bytes)", flush=True)
             logger.info("  Shard %d: %s (size: %d bytes)", i, file_path, file_size)
         except Exception as e:
             logger.warning("  Shard %d: %s (could not get size: %s)", i, file_path, e)
     
     # Step 2: Load original text to get expected length
+    print(f"Loading original text from {cfg.original_text_path}", flush=True)
     logger.info("Loading original text from %s", cfg.original_text_path)
-    
+    print(f"Loading original text from {cfg.original_text_path}", flush=True)
     # Use marin's fsspec utilities
     import fsspec
     with fsspec.open(cfg.original_text_path, "r") as f:
         original_text = f.read()
     expected_length = len(original_text)
     logger.info("Original text length: %d characters", expected_length)
-    
+    print(f"Original text length: {expected_length} characters", flush=True)
     # Step 3: Load and combine character-level data
     logger.info("Loading and combining char_max arrays...")
-    
+    print(f"Loading and combining char_max arrays...", flush=True)
     combined_char_max = None
-    
+
     for i, file_path in enumerate(char_max_files):
         logger.info("Loading shard %d/%d: %s", i + 1, len(char_max_files), file_path)
-        
+        print(f"Loading shard {i + 1}/{len(char_max_files)}: {file_path}", flush=True)
         # Load each file carefully to avoid OOM
         try:
             with fsspec.open(file_path, "rb") as f:
                 part_array = np.load(f)
                 logger.info("  Loaded array shape: %s, dtype: %s, memory: %.2f MB", 
                            part_array.shape, part_array.dtype, part_array.nbytes / 1024 / 1024)
+                print(f"  Loaded array shape: {part_array.shape}, dtype: {part_array.dtype}, memory: {part_array.nbytes / 1024 / 1024:.2f} MB", flush=True)
                 
                 if combined_char_max is None:
                     combined_char_max = part_array.copy()
                     logger.info("  Initialized combined array with shape: %s", combined_char_max.shape)
+                    print(f"  Initialized combined array with shape: {combined_char_max.shape}", flush=True)
                 else:
                     # Verify shapes match
                     if part_array.shape != combined_char_max.shape:
@@ -136,7 +146,8 @@ def create_sliding_logits_plot(cfg: PlotSlidingLogitsConfig) -> Dict[str, Any]:
                     # Element-wise maximum across cores
                     combined_char_max = np.maximum(combined_char_max, part_array)
                     logger.info("  Combined with existing array using element-wise maximum")
-                
+                    print(f"  Combined with existing array using element-wise maximum", flush=True)
+
                 # Free memory from this shard
                 del part_array
                 
@@ -170,7 +181,7 @@ def create_sliding_logits_plot(cfg: PlotSlidingLogitsConfig) -> Dict[str, Any]:
     logger.info("  Min probability: %.6f", min_prob)
     logger.info("  Non-zero positions: %d/%d (%.1f%%)", 
                 nonzero_count, actual_length, 100 * nonzero_count / actual_length)
-    
+    print(f"Combined array statistics: Max probability: {max_prob}, Mean probability: {mean_prob}, Min probability: {min_prob}, Non-zero positions: {nonzero_count}/{actual_length} ({100 * nonzero_count / actual_length:.1f}%)", flush=True)
     # Step 4: Create visualization
     logger.info("Creating heatmap visualization...")
     
@@ -178,6 +189,7 @@ def create_sliding_logits_plot(cfg: PlotSlidingLogitsConfig) -> Dict[str, Any]:
         fig, ax = plt.subplots(figsize=cfg.figsize)
         
         # Create single-row heatmap
+        print(f"Creating heatmap visualization...", flush=True)
         im = ax.imshow(
             combined_char_max[np.newaxis, :],  # shape (1, text_len)
             cmap=cfg.colormap,
@@ -198,12 +210,14 @@ def create_sliding_logits_plot(cfg: PlotSlidingLogitsConfig) -> Dict[str, Any]:
         plt.tight_layout()
         
         # Save plot using fsspec
+        print(f"Saving plot to {cfg.output_path}/sliding_logits_plot.png", flush=True)
         plot_path = os.path.join(cfg.output_path, "sliding_logits_plot.png")
         logger.info("Saving plot to %s", plot_path)
         with fsspec.open(plot_path, "wb") as f:
             plt.savefig(f, dpi=cfg.dpi, bbox_inches='tight')
         
         plt.close()
+        print(f"Plot saved successfully", flush=True)
         logger.info("Plot saved successfully")
         
     except Exception as e:

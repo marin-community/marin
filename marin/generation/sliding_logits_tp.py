@@ -17,6 +17,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from marin.utils import fsspec_mkdirs, remove_tpu_lockfile_on_exit
 
+os.environ.setdefault("XLA_USE_F16", "1")
+os.environ.setdefault("XLA_USE_BF16", "0")
+os.environ.setdefault("XLA_DOWNCAST_BF16", "0")
+
 
 def chunk_text_to_sliding_window_token_chunks(
     text: str,
@@ -298,6 +302,7 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
     import torch_xla.runtime as xr
     import torch_xla.distributed.spmd as xs
     from torch_xla.distributed.spmd import Mesh
+    import torch_xla.backends
 
     # Enable SPMD mode for tensor parallelism
     print(f"[TP] Enabling SPMD mode", flush=True)
@@ -355,6 +360,9 @@ def compute_sliding_logits_tp(cfg: SlidingLogitsTPConfig) -> None:
     # ------------------------------------------------------------------
     # Load and shard model
     # ------------------------------------------------------------------
+    torch_xla.backends.set_mat_mul_precision("high")
+    torch_xla.backends.set_mat_mul_precision("highest")
+
     desired_dtype = torch.float16 if cfg.precision == Precision.FLOAT16 else torch.float32
     print(f"[TP] Loading model {cfg.model_name} with dtype {desired_dtype}", flush=True)
     

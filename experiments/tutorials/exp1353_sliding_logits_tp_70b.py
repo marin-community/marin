@@ -18,7 +18,7 @@ from marin.generation.plot_sliding_logits import PlotSlidingLogitsConfig, create
 # -----------------------------------------------------------------------------
 
 sliding_logits_tp_step = ExecutorStep(
-    name="extraction/sliding-forward-logits-tp_70b",
+    name="extraction/sliding-forward-logits-tp_70b_higherprecision",
     description="Run tensor-parallel sliding-window LM forward pass over a text file, store logits + generate heat-map.",
     fn=compute_sliding_logits_tp_remote,
     config=SlidingLogitsTPConfig(
@@ -47,7 +47,7 @@ sliding_logits_tp_step = ExecutorStep(
 # -----------------------------------------------------------------------------
 
 plot_step = ExecutorStep(
-    name="visualization/sliding-logits-plot-tp_70b",
+    name="visualization/sliding-logits-plot-tp_70b_higherprecision",
     description="Create character-level heatmap visualization from tensor-parallel sliding logits results.",
     fn=create_sliding_logits_plot,
     config=PlotSlidingLogitsConfig(
