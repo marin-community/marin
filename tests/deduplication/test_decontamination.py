@@ -6,10 +6,12 @@ import pytest
 import ray
 
 from marin.processing.classification.dedupe import DedupeConfig, NGramConfig, dedupe
+from marin.utils import fsspec_exists
 
 BASE_INPUT_DIR = "gs://marin-us-east1/documents/test-data/decontamination"
 BASE_ATTRIBUTE_OUTPUT_DIR = "gs://marin-us-east1/attributes/test-data/decontamination"
 GSM8K_DECONTAMINATION_PATH = "gs://marin-us-east1/decontamination/gsm8k-dolma-9f147d/gsm8k"
+BLOOM_FILTER_OUTPUT_DIR = "gs://marin-us-east1/decontamination/bloom-filters/gsm8k-test"
 
 
 @pytest.fixture
@@ -60,6 +62,7 @@ def test_exact_decontamination_paragraph(ray_tpu_cluster, sample_documents):
         ),
         decontaminate=True,
         decontaminate_path=GSM8K_DECONTAMINATION_PATH,
+        bloom_filter_path=BLOOM_FILTER_OUTPUT_DIR,
     )
 
     ray.get(_run_dedupe.remote(dedupe_config))
@@ -81,3 +84,5 @@ def test_exact_decontamination_paragraph(ray_tpu_cluster, sample_documents):
     # Not a duplicate at all
     assert len(attributes[2]["attributes"]["duplicate_text"]) == 1
     assert attributes[2]["attributes"]["duplicate_text"][0][2] == 0
+
+    assert fsspec_exists(os.path.join(BLOOM_FILTER_OUTPUT_DIR, "decontaminated_bloom_filter.bin"))
