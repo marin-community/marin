@@ -79,7 +79,7 @@ ray job stop --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
 ```
 
 **Quality of Life**: If you like `tmux` and `conda` (with environment name `marin`), feel free to run
-[`infra/marin-tmux.sh`](./infra/marin-tmux.sh) that automates launching the dashboard for you. Make sure to read the
+[`infra/marin-tmux.sh`](https://github.com/marin-community/marin/blob/main/infra/marin-tmux.sh) that automates launching the dashboard for you. Make sure to read the
 script before running!
 
 ## Programming Guidelines
