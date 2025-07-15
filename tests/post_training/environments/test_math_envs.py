@@ -59,8 +59,8 @@ def test_open_math_reasoning_env_loaded():
         "\\( x \\geq \\frac{2}{a-b} \\) or \\( x \\leq \\frac{2}{a+b} \\) or \\( x \\leq 0 \\)"
     )
     assert env.eval_examples[16]["prompt"].startswith(
-        "Find all triples $(x, y, z)$ of real numbers such that:\n\\[ x^3 = 3x - 12y + 50 \\]\n\\"
-        "[ y^3 = 12y + 3z - 2 \\]\n\\[ z^3 = 27z + 27x \\]"
+        "For an integer \\( a > 1 \\) that is not a prime number, find the maximum possible "
+        "value of \\( \\frac{a}{p^2} \\) where \\( p \\) is the smallest prime divisor of \\( a \\)."
     )
 
 
