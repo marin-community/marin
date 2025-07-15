@@ -20,7 +20,7 @@ init:
 	conda install -c conda-forge pandoc
 	npm install -g pandiff
 	pre-commit install
-	pip install -e ".[dev,download_transform]"
+	uv sync
 	huggingface-cli login
 
 clean:
