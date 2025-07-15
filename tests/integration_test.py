@@ -18,8 +18,6 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
-from marin.processing.classification.dedupe import DedupeConfig, dedupe
 from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,
@@ -129,50 +127,50 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     ############################################################
     # Deduplicate
 
-    dedupe_step = ExecutorStep(
-        name=os.path.join(prefix, "dedupe"),
-        fn=dedupe,
-        config=DedupeConfig(
-            input_path=output_path_of(transform_hq_data_step),
-            output_path=this_output_path(),
-        ),
-        pip_dependency_groups=["quality_dedup_consolidate"],
-    )
-
+    # dedupe_step = ExecutorStep(
+    #     name=os.path.join(prefix, "dedupe"),
+    #     fn=dedupe,
+    #     config=DedupeConfig(
+    #         input_path=output_path_of(transform_hq_data_step),
+    #         output_path=this_output_path(),
+    #     ),
+    #     pip_dependency_groups=["quality_dedup_consolidate"],
+    # )
+    #
     ############################################################
     # Consolidate
 
-    consolidate_step = ExecutorStep(
-        name=os.path.join(prefix, "consolidate"),
-        fn=consolidate,
-        config=ConsolidateConfig(
-            input_path=output_path_of(transform_hq_data_step),
-            output_path=this_output_path(),
-            filters=[
-                FilterConfig(
-                    type=versioned("classify"),
-                    attribute_path=output_path_of(inference_hq_step),
-                    name=versioned("quickstart-fasttext-quality-hq"),
-                    label="__label__hq",
-                    threshold=versioned(0.1),
-                ),
-                FilterConfig(
-                    type=versioned("remove_spans"),
-                    attribute_path=output_path_of(dedupe_step),
-                    name=versioned("duplicate_text"),
-                ),
-            ],
-        ),
-        pip_dependency_groups=["quality_dedup_consolidate"],
-    )
-
+    # consolidate_step = ExecutorStep(
+    #     name=os.path.join(prefix, "consolidate"),
+    #     fn=consolidate,
+    #     config=ConsolidateConfig(
+    #         input_path=output_path_of(transform_hq_data_step),
+    #         output_path=this_output_path(),
+    #         filters=[
+    #             FilterConfig(
+    #                 type=versioned("classify"),
+    #                 attribute_path=output_path_of(inference_hq_step),
+    #                 name=versioned("quickstart-fasttext-quality-hq"),
+    #                 label="__label__hq",
+    #                 threshold=versioned(0.1),
+    #             ),
+    #             FilterConfig(
+    #                 type=versioned("remove_spans"),
+    #                 attribute_path=output_path_of(dedupe_step),
+    #                 name=versioned("duplicate_text"),
+    #             ),
+    #         ],
+    #     ),
+    #     pip_dependency_groups=["quality_dedup_consolidate"],
+    # )
+    #
     ############################################################
     # Tokenize
     tokenizer = "gpt2"
 
     tokenize_step = default_tokenize(
         name=os.path.join(prefix, "tokenized"),
-        dataset=output_path_of(consolidate_step) / "**/*.jsonl.gz",
+        dataset=output_path_of(transform_hq_data_step),
         tokenizer=tokenizer,
     )
 
@@ -228,8 +226,8 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         train_quality_step,
         inference_hq_step,
         inference_lq_step,
-        dedupe_step,
-        consolidate_step,
+        # dedupe_step,
+        # consolidate_step,
         tokenize_step,
         train_step,
         # evaluate_step,

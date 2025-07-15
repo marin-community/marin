@@ -48,7 +48,7 @@ The environment will have the following packages installed:
   not interfere with other steps.
 
 For example, to install the dependencies specified in the
-`quality_dedup_consolidate` groups and also pip install `google-cloud-logging`,
+`quality_dedup_consolidate` groups and also uv pip install `google-cloud-logging`,
 one can do:
 
 ```python

@@ -9,7 +9,7 @@ This will change as we begin to use Marin's executor framework. For now, below a
 Install dependencies:
 
 ```
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
 Allocating a TPU node. Change $TPU_NAME and $ACCELERATOR_TYPE if needed:
