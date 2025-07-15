@@ -11,12 +11,14 @@ license = {file = "LICENSE"}
 requires-python = ">=3.10"
 dependencies = [
     "draccus>=0.11.5",
-    "google-api-python-client~=2.0",
-    "ray",
+    "google-api-python-client>=2.175.0",
+    "ray==2.45",
     "gcsfs",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
+    "cryptography>=45",
     "s3fs>=2024",
+    "datasets",
     "regex",
     "requests",
     "numpy",
@@ -38,42 +40,26 @@ dependencies = [
     "openai",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "black>=24.8.0",
-    "ipython",
-    "mypy>=1.4.1",
-    "pre-commit",
+[dependency-groups]
+
+test = [
     "pytest>=8.3.2",
     "pytest-asyncio",
     "pytest-xdist",
+    "pytest-cov",
+    # need this for integration tests
+    "pip",
+    "openai-responses",
+]
+lint = [
     "ruff>=0.5.7",
+    "black>=24.8.0",
+    "pre-commit",
+    "mypy>=1.4.1",
     "types-PyYAML",
     "types-requests",
     "types-six",
-    "openai-responses",
-    "markdownify==0.12.1",
-    "html2text==2024.2.26", # TODO :: Check pin?
 ]
-
-math = [
-    "pylatexenc",
-    "sympy",
-]
-
-cuda12 = [
-    "jax[cuda12]==0.5.1",
-    "torch>=2.7.0",
-]
-
-tpu = [
-    "jax[tpu]==0.5.1",
-]
-
-metrics = [
-    "google-cloud-logging",
-]
-
 docs = [
     "mkdocs>=1.5.0",
     "mkdocs-material>=9.5.0",
@@ -84,6 +70,63 @@ docs = [
     "mkdocs-git-authors-plugin>=0.9.0",
     "mkdocs-minify-plugin>=0.7.0",
     "mkdocs-include-markdown-plugin>=7.1.5",
+]
+
+gcp = [
+  "google-api-python-client>=2.175.0",  # ray GCP workaround
+  "cryptography>=45",
+  "google-cloud-storage",
+  "google-cloud-storage-transfer",
+]
+
+math = [
+  "pylatexenc",
+  "sympy",
+]
+
+metrics = [
+  "google-cloud-logging",
+]
+
+
+transform_test_deps = [
+    "trafilatura>=2.0",
+    "readabilipy",
+    "readability-lxml",
+    "warcio",
+    "markdownify==0.12.1",
+    "resiliparse",
+]
+
+
+[tool.uv]
+default-groups = ["test", "lint", "docs", "gcp", "math", "transform_test_deps"]
+
+conflicts = [
+    [
+        { extra = "crawl" },
+        { extra = "post-training" },
+    ],
+    [
+        { extra = "crawl" },
+        { extra = "download-transform" },
+    ],
+    [
+        { extra = "crawl" },
+        { group = "transform-test-deps" },
+    ],
+
+]
+
+[project.optional-dependencies]
+
+cuda12 = [
+    "jax[cuda12]>=0.5.1",
+    "torch>=2.7.0",
+]
+
+tpu = [
+    "jax[tpu]>=0.5.1",
 ]
 
 crawl = [
@@ -156,12 +199,13 @@ tokenize_train = [
     "tiktoken",
 ]
 
+
 post_training = [
     "gcsfs",
     "jax==0.5.2",
     "transformers",
     "flax==0.10.0",
-    "sentencepiece==0.1.99",
+    "sentencepiece>=0.1.99",
     "wget==3.2",
     "jaxtyping",#==0.2.23",
     "tyro==0.8.11",
@@ -188,6 +232,7 @@ eval = [
     "levanter>=1.2.dev1359",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
+
 
 [tool.setuptools.packages.find]
 where = ["."]
