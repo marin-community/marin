@@ -139,7 +139,7 @@ def main():
             "update",
             tpu_name,
             f"--zone={zone}",
-            f"--update-labels=ray-cluster-name={cluster_name},ray-worker-type=manual",
+            f"--update-labels=marin-ray-cluster-name={cluster_name},marin-ray-worker-type=manual",
             "--quiet",
         )
     except subprocess.CalledProcessError as e:

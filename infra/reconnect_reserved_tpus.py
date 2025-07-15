@@ -21,9 +21,12 @@ def reconnect_reserved_tpus(cluster_yaml: str) -> None:
     cluster_name = config_data.get("cluster_name")
     zone = config_data.get("provider", {}).get("availability_zone")
     project_id = config_data.get("provider", {}).get("project_id")
-    
+
     if not cluster_name or not zone or not project_id:
-        print(f"Missing required fields in {cluster_yaml}: cluster_name, provider.availability_zone, or provider.project_id")
+        print(
+            f"Missing required fields in {cluster_yaml}: cluster_name, provider.availability_zone, "
+            f"or provider.project_id"
+        )
         return
 
     tpu_client = tpu_v2alpha1.TpuClient()
@@ -37,9 +40,9 @@ def reconnect_reserved_tpus(cluster_yaml: str) -> None:
 
     for node in nodes:
         labels = dict(node.labels)
-        if labels.get("ray-cluster-name") != cluster_name:
+        if labels.get("marin-ray-cluster-name") != cluster_name:
             continue
-        if labels.get("ray-worker-type") != "manual":
+        if labels.get("marin-ray-worker-type") != "manual":
             continue
 
         tpu_name = node.name.split("/")[-1]
@@ -67,7 +70,7 @@ def reconnect_reserved_tpus(cluster_yaml: str) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Reconnect TPU VMs that are tagged with their Ray cluster name")
     parser.add_argument("cluster_yaml", help="Path to the cluster YAML configuration file")
-    
+
     args = parser.parse_args()
     reconnect_reserved_tpus(args.cluster_yaml)
 
