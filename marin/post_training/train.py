@@ -442,7 +442,7 @@ def main(
     num_eval_examples: int,
     save_model_freq: int,
     wandb_project: str,
-    environment_conf_path: str = "environments.conf",
+    environments_path: str = "environments.json",
     inference_param_dtype: str = "bf16",
     inference_activation_dtype: str = "bf16",
     training_param_dtype: str = "fp32",
@@ -598,7 +598,7 @@ def main(
             os.remove(model_paths["tokenizer"])
 
         # Initialize environment with tokenization parameters
-        environment = load_environments_from_config(environment_conf_path, tokenizer)
+        environment = load_environments_from_config(environments_path, tokenizer)
 
         # Initialize logger
         if "enable" not in logger_config:
