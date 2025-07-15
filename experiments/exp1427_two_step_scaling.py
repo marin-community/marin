@@ -1,7 +1,7 @@
 """Run CORE evaluations on Gemstone models."""
 
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
-from experiments.evals.resource_configs import SINGLE_TPU_V4_8
+from experiments.evals.resource_configs import SINGLE_TPU_V5p_8
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU, MMLU_PRO_5_SHOT, EvalTaskConfig
 from experiments.exp1342_gemstones_scaling_law import (
     gemstone_splits,
@@ -18,6 +18,8 @@ def create_eval_steps() -> list:
         EvalTaskConfig("commonsense_qa_sl", num_fewshot=10),
         EvalTaskConfig("mmlu_sl", num_fewshot=0, task_alias="mmlu_sl_0_shot"),
         EvalTaskConfig("mmlu_sl", num_fewshot=5, task_alias="mmlu_sl_5_shot"),
+        EvalTaskConfig("mmlu_sl_verb", num_fewshot=0, task_alias="mmlu_sl_verb_0_shot"),
+        EvalTaskConfig("mmlu_sl_verb", num_fewshot=5, task_alias="mmlu_sl_verb_5_shot"),
     )
 
     steps = []
@@ -32,9 +34,8 @@ def create_eval_steps() -> list:
                     model_name=f"{model}@{revision}",
                     model_path=output_path_of(gemstone_model),
                     evals=tasks,
-                    resource_config=SINGLE_TPU_V4_8,
+                    resource_config=SINGLE_TPU_V5p_8,
                 )
-                break
                 steps.append(step)
             except ValueError as e:
                 print(f"Skipping {model}/{revision}: {e}")
@@ -52,7 +53,7 @@ def create_eval_steps() -> list:
             model_name=f"{model}@{revision}",
             model_path=output_path_of(model_instance),
             evals=tasks,
-            resource_config=SINGLE_TPU_V4_8,
+            resource_config=SINGLE_TPU_V5p_8,
         )
         steps.append(step)
     print(steps)
@@ -67,5 +68,4 @@ def chunked(lst, n):
 
 if __name__ == "__main__":
     all_steps = create_eval_steps()
-    for batch in chunked(all_steps, 4):
-        executor_main(batch)
+    executor_main(all_steps)
