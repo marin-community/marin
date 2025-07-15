@@ -49,12 +49,12 @@ Marin leverages the `fsspec` library, allowing you to use various storage backen
 *   **Amazon S3:**
     *   `--prefix s3://your-s3-bucket/path/to/output`
     *   `export MARIN_PREFIX=s3://your-s3-bucket/path/to/output`
-    (Requires appropriate AWS credentials and `s3fs` library installed: `pip install s3fs`)
+    (Requires appropriate AWS credentials and `s3fs` library installed: `uv pip install s3fs`)
 
 *   **Google Cloud Storage (GCS):**
     *   `--prefix gs://your-gcs-bucket/path/to/output`
     *   `export MARIN_PREFIX=gs://your-gcs-bucket/path/to/output`
-    (Requires appropriate GCP credentials and `gcsfs` library installed: `pip install gcsfs`)
+    (Requires appropriate GCP credentials and `gcsfs` library installed: `uv pip install gcsfs`)
 
 ## Important Considerations for Distributed Environments
 
