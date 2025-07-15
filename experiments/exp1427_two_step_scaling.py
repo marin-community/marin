@@ -56,7 +56,6 @@ def create_eval_steps() -> list:
             resource_config=SINGLE_TPU_V5p_8,
         )
         steps.append(step)
-    print(steps)
     return steps
 
 
