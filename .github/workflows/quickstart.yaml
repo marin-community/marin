@@ -34,6 +34,8 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.cache/uv
+          # "3" as a poor man's version since we were running out of disk for some reason?
+          # Seems to be related to dedupe
           key: ${{ runner.os }}-${{ matrix.python-version }}-quickstart-3
 
       - name: Install dependencies
@@ -50,8 +52,9 @@ jobs:
         run: |
           ray start --head --num-cpus=64 --resources='{"head_node": 1}'
           df -h
-          sudo du  -h / | sort -hr | head -n 40
-          sudo du -h /home/runner/work/marin/marin/.venv/lib/python3.12/site-packages | sort -hr | head -n 50
+#          # Debugging disk space issues
+#          sudo du  -h / | sort -hr | head -n 40
+#          sudo du -h /home/runner/work/marin/marin/.venv/lib/python3.12/site-packages | sort -hr | head -n 50
 
       - name: Run the quickstart script
         shell: bash -l {0}
