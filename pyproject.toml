@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.7.19,<0.8.0"]
+build-backend = "uv_build"
 
 [project]
 name = "marin"
@@ -33,7 +33,7 @@ dependencies = [
     # We have levanter deps for now. @TODO :: Remove them
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1359",
-    "haliax>=1.4.dev348",
+    "haliax>=1.4.dev381",
     "sentencepiece",
     "lz4",
     "wandb<=0.19.9",
@@ -234,13 +234,6 @@ eval = [
 ]
 
 
-[tool.setuptools.packages.find]
-where = ["."]
-exclude = ["cache", "infra"]
-
-[tool.setuptools.package-data]
-"marin" = ["py.typed"]
-
 [tool.black]
 line-length = 121
 target-version = ["py310"]
@@ -279,3 +272,7 @@ exclude = [
 
 [tool.uv.sources]
 resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
+
+
+[tool.uv_build]
+package-dir = "src"
