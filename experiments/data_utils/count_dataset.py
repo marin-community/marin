@@ -100,7 +100,7 @@ def _compile_and_store_num_rows(
 
 def compile_and_store_num_rows_step(
         tokenization_steps: dict[str, list[ExecutorStep]],
-        output_dir: str = None,
+        output_dir: str,
     ) -> ExecutorStep:
     """
     Creates an ExecutorStep that compiles row counts from tokenized datasets.
@@ -115,8 +115,7 @@ def compile_and_store_num_rows_step(
     Args:
         tokenization_steps: Dictionary mapping dataset short names to their tokenization ExecutorSteps.
                            Each value should be a list containing one ExecutorStep.
-        output_dir: Optional custom output path. If None, uses the default path
-                    from the ExecutorStep configuration. Recommend that the experiment
+        output_dir: Custom output path. Recommend that the experiment
                     folder be used since every experiment should have different
                     data mixes. rows_counts.json will be created in the output_dir.
         
@@ -130,9 +129,6 @@ def compile_and_store_num_rows_step(
     """
     # Flatten the tokenization steps (each value is a list with one step)
     flattened_steps = {name: steps[0] for name, steps in tokenization_steps.items()}
-    
-    if output_dir is None:
-        output_dir = this_output_path()
     
     return ExecutorStep(
         name="compile_row_counts",
@@ -219,7 +215,7 @@ def _compile_and_store_num_tokens(
 
 def compile_and_store_num_tokens_step(
     tokenization_steps: dict[str, list[ExecutorStep]],
-    output_dir: str = None,
+    output_dir: str,
     ) -> ExecutorStep:
     """
     Creates an ExecutorStep that compiles token counts from tokenized datasets.
@@ -235,8 +231,9 @@ def compile_and_store_num_tokens_step(
     Args:
         tokenization_steps: Dictionary mapping dataset short names to their tokenization ExecutorSteps.
                            Each value should be a list containing one ExecutorStep.
-        output_dir: Optional custom output path. If None, uses the default path
-                    from the ExecutorStep configuration.
+        output_dir: Custom output path. Recommend that the experiment
+                    folder be used since every experiment should have different
+                    data mixes. token_counts.json will be created in the output_dir.
         
     Returns:
         ExecutorStep that computes and stores token counts as a JSON file
@@ -252,9 +249,6 @@ def compile_and_store_num_tokens_step(
     """
     # Flatten the tokenization steps (each value is a list with one step)
     flattened_steps = {name: steps[0] for name, steps in tokenization_steps.items()}
-    
-    if output_dir is None:
-        output_dir = this_output_path()
     
     return ExecutorStep(
         name="compile_token_counts",

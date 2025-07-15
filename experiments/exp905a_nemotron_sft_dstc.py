@@ -1,5 +1,5 @@
-# This script is a helper script to download, transform, tokenize, and compile
-# token counts for SFT datasets.
+# This script is a helper script to download, transform, tokenize, and count 
+# tokens for SFT datasets.
 # In addition to previous SFT datasets, we include Nemotron SFT and OpenThoughts3-1.2M.
 
 from experiments.posttrain.instruction_datasets import (
@@ -65,7 +65,7 @@ DATASETS = {
     "openthoughts3": "open-thoughts/OpenThoughts3-1.2M",
 }
 
-def download_transform_tokenize_compile_steps():
+def download_transform_tokenize_count_steps():
     ALL_STEPS = []
     TOKENIZATION_STEPS = dict()
     for short_ds_name, full_ds_name in DATASETS.items():
@@ -81,12 +81,22 @@ def download_transform_tokenize_compile_steps():
         TOKENIZATION_STEPS[short_ds_name] = [data_tokenize_step]
     
     # Compile token counts
-    ALL_STEPS.append(compile_and_store_num_rows_step(TOKENIZATION_STEPS))
-    ALL_STEPS.append(compile_and_store_num_tokens_step(TOKENIZATION_STEPS))
+    ALL_STEPS.append(
+        compile_and_store_num_rows_step(
+            TOKENIZATION_STEPS,
+            'experiments/exp905a_nemotron_sft_dstc/num_rows'
+        )
+    )
+    ALL_STEPS.append(
+        compile_and_store_num_tokens_step(
+            TOKENIZATION_STEPS,
+            'experiments/exp905a_nemotron_sft_dstc/num_tokens'
+        )
+    )
     
     return ALL_STEPS
 
 ########### Main ###########
 if __name__ == "__main__":
-    ALL_STEPS = download_transform_tokenize_compile_steps()
+    ALL_STEPS = download_transform_tokenize_count_steps()
     executor_main(steps=ALL_STEPS)
