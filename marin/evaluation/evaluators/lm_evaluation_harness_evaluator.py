@@ -23,7 +23,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
-        # NOTE(chris): We put lm-eval[ifeval] in the Dockerfile.vllm, so this dependency is not needed
+        "lm-eval",
     ]
     _env_vars: ClassVar[dict[str, str]] = {
         # Human eval tests code from the model which requires permission to run
@@ -83,6 +83,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                     tasks=[eval_task.name],
                     num_fewshot=eval_task.num_fewshot,
                     model_args=pretrained_args,
+                    apply_chat_template=model.apply_chat_template,
                     batch_size="auto",
                     confirm_run_unsafe_code=True,
                     limit=max_eval_instances if max_eval_instances is not None else None,

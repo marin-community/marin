@@ -50,14 +50,14 @@ def evaluate(config: EvaluationConfig) -> None:
 def _impute_model_config(config):
     model_path = config.model_path
 
+    if config.model_path is None:
+        raise ValueError("model_name or model_path must be provided")
+
+    if config.discover_latest_checkpoint:
+        model_path = discover_hf_checkpoints(model_path)[-1]
+
     if config.model_name is None:
         # have to impute the model name from the path
-        if config.model_path is None:
-            raise ValueError("model_name or model_path must be provided")
-
-        if config.discover_latest_checkpoint:
-            model_path = discover_hf_checkpoints(model_path)[-1]
-
         model_name_parts = model_path.split("/")
         # we're looking for something that looks like a run name and something that looks like a step
         # e.g. $RUN/hf/step-$STEP
@@ -89,7 +89,11 @@ def _impute_model_config(config):
         engine_kwargs = config.engine_kwargs
 
     return ModelConfig(
-        name=model_name, path=model_path, engine_kwargs=engine_kwargs, generation_params=generation_params
+        name=model_name,
+        path=model_path,
+        engine_kwargs=engine_kwargs,
+        generation_params=generation_params,
+        apply_chat_template=config.apply_chat_template,
     )
 
 

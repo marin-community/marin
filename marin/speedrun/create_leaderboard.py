@@ -64,9 +64,10 @@ def load_results_file(path: str) -> dict:
         return {"runs": [data]} if "runs" not in data else data
 
 
-def create_entry_from_results(results: dict, results_filepath: str) -> LeaderboardEntry:
+def create_entry_from_results(results: dict, results_filepath: str, base_path: str) -> LeaderboardEntry:
+    base_path_abs = Path(base_path).resolve()
     # Path information
-    run_name = Path(results_filepath).parent.name
+    run_name = Path(results_filepath).parent.relative_to(base_path_abs).as_posix()
     filepath = Path(results_filepath)
     repo_root = Path(__file__).resolve().parent.parent.parent
     relative_path = filepath.relative_to(repo_root).parent
@@ -116,7 +117,7 @@ def get_entries(base_path: str) -> list[LeaderboardEntry]:
             results_data = load_results_file(file_path)
             for _i, run_results in enumerate(results_data["runs"]):
                 run_path = file_path
-                entry = create_entry_from_results(run_results, run_path)
+                entry = create_entry_from_results(run_results, run_path, base_path)
                 entries.append(entry)
         except Exception as e:
             print(f"Failed to process {file_path}: {e}")

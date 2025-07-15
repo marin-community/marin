@@ -775,6 +775,7 @@ def get_shard_indices_to_process(urls_input_directory: str) -> list[int]:
     shard_indices: list[int] = [
         int(pathlib.Path(path).name.removesuffix(".parquet").removeprefix("links."))
         for path in fsspec_glob(os.path.join(urls_input_directory, "links.*.parquet"))
+        if not fsspec_exists(f"{path}.SUCCESS")
     ]
     shard_indices = sorted(shard_indices)
     logger.info(f"Found {len(shard_indices)} shards to process")

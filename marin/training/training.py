@@ -163,6 +163,14 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         _check_for_wandb_key(env)
 
     env = _add_run_env_variables(env)
+
+    if "JAX_COMPILATION_CACHE_DIR" not in env:
+        marin_prefix = os.environ.get("MARIN_PREFIX")
+        if marin_prefix:
+            env["JAX_COMPILATION_CACHE_DIR"] = os.path.join(marin_prefix, "compilation-cache")
+            logger.info(f"JAX compilation cache enabled at: {env['JAX_COMPILATION_CACHE_DIR']}")
+        else:
+            logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
     hw_config = config.resources.with_env_vars(env)
 
     config = _enforce_run_id(config)
@@ -171,12 +179,17 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     train_config = config.train_config
     train_config = _suppress_ray_config(train_config)
 
+    # disable accelerator requirement when running without GPU/TPU resources
+    if hw_config.accelerator_descriptor() is None:
+        trainer = replace(train_config.trainer, require_accelerator=False)
+        train_config = replace(train_config, trainer=trainer)
+
     if not config.allow_out_of_region and not isinstance(hw_config, CpuOnlyConfig):
         # run this on the Ray cluster to get the right region
         # doesn't need to be a TPU because ray insists that all VMs are in the same region
         ray.get(ray.remote(_doublecheck_paths).options(runtime_env=hw_config.runtime_env, num_cpus=0.1).remote(config))
 
-    @ray.remote(**hw_config.as_remote_kwargs())
+    @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1)
     def train_lm_task():
         train_lm.main(train_config)
 
@@ -303,6 +316,11 @@ def _add_run_env_variables(env: dict):
 
     if "TOKENIZERS_PARALLELISM" not in env:
         env["TOKENIZERS_PARALLELISM"] = "false"
+
+    if "TPU_MIN_LOG_LEVEL" not in env:
+        env["TPU_MIN_LOG_LEVEL"] = "2"
+    if "TPU_STDERR_LOG_LEVEL" not in env:
+        env["TPU_STDERR_LOG_LEVEL"] = "2"
 
     return env
 
