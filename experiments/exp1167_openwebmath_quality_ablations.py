@@ -24,7 +24,7 @@ openwebmath_crawl_tokenized = default_tokenize(
 )
 
 openwebmath_raw_tokenized = default_tokenize(
-    "openwebmath",
+    "openwebmath-control",
     InputName.hardcoded(
         "gs://marin-us-central2/raw/open-web-math-fde8ef8/fde8ef8/huggingface.co/datasets/open-web-math/open-web-math/resolve/fde8ef8/data"
     ),

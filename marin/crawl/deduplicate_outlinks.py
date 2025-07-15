@@ -79,6 +79,7 @@ import uuid
 from dataclasses import dataclass
 
 import draccus
+from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 from google.oauth2 import service_account
 
@@ -118,7 +119,7 @@ class DeduplicateOutlinksConfig:
     gcs_input_pattern: str
     gcs_output_prefix: str
     bq_table_id: str
-    bq_dataset_id: str = "marin_crawl"
+    bq_dataset_id: str = "marin_crawl_links"
 
 
 def deduplicate_and_shuffle_with_bq(
@@ -148,50 +149,82 @@ def deduplicate_and_shuffle_with_bq(
     logger.info(f"Creating BigQuery client with project id {project_id}")
     client = bigquery.Client(credentials=credentials, project=project_id)
 
-    # 2) Create dataset if it doesn't exist
+    # 2) Get or create dataset, ensuring correct location
     dataset_name = f"{project_id}.{dataset_id}"
-    dataset_ref = bigquery.Dataset(dataset_name)
-    logger.info(f"Creating or getting BigQuery dataset {dataset_name}")
-    try:
-        client.get_dataset(dataset_ref)
-    except Exception:
-        client.create_dataset(dataset_ref)
-        logger.info(f"Created dataset {dataset_id}")
-    logger.info(f"Got BigQuery dataset {dataset_name}")
+    dataset_location = "us-central2"  # Required location
+    logger.info(f"Checking for BigQuery dataset {dataset_name}...")
 
-    # 3) Load the GCS data into BigQuery
-    load_config = bigquery.LoadJobConfig()
-    load_config.source_format = bigquery.SourceFormat.NEWLINE_DELIMITED_JSON
-    load_config.autodetect = True
+    try:
+        dataset = client.get_dataset(dataset_name)  # Check existence first
+        logger.info(f"Found existing dataset {dataset_name}.")
+        if dataset.location != dataset_location:
+            raise ValueError(
+                f"Dataset {dataset_name} already exists in location {dataset.location}, "
+                f"but script requires location {dataset_location}. "
+                f"Please delete the existing dataset or use a different bq_dataset_id."
+            )
+        else:
+            logger.info(f"Dataset already exists in the correct location: {dataset_location}.")
+
+    except NotFound:
+        logger.info(f"Dataset {dataset_name} not found. Creating in location {dataset_location}...")
+        dataset_ref = bigquery.Dataset(dataset_name)
+        dataset_ref.location = dataset_location
+        try:
+            client.create_dataset(dataset_ref, timeout=30)
+            logger.info(f"Created dataset {dataset_id} in {dataset_location}.")
+        except Exception as e:
+            logger.error(f"Failed to create dataset {dataset_name}: {e}")
+            raise
+
+    logger.info(f"Using BigQuery dataset {dataset_name} in location {dataset_location}")
+
+    # 3) Create an external table referencing the GCS files
+    ext_table_id = f"{table_id}_ext_{uuid.uuid4().hex[:8]}"
+    ext_table_ref = f"{project_id}.{dataset_id}.{ext_table_id}"
+    schema = [
+        bigquery.SchemaField("page_url", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("link_target", "STRING", mode="REQUIRED"),  # Used for deduplication
+        bigquery.SchemaField("is_internal_link", "BOOLEAN", mode="NULLABLE"),
+        bigquery.SchemaField("in_main_content", "BOOLEAN", mode="NULLABLE"),
+    ]
+
+    logger.info(f"Creating external table {ext_table_ref} pointing to {gcs_input_pattern}...")
+    external_config = bigquery.ExternalConfig("NEWLINE_DELIMITED_JSON")
+    external_config.source_uris = [gcs_input_pattern]
+    external_config.schema = schema
+    external_config.compression = "GZIP"
+
+    table = bigquery.Table(ext_table_ref)
+    table.external_data_configuration = external_config
+
+    try:
+        client.delete_table(ext_table_ref, not_found_ok=True)
+        table = client.create_table(table)
+        logger.info(f"External table {ext_table_ref} created.")
+    except Exception as e:
+        logger.error(f"Error creating external table: {e}")
+        raise
 
     table_ref = f"{project_id}.{dataset_id}.{table_id}"
-    logger.info(f"Loading data from {gcs_input_pattern} into {table_ref}...")
-    load_job = client.load_table_from_uri(
-        gcs_input_pattern,
-        table_ref,
-        job_config=load_config,
-    )
-    # Wait for load to complete
-    load_job.result()
-    logger.info("Load job finished.")
+    logger.info(f"Deduplicating data into {table_ref}...")
 
-    # 4) Deduplicate on link_target
-    # scratch table name
-    logger.info("Deduplicating...")
-    dedup_table = f"{table_ref}_deduped_{uuid.uuid4().hex}"
     dedup_query = f"""
-    CREATE OR REPLACE TABLE `{dedup_table}` AS
+    CREATE OR REPLACE TABLE `{table_ref}` AS
     WITH ranked AS (
         SELECT
             t.*,
             ROW_NUMBER() OVER (PARTITION BY link_target ORDER BY link_target) AS rn
-        FROM `{table_ref}` t
+        FROM `{ext_table_ref}` t
     )
     SELECT * EXCEPT(rn)
     FROM ranked
     WHERE rn = 1
     """
-    client.query(dedup_query).result()
+
+    # Ensure the query job runs in the correct location
+    query_job = client.query(dedup_query, location=dataset_location)
+    query_job.result()
     logger.info("Deduplication complete.")
 
     # 5) Shuffle rows by RAND(), this can be expensive.
@@ -200,10 +233,11 @@ def deduplicate_and_shuffle_with_bq(
     shuffle_query = f"""
     CREATE OR REPLACE TABLE `{shuffled_table}` AS
     SELECT *
-    FROM `{dedup_table}`
+    FROM `{table_ref}`
     ORDER BY RAND()
     """
-    client.query(shuffle_query).result()
+    # Ensure the shuffle query job runs in the correct location
+    client.query(shuffle_query, location=dataset_location).result()
     logger.info("Shuffle complete.")
 
     # 6) Export deduplicated and shuffled table back to GCS in multiple shards
@@ -217,9 +251,9 @@ def deduplicate_and_shuffle_with_bq(
     extract_job.result()
     logger.info("Export complete!")
 
-    # Clean up intermediate tables if desired
+    # Clean up intermediate tables
+    client.delete_table(ext_table_ref, not_found_ok=True)
     client.delete_table(table_ref, not_found_ok=True)
-    client.delete_table(dedup_table, not_found_ok=True)
     client.delete_table(shuffled_table, not_found_ok=True)
 
     logger.info("Done.")
