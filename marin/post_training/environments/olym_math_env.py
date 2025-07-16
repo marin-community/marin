@@ -58,13 +58,13 @@ class OlymMathEnv(MathEnv):
 
         self.train_examples = []
         for item in splits["train"]:
-            prompt = f"{item['problem']} {self.INSTRUCTION}"
+            prompt = self.add_instruction(item["problem"])
             answer = item["answer"]
             self.train_examples.append({"prompt": prompt, "answer": answer})
 
         self.eval_examples = []
         for item in splits["test"]:
-            prompt = f"{item['problem']} {self.INSTRUCTION}"
+            prompt = self.add_instruction(item["problem"])
             answer = item["answer"]
             self.eval_examples.append({"prompt": prompt, "answer": answer})
 
