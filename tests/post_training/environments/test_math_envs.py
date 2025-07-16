@@ -84,6 +84,48 @@ def test_numina_math_env_loaded():
 
 
 @pytest.mark.skip(reason="Need to fix environment import.")
+def test_aqua_rat_env_loaded():
+    from marin.post_training.environments.aqua_rat_env import AquaRatEnv
+
+    env = AquaRatEnv(tokenizer=None)
+
+    assert len(env.train_examples) == 97_467
+    assert len(env.eval_examples) == 254
+
+    # Ensure we get the same examples every time we load the environment
+    assert env.train_examples[0]["prompt"].startswith(
+        "Two friends plan to walk along a 43-km trail, starting at opposite ends of the trail at the same time. "
+        "If Friend P's rate is 15% faster than Friend Q's, how many kilometers will Friend P have walked when "
+        "they pass each other? A)21 B)21.5 C)22 D)22.5 E)23"
+    )
+    assert env.eval_examples[16]["prompt"].startswith(
+        "Alex has enough money to buy 30 bricks. If the bricks each cost 20 cents less, "
+        "Grace could buy 10 more bricks. How much money does Grace have to spend on bricks? A)30 B)32 C)42 D)45 E)36"
+    )
+
+
+@pytest.mark.skip(reason="Need to fix environment import.")
+def test_svamp_env_loaded():
+    from marin.post_training.environments.svamp_env import SVAMPEnv
+
+    env = SVAMPEnv(tokenizer=None)
+
+    assert len(env.train_examples) == 19_690
+    assert len(env.eval_examples) == 1000
+
+    # Ensure we get the same examples every time we load the environment
+    assert env.train_examples[0]["prompt"].startswith(
+        "bobby ate some pieces of candy . then he ate 25 more . if he ate a total of 43 pieces of "
+        "candy how many pieces of candy had he eaten at the start ?"
+    )
+    assert env.eval_examples[16]["prompt"].startswith(
+        "every day ryan spends 3 hours on learning english and some more hours on learning chinese . "
+        "if he spends a total of 4 hours on learning english and chinese everyday how many hours does he "
+        "spend on learning chinese ?"
+    )
+
+
+@pytest.mark.skip(reason="Need to fix environment import.")
 def test_grade_answer_with_olym_math_env():
     """
     Test whether `grade_answer` works correctly with OlymMathEnv
@@ -157,3 +199,31 @@ def test_grade_answer_with_numina_math_env():
     assert grade_answer(given_answer="\\frac{13}{6}", ground_truth=answer) is True
     assert grade_answer(given_answer="+\\frac{13}{6}", ground_truth=answer) is True
     assert grade_answer(given_answer="-\\frac{13}{6}", ground_truth=answer) is False
+
+
+@pytest.mark.skip(reason="Need to fix environment import.")
+def test_grade_answer_with_aqua_rat_env():
+    from marin.post_training.environments.aqua_rat_env import AquaRatEnv
+
+    env = AquaRatEnv(tokenizer=None)
+
+    # Sanity check that `grade_answer` works fine with letter choices
+    answer = env.train_examples[0]["answer"]
+    assert grade_answer(given_answer="E", ground_truth=answer) is True
+    assert grade_answer(given_answer=" e", ground_truth=answer) is True
+    assert grade_answer(given_answer="a", ground_truth=answer) is False
+    assert grade_answer(given_answer="B", ground_truth=answer) is False
+    assert grade_answer(given_answer="  c", ground_truth=answer) is False
+    assert grade_answer(given_answer=" D", ground_truth=answer) is False
+
+
+@pytest.mark.skip(reason="Need to fix environment import.")
+def test_grade_answer_with_svamp_env():
+    from marin.post_training.environments.svamp_env import SVAMPEnv
+
+    env = SVAMPEnv(tokenizer=None)
+
+    answer = env.train_examples[0]["answer"]
+    assert grade_answer(given_answer="18.000", ground_truth=answer) is True
+    assert grade_answer(given_answer=" 18", ground_truth=answer) is True
+    assert grade_answer(given_answer="16", ground_truth=answer) is False
