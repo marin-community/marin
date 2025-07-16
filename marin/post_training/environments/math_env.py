@@ -30,7 +30,7 @@ class MathEnv(MarinEnv):
         # Convert to the format expected by the training code and pre-tokenize
         self.train_examples = []
         for item in tqdm(train_dataset, desc="Processing train set"):
-            prompt = f"{item['problem']} {self.INSTRUCTION}"
+            prompt = self.add_instruction(item["problem"])
             answer = remove_boxed(last_boxed_only_string(item["solution"]))
 
             self.train_examples.append(
@@ -42,7 +42,7 @@ class MathEnv(MarinEnv):
 
         self.eval_examples = []
         for item in tqdm(test_dataset, desc="Processing test set"):
-            prompt = f"{item['problem']} {self.INSTRUCTION}"
+            prompt = self.add_instruction(item["problem"])
             answer = remove_boxed(last_boxed_only_string(item["solution"]))
 
             self.eval_examples.append(
@@ -161,3 +161,7 @@ class MathEnv(MarinEnv):
             n_to_sample = min(n_examples, len(self.eval_examples))
             indices = jax.random.choice(eval_key, len(self.eval_examples), shape=(n_to_sample,), replace=False)
             return [self.eval_examples[int(idx)] for idx in indices]
+
+    def add_instruction(self, math_problem: str) -> str:
+        """Add the standard instruction to a math problem."""
+        return f"{math_problem} {self.INSTRUCTION}"
