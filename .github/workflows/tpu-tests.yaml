@@ -109,16 +109,15 @@ jobs:
                                      && export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
                                      && export HF_TOKEN=${{ secrets.HF_TOKEN }} \
                                      && export START_RAY_TPU_CLUSTER=true \
-                                     && python scripts/install_all_pip_dep.py \
-                                     && pip list \
+                                     && uv sync \
                                      && echo TPU_TEST \
-                                     && pytest tests/tpu -s -v \
+                                     && uv run pytest tests/tpu -s -v \
                                      && echo VLLM_TEST \
-                                     && pytest tests/vllm -s -v \
+                                     && uv run pytest tests/vllm -s -v \
                                      && echo EVALS_TEST \
-                                     && pytest tests/evals -s -v \
+                                     && uv run pytest tests/evals -s -v \
                                      && echo RAY_DATA_TEST \
-                                     && pytest tests/ray-data -s -v"'
+                                     && uv run pytest tests/ray-data -s -v"'
 
       # - name: Configure Docker for Artifact Registry
       #   run: |

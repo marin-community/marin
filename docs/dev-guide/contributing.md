@@ -10,9 +10,9 @@
 ```bash
 git clone https://github.com/marin-community/marin.git
 cd marin
-python -m venv venv
-source venv/bin/activate
-pip install -e .[dev]
+uv venv --python 3.11
+source .venv/bin/activate
+uv pip install -e .[dev]
 pre-commit install
 ```
 
