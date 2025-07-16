@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 import ray
+import wandb
 import yaml as pyyaml
 from bs4 import BeautifulSoup
 from google.cloud import compute_v1, tpu_v2alpha1
@@ -14,8 +15,6 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-
-import wandb
 
 sys.path.append("../..")
 
@@ -30,16 +29,16 @@ MIN_WAIT_FOR_INCOMPLETE_TPUS = 15
 CONFIG_DIR = Path(__file__).parent
 
 YAML_FILES = [
-    # "marin-asia-northeast1.yaml",
-    # "marin-eu-west4-a.yaml",
-    # "marin-eu-west4.yaml",
-    # "marin-us-central1.yaml",
-    # "marin-us-central2.yaml",
+    "marin-asia-northeast1.yaml",
+    "marin-eu-west4-a.yaml",
+    "marin-eu-west4.yaml",
+    "marin-us-central1.yaml",
+    "marin-us-central2.yaml",
     "marin-us-east1.yaml",
     # "marin-us-east5.yaml",
-    # 'marin-us-east5-b-vllm.yaml',
-    # "marin-us-west4.yaml",
-    # "marin-big-run.yaml",
+    'marin-us-east5-b-vllm.yaml',
+    "marin-us-west4.yaml",
+    "marin-big-run.yaml",
 ]
 
 if not YAML_FILES:
