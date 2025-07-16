@@ -35,8 +35,8 @@ YAML_FILES = [
     "marin-us-central1.yaml",
     "marin-us-central2.yaml",
     "marin-us-east1.yaml",
-    # "marin-us-east5.yaml",
-    "marin-us-east5-b-vllm.yaml",
+    "marin-us-east5.yaml",
+    # "marin-us-east5-b-vllm.yaml",
     "marin-us-west4.yaml",
     "marin-big-run.yaml",
 ]
