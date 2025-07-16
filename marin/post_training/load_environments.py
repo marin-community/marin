@@ -3,19 +3,23 @@ from typing import Any
 
 from transformers import AutoTokenizer
 
+from .environments.aqua_rat_env import AquaRatEnv
 from .environments.marin_env import MarinEnv
 from .environments.math_env import MathEnv
 from .environments.numina_math_env import NuminaMathEnv
 from .environments.olym_math_env import OlymMathEnv
 from .environments.open_math_reasoning_env import OpenMathReasoningEnv
+from .environments.svamp_env import SVAMPEnv
 from .environments.swe_bench_env import SWEBenchEnv
 
 # Specify environments here
 ENVIRONMENT_NAME_TO_CLASS = {
+    "aqua_rat": AquaRatEnv,
     "math": MathEnv,
     "numina_math": NuminaMathEnv,
     "olym_math": OlymMathEnv,
     "open_math_reasoning": OpenMathReasoningEnv,
+    "svamp": SVAMPEnv,
     "swe_bench": SWEBenchEnv,
 }
 
