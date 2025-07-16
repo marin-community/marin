@@ -51,7 +51,7 @@ We use docker images to run the jobs inside the ray cluster. We provide a convie
 
 1. Install Marin with TPU support:
    ```bash
-   pip install -e ".[tpu]"
+   uv pip install -e ".[tpu]"
    ```
 
 2. Set up your GCP environment:
