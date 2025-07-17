@@ -12,9 +12,19 @@ logger.setLevel(logging.INFO)
 
 class AquaRatEnv(MathEnv):
     """
-    TODO
+    AQUA-RAT (Algebra Question Answering with Rationales) is a large (~100K) crowd‑sourced collection of
+    multiple‑choice algebraic/math word problems where each item includes the problem statement,
+    five answer options (A–E), a natural‑language step‑by‑step rationale explaining the solution,
+    and the correct option.
 
     HuggingFace: https://huggingface.co/datasets/deepmind/aqua_rat
+
+    @article{ling2017program,
+      title={Program induction by rationale generation: Learning to solve and explain algebraic word problems},
+      author={Ling, Wang and Yogatama, Dani and Dyer, Chris and Blunsom, Phil},
+      journal={ACL},
+      year={2017}
+    }
     """
 
     HF_DATASET_NAME: ClassVar[str] = "deepmind/aqua_rat"
