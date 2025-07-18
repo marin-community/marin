@@ -98,7 +98,6 @@ def get_all_runs_over_period(
     api = wandb.Api()
 
     try:
-
         # Check if project exists first
         try:
             api.project(entity, project)
@@ -134,11 +133,12 @@ def get_all_runs_over_period(
 
 
 def get_vocab_size_for_tokenizer(tokenizer: str) -> int | None:
-
     logger.info(f"Tokenizer:{tokenizer}")
     if tokenizer == "EleutherAI/gpt-neox-20b":
         vocab_size = 50_257
     elif tokenizer == "meta-llama/Meta-Llama-3.1-8B":
+        vocab_size = 128_256
+    elif tokenizer == "stanford-crfm/marin-tokenizer":
         vocab_size = 128_256
     elif tokenizer == "meta-llama/Llama-2-7b":
         vocab_size = 32_000
@@ -328,7 +328,6 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-
     config = WandbMetricsConfig(entity=WANDB_ENTITY, project=WANDB_PROJECT, num_days=7)
 
     calculate_wandb_metrics(config)
