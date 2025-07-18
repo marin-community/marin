@@ -227,3 +227,8 @@ def test_grade_answer_with_svamp_env():
     assert grade_answer(given_answer="18.000", ground_truth=answer) is True
     assert grade_answer(given_answer=" 18", ground_truth=answer) is True
     assert grade_answer(given_answer="16", ground_truth=answer) is False
+
+    answer = env.eval_examples[0]["answer"]
+    assert grade_answer(given_answer="58.0", ground_truth=answer) is True
+    assert grade_answer(given_answer=" 58", ground_truth=answer) is True
+    assert grade_answer(given_answer="57.999", ground_truth=answer) is False
