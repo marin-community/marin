@@ -96,11 +96,11 @@ def test_aqua_rat_env_loaded():
     assert env.train_examples[0]["prompt"].startswith(
         "Two friends plan to walk along a 43-km trail, starting at opposite ends of the trail at the same time. "
         "If Friend P's rate is 15% faster than Friend Q's, how many kilometers will Friend P have walked when "
-        "they pass each other? A)21 B)21.5 C)22 D)22.5 E)23"
+        "they pass each other?"
     )
     assert env.eval_examples[16]["prompt"].startswith(
         "Alex has enough money to buy 30 bricks. If the bricks each cost 20 cents less, "
-        "Grace could buy 10 more bricks. How much money does Grace have to spend on bricks? A)30 B)32 C)42 D)45 E)36"
+        "Grace could buy 10 more bricks. How much money does Grace have to spend on bricks?"
     )
 
 
@@ -207,14 +207,27 @@ def test_grade_answer_with_aqua_rat_env():
 
     env = AquaRatEnv(tokenizer=None)
 
-    # Sanity check that `grade_answer` works fine with letter choices
     answer = env.train_examples[0]["answer"]
-    assert grade_answer(given_answer="E", ground_truth=answer) is True
-    assert grade_answer(given_answer=" e", ground_truth=answer) is True
-    assert grade_answer(given_answer="a", ground_truth=answer) is False
-    assert grade_answer(given_answer="B", ground_truth=answer) is False
-    assert grade_answer(given_answer="  c", ground_truth=answer) is False
-    assert grade_answer(given_answer=" D", ground_truth=answer) is False
+    assert grade_answer(given_answer="23", ground_truth=answer) is True
+    assert grade_answer(given_answer="23.0", ground_truth=answer) is True
+    assert grade_answer(given_answer="23.01", ground_truth=answer) is False
+    assert grade_answer(given_answer="24", ground_truth=answer) is False
+
+    answer = env.train_examples[1]["answer"]
+    assert grade_answer(given_answer="5 and 1", ground_truth=answer) is True
+    assert grade_answer(given_answer="5 and   1", ground_truth=answer) is True
+    assert grade_answer(given_answer="5 and   2", ground_truth=answer) is False
+
+    answer = env.train_examples[2]["answer"]
+    assert grade_answer(given_answer="I and II", ground_truth=answer) is True
+    assert grade_answer(given_answer="I and III", ground_truth=answer) is False
+
+    answer = env.train_examples[3]["answer"]
+    assert grade_answer(given_answer="$1600", ground_truth=answer) is True
+    assert grade_answer(given_answer="$1600.00", ground_truth=answer) is True
+    assert grade_answer(given_answer="1600.00", ground_truth=answer) is True
+    assert grade_answer(given_answer="1599.99", ground_truth=answer) is False
+    assert grade_answer(given_answer="$1600.01", ground_truth=answer) is False
 
 
 @pytest.mark.skip(reason="Need to fix environment import.")
