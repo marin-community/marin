@@ -17,6 +17,8 @@ class AquaRatEnv(MathEnv):
     five answer options (A-E), a natural-language step-by-step rationale explaining the solution,
     and the correct option.
 
+    For this environment, we converted the multiple-choice problems to an open-ended format.
+
     HuggingFace: https://huggingface.co/datasets/deepmind/aqua_rat
 
     @article{ling2017program,
@@ -28,12 +30,6 @@ class AquaRatEnv(MathEnv):
     """
 
     HF_DATASET_NAME: ClassVar[str] = "deepmind/aqua_rat"
-
-    INSTRUCTION: str = (
-        "Show your work in <think> </think> tags. And return just the letter of the correct answer "
-        "(one of A, B, C, D or E) as the final answer in <answer> </answer> "
-        "tags. Assistant: Let me solve this step by step. <think>"
-    )
 
     def __init__(self, tokenizer, **kwargs):
         self.tokenizer = tokenizer
@@ -52,9 +48,14 @@ class AquaRatEnv(MathEnv):
         examples: list[dict] = []
         for item in tqdm(split):
             question: str = item["question"]
-            options: str = " ".join(item["options"])
-            prompt: str = self.add_instruction(f"{question} {options}")
-            answer: str = item["correct"]
-            assert answer in ["A", "B", "C", "D", "E"]
+            letter_answer: str = item["correct"]
+            answer_index: int = ord(letter_answer) - ord("A")
+            # Options look like this ['A)21', 'B)21.5', 'C)22', 'D)22.5', 'E)23']
+            raw_answer: str = item["options"][answer_index]
+            assert raw_answer.startswith(f"{letter_answer})")
+            # Remove the letter and closing parenthesis, e.g., 'A)21' -> '21'
+            answer: str = raw_answer.replace(f"{letter_answer})", "").strip()
+
+            prompt: str = self.add_instruction(question)
             examples.append({"prompt": prompt, "answer": answer})
         return examples
