@@ -680,10 +680,10 @@ class Executor:
 
             runtime_env = RuntimeEnv(pip=pip_dependencies)
 
-            # see if we should be using uv:
-            # cf https://www.anyscale.com/blog/uv-ray-pain-free-python-dependencies-in-clusters#using-uv-in-a-ray-job
-            if os.system("which uv >/dev/null 2>&1") == 0:
-                runtime_env["py_executable"] = "uv run --active"
+            # uv doesn't reuse dependencies and ends up installing CUDA-enabled
+            # torch, which is huge and causes OOMs, so disable it for now.
+            # if os.system("which uv >/dev/null 2>&1") == 0:
+            #     runtime_env["py_executable"] = "uv run --active"
 
             if isinstance(step.fn, ray.remote_function.RemoteFunction):
                 ref = step.fn.options(
