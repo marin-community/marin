@@ -1,6 +1,10 @@
+from io import BytesIO
 import csv
 import logging
 import os
+import requests
+import tempfile
+import zipfile
 
 from tqdm.auto import tqdm
 
@@ -37,7 +41,7 @@ class SVAMPEnv(MathEnv):
         abstract = "The problem of designing NLP solvers for math word problems (MWP) has seen sustained
         research activity and steady gains in the test accuracy. Since existing solvers achieve high performance
         on the benchmark datasets for elementary level MWPs containing one-unknown arithmetic word problems,
-        such problems are often considered {``}solved{''} with the bulk of research attention moving to more
+        such problems are often considered "solved" with the bulk of research attention moving to more
         complex MWPs. In this paper, we restrict our attention to English MWPs taught in grades four and lower.
         We provide strong evidence that the existing MWP solvers rely on shallow heuristics to achieve high
         performance on the benchmark datasets. To this end, we show that MWP solvers that do not have access
@@ -50,11 +54,17 @@ class SVAMPEnv(MathEnv):
     """
     NUM_FOLDS: int = 5
 
+    # Where the whole repository lives on GitHub
+    _REPO_ZIP = "https://github.com/arkilpatel/SVAMP/archive/refs/heads/main.zip"
+    # Sub‑directory inside that ZIP that we need
+    _SUBDIR_IN_ZIP = "SVAMP-main/data/cv_svamp_augmented"
+
     def __init__(self, tokenizer, **kwargs):
         self.tokenizer = tokenizer
 
-        # TODO: handle dataset download path
-        self.local_dataset_path: str = "/Users/tonylee/Dev/SVAMP/data/cv_svamp_augmented"
+        # Download and extract the SVAMP dataset to a temporary directory
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="svamp_")
+        self.local_dataset_path = self._download_and_extract(self._tmpdir.name)
 
         train_examples: list[dict] = []
         eval_examples: list[dict] = []
@@ -69,6 +79,26 @@ class SVAMPEnv(MathEnv):
             f"Initialized SVAMPEnv with {len(self.train_examples)} train examples "
             f"and {len(self.eval_examples)} eval examples."
         )
+
+        # Clean up the temporary directory
+        self._tmpdir.cleanup()
+        assert not os.path.exists(self._tmpdir.name), "Temporary directory was not cleaned up properly."
+
+    def _download_and_extract(self, destination_dir: str) -> str:
+        logger.info("Downloading the SVAMP repository...")
+        response = requests.get(self._REPO_ZIP)
+        response.raise_for_status()
+
+        with zipfile.ZipFile(BytesIO(response.content)) as z:
+            subdir_prefix = self._SUBDIR_IN_ZIP.rstrip("/") + "/"
+            relevant_files = [f for f in z.namelist() if f.startswith(subdir_prefix)]
+
+            logger.info(f"Extracting {len(relevant_files)} files from {subdir_prefix}")
+            z.extractall(destination_dir, members=relevant_files)
+
+        extracted_subdir = os.path.join(destination_dir, self._SUBDIR_IN_ZIP)
+        assert os.path.exists(extracted_subdir), f"Expected directory not found: {extracted_subdir}"
+        return extracted_subdir
 
     def _process_fold(self, fold: int, split: str) -> list[dict]:
         fold_folder: str = f"fold{fold}"
