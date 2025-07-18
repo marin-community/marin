@@ -109,7 +109,7 @@ class IsoFlopSweepConfig:
     flop_tolerance: float = 0.01
     hidden_layer_ratio: int = 128
     hidden_head_ratio: int = 128
-    lr_constant: float = 50.0
+    lr_constant: float = 2.0
     min_hidden_pow: int = 7
     max_hidden_pow: int = 15
     base_optimizer_config: OptimizerConfig = dataclasses.field(
@@ -260,7 +260,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
             batch_size,
             train_steps,
         ) in candidate_configs(config, budget):
-            lr = config.lr_constant / hidden_size / math.sqrt(batch_size)
+            lr = (config.lr_constant * math.sqrt(batch_size)) / hidden_size
 
             model_cfg = LlamaConfig(
                 seq_len=config.seq_len,
@@ -324,5 +324,5 @@ def generate_isoflop_sweep(
 
 
 if __name__ == "__main__":
-    steps = generate_isoflop_sweep(nemotron_mix, experiment_name="nemotron-scaling-co")
+    steps = generate_isoflop_sweep(nemotron_mix, experiment_name="nemotron-iso")
     executor_main(steps=steps)
