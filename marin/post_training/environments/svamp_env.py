@@ -22,6 +22,13 @@ class SVAMPEnv(MathEnv):
     In each fold, the test set consists of problems from only SVAMP while the train set consists of
     problems from the rest of SVAMP and complete MAWPS and ASDiv-A.
 
+    An example:
+    Prompt: bobby ate some pieces of candy . then he ate 25 more . if he ate a total of 43 pieces of
+    candy how many pieces of candy had he eaten at the start ?
+    Show your work in <think> </think> tags. And return the final answer in <answer> </answer>
+    tags. Assistant: Let me solve this step by step. <think>
+    Answer: 18
+
     Dataset: https://github.com/arkilpatel/SVAMP
 
     @inproceedings{patel-etal-2021-nlp,
