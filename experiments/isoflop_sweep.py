@@ -109,7 +109,7 @@ class IsoFlopSweepConfig:
     flop_tolerance: float = 0.01
     hidden_layer_ratio: int = 128
     hidden_head_ratio: int = 128
-    lr_constant: float = 2.0
+    lr_constant: float = 0.33
     min_hidden_pow: int = 7
     max_hidden_pow: int = 15
     base_optimizer_config: OptimizerConfig = dataclasses.field(
@@ -123,6 +123,8 @@ class IsoFlopSweepConfig:
             epsilon=1e-15,
             max_grad_norm=1,
             adamc_weight_decay=True,
+            lr_schedule="linear",
+            decay=0.2,
         ),
     )
     base_train_config: SimpleTrainConfig = dataclasses.field(
@@ -134,7 +136,6 @@ class IsoFlopSweepConfig:
             weight_decay=0.1,
             min_lr_ratio=0.0,
             lr_schedule="linear",
-            warmup=0.1,
             decay=0.2,
         )
     )
@@ -324,5 +325,5 @@ def generate_isoflop_sweep(
 
 
 if __name__ == "__main__":
-    steps = generate_isoflop_sweep(nemotron_mix, experiment_name="nemotron-iso")
+    steps = generate_isoflop_sweep(nemotron_mix, experiment_name="nemotron-proofpile-starcoder-wsd")
     executor_main(steps=steps)
