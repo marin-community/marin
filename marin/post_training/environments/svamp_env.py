@@ -1,11 +1,11 @@
-from io import BytesIO
 import csv
 import logging
 import os
-import requests
 import tempfile
 import zipfile
+from io import BytesIO
 
+import requests
 from tqdm.auto import tqdm
 
 from .math_env import MathEnv
@@ -52,11 +52,12 @@ class SVAMPEnv(MathEnv):
         remains to be done even for the simplest of the MWPs.",
     }
     """
+
     NUM_FOLDS: int = 5
 
     # Where the whole repository lives on GitHub
     _REPO_ZIP = "https://github.com/arkilpatel/SVAMP/archive/refs/heads/main.zip"
-    # Sub‑directory inside that ZIP that we need
+    # Subdirectory inside that ZIP that we need
     _SUBDIR_IN_ZIP = "SVAMP-main/data/cv_svamp_augmented"
 
     def __init__(self, tokenizer, **kwargs):
