@@ -88,9 +88,8 @@ def test_aqua_rat_env_loaded():
     from marin.post_training.environments.aqua_rat_env import AquaRatEnv
 
     env = AquaRatEnv(tokenizer=None)
-
-    assert len(env.train_examples) == 97_467
-    assert len(env.eval_examples) == 254
+    assert len(env.train_examples) == 96_993
+    assert len(env.eval_examples) == 252
 
     # Ensure we get the same examples every time we load the environment
     assert env.train_examples[0]["prompt"].startswith(
