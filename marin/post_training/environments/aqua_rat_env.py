@@ -56,6 +56,13 @@ class AquaRatEnv(MathEnv):
             # Remove the letter and closing parenthesis, e.g., 'A)21' -> '21'
             answer: str = raw_answer.replace(f"{letter_answer})", "").strip()
 
+            # Since we converted the multiple-choice problems to an open-ended format,
+            # we skip any questions where the correct answer is "none" or similar,
+            # which requires the choices to be provided.
+            if answer.lower().startswith("none"):
+                logger.warning(f"Skipping question '{question}' with answer '{answer}'.")
+                continue
+
             prompt: str = self.add_instruction(question)
             examples.append({"prompt": prompt, "answer": answer})
         return examples
