@@ -355,7 +355,7 @@ def _copy_multiple_inputs(input_paths: str | list[str], local_base_dir: str) -> 
         copy_files_in(input_paths, local_base_dir)
 
 
-def copy_files_in(input_path, local_base_dir):
+def copy_files_in(input_path, local_base_dir, input_filetype):
     # Ensure input_path doesn't end with a slash
     input_path = input_path.rstrip("/")
 
@@ -440,6 +440,7 @@ def do_dedup(
     false_positive_rate,
     ngram,
     processes,
+    input_filetype,
     read_only=False,
     bloom_filter_file="deduper_bloom_filter.bin",
     train_test_overlap=False,
@@ -462,7 +463,7 @@ def do_dedup(
         "dolma",
         "dedupe",
         "--documents",
-        f"{local_base_dir}/documents/**/*.jsonl.gz",
+        f"{local_base_dir}/documents/**/*.{input_filetype}",
         "--dedupe.paragraphs.attribute_name",
         attribute_name,
         "--dedupe.skip_empty",
@@ -575,6 +576,21 @@ def copy_files_out(local_base_dir, output_path, attribute_name):
     print(f"Uploaded {files_uploaded} files to {output_path}")
 
 
+@cached_or_construct_output(success_suffix="SUCCESS")
+def copy_file_out(input_file_path, output_file_path):
+
+    # Ensure the output directory exists
+    output_file_dir = os.path.dirname(output_file_path)
+    fsspec_mkdirs(output_file_dir)
+
+    # Copy the file using fsspec
+    with fsspec.open(input_file_path, "rb") as f_local:
+        with fsspec.open(output_file_path, "wb") as f_remote:
+            f_remote.write(f_local.read())
+
+    print(f"Uploaded file to {output_file_path}")
+
+
 def delete_jsonl_files(dir_path):
     """
     Delete all JSONL files (both .jsonl and .jsonl.gz) in the specified directory and its subdirectories.
@@ -589,10 +605,9 @@ def delete_jsonl_files(dir_path):
     dir_path = dir_path.rstrip("/")
 
     # Get all .jsonl and .jsonl.gz files in the directory and its subdirectories
-    glob_path_jsonl = f"{dir_path}/**/*.jsonl"
-    glob_path_jsonl_gz = f"{dir_path}/**/*.jsonl.gz"
+    glob_path_files = os.path.join(dir_path, f"**/*.{input_filetype}")
 
-    files_to_delete = fsspec_glob(glob_path_jsonl) + fsspec_glob(glob_path_jsonl_gz)
+    files_to_delete = fsspec_glob(glob_path_files)
 
     files_deleted = 0
     for file_path in tqdm(files_to_delete, desc="Deleting files"):
