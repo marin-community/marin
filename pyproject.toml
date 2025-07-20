@@ -77,6 +77,7 @@ gcp = [
   "cryptography>=45",
   "google-cloud-storage",
   "google-cloud-storage-transfer",
+  "google-cloud-compute",
 ]
 
 math = [
@@ -115,23 +116,48 @@ conflicts = [
         { extra = "crawl" },
         { group = "transform-test-deps" },
     ],
-
+    [
+        { extra = "tpu" },
+        { extra = "cuda12" },
+    ],
 ]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "tpu" },
+  { index = "pytorch-cu128", extra = "cuda12" },
+]
+resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
 
 [project.optional-dependencies]
 
 cuda12 = [
-    "jax[cuda12]>=0.5.1",
+    "jax[cuda12]>=0.6.2",
     "torch>=2.7.0",
 ]
 
 tpu = [
-    "jax[tpu]>=0.5.1",
+    "jax[tpu]>=0.6.2",
+    "torch>=2.7.0",
 ]
 
 crawl = [
     "w3lib",
     "datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
+]
+
+torch_cpu = [
     "datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
     "beautifulsoup4",
     "resiliparse",
@@ -269,9 +295,6 @@ exclude = [
     "marin/",
     "scripts/"
 ]
-
-[tool.uv.sources]
-resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
 
 
 [tool.uv_build]
