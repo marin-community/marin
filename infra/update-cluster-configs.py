@@ -99,12 +99,11 @@ configs = {
         "REGION": "us-east5",
         "ZONE": "us-east5-a",
         "BUCKET": "marin-us-east5",
-        "DOCKER_TAG": "20250712",
+        "DOCKER_TAG": "8f3bb0f4",
         "tpu_generation": "v5p",
-        "min_workers": 1,
+        "min_workers": 4,
         "worker_targets": {
-            "v5p-8": 1,
-            "v5p-32": 8,
+            "v5p-2048": 2,
         },
     },
     "marin-eu-west4-a": {
@@ -188,7 +187,7 @@ generation_configs = {
     "v5p": {
         "runtime_version": "v2-alpha-tpuv5",
         "base_worker": "8",
-        "slices": [8, 16, 32, 64, 128, 256, 512, 1024],
+        "slices": [8, 16, 32, 64, 128, 256, 512, 1024, 2048],
         "num_tpus": 4,
         "tpus_worker": 8,
     },
