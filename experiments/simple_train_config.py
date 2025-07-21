@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from levanter.callbacks.watch import WatchConfig
 from levanter.optim import OptimizerConfig
 from levanter.schedule import IntSchedule
-
 from marin.resources import ResourceConfig, TpuPodConfig
 
 

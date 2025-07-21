@@ -93,13 +93,13 @@ from urllib.parse import urlparse
 
 import draccus
 import fsspec
-import levanter.utils.fsspec_utils as fsspec_utils
 import ray
 import ray.remote_function
 from ray.runtime_env import RuntimeEnv
 from ray.util import state  # noqa
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
+import levanter.utils.fsspec_utils as fsspec_utils
 from marin.execution.executor_step_status import (
     STATUS_CANCELLED,
     STATUS_DEP_FAILED,

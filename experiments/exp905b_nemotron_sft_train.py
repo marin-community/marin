@@ -8,9 +8,13 @@ GitHub Issue: https://github.com/marin-community/marin/issues/1237
 """
 
 import dataclasses
+import logging
 
 from experiments.defaults import default_sft
 from experiments.evals.evals import default_sft_eval
+
+# Dataset configurations
+from experiments.exp905a_nemotron_sft_dstc import DATASETS, create_tokenization_step
 from experiments.llama import llama_8b
 from experiments.tootsie.exp600_tootsie import tootsie_8b_deeper_starling
 from experiments.tootsie.exp916_tootsie_spoonbill_cooldown import spoonbill_zloss_tulu3_sft_config
@@ -18,7 +22,6 @@ from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 from marin.resources import TpuPodConfig
 
-import logging
 logger = logging.getLogger("ray")
 
 # Experiment specific settings
@@ -49,8 +52,6 @@ BATCH_SIZE = 64
 EPOCHS = 3
 
 
-# Dataset configurations
-from experiments.exp905a_nemotron_sft_dstc import DATASETS, create_tokenization_step
 tokenized_datasets = {short_name: create_tokenization_step(hf_name) for short_name, hf_name in DATASETS.items()}
 
 # Mixture weights should be read from the json file written by exp905a
@@ -65,7 +66,7 @@ mixture_weights = {
     "tulu_3_sft_mixture": 749008790,
     "natural_reasoning": 966484170,
     "nemotron_sft": 34739443205,
-    "openthoughts3": 17449811417
+    "openthoughts3": 17449811417,
 }
 
 # Calculate the number of training steps from computed values
@@ -73,11 +74,10 @@ total_tokens = sum(mixture_weights.values())
 num_steps = total_tokens // (BATCH_SIZE * MODEL_CONFIG.seq_len) * EPOCHS + 1419967
 
 
-
 if __name__ == "__main__":
     sft_mixture_llama3 = lm_mixture_data_config(
         tokenized_datasets,
-        mixture_weights, # Edit in create_experiment_config_step, not here.
+        mixture_weights,  # Edit in create_experiment_config_step, not here.
         shuffle=True,
         missing_weights_are_validation=True,
     )
@@ -85,7 +85,7 @@ if __name__ == "__main__":
     _sft_config = dataclasses.replace(
         SFT_CONFIG,
         num_train_steps=num_steps,  # Using the values in the config file
-        train_batch_size=BATCH_SIZE,# Using the values in the config file
+        train_batch_size=BATCH_SIZE,  # Using the values in the config file
     )
 
     sft_step = default_sft(

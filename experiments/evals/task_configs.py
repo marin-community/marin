@@ -1,7 +1,6 @@
 from collections.abc import Sequence
 
 from levanter.eval_harness import TaskConfig
-
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
 # tasks to run (corresponding to lm_eval_harness tasks)

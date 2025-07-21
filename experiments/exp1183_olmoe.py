@@ -9,12 +9,11 @@ Reference Issue: https://github.com/marin-community/marin/issues/1183
 import logging
 import math
 
-from levanter.models.llama import LlamaConfig
-from levanter.models.mixtral import MixtralConfig
-
 from experiments.defaults import default_train
 from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
 from experiments.simple_train_config import SimpleTrainConfig
+from levanter.models.llama import LlamaConfig
+from levanter.models.mixtral import MixtralConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.resources import TpuPodConfig

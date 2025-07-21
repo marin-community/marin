@@ -4,10 +4,9 @@ Train 32B on Nemotron with Starcoderdata and Proofpile 2 using Muon
 
 import dataclasses
 
-from levanter.optim import MuonConfig
-
 from experiments.defaults import default_train
 from experiments.tootsie.exp1295_32b import llama_32b_remat, llama_32b_tootsie, llama_32b_train_config, nemotron_mix
+from levanter.optim import MuonConfig
 from marin.execution import executor_main
 from marin.resources import TpuPodConfig
 

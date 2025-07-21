@@ -5,11 +5,11 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 import ray
-from levanter.utils.py_utils import logical_cpu_core_count
-from levanter.utils.ray_utils import RayResources
 from ray.remote_function import RemoteFunction
 from ray.runtime_env import RuntimeEnv
 
+from levanter.utils.py_utils import logical_cpu_core_count
+from levanter.utils.ray_utils import RayResources
 from marin.resources_utils import AcceleratorType
 
 logger = logging.getLogger(__name__)

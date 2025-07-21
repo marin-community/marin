@@ -10,8 +10,9 @@ import logging
 import time
 
 import ray
-from levanter.utils.ray_utils import RayResources
 from ray.actor import ActorHandle
+
+from levanter.utils.ray_utils import RayResources
 
 from ..config import AbstractEnvConfig
 from ..env import SimpleEnv

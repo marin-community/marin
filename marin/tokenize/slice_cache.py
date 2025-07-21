@@ -17,6 +17,9 @@ from dataclasses import dataclass
 import fsspec
 import humanfriendly
 from jax.random import PRNGKey
+from tqdm_loggable.auto import tqdm
+from transformers import AutoTokenizer
+
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LMDatasetSourceConfig,
@@ -24,9 +27,6 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
 )
 from levanter.store import SerialCacheWriter, TreeCache
-from tqdm_loggable.auto import tqdm
-from transformers import AutoTokenizer
-
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 

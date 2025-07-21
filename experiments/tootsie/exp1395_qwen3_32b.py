@@ -5,12 +5,12 @@ Switch over to Qwen3 architecture, warmstarting from the llama-32b-tootsie
 import dataclasses
 
 import haliax
-from levanter.optim import AdamConfig
-from levanter.optim.clip_update_norm import ClipUpdateNormConfig
 
 from experiments.defaults import default_train
 from experiments.qwen3 import qwen3_32b
 from experiments.tootsie.exp1295_32b import llama_32b_tootsie, llama_32b_train_config, nemotron_mix
+from levanter.optim import AdamConfig
+from levanter.optim.clip_update_norm import ClipUpdateNormConfig
 from marin.execution import executor_main
 from marin.resources import TpuPodConfig
 

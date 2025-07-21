@@ -8,12 +8,12 @@ from collections.abc import Sequence
 
 import numpy as np
 import ray
-from levanter.models.llama import LlamaConfig
 
 from experiments.defaults import default_train
 from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama_150m, llama_300m
 from experiments.simple_train_config import SimpleTrainConfig
+from levanter.models.llama import LlamaConfig
 from marin.execution.executor import ExecutorStep, executor_main, versioned
 from marin.resources import TpuPodConfig
 

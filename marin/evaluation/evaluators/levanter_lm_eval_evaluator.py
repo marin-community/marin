@@ -6,14 +6,14 @@ from typing import ClassVar
 
 import fsspec
 import jmp
+
 import levanter
 import levanter.eval_harness as eval_harness
+from experiments.evals.task_configs import convert_to_levanter_task_config
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.distributed import RayConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-
-from experiments.evals.task_configs import convert_to_levanter_task_config
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
 from marin.evaluation.evaluators.levanter_tpu_evaluator import LevanterTpuEvaluator

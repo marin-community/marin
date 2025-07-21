@@ -27,10 +27,10 @@ from dataclasses import dataclass
 
 from datasets import get_dataset_config_names, get_dataset_split_names
 from huggingface_hub import get_collection, list_repo_refs
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
 
 from experiments.defaults import default_tokenize, default_validation_sets
 from experiments.models import ModelConfig, download_model_step
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from marin.download.huggingface.download import DownloadConfig, download
 from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned

@@ -5,9 +5,8 @@ This model has 32 experts and only activates 4 of them.
 
 import logging
 
-from levanter.models.mixtral import MixtralConfig
-
 from experiments.simple_train_config import SimpleTrainConfig
+from levanter.models.mixtral import MixtralConfig
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun

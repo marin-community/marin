@@ -6,13 +6,12 @@ import dataclasses
 import logging
 from collections.abc import Sequence
 
-from levanter.data.text import LMMixtureDatasetConfig
-from levanter.models.llama import LlamaConfig
-
 from experiments.defaults import default_train
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
+from levanter.data.text import LMMixtureDatasetConfig
+from levanter.models.llama import LlamaConfig
 from marin.execution.executor import ExecutorStep, InputName
 from marin.resources import TpuPodConfig
 

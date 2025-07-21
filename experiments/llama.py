@@ -2,10 +2,9 @@
 Specifies a sequence of Llama 3 models from small to large.
 """
 
+from experiments.simple_train_config import SimpleTrainConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig
-
-from experiments.simple_train_config import SimpleTrainConfig
 from marin.resources import TpuPodConfig
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"

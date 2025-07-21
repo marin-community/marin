@@ -246,12 +246,12 @@ def transform_and_write_batch(
 def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     """Shards the dataset; copies datafiles from GCP to instance, loads
     data using the `datasets` package, and write shards to target directory.
-    We now implement checks to ensure that the temporary files are deleted 
+    We now implement checks to ensure that the temporary files are deleted
     after the script is done to free up disk space for others.
 
     Adding some documentation so that others won't attempt the same things.
     - There is no way to pass in the gs:// path to the `datasets` package in Ray. The main issue is
-      that the `datasets` package always resolve the relative path, which resolves to a weird 
+      that the `datasets` package always resolve the relative path, which resolves to a weird
       `/tmp/...` path when executed in Ray and the `datasets` package will fail.
     - This is the main reason why we need to copy the data from GCP to local instance.
     - However, when we do this, we cannot a-priori know the splits that are available in the dataset.

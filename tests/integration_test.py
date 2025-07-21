@@ -4,11 +4,11 @@ import os
 import sys
 
 import draccus
+
+from experiments.defaults import default_tokenize
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
-
-from experiments.defaults import default_tokenize
 from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import (
     ExecutorMainConfig,

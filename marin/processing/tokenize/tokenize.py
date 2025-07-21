@@ -25,9 +25,11 @@ from collections.abc import Sequence
 import draccus
 import fsspec
 import humanfriendly
-import levanter
 import ray
 import transformers
+from ray.runtime_env import RuntimeEnv
+
+import levanter
 from levanter.data.sharded_datasource import ShardedDataSource, UrlDataSource
 from levanter.data.text import (
     HfDatasetSourceConfig,
@@ -38,8 +40,6 @@ from levanter.data.text import (
     preprocessor_for_format,
 )
 from levanter.store.cache import CacheOptions
-from ray.runtime_env import RuntimeEnv
-
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
 from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size
 

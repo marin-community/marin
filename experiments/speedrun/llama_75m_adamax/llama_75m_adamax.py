@@ -6,10 +6,10 @@ import logging
 from dataclasses import dataclass
 
 import optax
-from levanter.optim import OptimizerConfig
 
 from experiments.llama import llama_75m
 from experiments.simple_train_config import SimpleTrainConfig
+from levanter.optim import OptimizerConfig
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun

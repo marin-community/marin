@@ -10,8 +10,6 @@ that point the loss started to increase again. I still don't know why.
 
 import dataclasses
 
-from levanter.callbacks.watch import WatchConfig
-
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_sft, default_train
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
@@ -29,6 +27,7 @@ from experiments.tootsie.exp600_tootsie import (
     llama_8b_train_config_phase3,
     phase_3_tokenized,
 )
+from levanter.callbacks.watch import WatchConfig
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 from marin.resources import TpuPodConfig

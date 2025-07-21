@@ -5,9 +5,9 @@ import numpy as np
 import pytest
 import requests  # For requests.exceptions.RequestException
 from huggingface_hub.utils import HfHubHTTPError
-from levanter.store import TreeCache
 from transformers import AutoTokenizer
 
+from levanter.store import TreeCache
 from marin.processing.tokenize.download_pretokenized import (
     PretokenizedCacheDownloadConfig,
     _actually_download_pretokenized_cache,

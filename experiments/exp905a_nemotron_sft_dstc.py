@@ -1,27 +1,27 @@
-# This script is a helper script to download, transform, tokenize, and count 
+# This script is a helper script to download, transform, tokenize, and count
 # tokens for SFT datasets.
 # In addition to previous SFT datasets, we include Nemotron SFT and OpenThoughts3-1.2M.
 
-from experiments.posttrain.instruction_datasets import (
-    INSTRUCTION_DATASET_NAME_TO_CONFIG,
-    transform_dataset_step,
-    download_dataset_step,
-    get_instruction_dataset,
-)
-from levanter.data.text import ChatLmDatasetFormat
+import logging
 
+# Define datasets
+from exp808_sft_mixture import DATASETS as EXP808_DATASETS
+
+from experiments.data_utils.count_dataset import compile_and_store_num_rows_step, compile_and_store_num_tokens_step
 from experiments.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
+from experiments.posttrain.instruction_datasets import (
+    INSTRUCTION_DATASET_NAME_TO_CONFIG,
+    download_dataset_step,
+    get_instruction_dataset,
+    transform_dataset_step,
+)
+from levanter.data.text import ChatLmDatasetFormat
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
 )
-from experiments.data_utils.count_dataset import (
-    compile_and_store_num_rows_step, 
-    compile_and_store_num_tokens_step
-)
 
-import logging
 logger = logging.getLogger("ray")
 
 
@@ -39,16 +39,16 @@ def create_tokenization_step(dataset_name: str) -> ExecutorStep:
     """
     # Get the dataset with only train split
     if dataset_name == "nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT":
-        dataset = get_instruction_dataset(dataset_name, splits=['chat', 'code', 'math', 'science', 'safety'])
+        dataset = get_instruction_dataset(dataset_name, splits=["chat", "code", "math", "science", "safety"])
     else:
-        dataset = get_instruction_dataset(dataset_name, splits=['train'])
+        dataset = get_instruction_dataset(dataset_name, splits=["train"])
 
     # Get the last part of the path and clean it up
     short_name = dataset_name.split("/")[-1].lower().replace("-", "_")
-    
+
     # Use .jsonl.gz extension since transform_and_write_batch produces .jsonl.gz files
     dataset_path = dataset / "**/*.jsonl.gz"
-        
+
     return default_tokenize(
         name=f"{short_name}_marin_tokenizer",
         dataset=dataset_path,
@@ -57,13 +57,12 @@ def create_tokenization_step(dataset_name: str) -> ExecutorStep:
     )
 
 
-# Define datasets
-from exp808_sft_mixture import DATASETS as EXP808_DATASETS
 DATASETS = {
     **EXP808_DATASETS,
     "nemotron_sft": "nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
     "openthoughts3": "open-thoughts/OpenThoughts3-1.2M",
 }
+
 
 def download_transform_tokenize_count_steps():
     ALL_STEPS = []
@@ -76,25 +75,20 @@ def download_transform_tokenize_count_steps():
         data_transform_step = transform_dataset_step(config, data_download_step)
         # Tokenize the dataset
         data_tokenize_step = create_tokenization_step(full_ds_name)
-        
-        ALL_STEPS += [data_download_step] + [data_transform_step] + [data_tokenize_step]
+
+        ALL_STEPS += [data_download_step, data_transform_step, data_tokenize_step]
         TOKENIZATION_STEPS[short_ds_name] = [data_tokenize_step]
-    
+
     # Compile token counts
     ALL_STEPS.append(
-        compile_and_store_num_rows_step(
-            TOKENIZATION_STEPS,
-            'experiments/exp905a_nemotron_sft_dstc/num_rows'
-        )
+        compile_and_store_num_rows_step(TOKENIZATION_STEPS, "experiments/exp905a_nemotron_sft_dstc/num_rows")
     )
     ALL_STEPS.append(
-        compile_and_store_num_tokens_step(
-            TOKENIZATION_STEPS,
-            'experiments/exp905a_nemotron_sft_dstc/num_tokens'
-        )
+        compile_and_store_num_tokens_step(TOKENIZATION_STEPS, "experiments/exp905a_nemotron_sft_dstc/num_tokens")
     )
-    
+
     return ALL_STEPS
+
 
 ########### Main ###########
 if __name__ == "__main__":

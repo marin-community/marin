@@ -6,10 +6,9 @@ This module defines a function that returns tokenization steps for each dataset 
 
 import os.path
 
-from levanter.store.cache import CacheOptions
-
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import dolmino
+from levanter.store.cache import CacheOptions
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep

@@ -9,8 +9,9 @@ import abc
 from dataclasses import dataclass
 from typing import Any
 
-from levanter.utils.ray_utils import RayResources
 from ray.actor import ActorHandle
+
+from levanter.utils.ray_utils import RayResources
 
 from ..resources import ResourceConfig
 from .types import InferenceConfig, InferenceEndpoint, RolloutSink

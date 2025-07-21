@@ -1,10 +1,9 @@
 import dataclasses
 
-from levanter.data.text import TextLmDatasetFormat
-
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import dclm_baseline, dclm_baseline_wrong, proofpile_2, starcoderdata
+from levanter.data.text import TextLmDatasetFormat
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
