@@ -58,7 +58,7 @@ def compute_stats(config: ComputeStatsConfig):
         "max": max(numbers),
     }
     stats_path = os.path.join(config.output_path, "stats.json")
-    with open(stats_path, "w") as f:
+    with fsspec.open(stats_path, "w") as f:
         json.dump(stats, f)
 
 
