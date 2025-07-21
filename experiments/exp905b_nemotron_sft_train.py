@@ -27,7 +27,7 @@ EXPERIMENT_NAME = "sft/mixture_sft_deeper_starling_with_nemotron_and_openthought
 SFT_CONFIG = dataclasses.replace(
     spoonbill_zloss_tulu3_sft_config,
     learning_rate=1e-4,
-    resources=TpuPodConfig(tpu_type="v4-128", slice_count=2),
+    resources=TpuPodConfig(tpu_type="v4-128", slice_count=1),
     initialize_from_checkpoint_path=tootsie_8b_deeper_starling.cd("checkpoints/step-1419967").nonblocking(),
 )
 
@@ -45,7 +45,7 @@ EXPERIMENT_TAGS = [
 ]
 
 # Training parameters
-BATCH_SIZE = 128
+BATCH_SIZE = 64
 EPOCHS = 3
 
 
@@ -70,7 +70,7 @@ mixture_weights = {
 
 # Calculate the number of training steps from computed values
 total_tokens = sum(mixture_weights.values())
-num_steps = total_tokens // (BATCH_SIZE * MODEL_CONFIG.seq_len) * EPOCHS
+num_steps = total_tokens // (BATCH_SIZE * MODEL_CONFIG.seq_len) * EPOCHS + 1419967
 
 
 
