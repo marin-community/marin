@@ -11,7 +11,7 @@ CLEANUP_POLICY_30D = [
         "name": "delete-older-than-30d",
         "action": {"type": "Delete"},
         "condition": {
-            "olderThan": f"{30 * 24 * 60 * 60}s",
+            "olderThan": "30d",
             "tagState": "ANY",
         },
     },
