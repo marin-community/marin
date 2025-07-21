@@ -3,6 +3,7 @@ from typing import Any
 
 from transformers import AutoTokenizer
 
+from .environments.humaneval_env import HumanEvalEnv
 from .environments.marin_env import MarinEnv
 from .environments.math_env import MathEnv
 from .environments.numina_math_env import NuminaMathEnv
@@ -12,6 +13,7 @@ from .environments.swe_bench_env import SWEBenchEnv
 
 # Specify environments here
 ENVIRONMENT_NAME_TO_CLASS = {
+    "humaneval": HumanEvalEnv,
     "math": MathEnv,
     "numina_math": NuminaMathEnv,
     "olym_math": OlymMathEnv,
