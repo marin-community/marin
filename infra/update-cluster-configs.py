@@ -9,22 +9,15 @@ this_path = os.path.dirname(os.path.abspath(__file__))
 cluster_template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 vllm_template_path = os.path.join(this_path, "marin-vllm-template.yaml")
 
+LATEST = "20250721"  # The latest docker tag used for the clusters, update this when you update the docker image.
+
 configs = {
     "marin-us-central2": {
         "NAME": "marin-us-central2",
         "REGION": "us-central2",
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": "20250712",
-        "tpu_generation": "v4",
-        "min_workers": 4,
-    },
-    "marin-us-central2-compress": {
-        "NAME": "marin-us-central2-compress",
-        "REGION": "us-central2",
-        "ZONE": "us-central2-b",
-        "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": "20250712",
+        "DOCKER_TAG": LATEST,
         "tpu_generation": "v4",
         "min_workers": 4,
     },
@@ -33,7 +26,7 @@ configs = {
         "REGION": "us-central1",
         "ZONE": "us-central1-a",
         "BUCKET": "marin-us-central1",
-        "DOCKER_TAG": "4a47ffc0",
+        "DOCKER_TAG": LATEST,
         "tpu_generation": "v5p",
         "min_workers": 1,
         "worker_targets": {
@@ -45,7 +38,7 @@ configs = {
         "REGION": "us-central2",
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": "20250712",
+        "DOCKER_TAG": LATEST,
         "tpu_generation": "v4",
         "min_workers": 0,
     },
@@ -54,11 +47,11 @@ configs = {
         "REGION": "europe-west4",
         "ZONE": "europe-west4-b",
         "BUCKET": "marin-eu-west4",
-        "DOCKER_TAG": "89b461b3",
+        "DOCKER_TAG": LATEST,
         "tpu_generation": "v5e",
         "min_workers": 0,
         "worker_targets": {
-            "v5e-256": 4,
+            "v5e-128": 1,
         },
     },
     "marin-us-west4": {
@@ -66,7 +59,7 @@ configs = {
         "REGION": "us-west4",
         "ZONE": "us-west4-a",
         "BUCKET": "marin-us-west4",
-        "DOCKER_TAG": "89b461b3",
+        "DOCKER_TAG": LATEST,
         "tpu_generation": "v5e",
         "min_workers": 0,
     },
@@ -75,7 +68,7 @@ configs = {
         "REGION": "us-east1",
         "ZONE": "us-east1-d",
         "BUCKET": "marin-us-east1",
-        "DOCKER_TAG": "89b461b3",
+        "DOCKER_TAG": LATEST,
         "tpu_generation": "v6e",
         "min_workers": 0,
         "worker_targets": {
@@ -87,7 +80,7 @@ configs = {
         "REGION": "us-east5",
         "ZONE": "us-east5-b",
         "BUCKET": "marin-us-east5",
-        "DOCKER_TAG": "89b461b3",
+        "DOCKER_TAG": LATEST,
         "tpu_generation": "v6e",
         "min_workers": 0,
         "worker_targets": {
@@ -99,7 +92,7 @@ configs = {
         "REGION": "us-east5",
         "ZONE": "us-east5-a",
         "BUCKET": "marin-us-east5",
-        "DOCKER_TAG": "8f3bb0f4",
+        "DOCKER_TAG": LATEST,
         "tpu_generation": "v5p",
         "min_workers": 4,
         "worker_targets": {
@@ -111,21 +104,12 @@ configs = {
         "REGION": "europe-west4",
         "ZONE": "europe-west4-a",
         "BUCKET": "marin-eu-west4",
-        "DOCKER_TAG": "89b461b3",
+        "DOCKER_TAG": LATEST,
         "tpu_generation": "v6e",
         "min_workers": 0,
         "worker_targets": {
-            "v6e-128": 8,
+            "v6e-128": 2,
         },
-    },
-    "marin-asia-northeast1": {
-        "NAME": "marin-asia-northeast1",
-        "REGION": "asia-northeast1",
-        "ZONE": "asia-northeast1-b",
-        "BUCKET": "marin-asia-northeast1",
-        "DOCKER_TAG": "89b461b3",
-        "tpu_generation": "v6e",
-        "min_workers": 0,
     },
     "marin-us-east5-b-vllm": {
         "NAME": "marin-us-east5-b-vllm",

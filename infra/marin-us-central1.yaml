@@ -24,7 +24,7 @@ provider:
 
 
 docker:
-    image: "us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:4a47ffc0"
+    image: "us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20250721"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -40,6 +40,7 @@ docker:
       - --privileged
       - -v "/tmp:/tmp"
       - --ulimit nofile=1048576:1048576
+      - -e RAY_TPU_MAX_CONCURRENT_ACTIVE_CONNECTIONS=64
 
 
 initialization_commands:
