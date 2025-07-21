@@ -72,13 +72,6 @@ docs = [
     "mkdocs-include-markdown-plugin>=7.1.5",
 ]
 
-gcp = [
-  "google-api-python-client>=2.175.0",  # ray GCP workaround
-  "cryptography>=45",
-  "google-cloud-storage",
-  "google-cloud-storage-transfer",
-  "google-cloud-compute",
-]
 
 math = [
   "pylatexenc",
@@ -90,6 +83,8 @@ metrics = [
 ]
 
 
+
+
 transform_test_deps = [
     "trafilatura>=2.0",
     "readabilipy",
@@ -99,9 +94,17 @@ transform_test_deps = [
     "resiliparse",
 ]
 
+dev = [
+    {include-group="test"},
+    {include-group="lint"},
+    {include-group="docs"},
+#    {include-group="gcp"},
+    {include-group="math"},
+    {include-group="transform_test_deps"},
+    "marin[gcp]"
+]
 
 [tool.uv]
-default-groups = ["test", "lint", "docs", "gcp", "math", "transform_test_deps"]
 
 conflicts = [
     [
@@ -120,13 +123,25 @@ conflicts = [
         { extra = "tpu" },
         { extra = "cuda12" },
     ],
+    [
+        { extra = "cuda12" },
+        { extra = "cpu" },
+    ],
+    [
+        { extra = "tpu" },
+        { extra = "cpu" },
+    ]
 ]
 
 [tool.uv.sources]
 torch = [
-  { index = "pytorch-cpu", extra = "tpu" },
-  { index = "pytorch-cu128", extra = "cuda12" },
+  # CPU‑only index when --extra cpu is set
+  { index = "pytorch-cpu",  marker = "extra == 'cpu'" },
+  # CUDA12 index only when --extra cuda12 *and* NOT --extra cpu
+  { index = "pytorch-cu128", marker = "extra != 'cpu' and extra == 'cuda12'" },
 ]
+
+
 resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
 
 [[tool.uv.index]]
@@ -142,6 +157,15 @@ explicit = true
 
 [project.optional-dependencies]
 
+
+gcp = [
+    "google-api-python-client>=2.175.0",  # ray GCP workaround
+    "cryptography>=45",
+    "google-cloud-storage",
+    "google-cloud-storage-transfer",
+    "google-cloud-compute",
+]
+
 cuda12 = [
     "jax[cuda12]>=0.6.2",
     "torch>=2.7.0",
@@ -152,12 +176,14 @@ tpu = [
     "torch>=2.7.0",
 ]
 
+cpu = [
+    "torch>=2.7.0",
+    "jax>=0.6.2",
+]
+
 crawl = [
     "w3lib",
     "datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
-]
-
-torch_cpu = [
     "datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
     "beautifulsoup4",
     "resiliparse",
@@ -228,7 +254,6 @@ tokenize_train = [
 
 post_training = [
     "gcsfs",
-    "jax==0.5.2",
     "transformers",
     "flax==0.10.0",
     "sentencepiece>=0.1.99",
@@ -237,8 +262,7 @@ post_training = [
     "tyro==0.8.11",
     "tqdm",
     "wandb",
-    "einops==0.8.0",
-    "numpy<2.0.0",
+    "einops",
     "ringattention==0.1.2",
     "redis==4.3.4",
     "Flask==3.0.3",
