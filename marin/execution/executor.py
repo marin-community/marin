@@ -112,6 +112,7 @@ from marin.execution.executor_step_status import (
     get_latest_status_from_gcs,
     get_status_path,
 )
+from marin.execution.placement_group_cleanup_actor import PlacementGroupCleanupActor
 from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
 from marin.utilities.executor_utils import get_pip_dependencies
 from marin.utilities.json_encoder import CustomJsonEncoder
@@ -534,6 +535,15 @@ class Executor:
             # This is to ensure that the status actor is only schduled on the headnode
             scheduling_strategy=strategy,
         ).remote()
+
+        self.pg_cleanup_actor: PlacementGroupCleanupActor = PlacementGroupCleanupActor.options(
+            name="placement_group_cleanup_actor",
+            get_if_exists=True,
+            lifetime="detached",
+            scheduling_strategy=strategy,
+        ).remote()
+        # Fire and forget the cleanup loop
+        self.pg_cleanup_actor.run.remote()
         # TODO: Add a design docstring of how status_actor works
 
     def run(
