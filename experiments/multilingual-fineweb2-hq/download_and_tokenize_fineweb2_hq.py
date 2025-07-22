@@ -62,6 +62,30 @@ FINEWEB2_HQ_MIXTURE_WEIGHTS = {  # From https://huggingface.co/datasets/epfml/Fi
     "vie_Latn": 59 / 1024,
 }
 
+LLAMA3_TOKENS_PER_WORD = { # https://colab.research.google.com/drive/1SAd9lg2xnD69pzRwbUgLfKpcOx1sE9rk#scrollTo=DpkLnQLW75jx
+    "eng_Latn": 1.0,
+    "arb_Arab": 1.86,     
+    "ces_Latn": 1.88,    
+    "fra_Latn": 1.6018518518518519, 
+    "ell_Grek": 2.29,     
+    "cmn_Hani": 1.0,      
+    "por_Latn": 1.53,    
+    "rus_Cyrl": 1.72,     
+    "tur_Latn": 1.95,    
+    "pol_Latn": 2.05,    
+    "nld_Latn": 1.41,    
+    "jpn_Jpan": 1.46,     
+    "fas_Arab": 1.69,    
+    "deu_Latn": 1.5727272727272728,  
+    "spa_Latn": 1.43,     
+    "ita_Latn": 1.81,    
+    "ind_Latn": 1.85,     
+    "dan_Latn": 1.47,     
+    "swe_Latn": 1.59,     
+    "hun_Latn": 1.84,     
+    "vie_Latn": 1.92     
+}
+
 fineweb2_raw = ExecutorStep(
     name="raw/fineweb2_hq",
     fn=download_hf,
