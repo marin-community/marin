@@ -39,7 +39,7 @@ FINEWEB2_DATASETS = {
     "vie_Latn": ["vie_Latn/*.parquet"],
 }
 
-FINEWEB2_HQ_MIXTURE_WEIGHTS = {
+FINEWEB2_HQ_MIXTURE_WEIGHTS = {  # From https://huggingface.co/datasets/epfml/FineWeb2-HQ
     "arb_Arab": 94 / 1024,
     "rus_Cyrl": 1.2,  # TiB
     "cmn_Hani": 784 / 1024,  # in GiB
