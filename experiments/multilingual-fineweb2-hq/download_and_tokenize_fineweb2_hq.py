@@ -62,7 +62,7 @@ FINEWEB2_HQ_MIXTURE_WEIGHTS = {  # From https://huggingface.co/datasets/epfml/Fi
     "vie_Latn": 59 / 1024,
 }
 
-download_fineweb2_step = ExecutorStep(
+fineweb2_raw = ExecutorStep(
     name="raw/fineweb2_hq",
     fn=download_hf,
     config=DownloadConfig(
@@ -71,14 +71,12 @@ download_fineweb2_step = ExecutorStep(
         revision="c0c06e94fd3a44ae9e802b2b0fc533817601eb5e",
         wait_for_completion=True,
     ),
-).with_output_path("raw/fineweb2")
-
-fineweb2_path = output_path_of(download_fineweb2_step, "")
+).with_output_path("raw/fineweb2-hq")
 
 
 def _get_fineweb2_split_paths(split):
     patterns = FINEWEB2_DATASETS[split]
-    fineweb2_split_paths = [output_path_of(download_fineweb2_step, pattern) for pattern in patterns]
+    fineweb2_split_paths = [output_path_of(fineweb2_raw, pattern) for pattern in patterns]
     return fineweb2_split_paths
 
 
