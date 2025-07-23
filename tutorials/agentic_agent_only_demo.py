@@ -13,6 +13,7 @@ from marin.agents.dataset_agent import DatasetAgent
 from marin.agents.hparam_agent import HyperparameterAgent
 from marin.resources import CpuOnlyConfig
 
+
 # Optional: Multi-turn user interaction callback for manual/suggest mode
 def cli_user_interact(agent, prompt, data, context=None):
     schema = context.get("schema") if context else None
@@ -48,6 +49,7 @@ def cli_user_interact(agent, prompt, data, context=None):
         else:
             raise RuntimeError("User rejected the agent suggestion.")
 
+
 # 1. Choose a dataset
 hf_id = "roneneldan/TinyStories"
 
@@ -60,17 +62,22 @@ print(dataset_info_auto["config_snippet"])
 print("\n=== DATASET AGENT: MANUAL MODE ===")
 # Update lambda to pass context through
 # (Assume dataset_agent_manual is created after schema/sample_records are available)
-dataset_agent_manual = DatasetAgent(model="gpt-4o", provider="openai", mode="manual", user_interact=lambda p, d, c: cli_user_interact(dataset_agent_manual, p, d, c))
+dataset_agent_manual = DatasetAgent(
+    model="gpt-4o",
+    provider="openai",
+    mode="manual",
+    user_interact=lambda p, d, c: cli_user_interact(dataset_agent_manual, p, d, c),
+)
 dataset_info_manual = dataset_agent_manual.validate(hf_id)
 print("\n[Manual] Agent config snippet:")
 print(dataset_info_manual["config_snippet"])
 
 # === DATASET AGENT: AUTO MODE (HuggingFace Local) ===
 # NOTE: This example requires a GPU and a local or open HuggingFace model. Uncomment to test with GPU support.
-#dataset_agent_hf = DatasetAgent(model="gpt2", provider="huggingface", mode="auto")
-#dataset_info_hf = dataset_agent_hf.validate(hf_id)
-#print("\n[HuggingFace] Agent config snippet:")
-#print(dataset_info_hf["config_snippet"])
+# dataset_agent_hf = DatasetAgent(model="gpt2", provider="huggingface", mode="auto")
+# dataset_info_hf = dataset_agent_hf.validate(hf_id)
+# print("\n[HuggingFace] Agent config snippet:")
+# print(dataset_info_hf["config_snippet"])
 
 # 2. Hyperparameter suggestion
 default_hparams = {
@@ -90,8 +97,13 @@ for cfg in hparam_suggestions_auto["suggested_configs"]:
     print(cfg)
 
 print("\n=== HYPERPARAM AGENT: MANUAL MODE ===")
-hparam_agent_manual = HyperparameterAgent(model="gpt-4o", provider="openai", mode="manual", user_interact=lambda p, d, c=None: cli_user_interact(hparam_agent_manual, p, d, c))
+hparam_agent_manual = HyperparameterAgent(
+    model="gpt-4o",
+    provider="openai",
+    mode="manual",
+    user_interact=lambda p, d, c=None: cli_user_interact(hparam_agent_manual, p, d, c),
+)
 hparam_suggestions_manual = hparam_agent_manual.suggest(default_hparams, dataset_metadata)
 print("\n[Manual] Agent hyperparameter suggestions:")
 for cfg in hparam_suggestions_manual["suggested_configs"]:
-    print(cfg) 
+    print(cfg)

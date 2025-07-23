@@ -1,7 +1,9 @@
-from typing import Any, Dict, Optional, Callable
 import logging
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
 
 class BaseAgent:
     """
@@ -11,14 +13,15 @@ class BaseAgent:
       - 'manual': interactively confirms/edits with user via callback
       - 'suggest': provides suggestions, user must confirm/modify
     """
+
     def __init__(
         self,
         model: str,
         provider: str = "openai",
         mode: str = "auto",
-        user_interact: Optional[Callable[[str, Any], Any]] = None,
+        user_interact: Callable[[str, Any], Any] | None = None,
         max_retries: int = 3,
-        **kwargs
+        **kwargs,
     ):
         """
         Args:
@@ -60,10 +63,7 @@ class BaseAgent:
                 if self.provider == "openai":
                     extra_kwargs = {"response_format": {"type": "json_object"}} if use_json_mode else {}
                     response = self.llm.chat.completions.create(
-                        model=self.model,
-                        messages=[{"role": "user", "content": prompt}],
-                        **extra_kwargs,
-                        **kwargs
+                        model=self.model, messages=[{"role": "user", "content": prompt}], **extra_kwargs, **kwargs
                     )
                     output = response.choices[0].message.content
                 elif self.provider == "huggingface":
@@ -87,4 +87,4 @@ class BaseAgent:
         return data
 
     def run(self, *args, **kwargs) -> Any:
-        raise NotImplementedError("Subclasses must implement the run() method.") 
+        raise NotImplementedError("Subclasses must implement the run() method.")

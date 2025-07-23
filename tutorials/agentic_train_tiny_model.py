@@ -11,12 +11,13 @@ from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_nano
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
-from marin.resources import CpuOnlyConfig
 from marin.agents.dataset_agent import DatasetAgent
 from marin.agents.hparam_agent import HyperparameterAgent
+from marin.execution.executor import executor_main
+from marin.resources import CpuOnlyConfig
 
 # Optional: Example user interaction callback for manual/suggest mode
+
 
 def cli_user_interact(prompt, data):
     print("\nAGENT SUGGESTION:")
@@ -36,6 +37,7 @@ def cli_user_interact(prompt, data):
         return "\n".join(lines)
     else:
         raise RuntimeError("User rejected the agent suggestion.")
+
 
 # 1. Choose a dataset
 hf_id = "roneneldan/TinyStories"
@@ -75,7 +77,9 @@ hparam_suggestions = hparam_agent_auto.suggest(default_hparams, dataset_metadata
 # Pick the first valid config (could parse YAML/dict if needed)
 
 # MANUAL/SUGGEST MODE (human-in-the-loop)
-hparam_agent_manual = HyperparameterAgent(model="gpt-4", provider="openai", mode="manual", user_interact=cli_user_interact)
+hparam_agent_manual = HyperparameterAgent(
+    model="gpt-4", provider="openai", mode="manual", user_interact=cli_user_interact
+)
 # Uncomment to try manual mode:
 # hparam_suggestions = hparam_agent_manual.suggest(default_hparams, dataset_metadata)
 
@@ -102,4 +106,4 @@ nano_tinystories_model = default_train(
 )
 
 if __name__ == "__main__":
-    executor_main(steps=[nano_tinystories_model]) 
+    executor_main(steps=[nano_tinystories_model])

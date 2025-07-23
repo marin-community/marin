@@ -1,3 +1,3 @@
 from .base_agent import BaseAgent
 from .dataset_agent import DatasetAgent, DatasetAgentStep
-from .hparam_agent import HyperparameterAgent, HparamAgentStep 
+from .hparam_agent import HparamAgentStep, HyperparameterAgent

@@ -24,4 +24,4 @@ agent_steps:
   - Inspect schema/examples
   - Validate for LLM suitability
   - Generate config
-  - Output recipe 
+  - Output recipe
