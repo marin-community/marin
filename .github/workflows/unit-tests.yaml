@@ -7,7 +7,6 @@ on:
   pull_request:
     branches:
       - main
-      -
 
 # TODO: change to uv
 
@@ -25,22 +24,7 @@ jobs:
         node-version: ["20.10.0"]
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Conda
-        uses: conda-incubator/setup-miniconda@v2
-        with:
-          auto-update-conda: true
-          python-version: ${{ matrix.python-version }}
-          activate-environment: marin_unit_test_env
-          auto-activate-base: false
-
-      - name: Set up Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v3
-        with:
-          node-version: ${{ matrix.node-version }}
-
+      - uses: actions/checkout@v4
       - name: Cache pip dependencies
         uses: actions/cache@v3
         with:
@@ -48,21 +32,29 @@ jobs:
             ~/.cache/pip
             ~/.cache/uv
           key: ${{ runner.os }}-${{ matrix.python-version }}-unittest
-
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install
+      - name: Install dependencies
+        run: uv sync --dev
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
       - name: Install dependencies
         shell: bash -l {0}
         run: |
-          conda install -c conda-forge pandoc
-          npm install -g pandiff
-          python -m pip install --upgrade pip
-          pip install "uv>=0.7.19" toml
           uv sync
-
       - name: Test with pytest (no GCP)
         shell: bash -l {0}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           export CI=true # Set CI environment variable; It's needed for tokenization
-          CI=true PYTHONPATH=tests:. uv run pytest -m "not gcp" --durations=0 --tb=no -vv tests/
+          CI=true PYTHONPATH=tests:. uv run pytest -m "not gcp" --durations=0 -vv tests/
 
