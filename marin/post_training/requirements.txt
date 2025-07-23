@@ -11,7 +11,7 @@ wandb==0.16.1
 einops==0.8.0
 numpy<2.0.0
 ringattention==0.1.2
-redis==4.3.4
+redis==4.4.4
 Flask==3.0.3
 flask-cors==5.0.0
 sympy
