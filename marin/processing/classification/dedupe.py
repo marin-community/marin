@@ -21,6 +21,7 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 import ray
+from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from tqdm import tqdm
 
 from marin.core.runtime import cached_or_construct_output
@@ -303,7 +304,7 @@ def dolma_dedup(
 ):
 
     dolma_dedupe_ray_remote_args = {
-        "scheduling_strategy": ray.util.scheduling_strategies.NodeAffinitySchedulingStrategy(
+        "scheduling_strategy": NodeAffinitySchedulingStrategy(
             node_id=ray.get_runtime_context().get_node_id(),
             soft=False,
         ),
