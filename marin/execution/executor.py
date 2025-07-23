@@ -98,7 +98,6 @@ import ray
 import ray.remote_function
 from ray.runtime_env import RuntimeEnv
 from ray.util import state  # noqa
-from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from marin.execution.executor_step_status import (
     STATUS_CANCELLED,
@@ -115,7 +114,7 @@ from marin.execution.executor_step_status import (
 from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
 from marin.utilities.executor_utils import get_pip_dependencies
 from marin.utilities.json_encoder import CustomJsonEncoder
-from marin.utilities.ray_utils import is_local_ray_cluster
+from marin.utilities.ray_utils import is_local_ray_cluster, schedule_on_head_node_strategy
 
 logger = logging.getLogger("ray")
 
@@ -521,10 +520,7 @@ class Executor:
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
         if not is_local_ray_cluster():
-            strategy = NodeAffinitySchedulingStrategy(
-                node_id=ray.get_runtime_context().get_node_id(),
-                soft=False,
-            )
+            strategy = schedule_on_head_node_strategy()
         else:
             strategy = None
         self.status_actor: StatusActor = StatusActor.options(
