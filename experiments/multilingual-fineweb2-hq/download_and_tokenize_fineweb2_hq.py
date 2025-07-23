@@ -39,7 +39,7 @@ FINEWEB2_DATASETS = {
     "vie_Latn": ["vie_Latn/*.parquet"],
 }
 
-FINEWEB2_HQ_MIXTURE_WEIGHTS = {  # From https://huggingface.co/datasets/epfml/FineWeb2-HQ
+FINEWEB2_HQ_MIXTURE_BYTES = {  # From https://huggingface.co/datasets/epfml/FineWeb2-HQ
     "arb_Arab": 94 / 1024,
     "rus_Cyrl": 1.2,  # TiB
     "cmn_Hani": 784 / 1024,  # in GiB
@@ -62,28 +62,27 @@ FINEWEB2_HQ_MIXTURE_WEIGHTS = {  # From https://huggingface.co/datasets/epfml/Fi
     "vie_Latn": 59 / 1024,
 }
 
-LLAMA3_TOKENS_PER_WORD = { # https://colab.research.google.com/drive/1SAd9lg2xnD69pzRwbUgLfKpcOx1sE9rk#scrollTo=DpkLnQLW75jx
-    "eng_Latn": 1.0,
-    "arb_Arab": 1.86,     
-    "ces_Latn": 1.88,    
-    "fra_Latn": 1.6018518518518519, 
-    "ell_Grek": 2.29,     
-    "cmn_Hani": 1.0,      
-    "por_Latn": 1.53,    
-    "rus_Cyrl": 1.72,     
-    "tur_Latn": 1.95,    
-    "pol_Latn": 2.05,    
-    "nld_Latn": 1.41,    
-    "jpn_Jpan": 1.46,     
-    "fas_Arab": 1.69,    
-    "deu_Latn": 1.5727272727272728,  
-    "spa_Latn": 1.43,     
-    "ita_Latn": 1.81,    
-    "ind_Latn": 1.85,     
-    "dan_Latn": 1.47,     
-    "swe_Latn": 1.59,     
-    "hun_Latn": 1.84,     
-    "vie_Latn": 1.92     
+LLAMA3_TOKENS_PER_BYTE = { # UTF-8
+    'rus_Cyrl': 0.17677821397793153,
+    'cmn_Hani': 0.2959771019692867, 
+    'deu_Latn': 0.28022908170020344,
+    'jpn_Jpan': 0.25653320627781934,
+    'spa_Latn': 0.26257939432458355,
+    'fra_Latn': 0.2680086987523188,
+    'ita_Latn': 0.28830668455618513,
+    'por_Latn': 0.27618470534916084,
+    'pol_Latn': 0.34932138076807834,
+    'nld_Latn': 0.29540389884839874,
+    'ind_Latn': 0.29528557247940446,
+    'tur_Latn': 0.26928567422981753,
+    'ces_Latn': 0.29385531687368166,
+    'vie_Latn': 0.21473460462772323,
+    'swe_Latn': 0.3080962816189239,
+    'fas_Arab': 0.18324142427489984,
+    'arb_Arab': 0.22182239425150832,
+    'ell_Grek': 0.21557501301254528,
+    'dan_Latn': 0.31682970618405476,
+    'hun_Latn': 0.37565856717870233
 }
 
 fineweb2_raw = ExecutorStep(
