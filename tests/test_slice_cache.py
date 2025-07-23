@@ -7,11 +7,13 @@ from levanter.data import ShardedDataSource
 from levanter.data.text import LmDatasetSourceConfigBase
 from levanter.store import SerialCacheWriter, TreeCache
 
+pytestmark = pytest.mark.skip(reason="requires huggingface download")
+
 from marin.tokenize.slice_cache import SliceCacheConfig, _do_slice_cache
 from tests.test_utils import skip_in_ci
 
 
-@dataclass
+@dataclass(frozen=True)
 class MockDatasetSource(LmDatasetSourceConfigBase):
     # def __init__(self, cache_dir, num_docs: int, tokens_per_doc: int, tags):
     #     self.num_docs = num_docs

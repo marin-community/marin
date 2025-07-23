@@ -1,4 +1,4 @@
-name: Run unit tests
+name: Run unit tests (GCP)
 
 on:
   push:
@@ -9,11 +9,11 @@ on:
       - main
 
 jobs:
-  test:
+  test-gcp:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
-      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-gcp
       cancel-in-progress: true
 
     strategy:
@@ -44,7 +44,17 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.cache/uv
-          key: ${{ runner.os }}-${{ matrix.python-version }}-unittest
+          key: ${{ runner.os }}-${{ matrix.python-version }}-unittest-gcp
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.NEW_GCP_JSON }}
 
       - name: Install dependencies
         shell: bash -l {0}
@@ -55,11 +65,10 @@ jobs:
           pip install "uv>=0.7.19" toml
           uv sync
 
-      - name: Test with pytest (no GCP)
+      - name: Test with pytest (GCP)
         shell: bash -l {0}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          export CI=true # Set CI environment variable; It's needed for tokenization
-          CI=true PYTHONPATH=tests:. uv run pytest -m "not gcp" --durations=0 --tb=no -vv tests/
-
+          export CI=true
+          CI=true PYTHONPATH=tests:. uv run pytest -m "gcp" --durations=0 --tb=no -vv tests/
