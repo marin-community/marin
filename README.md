@@ -112,3 +112,9 @@ The training step depends on the tokenized dataset step, so it will be executed 
 With slight modifications, you can extend this to train a [larger model on a larger dataset](docs/tutorials/train-an-lm.md),
 a [mixture of datasets](docs/tutorials/train-an-lm.md#mixture-of-sources), even scaling to very large TPU pods
 (or multislice TPU, and, soon, multi-node GPUs!).
+
+## Agentic Workflows
+
+Marin supports agentic workflows for automated, transparent, and extensible experiment setup. Agents can validate datasets, generate onboarding recipes, and suggest hyperparameters with hardware awareness and task decomposition.
+
+- See [docs/agents.md](docs/agents.md) for a full overview, installation, usage, and extension instructions.
