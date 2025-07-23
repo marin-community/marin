@@ -5,7 +5,6 @@ Usage:
     agent = HyperparameterAgent(model="gpt-4o", provider="openai", mode="auto")
     result = agent.suggest(current_config, dataset_metadata, preview_mode=True, decompose_executable=True)
 
-Author: [Your Name]
 """
 
 from collections.abc import Callable
