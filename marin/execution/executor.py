@@ -578,7 +578,8 @@ class Executor:
         self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
 
         logger.info("### Writing metadata ###")
-        self.write_infos()
+        if not dry_run:
+            self.write_infos()
 
         logger.info("### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
