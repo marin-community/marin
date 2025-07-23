@@ -562,7 +562,7 @@ class Executor:
             if step is not None:
                 self.compute_version(step, is_pseudo_dep=False)
 
-        self.get_infos()
+        self._get_infos()
         logger.info(f"### Reading {len(self.steps)} statuses ###")
 
         if run_only is not None:
@@ -578,8 +578,7 @@ class Executor:
         self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
 
         logger.info("### Writing metadata ###")
-        if not dry_run:
-            self.write_infos()
+        self._write_infos(dry_run)
 
         logger.info("### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
@@ -835,7 +834,7 @@ class Executor:
         """Multiple instances of `ExecutorStep` might have the same version."""
         return self.version_str_to_step[self.version_strs[step]]
 
-    def get_infos(self):
+    def _get_infos(self):
         """Calculates info files for each step and also entire execution"""
         # Compute info for each step
         for step in self.steps:
@@ -875,7 +874,7 @@ class Executor:
 
         return host + "/experiment?path=" + urllib.parse.quote(self.executor_info_path)
 
-    def write_infos(self):
+    def _write_infos(self, dry_run: bool):
         """Output JSON files (one for the entire execution, one for each step)."""
 
         # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
@@ -891,22 +890,28 @@ class Executor:
         )
 
         # Print where to find the executor info (experiments JSON)
-        logger.info(f"Writing executor info to {self.executor_info_path}")
-        logger.info("To view the experiment page, go to:")
-        logger.info("")
-        logger.info(self.get_experiment_url())
-        logger.info("")
-        # Write out info for each step
-        for step, info in zip(self.steps, self.step_infos, strict=True):
-            info_path = _get_info_path(self.output_paths[step])
-            fsspec_utils.mkdirs(os.path.dirname(info_path))
-            with fsspec.open(info_path, "w") as f:
-                print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
+        if not dry_run:
+            logger.info(
+                f"Writing executor info to {self.executor_info_path}\n"
+                "To view the experiment page, go to:\n"
+                "\n"
+                f"{self.get_experiment_url()}\n"
+            )
+        else:
+            logger.info(f"Dry run: would write executor info to {self.executor_info_path}")
 
-        # Write out info for the entire execution
-        fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
-        with fsspec.open(self.executor_info_path, "w") as f:
-            print(json.dumps(asdict(self.executor_info), indent=2, cls=CustomJsonEncoder), file=f)
+        # Write out info for each step
+        if not dry_run:
+            for step, info in zip(self.steps, self.step_infos, strict=True):
+                info_path = _get_info_path(self.output_paths[step])
+                fsspec_utils.mkdirs(os.path.dirname(info_path))
+                with fsspec.open(info_path, "w") as f:
+                    print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
+
+            # Write out info for the entire execution
+            fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
+            with fsspec.open(self.executor_info_path, "w") as f:
+                print(json.dumps(asdict(self.executor_info), indent=2, cls=CustomJsonEncoder), file=f)
 
     # caching saves ~10% off some tests
     @cached_property
