@@ -7,10 +7,10 @@ from levanter.data import ShardedDataSource
 from levanter.data.text import LmDatasetSourceConfigBase
 from levanter.store import SerialCacheWriter, TreeCache
 
-pytestmark = pytest.mark.skip(reason="requires huggingface download")
-
 from marin.tokenize.slice_cache import SliceCacheConfig, _do_slice_cache
 from tests.test_utils import skip_in_ci
+
+pytestmark = pytest.mark.skip(reason="requires huggingface download")
 
 
 @dataclass(frozen=True)
