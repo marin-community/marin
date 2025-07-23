@@ -25,9 +25,8 @@ def get_head_ip() -> str:
 
 def get_head_node_id() -> str:
     """Get the node ID of the Ray head node."""
-    nodes = list_nodes(detail=True)
     try:
-        head = next(n for n in nodes if n.is_head_node)
+        head = list_nodes(filters=[("is_head_node", "=", True)])[0]
         return head.node_id
     except StopIteration:
         raise RuntimeError("No head node found in the Ray cluster. Ensure the cluster is running.") from None
