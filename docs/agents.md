@@ -8,16 +8,12 @@ Marin's agentic workflow system enables automated, transparent, and extensible e
 Agents can be used in auto, manual, or recipe modes, and support task decomposition for transparency and future tool integration (e.g., LangChain).
 
 ## Installation & Requirements
-- Ensure you have the following in your `requirements.txt`:
+- Ensure you install the following packages:
   - `openai` (for OpenAI LLMs)
   - `datasets` (Hugging Face datasets)
   - `pyyaml`
   - `jax`, `equinox`, `haliax` (for hardware detection and Levanter integration)
   - (Optional) `langchain` for advanced agent chains
-- Install with:
-  ```sh
-  pip install -r requirements.txt
-  ```
 
 ## Usage Flows
 ### DatasetAgent
