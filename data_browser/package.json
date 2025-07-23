@@ -19,6 +19,9 @@
   "devDependencies": {
     "react-scripts": "5.0.1"
   },
+  "overrides": {
+    "form-data": "4.0.4"
+  },
   "scripts": {
     "start": "react-scripts start --disable-host-check",
     "build": "react-scripts build",
