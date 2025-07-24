@@ -166,6 +166,10 @@ class MyMarkdownConverter(MarkdownConverter):
         kwargs = config.markdownify_kwargs
         super().__init__(**kwargs)
 
+    def convert_soup(self, soup, convert_as_inline: bool = False):
+        """Convert a BeautifulSoup document using our extended process_tag."""
+        return self.process_tag(soup, convert_as_inline, children_only=True, parent_tags=set())
+
     def convert_hn(self, n, el, text, convert_as_inline):
         if convert_as_inline:
             return text
@@ -404,7 +408,10 @@ class MyMarkdownConverter(MarkdownConverter):
 
         # markdown headings or cells can't include
         # block elements (elements w/newlines)
-        isHeading = markdownify.html_heading_re.match(node.name) is not None
+        heading_re = getattr(markdownify, "re_html_heading", None)
+        if heading_re is None:
+            heading_re = markdownify.html_heading_re
+        isHeading = heading_re.match(node.name) is not None
         isEmphasisLike = node.name in ["em", "strong", "b", "i", "u", "s", "del", "ins"]
         isCell = node.name in ["td", "th"]
         convert_children_as_inline = convert_as_inline
