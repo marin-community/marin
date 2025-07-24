@@ -418,6 +418,7 @@ COMMON_PILE_DATASETS: dict[str, TokenizerStep] = {
 }
 
 # Effective token counts for the main training stage (in teratokens)
+# Weights pulled from https://huggingface.co/datasets/common-pile/comma_v0.1_training_dataset under Main stage
 COMMA_MAIN_MIXTURE_WEIGHTS = {
     "comma/arxiv_abstracts": 0.00342,
     "comma/arxiv_papers": 0.036,
@@ -453,6 +454,7 @@ COMMA_MAIN_MIXTURE_WEIGHTS = {
 }
 
 # Effective token counts for the cooldown stage (in teratokens)
+# Weights pulled from https://huggingface.co/datasets/common-pile/comma_v0.1_training_dataset under Cooldown stage
 COMMA_COOLDOWN_MIXTURE_WEIGHTS = {
     "comma/arxiv_papers": 0.003,
     "comma/cccc": 0.00456,
