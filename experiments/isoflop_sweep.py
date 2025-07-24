@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
-from levanter.models.llama import LlamaConfig
+from levanter.models.qwen import Qwen3Config
 from levanter.optim.cautious import CautiousConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
@@ -71,7 +71,7 @@ def estimate_bytes(
 
 
 def pick_v5p_type(
-    config: LlamaConfig,
+    config: Qwen3Config,
     hidden: int,
     layers: int,
     batch: int,
@@ -107,17 +107,17 @@ class IsoFlopSweepConfig:
     seq_len: int = 4096
     steps_per_run: int = 2**16
     flop_tolerance: float = 0.01
-    hidden_layer_ratio: int = 128
+    base_hidden_layer_ratio: int = 64
     hidden_head_ratio: int = 128
     lr_constant: float = 0.33
-    min_hidden_pow: int = 7
-    max_hidden_pow: int = 15
+    min_hidden_pow: int = 9
+    max_hidden_pow: int = 12
     base_optimizer_config: OptimizerConfig = dataclasses.field(
         default_factory=lambda: CautiousConfig(
             learning_rate=1.0,  # Placeholder
             weight_decay=0.1,
             min_lr_ratio=0.0,
-            warmup=0.05,
+            warmup=0.1,
             beta1=0.95,
             beta2=0.98,
             epsilon=1e-15,
@@ -180,10 +180,10 @@ def candidate_configs(cfg: IsoFlopSweepConfig, budget: float):
 
     vocab_size = get_vocab_size_for_tokenizer(cfg.tokenizer)
 
-    for hs_pow in range(cfg.min_hidden_pow, cfg.max_hidden_pow + 1):
-        hidden_size = 2**hs_pow
+    for hidden_size in range(2**cfg.min_hidden_pow, (2**cfg.max_hidden_pow) + 1, 512):
+        hs_pow = math.log2(hidden_size)
         intermediate_dim = hidden_size * MLP_RATIO
-        num_layers = max(2, round(hidden_size / cfg.hidden_layer_ratio))
+        num_layers = round(hidden_size / (cfg.base_hidden_layer_ratio + (hs_pow * 4) - cfg.min_hidden_pow))
         n_heads = max(1, hidden_size // cfg.hidden_head_ratio)
         n_kv_heads = n_heads
 
@@ -198,12 +198,15 @@ def candidate_configs(cfg: IsoFlopSweepConfig, budget: float):
             cfg.seq_len,
             vocab_size,
         )
-        if batch_exact < 1:
-            continue
 
         batch_size = round_to_power_of_two(batch_exact)
+        lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
+        while lr > 0.01:
+            batch_size //= 2
+            lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
+        b2 = 0.98 ** (batch_size / 128)  # https://arxiv.org/pdf/2507.07101
 
-        if batch_size > (2**13) or batch_size < hidden_size**0.5:
+        if batch_size < 8:
             continue
 
         steps_exact = budget / compute_total_flops(
@@ -234,15 +237,7 @@ def candidate_configs(cfg: IsoFlopSweepConfig, budget: float):
         if abs(achieved_flops - budget) / budget > cfg.flop_tolerance:
             continue
 
-        yield (
-            hidden_size,
-            intermediate_dim,
-            num_layers,
-            n_heads,
-            n_kv_heads,
-            batch_size,
-            train_steps,
-        )
+        yield (hidden_size, intermediate_dim, num_layers, n_heads, n_kv_heads, batch_size, train_steps, lr, b2)
 
 
 def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> list[ExecutorStep]:
@@ -260,10 +255,10 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
             n_kv_heads,
             batch_size,
             train_steps,
+            lr,
+            b2,
         ) in candidate_configs(config, budget):
-            lr = (config.lr_constant * math.sqrt(batch_size)) / hidden_size
-
-            model_cfg = LlamaConfig(
+            model_cfg = Qwen3Config(
                 seq_len=config.seq_len,
                 hidden_dim=hidden_size,
                 intermediate_dim=intermediate_dim,
@@ -280,10 +275,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
                 seq_len=config.seq_len,
                 vocab=vocab_size,
             )
-            optimizer_cfg = replace(
-                config.base_optimizer_config,
-                learning_rate=lr,
-            )
+            optimizer_cfg = replace(config.base_optimizer_config, learning_rate=lr, beta2=b2)
             train_cfg = replace(
                 config.base_train_config,
                 train_batch_size=batch_size,
@@ -325,5 +317,5 @@ def generate_isoflop_sweep(
 
 
 if __name__ == "__main__":
-    steps = generate_isoflop_sweep(nemotron_mix, experiment_name="nemotron-proofpile-starcoder-wsd")
+    steps = generate_isoflop_sweep(nemotron_mix, experiment_name="nemo-wider-depth-adapt")
     executor_main(steps=steps)
