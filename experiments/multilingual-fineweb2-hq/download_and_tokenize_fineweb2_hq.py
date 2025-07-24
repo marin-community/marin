@@ -39,6 +39,7 @@ FINEWEB2_DATASETS = {
     "vie_Latn": ["vie_Latn/*.parquet"],
 }
 
+
 FINEWEB2_HQ_MIXTURE_BYTES = {  # From https://huggingface.co/datasets/epfml/FineWeb2-HQ
     "arb_Arab": 94 / 1024,
     "rus_Cyrl": 1.2,  # TiB
@@ -62,27 +63,35 @@ FINEWEB2_HQ_MIXTURE_BYTES = {  # From https://huggingface.co/datasets/epfml/Fine
     "vie_Latn": 59 / 1024,
 }
 
-LLAMA3_TOKENS_PER_BYTE = { # UTF-8
-    'rus_Cyrl': 0.17677821397793153,
-    'cmn_Hani': 0.2959771019692867, 
-    'deu_Latn': 0.28022908170020344,
-    'jpn_Jpan': 0.25653320627781934,
-    'spa_Latn': 0.26257939432458355,
-    'fra_Latn': 0.2680086987523188,
-    'ita_Latn': 0.28830668455618513,
-    'por_Latn': 0.27618470534916084,
-    'pol_Latn': 0.34932138076807834,
-    'nld_Latn': 0.29540389884839874,
-    'ind_Latn': 0.29528557247940446,
-    'tur_Latn': 0.26928567422981753,
-    'ces_Latn': 0.29385531687368166,
-    'vie_Latn': 0.21473460462772323,
-    'swe_Latn': 0.3080962816189239,
-    'fas_Arab': 0.18324142427489984,
-    'arb_Arab': 0.22182239425150832,
-    'ell_Grek': 0.21557501301254528,
-    'dan_Latn': 0.31682970618405476,
-    'hun_Latn': 0.37565856717870233
+"""
+To calculate tokens per byte, we sample 10_000 documents per language and tokenize.
+Please take into account the below factors that affect tokens per byte for each language:
+-Character to byte ratio per language in UTF-8. Some languages take up more bytes per character than others.
+-Tokens per (set of UTF-8 characters in the sampled documents)
+See: https://gist.github.com/pruksmhc/6f70c6f41b93fe2fdd16344181e062ec
+"""
+
+LLAMA3_TOKENS_PER_BYTE = {
+    "rus_Cyrl": 0.17677821397793153,
+    "cmn_Hani": 0.2959771019692867,
+    "deu_Latn": 0.28022908170020344,
+    "jpn_Jpan": 0.25653320627781934,
+    "spa_Latn": 0.26257939432458355,
+    "fra_Latn": 0.2680086987523188,
+    "ita_Latn": 0.28830668455618513,
+    "por_Latn": 0.27618470534916084,
+    "pol_Latn": 0.34932138076807834,
+    "nld_Latn": 0.29540389884839874,
+    "ind_Latn": 0.29528557247940446,
+    "tur_Latn": 0.26928567422981753,
+    "ces_Latn": 0.29385531687368166,
+    "vie_Latn": 0.21473460462772323,
+    "swe_Latn": 0.3080962816189239,
+    "fas_Arab": 0.18324142427489984,
+    "arb_Arab": 0.22182239425150832,
+    "ell_Grek": 0.21557501301254528,
+    "dan_Latn": 0.31682970618405476,
+    "hun_Latn": 0.37565856717870233,
 }
 
 fineweb2_raw = ExecutorStep(
