@@ -48,13 +48,7 @@ class ExperimentConfig:
     experiment_name: str
     input_data_source_to_path: dict[str, str] = field(
         default_factory=lambda: {
-            # Option 1: Use pre-downloaded C4 from Dolma v1.7 (recommended)
-            # Contains c4-{0000..0170}.json.gz files
             "c4_en": "gs://marin-us-central2/raw/dolma/v1.7/",
-            
-            # Option 2: Alternative - download C4 directly from HuggingFace (uncomment if needed)
-            # Note: This would require adding a download step in create_steps()
-            # "c4_en_hf": "allenai/c4:en",
         }
     )
 
