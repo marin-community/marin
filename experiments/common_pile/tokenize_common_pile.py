@@ -6,7 +6,7 @@ from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from marin.download.huggingface.download import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
 
 # Common Pile v0.1 filtered dataset download steps
@@ -487,20 +487,17 @@ def common_pile_tokenized(*, tokenizer: str = llama3_tokenizer) -> dict[str, Tok
 def comma_main_mixture(*, tokenizer: str = llama3_tokenizer):
     """LmMixtureDatasetConfig for the main training stage."""
     tokenized = common_pile_tokenized(tokenizer=tokenizer)
-    components = {f"comma/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_DATASETS}
+    components = {f"common_pile/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_DATASETS}
     return lm_mixture_data_config(components=components, weights=COMMA_MAIN_MIXTURE_WEIGHTS)
 
 
 def comma_cooldown_mixture(*, tokenizer: str = llama3_tokenizer):
     """LmMixtureDatasetConfig for the cooldown stage."""
     tokenized = common_pile_tokenized(tokenizer=tokenizer)
-    components = {f"comma/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_DATASETS}
+    components = {f"common_pile/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_DATASETS}
     return lm_mixture_data_config(components=components, weights=COMMA_COOLDOWN_MIXTURE_WEIGHTS)
 
 
 if __name__ == "__main__":
-    # Convenience for manual execution
-    from marin.execution.executor import executor_main
-
     steps = list(common_pile_tokenized().values())
     executor_main(steps=steps)
