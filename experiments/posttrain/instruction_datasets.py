@@ -9,6 +9,8 @@ How to add a new instruction dataset:
 How to retrieve an instruction dataset:
 1. Use the function `get_instruction_dataset` with the HF repo id.
 
+[TBI] = To be implemented
+
 Current datasets:
 1. GeneralReasoning/GeneralThought-195K-modelanswer
 2. GeneralReasoning/GeneralThought-195K-modelreasoning
@@ -27,11 +29,25 @@ Current datasets:
 15. PrimeIntellect/verifiable-math-problems
 16. sherryy/tulu-3-sft-personas-instruction-following-expanded
 17. facebook/natural_reasoning
+18. open-thoughts/OpenThoughts3-1.2M
+19. nvidia/Llama-Nemotron-Post-Training-Dataset-v1
+20. [TBI] HuggingFaceH4/no_robots
+21. [TBI] m-a-p/CodeFeedback-Filtered-Instruction
+22. [TBI] nvidia/Daring-Anteater
+23. [TBI] HuggingFaceH4/ultrafeedback_binarized
 """
 
 import hashlib
+import json
+import logging
+import os
+import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
+
+import ray
+from google.cloud import storage
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
@@ -50,8 +66,13 @@ from marin.transform.conversation.conversation_to_dolma import (
 )
 from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
+    create_shard_output_directory,
+    get_shard_dir,
+    transform_and_write_batch,
     transform_hf_dataset,
 )
+
+logger = logging.getLogger("ray")
 
 
 @dataclass(frozen=True)
@@ -67,8 +88,7 @@ class InstructionDatasetConfig:
         subsets: Data subsets (from HuggingFace config) to use. Empty list indicates to use all/default subset(s).
         splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
                 Defaults to `train` only
-        legacy: True uses the Marin function as dataloader. False uses the `datasets` package as dataloader.
-        adapter_name: Nmae of the adapter. None indicates that the adapater name is the same as the `hf_dataset_id`.
+        adapter_name: Name of the adapter. None indicates that the adapater name is the same as the `hf_dataset_id`.
     """
 
     hf_dataset_id: str
@@ -78,8 +98,8 @@ class InstructionDatasetConfig:
     filetype: str
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
-    legacy: bool = False
     adapter_name: str = None
+    use_large_dataset_transform: bool = False
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
@@ -214,6 +234,24 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         splits=["train"],  # Default to train split
         adapter_name="GeneralReasoning/GeneralThought-195K-modelreasoning",
     ),
+    "open-thoughts/OpenThoughts3-1.2M": InstructionDatasetConfig(
+        hf_dataset_id="open-thoughts/OpenThoughts3-1.2M",
+        revision="61bcf9d",  # The revision hash shown in the image
+        wait_for_completion=True,
+        metadata_columns=["difficulty", "source", "domain"],
+        filetype="parquet",
+    ),
+    "nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT": InstructionDatasetConfig(
+        hf_dataset_id="nvidia/Llama-Nemotron-Post-Training-Dataset",
+        revision="ab2a40d",
+        wait_for_completion=True,
+        filetype="jsonl",
+        splits=["chat", "code", "math", "science", "safety"],
+        subsets=["SFT"],
+        metadata_columns=["category", "license", "generator"],
+        adapter_name="nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
+        use_large_dataset_transform=True,
+    ),
 }
 
 
@@ -275,24 +313,214 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
         -{sorted(dataset_cfg.splits)}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
+    transform_config = TransformSFTDatasetConfig(
+        input_path=download_data_path,
+        output_path=this_output_path(),
+        shard_size=versioned(5000),
+        metadata_columns=versioned(dataset_cfg.metadata_columns),
+        filetype=dataset_cfg.filetype,
+        source=dataset_cfg.hf_dataset_id,
+        subsets=dataset_cfg.subsets,
+        splits=dataset_cfg.splits,
+        adapter_name=adapter_name,
+    )
+
+    if dataset_cfg.use_large_dataset_transform:
+        transform_fn = transform_large_dataset
+    else:
+        transform_fn = transform_hf_dataset
+
     transform_step = ExecutorStep(
         name=f"documents/{dataset_name}",
-        fn=transform_hf_dataset,
-        config=TransformSFTDatasetConfig(
-            input_path=download_data_path,
-            output_path=this_output_path(),
-            shard_size=versioned(5000),
-            metadata_columns=versioned(dataset_cfg.metadata_columns),
-            filetype=dataset_cfg.filetype,
-            source=dataset_cfg.hf_dataset_id,
-            subsets=dataset_cfg.subsets,
-            splits=dataset_cfg.splits,
-            adapter_name=adapter_name,
-        ),
+        fn=transform_fn,
+        config=transform_config,
         override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
     )
 
     return transform_step
+
+
+########### Nemotron SFT ###########
+def list_jsonl_files_in_gcs(bucket_name: str, gcs_directory_path: str) -> list[str]:
+    """
+    List all .jsonl files in a GCS directory.
+
+    Args:
+        bucket_name (str): The name of the GCS bucket.
+        gcs_directory_path (str): The path to the directory in GCS (excluding the bucket name).
+
+    Returns:
+        list[str]: List of full GCS paths to .jsonl files.
+    """
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+
+    # List all the blobs (files) with the specified prefix
+    blobs = bucket.list_blobs(prefix=gcs_directory_path)
+
+    jsonl_files = []
+    for blob in blobs:
+        if blob.name.endswith(".jsonl") and "provenance.json" not in blob.name:
+            jsonl_files.append(blob.name)
+
+    return jsonl_files
+
+
+def download_single_file_from_gcs(bucket_name: str, gcs_file_path: str, local_file_path: str) -> None:
+    """
+    Download a single file from GCS to a local path.
+
+    Args:
+        bucket_name (str): The name of the GCS bucket.
+        gcs_file_path (str): The path to the file in GCS (excluding the bucket name).
+        local_file_path (str): The local file path where the file will be saved.
+    """
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(gcs_file_path)
+
+    # Create local directory if it doesn't exist
+    os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+
+    # Download the blob to the local file path
+    blob.download_to_filename(local_file_path)
+    logger.info(f"Downloaded gs://{bucket_name}/{gcs_file_path} to {local_file_path}")
+
+
+def transform_large_dataset(cfg: TransformSFTDatasetConfig):
+    """We need a custom transform function because Nemotron is too large (~140GB in total).
+    Downloading the entire dataset to disk can fill up the disk and cause disk failure.
+    Even downloading splits will cause failure (code split is 50GB+)
+
+    This approach:
+    1. Lists all .jsonl files in the GCS directory
+    2. Downloads each file individually
+    3. Processes each file immediately
+    4. Deletes the file after processing to save disk space
+    """
+    assert len(cfg.subsets) == 1, "This script only supports the SFT subset"
+    assert len(cfg.splits) > 0, "Nemotron requires splits to be specified"
+
+    # parse gs://my-bucket/path/to/mmlu into "my-bucket", "path/to/mmlu", and "mmlu"
+    parsed_url = urlparse(cfg.input_path)
+    bucket = parsed_url.netloc
+    gcp_path = parsed_url.path.lstrip("/")
+    temp_dir = os.path.join("tmp", "large_dataset_processing")
+
+    # Ensure temp directory exists
+    os.makedirs(temp_dir, exist_ok=True)
+
+    # 3. For each subset...
+    write_ops = []
+    try:
+        for subset in cfg.subsets:
+            for split in cfg.splits:
+                # List all .jsonl files in the GCS directory
+                jsonl_files = list_jsonl_files_in_gcs(bucket, f"{gcp_path}/{subset}/{split}")
+                # Should be gs://nemotron-x/SFT/code/code_v1.jsonl, gs://nemotron-x/SFT/code/code_v1.1.jsonl, etc.
+                # For chat: gs://nemotron-x/SFT/chat/chat.jsonl
+
+                for gcs_file_path in jsonl_files:
+                    # Extract filename for local path
+                    filename = os.path.basename(gcs_file_path)
+                    local_file_path = os.path.join(temp_dir, filename)
+
+                    try:
+                        # Download the single file
+                        logger.info(f"Downloading file: {gcs_file_path}")
+                        download_single_file_from_gcs(bucket, gcs_file_path, local_file_path)
+
+                        # Create GCP target directory
+                        subset_output_path = get_shard_dir(cfg.output_path, subset, split)
+                        if len(jsonl_files) > 1:
+                            # Extract version suffix from filename (e.g., "chat_v1.1" from "chat_v1.1.jsonl")
+                            suffix = filename.replace(".jsonl", "").replace(".", "_").strip()
+                            # Make the new output path be e.g. nemotron-x/SFT/code/code_v1.1
+                            # For chat, it will remain as nemotron-x/SFT/chat
+                            subset_output_path += "/" + suffix
+                        output_path = create_shard_output_directory(subset_output_path)
+
+                        # Process the downloaded file
+                        with open(local_file_path, "r") as f:
+                            batch = []
+                            shard_idx = 0
+                            for line in f:
+                                try:
+                                    row = json.loads(line)
+                                    # Validate required fields
+                                    if "input" not in row or "output" not in row:
+                                        logger.error(f"Missing required fields: {row}")
+                                        raise ValueError(f"Skipping row - missing required fields: {row}")
+
+                                    # Convert input to string if it's a list
+                                    if isinstance(row["input"], list):
+                                        row["input"] = "\n".join(str(x) for x in row["input"])
+                                    elif not isinstance(row["input"], str):
+                                        row["input"] = str(row["input"])
+
+                                    # Ensure output is a string
+                                    if not isinstance(row["output"], str):
+                                        row["output"] = str(row["output"])
+
+                                    # Ensure metadata fields exist
+                                    for col in cfg.metadata_columns:
+                                        if col not in row:
+                                            row[col] = ""  # Set empty string for missing metadata
+
+                                    batch.append(row)
+
+                                    # When batch reaches shard size, process and write it
+                                    if len(batch) >= cfg.shard_size:
+                                        # Queue the batch for writing
+                                        write_ops.append(
+                                            transform_and_write_batch.remote(
+                                                batch.copy(),  # need .copy() or else ray will fail
+                                                shard_idx,
+                                                output_path,
+                                                cfg,
+                                            )
+                                        )
+                                        # Clear batch and increment shard index
+                                        batch = []
+                                        shard_idx += 1
+
+                                except json.JSONDecodeError as e:
+                                    logger.error(f"Error decoding JSON from line: {e}")
+                                    raise e
+                                except Exception as e:
+                                    logger.error(f"Error processing row: {e}")
+                                    raise e
+
+                            # Write any remaining rows in the final batch
+                            if batch:
+                                write_ops.append(
+                                    transform_and_write_batch.remote(
+                                        batch.copy(),  # need .copy() or else ray will fail
+                                        shard_idx,
+                                        output_path,
+                                        cfg,
+                                    )
+                                )
+
+                        logger.info(f"Processed file: {local_file_path}")
+
+                    except Exception as e:
+                        logger.error(f"Error processing file {gcs_file_path}: {e}")
+                        raise e
+                    finally:
+                        # Always clean up the local file to save disk space
+                        if os.path.exists(local_file_path):
+                            os.remove(local_file_path)
+                            logger.info(f"Deleted local file: {local_file_path}")
+    finally:
+        # Clean up temp directory
+        if os.path.exists(temp_dir):
+            logger.info(f"Cleaning up temp directory: {temp_dir}")
+            shutil.rmtree(temp_dir)
+
+    # Wait for all write operations to complete
+    ray.get(write_ops)
+    return cfg.output_path
 
 
 def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",)) -> ExecutorStep:
