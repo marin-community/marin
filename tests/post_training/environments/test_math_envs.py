@@ -125,6 +125,64 @@ def test_svamp_env_loaded():
 
 
 @pytest.mark.skip(reason="Need to fix environment import.")
+def test_olympiad_bench_env_math_loaded():
+    from marin.post_training.environments.olympiad_bench_env import OlympiadBenchEnv
+
+    env = OlympiadBenchEnv(tokenizer=None, subject="maths", language="en")
+    assert len(env.train_examples) == 574
+    assert len(env.eval_examples) == 100
+
+    # Ensure we get the same examples every time we load the environment
+    assert env.train_examples[0]["prompt"].startswith(
+        "Find the smallest number $n$ such that there exist polynomials $f_{1}, f_{2}, \\ldots, f_{n}$ "
+        "with rational coefficients satisfying\n\n$$\nx^{2}+7=f_{1}(x)^{2}+f_{2}(x)^{2}+\\cdots+f_{n}(x)^{2}"
+    )
+    assert env.eval_examples[16]["prompt"].startswith(
+        "The Sieve of Sundaram uses the following infinite table of positive integers:"
+        "\n\n| 4 | 7 | 10 | 13 | $\\cdots$ |"
+        "\n| :---: | :---: | :---: | :---: | :---: |"
+        "\n| 7 | 12 | 17 | 22 | $\\cdots$ |"
+        "\n| 10 | 17 | 24 | 31 | $\\cdots$ |"
+        "\n| 13 | 22 | 31 | 40 | $\\cdots$ |"
+        "\n| $\\vdots$ | $\\vdots$ | $\\vdots$ | $\\vdots$ |  |"
+        "\n\nThe numbers in each row in the table form an arithmetic sequence. "
+        "The numbers in each column in the table form an arithmetic sequence. "
+        "The first four entries in each of the first four rows and columns are shown."
+        "\nDetermine the number in the 50th row and 40th column."
+    )
+
+
+@pytest.mark.skip(reason="Need to fix environment import.")
+def test_olympiad_bench_env_physics_loaded():
+    from marin.post_training.environments.olympiad_bench_env import OlympiadBenchEnv
+
+    env = OlympiadBenchEnv(tokenizer=None, subject="physics", language="en")
+    assert len(env.train_examples) == 136
+    assert len(env.eval_examples) == 100
+
+    # Ensure we get the same examples every time we load the environment
+    assert env.train_examples[0]["prompt"].startswith(
+        "3. The circular restricted three-body problem\n\nIn general, there is no exact solution of the "
+        "three-body problem, in which three masses move under their mutual gravitational attraction. However, "
+        "it is possible to make some progress by adding some constraints to the motion.\n\nTwo-body problem\n\n"
+        "Let's start with the motion of two masses, $M_{1}$ and $M_{2}$. Assume both masses move in circular orbits "
+        "about their center of mass."
+    )
+    assert env.eval_examples[16]["prompt"].startswith(
+        "Problem T3. Protostar formation\n\nLet us model the formation of a star as follows. A spherical cloud "
+        "of sparse interstellar gas, initially at rest, starts to collapse due to its own gravity. The initial "
+        "radius of the ball is $r_{0}$ and the mass is $m$. The temperature of the surroundings (much sparser than "
+        "the gas) and the initial temperature of the gas is uniformly $T_{0}$. The gas may be assumed to be ideal. "
+        "The average molar mass of the gas is $\\mu$ and its adiabatic index is $\\gamma>\\frac{4}{3}$. Assume "
+        "that $G \\frac{m \\mu}{r_{0}} \\gg R T_{0}$, where $R$ is the gas constant and $G$ is the gravitational "
+        "constant.\ni. During much of the collapse, the gas is so transparent that any heat generated is "
+        "immediately radiated away, i.e. the ball stays in thermodynamic equilibrium with its surroundings. "
+        "What is the number of times, $n$, by which the pressure increases when the radius is halved to "
+        "$r_{1}=0.5 r_{0}$ ?"
+    )
+
+
+@pytest.mark.skip(reason="Need to fix environment import.")
 def test_grade_answer_with_olym_math_env():
     """
     Test whether `grade_answer` works correctly with OlymMathEnv
@@ -244,3 +302,15 @@ def test_grade_answer_with_svamp_env():
     assert grade_answer(given_answer="58.0", ground_truth=answer) is True
     assert grade_answer(given_answer=" 58", ground_truth=answer) is True
     assert grade_answer(given_answer="57.999", ground_truth=answer) is False
+
+
+@pytest.mark.skip(reason="Need to fix environment import.")
+def test_grade_answer_with_olympiad_bench_env_loaded():
+    from marin.post_training.environments.olympiad_bench_env import OlympiadBenchEnv
+
+    env = OlympiadBenchEnv(tokenizer=None, subject="maths", language="en")
+
+    answer = env.train_examples[6]["answer"]
+    assert grade_answer(given_answer="6m", ground_truth=answer) is True
+    assert grade_answer(given_answer="$ 6m $", ground_truth=answer) is True
+    assert grade_answer(given_answer="16m", ground_truth=answer) is False
