@@ -52,7 +52,7 @@ EXPERIMENT_TAGS = [
     "nemotron+openthoughts3-1.2m",
     f"{REGION}",
     "v4-128",
-    "batchsize=512"
+    "batchsize=512",
 ]
 
 # Training parameters
@@ -79,7 +79,7 @@ mixture_weights = {
 
 # Calculate the number of training steps from computed values
 total_tokens = sum(mixture_weights.values())
-num_steps = total_tokens // (BATCH_SIZE * MODEL_CONFIG.seq_len) * EPOCHS + 2*1419967 - LAST_STEP 
+num_steps = total_tokens // (BATCH_SIZE * MODEL_CONFIG.seq_len) * EPOCHS + 2 * 1419967 - LAST_STEP
 
 logger.info(f"Total tokens: {total_tokens}")
 logger.info(f"Sequence length: {MODEL_CONFIG.seq_len}")
@@ -104,13 +104,12 @@ if __name__ == "__main__":
     )
 
     # Create a custom SFT step with evaluations enabled
-    from experiments.evals.task_configs import OPEN_LM_LEADERBOARD_MCQ
-    
     # We need to modify the default_sft to enable evaluations
     # Since default_sft hardcodes eval_harness_tasks=[], we'll use default_train directly
     from experiments.defaults import default_train
+    from experiments.evals.task_configs import OPEN_LM_LEADERBOARD_MCQ
     from experiments.simple_train_config import SimpleTrainConfig
-    
+
     # Convert your existing _sft_config to train config
     normal_train_config = SimpleTrainConfig(
         resources=_sft_config.resources,
@@ -140,9 +139,7 @@ if __name__ == "__main__":
         tags=EXPERIMENT_TAGS,
         eval_harness_tasks=OPEN_LM_LEADERBOARD_MCQ,  # Enable evaluations during training
         use_default_validation=False,
-    ).with_output_path(
-        f"gs://marin-{REGION}/checkpoints/{EXPERIMENT_NAME}"
-    )
+    ).with_output_path(f"gs://marin-{REGION}/checkpoints/{EXPERIMENT_NAME}")
 
     # Now run the SFT step
     executor_main(
