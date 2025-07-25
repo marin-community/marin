@@ -203,7 +203,7 @@ def tokenize(config: TokenizeConfigBase):
 
     if train_source is None and validation_source is None:
         raise ValueError(
-            f"No input files specified. Nothing to do. Sources:\n"
+            "No input files specified. Nothing to do. Sources:\n"
             f"Train source: {train_source}\n\n"
             f"validation source: {validation_source}"
         )
@@ -308,7 +308,7 @@ def _create_source(input_paths: str | list[str]) -> ShardedDataSource:
         filepaths_to_tokenize = _get_filepaths_to_tokenize(input_paths)
 
         if len(filepaths_to_tokenize) == 0:
-            raise ValueError(f"No valid jsonl/parquet files found to tokenize in {input_paths}")
+            raise ValueError(f"No valid json/jsonl/parquet files found to tokenize in {input_paths}")
 
         logger.info(f"Found {len(filepaths_to_tokenize)} files to tokenize.")
         source = UrlDataSource(filepaths_to_tokenize)
@@ -336,7 +336,7 @@ def _get_files_by_extensions(input_paths: list[str], extensions: list[str]) -> l
 def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
     """
     Get all file paths to tokenize from the input paths.
-    Handles jsonl.{gz,zst,zstd}, and parquet.
+    Handles json/jsonl.{gz,zst,zstd}, and parquet.
     """
     if isinstance(input_paths, VersionedValue):
         input_paths = input_paths.value
@@ -347,7 +347,7 @@ def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
         return input_paths
 
     # we're only going to have one or the other, but might as well return both
-    out = _get_files_by_extensions(input_paths, ["jsonl.{gz,zst,zstd}", "parquet", "json"])
+    out = _get_files_by_extensions(input_paths, ["json.{gz,zst,zstd}", "jsonl.{gz,zst,zstd}", "parquet", "json"])
 
     # NOTE(chris): When downloading the datasets from HF using default_download, we create a
     # provenance.json file but we seek to exclude this since we shouldn't train on this.
