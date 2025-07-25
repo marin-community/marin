@@ -85,7 +85,7 @@ class OlympiadBenchEnv(MathEnv):
     DEV_SET_SIZE: ClassVar[int] = 100
 
     # Seed for reproducibility when splitting the dataset
-    SPLIT_RANDOM_SEED: int = 42
+    SPLIT_RANDOM_SEED: ClassVar[int] = 42
 
     def __init__(self, tokenizer, **kwargs):
         def process_split(split: datasets.Dataset) -> list[dict]:
