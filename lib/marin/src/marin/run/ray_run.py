@@ -29,7 +29,7 @@ from ray.job_submission import JobSubmissionClient
 
 from marin.cluster.config import find_config_by_region
 from fray.cluster.ray import DashboardConfig, ray_dashboard
-from marin.run.ray_deps import build_runtime_env_for_packages, accelerator_type_from_extra, AcceleratorType
+from fray.cluster.ray.deps import build_runtime_env_for_packages, accelerator_type_from_extra, AcceleratorType
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,9 @@ async def submit_and_track_job(
 
     # Inject GIT_COMMIT into the environment for logging
     env_vars["GIT_COMMIT"] = subprocess.getoutput("git rev-parse HEAD")
+
+    # Tell Fray to use Ray cluster for job execution
+    env_vars["FRAY_CLUSTER_SPEC"] = "ray"
 
     logger.info(f"Submitting job with entrypoint: {entrypoint}")
     logger.info(f"Extras: {extra}")

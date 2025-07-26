@@ -32,8 +32,8 @@ from functools import partial
 
 import fsspec
 import fsspec.generic
-import ray
-from datasets import DatasetDict, load_dataset, load_from_disk
+from datasets import DatasetDict, load_from_disk
+from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -102,49 +102,6 @@ class BertTrainingArguments:
         )
 
 
-@ray.remote(
-    memory=64 * 1024 * 1024 * 1024,
-    resources={"TPU": 4, "TPU-v4-8-head": 1},
-)
-def tokenize_json_save_as_arrow(
-    train_input_path: str, val_input_path: str, hf_model: str, max_length: int, output_path: str
-):
-    success_path = output_path + ".SUCCESS"
-    if fsspec_exists(success_path):
-        with fsspec.open(success_path) as f:
-            success_data = json.load(f)
-            # Make sure that we're using the same tokenizer and train/val paths
-            assert success_data["hf_model"] == hf_model
-            assert success_data["train_input_path"] == train_input_path
-            assert success_data["val_input_path"] == val_input_path
-        logger.info(f"Success path {success_path} already exists, skipping...")
-        return
-    dataset_dict: DatasetDict = load_dataset("json", data_files={"train": train_input_path, "val": val_input_path})
-    dataset_dict = dataset_dict.class_encode_column("label")
-    class_label_feature = dataset_dict["train"].features["label"]
-    labels2id = {label: class_label_feature.str2int(label) for label in class_label_feature.names}
-    logger.info(f"Labels to ID mapping: {labels2id}")
-
-    # Tokenize the dataset
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
-
-    def tokenize(batch):
-        return tokenizer(
-            batch["text"],
-            padding=True,
-            truncation=True,
-            return_tensors="pt",
-            max_length=max_length,
-        )
-
-    dataset_dict = dataset_dict.map(tokenize, batched=True, num_proc=8, remove_columns=["text"])
-    logger.info(f"Writing dataset dict to output path {output_path}")
-    dataset_dict.save_to_disk(output_path)
-    logger.info(f"Wrote dataset dict to output path {output_path}")
-    with fsspec.open(success_path, "w") as fout:
-        json.dump({"hf_model": hf_model, "train_input_path": train_input_path, "val_input_path": val_input_path}, fout)
-
-
 def _mp_fn(
     index: int,
     hf_model: str,
@@ -178,14 +135,14 @@ def _mp_fn(
     logger.info("Training Label Counts (label_id -> count):")
     for label_id, count in sorted(train_label_counts.items()):
         label_name = class_label_feature.int2str(label_id)
-        logger.info(f"  {label_id} ({label_name}): {count} ({count/len(dataset['train']):.2%})")
+        logger.info(f"  {label_id} ({label_name}): {count} ({count / len(dataset['train']):.2%})")
 
     # Print val label distribution
     val_label_counts = Counter(dataset["val"]["label"])
     logger.info("Validation Label Counts (label_id -> count):")
     for label_id, count in sorted(val_label_counts.items()):
         label_name = class_label_feature.int2str(label_id)
-        logger.info(f"  {label_id} ({label_name}): {count} ({count/len(dataset['val']):.2%})")
+        logger.info(f"  {label_id} ({label_name}): {count} ({count / len(dataset['val']):.2%})")
 
     tokenizer = AutoTokenizer.from_pretrained(hf_model)
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -331,12 +288,7 @@ def train_model(
     logger.info(f"Training BERT model for experiment {output_path}")
     datetime_start = datetime.utcnow()
 
-    # run training on remote worker, not head node
-    @ray.remote(
-        memory=memory_req * 1024 * 1024 * 1024,
-        resources={"TPU": 4, "TPU-v4-8-head": 1},
-    )
-    @remove_tpu_lockfile_on_exit
+    @remove_tpu_lockfile_on_exit()
     def run():
         if fsspec_exists(f"{output_path}/model"):
             logger.info(f"Model already exists at {output_path}/model. Skipping training.")
@@ -382,12 +334,17 @@ def train_model(
             fsspec_rm(merge_path)
             fsspec_cpdir(tmp_dir, output_path)
 
-    response = run.remote()
-    try:
-        ray.get(response)
-    except Exception as e:
-        logger.exception(f"Error processing: {e}")
-        raise
+    resource_config = ResourceConfig.with_tpu("v4-8")
+    job_request = JobRequest(
+        name="bert-training",
+        entrypoint=Entrypoint.from_callable(run),
+        resources=resource_config,
+        environment=EnvironmentConfig.create(),
+    )
+
+    cluster = current_cluster()
+    job_id = cluster.launch(job_request)
+    cluster.wait(job_id, raise_on_failure=True)
 
     datetime_end = datetime.utcnow()
     logger.info(f"Training BERT for experiment {output_path} completed in {datetime_end - datetime_start}.")

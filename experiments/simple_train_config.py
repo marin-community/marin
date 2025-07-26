@@ -15,11 +15,10 @@
 import dataclasses
 from dataclasses import dataclass
 
+from fray.cluster import ResourceConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.optim import OptimizerConfig
 from levanter.schedule import IntSchedule
-
-from marin.resources import ResourceConfig, TpuPodConfig
 
 
 @dataclass(frozen=True)
@@ -32,6 +31,7 @@ class SimpleTrainConfig:
     """
     num_train_steps: int
     learning_rate: float
+    train_seq_len: int | None = None
     data_seed: int | None = None
     weight_decay: float | None = None
     beta1: float | None = None
@@ -94,17 +94,3 @@ class SimpleTrainConfig:
     """Which step to start profiling."""
     profiler_num_steps: int = 100
     """How many steps to profile for once started."""
-
-    @property
-    def tpu_type(self) -> str | None:
-        """For backward compatibility."""
-        if isinstance(self.resources, TpuPodConfig):
-            return self.resources.tpu_type
-        return None
-
-    @property
-    def node_count(self) -> int:
-        """For backward compatibility."""
-        if isinstance(self.resources, TpuPodConfig):
-            return self.resources.slice_count
-        return 1

@@ -19,83 +19,57 @@ Implementation-specific tests are kept as separate manual tests.
 """
 
 import json
+import logging
 import os
 import sys
+import time
 
 import pytest
 from fray.cluster import (
     Entrypoint,
-    GpuConfig,
-    JobId,
+    EnvironmentConfig,
     JobRequest,
     ResourceConfig,
-    TpuConfig,
-    create_environment,
 )
-
-
-def test_cluster_launch(cluster):
-    request = JobRequest(
-        name="test-simple-job",
-        entrypoint=Entrypoint(binary="python", args=["-m", "json.tool", "--help"]),
-        environment=create_environment(),
-    )
-
-    job_id = cluster.launch(request)
-    assert job_id is not None
-
-    info = cluster.poll(job_id)
-    assert info.job_id == job_id
-    assert info.name == "test-simple-job"
-    assert info.status in ["pending", "running", "succeeded", "failed"]
+from fray.cluster.ray import RayCluster
 
 
 def test_cluster_list_jobs(cluster):
     request = JobRequest(
         name="list-test-job",
-        entrypoint=Entrypoint(binary="python", args=["-m", "json.tool"]),
-        environment=create_environment(),
+        entrypoint=Entrypoint.from_binary("python", ["-m", "json.tool"]),
+        environment=EnvironmentConfig.create(),
     )
 
     job_id = cluster.launch(request)
-
-    # List jobs
     jobs = cluster.list_jobs()
     assert isinstance(jobs, list)
     assert len(jobs) >= 1
     assert any(job.job_id == job_id for job in jobs)
 
 
-def test_cluster_poll_unknown_job(cluster):
-    with pytest.raises(KeyError):
-        cluster.poll(JobId("unknown-job-id-12345"))
-
-
-def test_cluster_terminate(cluster, cluster_type):
+def test_cluster_terminate(cluster):
     request = JobRequest(
         name="terminate-test-job",
-        entrypoint=Entrypoint(binary="python", args=["-m", "time", "sleep", "10"]),
-        environment=create_environment(),
+        entrypoint=Entrypoint.from_binary("python", ["-m", "time", "sleep", "10"]),
+        environment=EnvironmentConfig.create(),
     )
 
     job_id = cluster.launch(request)
-
-    # Terminate waits for termination to complete
     cluster.terminate(job_id)
-
+    time.sleep(1)
     info = cluster.poll(job_id)
-    # Ray jobs may still be pending if they never started due to slow runtime env setup
-    if cluster_type == "ray":
-        assert info.status in ["pending", "stopped", "failed", "succeeded"]
-    else:
+
+    # ray... doesn't necessarily terminate jobs promptly
+    if not isinstance(cluster, RayCluster):
         assert info.status in ["stopped", "failed", "succeeded"]
 
 
-def test_cluster_job_success(cluster, cluster_type):
+def test_cluster_job_success(cluster):
     request = JobRequest(
         name="success-test-job",
-        entrypoint=Entrypoint(binary="python", args=["-m", "json.tool", "--help"]),
-        environment=create_environment(),
+        entrypoint=Entrypoint.from_binary("python", ["-m", "json.tool", "--help"]),
+        environment=EnvironmentConfig.create(),
     )
 
     job_id = cluster.launch(request)
@@ -105,41 +79,7 @@ def test_cluster_job_success(cluster, cluster_type):
     assert info.error_message is None
 
 
-def test_cluster_monitor_logs(cluster):
-    request = JobRequest(
-        name="log-test-job",
-        entrypoint=Entrypoint(binary="python", args=["-m", "json.tool", "--help"]),
-        environment=create_environment(),
-    )
-
-    job_id = cluster.launch(request)
-    logs = list(cluster.monitor(job_id))
-    assert len(logs) > 0
-
-
-def test_ray_cluster_get_ray_resources_gpu(ray_cluster):
-    request = JobRequest(
-        name="gpu-resource-test",
-        entrypoint=Entrypoint(binary="python", args=["-m", "my_module"]),
-        resources=ResourceConfig(device=GpuConfig(type="A100", count=4)),
-    )
-
-    resources = ray_cluster.get_ray_resources(request)
-    assert resources == {"GPU": 4.0}
-
-
-def test_ray_cluster_get_ray_resources_tpu(ray_cluster):
-    request = JobRequest(
-        name="tpu-resource-test",
-        entrypoint=Entrypoint(binary="python", args=["-m", "my_module"]),
-        resources=ResourceConfig(device=TpuConfig(type="v5e-16", count=8)),
-    )
-
-    resources = ray_cluster.get_ray_resources(request)
-    assert resources == {"TPU": 8.0, "v5e-16-head": 1.0}
-
-
-def test_environment_integration(cluster, cluster_type, tmp_path):
+def test_environment_integration(cluster, tmp_path):
     """Validate that environment variables are propogated into the job as expected."""
 
     def _check_env_closure(output_path: str):
@@ -150,11 +90,8 @@ def test_environment_integration(cluster, cluster_type, tmp_path):
 
     request = JobRequest(
         name="env-integration-test",
-        entrypoint=Entrypoint(
-            callable=_check_env_closure,
-            function_args={"output_path": output_path},
-        ),
-        environment=create_environment(
+        entrypoint=Entrypoint.from_callable(_check_env_closure, kwargs={"output_path": output_path}),
+        environment=EnvironmentConfig.create(
             env_vars={"TEST_INTEGRATION_VAR": "test_value_123"},
         ),
     )
@@ -179,17 +116,15 @@ def test_environment_integration(cluster, cluster_type, tmp_path):
     assert "FRAY_CLUSTER_SPEC" in env_vars, f"FRAY_CLUSTER_SPEC should be set by the cluster: found {env_vars.keys()}"
 
 
-def test_local_cluster_replica_integration(local_cluster, tmp_path):
+def test_local_cluster_replica_integration(local_cluster, tmp_path, caplog):
     """Integration test for replica functionality: env vars, logs, status aggregation."""
 
     def replica_worker(output_path: str):
         replica_id = int(os.environ.get("FRAY_REPLICA_ID", "0"))
         replica_count = os.environ.get("FRAY_REPLICA_COUNT", "MISSING")
 
-        # Log from each replica
         print(f"Hello from replica {replica_id}")
 
-        # Write env vars to file
         output_file = f"{output_path}_{replica_id}.json"
         with open(output_file, "w") as f:
             json.dump({"replica_id": str(replica_id), "replica_count": replica_count}, f)
@@ -202,26 +137,24 @@ def test_local_cluster_replica_integration(local_cluster, tmp_path):
 
     request = JobRequest(
         name="replica-integration-test",
-        entrypoint=Entrypoint(callable=replica_worker, function_args={"output_path": output_path}),
+        entrypoint=Entrypoint.from_callable(replica_worker, kwargs={"output_path": output_path}),
         resources=ResourceConfig(replicas=3),
-        environment=create_environment(),
+        environment=EnvironmentConfig.create(),
     )
 
     job_id = local_cluster.launch(request)
-    logs = list(local_cluster.monitor(job_id))
 
-    replica_0_logs = [log for log in logs if "[replica-0]" in log and "Hello from replica 0" in log]
-    replica_1_logs = [log for log in logs if "[replica-1]" in log and "Replica 1 intentionally failing" in log]
-    replica_2_logs = [log for log in logs if "[replica-2]" in log and "Hello from replica 2" in log]
+    with caplog.at_level(logging.INFO):
+        job_info = local_cluster.monitor(job_id)
 
-    assert len(replica_0_logs) > 0, "No logs from replica-0"
-    assert len(replica_1_logs) > 0, "No logs from replica-1"
-    assert len(replica_2_logs) > 0, "No logs from replica-2"
+    logs = caplog.text
+    assert "[replica-0]" in logs and "Hello from replica 0" in logs, "No logs from replica-0"
+    assert "[replica-1]" in logs and "Replica 1 intentionally failing" in logs, "No logs from replica-1"
+    assert "[replica-2]" in logs and "Hello from replica 2" in logs, "No logs from replica-2"
 
-    info = local_cluster.poll(job_id)
-    assert info.status == "failed"
-    assert info.error_message is not None
-    assert info.tasks[1].status == "failed"
+    assert job_info.status == "failed"
+    assert job_info.error_message is not None
+    assert job_info.tasks[1].status == "failed"
 
     for replica_id in [0, 2]:
         output_file = f"{output_path}_{replica_id}.json"

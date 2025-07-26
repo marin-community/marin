@@ -1212,6 +1212,8 @@ def _actually_run_eval_harness(
     max_examples = config.max_examples
     max_length = config.max_length
 
+    max_length = max_length or model.max_length
+
     EvalPos = model.Pos if max_length is None else model.Pos.resize(max_length)
     num_parameters = parameter_count(model)
     logger.info(

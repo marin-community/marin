@@ -24,9 +24,6 @@ TODO: this should probably be tokens instead of doc counts.
 import math
 import re
 
-from experiments.evals.resource_configs import TPU_V4_8
-from levanter.data.text import ChatLmDatasetFormat
-
 from experiments.defaults import default_sft, default_tokenize
 from experiments.evals.evals import default_sft_eval
 from experiments.llama import llama_8b
@@ -38,9 +35,10 @@ from experiments.posttrain.instruction_datasets import (
     get_instruction_dataset,
 )
 from experiments.simple_sft_config import SimpleSFTConfig
+from fray.cluster import ResourceConfig
+from levanter.data.text import ChatLmDatasetFormat
 from marin.execution.executor import ExecutorStep, executor_main
 from marin.processing.tokenize import lm_mixture_data_config
-from marin.resources import TpuPodConfig
 
 SLUGIFY_PATTERN = re.compile(r"[^a-z0-9]+")
 
@@ -142,7 +140,7 @@ mixture_sft_config = SimpleSFTConfig(
     train_batch_size=TRAIN_BATCH_SIZE,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=1e-5,
-    resources=TpuPodConfig(tpu_type="v4-2048"),
+    resources=ResourceConfig.with_tpu("v4-2048"),
     tokenizer=marin_tokenizer,
     model_name_or_path="marin-community/marin-8b-base",
     max_seq_len=8192,
@@ -169,7 +167,7 @@ marin_8b_sft_smoltalk2_nemotron_v2 = default_sft(
 marin_8b_sft_smoltalk2_nemotron_v2_evals = default_sft_eval(
     marin_8b_sft_smoltalk2_nemotron_v2,
     use_levanter_inference=True,
-    resource_config=TPU_V4_8,
+    resource_config=ResourceConfig.with_tpu("v4-8"),
 )
 
 if __name__ == "__main__":

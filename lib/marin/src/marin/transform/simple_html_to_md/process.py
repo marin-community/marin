@@ -25,7 +25,6 @@ uv run zephyr --backend=ray --max-parallelism=1000 --memory=1GB --num-cpus=1 --c
 import logging
 from dataclasses import dataclass, field
 
-import draccus
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
 from zephyr import Dataset, flow_backend, load_jsonl
 
@@ -58,8 +57,11 @@ def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
         logger.debug(f"Converting {data_id} {url}")
         md = convert_page(html, url, extract_method, config)["content"]
         error = None
+    except (ModuleNotFoundError, ImportError):
+        # Configuration errors should fail the job, not be caught
+        raise
     except Exception as e:
-        # Failed to convert
+        # Failed to convert - content-level errors are logged and recorded
         logger.exception(f"{e} in processing {data_id = }, {url = }")
         md = None
         error = e
@@ -88,7 +90,6 @@ class SimpleHtmlToMdConfig:
     # Configuration for the extraction method.
 
 
-@draccus.wrap()
 def html_to_md(cfg: SimpleHtmlToMdConfig):
     """Transform HTML content to markdown using the specified extraction method."""
     backend = flow_backend()

@@ -94,7 +94,6 @@ def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerSte
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
             ),
-            pip_dependency_groups=["sentencepiece"],
         )
 
         # Check if we need to use override path for llama3

@@ -18,10 +18,12 @@ import ctypes
 import ctypes.util
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -42,21 +44,95 @@ def _set_pdeathsig_preexec():
         logger.info(f"Could not set parent death signal: {e}")
 
 
-def _signal_process(process: subprocess.Popen, sig: int) -> None:
-    if sys.platform == "win32":
-        if sig == signal.SIGKILL:
-            process.kill()
-        else:
-            process.terminate()
-    else:
-        os.killpg(process.pid, sig)
-
-
 def _terminate_process(process: subprocess.Popen) -> None:
     try:
-        _signal_process(process, signal.SIGKILL)
+        if sys.platform == "win32":
+            process.kill()
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
     except Exception as e:
         logger.info(f"Failed to terminate process {process.pid} -- already terminated? {e}")
+
+
+class JobGroup:
+    """Manages a group of processes with automatic cleanup.
+    with JobGroup() as jobs:
+        proc = jobs.run_async(["python", "worker.py"])
+        jobs.run(["python", "setup.py"])
+    """
+
+    def __init__(
+        self,
+        *,
+        env: dict[str, str] | None = None,
+        cwd: str | None = None,
+    ):
+        """Initialize job group.
+
+        Args:
+            env: Base environment dict for commands. If None, uses os.environ.
+            cwd: Working directory for commands. If None, uses current directory.
+        """
+        self._base_env = env
+        self._cwd = cwd
+        self._processes: list[subprocess.Popen] = []
+        self._entered = False
+
+    def _check_entered(self) -> None:
+        if not self._entered:
+            raise RuntimeError("JobGroup must be entered before calling run methods")
+
+    def __enter__(self) -> "JobGroup":
+        self._entered = True
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        for process in self._processes:
+            if process.poll() is not None:
+                continue
+            _terminate_process(process)
+
+    def run(
+        self,
+        cmd: list[str],
+        *,
+        check: bool = True,
+        env: dict[str, str] | None = None,
+        **kwargs,
+    ) -> subprocess.CompletedProcess:
+        """Run a command and wait for completion."""
+        self._check_entered()
+
+        if "cwd" not in kwargs and self._cwd:
+            kwargs["cwd"] = self._cwd
+
+        logger.info("Running %s", " ".join(cmd))
+        return subprocess.run(cmd, env=env, check=check, **kwargs)
+
+    def run_async(
+        self,
+        cmd: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        **kwargs,
+    ) -> subprocess.Popen:
+        """Start a command without waiting, track for cleanup."""
+        self._check_entered()
+
+        if "cwd" not in kwargs and self._cwd:
+            kwargs["cwd"] = self._cwd
+
+        # Unix: use process groups + parent death signal for cleanup
+        if sys.platform != "win32":
+            if "start_new_session" not in kwargs:
+                kwargs["start_new_session"] = True
+            if "preexec_fn" not in kwargs:
+                kwargs["preexec_fn"] = _set_pdeathsig_preexec
+
+        logger.info("Running %s", " ".join(cmd))
+        process = subprocess.Popen(cmd, env=env, **kwargs)
+        self._processes.append(process)
+        return process
 
 
 class TemporaryVenv:
@@ -77,31 +153,51 @@ class TemporaryVenv:
     def __init__(
         self,
         *,
+        workspace: str | None = None,
         pip_install_args: list[str] | None = None,
+        extras: list[str] | None = None,
         venv_args: list[str] | None = None,
         prefix: str = "temp_venv_",
     ):
         """Initialize temporary venv context manager.
 
         Args:
+            workspace: Path to workspace to copy (git-tracked files). If provided,
+                workspace files are copied to the temp directory root, and a venv
+                is created in .venv/ subdirectory.
             pip_install_args: Arguments to pass to `uv pip install` (e.g.,
                 ["--prerelease=allow", "vllm-tpu", "package==1.0.0"]).
                 These are passed directly to `uv pip install --python <venv_python> <args...>`
+            extras: Workspace extras to install (e.g., ['tpu', 'eval']). Only used
+                when workspace has a pyproject.toml.
+            venv_args: Additional arguments to pass to `uv venv`
             prefix: Prefix for temporary directory name
         """
+        self._workspace = workspace
         self._pip_install_args = pip_install_args
+        self._extras = extras or []
         self._prefix = prefix
         self._venv_args = venv_args
 
         self._temp_dir: tempfile.TemporaryDirectory | None = None
-        self._processes: list[subprocess.Popen] = []
+        self._job_group: JobGroup | None = None
+
+    @property
+    def workspace_path(self) -> str:
+        """Path to the workspace root directory (temp dir root)."""
+        if not self._temp_dir:
+            raise RuntimeError("TemporaryVenv must be entered before accessing workspace_path")
+        return self._temp_dir.name
 
     @property
     def venv_path(self) -> str:
-        """Path to the virtual environment directory."""
+        """Path to the virtual environment directory (.venv/ if workspace, else temp root)."""
         if not self._temp_dir:
             raise RuntimeError("TemporaryVenv must be entered before accessing venv_path")
-        return self._temp_dir.name
+        if self._workspace:
+            return os.path.join(self.workspace_path, ".venv")
+        else:
+            return self.workspace_path
 
     @property
     def python_path(self) -> str:
@@ -113,22 +209,77 @@ class TemporaryVenv:
         """Path to the bin directory (e.g., venv/bin)."""
         return os.path.join(self.venv_path, "bin")
 
+    def _copy_workspace_files(self) -> None:
+        """Copy git-tracked files from workspace to temp directory root."""
+        workspace = Path(self._workspace)
+        dest = Path(self.workspace_path)
+
+        logger.info(f"Copying workspace {workspace} to {dest}")
+
+        try:
+            # Use git ls-files (respects .gitignore)
+            git_files = subprocess.check_output(
+                ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+                cwd=workspace,
+                text=True,
+            ).splitlines()
+
+            for rel_path in git_files:
+                src = workspace / rel_path
+                dst = dest / rel_path
+
+                if src.is_file():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
+
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Git failed, falling back to copytree: {e}")
+            shutil.copytree(workspace, dest, dirs_exist_ok=True)
+
+    def _install_packages(self) -> None:
+        """Install workspace (editable + extras) and pip packages."""
+        sync_args = ["--all-packages"]
+
+        if self._extras:
+            sync_args.extend(["--extra=" + ",".join(self._extras)])
+
+        pyproject = Path(self.workspace_path) / "pyproject.toml"
+        if self._workspace and pyproject.exists():
+            subprocess.check_call(
+                ["uv", "sync", "--python", self.python_path, *sync_args],
+                cwd=self.workspace_path,
+                env=self.get_env(),
+            )
+
+        install_args = []
+        if self._pip_install_args:
+            install_args.extend(self._pip_install_args)
+
+        if install_args:
+            logger.info(f"Installing packages: {' '.join(install_args)}")
+            subprocess.check_call(
+                ["uv", "pip", "install", "--python", self.python_path, *install_args],
+                cwd=self.workspace_path,
+                env=self.get_env(),
+            )
+
     def __enter__(self) -> "TemporaryVenv":
-        """Create venv, install packages, return self."""
         if self._temp_dir:
             raise RuntimeError("TemporaryVenv cannot be entered twice")
 
         self._temp_dir = tempfile.TemporaryDirectory(prefix=self._prefix)
+        self._job_group = JobGroup(cwd=self._temp_dir.name)
+        self._job_group.__enter__()
+
+        if self._workspace:
+            self._copy_workspace_files()
 
         py_version = sys.version_info
         python_spec = f"{py_version.major}.{py_version.minor}"
 
         logger.info(f"Creating temporary venv at {self.venv_path} with Python {python_spec}")
 
-        venv_args = []
-        if self._venv_args:
-            venv_args = self._venv_args
-
+        venv_args = self._venv_args or []
         subprocess.check_call(
             [
                 "uv",
@@ -142,29 +293,19 @@ class TemporaryVenv:
             ]
         )
 
-        if self._pip_install_args:
-            logger.info(f"Installing packages: {' '.join(self._pip_install_args)}")
-            venv_env = self.get_env()
-            subprocess.check_call(
-                ["uv", "pip", "install", "--python", self.python_path, *self._pip_install_args],
-                env=venv_env,
-            )
+        # Install packages (workspace + explicit packages)
+        if self._workspace or self._pip_install_args:
+            self._install_packages()
 
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Kill all tracked processes and clean up venv directory."""
+        self._job_group.__exit__(exc_type, exc_val, exc_tb)
         try:
             self._temp_dir.cleanup()
         except Exception as e:
             logger.warning(f"Failed to cleanup temporary directory: {e}")
-
-        for process in self._processes:
-            if process.poll() is not None:
-                # process already terminated
-                continue
-
-            _terminate_process(process)
 
     def get_env(self, base_env: dict[str, str] | None = None) -> dict[str, str]:
         """Get environment dict with venv activation."""
@@ -174,6 +315,9 @@ class TemporaryVenv:
         env = (base_env or os.environ).copy()
         env["VIRTUAL_ENV"] = self.venv_path
         env["PATH"] = f"{self.bin_path}:{env['PATH']}"
+
+        # todo, how to handle torch backend?
+        env["TORCH_BACKEND"] = "cpu"
 
         bad_env_vars = ("TPU_LIBRARY_PATH", "PYTHONPATH")
         for var in bad_env_vars:
@@ -203,14 +347,9 @@ class TemporaryVenv:
         **kwargs,
     ) -> subprocess.CompletedProcess:
         """Run a command within the venv and wait for completion."""
-        if not self._temp_dir:
-            raise RuntimeError("TemporaryVenv must be entered before calling run()")
-
         if env is None:
             env = self.get_env()
-
-        logger.info("Running %s", " ".join(cmd))
-        return subprocess.run(cmd, env=env, check=check, **kwargs)
+        return self._job_group.run(cmd, check=check, env=env, **kwargs)
 
     def run_async(
         self,
@@ -220,20 +359,6 @@ class TemporaryVenv:
         **kwargs,
     ) -> subprocess.Popen:
         """Start a command within the venv without waiting."""
-        if not self._temp_dir:
-            raise RuntimeError("TemporaryVenv must be entered before calling run_async()")
-
         if env is None:
             env = self.get_env()
-
-        # Unix: use process groups + parent death signal for cleanup
-        if sys.platform != "win32":
-            if "start_new_session" not in kwargs:
-                kwargs["start_new_session"] = True
-            if "preexec_fn" not in kwargs:
-                kwargs["preexec_fn"] = _set_pdeathsig_preexec
-
-        logger.info("Running %s", " ".join(cmd))
-        process = subprocess.Popen(cmd, env=env, **kwargs)
-        self._processes.append(process)
-        return process
+        return self._job_group.run_async(cmd, env=env, **kwargs)

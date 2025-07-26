@@ -18,7 +18,6 @@ import logging
 import os
 from dataclasses import dataclass
 
-import draccus
 import pandas as pd
 import pyarrow.parquet as pq
 from huggingface_hub import HfFileSystem
@@ -86,7 +85,6 @@ class DatasetConfig:
     keep_columns: list[str]
 
 
-@draccus.wrap()
 def prune_hf_dataset(cfg: DatasetConfig):
     logger.info(f"Starting dataset pruning for {cfg.hf_paths}")
 

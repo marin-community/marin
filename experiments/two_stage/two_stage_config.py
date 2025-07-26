@@ -32,7 +32,8 @@ from experiments.two_stage.models import model_dict
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import ExecutorStep, this_output_path
 from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig, lm_varying_mixture_data_config
-from marin.training.training import TpuPodConfig, TrainLmOnPodConfig, run_levanter_train_lm
+from fray.cluster import ResourceConfig
+from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
 @dataclass
@@ -178,7 +179,7 @@ class TwoStageConfig:
                 f"{self.rare_fraction_epoched * self.rare_stage2_allocation}"
             )
 
-        self.total_tokens = self.num_train_steps * self.train_batch_size * self.model_config.seq_len
+        self.total_tokens = self.num_train_steps * self.train_batch_size * self.model_config.max_seq_len
         self.rare_batches = int(self.num_train_steps * self.rare_fraction)
 
         self.stage1_duration = 1.0 - self.stage2_duration
@@ -331,11 +332,8 @@ class TwoStageConfig:
             return None
         return LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(self.eval_harness_tasks))
 
-    def build_pod_config(self) -> TpuPodConfig:
-        return TpuPodConfig(
-            tpu_type=self.tpu_type,
-            slice_count=self.slice_count,
-        )
+    def build_pod_config(self) -> ResourceConfig:
+        return ResourceConfig.with_tpu(self.tpu_type, slice_count=self.slice_count)
 
     def build_train_lm_config(self) -> TrainLmConfig:
         return TrainLmConfig(
@@ -380,7 +378,7 @@ def two_stage_train_step(two_stage_config: TwoStageConfig) -> ExecutorStep:
         description=f"Train a model for "
         f"{two_stage_config.num_train_steps} (steps) * "
         f"{two_stage_config.train_batch_size} (batch_size) * "
-        f"{two_stage_config.model_config.seq_len} (seq_len) "
+        f"{two_stage_config.model_config.max_seq_len} (seq_len) "
         f"= {two_stage_config.total_tokens:,} tokens.",
         config=train_lm_on_pod_config,
         pip_dependency_groups=["tokenize_train"],

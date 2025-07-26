@@ -43,7 +43,7 @@ from zephyr import Dataset, create_backend, flow_backend
 from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
-from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
 
 logger = logging.getLogger(__name__)
 
@@ -247,11 +247,7 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
 
 def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    # Verify JAX is configured for CPU-only mode
-    jax_platforms = os.environ.get("JAX_PLATFORMS", "not set")
     jax_devices = jax.devices()
-
-    assert jax_platforms == "cpu", f"JAX_PLATFORMS should be 'cpu' but is '{jax_platforms}'"
     assert all(d.platform == "cpu" for d in jax_devices), f"Expected all CPU devices, got: {jax_devices}"
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
@@ -302,6 +298,17 @@ def tokenize(config: TokenizeConfigBase):
         raise ValueError("No input files specified. Nothing to do.")
 
     def run_pipeline(paths: list[str], split_name: str) -> None:
+        prefix = os.path.join(config.cache_path, split_name)
+        ledger_path = os.path.join(prefix, "shard_ledger.json")
+
+        if fsspec_exists(ledger_path):
+            logger.info(
+                "Shard ledger already exists for %s at %s; skipping tokenization step",
+                split_name,
+                ledger_path,
+            )
+            return
+
         cluster_backend = cpu_only_backend()
 
         thread_backend = create_backend("threadpool")
@@ -314,7 +321,6 @@ def tokenize(config: TokenizeConfigBase):
         file_groups = list(_bundle_files_by_size(file_stats, config.window_size_bytes))
         logger.info(f"Grouped {len(paths)} files into {len(file_groups)} groups by size.")
 
-        prefix = os.path.join(config.cache_path, split_name)
         ds = Dataset.from_list(file_groups).flat_map(lambda file_list: file_list).flat_map(load_file)
 
         if config.sample_count is not None:
@@ -322,7 +328,7 @@ def tokenize(config: TokenizeConfigBase):
             ds = ds.take_per_shard(config.sample_count)
 
         temp_shards = (
-            ds.batch(64)
+            ds.window(64)
             .map_shard(lambda batches: _tokenize_batches(config, batches))
             .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
         )

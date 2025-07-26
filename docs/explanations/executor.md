@@ -4,6 +4,8 @@ Marin's executor framework manages the execution of experiments.
 This document is more about the mechanics, read [this](../explanations/experiments.md) to
 learn more about the conventions.
 
+## Steps
+
 An **experiment** is a sequence (really, a DAG) of steps, where each **step** is
 specified by the following:
 - **name**: an identifier describing the function (and its version)
@@ -28,6 +30,10 @@ In the [hello world example](../tutorials/executor-101.md), we have two steps,
 generating data and compute statistics.
 
 See the documentation in [`executor.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/execution/executor.py) for more details.
+
+Coordination between multiple pipelines is handled via lease files. This
+prevents duplicate execution if, for example, 2 Executor pipelines share common
+ancestor steps.
 
 ## Ray
 

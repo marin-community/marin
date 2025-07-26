@@ -24,20 +24,18 @@ import hashlib
 import json
 import logging
 import os
-from typing import Literal
 import uuid
 from dataclasses import dataclass, field
+from typing import Literal
 
-from marin.rl.environments.inference_ctx import LevanterInferenceContextConfig, vLLMInferenceContextConfig
-import ray
-from fray.cluster.ray.tpu import run_on_pod_ray
+from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import TrainerConfig
-from marin.resources import TpuPodConfig
 from marin.rl.curriculum import CurriculumConfig
+from marin.rl.environments.inference_ctx import LevanterInferenceContextConfig, vLLMInferenceContextConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
@@ -47,7 +45,6 @@ from marin.rl.weight_transfer import WeightTransferConfig
 from marin.training.training import _add_run_env_variables
 from marin.utilities.json_encoder import CustomJsonEncoder
 from marin.utils import remove_tpu_lockfile_on_exit
-from ray.runtime_env import RuntimeEnv
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 logger = logging.getLogger(__name__)
@@ -74,9 +71,6 @@ class RunConfig:
 
     max_retries_preemption: int = 100
     """Maximum retries on preemption"""
-
-    runtime_env: RuntimeEnv | None = None
-    """Optional Ray runtime environment for workers"""
 
 
 @dataclass
@@ -182,43 +176,31 @@ class RLJob:
     def __init__(self, config: RLJobConfig):
         self.config = config
 
-    # Helper, as Ray doesn't accept method instances for ray.remote
+    # Helper, as Ray doesn't accept method instances
     @staticmethod
     def make_step_fn():
         return lambda config: RLJob(config).run()
 
-    def run(self):
-        """Run with TPU pod deployment using run_on_pod_ray."""
+    def run(self, name: str):
+        """Run with TPU pod deployment."""
         run_config = self.config.run_config
         train_worker_config, rollout_worker_config = self.to_worker_configs()
 
         # Setup environment
-        env = {}
+        env = {"EQX_ON_ERROR": "nan"}
         env = _add_run_env_variables(env)
-        env["EQX_ON_ERROR"] = "nan"
 
-        runtime_env = run_config.runtime_env or RuntimeEnv()
-
-        # Create pod configs
+        # Create resource configs
         inference_tpu_type = run_config.inference_tpu_type or run_config.train_tpu_type
-        train_pod_config = TpuPodConfig(tpu_type=run_config.train_tpu_type, runtime_env=runtime_env)
-        rollout_pod_config = TpuPodConfig(tpu_type=inference_tpu_type, runtime_env=runtime_env)
+        train_resources = ResourceConfig.with_tpu(run_config.train_tpu_type)
+        rollout_resources = ResourceConfig.with_tpu(inference_tpu_type)
 
-        rollout_hw_config = rollout_pod_config.with_env_vars(env)
-        train_hw_config = train_pod_config.with_env_vars(env)
-
-        train_kwargs = dict(max_calls=1, **train_hw_config.as_remote_kwargs())
-        rollout_kwargs = dict(max_calls=1, **rollout_hw_config.as_remote_kwargs())
-
-        # Define remote tasks
-        @ray.remote(**train_kwargs)
         def train_worker_task():
             with remove_tpu_lockfile_on_exit():
                 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
                 worker = TrainWorker(config=train_worker_config)
                 worker.train()
 
-        @ray.remote(**rollout_kwargs)
         def inference_worker_task():
             with remove_tpu_lockfile_on_exit():
                 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
@@ -234,29 +216,32 @@ class RLJob:
                 worker = RolloutWorker(config=config)
                 worker.run()
 
-        train_tasks = [
-            run_on_pod_ray.remote(
-                train_worker_task,
-                run_config.train_tpu_type,
-                num_slices=run_config.num_train_slices,
-                max_retries_failure=run_config.max_retries_failure,
-                max_retries_preemption=run_config.max_retries_preemption,
+        cluster = current_cluster()
+        jobs = []
+        jobs.append(
+            cluster.launch(
+                JobRequest(
+                    name=f"rl-train-{name}-train",
+                    resources=train_resources,
+                    entrypoint=Entrypoint.from_callable(train_worker_task),
+                    environment=EnvironmentConfig.create(env_vars=env),
+                )
             )
-        ]
+        )
 
-        inference_tasks = []
-        for _ in range(run_config.num_rollout_workers):
-            inference_tasks.append(
-                run_on_pod_ray.remote(
-                    inference_worker_task,
-                    inference_tpu_type,
-                    num_slices=1,
-                    max_retries_failure=run_config.max_retries_failure,
-                    max_retries_preemption=run_config.max_retries_preemption,
+        for i in range(run_config.num_rollout_workers):
+            jobs.append(
+                cluster.launch(
+                    JobRequest(
+                        name=f"rl-train-{name}-rollout-{i}",
+                        resources=rollout_resources,
+                        entrypoint=Entrypoint.from_callable(inference_worker_task),
+                        environment=EnvironmentConfig.create(env_vars=env),
+                    )
                 )
             )
 
-        return ray.get(inference_tasks + train_tasks)
+        return cluster.wait(jobs, raise_on_failure=True)
 
     def to_worker_configs(self) -> tuple[TrainWorkerConfig, RolloutWorkerConfig]:
         """Export worker configurations for inspection/testing.
