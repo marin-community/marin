@@ -83,7 +83,8 @@ def _check_input_size(input_path: str | list[str]) -> dict:
                     path_size = 0
                     path_file_count = 0
                     for pattern in patterns:
-                        files = fsspec_glob(f"{path.rstrip('/')}/{pattern}")
+                        path_to_glob = os.path.join(path, pattern)
+                        files = fsspec_glob(path_to_glob)
                         for f in files:
                             path_size += fsspec_size(f)
                             path_file_count += 1
@@ -125,7 +126,8 @@ def _check_input_size(input_path: str | list[str]) -> dict:
             total_size = 0
             file_count = 0
             for pattern in patterns:
-                files = fsspec_glob(f"{input_path.rstrip('/')}/{pattern}")
+                path_to_glob = os.path.join(input_path, pattern)
+                files = fsspec_glob(path_to_glob)
                 for f in files:
                     total_size += fsspec_size(f)
                     file_count += 1
@@ -272,16 +274,19 @@ class DedupeConfig:
     decontaminate_source: str | None = None
     # path to write or read the bloom filter file
     bloom_filter_path: str = "deduper_bloom_filter.bin"
+    # field to use for text content in Parquet files
+    parquet_text_field: str = "text"
 
 
 # Helper: convert Parquet files (single or shards) directly into .jsonl.gz under docs_dir
-def _parquet_to_jsonl_gz(input_path: str, docs_dir: str) -> None:
+def _parquet_to_jsonl_gz(input_path: str, docs_dir: str, parquet_text_field: str = "text") -> None:
     os.makedirs(docs_dir, exist_ok=True)
     # find all Parquet files
     if input_path.endswith(".parquet"):
         parquet_files = [input_path]
     else:
-        parquet_files = fsspec_glob(f"{input_path.rstrip('/')}/*.parquet")
+        path_to_glob = os.path.join(input_path, "**/*.parquet")
+        parquet_files = fsspec_glob(path_to_glob)
 
     for pq in parquet_files:
         df = pd.read_parquet(pq)
@@ -292,38 +297,22 @@ def _parquet_to_jsonl_gz(input_path: str, docs_dir: str) -> None:
         out_name = os.path.splitext(os.path.basename(pq))[0] + ".jsonl.gz"
         out_path = os.path.join(docs_dir, out_name)
 
-        print(f"Converting {pq} with columns: {list(df.columns)}")
+        print(f"Converting {pq} with columns: {list(df.columns)}", flush=True)
 
-        # Determine text field strategy
-        has_text = "text" in df.columns
-        has_content = "content" in df.columns
-
-        if not has_text and not has_content:
-            logger.error(
-                f" Parquet file {pq} has neither 'text' nor 'content' fields! Available columns: {list(df.columns)}"
-            )
-            logger.error(f"Cannot convert {pq} - skipping this file")
+        if parquet_text_field not in df.columns:
+            logger.error(f"Parquet file {pq} missing '{parquet_text_field}' field, skipping this file")
             continue
-        elif not has_text and has_content:
-            logger.warning(f"Parquet file {pq} missing 'text' field, using 'content' as fallback")
 
         with gzip.open(out_path, "wt") as f:
             for rec in df.to_dict(orient="records"):
-                # Robust text field handling
-                if "text" not in rec:
-                    if "content" in rec:
-                        rec["text"] = rec.pop("content")
-                    else:
-                        logger.error(
-                            f"Record in {pq} missing both 'text' and 'content' fields, has keys: {list(rec.keys())}"
-                        )
-                        continue
+                rec["text"] = rec[parquet_text_field]
 
                 # Validate text field is actually a string
                 if not isinstance(rec["text"], str):
                     logger.warning(
                         f"Text field in {pq} is not a string (type: {type(rec['text'])}), converting to string"
                     )
+                    print("somehow there's non string?", flush=True)
                     rec["text"] = str(rec["text"])
 
                 if "id" not in rec:
@@ -347,16 +336,16 @@ def _format_input_paths_for_error(input_paths: str | list[str], max_paths: int =
         return input_paths
 
 
-def _copy_multiple_inputs(input_paths: str | list[str], local_base_dir: str) -> None:
+def _copy_multiple_inputs(input_paths: str | list[str], local_base_dir: str, parquet_text_field: str = "text") -> None:
     """Helper function to copy files from single path or list of paths."""
     if isinstance(input_paths, list):
         for path in input_paths:
-            copy_files_in(path, local_base_dir)
+            copy_files_in(path, local_base_dir, parquet_text_field)
     else:
-        copy_files_in(input_paths, local_base_dir)
+        copy_files_in(input_paths, local_base_dir, parquet_text_field)
 
 
-def copy_files_in(input_path, local_base_dir):
+def copy_files_in(input_path, local_base_dir, parquet_text_field: str = "text"):
     # Ensure input_path doesn't end with a slash
     input_path = input_path.rstrip("/")
 
@@ -364,7 +353,7 @@ def copy_files_in(input_path, local_base_dir):
     parquet_pattern = f"{input_path}/**/*.parquet"
     if input_path.endswith(".parquet") or fsspec_glob(parquet_pattern):
         docs_dir = os.path.join(local_base_dir, "documents")
-        _parquet_to_jsonl_gz(input_path, docs_dir)
+        _parquet_to_jsonl_gz(input_path, docs_dir, parquet_text_field)
         print(f"Converted Parquet → JSONL.gz into {docs_dir}")
         return
 
@@ -786,9 +775,9 @@ def _run_decontamination(config: DedupeConfig):
             **source_check,
         }
 
-    with tempfile.TemporaryDirectory(dir="/tmp", prefix="marin_dedupe_") as tmpdir:
+    with tempfile.TemporaryDirectory(dir="/dev/shm", prefix="marin_dedupe_") as tmpdir:
         # 1) build the filter
-        copy_files_in(config.decontaminate_source, tmpdir)
+        copy_files_in(config.decontaminate_source, tmpdir, parquet_text_field=config.parquet_text_field)
         do_dedup(
             tmpdir,
             config.attribute_name,
@@ -807,7 +796,7 @@ def _run_decontamination(config: DedupeConfig):
         # 2) clear out JSONLs
         delete_jsonl_files(tmpdir)
         # 3) apply filter to real input
-        _copy_multiple_inputs(config.input_path, tmpdir)
+        _copy_multiple_inputs(config.input_path, tmpdir, parquet_text_field=config.parquet_text_field)
         do_dedup(
             tmpdir,
             config.attribute_name,
@@ -847,9 +836,9 @@ def _run_deduplication(config: DedupeConfig):
             **input_check,
         }
 
-    with tempfile.TemporaryDirectory(dir="/tmp", prefix="marin_dedupe_") as tmpdir:
+    with tempfile.TemporaryDirectory(dir="/dev/shm", prefix="marin_dedupe_") as tmpdir:
         # run standard deduplication
-        _copy_multiple_inputs(config.input_path, tmpdir)
+        _copy_multiple_inputs(config.input_path, tmpdir, parquet_text_field=config.parquet_text_field)
         do_dedup(
             tmpdir,
             config.attribute_name,
@@ -940,7 +929,7 @@ def _run_train_test_overlap(config: DedupeConfig):
         )
 
         # 1) Convert decontaminate source to jsonl.gz format using copy_files_in
-        copy_files_in(config.decontaminate_source, tmpdir)
+        copy_files_in(config.decontaminate_source, tmpdir, parquet_text_field=config.parquet_text_field)
         seed_dir = os.path.join(tmpdir, "documents_seed")
         os.rename(os.path.join(tmpdir, "documents"), seed_dir)
 
@@ -1046,7 +1035,7 @@ def _run_train_test_overlap(config: DedupeConfig):
         }
 
 
-@ray.remote(num_cpus=2, memory=1024 * 1024 * 1024 * 16)
+@ray.remote(num_cpus=2, memory=1024 * 1024 * 1024 * 16, resources={"TPU-v4-8-head": 1})
 def dedupe(config: DedupeConfig):
     """Top-level Ray task: dispatch between decontamination and deduplication workflows."""
     if config.mode == DedupMode.DECONTAMINATE:

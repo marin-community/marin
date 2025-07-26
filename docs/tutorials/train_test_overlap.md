@@ -1,10 +1,10 @@
 # Train-Test Overlap Detection
 
-This tutorial will teach you how to use Marin's train-test overlap script (which is a wrapper around the dolma deduplication toolkit) to identify contamination between your training datasets and evaluation benchmarks. This is crucial for calibrating the results of your model evaluations.
+This tutorial will teach you how to use Marin's train-test overlap script (which is a wrapper around the dolma deduplication toolkit) to identify overlap between your training datasets and evaluation benchmarks. This is crucial for calibrating the results of your model evaluations. Under the hood, this uses the same library for deduplication and decontamination.
 
 ## What is Train-Test Overlap?
 
-**Train-test overlap** (also called data contamination) occurs when your training data contains examples that are too similar to your evaluation data. This can lead to:
+**Train-test overlap** occurs when your training data contains examples that are too similar to your evaluation data. This can lead to:
 
 - **Inflated evaluation scores**: Your model may have "memorized" answers rather than learned to reason
 - **Invalid comparisons**: Results become incomparable to other models trained on clean data
@@ -24,8 +24,8 @@ The system uses a two-step process:
 
 2. **Aggregation Step** (`aggregate_total.py`):
    - Combines results across all datasets
-   - Generates contamination matrices and CSV summaries
-   - Produces detailed contamination maps
+   - Generates overlap matrices and CSV summaries
+   - Produces detailed overlap maps that tell you which documents between training and test datasets have overlap
 
 ## Quick Start
 
@@ -55,8 +55,7 @@ python experiments/train_test_overlap/aggregate_total.py --prefix gs://${BUCKET}
 
 This will process these datasets:
 - **Training**: FineMath, DCLM, StarCoder, ProofPile, Dolmino, Nemotron-CC
-- **Evaluation**: All datasets defined in `eval_datasets_overlap.py`
-  - Currently includes: GSM8K, MATH, TruthfulQA, BBH, MMLU, HumanEval, and more
+- **Evaluation**: All datasets defined in `eval_datasets_overlap.py` includes: GSM8K, MATH, TruthfulQA, BBH, MMLU, HumanEval, and more
 
 ### Understanding the Output
 
@@ -64,20 +63,20 @@ After running both scripts, you'll find:
 
 ```
 ${PREFIX}/
-├── train_test_overlap/dolma/total/
+├── train_test_overlap/total/
 │   ├── finemath-abc123/          # Per-dataset results
 │   ├── dclm-def456/
 │   └── ...
-└── train_test_overlap/dolma/aggregate_total_final-xyz789/
-    ├── union/15/summary.csv      # Overall contamination summary
-    ├── contamination_matrix.csv  # Training vs eval matrix
+└── train_test_overlap/aggregate_total/
+    ├── union/15/summary.csv      # Overlap summary for 15-grams with a union over all training datasets
+    ├── overlap_matrix.csv  # Training vs eval matrix
     └── individual_datasets/      # Per-dataset breakdowns
 ```
 
 Key files to examine:
-- **`contamination_matrix.csv`**: Shows overlap percentages between each training-eval pair
-- **`summary.csv`**: Overall contamination statistics
-- **`*_contamination_map.jsonl.gz`**: Detailed per-example contamination data
+- **`overlap_matrix.csv`**: Shows overlap percentages between each training-eval pair
+- **`summary.csv`**: Overall overlap statistics
+- **`*_overlap_map.jsonl.gz`**: Detailed per-example overlap data - for each test dataset, shows every individual document that has overlap with training data, including the exact file paths where the overlap occurs in both training and test files
 
 ## Adding Your Own Dataset
 
@@ -110,7 +109,7 @@ DATASET_CONFIGS = [
     # ... existing datasets ...
     DatasetConfig(
         name="${DATASET_NAME}",
-        path="gs://${BUCKET}/path/to/${DATASET_NAME}",
+        path="gs://${BUCKET}/${DATASET_NAME}",
         max_in_flight=64
     ),
 ]
@@ -130,7 +129,7 @@ python experiments/train_test_overlap/train_test_total.py --prefix gs://${BUCKET
 The system will automatically:
 - Discover all shards in your dataset directory
 - Process them in parallel with the configured n-gram settings
-- Output contamination results for each evaluation dataset
+- Output overlap results for each evaluation dataset
 
 ## Configuration Options
 
@@ -186,7 +185,7 @@ DatasetConfig(
 
 **2. Shard-level parallelism (`processes`):**
 ```python
-# In BASE_DEDUPE_CONFIG - how many processes per shard
+# In BASE_DEDUPE_CONFIG - how many processes per shard. This will make generating the bloom filter for each training shard on a node run faster.
 processes=32,  # Split each shard into 32 parallel processes
 ```
 
@@ -197,7 +196,7 @@ To add a new evaluation dataset, create a conversion step in `experiments/train_
 ```python
 # Download the dataset
 my_eval_raw = ExecutorStep(
-    name="raw/my_evaluation_dataset",
+    name="raw/${DATASET_NAME}",
     fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="org/dataset-name",
@@ -234,7 +233,7 @@ For specialized analysis, you can run single n-gram sizes:
 custom_config = dataclasses.replace(
     BASE_DEDUPE_CONFIG,
     ngram=NGramConfig(ngram_length=[10]),  # Only 10-grams
-    false_positive_rate=1e-8,              # Lower memory usage
+    false_positive_rate=1e-8,
 )
 
 # Use in your ExecutorStep
@@ -351,15 +350,25 @@ DATASET_CONFIGS = [
 
 **2. Run deduplication**
 ```bash
-python experiments/train_test_overlap/train_test_total.py --prefix gs://${BUCKET}
+python experiments/train_test_overlap/train_test_total.py
 ```
 **3. Run aggregation**
 ```bash
-python experiments/train_test_overlap/aggregate_total.py --prefix gs://${BUCKET}
+python experiments/train_test_overlap/aggregate_total.py
 ```
 **4. Analyze results**
 ```bash
-gsutil cat gs://${BUCKET}/train_test_overlap/dolma/aggregate_total_final-*/contamination_matrix.csv
+gsutil cat gs://${BUCKET}/train_test_overlap/dolma/aggregate_total_final-*/overlap_matrix.csv
 ```
 
-This will give you contamination percentages for your training data against all standard evaluation benchmarks, helping you make informed decisions about data quality and evaluation validity.
+This will give you overlap percentages for your training data against all standard evaluation benchmarks, helping you make informed decisions about data quality and evaluation validity.
+
+## Gotchas
+
+- If the provided dataset path contains no files or only empty files, the
+  pipeline will exit early to avoid hanging on empty shards.
+- The Bloom filter false positive rate defaults to `1e-12` in
+  `train_test_total.py`. For very large datasets you may need to adjust this
+  value to manage memory usage.
+- Ensure the dataset path you provide actually contains files with one of
+  the supported extensions; otherwise no shards will be discovered.

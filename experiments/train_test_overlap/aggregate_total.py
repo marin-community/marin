@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """aggregate_total.py
 
-Aggregate contamination across all discovered training datasets with two levels:
+Aggregate overlap across all discovered training datasets with two levels:
 1. Per-training-dataset aggregation (like debug scripts but using ALL shards)
 2. Union aggregation across all training datasets
-3. Contamination matrix showing training_datasets X evaluation_datasets
+3. Overlap matrix showing training_datasets X evaluation_datasets
 
 Auto-discovers training datasets from a given GCP path.
 """
@@ -30,17 +30,29 @@ logger = logging.getLogger(__name__)
 
 
 @ray.remote
-def summarise_shard(shard_path: str, test_dataset: str, training_dataset: str, attr_key: str) -> dict:
-    """Return basic overlap statistics for a single attribute shard."""
+def summarize_shard(shard_path: str, test_dataset: str, training_dataset: str, attr_key: str) -> dict:
+    """Return basic overlap statistics for a single attribute shard.
+
+    Args:
+        shard_path: Path to the attribute shard file containing overlap data
+        test_dataset: Name of the evaluation dataset being checked for overlap
+        training_dataset: Name of the training dataset that may contain overlapping content
+        attr_key: The attribute key to check for overlap (e.g., "ngram_overlap_15")
+
+    Returns:
+        Dictionary containing:
+        - shard_path: The input shard path
+        - test_dataset: The test dataset name
+        - training_dataset: The training dataset name
+        - ids_seen: List of all document IDs found in this shard
+        - overlap_ids: List of document IDs that have overlap with the test dataset
+    """
 
     ids_seen: set[str] = set()
     overlap_ids: set[str] = set()
     with fsspec.open(shard_path, "rt", compression="infer") as f:
         for line in f:
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+            rec = json.loads(line)
             doc_id = rec.get("id")
             if doc_id is None:
                 continue
@@ -155,7 +167,7 @@ def discover_training_datasets(base_path: str, ngram_size: int = 15) -> list[str
 
 @dataclass(frozen=True)
 class AggregateConfig:
-    """Aggregate contamination across all training datasets."""
+    """Aggregate overlap across all training datasets."""
 
     training_datasets_base_path: str  # base path to discover training datasets
     output_path: str  # where to write the results
@@ -173,7 +185,7 @@ class AggregateConfig:
 def aggregate_single_dataset(
     training_root: str, cfg: AggregateConfig, dataset_sizes: dict[str, int], test_lookup: dict[str, list[str]]
 ) -> tuple[dict, dict]:
-    """Aggregate contamination for a single training dataset."""
+    """Aggregate overlap for a single training dataset."""
     attr_key = f"{cfg.attribute_name}_{cfg.ngram_size}"
     training_name = os.path.basename(training_root)
 
@@ -199,7 +211,7 @@ def aggregate_single_dataset(
         test_ds = test_ds_segment.split("-")[0]
         task_args.append((shard, test_ds, training_name, attr_key))
 
-    refs: Iterator = simple_backpressure(summarise_shard, iter(task_args), cfg.max_in_flight, fetch_local=True)
+    refs: Iterator = simple_backpressure(summarize_shard, iter(task_args), cfg.max_in_flight, fetch_local=True)
 
     # 3. Aggregate results
     overall_unique: set[str] = set()
@@ -298,7 +310,7 @@ def write_dataset_results(results: dict, output_dir: str, cfg: AggregateConfig, 
 
     # 3. Write detailed contamination JSONL files
     for tds, id_map in results["contam_map"].items():
-        file_path = os.path.join(output_dir, f"{tds}_contamination_map.jsonl.gz")
+        file_path = os.path.join(output_dir, f"{tds}_overlap_map.jsonl.gz")
         with fsspec.open(file_path, "wt", compression="gzip") as f:
             for _id, train_dict in id_map.items():
                 for train_name, maps in train_dict.items():
@@ -324,7 +336,7 @@ def write_dataset_results(results: dict, output_dir: str, cfg: AggregateConfig, 
 
 
 def aggregate_total(cfg: AggregateConfig):
-    """Main function to aggregate contamination across all training datasets."""
+    """Main function to aggregate overlap across all training datasets."""
 
     # Pre-compute test dataset sizes
     dataset_sizes = _compute_dataset_sizes(cfg.dataset_steps)
@@ -405,7 +417,7 @@ def aggregate_total(cfg: AggregateConfig):
     logger.info("Wrote %s", union_per_test_csv)
 
     # Generate contamination matrix CSV
-    matrix_path = os.path.join(cfg.output_path, "contamination_matrix.csv")
+    matrix_path = os.path.join(cfg.output_path, "overlap_matrix.csv")
     with fsspec.open(matrix_path, "wt") as f:
         writer = csv.writer(f)
 
@@ -429,7 +441,7 @@ def aggregate_total(cfg: AggregateConfig):
 
             writer.writerow(row)
 
-    logger.info("Wrote contamination matrix: %s", matrix_path)
+    logger.info("Wrote overlap matrix: %s", matrix_path)
     logger.info(
         "Matrix dimensions: %d evaluation datasets x %d training datasets",
         len(dataset_sizes),
@@ -452,7 +464,7 @@ aggregate_total_step = ExecutorStep(
     name="train_test_overlap/dolma/aggregate_total_final",
     fn=aggregate_total,
     config=cfg,
-    description="Aggregate contamination across all training datasets with individual and union views",
+    description="Aggregate overlap across all training datasets with individual and union views",
 )
 
 ###############################################################################
@@ -462,5 +474,5 @@ aggregate_total_step = ExecutorStep(
 if __name__ == "__main__":
     executor_main(
         steps=[aggregate_total_step],
-        description="Aggregate train-test contamination across all training datasets",
+        description="Aggregate train-test overlap across all training datasets",
     )
