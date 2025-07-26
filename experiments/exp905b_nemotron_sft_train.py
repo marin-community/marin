@@ -12,6 +12,9 @@ import logging
 import math
 
 from experiments.evals.evals import default_sft_eval
+from experiments.defaults import default_train
+from experiments.evals.task_configs import OPEN_LM_LEADERBOARD_MCQ
+from experiments.simple_train_config import SimpleTrainConfig
 
 # Dataset configurations
 from experiments.exp905a_nemotron_sft_dstc import DATASETS, create_tokenization_step
@@ -50,15 +53,15 @@ EXPERIMENT_TAGS = [
     "mixture",
     "exp905b",
     "nemotron+openthoughts3-1.2m",
-    f"{REGION}",
+    f"region={REGION}",
     "v4-128",
     "batchsize=512",
+    "user=chiheem",
 ]
 
 # Training parameters
 BATCH_SIZE = 512
 EPOCHS = 3
-
 
 tokenized_datasets = {short_name: create_tokenization_step(hf_name) for short_name, hf_name in DATASETS.items()}
 
@@ -106,11 +109,6 @@ if __name__ == "__main__":
     # Create a custom SFT step with evaluations enabled
     # We need to modify the default_sft to enable evaluations
     # Since default_sft hardcodes eval_harness_tasks=[], we'll use default_train directly
-    from experiments.defaults import default_train
-    from experiments.evals.task_configs import OPEN_LM_LEADERBOARD_MCQ
-    from experiments.simple_train_config import SimpleTrainConfig
-
-    # Convert your existing _sft_config to train config
     normal_train_config = SimpleTrainConfig(
         resources=_sft_config.resources,
         train_batch_size=_sft_config.train_batch_size,
