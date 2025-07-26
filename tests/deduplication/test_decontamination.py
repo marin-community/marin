@@ -6,7 +6,7 @@ import fsspec
 import pytest
 import ray
 
-from marin.processing.classification.dedupe import DedupeConfig, NGramConfig, dedupe
+from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 from marin.utils import fsspec_exists
 
 
@@ -17,7 +17,7 @@ def sample_documents():
         {
             "id": "gsm8k",
             "text": (
-                "Janet’s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?"  # noqa: E501, RUF001
+                "Janet's ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?"  # noqa: E501
             ),
             "source": "test",
         },
@@ -39,7 +39,7 @@ def test_set_documents():
         {
             "id": "gsm8k",
             "text": (
-                "Janet’s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?"  # noqa: E501, RUF001
+                "Janet's ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?"  # noqa: E501
             ),
             "source": "test",
         },
@@ -51,11 +51,6 @@ def test_set_documents():
             "source": "test",
         },
     ]
-
-
-@ray.remote
-def _run_dedupe(dedupe_config):
-    ray.get(dedupe.remote(dedupe_config))
 
 
 def test_exact_decontamination_paragraph(ray_tpu_cluster, sample_documents, test_set_documents):
@@ -88,12 +83,12 @@ def test_exact_decontamination_paragraph(ray_tpu_cluster, sample_documents, test
                 stride=0,
                 overlap_threshold=0.0,  # For debugging purposes, this outputs all possible duplicates
             ),
-            decontaminate=True,
-            decontaminate_path=temp_decontamination_dir,
-            bloom_filter_path=temp_bloom_filter_dir,
+            mode=DedupMode.DECONTAMINATE,
+            decontaminate_source=temp_decontamination_dir,
+            bloom_filter_path=os.path.join(temp_bloom_filter_dir, "deduper_bloom_filter.bin"),
         )
 
-        ray.get(_run_dedupe.remote(dedupe_config))
+        ray.get(dedupe.remote(dedupe_config))
 
         attribute_file_path = os.path.join(temp_attribute_dir, "test_docs.jsonl.gz")
         with fsspec.open(attribute_file_path, "r", compression="gzip") as f:
@@ -113,4 +108,4 @@ def test_exact_decontamination_paragraph(ray_tpu_cluster, sample_documents, test
         assert len(attributes[2]["attributes"]["duplicate_text"]) == 1
         assert attributes[2]["attributes"]["duplicate_text"][0][2] == 0
 
-        assert fsspec_exists(os.path.join(temp_bloom_filter_dir, "decontaminated_bloom_filter.bin"))
+        assert fsspec_exists(os.path.join(temp_bloom_filter_dir, "deduper_bloom_filter.bin"))

@@ -30,6 +30,7 @@ import pandas as pd
 import ray
 from tqdm import tqdm
 
+from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_mkdirs, fsspec_rm, fsspec_size, rebase_file_path
 
 logger = logging.getLogger(__name__)
@@ -355,7 +356,7 @@ def _copy_multiple_inputs(input_paths: str | list[str], local_base_dir: str) -> 
         copy_files_in(input_paths, local_base_dir)
 
 
-def copy_files_in(input_path, local_base_dir, input_filetype):
+def copy_files_in(input_path, local_base_dir):
     # Ensure input_path doesn't end with a slash
     input_path = input_path.rstrip("/")
 
@@ -429,120 +430,6 @@ def copy_files_in(input_path, local_base_dir, input_filetype):
     )
 
 
-@ray.remote
-def do_dedup(
-    local_base_dir,
-    attribute_name,
-    min_length,
-    min_words,
-    bloom_filter_size,
-    estimated_doc_count,
-    false_positive_rate,
-    ngram,
-    processes,
-    input_filetype,
-    read_only=False,
-    bloom_filter_file="deduper_bloom_filter.bin",
-    train_test_overlap=False,
-    pre_estimated_counts: dict[int, int] | None = None,
-):
-    bloom_filter_file = os.path.join(local_base_dir, bloom_filter_file)
-
-    # If n-gram mode and no explicit bloom_filter_size, use pre-computed estimates
-    if ngram is not None and not bloom_filter_size and pre_estimated_counts is not None:
-        ngram_length = ngram.ngram_length
-        estimated_doc_count = pre_estimated_counts[ngram_length]
-        print(f"Using pre-computed estimate for {ngram_length}-grams: {estimated_doc_count}")
-        if estimated_doc_count < 100:
-            print(
-                f"Warning: Pre-computed estimate for {ngram_length}-grams is too low: {estimated_doc_count}", flush=True
-            )
-
-    command = [
-        "RUST_BACKTRACE=full",
-        "dolma",
-        "dedupe",
-        "--documents",
-        f"{local_base_dir}/documents/**/*.{input_filetype}",
-        "--dedupe.paragraphs.attribute_name",
-        attribute_name,
-        "--dedupe.skip_empty",
-        "--dedupe.min_length",
-        str(min_length),
-        "--dedupe.min_words",
-        str(min_words),
-        "--bloom_filter.file",
-        bloom_filter_file,
-        "--processes",
-        str(processes),
-        "--bloom_filter.estimated_doc_count",
-        str(max(1, estimated_doc_count)),
-        "--bloom_filter.desired_false_positive_rate",
-        str(false_positive_rate),
-    ]
-
-    if bloom_filter_size:
-        command.extend(
-            [
-                "--bloom_filter.size_in_bytes",
-                str(bloom_filter_size),
-            ]
-        )
-
-    # for decontamination bloom filter is read only
-    command.append("--bloom_filter.read_only" if read_only else "--no-bloom_filter.read_only")
-
-    # add ngram settings to dolma dedupe command if in ngram matching mode
-    if ngram is not None:
-        command.extend(
-            [
-                "--dedupe.paragraphs.by_ngram.ngram_length",
-                str(ngram.ngram_length),
-                "--dedupe.paragraphs.by_ngram.overlap_threshold",
-                str(ngram.overlap_threshold),
-                "--dedupe.paragraphs.by_ngram.stride",
-                str(ngram.stride),
-            ]
-        )
-
-    # ONLY set special paragraph separator for train-test overlap
-    if train_test_overlap:
-        # chatgpt says the separator below is extrememly unlikely to ever occur, so we count all n-grams in document
-        # instead of per paragraph, giving us overlap if any n-grams match
-        command.extend(
-            [
-                "--dedupe.paragraphs.paragraph_separator",
-                "\u001e\u001e",
-            ]
-        )
-
-    process = subprocess.Popen(
-        " ".join(command),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        shell=True,
-        text=True,
-        bufsize=1,
-        universal_newlines=True,
-    )
-    for line in process.stdout:
-        print(line, end="", flush=True)
-    process.wait()
-
-    # Rename temporary files
-    attr_dir = os.path.join(local_base_dir, "attributes/duplicate_documents")
-    print(f"Checking for temporary files in: {attr_dir}")
-    for root, _, files in os.walk(attr_dir):
-        for file in files:
-            if file.endswith(".jsonl.gz.tmp"):
-
-                old_path = os.path.join(root, file)
-                new_path = old_path.rsplit(".tmp", 1)[0]
-                os.rename(old_path, new_path)
-
-    return process.returncode
-
-
 def copy_files_out(local_base_dir, output_path, attribute_name):
     # Ensure output_path doesn't end with a slash
     output_path = output_path.rstrip("/")
@@ -605,9 +492,10 @@ def delete_jsonl_files(dir_path):
     dir_path = dir_path.rstrip("/")
 
     # Get all .jsonl and .jsonl.gz files in the directory and its subdirectories
-    glob_path_files = os.path.join(dir_path, f"**/*.{input_filetype}")
+    glob_path_jsonl = f"{dir_path}/**/*.jsonl"
+    glob_path_jsonl_gz = f"{dir_path}/**/*.jsonl.gz"
 
-    files_to_delete = fsspec_glob(glob_path_files)
+    files_to_delete = fsspec_glob(glob_path_jsonl) + fsspec_glob(glob_path_jsonl_gz)
 
     files_deleted = 0
     for file_path in tqdm(files_to_delete, desc="Deleting files"):
@@ -685,6 +573,118 @@ def estimate_total_ngrams_fast(local_base_dir, ngram_lengths: list[int], sample_
         estimates[ngram_length] = max(1, int(avg_ngrams_per_line * total_lines))
 
     return estimates
+
+
+def do_dedup(
+    local_base_dir,
+    attribute_name,
+    min_length,
+    min_words,
+    bloom_filter_size,
+    estimated_doc_count,
+    false_positive_rate,
+    ngram,
+    processes,
+    read_only=False,
+    bloom_filter_file="deduper_bloom_filter.bin",
+    train_test_overlap=False,
+    pre_estimated_counts: dict[int, int] | None = None,
+):
+    bloom_filter_file = os.path.join(local_base_dir, bloom_filter_file)
+
+    # If n-gram mode and no explicit bloom_filter_size, use pre-computed estimates
+    if ngram is not None and not bloom_filter_size and pre_estimated_counts is not None:
+        ngram_length = ngram.ngram_length
+        estimated_doc_count = pre_estimated_counts[ngram_length]
+        print(f"Using pre-computed estimate for {ngram_length}-grams: {estimated_doc_count}")
+        if estimated_doc_count < 100:
+            print(
+                f"Warning: Pre-computed estimate for {ngram_length}-grams is too low: {estimated_doc_count}", flush=True
+            )
+
+    command = [
+        "RUST_BACKTRACE=full",
+        "dolma",
+        "dedupe",
+        "--documents",
+        f"{local_base_dir}/documents/**/*.jsonl.gz",
+        "--dedupe.paragraphs.attribute_name",
+        attribute_name,
+        "--dedupe.skip_empty",
+        "--dedupe.min_length",
+        str(min_length),
+        "--dedupe.min_words",
+        str(min_words),
+        "--bloom_filter.file",
+        bloom_filter_file,
+        "--processes",
+        str(processes),
+        "--bloom_filter.estimated_doc_count",
+        str(max(1, estimated_doc_count)),
+        "--bloom_filter.desired_false_positive_rate",
+        str(false_positive_rate),
+    ]
+
+    if bloom_filter_size:
+        command.extend(
+            [
+                "--bloom_filter.size_in_bytes",
+                str(bloom_filter_size),
+            ]
+        )
+
+    # for decontamination bloom filter is read only
+    command.append("--bloom_filter.read_only" if read_only else "--no-bloom_filter.read_only")
+
+    # add ngram settings to dolma dedupe command if in ngram matching mode
+    if ngram is not None:
+        command.extend(
+            [
+                "--dedupe.paragraphs.by_ngram.ngram_length",
+                str(ngram.ngram_length),
+                "--dedupe.paragraphs.by_ngram.overlap_threshold",
+                str(ngram.overlap_threshold),
+                "--dedupe.paragraphs.by_ngram.stride",
+                str(ngram.stride),
+            ]
+        )
+
+    # ONLY set special paragraph separator for train-test overlap
+    if train_test_overlap:
+        # chatgpt says the separator below is extrememly unlikely to ever occur, so we count all n-grams in document
+        # instead of per paragraph, giving us overlap if any n-grams match
+        command.extend(
+            [
+                "--dedupe.paragraphs.paragraph_separator",
+                "\u001e\u001e",
+            ]
+        )
+
+    process = subprocess.Popen(
+        " ".join(command),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        shell=True,
+        text=True,
+        bufsize=1,
+        universal_newlines=True,
+    )
+    for line in process.stdout:
+        print(line, end="", flush=True)
+    process.wait()
+
+    # Rename temporary files
+    attr_dir = os.path.join(local_base_dir, "attributes/duplicate_documents")
+    print(f"Checking for temporary files in: {attr_dir}")
+    for root, _, files in os.walk(attr_dir):
+        for file in files:
+            if file.endswith(".jsonl.gz.tmp"):
+
+                old_path = os.path.join(root, file)
+                new_path = old_path.rsplit(".tmp", 1)[0]
+                os.rename(old_path, new_path)
+
+    return process.returncode
 
 
 def _shard_jsonl_source(jsonl_path: str, writers: list) -> None:
@@ -1046,7 +1046,7 @@ def _run_train_test_overlap(config: DedupeConfig):
         }
 
 
-@ray.remote(num_cpus=16, memory=1024 * 1024 * 1024 * 16)
+@ray.remote(num_cpus=2, memory=1024 * 1024 * 1024 * 16)
 def dedupe(config: DedupeConfig):
     """Top-level Ray task: dispatch between decontamination and deduplication workflows."""
     if config.mode == DedupMode.DECONTAMINATE:

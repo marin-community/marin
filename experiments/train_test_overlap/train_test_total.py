@@ -46,13 +46,15 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+MAX_IN_FLIGHT = 32
+
 DATASET_CONFIGS = [
-    DatasetConfig(name="finemath", path=finemath_3_plus, max_in_flight=64),
-    DatasetConfig(name="dclm", path=dclm_baseline, max_in_flight=64),
-    DatasetConfig(name="starcoder", path=starcoderdata, max_in_flight=64),
-    DatasetConfig(name="proofpile", path=proofpile_2, max_in_flight=64),
-    DatasetConfig(name="dolmino", path=dolmino, max_in_flight=64),
-    DatasetConfig(name="nemotron_cc", path=nemotron_cc, max_in_flight=64),
+    DatasetConfig(name="finemath", path=finemath_3_plus, max_in_flight=MAX_IN_FLIGHT),
+    DatasetConfig(name="dclm", path=dclm_baseline, max_in_flight=MAX_IN_FLIGHT),
+    DatasetConfig(name="starcoder", path=starcoderdata, max_in_flight=MAX_IN_FLIGHT),
+    DatasetConfig(name="proofpile", path=proofpile_2, max_in_flight=MAX_IN_FLIGHT),
+    DatasetConfig(name="dolmino", path=dolmino, max_in_flight=MAX_IN_FLIGHT),
+    DatasetConfig(name="nemotron_cc", path=nemotron_cc, max_in_flight=MAX_IN_FLIGHT),
 ]
 
 

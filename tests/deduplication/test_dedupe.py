@@ -69,7 +69,7 @@ def _run_dedupe(dedupe_config):
     ray.get(dedupe.remote(dedupe_config))
 
 
-@pytest.mark.skip("Seems broken locally, and I dont' want to copy files all the time.")
+# @pytest.mark.skip("Seems broken locally, and I dont' want to copy files all the time.")
 def test_exact_deduplication_paragraph(ray_tpu_cluster, sample_documents):
     output_file_path = os.path.join(BASE_INPUT_DIR, "deduplication", "test_docs.jsonl.gz")
     with fsspec.open(output_file_path, "w", compression="gzip") as f:
