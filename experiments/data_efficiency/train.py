@@ -12,9 +12,6 @@ from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from experiments.pretraining_datasets import dclm_baseline
-from experiments.defaults import default_tokenize
-from experiments.llama import llama3_tokenizer
 from experiments.defaults import _prepare_data_config
 from experiments.evals.task_configs import convert_to_levanter_task_config
 from experiments.data_efficiency.models import model_dict
@@ -24,15 +21,7 @@ from marin.execution.executor import ExecutorStep, this_output_path, output_path
 from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig, lm_mixture_data_config
 from marin.training.training import TpuPodConfig, TrainLmOnPodConfig, run_levanter_train_lm
 
-data_dict = {
-   "dclm": dataclasses.replace(
-        default_tokenize(
-            name="dclm_baseline",
-            dataset=dclm_baseline,
-            tokenizer=llama3_tokenizer,
-        ).with_output_path("tokenized/dclm_baseline-0206f1/"),
-    )
-}
+from experiments.data_efficiency.data import data_dict
 
 @dataclass
 class DataEfficiencyConfig:
@@ -41,6 +30,9 @@ class DataEfficiencyConfig:
     epochs: float
     train_seed: int = 0
     data_seed: int = 42
+
+    teacher_data_name: str | None = None
+    teacher_data_weight: float = 0.0
 
     ### Trainer config
     base_train_steps: int = 1024
@@ -73,8 +65,15 @@ class DataEfficiencyConfig:
 
     def __post_init__(self):
         assert self.lr_cooldown_duration is None, "Cooldown duration is not supported for data efficiency experiments"
+
+        if self.teacher_data_name is not None:
+            assert self.teacher_data_weight > 0.0, "Teacher data weight must be greater than 0.0"
+        
+        if self.teacher_data_weight > 0.0:
+            assert self.teacher_data_name is not None, "Teacher data name must be specified if teacher data weight is greater than 0.0"
+
         self.model_config = model_dict[self.model_name]
-        self.total_train_steps = self.base_train_steps * self.epochs
+        self.total_train_steps = int(self.base_train_steps * self.epochs / (1.0 - self.teacher_data_weight))
 
         assert (
             self.initialize_from_checkpoint_path is None or self.initialize_from_hf is None
@@ -96,6 +95,8 @@ class DataEfficiencyConfig:
 
     def build_name(self) -> str:
         data_str = f"{self.format_num_tokens()}x{self.epochs}-{self.data_name}"
+        if self.teacher_data_name is not None and self.teacher_data_weight > 0.0:
+            data_str += f"+{self.teacher_data_name}^{self.teacher_data_weight}"
         name = f"{self.model_name}-{data_str}-{self.format_lr_schedule()}{self.nametag}"
         assert len(name) <= 64, f"Name is too long with length {len(name)}: {name}"
         return name
@@ -105,6 +106,12 @@ class DataEfficiencyConfig:
         weights = {self.data_name: 1.0}
         max_train_batches = {self.data_name: self.base_train_steps}
         num_validation_sequences = {self.data_name: 1024}
+
+        if self.teacher_data_name is not None and self.teacher_data_weight > 0.0:
+            components[self.teacher_data_name] = data_dict[self.teacher_data_name]
+            weights[self.teacher_data_name] = self.teacher_data_weight
+            weights[self.data_name] = 1.0 - self.teacher_data_weight
+            num_validation_sequences[self.teacher_data_name] = 1024
 
         data_config = lm_mixture_data_config(
             components=components,
@@ -241,7 +248,7 @@ def data_efficiency_eval_model(data_efficiency_executor_step: ExecutorStep) -> E
         checkpoint_is_hf=True,
     )
 
-def data_efficiency_eval_ensemble(data_efficiency_executor_steps: list[ExecutorStep]) -> ExecutorStep:
+def data_efficiency_eval_ensemble(data_efficiency_executor_steps: list[ExecutorStep], run_prefix: str = "ppl-eval", name_prefix: str = "ensemble-", key: str = None) -> ExecutorStep:
     data_efficiency_train_lm_on_pod_config = data_efficiency_executor_steps[0].config
     data_efficiency_train_lm_config = data_efficiency_train_lm_on_pod_config.train_config
 
@@ -253,4 +260,7 @@ def data_efficiency_eval_ensemble(data_efficiency_executor_steps: list[ExecutorS
         model=data_efficiency_train_lm_config.model,
         data=data_efficiency_train_lm_config.data,
         checkpoint_is_hf=True,
+        run_prefix=run_prefix,
+        name_prefix=name_prefix,
+        key=key,
     )

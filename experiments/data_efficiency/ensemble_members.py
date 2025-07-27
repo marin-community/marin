@@ -1,69 +1,94 @@
-"""
-Searching for the best two-stage data schedule (based on two_stage_config.py).
-Mid-training setup where we have a single learning rate schedule and a different mixture for each stage.
-Hyperparameters are tuned for the baseline of all data at the end of training.
-"""
-
 from experiments.data_efficiency.train import DataEfficiencyConfig, data_efficiency_train_step
 from marin.execution.executor import executor_main
+from experiments.data_efficiency.convex_certificate_scaling import valid_epochs, valid_lrs, valid_weight_decays, extract_neighbors
 
-# ensemble_members_train_steps_dict = {
-#     (base_train_steps, seed): data_efficiency_train_step(
-#         DataEfficiencyConfig(
-#             train_seed=seed,
-#             data_seed=seed,
-#             data_name="dclm",
-#             epochs=epochs,
-#             base_train_steps=base_train_steps * 1024 / batch_size,
-#             train_batch_size=batch_size,
-#             lr_schedule="cosine",
-#             lr=lr,
-#             weight_decay=weight_decay,
-#             wandb_project_name="suhas-data-efficiency",
-#             wandb_additional_tags=["ensemble-members-6-13"],
-#             model_name=model_name,
-#             nametag=f"-seed{seed}",
-#         )
-#     )
-#     for base_train_steps, epochs, lr, weight_decay in [
-#         (50, 16, 3e-3, 1.6),
-#         (100, 16, 3e-3, 0.8),
-#         (200, 16, 3e-3, 0.4),
-#         (400, 32, 3e-3, 0.8),
-#     ]
-#     for batch_size in [64]
-#     for model_name in ["300m4k"]
-#     for seed in list(range(5))
-# }
+# for now, do not vary LR
+def get_ensemble_bounding_box(base_train_steps, epochs, lr, weight_decay, model_name):
+    lower_epochs, upper_epochs = extract_neighbors(epochs, valid_epochs)
+    lower_weight_decay, upper_weight_decay = extract_neighbors(weight_decay, valid_weight_decays)
 
-# ensemble_members_train_steps = list(ensemble_members_train_steps_dict.values())
+    return [
+        (base_train_steps, epochs, lr, weight_decay, model_name),
+        (base_train_steps, lower_epochs, lr, weight_decay, model_name),
+        (base_train_steps, upper_epochs, lr, weight_decay, model_name),
+        (base_train_steps, epochs, lr, lower_weight_decay, model_name),
+        (base_train_steps, epochs, lr, upper_weight_decay, model_name),
+    ]
 
-ensemble_members_train_steps_dict = {
-    (base_train_steps, epochs, lr, weight_decay, batch_size, model_name, seed): data_efficiency_train_step(
-        DataEfficiencyConfig(
-            train_seed=seed,
-            data_seed=seed,
-            data_name="dclm",
-            epochs=epochs,
-            base_train_steps=base_train_steps * 1024 / batch_size,
-            train_batch_size=batch_size,
-            lr_schedule="cosine",
-            lr=lr,
-            weight_decay=weight_decay,
-            wandb_project_name="suhas-data-efficiency",
-            wandb_additional_tags=["best-ensemble-member-6-28"],
-            model_name=model_name,
-            nametag=f"-seed{seed}",
+ensemble_members_train_steps_dict_list = [
+    {
+        (base_train_steps, epochs, lr, weight_decay, model_name, seed): data_efficiency_train_step(
+            DataEfficiencyConfig(
+                train_seed=seed,
+                data_seed=seed,
+                data_name="dclm",
+                epochs=epochs,
+                base_train_steps=base_train_steps,
+                train_batch_size=64,
+                lr_schedule="cosine",
+                lr=lr,
+                weight_decay=weight_decay,
+                wandb_project_name="suhas-data-efficiency",
+                model_name=model_name,
+                nametag=f"-seed{seed}",
+            )
         )
-    )
-    for base_train_steps in [50]
-    for epochs in [64]
-    for lr in [1e-3, 3e-3]
-    for weight_decay in [0.4, 0.8, 1.6]
-    for batch_size in [64]
-    for model_name in ["300m4k"]
+        for base_train_steps, epochs, lr, weight_decay, model_name in (get_ensemble_bounding_box(*candidate_hparams) if use_bounding_box else [candidate_hparams])
+    }
+    for candidate_hparams, use_bounding_box in [
+        # # Vanilla
+        # ((800, 16, 3e-3, 0.8, "150m4k"), False),
+        # ((800, 16, 3e-3, 1.6, "300m4k"), False),
+        # ((800, 8, 1e-3, 3.2, "600m4k"), False),
+        # ((800, 8, 1e-3, 3.2, "1_4b4k"), False),
+        # # Ensembling guess
+        # ((800, 32, 3e-3, 0.4, "150m4k"), True),
+        # ((800, 32, 3e-3, 0.8, "300m4k"), True),
+        # ((800, 16, 1e-3, 1.6, "600m4k"), True),
+        # ((800, 16, 1e-3, 1.6, "1_4b4k"), True),
+
+        # # Vanilla
+        # ((1600, 32, 3e-3, 0.8, "150m4k"), False),
+        # ((1600, 16, 3e-3, 0.8, "300m4k"), False),
+        # ((1600, 8, 1e-3, 1.6, "600m4k"), False),
+        # ((1600, 8, 1e-3, 3.2, "1_4b4k"), False),
+        # # Ensembling guess
+        # ((1600, 64, 3e-3, 0.4, "150m4k"), False),
+        # ((1600, 32, 3e-3, 0.4, "300m4k"), False),
+        # ((1600, 16, 1e-3, 0.8, "600m4k"), False),
+        # ((1600, 16, 1e-3, 1.6, "1_4b4k"), False),
+
+        # Vanilla
+        ((3200, 64, 3e-3, 0.4, "150m4k"), False),
+        ((3200, 16, 3e-3, 0.4, "300m4k"), False),
+        ((3200, 16, 3e-3, 0.4, "600m4k"), False),
+        ((3200, 8, 1e-3, 1.6, "1_4b4k"), False),
+        # Ensembling guess
+        # ((3200, 128, 3e-3, 0.2, "150m4k"), False),
+        # ((3200, 32, 3e-3, 0.2, "300m4k"), False),
+        # ((3200, 32, 3e-3, 0.2, "600m4k"), False),
+        # ((3200, 16, 1e-3, 0.8, "1_4b4k"), False),
+ 
+        # Vanilla
+        ((6400, 64, 3e-3, 0.1, "150m4k"), False),
+        ((6400, 32, 1e-3, 0.4, "300m4k"), False),
+        ((6400, 16, 1e-3, 0.8, "600m4k"), False),
+        ((6400, 8, 1e-3, 0.8, "1_4b4k"), False),
+        # Ensembling guess
+        # ((6400, 128, 3e-3, 0.1, "150m4k"), False),
+        # ((6400, 64, 1e-3, 0.2, "300m4k"), False),
+        # ((6400, 32, 1e-3, 0.4, "600m4k"), False),
+        # ((6400, 16, 1e-3, 0.4, "1_4b4k"), False),
+
+    ]
     for seed in list(range(5))
-}
+]
+
+ensemble_members_train_steps_dict = {}
+for train_steps_dict in ensemble_members_train_steps_dict_list:
+    for key, value in train_steps_dict.items():
+        assert key not in ensemble_members_train_steps_dict
+        ensemble_members_train_steps_dict[key] = value
 
 ensemble_members_train_steps = list(ensemble_members_train_steps_dict.values())
 

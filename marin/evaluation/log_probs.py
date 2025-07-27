@@ -54,6 +54,8 @@ class EvalEnsembleLmConfig:
     datasets: LMMixtureDatasetConfig
     per_device_batch_size: int = 4
     output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
+    run_prefix: str = "ppl-eval"
+    key: str = None,
     checkpoint_is_hf: bool = False
     """Whether the checkpoint is in HF format."""
 
@@ -105,6 +107,9 @@ def default_ensemble_log_probs(
     checkpoint_is_hf: bool,
     per_device_batch_size: int = 4,
     max_samples_per_dataset: int | None = None,
+    run_prefix: str = "ppl-eval",
+    name_prefix: str = "ensemble-",
+    key: str = None,
 ) -> ExecutorStep:
     """
     Creates a step to evaluate log probabilities of a language model.
@@ -115,7 +120,7 @@ def default_ensemble_log_probs(
         checkpoint_is_hf:  Whether the checkpoint is in HF format.
     """
     name = ckpt_path_to_step_name(checkpoints[0])
-    name = f"analysis/log_probs/data-efficiency/ensemble-{len(checkpoints)}x-{name}"
+    name = f"analysis/log_probs/data-efficiency/{name_prefix}{len(checkpoints)}x-{name}"
     return ExecutorStep(
         name=name,
         fn=evaluate_ensemble_log_probs,
@@ -127,6 +132,8 @@ def default_ensemble_log_probs(
             checkpoint_is_hf=checkpoint_is_hf,
             per_device_batch_size=per_device_batch_size,
             max_samples_per_dataset=max_samples_per_dataset,
+            run_prefix=run_prefix,
+            key=key,
         ),
     )
 
@@ -208,7 +215,7 @@ def evaluate_ensemble_log_probs(config: EvalEnsembleLmConfig) -> None:
     """
 
     name = os.path.basename(config.output_path)
-    name = f"ppl-eval-{name}"
+    name = f"{config.run_prefix}-{name}"
 
     if config.max_samples_per_dataset is None:
         max_eval_batches = None
@@ -221,7 +228,7 @@ def evaluate_ensemble_log_probs(config: EvalEnsembleLmConfig) -> None:
         model=config.model,
         data=config.datasets,
         trainer=TrainerConfig(
-            tracker=WandbConfig(project="suhas-eval-data-efficiency", tags=["eval_lm"], name=name, id=name[:64]),
+            tracker=WandbConfig(project="suhas-eval-data-efficiency", tags=["eval_lm"] + [config.key] if config.key else [], name=name, id=name[:64]),
             ray=RayConfig(auto_start_cluster=False),
             per_device_eval_parallelism=config.per_device_batch_size,
             max_eval_batches=max_eval_batches,
