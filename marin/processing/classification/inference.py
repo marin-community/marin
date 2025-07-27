@@ -12,6 +12,9 @@ import os
 import draccus
 import pandas as pd
 import ray
+import json
+import fsspec
+import pyarrow.parquet as pq
 
 from marin.core.runtime import cached_or_construct_output
 from marin.processing.classification.classifier import (
@@ -62,6 +65,30 @@ def read_dataset(input_filename: str, columns: list[str] | None = None):
         raise ValueError(f"Unsupported filetype: {input_filename}")
 
 
+def iter_dataset_batches(input_filename: str, columns: list[str], batch_size: int = 512) -> "Iterator[dict[str, list]]":
+    """Yield batches of data from ``input_filename`` without loading it all into memory."""
+
+    if input_filename.endswith(".jsonl.gz"):
+        reader = pd.read_json(input_filename, compression="gzip", lines=True, chunksize=batch_size)
+        for df in reader:
+            df = df[columns]
+            yield {col: df[col].tolist() for col in columns}
+    elif input_filename.endswith(".jsonl.zst"):
+        reader = pd.read_json(input_filename, compression="zstd", lines=True, chunksize=batch_size)
+        for df in reader:
+            df = df[columns]
+            yield {col: df[col].tolist() for col in columns}
+    elif input_filename.endswith(".parquet"):
+        fs, path = fsspec.core.url_to_fs(input_filename)
+        with fs.open(path, "rb") as f:
+            pf = pq.ParquetFile(f)
+            for batch in pf.iter_batches(batch_size=batch_size, columns=columns):
+                df = batch.to_pandas()
+                yield {col: df[col].tolist() for col in columns}
+    else:
+        raise ValueError(f"Unsupported filetype: {input_filename}")
+
+
 def write_dataset(dataset, output_filename: str):
     """Writes a Huggingface Dataset to a file (remote or local)"""
     if output_filename.endswith(".jsonl.gz"):
@@ -100,16 +127,28 @@ def get_output_dataset_column_names(input_filename: str) -> list[str]:
 def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseClassifier):
     print(f"[*] Processing {input_filename} to {output_filename}")
 
-    dataset = read_dataset(input_filename)
-
-    # TODO(chris): Add support for more types of columns.
     input_column_names = get_input_dataset_column_names(input_filename)
     output_column_names = get_output_dataset_column_names(input_filename)
-    dataset = dataset.select_columns(input_column_names)
-    dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=512)
-    dataset = dataset.select_columns(output_column_names)
 
-    write_dataset(dataset, output_filename)
+    compression = None
+    if output_filename.endswith(".jsonl.gz"):
+        compression = "gzip"
+    elif output_filename.endswith(".jsonl.zst"):
+        compression = "zstd"
+
+    with fsspec.open(output_filename, "wt", compression=compression) as fout:
+        for batch in iter_dataset_batches(input_filename, input_column_names, batch_size=512):
+            result = quality_classifier(batch)
+
+            batch_len = len(batch[input_column_names[0]])
+            for i in range(batch_len):
+                row = {}
+                if "id" in output_column_names and "id" in batch:
+                    row["id"] = batch["id"][i]
+                if "metadata" in output_column_names and "metadata" in batch:
+                    row["metadata"] = batch["metadata"][i]
+                row["attributes"] = result["attributes"][i]
+                fout.write(json.dumps(row) + "\n")
 
 
 @ray.remote(max_calls=1)
