@@ -4,6 +4,7 @@ experiments/two_stage/cache/*
 experiments/two_stage/plots/*
 experiments/curriculum/cache/*
 experiments/curriculum/plots/*
+.git/objects/*
 
 tests/snapshots/outputs
 tests/snapshots/diffs
