@@ -22,6 +22,7 @@ from marin.processing.classification.inference import read_dataset, write_datase
 from marin.utils import (
     fsspec_exists,
     fsspec_glob,
+    get_base_dir_of_paths,
     rebase_file_path,
 )
 
@@ -70,7 +71,7 @@ class ConsolidateConfig:
     filters: list[FilterConfig]
     """List of filters to apply to the documents."""
 
-    filetype: str = "jsonl.gz"
+    filetype: str | None = "jsonl.gz"
     """The filetype of the input data."""
 
     max_tasks_in_flight: int = 1000  # The maximum number of flights in a task
@@ -243,8 +244,12 @@ def process_file(
         if fsspec_exists(doc_filter.attribute_path):
             attribute_files.append(read_attributes_as_dict(doc_filter.attribute_path))
         else:
-            logger.warning(f"Attribute file not found: {doc_filter.attribute_path}")
-            attribute_files.append(None)
+            # logger.warning(f"Attribute file not found: {doc_filter.attribute_path}")
+            raise FileNotFoundError(
+                f"Attribute file not found: {doc_filter.attribute_path}. "
+                "Please ensure the attribute files are available before running the consolidation."
+            )
+            # attribute_files.append(None)
 
     dataset = read_dataset(input_path)
     dataset = dataset.map(lambda row: get_nested_id_object(row, get_corpus_type(input_path)))
@@ -311,8 +316,18 @@ def calculate_percentile_threshold(
 
 @ray.remote
 def consolidate(config: ConsolidateConfig):
-    input_paths = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
+    if config.filetype is None:
+        path_to_glob = config.input_path
+    else:
+        path_to_glob = os.path.join(config.input_path, f"**/*.{config.filetype}")
+    input_paths = fsspec_glob(path_to_glob)
+
+    base_dir = get_base_dir_of_paths(input_paths)
+
     logger.info(f"Consolidating {len(input_paths)} documents")
+
+    if not len(input_paths):
+        raise ValueError(f"No input files found in {base_dir} with filetype {config.filetype}")
 
     updated_filters = []
     for doc_filter in config.filters:
@@ -326,7 +341,7 @@ def consolidate(config: ConsolidateConfig):
         # Calculate the minimum threshold required to keep `keep_fraction` of the documents
         if doc_filter.keep_fraction is not None and doc_filter.type == FILTER_TYPE_CLASSIFY:
             threshold = calculate_percentile_threshold(
-                config.input_path,
+                base_dir,
                 input_paths,
                 doc_filter.attribute_path,
                 doc_filter.name,
@@ -338,19 +353,16 @@ def consolidate(config: ConsolidateConfig):
             updated_filters.append(doc_filter)
 
     tasks = []
-    ready_refs = []
     for input_path in input_paths:
         if len(tasks) > config.max_tasks_in_flight:
             ready_refs, tasks = ray.wait(tasks, num_returns=1)
             ray.get(ready_refs)
 
         filters = [
-            replace(
-                doc_filter, attribute_path=rebase_file_path(config.input_path, input_path, doc_filter.attribute_path)
-            )
+            replace(doc_filter, attribute_path=rebase_file_path(base_dir, input_path, doc_filter.attribute_path))
             for doc_filter in updated_filters
         ]
-        output_path = rebase_file_path(config.input_path, input_path, config.output_path)
+        output_path = rebase_file_path(base_dir, input_path, config.output_path)
 
         task = process_file.options(memory=config.ray_memory_limit_gb * 1024 * 1024 * 1024, num_cpus=2).remote(
             input_path, output_path, filters
