@@ -68,7 +68,7 @@ compression_step = ExecutorStep(
 
 # Filter based on compression ratios (0.65-0.8 range)
 consolidate_step = ExecutorStep(
-    name=f"documents/compression_filtering/{EXPERIMENT_NAME}/",
+    name=f"documents/compression_filtering/{EXPERIMENT_NAME}/{input_data_source}",
     fn=consolidate,
     config=ConsolidateConfig(
         input_path=input_data_path,
@@ -82,14 +82,15 @@ consolidate_step = ExecutorStep(
                 upper_threshold=versioned(0.8),  # Upper bound (decreased from 0.9)
             ),
         ],
-        ray_memory_limit_gb=12,
+        ray_memory_limit_gb=200,
+        filetype=None,
     ),
     pip_dependency_groups=["ddsketch", "lz4"],
 )
 
 filtered_dolma = tokenize_dolma_steps(
     base_path=f"tokenized/compression_filtering/{EXPERIMENT_NAME}/{input_data_source}",
-    input_base_path=output_path_of(compression_step),
+    input_base_path=output_path_of(consolidate_step),
     tokenizer=llama3_tokenizer,
 )
 
@@ -106,7 +107,8 @@ weights = {
 data_config = lm_mixture_data_config(components=dolma_to_use, weights=weights)
 
 train_step = default_train(
-    name=f"compression_filtering/{EXPERIMENT_NAME}",
+    # initial version was using the original c4 by mistake
+    name=f"compression_filtering/{EXPERIMENT_NAME}-v2",
     tokenized=data_config,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,

@@ -112,7 +112,13 @@ def tokenize_dolma_steps(
             pip_dependency_groups=["sentencepiece"],
         )
 
-        if tokenizer == llama3_tokenizer and dataset in DOLMA_LLAMA3_OVERRIDES:
+        # if all defaults, we have specific pre-saved tokenized datasets
+        if (
+            tokenizer == llama3_tokenizer
+            and dataset in DOLMA_LLAMA3_OVERRIDES
+            and base_path == "tokenized/"
+            and input_base_path == BASE_DIR_DOLMA
+        ):
             step = step.with_output_path(DOLMA_LLAMA3_OVERRIDES[dataset])
         dolma_steps[os.path.join("dolma", dataset)] = step
 
