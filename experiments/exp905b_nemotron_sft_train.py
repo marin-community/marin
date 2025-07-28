@@ -11,14 +11,14 @@ import dataclasses
 import logging
 import math
 
-from experiments.evals.evals import default_sft_eval
 from experiments.defaults import default_train
+from experiments.evals.evals import default_sft_eval
 from experiments.evals.task_configs import OPEN_LM_LEADERBOARD_MCQ
-from experiments.simple_train_config import SimpleTrainConfig
 
 # Dataset configurations
 from experiments.exp905a_nemotron_sft_dstc import DATASETS, create_tokenization_step
 from experiments.llama import llama_8b
+from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp916_tootsie_spoonbill_cooldown import spoonbill_zloss_tulu3_sft_config
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
@@ -29,7 +29,7 @@ logger = logging.getLogger("ray")
 # Experiment specific settings
 EXPERIMENT_NAME = "sft/deeper_starling_sft_nemotron_and_openthoughts3"
 REGION = "us-central2"
-LAST_STEP = 1441115 # Last step of the previous run -- Used to load checkpoint
+LAST_STEP = 1441115  # Last step of the previous run -- Used to load checkpoint
 
 SFT_CONFIG = dataclasses.replace(
     spoonbill_zloss_tulu3_sft_config,
@@ -84,7 +84,7 @@ mixture_weights = {
 total_tokens = sum(mixture_weights.values())
 
 base_tokens = 1488945414144
-current_tokens = 1511163691008 # To be retrieved from Wandb
+current_tokens = 1511163691008  # To be retrieved from Wandb
 extra_steps = (base_tokens + total_tokens * EPOCHS - current_tokens) // (BATCH_SIZE * MODEL_CONFIG.seq_len)
 num_steps = LAST_STEP + extra_steps
 # num_steps = total_tokens // (BATCH_SIZE * MODEL_CONFIG.seq_len) * EPOCHS + 2 * 1419967 - LAST_STEP
