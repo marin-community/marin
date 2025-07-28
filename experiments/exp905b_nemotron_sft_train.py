@@ -29,14 +29,14 @@ logger = logging.getLogger("ray")
 # Experiment specific settings
 EXPERIMENT_NAME = "sft/deeper_starling_sft_nemotron_and_openthoughts3"
 REGION = "us-central2"
-LAST_STEP = 1430237
+LAST_STEP = 1441115 # Last step of the previous run -- Used to load checkpoint
 
 SFT_CONFIG = dataclasses.replace(
     spoonbill_zloss_tulu3_sft_config,
     learning_rate=1e-4,
     resources=TpuPodConfig(tpu_type="v4-128", slice_count=1),
     # initialize_from_checkpoint_path=tootsie_8b_deeper_starling.cd("checkpoints/step-1419967").nonblocking(),
-    initialize_from_checkpoint_path=f"gs://marin-{REGION}/checkpoints/sft/mixture_sft_deeper_starling_with_nemotron_and_openthoughts3_2/checkpoints/step-{LAST_STEP}",
+    initialize_from_checkpoint_path=f"gs://marin-{REGION}/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/checkpoints/step-{LAST_STEP}",
     steps_per_eval=5000,
     steps_per_hf_export=1000,
     steps_per_checkpoint=2500,
@@ -55,12 +55,12 @@ EXPERIMENT_TAGS = [
     "nemotron+openthoughts3-1.2m",
     f"region={REGION}",
     "v4-128",
-    "batchsize=512",
+    "batchsize=256",
     "user=chiheem",
 ]
 
 # Training parameters
-BATCH_SIZE = 512
+BATCH_SIZE = 256
 EPOCHS = 3
 
 tokenized_datasets = {short_name: create_tokenization_step(hf_name) for short_name, hf_name in DATASETS.items()}
@@ -82,14 +82,19 @@ mixture_weights = {
 
 # Calculate the number of training steps from computed values
 total_tokens = sum(mixture_weights.values())
-num_steps = total_tokens // (BATCH_SIZE * MODEL_CONFIG.seq_len) * EPOCHS + 2 * 1419967 - LAST_STEP
+
+base_tokens = 1488945414144
+current_tokens = 1511163691008 # To be retrieved from Wandb
+extra_steps = (base_tokens + total_tokens * EPOCHS - current_tokens) // (BATCH_SIZE * MODEL_CONFIG.seq_len)
+num_steps = LAST_STEP + extra_steps
+# num_steps = total_tokens // (BATCH_SIZE * MODEL_CONFIG.seq_len) * EPOCHS + 2 * 1419967 - LAST_STEP
 
 logger.info(f"Total tokens: {total_tokens}")
 logger.info(f"Sequence length: {MODEL_CONFIG.seq_len}")
 logger.info(f"Batch size: {BATCH_SIZE}")
 logger.info(f"Epochs: {EPOCHS}")
-logger.info(f"Number of new steps: {total_tokens // (BATCH_SIZE * MODEL_CONFIG.seq_len) * EPOCHS}")
-logger.info(f"Number of steps: {num_steps}")
+logger.info(f"Number of new steps: {extra_steps}")
+logger.info(f"stop at step number: {num_steps}")
 
 if __name__ == "__main__":
     sft_mixture_llama3 = lm_mixture_data_config(
@@ -136,7 +141,7 @@ if __name__ == "__main__":
         train_config=normal_train_config,
         tags=EXPERIMENT_TAGS,
         eval_harness_tasks=OPEN_LM_LEADERBOARD_MCQ,  # Enable evaluations during training
-        use_default_validation=False,
+        use_default_validation=True,
     ).with_output_path(f"gs://marin-{REGION}/checkpoints/{EXPERIMENT_NAME}")
 
     # Now run the SFT step
