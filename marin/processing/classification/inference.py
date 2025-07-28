@@ -6,15 +6,16 @@ python -m marin.processing.classification.inference \
     --config_path marin/processing/classification/config/dclm_fasttext.yaml
 """
 
+import json
 import logging
 import os
+from collections.abc import Iterator
 
 import draccus
-import pandas as pd
-import ray
-import json
 import fsspec
+import pandas as pd
 import pyarrow.parquet as pq
+import ray
 
 from marin.core.runtime import cached_or_construct_output
 from marin.processing.classification.classifier import (
@@ -65,7 +66,7 @@ def read_dataset(input_filename: str, columns: list[str] | None = None):
         raise ValueError(f"Unsupported filetype: {input_filename}")
 
 
-def iter_dataset_batches(input_filename: str, columns: list[str], batch_size: int = 512) -> "Iterator[dict[str, list]]":
+def iter_dataset_batches(input_filename: str, columns: list[str], batch_size: int = 512) -> Iterator[dict[str, list]]:
     """Yield batches of data from ``input_filename`` without loading it all into memory."""
 
     if input_filename.endswith(".jsonl.gz"):
@@ -126,6 +127,17 @@ def get_output_dataset_column_names(input_filename: str) -> list[str]:
 @cached_or_construct_output(success_suffix="SUCCESS")
 def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseClassifier):
     print(f"[*] Processing {input_filename} to {output_filename}")
+
+    # Parquet does not support streaming writes, fall back to reading everything into memory
+    if output_filename.endswith(".parquet"):
+        dataset = read_dataset(input_filename)
+        input_column_names = get_input_dataset_column_names(input_filename)
+        output_column_names = get_output_dataset_column_names(input_filename)
+        dataset = dataset.select_columns(input_column_names)
+        dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=512)
+        dataset = dataset.select_columns(output_column_names)
+        write_dataset(dataset, output_filename)
+        return
 
     input_column_names = get_input_dataset_column_names(input_filename)
     output_column_names = get_output_dataset_column_names(input_filename)
