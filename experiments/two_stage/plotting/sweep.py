@@ -79,7 +79,7 @@ def parse_run(run):
     #         weight_decay_str = "16"
     #     run_dict["weight_decay"] = float(weight_decay_str) / 10.0
 
-    run_history_loss_keys = [f"eval/{rare_data_name}/loss"]
+    run_history_loss_keys = [f"eval/{rare_data_name}/loss", f"eval/{common_data_name}/loss"]
 
     if key == "train-loss-spike-observation" and "train-loss-spike-observation" in run.tags:
         history_loss = run.scan_history()
@@ -95,10 +95,11 @@ def parse_run(run):
         return None
     
     run_dict[f"final_{rare_data_name}_loss"] = history_loss[f"eval/{rare_data_name}/loss"].iloc[-1]
+    run_dict[f"final_{common_data_name}_loss"] = history_loss[f"eval/{common_data_name}/loss"].iloc[-1]
 
     return run_dict
 
-def create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key):
+def create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key, loss_key):
     """
     Creates a heatmap visualization from a list of experimental runs.
     
@@ -128,8 +129,8 @@ def create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data
                            if run[x_axis_key] == x 
                            and run[y_axis_key] == y]
             if matching_runs:
-                best_run = min(matching_runs, key=lambda x: x[f'final_{rare_data_name}_loss'])
-                loss_grid[i, j] = best_run[f'final_{rare_data_name}_loss']
+                best_run = min(matching_runs, key=lambda x: x[f'final_{loss_key}_loss'])
+                loss_grid[i, j] = best_run[f'final_{loss_key}_loss']
                 best_run_grid[i, j] = best_run
 
     # Create heatmap plot
@@ -143,7 +144,7 @@ def create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data
     plt.gca().add_patch(rect)
 
     # Move colorbar to bottom and make it horizontal
-    plt.colorbar(label=f'{pretty_name_dict[rare_data_name]} Loss', 
+    plt.colorbar(label=f'{pretty_name_dict[loss_key]} Loss', 
                 orientation='horizontal')
 
     # Add text annotations to cells
@@ -156,14 +157,18 @@ def create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data
 
     plt.xlabel(key_pretty_name_dict[y_axis_key])
     plt.ylabel(key_pretty_name_dict[x_axis_key])
-    plt.title(f'{pretty_name_dict[rare_data_name]} Loss')
+
+    if loss_key != "c4":
+        plt.title(f'{pretty_name_dict[loss_key]} Loss')
+    else:
+        plt.title(f'C4 Loss, Training on {pretty_name_dict[rare_data_name]}')
 
     # Set tick labels
     plt.xticks(range(len(unique_y_axis_values)), unique_y_axis_values)
     plt.yticks(range(len(unique_x_axis_values)), unique_x_axis_values)
 
     plt.tight_layout()
-    output_path = f'plotting/plots/{key}_loss_heatmap.png'
+    output_path = f'plotting/plots/{key}_{loss_key}_loss_heatmap.png'
     plt.savefig(output_path, bbox_inches='tight')
     plt.close()
 
@@ -532,7 +537,10 @@ if __name__ == "__main__":
             run_list = [run for run in run_list if run["model_name"] != "1_9b4k"]
 
         run_list = [run for run in run_list if run["replay_ratio"] < 0.9]
-        create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key)
+        create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key, loss_key=rare_data_name)
+        if args.mode == "schedule_v3":
+            create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key, loss_key="c4")
+            
         create_scatter_plot(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key)
 
         if args.mode == "schedule_v3" and rare_data_name == "starcoder":
