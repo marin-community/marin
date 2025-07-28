@@ -12,19 +12,19 @@ Usage:
     python marin/run/ray_run.py --env_vars WANDB_API_KEY <your_key> -- python experiments/exp_c4_compression_filtering.py
 
     For forced re-run of specific steps:
-    python marin/run/ray_run.py --env_vars WANDB_API_KEY <your_key> -- python experiments/exp_c4_compression_filtering.py --force_run_failed
+    python marin/run/ray_run.py --env_vars WANDB_API_KEY <your_key> -- \
+     python experiments/exp_c4_compression_filtering.py --force_run_failed
 
-Note: 
+Note:
     - C4 data is sourced from the pre-downloaded Dolma v1.7 dataset
     - Compression filtering uses LZ4 with thresholds: 0.65 ≤ ratio ≤ 0.8
     - Final model will be saved to: gs://marin-us-central2/checkpoints/compression_filtering/c4-compression-ratio-filter-065-08/
 """
 
 import logging
-import os
-from dataclasses import dataclass, field
 
-from experiments.defaults import default_tokenize, default_train, default_download
+from experiments.defaults import default_train
+from experiments.dolma.tokenize_dolma import BASE_DIR_DOLMA, tokenize_dolma_steps
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
@@ -42,105 +42,100 @@ from marin.processing.tokenize import lm_mixture_data_config
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")
 
+EXPERIMENT_NAME = "c4-compression-ratio-filter-065-08"
 
-@dataclass
-class ExperimentConfig:
-    experiment_name: str
-    input_data_source_to_path: dict[str, str] = field(
-        default_factory=lambda: {
-            "c4_en": "gs://marin-us-central2/raw/dolma/v1.7/",
-        }
-    )
+input_data_source = "dolma-c4"
+input_data_path = BASE_DIR_DOLMA / "c4*.json.gz"
 
+# Calculate compression ratios
+compression_step = ExecutorStep(
+    name=f"attributes/compression_filtering/{EXPERIMENT_NAME}/{input_data_source}",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=input_data_path,
+        output_path=this_output_path(),
+        model_type="compression",  # Use our compression classifier
+        model_name=None,  # This doesn't matter for compression
+        attribute_name=versioned("compression_ratio"),
+        runtime=RuntimeConfig(
+            memory_limit_gb=200,  # this is insane, but I don't want to figure out why it's happening
+        ),
+        task=TaskConfig(max_in_flight=500),
+        filetype=None,
+    ),
+    pip_dependency_groups=["lz4", "datasets", "filelock"],
+)
 
-def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
-    """Create the steps for a single experiment with compression ratio filtering on C4."""
-    assert config.experiment_name is not None
-
-    steps = []
-    tokenized: dict[str, ExecutorStep] = {}
-    weights: dict[str, float] = {}
-
-    for input_data_source, input_data_path in config.input_data_source_to_path.items():
-        input_basename = os.path.basename(os.path.normpath(input_data_path))
-
-        # Calculate compression ratios
-        compression_step = ExecutorStep(
-            name=f"attributes/compression_filtering/{config.experiment_name}/{input_data_source}",
-            fn=run_inference,
-            config=InferenceConfig(
-                input_path=input_data_path,
-                output_path=this_output_path(input_basename),
-                model_type="compression",  # Use our compression classifier
-                model_name=None,  # This doesn't matter for compression
-                attribute_name=versioned("compression_ratio"),
-                runtime=RuntimeConfig(
-                    memory_limit_gb=12,
-                ),
-                task=TaskConfig(max_in_flight=500),
+# Filter based on compression ratios (0.65-0.8 range)
+consolidate_step = ExecutorStep(
+    name=f"documents/compression_filtering/{EXPERIMENT_NAME}/",
+    fn=consolidate,
+    config=ConsolidateConfig(
+        input_path=input_data_path,
+        output_path=this_output_path(),
+        filters=[
+            FilterConfig(
+                type=versioned("classify"),
+                attribute_path=output_path_of(compression_step),
+                name=versioned("compression_ratio"),
+                threshold=versioned(0.65),  # Lower bound (increased from 0.6)
+                upper_threshold=versioned(0.8),  # Upper bound (decreased from 0.9)
             ),
-            pip_dependency_groups=["lz4", "datasets", "filelock"],
-        )
+        ],
+        ray_memory_limit_gb=12,
+    ),
+    pip_dependency_groups=["ddsketch", "lz4"],
+)
 
-        # Filter based on compression ratios (0.65-0.8 range)
-        consolidate_step = ExecutorStep(
-            name=f"documents/compression_filtering/{config.experiment_name}/{input_data_source}",
-            fn=consolidate,
-            config=ConsolidateConfig(
-                input_path=input_data_path,
-                output_path=this_output_path(input_basename),
-                filters=[
-                    FilterConfig(
-                        type=versioned("classify"),
-                        attribute_path=output_path_of(compression_step, input_basename),
-                        name=versioned("compression_ratio"),
-                        threshold=versioned(0.65),  # Lower bound (increased from 0.6)
-                        upper_threshold=versioned(0.8),  # Upper bound (decreased from 0.9)
-                    ),
-                ],
-                ray_memory_limit_gb=12,
-            ),
-            pip_dependency_groups=["ddsketch", "lz4"],
-        )
+filtered_dolma = tokenize_dolma_steps(
+    base_path=f"tokenized/compression_filtering/{EXPERIMENT_NAME}/{input_data_source}",
+    input_base_path=output_path_of(compression_step),
+    tokenizer=llama3_tokenizer,
+)
 
-        tokenize_step = default_tokenize(
-            name=f"compression_filtering/{config.experiment_name}/{input_data_source}",
-            dataset=output_path_of(consolidate_step),
-            tokenizer=llama3_tokenizer,
-        )
-
-        steps.append(compression_step)
-        steps.append(consolidate_step)
-        steps.append(tokenize_step)
-        tokenized[input_data_source] = tokenize_step
-        weights[input_data_source] = 1.0
-
-    data_config = lm_mixture_data_config(components=tokenized, weights=weights)
-
-    train_step = default_train(
-        name=f"compression_filtering/{config.experiment_name}",
-        tokenized=data_config,
-        model_config=llama_1_4b,
-        train_config=llama_1_4b_train_config,
-    )
-
-    steps.append(train_step)
-    return steps
+dolma_to_use = {
+    "filtered_dolma/c4": filtered_dolma["dolma/c4"],
+}
 
 
-def create_experiment_configs() -> list[ExperimentConfig]:
-    c4_compression_filter_config = ExperimentConfig(
-        experiment_name="c4-compression-ratio-filter-065-08",
-    )
-    return [c4_compression_filter_config]
+weights = {
+    "filtered_dolma/c4": 1.0,  # Assuming we only have C4 English data
+}
 
 
-def main():
-    steps = []
-    for experiment_config in create_experiment_configs():
-        steps.extend(create_steps(experiment_config))
-    executor_main(steps=steps)
+data_config = lm_mixture_data_config(components=dolma_to_use, weights=weights)
+
+train_step = default_train(
+    name=f"compression_filtering/{EXPERIMENT_NAME}",
+    tokenized=data_config,
+    model_config=llama_1_4b,
+    train_config=llama_1_4b_train_config,
+    eval_harness_tasks=[],
+).with_output_path(f"compression_filtering/{EXPERIMENT_NAME}")
+
+# also need a baseline
+
+baseline_dolma = tokenize_dolma_steps(
+    tokenizer=llama3_tokenizer,
+)
+baseline_dolma_to_use = {
+    "dolma/c4": baseline_dolma["dolma/c4"],
+}
+
+baseline_weights = {
+    "dolma/c4": 1.0,  # Assuming we only have C4 English data
+}
+
+baseline_data_config = lm_mixture_data_config(components=baseline_dolma_to_use, weights=baseline_weights)
+
+baseline_train_step = default_train(
+    name=f"baseline_dolma/{EXPERIMENT_NAME}",
+    tokenized=baseline_data_config,
+    model_config=llama_1_4b,
+    train_config=llama_1_4b_train_config,
+    eval_harness_tasks=[],
+).with_output_path(f"compression_filtering/{EXPERIMENT_NAME}-baseline")
 
 
 if __name__ == "__main__":
-    main()
+    executor_main(steps=[train_step, baseline_train_step])

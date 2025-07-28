@@ -95,14 +95,16 @@ DOLMA_LLAMA3_OVERRIDES = {
 }
 
 
-def tokenize_dolma_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) -> dict[str, TokenizerStep]:
+def tokenize_dolma_steps(
+    *, base_path="tokenized/", tokenizer=llama3_tokenizer, input_base_path=BASE_DIR_DOLMA
+) -> dict[str, TokenizerStep]:
     dolma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, files in DOLMA_DATASETS.items():
         step = ExecutorStep(
             name=os.path.join(base_path, "dolma", dataset),
             fn=tokenize,
             config=TokenizeConfig(
-                train_paths=[BASE_DIR_DOLMA / file for file in files],
+                train_paths=[input_base_path / file for file in files],
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
