@@ -4,8 +4,6 @@
 
 import logging
 
-from levanter.data.text import ChatLmDatasetFormat
-
 from experiments.data_utils.count_dataset import compile_and_store_num_rows_step, compile_and_store_num_tokens_step
 from experiments.defaults import default_tokenize
 
@@ -18,7 +16,7 @@ from experiments.posttrain.instruction_datasets import (
     get_instruction_dataset,
     transform_dataset_step,
 )
-
+from levanter.data.text import ChatLmDatasetFormat
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,

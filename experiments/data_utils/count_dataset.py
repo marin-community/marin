@@ -83,10 +83,6 @@ def _compile_and_store_num_rows(
     Note:
         This is an internal helper function used by compile_and_store_num_rows_step.
     """
-    import json
-
-    import fsspec
-
     # Get token counts
     token_counts = get_num_rows_from_tokenized_datasets(config.tokenization_steps)
 
