@@ -98,7 +98,6 @@ import ray
 import ray.remote_function
 from ray.runtime_env import RuntimeEnv
 from ray.util import state  # noqa
-from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from marin.execution.executor_step_status import (
     STATUS_CANCELLED,
@@ -115,6 +114,7 @@ from marin.execution.executor_step_status import (
 from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
 from marin.utilities.executor_utils import get_pip_dependencies
 from marin.utilities.json_encoder import CustomJsonEncoder
+from marin.utilities.ray_utils import is_local_ray_cluster, schedule_on_head_node_strategy
 
 logger = logging.getLogger("ray")
 
@@ -519,15 +519,16 @@ class Executor:
         self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
+        if not is_local_ray_cluster():
+            strategy = schedule_on_head_node_strategy()
+        else:
+            strategy = None
         self.status_actor: StatusActor = StatusActor.options(
             name="status_actor",
             get_if_exists=True,
             lifetime="detached",
             # This is to ensure that the status actor is only schduled on the headnode
-            scheduling_strategy=NodeAffinitySchedulingStrategy(
-                node_id=ray.get_runtime_context().get_node_id(),
-                soft=False,
-            ),
+            scheduling_strategy=strategy,
         ).remote()
         # TODO: Add a design docstring of how status_actor works
 
@@ -606,7 +607,7 @@ class Executor:
             if not running:
                 break
 
-            done_refs, _ = ray.wait([ref for ref, _ in running.values()], num_returns=1)
+            done_refs = self._filter_unique_waitables(running)
             for ref in done_refs:
                 finished_step = next(step for step, r in running.items() if r[0] == ref)
                 status_path = get_status_path(self.output_paths[finished_step])
@@ -626,6 +627,17 @@ class Executor:
                     remaining_deps[child].remove(finished_step)
                     if not remaining_deps[child]:
                         ready.append(child)
+
+    def _filter_unique_waitables(self, running):
+        # Ray now requires the waitables be unique, so we filter them out.
+        unique_refs = set()
+        out = []
+        for ref, _ in running.values():
+            if ref not in unique_refs:
+                unique_refs.add(ref)
+                out.append(ref)
+        done_refs, _ = ray.wait(out, num_returns=1)
+        return done_refs
 
     def _launch_step(self, step: ExecutorStep, *, dry_run: bool, force_run_failed: bool) -> tuple[ray.ObjectRef, bool]:
         config = self.configs[step]
@@ -660,16 +672,22 @@ class Executor:
 
             append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
 
+            runtime_env = RuntimeEnv(pip=pip_dependencies)
+
+            # uv doesn't reuse dependencies and ends up installing CUDA-enabled
+            # torch, which is huge and causes OOMs, so disable it for now.
+            # if os.system("which uv >/dev/null 2>&1") == 0:
+            #     runtime_env["py_executable"] = "uv run --active"
+
             if isinstance(step.fn, ray.remote_function.RemoteFunction):
                 ref = step.fn.options(
-                    name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
-                    runtime_env=RuntimeEnv(pip=pip_dependencies),
+                    name=f"{get_fn_name(step.fn, short=True)}:{step.name}", runtime_env=runtime_env
                 ).remote(config)
             else:
                 remote_fn = ray.remote(step.fn)
                 ref = remote_fn.options(
                     name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
-                    runtime_env=RuntimeEnv(pip=pip_dependencies),
+                    runtime_env=runtime_env,
                 ).remote(config)
 
             return ref, True
@@ -1066,7 +1084,9 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
 
     time_in = time.time()
     ray.init(
-        namespace="marin", ignore_reinit_error=True
+        namespace="marin",
+        ignore_reinit_error=True,
+        resources={"head_node": 1} if is_local_ray_cluster() else None,
     )  # We need to init ray here to make sure we have the correct namespace for actors
     # (status_actor in particular)
     time_out = time.time()
