@@ -442,11 +442,6 @@ def test_olmo2_seq_len_doesnt_change_predictions(num_kv_heads):
     assert np.allclose(jax_out_1.array, jax_out_2.array, rtol=1e-6, atol=1e-6)
 
 
-# ------------------------------------------------------------
-# OLMO-3 Tests
-# ------------------------------------------------------------
-
-
 def test_olmo3_config_roundtrip():
     layer_types = ("sliding_attention", "full_attention", "sliding_attention")
     config = _get_olmo3_config(
@@ -524,19 +519,8 @@ def test_olmo3_attention_applies_sliding_window():
 def test_olmo3_roundtrip():
     import torch
     from transformers import AutoModelForCausalLM, Olmo3ForCausalLM
-    from tokenizers import Tokenizer, models, trainers, pre_tokenizers
-    from transformers import PreTrainedTokenizerFast
 
     converter = Olmo3Config().hf_checkpoint_converter()
-
-    # Build an in-memory tokenizer to avoid network access
-    tok = Tokenizer(models.WordLevel(unk_token="[UNK]"))
-    tok.pre_tokenizer = pre_tokenizers.Whitespace()
-    trainer = trainers.WordLevelTrainer(special_tokens=["[UNK]", "[PAD]"])
-    tok.train_from_iterator(["dummy data for olmo3 tests"], trainer)
-    dummy_tokenizer = PreTrainedTokenizerFast(tokenizer_object=tok, unk_token="[UNK]", pad_token="[PAD]")
-
-    converter = converter.replaced(reference_checkpoint=None, tokenizer=dummy_tokenizer)
 
     config = Olmo3Config(
         max_seq_len=64,
@@ -551,7 +535,8 @@ def test_olmo3_roundtrip():
         sliding_window=16,
         layer_types=("sliding_attention", "sliding_attention", "full_attention", "full_attention"),
     )
-    Vocab = hax.Axis("vocab", 1000)
+    # Use large vocab so tokenizer pad/eos ids from the reference checkpoint stay in range
+    Vocab = hax.Axis("vocab", 150000)
     hf_config = config.to_hf_config(Vocab.size)
 
     input = hax.random.randint(random.PRNGKey(0), config.Pos, 0, Vocab.size)

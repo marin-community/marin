@@ -605,10 +605,6 @@ class Olmo2LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo2Config
             return dataclasses.replace(self, embeddings=new_embeddings)
 
 
-# ------------------------------------------------------------
-# OLMO-3 Config (extends OLMo-2)
-# ------------------------------------------------------------
-
 @LmConfig.register_subclass("olmo3")
 @dataclass(frozen=True)
 class Olmo3Config(HFCompatConfig):
