@@ -570,11 +570,11 @@ class Executor:
             logger.info(f"### Running {len(steps_to_run)} steps out of {len(self.steps)} ###")
 
         logger.info(f"### Launching {len(steps_to_run)} steps ###")
+        self.write_infos()
 
         self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
 
         logger.info("### Writing metadata ###")
-        self.write_infos()
 
         logger.info("### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
