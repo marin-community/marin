@@ -238,6 +238,36 @@ def validate_marin_gcp_path(path: str) -> str:
     return path
 
 
+def get_base_dir_of_paths(paths: list[str]) -> str:
+    """
+    Get the base directory from a list of paths.
+
+    This is basically a common prefix operation
+
+    Args:
+        paths (list[str]): A list of file paths.
+
+    Returns:
+        str: The base directory.
+    """
+    if not paths:
+        return ""
+
+    # Split the first path into components
+    base_components = paths[0].split(os.sep)
+
+    # Iterate through the rest of the paths
+    for path in paths[1:]:
+        components = path.split(os.sep)
+        # Find the common prefix
+        for i in range(min(len(base_components), len(components))):
+            if base_components[i] != components[i]:
+                base_components = base_components[:i]
+                break
+
+    return os.sep.join(base_components)
+
+
 def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None, old_extension=None):
     """
     Rebase a file path from one directory to another, with an option to change the file extension.

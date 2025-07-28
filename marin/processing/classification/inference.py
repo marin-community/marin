@@ -22,6 +22,7 @@ from marin.processing.classification.config.inference_config import InferenceCon
 from marin.utils import (
     fsspec_glob,
     fsspec_mkdirs,
+    get_base_dir_of_paths,
     rebase_file_path,
     remove_tpu_lockfile_on_exit,
 )
@@ -200,7 +201,7 @@ def run_inference(inference_config: InferenceConfig):
     logger.info(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
     filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
 
-    input_path = inference_config.input_path
+    base_dir = get_base_dir_of_paths(filepaths)
     output_path = inference_config.output_path
     responses = []
     for input_filepath in filepaths:
@@ -208,7 +209,7 @@ def run_inference(inference_config: InferenceConfig):
             ready_refs, responses = ray.wait(responses, num_returns=1)
             ray.get(ready_refs)
 
-        output_filepath = rebase_file_path(input_path, input_filepath, output_path)
+        output_filepath = rebase_file_path(base_dir, input_filepath, output_path)
         fsspec_mkdirs(os.path.dirname(output_filepath))
 
         result_ref = process_filepath_func.options(
