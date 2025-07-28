@@ -85,5 +85,6 @@ marin_32b_qwen_v5p = default_train(
 
 if __name__ == "__main__":
     executor_main(
-        [marin_32b_qwen, marin_32b_qwen_v5p], description="Warmstart 32B Qwen3 from Llama 32B Tootsie checkpoint and train on Nemotron etc"
+        [marin_32b_qwen, marin_32b_qwen_v5p],
+        description="Warmstart 32B Qwen3 from Llama 32B Tootsie checkpoint and train on Nemotron etc",
     )

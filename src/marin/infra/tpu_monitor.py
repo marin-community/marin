@@ -1,9 +1,7 @@
 import logging
 import threading
 import time
-import os
 from collections.abc import Iterable
-from pathlib import Path
 
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
@@ -192,8 +190,8 @@ try:
             dry_run=dry_run,
         )
 
-
 except ImportError as e:
+
     class TpuMonitor:  # type: ignore
         def __init__(self, *args, **kwargs) -> None:
             raise ImportError("Please install marin[gcp] to use TpuMonitor.")
@@ -204,7 +202,7 @@ except ImportError as e:
         logger.warning(
             "TpuMonitor is not available because GCP dependencies are not installed. "
             "Install with `pip install 'marin[gcp]'`",
-            exc_info=_ERROR
+            exc_info=_ERROR,
         )
         return None
 
