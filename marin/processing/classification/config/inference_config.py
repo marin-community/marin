@@ -32,7 +32,8 @@ class InferenceConfig:
     # Ray task config.
     task: TaskConfig = field(default_factory=TaskConfig)
 
-    # The filetype of the input data.
-    filetype: str = "jsonl.gz"
+    # The filetype of the input data. If None, input_path is expected to be a glob pattern.
+    # TODO: we should make None the default/deprecate filetype
+    filetype: str | None = "jsonl.gz"
 
     classifier_kwargs: dict = field(default_factory=dict)

@@ -46,11 +46,13 @@ def read_dataset(input_filename: str, columns: list[str] | None = None):
     # We use pandas to read in the file so that we don't have to materialize
     # the entire dataset in disk since we have limited disk space.
     # Huggingface datasets loads the dataset into disk first and mmaps.
-    if input_filename.endswith(".jsonl.gz"):
+
+    # sometimes people use json.gz for jsonl, sigh
+    if input_filename.endswith(".jsonl.gz") or input_filename.endswith(".json.gz"):
         df = pd.read_json(input_filename, compression="gzip", lines=True)
         dataset = datasets.Dataset.from_pandas(df)
         return dataset
-    elif input_filename.endswith(".jsonl.zst"):
+    elif input_filename.endswith(".jsonl.zst") or input_filename.endswith(".json.zst"):
         df = pd.read_json(input_filename, compression="zstd", lines=True)
         dataset = datasets.Dataset.from_pandas(df)
         return dataset
@@ -64,9 +66,9 @@ def read_dataset(input_filename: str, columns: list[str] | None = None):
 
 def write_dataset(dataset, output_filename: str):
     """Writes a Huggingface Dataset to a file (remote or local)"""
-    if output_filename.endswith(".jsonl.gz"):
+    if output_filename.endswith(".jsonl.gz") or output_filename.endswith(".json.gz"):
         dataset.to_json(output_filename, compression="gzip")
-    elif output_filename.endswith(".jsonl.zst"):
+    elif output_filename.endswith(".jsonl.zst") or output_filename.endswith(".json.zst"):
         df_pandas = dataset.to_pandas()
         df_pandas.to_json(output_filename, orient="records", compression="zstd", lines=True)
         # dataset.to_json(output_filename, to_json_kwargs={"compression": "zstd", "lines": True})
@@ -127,7 +129,11 @@ def process_file_ray(
         model_name_or_path, attribute_name, model_type, **classifier_kwargs
     )
 
-    process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
+    try:
+        process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
+    except Exception as e:
+        logger.exception(f"Error processing {input_filename} to {output_filename}: {e}")
+        raise e
 
 
 @ray.remote(max_calls=1)
@@ -153,7 +159,7 @@ def _process_dir(
 
     if len(files) == 0:
         logger.error(f"No files found in {input_path} with pattern {filetype}!!! This is likely an error.")
-        return
+        raise FileNotFoundError(f"No files found in {input_path} with pattern {filetype}")
 
     quality_classifier = AutoClassifier.from_model_path(
         model_name_or_path, attribute_name, model_type, **classifier_kwargs
@@ -175,7 +181,15 @@ def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
     # NOTE(chris): Maximize parallelism by doing one task per file. If this is too high
     # then we can use _process_dir to process multiple files in a single task.
     process_filepath_func = process_file_ray
-    filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
+    if inference_config.filetype is None:
+        pattern = inference_config.input_path
+    else:
+        pattern = os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}")
+
+    filepaths = fsspec_glob(pattern)
+
+    if len(filepaths) == 0:
+        raise FileNotFoundError(f"No files found in {inference_config.input_path} with pattern {pattern}")
 
     return filepaths, process_filepath_func
 
@@ -185,10 +199,6 @@ def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
 def run_inference(inference_config: InferenceConfig):
     logger.info(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
     filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
-
-    if len(filepaths) == 0:
-        pattern = f"**/*.{inference_config.filetype}"
-        raise FileNotFoundError(f"No files found in {inference_config.input_path} with pattern {pattern}")
 
     input_path = inference_config.input_path
     output_path = inference_config.output_path
@@ -219,7 +229,7 @@ def run_inference(inference_config: InferenceConfig):
     try:
         ray.get(responses)
     except Exception as e:
-        print(f"Error processing: {e}")
+        logger.exception(e)
         raise e
 
 
