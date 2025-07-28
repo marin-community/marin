@@ -113,7 +113,7 @@ train_step = default_train(
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
     eval_harness_tasks=[],
-).with_output_path(f"compression_filtering/{EXPERIMENT_NAME}")
+).with_output_path(f"compression_filtering/{EXPERIMENT_NAME}-v2")
 
 # also need a baseline
 
