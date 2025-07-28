@@ -237,6 +237,10 @@ def run_inference(inference_config: InferenceConfig):
     logger.info(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
     filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
 
+    if len(filepaths) == 0:
+        pattern = f"**/*.{inference_config.filetype}"
+        raise FileNotFoundError(f"No files found in {inference_config.input_path} with pattern {pattern}")
+
     input_path = inference_config.input_path
     output_path = inference_config.output_path
     responses = []
