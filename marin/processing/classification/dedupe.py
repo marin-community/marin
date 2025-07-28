@@ -65,6 +65,21 @@ def _normalise_to_gz(path: str) -> str:
     return path
 
 
+def _get_path_stats(path: str) -> tuple[int, int]:
+    """Get size and file count for a single path (file or directory)."""
+    if fsspec_isdir(path):
+        extensions_pattern = "{" + ",".join([*SUPPORTED_JSONL_EXTENSIONS, ".parquet"]) + "}"
+        pattern = os.path.join(path, f"**/*{extensions_pattern}")
+        files = fsspec_glob(pattern)
+        total_size = sum(fsspec_size(f) for f in files)
+        file_count = len(files)
+    else:
+        # Single file
+        total_size = fsspec_size(path)
+        file_count = 1 if total_size > 0 else 0
+    return total_size, file_count
+
+
 def _check_input_size(input_path: str | list[str]) -> dict:
     """Check if input has processable content before downloading"""
 
@@ -77,21 +92,7 @@ def _check_input_size(input_path: str | list[str]) -> dict:
 
         for path in input_path:
             try:
-                if fsspec_isdir(path):
-                    # For directories, check if any files exist and get total size
-                    patterns = [f"**/*{ext}" for ext in SUPPORTED_JSONL_EXTENSIONS] + ["**/*.parquet"]
-                    path_size = 0
-                    path_file_count = 0
-                    for pattern in patterns:
-                        path_to_glob = os.path.join(path, pattern)
-                        files = fsspec_glob(path_to_glob)
-                        for f in files:
-                            path_size += fsspec_size(f)
-                            path_file_count += 1
-                else:
-                    # Single file
-                    path_size = fsspec_size(path)
-                    path_file_count = 1 if path_size > 0 else 0
+                path_size, path_file_count = _get_path_stats(path)
 
                 total_size += path_size
                 total_file_count += path_file_count
@@ -117,24 +118,7 @@ def _check_input_size(input_path: str | list[str]) -> dict:
 
     # Handle single path (original logic)
     try:
-        if fsspec_isdir(input_path):
-            # For directories, check if any files exist and get total size
-            # Build the glob patterns dynamically from the canonical list of
-            # supported extensions so we never get out of sync with
-            # ``copy_files_in``.
-            patterns = [f"**/*{ext}" for ext in SUPPORTED_JSONL_EXTENSIONS] + ["**/*.parquet"]
-            total_size = 0
-            file_count = 0
-            for pattern in patterns:
-                path_to_glob = os.path.join(input_path, pattern)
-                files = fsspec_glob(path_to_glob)
-                for f in files:
-                    total_size += fsspec_size(f)
-                    file_count += 1
-        else:
-            # Single file
-            total_size = fsspec_size(input_path)
-            file_count = 1 if total_size > 0 else 0
+        total_size, file_count = _get_path_stats(input_path)
         print(f"total_size: {total_size}, file_count: {file_count}\n\n", flush=True)
         return {
             "has_content": total_size > 100,  # 100 bytes is a reasonable minimum for a shard
@@ -307,14 +291,6 @@ def _parquet_to_jsonl_gz(input_path: str, docs_dir: str, parquet_text_field: str
             for rec in df.to_dict(orient="records"):
                 rec["text"] = rec[parquet_text_field]
 
-                # Validate text field is actually a string
-                if not isinstance(rec["text"], str):
-                    logger.warning(
-                        f"Text field in {pq} is not a string (type: {type(rec['text'])}), converting to string"
-                    )
-                    print("somehow there's non string?", flush=True)
-                    rec["text"] = str(rec["text"])
-
                 if "id" not in rec:
                     # Generate a synthetic ID if missing
                     logger.warning(f"Adding synthetic id to {pq}")
@@ -377,25 +353,12 @@ def copy_files_in(input_path, local_base_dir, parquet_text_field: str = "text"):
         print(f"Copied 1 file from {input_path} to {output_file}", flush=True)
         return
 
-    # gather every supported extension recursively.
-    recursive_patterns = [f"{input_path}/**/*{ext}" for ext in SUPPORTED_JSONL_EXTENSIONS]
-    input_files: list[str] = []
-    for pattern in recursive_patterns:
-        input_files.extend(fsspec_glob(pattern))
-
-    fallback = False
-    if not input_files:
-        # Fallback to shallow glob (no **)
-        fallback = True
-        shallow_patterns = [f"{input_path}/*{ext}" for ext in SUPPORTED_JSONL_EXTENSIONS]
-        for pattern in shallow_patterns:
-            input_files.extend(fsspec_glob(pattern))
-
+    # Create a single pattern that matches all supported extensions recursively
+    extensions_pattern = "{" + ",".join(SUPPORTED_JSONL_EXTENSIONS) + "}"
+    recursive_pattern = f"{input_path}/**/*{extensions_pattern}"
+    input_files = fsspec_glob(recursive_pattern)
     # Log discovery results
-    if fallback:
-        print(f"Found {len(input_files)} input files in {input_path} (shallow), first five: {input_files[:5]}")
-    else:
-        print(f"Found {len(input_files)} input files in {input_path}, first five: {input_files[:5]}")
+    print(f"Found {len(input_files)} input files in {input_path}, first five: {input_files[:5]}")
 
     # ------------------------------------------------------------------
     # Copy each discovered file, normalising extension to .jsonl.gz
@@ -428,10 +391,6 @@ def copy_files_out(local_base_dir, output_path, attribute_name):
     # Get all .jsonl.gz files in the local attribute directory (recursive)
     glob_path = f"{local_attribute_dir}/**/*.jsonl.gz"
     local_files = fsspec_glob(glob_path)
-    # Fallback to shallow glob if no files found
-    if not local_files:
-        shallow_glob = f"{local_attribute_dir}/*.jsonl.gz"
-        local_files = fsspec_glob(shallow_glob)
 
     files_uploaded = 0
     for local_file in tqdm(local_files, desc="Uploading files"):
@@ -480,11 +439,8 @@ def delete_jsonl_files(dir_path):
     # Ensure dir_path doesn't end with a slash
     dir_path = dir_path.rstrip("/")
 
-    # Get all .jsonl and .jsonl.gz files in the directory and its subdirectories
-    glob_path_jsonl = f"{dir_path}/**/*.jsonl"
-    glob_path_jsonl_gz = f"{dir_path}/**/*.jsonl.gz"
-
-    files_to_delete = fsspec_glob(glob_path_jsonl) + fsspec_glob(glob_path_jsonl_gz)
+    glob_path = f"{dir_path}/**/*.jsonl{{,.gz}}"
+    files_to_delete = fsspec_glob(glob_path)
 
     files_deleted = 0
     for file_path in tqdm(files_to_delete, desc="Deleting files"):
@@ -1035,7 +991,7 @@ def _run_train_test_overlap(config: DedupeConfig):
         }
 
 
-@ray.remote(num_cpus=2, memory=1024 * 1024 * 1024 * 16, resources={"TPU-v4-8-head": 1})
+@ray.remote(num_cpus=16, memory=1024 * 1024 * 1024 * 16)  # , resources={"TPU-v4-8-head": 1})
 def dedupe(config: DedupeConfig):
     """Top-level Ray task: dispatch between decontamination and deduplication workflows."""
     if config.mode == DedupMode.DECONTAMINATE:

@@ -81,6 +81,9 @@ class DatasetConfig:
     max_in_flight: int
     """Maximum number of parallel tasks to run for this dataset."""
 
+    parquet_text_field: str = "text"
+    """Name of the text field in the parquet file."""
+
 
 @dataclass(frozen=True)
 class ShardedDedupeConfig:
@@ -90,6 +93,7 @@ class ShardedDedupeConfig:
     output_path: str
     max_in_flight: int = 16
     eval_dataset_steps: list[ExecutorStep] = None  # Evaluation dataset steps for path resolution
+    parquet_text_field: str = "text"
 
 
 # Base dedupe configuration - modify this to change n-gram settings, processes, etc.
@@ -114,6 +118,7 @@ def make_task(
     base_output_path: str,
     dataset_dir: str,
     eval_dataset_steps: list[ExecutorStep],
+    parquet_text_field: str,
     base_config: DedupeConfig = BASE_DEDUPE_CONFIG,
 ) -> DedupeConfig:
     """Create a DedupeConfig for a single shard using the base config.
@@ -139,6 +144,7 @@ def make_task(
         input_path=eval_dataset_steps,
         output_path=output_path,
         decontaminate_source=shard_path,
+        parquet_text_field=parquet_text_field,
     )
 
 
@@ -163,7 +169,11 @@ def run_all_shards(config: ShardedDedupeConfig) -> str:
     shard_paths = find_dataset_shards(config.dataset_dir)
     # Generator of arguments for each Ray task - now includes dataset_dir
     task_generator = (
-        (make_task(shard_path, config.output_path, config.dataset_dir, config.eval_dataset_steps),)
+        (
+            make_task(
+                shard_path, config.output_path, config.dataset_dir, config.eval_dataset_steps, config.parquet_text_field
+            ),
+        )
         for shard_path in shard_paths
     )
 
