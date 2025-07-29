@@ -152,7 +152,7 @@ def large_slice_loop(
             gather_elapsed = time.time() - time_in
 
             if jax.process_index() == 0 and server is not None and coordinator is not None:
-                logger.info("Gathered took %.2f seconds for step %d", gather_elapsed, step)
+                logger.info("Gather took %.2f seconds for step %d", gather_elapsed, step)
                 num_transfers_this_round = 0
 
                 while num_transfers_this_round < receiver_count:
@@ -168,6 +168,9 @@ def large_slice_loop(
                         "host/step": step,
                         "host/gather_bytes": gathered.nbytes,
                         "host/num_transfers": num_transfers,
+                        "host/weight_norm": float(
+                            jax.tree_util.tree_reduce(lambda x, y: x + jnp.linalg.norm(y), gathered, 0.0)
+                        ),
                     }
                     ray.get(tracker.log.remote(metrics))
 
@@ -232,7 +235,7 @@ def small_slice_loop(
 
             time_in = time.time()
             result = reshard(result)
-            jax.block_until_ready(result)
+            result = jax.block_until_ready(result)
             elapsed = time.time() - time_in
 
             transfer_finished = tracker.mark_transfer_finished.remote(step)
@@ -243,6 +246,7 @@ def small_slice_loop(
                 "client/bytes_transferred": info.weight_bytes,
                 "client/worker_id": worker_id,
                 "client/round": step,
+                "client/weight_norm": float(jax.tree_util.tree_reduce(lambda x, y: x + jnp.linalg.norm(y), result, 0.0)),
             }
             ray.get([tracker.log.remote(metrics), transfer_finished])
             stats.append(TransferStats(bytes_transferred=info.weight_bytes, transfer_time=info.time_elapsed + elapsed))

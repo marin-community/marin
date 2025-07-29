@@ -198,7 +198,9 @@ async def receive_weight_transfers(
     """
     transfer_info: WeightTransfer = await coordinator.schedule_weight_transfer.remote()  # type: ignore
     total_bytes = num_bytes(placeholder)
-    out = client_server.await_pull(transfer_info.transfer_uuid, placeholder)
+
+    connection = client_server.connect(transfer_info.address)
+    out = connection.pull(transfer_info.transfer_uuid, placeholder)
     out = jax.block_until_ready(out)
 
     await coordinator.report_transfer_finished.remote(transfer_info.transfer_uuid)  # type: ignore
