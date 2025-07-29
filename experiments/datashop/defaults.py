@@ -267,8 +267,8 @@ def default_quality_filter(
             "fasttext",
             "datasets",
             "filelock",
-            "torch~=2.6.0",
-            "torch_xla[tpu]~=2.6.0",
+            "torch~=2.7.0",
+            "torch_xla[tpu]~=2.7.0",
         ],
     )
 
@@ -337,7 +337,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
             dataset_config=lm_mixture_data_config(
                 components={"dclm": dclm_components_llama3["dclm_baseline"]}, weights={"dclm": 1.0}
             ),
-            resources=TpuPodConfig(tpu_type=tpu_type),
+            resources=TpuPodConfig(tpu_type=tpu_type, slice_count=2),
             use_default_validation=True,
         )
     else:
@@ -346,7 +346,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
                 components={"dclm": dclm_components_llama3["dclm_baseline"], "candidate": candidate_tokenized},
                 weights={"dclm": 0.70, "candidate": 0.30},
             ),
-            resources=TpuPodConfig(tpu_type=tpu_type),
+            resources=TpuPodConfig(tpu_type=tpu_type, slice_count=2),
             use_default_validation=True,
         )
 
@@ -392,6 +392,7 @@ def default_candidate_anneal(documents: ExecutorStep | None, tpu_type: str, expe
 
 def default_synthetic_data_generation(
     input_path: ExecutorStep | InputName,
+    output_path: str,
     model_name_or_path: str,
     data_generation_template: str,
     input_filetype: str,
@@ -400,7 +401,6 @@ def default_synthetic_data_generation(
     generated_text_column_name: str = "generated_text",
     engine_kwargs: dict = default_engine_kwargs,
     generation_kwargs: dict = default_generation_kwargs,
-    output_path: str | None = None,
 ) -> ExecutorStep:
     """
     Generates synthetic data using a specified model and prompt template.
@@ -443,5 +443,6 @@ def default_synthetic_data_generation(
             one_to_one_input_output_mapping=False,
             generated_text_column_name=generated_text_column_name,
             resource_config=resource_config,
+            batch_size=512,
         ),
     )
