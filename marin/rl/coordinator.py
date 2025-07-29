@@ -13,6 +13,7 @@ import jax
 import jax.experimental.transfer as jax_transfer
 import ray
 import ray.runtime_context
+from haliax.jax_utils import is_jax_array_like
 from jaxtyping import PyTree
 from ray.actor import ActorHandle
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
@@ -92,7 +93,9 @@ class WeightTransferCoordinator:
         Blocks until the underlying weight transfer has picked up the request.
         """
         request = _WeightTransferRequest(
-            uuid=uuid.uuid4().int,
+            # can't actually be a uuid because they want a 32-bit int
+            # uuid=uuid.uuid4().int,
+            uuid=int(uuid.uuid4().int & 0xFFFFFFFF),  # ensure it's a 32-bit int
             time_start=time.time(),
             transfer_ready_future=asyncio.Future(),
         )
@@ -133,6 +136,9 @@ class WeightTransferCoordinator:
         async with self._lock:
             if transfer_uuid in self._pending_completion:
                 self._pending_completion[transfer_uuid].set()
+                logger.info("Transfer %d finished", transfer_uuid)
+            else:
+                raise ValueError(f"Transfer {transfer_uuid} not found")
 
     async def await_transfers(self, transfer_uuids: list[int]):
         """Blocks until all specified transfers are complete."""
@@ -140,9 +146,18 @@ class WeightTransferCoordinator:
             return
 
         async with self._lock:
-            this_pending_completions = [self._pending_completion.pop(uuid) for uuid in transfer_uuids]
+            pending_events = [self._pending_completion[uuid] for uuid in transfer_uuids]
 
-        return await asyncio.gather(*this_pending_completions)
+        logger.info("Awaiting %d transfers", len(pending_events))
+
+        out = await asyncio.gather(*(event.wait() for event in pending_events))
+        logger.info("Awaited %d transfers", len(out))
+
+        async with self._lock:
+            for uuid in transfer_uuids:
+                self._pending_completion.pop(uuid)
+
+        return out
 
 
 async def process_weight_transfers(
@@ -151,17 +166,26 @@ async def process_weight_transfers(
     """
     Processes weight transfers for the given latest weight ID.
     This blocks until all transfers are complete.
+
+    Returns the number of transfers that were enqueued.
     """
-    enqueued_requests = await coordinator.poll_transfers.remote(latest_weight_id)
+    enqueued_requests = await coordinator.poll_transfers.remote(latest_weight_id)  # type: ignore
 
     if enqueued_requests:
         uuids_to_wait_for = [req.uuid for req in enqueued_requests]
         for request in enqueued_requests:
             transfer_server.await_pull(request.uuid, latest_weights)
 
-        await coordinator.await_transfers.remote(uuids_to_wait_for)
+        await coordinator.await_transfers.remote(uuids_to_wait_for)  # type: ignore
 
-    return latest_weight_id
+    return len(enqueued_requests)
+
+
+def num_bytes(model: PyTree):
+    # especially with jax.vjp, we get duplicate arrays and want to uniq them
+    # NB we need to use object identity here, mostly because of ShapedDtypeStruct
+    leaves = {id(x): x for x in jax.tree_util.tree_leaves(model) if is_jax_array_like(x)}
+    return sum(x.nbytes for x in leaves.values())
 
 
 async def receive_weight_transfers(
@@ -172,14 +196,16 @@ async def receive_weight_transfers(
     """
     Asks the coordinator to schedule a weight transfer for this client, and blocks until the transfer is complete.
     """
-    transfer_info: WeightTransfer = await coordinator.schedule_weight_transfer.remote()
-    this_size = sum(jax.tree_util.tree_map(lambda x: x.nbytes if isinstance(x, jax.Array) else 0, placeholder))
+    transfer_info: WeightTransfer = await coordinator.schedule_weight_transfer.remote()  # type: ignore
+    total_bytes = num_bytes(placeholder)
     out = client_server.await_pull(transfer_info.transfer_uuid, placeholder)
     out = jax.block_until_ready(out)
 
+    await coordinator.report_transfer_finished.remote(transfer_info.transfer_uuid)  # type: ignore
+
     return out, WeightTransferMetadata(
         weight_id=transfer_info.weight_id,
-        weight_bytes=this_size,
+        weight_bytes=total_bytes,
         time_start=transfer_info.time_start,
         time_end=time.time(),
     )
@@ -198,7 +224,7 @@ def instantiate_coordinator(server: jax_transfer.TransferServer, name: str | Non
     if name:
         options["name"] = name
 
-    return WeightTransferCoordinator.options(**options).remote(server.address())
+    return WeightTransferCoordinator.options(**options).remote(server.address())  # type: ignore
 
 
 def get_local_ip_from_hostname():
@@ -210,7 +236,7 @@ def get_local_ip_from_hostname():
         return "Could not resolve hostname to IP address."
 
 
-def start_transfer_server():
+def start_transfer_server() -> jax_transfer.TransferServer:
     ip = get_local_ip_from_hostname()
     return jax_transfer.start_transfer_server(
         jax.devices()[0].client,
