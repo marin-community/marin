@@ -6223,7 +6223,7 @@ dev = [
     { name = "mypy", specifier = ">=1.4.1" },
     { name = "openai-responses" },
     { name = "pip" },
-    { name = "pre-commit" },
+    { name = "pre-commit", specifier = "==4.2" },
     { name = "pylatexenc" },
     { name = "pymdown-extensions", specifier = ">=10.0.0" },
     { name = "pytest", specifier = ">=8.3.2" },
@@ -6255,7 +6255,7 @@ docs = [
 lint = [
     { name = "black", specifier = ">=24.8.0" },
     { name = "mypy", specifier = ">=1.4.1" },
-    { name = "pre-commit" },
+    { name = "pre-commit", specifier = "==4.2" },
     { name = "ruff", specifier = ">=0.5.7" },
     { name = "types-pyyaml" },
     { name = "types-requests" },

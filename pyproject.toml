@@ -54,7 +54,7 @@ test = [
 lint = [
     "ruff>=0.5.7",
     "black>=24.8.0",
-    "pre-commit",
+    "pre-commit==4.2",
     "mypy>=1.4.1",
     "types-PyYAML",
     "types-requests",
