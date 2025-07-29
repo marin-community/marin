@@ -1,0 +1,5 @@
+- [ ] Implement weight transfer server
+- [ ] Multiple servers (one per training node)
+- [ ] parameterize and initialize environments
+- [ ] gather and log rollouts
+- [ ] central coordinator that holds weight server address, does logging, and spins up environments

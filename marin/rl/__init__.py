@@ -19,7 +19,6 @@ __all__ = [
     "ChatEchoEnvConfig",
     "HelloEnvConfig",
     "MarinRlConfig",
-    "MathEnvConfig",
     "RlTrainingConfig",
     "Rollout",
     "RolloutGroup",

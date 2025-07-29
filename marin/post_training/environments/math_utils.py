@@ -7,8 +7,16 @@ Call grade_answer(given_answer: str, ground_truth: str).
 import re
 
 import sympy
-from pylatexenc import latex2text
-from sympy.parsing import sympy_parser
+
+try:
+    from pylatexenc import latex2text
+except ImportError:
+    latex2text = None
+
+try:
+    from sympy.parsing import sympy_parser
+except ImportError:
+    sympy_parser = None
 
 
 def normalize_answer(answer: str | None) -> str | None:
