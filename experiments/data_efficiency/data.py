@@ -77,6 +77,32 @@ ens4d0721_tokenized = default_tokenize(
     tokenizer=llama3_tokenizer,
 )
 
+ens4x0728 = default_download(
+    name="raw/data_efficiency/ens4x0728",
+    hf_dataset_id="konwoo/300Me1-200Mdata-mix4seeds",
+    revision="e7c195b",
+    override_output_path="raw/data_efficiency/ens4x0728",
+)
+
+ens4x0728_tokenized = default_tokenize(
+    name="data_efficiency/ens4x0728",
+    dataset=ens4x0728,
+    tokenizer=llama3_tokenizer,
+)
+
+octothinker_megamath = default_download(
+    name="raw/octothinker-megamath",
+    hf_dataset_id="OctoThinker/MegaMath-Web-Pro-Max",
+    revision="b5129b6",
+    override_output_path="raw/octothinker-megamath",
+)
+
+octothinker_megamath_tokenized = default_tokenize(
+    name="octothinker-megamath",
+    dataset=octothinker_megamath,
+    tokenizer=llama3_tokenizer,
+)
+
 data_dict = {
     "dclm": dclm_tokenized,
     "code": starcoderdata_tokenized,
@@ -84,5 +110,7 @@ data_dict = {
     "ens2d0715": ens2d0715_tokenized,
     "ens2d0717": ens2d0717_tokenized,
     "ens4d0721": ens4d0721_tokenized,
+    "ens4x0728": ens4x0728_tokenized,
+    "octo": octothinker_megamath_tokenized,
 }
 
