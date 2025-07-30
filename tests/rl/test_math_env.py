@@ -12,8 +12,8 @@ except ImportError:  # pragma: no cover
 
 import datasets
 
+from marin.rl.datatypes import InferenceEndpoint, RolloutGroup
 from marin.rl.envs.math_env import MathEnv
-from marin.rl.types import InferenceEndpoint, RolloutGroup
 
 
 @pytest.mark.skipif(openai_responses is None, reason="openai_responses not installed")

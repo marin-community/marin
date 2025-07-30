@@ -276,9 +276,9 @@ def instantiate_coordinator(server: jax_transfer.TransferServer, name: str | Non
     return WeightTransferCoordinator.options(**options).remote(server.address())  # type: ignore
 
 
-def start_transfer_server() -> jax_transfer.TransferServer:
+def start_transfer_server(backend: str | None = None) -> jax_transfer.TransferServer:
     ip = get_local_ip_from_hostname()
-    backend_client = jax.devices()[0].client
+    backend_client = jax.devices(backend=backend)[0].client
     return jax_transfer.start_transfer_server(
         backend_client,
         f"{ip}:0",  # bind to the local IP address

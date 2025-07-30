@@ -49,9 +49,10 @@ class TransferStats:
 class TransferProgressTracker:
     """Tracks and logs transfer progress using wandb."""
 
-    def __init__(self, num_transfers: int, **wandb_args) -> None:
+    def __init__(self, num_transfers: int, summary: dict, **wandb_args) -> None:
         self.coordinator: ActorHandle | None = None
         wandb.init(**wandb_args)
+        wandb.summary.update(summary)
         self._total_transfers = num_transfers
         self._num_finished = 0
 
@@ -114,11 +115,34 @@ def deshard(arr):
     return jax.lax.with_sharding_constraint(arr, host_replicated)
 
 
+def gather_and_transfer_to_host(arr, mesh, backend: str):
+    """Gather array from devices and transfer to host based on backend."""
+    if not arr.is_fully_addressable:
+        gathered = deshard(arr)
+    else:
+        gathered = arr
+    # move to host
+
+    if backend == "cpu":
+        gathered = jax.device_put(gathered, jax.local_devices(backend="cpu")[0])
+    elif backend == "offload":
+        sharding = jax.sharding.NamedSharding(mesh, host_replicated, memory_kind="pinned_host")
+        gathered = jax.device_put(gathered, sharding)
+    elif backend == "tpu":
+        # gathered = jax.device_put(gathered, host_replicated)
+        pass
+    else:
+        raise ValueError(f"Invalid backend: {backend}")
+
+    return gathered
+
+
 def large_slice_loop(
     size: int,
     rounds: int,
     tracker: ActorHandle,
     receiver_count: int,
+    backend: str,
 ) -> None:
     """Run on the large slice; serves weights and simulates updates."""
     mesh = make_process_mesh()
@@ -139,7 +163,7 @@ def large_slice_loop(
         coordinator: ActorHandle | None = None
 
         if jax.process_index() == 0:
-            server = start_transfer_server()
+            server = start_transfer_server("tpu" if backend == "offload" else backend)
             coordinator = instantiate_coordinator(server)
             ray.get(tracker.set_coordinator.remote(coordinator))
             logger.info("Large slice started transfer server at %s", server.address())
@@ -152,16 +176,14 @@ def large_slice_loop(
             arr = jax.block_until_ready(arr)
             logger.info("Step %d", step)
 
-            time_in = time.time()
-            if not arr.is_fully_addressable:
-                gathered = deshard(arr)
-                gathered = jax.block_until_ready(gathered)
-            else:
-                gathered = arr
-            gather_elapsed = time.time() - time_in
+            arr_bytes = num_bytes(arr)
+            # not really mean for more than one array but eh
+            arr_mean = jax.tree_util.tree_reduce(lambda x, y: x + y.mean(), arr, 0.0)
 
-            gathered_bytes = num_bytes(gathered)
-            gathered_max = jax.tree_util.tree_reduce(lambda x, y: max(x, y.max()), gathered, 0.0)
+            time_in = time.time()
+            gathered = gather_and_transfer_to_host(arr, mesh, backend)
+            gathered = jax.block_until_ready(gathered)
+            gather_elapsed = time.time() - time_in
 
             if jax.process_index() == 0 and server is not None and coordinator is not None:
                 logger.info("Gather took %.2f seconds for step %d", gather_elapsed, step)
@@ -178,9 +200,9 @@ def large_slice_loop(
                     metrics = {
                         "host/gather_time": gather_elapsed,
                         "host/step": step,
-                        "host/gather_bytes": gathered_bytes,
+                        "host/gather_bytes": arr_bytes,
                         "host/num_transfers": num_transfers,
-                        "host/weight_max": float(gathered_max),
+                        "host/weight_mean": float(arr_mean),
                     }
                     ray.get(tracker.log.remote(metrics))
                 del gathered
@@ -205,9 +227,10 @@ def small_slice_loop(
     worker_id: int,
     shape: Iterable[int],
     rounds: int,
+    backend: str,
 ) -> list[TransferStats]:
     """Persistent worker that performs `rounds` pulls from the weight server."""
-    client_server = start_transfer_server()
+    client_server = start_transfer_server("tpu" if backend == "offload" else backend)
 
     coordinator: ActorHandle | None = None
     while coordinator is None:
@@ -229,6 +252,7 @@ def small_slice_loop(
             return jax.lax.with_sharding_constraint(out, full_sharded)
 
         placeholder = make_placeholder()
+        placeholder = gather_and_transfer_to_host(placeholder, mesh, backend)
 
         @jax.jit
         def reshard(arr):
@@ -245,11 +269,12 @@ def small_slice_loop(
             )
 
             time_in = time.time()
-            result = reshard(result)
+            result = jax.device_put(result, full_sharded)
             result = jax.block_until_ready(result)
             elapsed = time.time() - time_in
 
             transfer_finished = tracker.mark_transfer_finished.remote(step)
+            arr_mean = jax.tree_util.tree_reduce(lambda x, y: x + y.mean(), result, 0.0)
 
             metrics = {
                 "client/pull_time": info.time_end - info.time_start,
@@ -257,7 +282,7 @@ def small_slice_loop(
                 "client/bytes_transferred": info.weight_bytes,
                 "client/worker_id": worker_id,
                 "client/round": step,
-                "client/weight_max": float(jax.tree_util.tree_reduce(lambda x, y: max(x, y.max()), result, 0.0)),
+                "client/weight_mean": float(arr_mean),
                 "client/throughput": info.weight_bytes / (info.time_elapsed + elapsed),
             }
             ray.get([tracker.log.remote(metrics), transfer_finished])
@@ -267,16 +292,27 @@ def small_slice_loop(
     return stats
 
 
-def run_benchmark(large_type: str, small_type: str, size: int, num_small: int, rounds: int) -> list[TransferStats]:
+def run_benchmark(
+    trial_name: str, large_type: str, small_type: str, size: int, num_small: int, rounds: int, backend: str
+) -> list[TransferStats]:
     """Initializes and runs the weight transfer benchmark."""
     tracker: ActorHandle = TransferProgressTracker.options(num_cpus=0).remote(  # type: ignore
         rounds * num_small,
         project="levanter-tpu-transfer-benchmark",
+        name=trial_name,
+        summary={
+            "backend": backend,
+            "large_type": large_type,
+            "small_type": small_type,
+            "size": size,
+            "num_small": num_small,
+            "rounds": rounds,
+        },
     )
 
     def _large_slice_fn():
         # return _separate_process_fn(large_slice_loop, (size, rounds, tracker, num_small), {})
-        return large_slice_loop(size, rounds, tracker, num_small)
+        return large_slice_loop(size, rounds, tracker, num_small, backend)
 
     large_future = ray_tpu.run_on_pod_ray.remote(_large_slice_fn, large_type)
 
@@ -285,7 +321,7 @@ def run_benchmark(large_type: str, small_type: str, size: int, num_small: int, r
     def _make_worker_fn(wid: int):
         def _worker_fn():
             # return _separate_process_fn(small_slice_loop, (tracker, wid, shape, rounds), {})
-            return small_slice_loop(tracker, wid, shape, rounds)
+            return small_slice_loop(tracker, wid, shape, rounds, backend)
 
         return _worker_fn
 
@@ -310,16 +346,23 @@ def main() -> None:
     parser.add_argument("--num-small", type=int, default=1, help="Number of small slices")
     parser.add_argument("--size", type=int, default=int(2e9), help="Number of fp32 weights")
     parser.add_argument("--rounds", type=int, default=1, help="Number of transfer rounds")
+    parser.add_argument("--backend", choices=["tpu", "cpu", "offload"], default="tpu")
     args = parser.parse_args()
 
     ray.init()
 
+    trial_name = (
+        f"{args.backend}-{args.large_type}->{args.num_small}x{args.small_type}-{args.size * 4//1e9}GB-{args.rounds}"
+    )
+
     stats = run_benchmark(
+        trial_name,
         args.large_type,
         args.small_type,
         args.size,
         args.num_small,
         args.rounds,
+        args.backend,
     )
 
     for i, s in enumerate(stats):
