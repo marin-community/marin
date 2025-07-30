@@ -32,14 +32,14 @@ from marin.post_training.environments.math_utils import (
 from marin.post_training.utils import validate_format
 
 from ..config import AbstractEnvConfig
-from ..env import AbstractMarinEnv
-from ..types import (
+from ..datatypes import (
     InferenceEndpoint,
     Rollout,
     RolloutGroup,
     RolloutSink,
     Turn,
 )
+from ..env import AbstractMarinEnv
 
 __all__ = [
     "MathEnv",

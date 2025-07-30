@@ -7,12 +7,12 @@ heavy dependencies outside of training scripts.
 
 # Configs now live in .config
 from .config import AbstractEnvConfig, MarinRlConfig, RlTrainingConfig
+from .datatypes import Rollout, RolloutGroup, RolloutSink, Turn
 
 # Example environment configs
 from .envs.hello import HelloEnvConfig
 from .envs.math_env import MathEnvConfig
 from .envs.openai_echo import ChatEchoEnvConfig
-from .types import Rollout, RolloutGroup, RolloutSink, Turn
 
 __all__ = [
     "AbstractEnvConfig",

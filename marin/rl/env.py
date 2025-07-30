@@ -13,7 +13,7 @@ import asyncio
 import logging
 from typing import Final
 
-from .types import InferenceEndpoint, RolloutGroup, RolloutSink
+from .datatypes import InferenceEndpoint, RolloutGroup, RolloutSink
 
 logger: Final = logging.getLogger(__name__)
 

@@ -13,7 +13,7 @@ from levanter.utils.ray_utils import RayResources
 from ray.actor import ActorHandle
 
 from ..resources import ResourceConfig
-from .types import InferenceConfig, InferenceEndpoint, RolloutSink
+from .datatypes import InferenceConfig, InferenceEndpoint, RolloutSink
 
 __all__ = [
     "AbstractEnvConfig",

@@ -14,8 +14,8 @@ import ray
 from levanter.utils.ray_utils import RayResources
 
 from ..config import AbstractEnvConfig
+from ..datatypes import InferenceEndpoint, Rollout, RolloutGroup, RolloutSink, Turn
 from ..env import AbstractMarinEnv
-from ..types import InferenceEndpoint, Rollout, RolloutGroup, RolloutSink, Turn
 
 
 class ChatEchoEnv(AbstractMarinEnv):
