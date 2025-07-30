@@ -1,7 +1,7 @@
-experiments/two_stage/cache/*
-experiments/two_stage/plotting/*
-experiments/curriculum/cache/*
-experiments/curriculum/plots/*
+experiments/*/cache/*
+experiments/*/plots/*
+experiments/*/plotting/*
+.git/objects/*
 
 tests/snapshots/outputs
 tests/snapshots/diffs
