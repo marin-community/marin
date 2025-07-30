@@ -5,6 +5,8 @@ A persistent large TPU slice hosts the weights while small slices
 periodically connect to fetch them. The large slice runs a
 :class:`~marin.rl.coordinator.WeightTransferCoordinator` to manage an all-gather cycle
 and simulate parameter updates.
+
+This class mostly serves as a demonstration of how to use weight transfer in JAX
 """
 
 import argparse
@@ -14,12 +16,13 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+import equinox
 import jax
 import jax.numpy as jnp
 import ray
 import wandb
-from jax._src.mesh_utils import create_device_mesh
 from jax.experimental import transfer as jax_transfer
+from jax.experimental.mesh_utils import create_device_mesh
 from levanter.infra import ray_tpu
 from ray.actor import ActorHandle
 
@@ -86,12 +89,8 @@ class TransferProgressTracker:
         return self._num_finished
 
 
-full_sharded = jax.sharding.PartitionSpec(
-    ("p", "d"),
-)
-host_replicated = jax.sharding.PartitionSpec(
-    ("d",),
-)
+full_sharded = jax.sharding.PartitionSpec(("p", "d"))
+host_replicated = jax.sharding.PartitionSpec(("d",))
 
 
 def make_process_mesh():
@@ -115,17 +114,6 @@ def deshard(arr):
     return jax.lax.with_sharding_constraint(arr, host_replicated)
 
 
-def estimate_memory_usage():
-    device_totals = {}
-    arrays = jax.live_arrays()
-    for array in arrays:
-        for shard in array.addressable_shards:
-            data_size = shard.data.nbytes
-            device = shard.device
-            device_totals[device] = device_totals.get(device, 0) + data_size
-    return {f"memory/device_{i}": total / 1e9 for i, total in enumerate(device_totals.values())}
-
-
 def large_slice_loop(
     size: int,
     rounds: int,
@@ -137,9 +125,12 @@ def large_slice_loop(
     with jax.sharding.use_mesh(mesh):
         logger.info("Large slice started with %d devices", jax.device_count())
 
-        @jax.jit
-        def make_arr(rng_key):
+        @equinox.filter_jit(donate="warn")
+        def make_arr(maybe_old, rng_key):
             """Create a random array of the given size on the mesh."""
+            # maybe_old is a hack to try to convince JAX to reuse the memory of the previous array.
+            # this simulates how training would work
+            del maybe_old
             out = jax.random.normal(rng_key, (size,), dtype=jnp.float32)
             return jax.lax.with_sharding_constraint(out, full_sharded)
 
@@ -153,29 +144,24 @@ def large_slice_loop(
             ray.get(tracker.set_coordinator.remote(coordinator))
             logger.info("Large slice started transfer server at %s", server.address())
 
+        arr = None
+
         for step in range(rounds):
             rng, subkey = jax.random.split(rng)
-            logger.info(f"Memory usage before make_arr: {estimate_memory_usage()}")
-            arr = make_arr(subkey)
+            arr = make_arr(arr, subkey)
             arr = jax.block_until_ready(arr)
-            logger.info(f"Memory usage after make_arr: {estimate_memory_usage()}")
             logger.info("Step %d", step)
 
             time_in = time.time()
             if not arr.is_fully_addressable:
                 gathered = deshard(arr)
-                del arr
-                logger.info(f"Memory usage after deshard: {estimate_memory_usage()}")
+                gathered = jax.block_until_ready(gathered)
             else:
                 gathered = arr
-                del arr
-            # gathered = jax.device_get(gathered)
-            gathered = jax.block_until_ready(gathered)
-            logger.info(f"Memory usage after gather: {estimate_memory_usage()}")
             gather_elapsed = time.time() - time_in
 
             gathered_bytes = num_bytes(gathered)
-            gathered_norm = jax.tree_util.tree_reduce(lambda x, y: x + jnp.linalg.norm(y), gathered, 0.0)
+            gathered_max = jax.tree_util.tree_reduce(lambda x, y: max(x, y.max()), gathered, 0.0)
 
             if jax.process_index() == 0 and server is not None and coordinator is not None:
                 logger.info("Gather took %.2f seconds for step %d", gather_elapsed, step)
@@ -194,7 +180,7 @@ def large_slice_loop(
                         "host/step": step,
                         "host/gather_bytes": gathered_bytes,
                         "host/num_transfers": num_transfers,
-                        "host/weight_norm": float(gathered_norm),
+                        "host/weight_max": float(gathered_max),
                     }
                     ray.get(tracker.log.remote(metrics))
                 del gathered
@@ -271,7 +257,8 @@ def small_slice_loop(
                 "client/bytes_transferred": info.weight_bytes,
                 "client/worker_id": worker_id,
                 "client/round": step,
-                "client/weight_norm": float(jax.tree_util.tree_reduce(lambda x, y: x + jnp.linalg.norm(y), result, 0.0)),
+                "client/weight_max": float(jax.tree_util.tree_reduce(lambda x, y: max(x, y.max()), result, 0.0)),
+                "client/throughput": info.weight_bytes / (info.time_elapsed + elapsed),
             }
             ray.get([tracker.log.remote(metrics), transfer_finished])
             stats.append(TransferStats(bytes_transferred=info.weight_bytes, transfer_time=info.time_elapsed + elapsed))
