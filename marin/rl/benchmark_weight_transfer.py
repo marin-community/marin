@@ -163,7 +163,7 @@ def large_slice_loop(
         coordinator: ActorHandle | None = None
 
         if jax.process_index() == 0:
-            server = start_transfer_server("tpu" if backend == "offload" else backend)
+            server = start_transfer_server("tpu")
             coordinator = instantiate_coordinator(server)
             ray.get(tracker.set_coordinator.remote(coordinator))
             logger.info("Large slice started transfer server at %s", server.address())
@@ -230,7 +230,7 @@ def small_slice_loop(
     backend: str,
 ) -> list[TransferStats]:
     """Persistent worker that performs `rounds` pulls from the weight server."""
-    client_server = start_transfer_server("tpu" if backend == "offload" else backend)
+    client_server = start_transfer_server("tpu")
 
     coordinator: ActorHandle | None = None
     while coordinator is None:
@@ -252,7 +252,7 @@ def small_slice_loop(
             return jax.lax.with_sharding_constraint(out, full_sharded)
 
         placeholder = make_placeholder()
-        placeholder = gather_and_transfer_to_host(placeholder, mesh, backend)
+        placeholder = gather_and_transfer_to_host(placeholder, mesh, backend if backend != "offload" else "tpu")
 
         @jax.jit
         def reshard(arr):
