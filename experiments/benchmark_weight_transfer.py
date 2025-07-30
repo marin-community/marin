@@ -25,6 +25,7 @@ from ray.actor import ActorHandle
 
 from marin.rl.coordinator import (
     instantiate_coordinator,
+    num_bytes,
     process_weight_transfers,
     receive_weight_transfers,
     start_transfer_server,
@@ -114,6 +115,17 @@ def deshard(arr):
     return jax.lax.with_sharding_constraint(arr, host_replicated)
 
 
+def estimate_memory_usage():
+    device_totals = {}
+    arrays = jax.live_arrays()
+    for array in arrays:
+        for shard in array.addressable_shards:
+            data_size = shard.data.nbytes
+            device = shard.device
+            device_totals[device] = device_totals.get(device, 0) + data_size
+    return {f"memory/device_{i}": total / 1e9 for i, total in enumerate(device_totals.values())}
+
+
 def large_slice_loop(
     size: int,
     rounds: int,
@@ -143,13 +155,27 @@ def large_slice_loop(
 
         for step in range(rounds):
             rng, subkey = jax.random.split(rng)
+            logger.info(f"Memory usage before make_arr: {estimate_memory_usage()}")
             arr = make_arr(subkey)
+            arr = jax.block_until_ready(arr)
+            logger.info(f"Memory usage after make_arr: {estimate_memory_usage()}")
             logger.info("Step %d", step)
 
             time_in = time.time()
-            gathered = deshard(arr)
+            if not arr.is_fully_addressable:
+                gathered = deshard(arr)
+                del arr
+                logger.info(f"Memory usage after deshard: {estimate_memory_usage()}")
+            else:
+                gathered = arr
+                del arr
+            # gathered = jax.device_get(gathered)
             gathered = jax.block_until_ready(gathered)
+            logger.info(f"Memory usage after gather: {estimate_memory_usage()}")
             gather_elapsed = time.time() - time_in
+
+            gathered_bytes = num_bytes(gathered)
+            gathered_norm = jax.tree_util.tree_reduce(lambda x, y: x + jnp.linalg.norm(y), gathered, 0.0)
 
             if jax.process_index() == 0 and server is not None and coordinator is not None:
                 logger.info("Gather took %.2f seconds for step %d", gather_elapsed, step)
@@ -166,13 +192,12 @@ def large_slice_loop(
                     metrics = {
                         "host/gather_time": gather_elapsed,
                         "host/step": step,
-                        "host/gather_bytes": gathered.nbytes,
+                        "host/gather_bytes": gathered_bytes,
                         "host/num_transfers": num_transfers,
-                        "host/weight_norm": float(
-                            jax.tree_util.tree_reduce(lambda x, y: x + jnp.linalg.norm(y), gathered, 0.0)
-                        ),
+                        "host/weight_norm": float(gathered_norm),
                     }
                     ray.get(tracker.log.remote(metrics))
+                del gathered
 
                 ray.get(
                     tracker.log.remote(
@@ -263,6 +288,7 @@ def run_benchmark(large_type: str, small_type: str, size: int, num_small: int, r
     )
 
     def _large_slice_fn():
+        # return _separate_process_fn(large_slice_loop, (size, rounds, tracker, num_small), {})
         return large_slice_loop(size, rounds, tracker, num_small)
 
     large_future = ray_tpu.run_on_pod_ray.remote(_large_slice_fn, large_type)
@@ -271,6 +297,7 @@ def run_benchmark(large_type: str, small_type: str, size: int, num_small: int, r
 
     def _make_worker_fn(wid: int):
         def _worker_fn():
+            # return _separate_process_fn(small_slice_loop, (tracker, wid, shape, rounds), {})
             return small_slice_loop(tracker, wid, shape, rounds)
 
         return _worker_fn
