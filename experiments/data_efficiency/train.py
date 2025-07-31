@@ -145,7 +145,9 @@ class DataEfficiencyConfig:
         }
 
         # cooldown_str = f"{self.lr_cooldown_duration:.2f}" if self.lr_cooldown_duration is not None else "na"
-        return f"{schedule_short_name[self.lr_schedule]}-lr{self.lr:.4f}-wd{self.weight_decay:.2f}"
+        assert self.lr >= 1e-5
+        lr_str = f"{self.lr:.4f}" if self.lr >= 1e-4 else f"{self.lr:.5f}"
+        return f"{schedule_short_name[self.lr_schedule]}-lr{lr_str}-wd{self.weight_decay:.2f}"
 
     def build_trainer_config(self) -> TrainerConfig:
         return TrainerConfig(
