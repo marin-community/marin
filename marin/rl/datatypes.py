@@ -23,6 +23,13 @@ __all__ = [
 # Rollouts & Turns
 # ---------------------------------------------------------------------------
 
+@dataclass(slots=True)
+class InferenceMetadata:
+    """Metadata about the inference of a turn."""
+    model_version: str
+    sampling_params: dict[str, Any]
+    inference_time: float
+
 
 @dataclass(slots=True, frozen=True)
 class Turn:
@@ -51,7 +58,7 @@ class Turn:
     logprobs: Sequence[float] | None
     role: str
     reward: float | None | None
-    inference_metadata: dict[str, Any]
+    inference_metadata: InferenceMetadata
 
 
 @dataclass(slots=True, frozen=True)
