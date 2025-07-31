@@ -1,7 +1,7 @@
 ## Meta
 
-- [ ] understand charlie's code
-- [ ] do we want to do disaggegrated inference
+- [x] understand charlie's code
+- [ ] do we want to do disaggegrated inference?
 
 ## Transfer
 - [x] Implement weight transfer coordinator
@@ -22,17 +22,18 @@
 
 
 ## Training
-- [ ] skeleton loop
-- [ ] initialize model
-- [ ] objective function
-- [ ] optimizer
-- [ ] aux losses (kl) and logging
+- [x] skeleton loop
+- [x] initialize model
+- [x] objective function
+- [ ] verify objective function works
+- [x] optimizer
+- [x] aux losses (kl) and logging
 
 
 ## Metrics
 - cf https://huggingface.co/blog/putting_rl_back_in_rlhf_with_rloo
 - [ ] **eps**: Tracks the number of episodes per second.
-- [ ] **objective/kl**: The mean Kullback-Leibler (KL) divergence between the current policy and reference policy.
+- [x] **objective/kl**: The mean Kullback-Leibler (KL) divergence between the current policy and reference policy.
 - [ ] **objective/entropy**: The mean entropy of the policy, indicating the randomness of the actions chosen by the policy.
 - [ ] **objective/non_score_reward**: The mean reward from non-score-related sources, basically `beta * kl.sum(1)`, where beta is the KL penalty coefficient and kl is the per-token KL divergence.
 - [ ] **objective/rlhf_reward**: The mean RLHF reward, which is `score - non_score_reward`.
@@ -51,8 +52,6 @@
 - [ ] **train/format_rewards**
 - [ ] **train/correct_rewards**
 - [ ] **train/output_length**
-
-
 
 
 

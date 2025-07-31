@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import equinox as eqx
+from levanter.layers import AttentionMask
+
 import haliax as hax
 import haliax.haxtyping as ht
 import jax
@@ -14,7 +16,7 @@ from haliax import NamedArray
 from haliax.jax_utils import maybe_rng_split
 from levanter.compat.hf_checkpoints import HFCompatConfig, load_tokenizer
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig
+from levanter.models.lm_model import LmConfig, LmExample
 from levanter.models.loss import next_token_loss
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -79,10 +81,18 @@ class RlExample(eqx.Module):
     input_ids: ht.i32[NamedArray, "batch position"]
     loss_mask: ht.bool_[NamedArray, "batch position"]  # indicates prompt vs not prompt
     segment_ids: ht.i32[NamedArray, "batch position"]  # mostly 1/0 for padding
-    returns: ht.Float[NamedArray, "batch"]  # RLOO advantages or similar
+    loss_weights: ht.f32[NamedArray, "batch position"]  # RLOO advantages or similar
     policy_logprobs: ht.Float[NamedArray, "batch position"]
-    # recompute reference logprobs on the fly?
-    # reference_logprobs: ht.f32[NamedArray, "batch position"]
+    reference_logprobs: ht.Float[NamedArray, "batch position"]
+
+    def to_lm_example(self) -> LmExample:
+        return LmExample(
+            tokens=self.input_ids,
+            loss_mask=self.loss_mask,
+            attn_mask=AttentionMask.causal().with_segment_ids(self.segment_ids),
+        )
+
+
 
 
 def main(config: TrainRlConfig):
@@ -163,8 +173,6 @@ def main(config: TrainRlConfig):
         return loss
 
     with Trainer(config.trainer, optimizer, loss_fn) as trainer:
-        seed = config.trainer.seed
-
         # Model Config Loading
 
         if config.initialize_from_checkpoint_path is not None:
