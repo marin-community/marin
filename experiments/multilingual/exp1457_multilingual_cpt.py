@@ -22,7 +22,6 @@ from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components
 from experiments.defaults import default_train
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from experiments.dolmino.tokenize_dolmino import dolmino_math_tokenized_llama3, get_dolmino_step_llama3
-from experiments.multilingual_fineweb2_hq.download_and_tokenize_fineweb2_hq import tokenize_fineweb2hq_steps, _get_fineweb2_split_paths
 from experiments.evals.evals import default_base_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
@@ -73,13 +72,13 @@ tootise_phase1_config = SimpleTrainConfig(
 llama_8b_tootsie_phase1 = dataclasses.replace(
     default_train(
         name="llama-8b-tootsie-0.001",
-        tokenized=tokenize_fineweb2hq_steps,
+        tokenized=dclm_mixture_config_llama3,
         # I am a dummy and use old rotary config
         model_config=llama_8b_old_rotary,
         train_config=tootise_phase1_config,
-        tags=["llama", "8b", "wsd-s", "exp1457"],
+        tags=["llama", "8b", "wsd-s", "exp600"],
     ),
-    override_output_path="checkpoints/llama-8b-multilingual-0.001-19ad63",
+    override_output_path="checkpoints/llama-8b-tootsie-0.001-19ad63",
 )
 
 
@@ -125,7 +124,7 @@ llama_8b_tootsie_phase2 = dataclasses.replace(
         train_config=llama_8b_train_config_phase2,
         tags=["llama", "8b", "ema", "exp600"],
     ),
-    override_output_path="checkpoints/llama-8b-multilingual-phase2",
+    override_output_path="checkpoints/llama-8b-tootsie-phase2",
 )
 
 # Note, we originally tried to fold the phase 3 mixture (below) into phase 2, but I messed up the hand off, so
