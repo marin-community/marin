@@ -23,6 +23,8 @@ from experiments.defaults import default_train
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from experiments.dolmino.tokenize_dolmino import dolmino_math_tokenized_llama3, get_dolmino_step_llama3
 from experiments.evals.evals import default_base_eval
+from experiments.multilingual_fineweb2_hq.constants import FINEWEB2_DATASETS, FINEWEB2_HQ_MIXTURE_BYTES
+from experiments.multilingual_fineweb2_hq.download_and_tokenize_fineweb2_hq import tokenize_fineweb2hq_steps
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary
@@ -594,48 +596,33 @@ cooldown_train_config = dataclasses.replace(
     cycle_length=None,
 )
 
-starling_hq_cooldown_weights = {
-    "starcoderdata": 0.25,
-    "proofpile_2": 0.25,
-    "dolmino/flan": 0.017 * 10,
-    "dolmino/pes2o": 0.0581 * 5,
-    "dolmino/stackexchange": 0.0171 * 5,
-    "dolmino/wiki": 0.00365 * 5,
-    "all_math": 0.00422 * 10,
-    "arxiv_markdownified": 0.0581 * 5,
-    "stackexchange_custom": 0.0171 * 5,
-    "wikipedia_markdown": 0.00365 * 5,
-    "medu_science_qa": 0.0012 * 5,
-    # about 34B tokens
-    "finemath-3-plus": 0.034 * 5,
-}
+fineweb_weights = FINEWEB2_HQ_MIXTURE_BYTES
 
-total_hq_weight = sum(v for k, v in starling_hq_cooldown_weights.items())
+total_hq_weight = sum(v for k, v in  fineweb_weights.items())
 # we want nemotron to be 0.7 of the total weight
-nemotron_total = sum(v for k, v in NEMOTRON_WEIGHTS.items())
+fineweb_total = sum(v for k, v in fineweb_weights.items())
 
 
 starling_cooldown_weights = {
-    **{k: v * 0.7 / nemotron_total for k, v in NEMOTRON_WEIGHTS.items()},
-    **{k: v * 0.3 / total_hq_weight for k, v in starling_hq_cooldown_weights.items()},
+    **{k: v * 0.7 / fineweb_total for k, v in FINEWEB2_HQ_MIXTURE_BYTES.items()},
+    **{k: v * 0.3 / total_hq_weight for k, v in FINEWEB2_HQ_MIXTURE_BYTES.items()},
 }
 
-starling_components = {"finemath-3-plus": finemath_3_plus_tokenized}
 
-starling_cooldown_mixture = lm_varying_mixture_data_config(
-    components={**phase_3_tokenized, **nemotron_cc_steps, **pt_vs_hq_components, **starling_components},
+
+fineweb2_hq_mixture = lm_varying_mixture_data_config(
+    components={**phase_3_tokenized, **tokenize_fineweb2hq_steps},
     weights_list=[
         (0, DCLM_MIXTURE_WEIGHTS),
         (PHASE_3_START, cooldown_mixture_weights_v1),
         (PHASE_4_START, phase_4_warmup_weights),
         (PHASE_4_START + PHASE_4_REWARMUP_DURATION, phase_4_steady_state_weights),
-        (PHASE_4_END, starling_cooldown_weights),
     ],
 )
 
 tootsie_8b_sensible_starling = default_train(
     name="tootsie-8b-sensible-starling",
-    tokenized=starling_cooldown_mixture,
+    tokenized=fineweb2_hq_mixture,
     model_config=llama_8b,
     train_config=cooldown_train_config,
     tags=["llama", "8b", "ema", "exp977", "tootsie", "cooldown"],
@@ -644,40 +631,40 @@ tootsie_8b_sensible_starling = default_train(
 
 # print normalized weights for final phase
 # sanity checks:
-normalized = {k: v / sum(starling_cooldown_weights.values()) for k, v in starling_cooldown_weights.items()}
+normalized = {k: v / sum(fineweb_weights.values()) for k, v in fineweb_weights.items()}
 
 # sum up the nemotron ones:
-assert 0.69 < sum(v for k, v in normalized.items() if k.startswith("nemotron")) < 0.71
-assert 0.29 < sum(v for k, v in normalized.items() if k not in NEMOTRON_WEIGHTS) < 0.31
+assert 0.69 < sum(v for k, v in normalized.items() if k.startswith("fineweb")) < 0.71
+assert 0.29 < sum(v for k, v in normalized.items() if k not in FINEWEB2_HQ_MIXTURE_BYTES) < 0.31
 
-############################
-# Phase 6: Deeper Starling (dessert-ish)
-############################
-# things kept getting better, so we'll do a constant LR run for a bit longer
+# ############################
+# # Phase 6: Deeper Starling (dessert-ish)
+# ############################
+# # things kept getting better, so we'll do a constant LR run for a bit longer
 
-# starling_checkpoint = "gs://marin-us-central2/checkpoints/tootsie-8b-sensible-starling/checkpoints/step-1399923/"
-starling_checkpoint = tootsie_8b_sensible_starling.cd("checkpoints/step-1399923").nonblocking()
+# # starling_checkpoint = "gs://marin-us-central2/checkpoints/tootsie-8b-sensible-starling/checkpoints/step-1399923/"
+# starling_checkpoint = tootsie_8b_sensible_starling.cd("checkpoints/step-1399923").nonblocking()
 
-EXTRA_COOLDOWN_LEN = 20000
+# EXTRA_COOLDOWN_LEN = 20000
 
-tootsie_8b_deeper_starling_train_config = dataclasses.replace(
-    cooldown_train_config,
-    learning_rate=1.7e-5,
-    min_lr_ratio=1.0,
-    decay=0,
-    num_train_steps=PHASE_4_END + COOLDOWN_LEN + EXTRA_COOLDOWN_LEN,
-    initialize_from_checkpoint_path=starling_checkpoint,
-    reset_data_loader_on_init=False,
-)
+# tootsie_8b_deeper_starling_train_config = dataclasses.replace(
+#     cooldown_train_config,
+#     learning_rate=1.7e-5,
+#     min_lr_ratio=1.0,
+#     decay=0,
+#     num_train_steps=PHASE_4_END + COOLDOWN_LEN + EXTRA_COOLDOWN_LEN,
+#     initialize_from_checkpoint_path=starling_checkpoint,
+#     reset_data_loader_on_init=False,
+# )
 
-tootsie_8b_deeper_starling = default_train(
-    name="tootsie-8b-deeper-starling",
-    tokenized=starling_cooldown_mixture,
-    model_config=llama_8b,
-    train_config=tootsie_8b_deeper_starling_train_config,
-    tags=["llama", "8b", "ema", "exp977", "tootsie", "cooldown"],
-    eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
-).with_output_path("checkpoints/tootsie-8b-deeper-starling")
+# tootsie_8b_deeper_starling = default_train(
+#     name="tootsie-8b-deeper-starling",
+#     tokenized=starling_cooldown_mixture,
+#     model_config=llama_8b,
+#     train_config=tootsie_8b_deeper_starling_train_config,
+#     tags=["llama", "8b", "ema", "exp977", "tootsie", "cooldown"],
+#     eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+# ).with_output_path("checkpoints/tootsie-8b-deeper-starling")
 
 
 if __name__ == "__main__":
@@ -690,8 +677,8 @@ if __name__ == "__main__":
             llama_8b_tootsie_cooldown_v2,
             llama_8b_tootsie_adept_phoenix,
             tootsie_8b_sensible_starling,
-            tootsie_8b_deeper_starling,
-            *default_base_eval(tootsie_8b_deeper_starling),
+            # tootsie_8b_deeper_starling,
+            # *default_base_eval(tootsie_8b_deeper_starling),
         ],
-        description="Train 8B model on DCLM using WSD-S, then switching to EMA with a new mixture.",
+        description="Train 8B model on DCLM using WSD-S, then switching to EMA with a new mixture. Then Continually Pretrain on Fineweb2 HQ",
     )
