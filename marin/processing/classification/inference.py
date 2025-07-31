@@ -202,6 +202,10 @@ def run_inference(inference_config: InferenceConfig):
     filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
 
     base_dir = get_base_dir_of_paths(filepaths)
+    if len(filepaths) == 0:
+        pattern = f"**/*.{inference_config.filetype}"
+        raise FileNotFoundError(f"No files found in {inference_config.input_path} with pattern {pattern}")
+
     output_path = inference_config.output_path
     responses = []
     for input_filepath in filepaths:
