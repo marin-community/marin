@@ -1,5 +1,6 @@
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.alpaca_evaluator import AlpacaEvaluator
+from marin.evaluation.evaluators.evalchemy_evaluator import EvalchemyEvaluator
 from marin.evaluation.evaluators.evaluator import Evaluator
 from marin.evaluation.evaluators.helm_evaluator import HELMEvaluator
 from marin.evaluation.evaluators.levanter_lm_eval_evaluator import LevanterLmEvalEvaluator
@@ -9,6 +10,7 @@ from marin.evaluation.evaluators.simple_evaluator import SimpleEvaluator
 # Supported evaluators
 NAME_TO_EVALUATOR = {
     "alpaca": AlpacaEvaluator,
+    "evalchemy": EvalchemyEvaluator,
     "helm": HELMEvaluator,
     "debug": SimpleEvaluator,
     "lm_evaluation_harness": LMEvaluationHarnessEvaluator,
