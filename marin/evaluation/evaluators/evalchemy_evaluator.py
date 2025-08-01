@@ -8,7 +8,7 @@ from typing import ClassVar
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
-from marin.evaluation.utils import is_remote_path, upload_to_gcs
+from marin.evaluation.utils import is_remote_path, upload_to_gcs, run_bash_command
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,11 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
                 for key, value in model.engine_kwargs.items():
                     pretrained_args += f",{key}={value}"
 
+            # Install evalchemy (test)
+            run_bash_command(["git", "clone", "https://github.com/mlfoundations/evalchemy.git"])
+            os.chdir("evalchemy")
+            run_bash_command(["pip", "install", "-e", "."])
+
             for eval_task in evals:
                 result_filepath = os.path.join(self.RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot")
 
@@ -94,7 +99,7 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
 
                 # Build command
                 cmd = [
-                    "python",
+                    "python3",
                     "-m",
                     "eval.eval",
                     "--model",
@@ -117,10 +122,10 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
                     cmd.append("--apply_chat_template")
 
                 # Add annotator model (default to auto for cost efficiency)
-                cmd.append(["--annotator_model", "auto"])
+                cmd.extend(["--annotator_model", "auto"])
 
                 # Run evaluation
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                result = run_bash_command(cmd)
                 if result.returncode != 0:
                     raise RuntimeError(f"Evalchemy failed: {result.stderr}")
 
