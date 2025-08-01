@@ -101,7 +101,7 @@ tootsie_8b_sensible_starling = default_train(
     tokenized=fineweb2_hq_mixture,
     model_config=llama_8b,
     train_config=cooldown_train_config,
-    tags=["llama", "8b", "ema", "exp977", "tootsie", "cooldown"],
+    tags=["llama", "8b", "ema", "exp1457", "tootsie", "cooldown"],
     eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
 ).with_output_path("checkpoints/tootsie-8b-sensible-starling")
 
