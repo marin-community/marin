@@ -134,7 +134,7 @@ humaneval_raw = default_download(
     name="raw/openai/openai_humaneval",
     hf_dataset_id="openai/openai_humaneval",
     revision=versioned("7dce605"),
-    override_output_path="gs://marin-us-central2/raw/openai/openai_humanevalhf",
+    override_output_path="raw/openai/openai_humanevalhf",
     hf_urls_glob=["**/*.parquet", "*.md"],
 )
 
