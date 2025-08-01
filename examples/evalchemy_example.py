@@ -32,11 +32,7 @@ def main():
     model_config = ModelConfig(
         name="deeper-starling-sft",  # Model name for identification
         path="gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/hf/step-1490000",  # HuggingFace format checkpoint
-        engine_kwargs={
-            "trust_remote_code": True,
-            "max_model_len": 4096,  # Increased for larger model
-            "max_gen_toks": 2048,
-        },
+        engine_kwargs=None,
         apply_chat_template=True,  # SFT models typically use chat templates
     )
     # model_config = ModelConfig(
@@ -54,20 +50,12 @@ def main():
     # Evalchemy supports various benchmarks - choose appropriate ones for SFT model
     evals = [
         EvalTaskConfig(
-            name="HumanEval",  # Code generation benchmark
-            num_fewshot=0,
+            name="AIME24",  # Instruction following evaluation
+            num_fewshot=1,
         ),
         EvalTaskConfig(
-            name="MMLU",  # Multiple choice benchmark
-            num_fewshot=5,
-        ),
-        EvalTaskConfig(
-            name="MTBench",  # Multi-turn dialogue evaluation
-            num_fewshot=0,
-        ),
-        EvalTaskConfig(
-            name="AlpacaEval",  # Instruction following evaluation
-            num_fewshot=0,
+            name="IFEval",  # Multiple choice benchmark
+            num_fewshot=1,
         ),
     ]
 

@@ -119,13 +119,14 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
                         f.write(line)
             logger.info("Removed 'fschat @ file:eval/chat_benchmarks/MTBench' from pyproject.toml")
             
-            logger.info("Installing evalchemy")
+            logger.info("Installing evalchemy.")
             run_bash_command(["uv", "pip", "install", "-e", "."])
             
-            logger.info("Installing evalchemy/chat_benchmarks/MTBench")
+            logger.info("Installing evalchemy/chat_benchmarks/MTBench.")
             run_bash_command(["uv", "pip", "install", "-e", "eval/chat_benchmarks/MTBench"])
 
             for eval_task in evals:
+                logger.info(f"Start evalchemy:{eval_task.name} ({eval_task.num_fewshot} shot).")
                 result_filepath = os.path.join(self.LOCAL_RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot")
 
                 # Create the output directory
