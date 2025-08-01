@@ -1,7 +1,7 @@
 [build-system]
 requires = ["uv_build>=0.7.19,<0.8.0"]
 build-backend = "uv_build"
-requires-python = ">=3.10,<=3.12"
+requires-python = ">=3.11"
 
 [project]
 name = "marin"
