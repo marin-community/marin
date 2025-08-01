@@ -83,7 +83,7 @@ mixture_weights = {
 # Calculate the number of training steps from computed values
 total_tokens = sum(mixture_weights.values())
 
-base_tokens = 1488945414144 # tootsie_8b_deeper_starling has about this many tokens
+base_tokens = 1488945414144  # tootsie_8b_deeper_starling has about this many tokens
 current_tokens = 1511163691008  # Number of tokens in the current checkpoint. To be retrieved from Wandb
 extra_steps = (base_tokens + total_tokens * EPOCHS - current_tokens) // (BATCH_SIZE * MODEL_CONFIG.seq_len)
 num_steps = LAST_STEP + extra_steps
