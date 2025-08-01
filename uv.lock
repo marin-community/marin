@@ -3429,6 +3429,7 @@ dependencies = [
     { name = "google-cloud-storage" },
     { name = "google-cloud-storage-transfer" },
     { name = "haliax" },
+    { name = "jax" },
     { name = "levanter" },
     { name = "lz4" },
     { name = "multiprocess" },
@@ -3649,6 +3650,7 @@ requires-dist = [
     { name = "htmlmin", marker = "extra == 'download-transform'", specifier = "==0.1.12" },
     { name = "huggingface-hub", marker = "extra == 'quality-dedup-consolidate'" },
     { name = "ipython", marker = "extra == 'post-training'" },
+    { name = "jax", specifier = "<0.7.0" },
     { name = "jax", marker = "extra == 'post-training'", specifier = "==0.5.2" },
     { name = "jax", extras = ["cuda12"], marker = "extra == 'cuda12'", specifier = ">=0.5.1" },
     { name = "jax", extras = ["tpu"], marker = "extra == 'crawl'" },
@@ -8003,7 +8005,7 @@ name = "triton"
 version = "3.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "setuptools" },
+    { name = "setuptools", marker = "sys_platform == 'linux' or (extra == 'extra-5-marin-crawl' and extra == 'extra-5-marin-download-transform') or (extra == 'extra-5-marin-crawl' and extra == 'extra-5-marin-post-training') or (extra == 'extra-5-marin-crawl' and extra == 'group-5-marin-transform-test-deps')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8d/a9/549e51e9b1b2c9b854fd761a1d23df0ba2fbc60bd0c13b489ffa518cfcb7/triton-3.3.1-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b74db445b1c562844d3cfad6e9679c72e93fdfb1a90a24052b03bb5c49d1242e", size = 155600257, upload-time = "2025-05-29T23:39:36.085Z" },

@@ -1,3 +1,8 @@
+## Inspiration
+
+- https://github.com/willccbb/verifiers
+- https://github.com/google/tunix/blob/main/tunix/rl/grpo/grpo_learner.py
+
 ## Meta
 
 - [x] understand charlie's code
@@ -17,7 +22,8 @@
 
 ## ReplayBuffer
 
-- [ ] Store rollouts in a replay buffer
+- [ ] Make ReplayBuffer skeleton
+- 
 
 
 
@@ -63,23 +69,6 @@ import haliax.haxtyping as ht
 import jaxtyping as jt
 from marin.rl.types import Rollout
 
-class RlExample(eqx.Module):
-    input_ids: ht.i32[NamedArray, "batch position"]
-    loss_mask: ht.bool_[NamedArray, "batch position"]  # indicates prompt vs not prompt
-    segment_ids: ht.i32[NamedArray, "batch position"]  # mostly 1/0 for padding
-    loss_weights: ht.f32[NamedArray, "batch position"]  # RLOO advantages or similar
-    policy_logprobs: ht.Float[NamedArray, "batch position"]
-    reference_logprobs: ht.Float[NamedArray, "batch position"]
-
-    def to_lm_example() -> LmExample:
-        return LmExample(
-            tokens=self.input_ids,
-            loss_mask=self.loss_mask,
-            attn_mask=AttentionMask.causal().with_segment_ids(self.segment_ids),
-        )
-
-
-
 @dataclass(frozen=True)
 class ProcessedRollout:
     source: str
@@ -90,7 +79,7 @@ class ProcessedRollout:
     returns: jt.f32[np.ndarray, "batch"]
     reference_logprobs: jt.f32[np.ndarray, "batch position"]
     policy_logprobs: jt.f32[np.ndarray, "batch position"]
-    
+
 
 def process_rollout_group(
     tokenizer: "HfTokenizer",  # type: ignore
@@ -174,5 +163,3 @@ def compute_rloo_advantages_for_group(rewards: np.ndarray) -> np.ndarray:
 
 
 ```
-
-
