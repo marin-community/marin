@@ -56,6 +56,9 @@ def lm_data_config(
         max_train_batches: Maximum number of batches to use for the training set per dataset.
         num_validation_sequences: Number of validation sequences to take from the training set per dataset.
     """
+    if isinstance(training_set, InputName):
+        training_set = training_set.step
+
     tokenizer = training_set.config.tokenizer
 
     if validation_sets is not None:
