@@ -19,18 +19,19 @@ logger = logging.getLogger(__name__)
 def main():
     """
     Example of running Evalchemy evaluations on the Deeper Starling SFT model.
-
+    
     This example evaluates the SFT model from:
-    gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/checkpoints/step-1490000
-
+    gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/hf/step-1490000
+    
     The model is a fine-tuned version of the Deeper Starling base model with
     instruction following capabilities, trained for 1.49M steps.
+    Uses HuggingFace format checkpoint for compatibility with Evalchemy.
     """
 
     # Define the model configuration
     model_config = ModelConfig(
         name="deeper-starling-sft",  # Model name for identification
-        path="gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/checkpoints/step-1490000",  # GCS checkpoint path
+        path="gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/hf/step-1490000",  # HuggingFace format checkpoint
         engine_kwargs={
             "trust_remote_code": True,
             "max_model_len": 4096,  # Increased for larger model
@@ -38,6 +39,16 @@ def main():
         },
         apply_chat_template=True,  # SFT models typically use chat templates
     )
+    # model_config = ModelConfig(
+    #     name="microsoft/DialoGPT-small",  # Small model for testing (117M parameters)
+    #     path=None,  # Use HuggingFace model directly
+    #     engine_kwargs={
+    #         "trust_remote_code": True,
+    #         "max_model_len": 1024,  # Smaller for testing
+    #         "max_gen_toks": 512,
+    #     },
+    #     apply_chat_template=False,  # DialoGPT doesn't use chat templates
+    # )
 
     # Define evaluation tasks
     # Evalchemy supports various benchmarks - choose appropriate ones for SFT model

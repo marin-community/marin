@@ -1,14 +1,14 @@
 import logging
 import os
 import shutil
-import subprocess
 import traceback
+import subprocess
 from typing import ClassVar
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
-from marin.evaluation.utils import is_remote_path, upload_to_gcs, run_bash_command
+from marin.evaluation.utils import upload_to_gcs, run_bash_command
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +48,8 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
         )
     """
 
-    CACHE_PATH: str = "/tmp/evalchemy"
-    RESULTS_PATH: str = os.path.join(CACHE_PATH, "evalchemy_results")
+    CACHE_PATH: str = VllmTpuEvaluator.CACHE_PATH
+    LOCAL_RESULTS_PATH: str = os.path.join(CACHE_PATH, "evalchemy_results")
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
@@ -82,16 +82,51 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
             # Prepare model arguments
             pretrained_args = f"pretrained={model_name_or_path}"
             if model.engine_kwargs:
-                for key, value in model.engine_kwargs.items():
-                    pretrained_args += f",{key}={value}"
+                # Dynamically check which parameters the model supports
+                try:
+                    from transformers import AutoModelForCausalLM
+                    import inspect
+                    
+                    # Load the model config to inspect supported parameters
+                    model_config = AutoModelForCausalLM.from_pretrained(model_name_or_path, trust_remote_code=True)
+                    model_class = model_config.__class__
+                    init_signature = inspect.signature(model_class.__init__)
+                    supported_params = set(init_signature.parameters.keys())
+                    
+                    for key, value in model.engine_kwargs.items():
+                        if key not in supported_params:
+                            logger.warning(f"Skipping unsupported parameter '{key}' for model {model_name_or_path}")
+                            continue
+                        pretrained_args += f",{key}={value}"
+                except Exception as e:
+                    logger.warning(f"Could not inspect model parameters for {model_name_or_path}: {e}")
+                    # Fallback to original behavior
+                    for key, value in model.engine_kwargs.items():
+                        pretrained_args += f",{key}={value}"
 
             # Install evalchemy (test)
             run_bash_command(["git", "clone", "https://github.com/mlfoundations/evalchemy.git"])
             os.chdir("evalchemy")
-            run_bash_command(["pip", "install", "-e", "."])
+            
+            # Surgery to remove "fschat @ file:eval/chat_benchmarks/MTBench" from pyproject.toml
+            # We will install the MTBench package separately after installing evalchemy
+            # See comments in `Quick Start::Installation` on `https://github.com/mlfoundations/evalchemy`
+            with open("pyproject.toml", "r") as f:
+                lines = f.readlines()
+            with open("pyproject.toml", "w") as f:
+                for line in lines:
+                    if "fschat @ file:eval/chat_benchmarks/MTBench" not in line:
+                        f.write(line)
+            logger.info("Removed 'fschat @ file:eval/chat_benchmarks/MTBench' from pyproject.toml")
+            
+            logger.info("Installing evalchemy")
+            run_bash_command(["uv", "pip", "install", "-e", "."])
+            
+            logger.info("Installing evalchemy/chat_benchmarks/MTBench")
+            run_bash_command(["uv", "pip", "install", "-e", "eval/chat_benchmarks/MTBench"])
 
             for eval_task in evals:
-                result_filepath = os.path.join(self.RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot")
+                result_filepath = os.path.join(self.LOCAL_RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot")
 
                 # Create the output directory
                 output_dir = os.path.dirname(result_filepath)
@@ -111,7 +146,7 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
                     "--batch_size",
                     "auto",
                     "--output_path",
-                    self.RESULTS_PATH,
+                    self.LOCAL_RESULTS_PATH,
                 ]
 
                 if eval_task.num_fewshot > 0:
@@ -125,16 +160,18 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
                 cmd.extend(["--annotator_model", "auto"])
 
                 # Run evaluation
-                result = run_bash_command(cmd)
-                if result.returncode != 0:
-                    raise RuntimeError(f"Evalchemy failed: {result.stderr}")
+                try:
+                    run_bash_command(cmd)
+                except subprocess.CalledProcessError as e:
+                    raise RuntimeError(f"Evalchemy failed with exit code {e.returncode}: {e.stderr}")
 
         except Exception as e:
             traceback.print_exc()
             raise RuntimeError("Evalchemy failed") from e
         finally:
-            if is_remote_path(output_path):
-                upload_to_gcs(self.RESULTS_PATH, output_path)
+            if not os.path.exists(self.LOCAL_RESULTS_PATH):
+                logger.warning(f"No results found in {self.LOCAL_RESULTS_PATH}")
+            else:
+                upload_to_gcs(self.LOCAL_RESULTS_PATH, output_path)
+                shutil.rmtree(self.LOCAL_RESULTS_PATH)
             self.cleanup(model)
-            if os.path.exists(self.RESULTS_PATH):
-                shutil.rmtree(self.RESULTS_PATH)
