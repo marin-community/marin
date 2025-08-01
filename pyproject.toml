@@ -136,9 +136,11 @@ conflicts = [
 [tool.uv.sources]
 torch = [
   # CPU‑only index when --extra cpu is set
-  { index = "pytorch-cpu",  marker = "extra == 'cpu'" },
+  { index = "pytorch-cpu",  marker = "extra == 'cpu' and extra != 'cuda12'"},
   # CUDA12 index only when --extra cuda12 *and* NOT --extra cpu
-  { index = "pytorch-cu128", marker = "extra != 'cpu' and extra == 'cuda12'" },
+  { index = "pytorch-cu128", marker = "extra == 'cuda12'" },
+  # Default index for all other cases
+  { index = "pytorch-default", marker = "extra != 'cuda12' and extra != 'cpu'" },
 ]
 
 
@@ -153,6 +155,11 @@ explicit = true
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
+
+
+[[tool.uv.index]]
+name = "pytorch-default"
+url = "https://download.pytorch.org/whl/torch_stable.html"
 
 
 [project.optional-dependencies]
