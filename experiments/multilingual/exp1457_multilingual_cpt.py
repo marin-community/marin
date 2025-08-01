@@ -51,7 +51,7 @@ PHASE_4_END = 1_320_000
 COOLDOWN_LEN = 80_000
 
 # for these long runs we don't usually actually **finish** the run in the Executor's eyes,
-# so we use `wait_for_completion`
+# so we use `nonblocking`
 phoenix_phase4_checkpoint_for_phase5 = llama_8b_tootsie_adept_phoenix.cd("checkpoints/step-1320000").nonblocking()
 
 cooldown_train_config = dataclasses.replace(
