@@ -1,6 +1,7 @@
 [build-system]
 requires = ["uv_build>=0.7.19,<0.8.0"]
 build-backend = "uv_build"
+requires-python = ">=3.10,<=3.12"
 
 [project]
 name = "marin"
@@ -135,12 +136,11 @@ conflicts = [
 
 [tool.uv.sources]
 torch = [
-  # CPU‑only index when --extra cpu is set
-  { index = "pytorch-cpu",  marker = "extra == 'cpu' and extra != 'cuda12'"},
+  { index = "pytorch-cpu",  extra = "cpu" },
   # CUDA12 index only when --extra cuda12 *and* NOT --extra cpu
-  { index = "pytorch-cu128", marker = "extra == 'cuda12'" },
-  # Default index for all other cases
-  { index = "pytorch-default", marker = "extra != 'cuda12' and extra != 'cpu'" },
+  { index = "pytorch-cu128", extra = "cuda12" },
+#   Default index for all other cases
+#  { index = "pytorch-default", marker = "extra != 'cuda12' and extra != 'cpu'" },
 ]
 
 
@@ -175,7 +175,7 @@ gcp = [
 
 cuda12 = [
     "jax[cuda12]>=0.6.2",
-    "torch>=2.7.0",
+    "torch",
 ]
 
 tpu = [
