@@ -34,6 +34,8 @@ from experiments.tootsie.exp600_tootsie import (
     phase_3_tokenized,
     phase_4_steady_state_weights,
     phase_4_warmup_weights,
+    starling_hq_cooldown_weights,
+    total_hq_weight,
 )
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
@@ -75,14 +77,13 @@ cooldown_train_config = dataclasses.replace(
 
 fineweb_weights = FINEWEB2_HQ_MIXTURE_BYTES
 
-total_hq_weight = sum(v for k, v in fineweb_weights.items())
 # we want nemotron to be 0.7 of the total weight
 fineweb_total = sum(v for k, v in fineweb_weights.items())
 
 
 starling_cooldown_weights = {
     **{k: v * 0.7 / fineweb_total for k, v in FINEWEB2_HQ_MIXTURE_BYTES.items()},
-    **{k: v * 0.3 / total_hq_weight for k, v in FINEWEB2_HQ_MIXTURE_BYTES.items()},
+    **{k: v * 0.3 / total_hq_weight for k, v in starling_hq_cooldown_weights.items()},
 }
 
 
@@ -93,17 +94,18 @@ fineweb2_hq_mixture = lm_varying_mixture_data_config(
         (PHASE_3_START, cooldown_mixture_weights_v1),
         (PHASE_4_START, phase_4_warmup_weights),
         (PHASE_4_START + PHASE_4_REWARMUP_DURATION, phase_4_steady_state_weights),
+        (PHASE_4_END, starling_cooldown_weights),
     ],
 )
 
-tootsie_8b_sensible_starling = default_train(
-    name="tootsie-8b-sensible-starling",
+tootsie_8b_multilingual_CPT_FW2_HQ = default_train(
+    name="tootsie-8b-CPT-Fineweb2-HQ",
     tokenized=fineweb2_hq_mixture,
     model_config=llama_8b,
     train_config=cooldown_train_config,
     tags=["llama", "8b", "ema", "exp1457", "tootsie", "cooldown"],
     eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
-).with_output_path("checkpoints/tootsie-8b-sensible-starling")
+).with_output_path("checkpoints/tootsie-8b-CPT-Fineweb2-HQ")
 
 # print normalized weights for final phase
 # sanity checks:
@@ -146,7 +148,7 @@ assert 0.29 < sum(v for k, v in normalized.items() if k not in FINEWEB2_HQ_MIXTU
 if __name__ == "__main__":
     executor_main(
         steps=[
-            tootsie_8b_sensible_starling,
+            tootsie_8b_multilingual_CPT_FW2_HQ,
             # tootsie_8b_deeper_starling,
             # *default_base_eval(tootsie_8b_deeper_starling),
         ],
