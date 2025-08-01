@@ -1,4 +1,5 @@
 import dataclasses
+import transformers
 
 from levanter.models.llama import LlamaConfig
 from levanter.models.rotary import Llama3RotaryEmbeddingsConfig
@@ -10,6 +11,9 @@ llama_300m_4096_config = dataclasses.replace(llama_300m, seq_len=4096)
 llama_600m_4096_config = dataclasses.replace(llama_600m, seq_len=4096)
 llama_1_4b_4096_config = dataclasses.replace(llama_1_4b, seq_len=4096)
 llama_1_9b_4096_config = dataclasses.replace(llama_1_9b, seq_len=4096)
+
+llama_3b_hf_config = transformers.LlamaConfig.from_pretrained("meta-llama/Llama-3.2-3B")
+llama_3b_config = LlamaConfig.from_hf_config(llama_3b_hf_config)
 
 llama_8b_config = LlamaConfig(
     seq_len=4096,  # Seq len set to reproduce Tulu SFT
@@ -39,5 +43,6 @@ model_dict = {
     "600m4k": llama_600m_4096_config,
     "1_4b4k": llama_1_4b_4096_config,
     "1_9b4k": llama_1_9b_4096_config,
+    "l3b": llama_3b_config,
     "l8b": llama_8b_config,
 }

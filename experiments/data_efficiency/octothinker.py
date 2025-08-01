@@ -3,9 +3,9 @@ from marin.execution.executor import executor_main
 
 # 800 steps ==> 200M tokens
 
-tasks = [
+# tasks = [
 
-]
+# ]
 
 train_steps = [
     data_efficiency_train_step(
@@ -19,19 +19,18 @@ train_steps = [
             weight_decay=weight_decay,
             wandb_project_name="suhas-cpt-data-efficiency",
             wandb_additional_tags=["octothinker-cpt"],
-            model_name=model_name,
-            nametag=f"-bs{batch_size}" + nametag,
+            model_name="l3b",
+            nametag=f"-bs{batch_size}",
             initialize_from_hf=initialize_from_hf,
         )
     )
-    for base_train_steps in [1600]
+    for base_train_steps in [200]
     for weight_decay in [0.1]
-    for initialize_from_hf, nametag in [
-        ("meta-llama/Llama-3.2-3B", "llama3b"),
+    for initialize_from_hf in [
+        "meta-llama/Llama-3.2-3B",
     ]
-    for lr in [1e-5, 2e-5, 4e-5]
+    for lr in [1e-5, 3e-5, 1e-4]
     for epochs in [1]
-    for model_name in ["300m4k"]
     for batch_size in [512]
 ]
 
