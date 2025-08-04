@@ -28,7 +28,7 @@ from experiments.train_test_overlap.eval_datasets_overlap import (
 )
 from marin.core.runtime import simple_backpressure
 from marin.execution.executor import ExecutorStep
-from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
+from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe_with_config_resources
 from marin.utils import fsspec_glob
 
 # File types that the dedupe pipeline knows how to handle.
@@ -81,7 +81,7 @@ class DatasetConfig:
     max_in_flight: int
     """Maximum number of parallel tasks to run for this dataset."""
 
-    parquet_text_field: str = "text"
+    text_field: str = "text"
     """Name of the text field in the parquet file."""
 
 
@@ -93,7 +93,11 @@ class ShardedDedupeConfig:
     output_path: str
     max_in_flight: int = 16
     eval_dataset_steps: list[ExecutorStep] = None  # Evaluation dataset steps for path resolution
-    parquet_text_field: str = "text"
+    text_field: str = "text"
+    # Ray resource overrides - if provided, will override BASE_DEDUPE_CONFIG defaults
+    num_cpus: int | None = None
+    memory: int | None = None  # in bytes
+    resources: dict[str, float] | None = None
 
 
 # Base dedupe configuration - modify this to change n-gram settings, processes, etc.
@@ -110,6 +114,10 @@ BASE_DEDUPE_CONFIG = DedupeConfig(
     processes=16,  # Modify this to change number of processes
     mode=DedupMode.TRAIN_TEST_OVERLAP,
     decontaminate_source="",  # Will be replaced per shard
+    # Ray resource configuration - modify these defaults as needed
+    num_cpus=16,
+    memory=16 * 1024 * 1024 * 1024,  # 16GB
+    resources=None,
 )
 
 
@@ -118,7 +126,7 @@ def make_task(
     base_output_path: str,
     dataset_dir: str,
     eval_dataset_steps: list[ExecutorStep],
-    parquet_text_field: str,
+    text_field: str,
     base_config: DedupeConfig = BASE_DEDUPE_CONFIG,
 ) -> DedupeConfig:
     """Create a DedupeConfig for a single shard using the base config.
@@ -128,6 +136,7 @@ def make_task(
         base_output_path: Base output directory for results
         dataset_dir: Root dataset directory (used for relative path calculation)
         eval_dataset_steps: List of evaluation dataset ExecutorSteps to resolve paths for
+        text_field: Name of the text field in the data files
         base_config: Base configuration to modify for this shard
 
     Returns:
@@ -144,7 +153,7 @@ def make_task(
         input_path=eval_dataset_steps,
         output_path=output_path,
         decontaminate_source=shard_path,
-        parquet_text_field=parquet_text_field,
+        text_field=text_field,
     )
 
 
@@ -167,19 +176,46 @@ def run_all_shards(config: ShardedDedupeConfig) -> str:
     # Find all supported dataset shards under root (Parquet or compressed JSONL)
 
     shard_paths = find_dataset_shards(config.dataset_dir)
-    # Generator of arguments for each Ray task - now includes dataset_dir
+
+    # Apply resource overrides to base config if specified
+    base_config = BASE_DEDUPE_CONFIG
+    if config.num_cpus is not None or config.memory is not None or config.resources is not None:
+        # Override resource settings in base config
+        resource_overrides = {}
+        if config.num_cpus is not None:
+            resource_overrides["num_cpus"] = config.num_cpus
+        if config.memory is not None:
+            resource_overrides["memory"] = config.memory
+        if config.resources is not None:
+            resource_overrides["resources"] = config.resources
+
+        base_config = dataclasses.replace(BASE_DEDUPE_CONFIG, **resource_overrides)
+        # Create a custom remote function with the specified resources
+        remote_func = dedupe_with_config_resources(base_config)
+    else:
+        # Use default remote function
+        from marin.processing.classification.dedupe import dedupe
+
+        remote_func = dedupe
+
+    # Generator of arguments for each Ray task
     task_generator = (
         (
             make_task(
-                shard_path, config.output_path, config.dataset_dir, config.eval_dataset_steps, config.parquet_text_field
+                shard_path,
+                config.output_path,
+                config.dataset_dir,
+                config.eval_dataset_steps,
+                config.text_field,
+                base_config=base_config,
             ),
         )
         for shard_path in shard_paths
     )
 
-    # Launch tasks with simple backpressure
+    # Launch tasks with simple_backpressure
     for ref in simple_backpressure(
-        dedupe,
+        remote_func,
         task_generator,
         max_in_flight=config.max_in_flight,
         fetch_local=True,

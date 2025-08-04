@@ -4,7 +4,7 @@ import logging
 import os
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 import fsspec
 import ray
@@ -67,6 +67,56 @@ def cached_or_construct_output(success_suffix="success", verbose=True):
 
             if verbose:
                 logger.info(f"Processed {input_file_path}")
+            return response
+
+        return wrapper
+
+    return decorator
+
+
+def workflow_cached(success_suffix="SUCCESS", verbose=True):
+    """
+    Decorator to make a workflow function idempotent by checking for a SUCCESS file
+    at config.output_path before execution. Functions must return a dict with success info.
+
+    Args:
+        success_suffix: The suffix of the success file.
+        verbose: If true, print logs for each function invocation.
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(config, *args, **kwargs):
+            success_file = f"{config.output_path.rstrip('/')}.{success_suffix}"
+
+            # If the success file exists, skip execution
+            if fsspec_exists(success_file):
+                if verbose:
+                    logger.info(f"Output already exists at {config.output_path}. Skipping {func.__name__}")
+                return {"success": True, "reason": "already_exists", "skipped": True}
+
+            datetime_start = datetime.now(timezone.utc)
+            if verbose:
+                logger.info(f"Running {func.__name__} with output to {config.output_path}")
+
+            # Execute the main function
+            response = func(config, *args, **kwargs)
+
+            datetime_end = datetime.now(timezone.utc)
+
+            # Write the success file with merged metadata
+            with fsspec.open(success_file, "w") as f:
+                metadata = {
+                    "output_path": config.output_path,
+                    "datetime_start": str(datetime_start),
+                    "datetime_end": str(datetime_end),
+                    "function_name": func.__name__,
+                    **response,  # Merge all the function's return data
+                }
+                f.write(json.dumps(metadata, indent=2))
+
+            if verbose:
+                logger.info(f"Completed {func.__name__}")
             return response
 
         return wrapper

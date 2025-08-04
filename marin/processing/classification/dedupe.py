@@ -13,25 +13,30 @@ just the Dolma package. We then schedule it directly on the node that is used to
 copy the files in to make sure there is data locality.
 """
 
-import functools
-import gzip
 import json
 import logging
 import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import Enum
 
 import draccus
 import fsspec
-import pandas as pd
 import ray
 from tqdm import tqdm
 
-from marin.core.runtime import cached_or_construct_output
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_mkdirs, fsspec_rm, fsspec_size, rebase_file_path
+from marin.core.runtime import cached_or_construct_output, workflow_cached
+from marin.utils import (
+    fsspec_exists,
+    fsspec_glob,
+    fsspec_isdir,
+    fsspec_mkdirs,
+    fsspec_rm,
+    fsspec_size,
+    parquet_to_jsonl_gz,
+    rebase_file_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,56 +134,6 @@ def _check_input_size(input_path: str | list[str]) -> dict:
         return {"has_content": False, "total_size_bytes": 0, "file_count": 0, "error": str(e)}
 
 
-def workflow_cached(success_suffix="SUCCESS", verbose=True):
-    """
-    Decorator to make a workflow function idempotent by checking for a SUCCESS file
-    at config.output_path before execution. Functions must return a dict with success info.
-
-    Args:
-        success_suffix: The suffix of the success file.
-        verbose: If true, print logs for each function invocation.
-    """
-
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(config, *args, **kwargs):
-            success_file = f"{config.output_path.rstrip('/')}.{success_suffix}"
-
-            # If the success file exists, skip execution
-            if fsspec_exists(success_file):
-                if verbose:
-                    logger.info(f"Output already exists at {config.output_path}. Skipping {func.__name__}")
-                return {"success": True, "reason": "already_exists", "skipped": True}
-
-            datetime_start = datetime.now(timezone.utc)
-            if verbose:
-                logger.info(f"Running {func.__name__} with output to {config.output_path}")
-
-            # Execute the main function
-            response = func(config, *args, **kwargs)
-
-            datetime_end = datetime.now(timezone.utc)
-
-            # Write the success file with merged metadata
-            with fsspec.open(success_file, "w") as f:
-                metadata = {
-                    "output_path": config.output_path,
-                    "datetime_start": str(datetime_start),
-                    "datetime_end": str(datetime_end),
-                    "function_name": func.__name__,
-                    **response,  # Merge all the function's return data
-                }
-                f.write(json.dumps(metadata, indent=2))
-
-            if verbose:
-                logger.info(f"Completed {func.__name__}")
-            return response
-
-        return wrapper
-
-    return decorator
-
-
 class DedupMode(str, Enum):
     DECONTAMINATE = "decontaminate"
     DEDUPLICATE = "deduplicate"
@@ -240,6 +195,12 @@ class DedupeConfig:
         decontaminate_source: str | None = None
         # path to write or read the bloom filter file
         bloom_filter_path: str = "deduper_bloom_filter.bin"
+        # field to use for text content in Parquet files
+        text_field: str = "text"
+        # Ray resource configuration
+        num_cpus: int = 16
+        memory: int = 16GB in bytes
+        resources: dict[str, float] | None = None for custom resources
     """
 
     input_path: str | list[str]
@@ -259,44 +220,11 @@ class DedupeConfig:
     # path to write or read the bloom filter file
     bloom_filter_path: str = "deduper_bloom_filter.bin"
     # field to use for text content in Parquet files
-    parquet_text_field: str = "text"
-
-
-# Helper: convert Parquet files (single or shards) directly into .jsonl.gz under docs_dir
-def _parquet_to_jsonl_gz(input_path: str, docs_dir: str, parquet_text_field: str = "text") -> None:
-    os.makedirs(docs_dir, exist_ok=True)
-    # find all Parquet files
-    if input_path.endswith(".parquet"):
-        parquet_files = [input_path]
-    else:
-        path_to_glob = os.path.join(input_path, "**/*.parquet")
-        parquet_files = fsspec_glob(path_to_glob)
-
-    for pq in parquet_files:
-        df = pd.read_parquet(pq)
-        # Skip empty Parquet files gracefully
-        if df.empty:
-            logger.error(f"Parquet file {pq} contains 0 rows, skipping conversion")
-            continue
-        out_name = os.path.splitext(os.path.basename(pq))[0] + ".jsonl.gz"
-        out_path = os.path.join(docs_dir, out_name)
-
-        print(f"Converting {pq} with columns: {list(df.columns)}", flush=True)
-
-        if parquet_text_field not in df.columns:
-            logger.error(f"Parquet file {pq} missing '{parquet_text_field}' field, skipping this file")
-            continue
-
-        with gzip.open(out_path, "wt") as f:
-            for rec in df.to_dict(orient="records"):
-                rec["text"] = rec[parquet_text_field]
-
-                if "id" not in rec:
-                    # Generate a synthetic ID if missing
-                    logger.warning(f"Adding synthetic id to {pq}")
-                    rec["id"] = f"synthetic_{hash(str(rec))}"
-
-                f.write(json.dumps(rec) + "\n")
+    text_field: str = "text"
+    # Ray resource configuration
+    num_cpus: int = 16
+    memory: int = 16 * 1024 * 1024 * 1024  # 16GB in bytes
+    resources: dict[str, float] | None = None
 
 
 def _format_input_paths_for_error(input_paths: str | list[str], max_paths: int = 3) -> str:
@@ -312,16 +240,16 @@ def _format_input_paths_for_error(input_paths: str | list[str], max_paths: int =
         return input_paths
 
 
-def _copy_multiple_inputs(input_paths: str | list[str], local_base_dir: str, parquet_text_field: str = "text") -> None:
+def _copy_multiple_inputs(input_paths: str | list[str], local_base_dir: str, text_field: str = "text") -> None:
     """Helper function to copy files from single path or list of paths."""
     if isinstance(input_paths, list):
         for path in input_paths:
-            copy_files_in(path, local_base_dir, parquet_text_field)
+            copy_files_in(path, local_base_dir, text_field)
     else:
-        copy_files_in(input_paths, local_base_dir, parquet_text_field)
+        copy_files_in(input_paths, local_base_dir, text_field)
 
 
-def copy_files_in(input_path, local_base_dir, parquet_text_field: str = "text"):
+def copy_files_in(input_path, local_base_dir, text_field: str = "text"):
     # Ensure input_path doesn't end with a slash
     input_path = input_path.rstrip("/")
 
@@ -329,8 +257,8 @@ def copy_files_in(input_path, local_base_dir, parquet_text_field: str = "text"):
     parquet_pattern = f"{input_path}/**/*.parquet"
     if input_path.endswith(".parquet") or fsspec_glob(parquet_pattern):
         docs_dir = os.path.join(local_base_dir, "documents")
-        _parquet_to_jsonl_gz(input_path, docs_dir, parquet_text_field)
-        print(f"Converted Parquet → JSONL.gz into {docs_dir}")
+        parquet_to_jsonl_gz(input_path, docs_dir, text_field)
+        print(f"Converted Parquet → JSONL.gz into {docs_dir}", flush=True)
         return
 
     # If input_path is a single file, copy only that file
@@ -357,8 +285,6 @@ def copy_files_in(input_path, local_base_dir, parquet_text_field: str = "text"):
     extensions_pattern = "{" + ",".join(SUPPORTED_JSONL_EXTENSIONS) + "}"
     recursive_pattern = f"{input_path}/**/*{extensions_pattern}"
     input_files = fsspec_glob(recursive_pattern)
-    # Log discovery results
-    print(f"Found {len(input_files)} input files in {input_path}, first five: {input_files[:5]}")
 
     # ------------------------------------------------------------------
     # Copy each discovered file, normalising extension to .jsonl.gz
@@ -408,7 +334,7 @@ def copy_files_out(local_base_dir, output_path, attribute_name):
 
         files_uploaded += 1
 
-    print(f"Uploaded {files_uploaded} files to {output_path}")
+    print(f"Uploaded {files_uploaded} files to {output_path}", flush=True)
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
@@ -423,7 +349,7 @@ def copy_file_out(input_file_path, output_file_path):
         with fsspec.open(output_file_path, "wb") as f_remote:
             f_remote.write(f_local.read())
 
-    print(f"Uploaded file to {output_file_path}")
+    print(f"Uploaded file to {output_file_path}", flush=True)
 
 
 def delete_jsonl_files(dir_path):
@@ -447,7 +373,7 @@ def delete_jsonl_files(dir_path):
         if fsspec_rm(file_path):
             files_deleted += 1
 
-    print(f"Deleted {files_deleted} JSONL files from {dir_path}")
+    print(f"Deleted {files_deleted} JSONL files from {dir_path}", flush=True)
     return files_deleted
 
 
@@ -483,11 +409,13 @@ def estimate_total_ngrams_fast(local_base_dir, ngram_lengths: list[int], sample_
                     data = json.loads(raw_line)
                     text = data.get("text", "")
                     if not isinstance(text, str):
-                        print(f"Warning: 'text' field is not a string in {file}:{line_num}, type: {type(text)}")
+                        print(
+                            f"Warning: 'text' field is not a string in {file}:{line_num}, type: {type(text)}", flush=True
+                        )
                         malformed_lines += 1
                         continue
                 except json.JSONDecodeError as e:
-                    print(f"JSON decode error in {file}:{line_num}: {e}")
+                    print(f"JSON decode error in {file}:{line_num}: {e}", flush=True)
                     malformed_lines += 1
                     continue
 
@@ -505,7 +433,7 @@ def estimate_total_ngrams_fast(local_base_dir, ngram_lengths: list[int], sample_
                 sample_lines_seen += 1
 
     if malformed_lines > 0:
-        print(f"Warning: Found {malformed_lines} malformed lines during sampling")
+        print(f"Warning: Found {malformed_lines} malformed lines during sampling", flush=True)
 
     if sample_lines_seen == 0:
         # nothing decoded ⇒ fall back to "one n-gram per line" heuristic
@@ -516,6 +444,8 @@ def estimate_total_ngrams_fast(local_base_dir, ngram_lengths: list[int], sample_
     for ngram_length in ngram_lengths:
         avg_ngrams_per_line = ngram_totals[ngram_length] / sample_lines_seen
         estimates[ngram_length] = max(1, int(avg_ngrams_per_line * total_lines))
+        # overestimate by 1.5x to be conservative
+        estimates[ngram_length] = int(estimates[ngram_length] * 1.5)
 
     return estimates
 
@@ -541,7 +471,7 @@ def do_dedup(
     if ngram is not None and not bloom_filter_size and pre_estimated_counts is not None:
         ngram_length = ngram.ngram_length
         estimated_doc_count = pre_estimated_counts[ngram_length]
-        print(f"Using pre-computed estimate for {ngram_length}-grams: {estimated_doc_count}")
+        print(f"Using pre-computed estimate for {ngram_length}-grams: {estimated_doc_count}", flush=True)
         if estimated_doc_count < 100:
             print(
                 f"Warning: Pre-computed estimate for {ngram_length}-grams is too low: {estimated_doc_count}", flush=True
@@ -620,7 +550,7 @@ def do_dedup(
 
     # Rename temporary files
     attr_dir = os.path.join(local_base_dir, "attributes/duplicate_documents")
-    print(f"Checking for temporary files in: {attr_dir}")
+    print(f"Checking for temporary files in: {attr_dir}", flush=True)
     for root, _, files in os.walk(attr_dir):
         for file in files:
             if file.endswith(".jsonl.gz.tmp"):
@@ -661,16 +591,6 @@ def _shard_documents_for_train_test_overlap(local_base_dir: str, processes: int,
     # Find all jsonl.gz files in documents directory
     docs_pattern = os.path.join(documents_dir, "**", "*.jsonl.gz")
     jsonl_files = fsspec_glob(docs_pattern)
-
-    if not jsonl_files:
-        # Fallback to shallow search
-        docs_pattern = os.path.join(documents_dir, "*.jsonl.gz")
-        jsonl_files = fsspec_glob(docs_pattern)
-
-    if not jsonl_files:
-        if debug:
-            print("No JSONL files found for sharding", flush=True)
-        return False
 
     if debug:
         print(f"Found {len(jsonl_files)} JSONL files to shard", flush=True)
@@ -724,6 +644,8 @@ def _run_decontamination(config: DedupeConfig):
 
     source_check = _check_input_size(config.decontaminate_source)
     if not source_check["has_content"]:
+        print(f"Empty decontaminate source: {config.decontaminate_source}", flush=True)
+        logger.info(f"Empty decontaminate source: {config.decontaminate_source}")
         return {
             "success": True,
             "reason": "empty_decontaminate_source",
@@ -731,9 +653,10 @@ def _run_decontamination(config: DedupeConfig):
             **source_check,
         }
 
+    print(f" content: {source_check['has_content']}", flush=True)
     with tempfile.TemporaryDirectory(dir="/dev/shm", prefix="marin_dedupe_") as tmpdir:
         # 1) build the filter
-        copy_files_in(config.decontaminate_source, tmpdir, parquet_text_field=config.parquet_text_field)
+        copy_files_in(config.decontaminate_source, tmpdir, text_field=config.text_field)
         do_dedup(
             tmpdir,
             config.attribute_name,
@@ -752,7 +675,7 @@ def _run_decontamination(config: DedupeConfig):
         # 2) clear out JSONLs
         delete_jsonl_files(tmpdir)
         # 3) apply filter to real input
-        _copy_multiple_inputs(config.input_path, tmpdir, parquet_text_field=config.parquet_text_field)
+        _copy_multiple_inputs(config.input_path, tmpdir, text_field=config.text_field)
         do_dedup(
             tmpdir,
             config.attribute_name,
@@ -794,7 +717,7 @@ def _run_deduplication(config: DedupeConfig):
 
     with tempfile.TemporaryDirectory(dir="/dev/shm", prefix="marin_dedupe_") as tmpdir:
         # run standard deduplication
-        _copy_multiple_inputs(config.input_path, tmpdir, parquet_text_field=config.parquet_text_field)
+        _copy_multiple_inputs(config.input_path, tmpdir, text_field=config.text_field)
         do_dedup(
             tmpdir,
             config.attribute_name,
@@ -861,10 +784,8 @@ def _run_train_test_overlap(config: DedupeConfig):
             "input_path": _format_input_paths_for_error(config.input_path),
             **input_check,
         }
-
     if not config.decontaminate_source:
         raise ValueError("decontaminate_source is required in TRAIN_TEST_OVERLAP mode")
-
     source_check = _check_input_size(config.decontaminate_source)
     if not source_check["has_content"]:
         return {
@@ -873,10 +794,8 @@ def _run_train_test_overlap(config: DedupeConfig):
             "decontaminate_source": config.decontaminate_source,
             **source_check,
         }
-
     if not config.ngram:
         raise ValueError("ngram config is required in TRAIN_TEST_OVERLAP mode")
-
     with tempfile.TemporaryDirectory(dir="/dev/shm", prefix="marin_dedupe_") as tmpdir:
 
         # Handle single or multiple ngram_lengths
@@ -885,27 +804,27 @@ def _run_train_test_overlap(config: DedupeConfig):
         )
 
         # 1) Convert decontaminate source to jsonl.gz format using copy_files_in
-        copy_files_in(config.decontaminate_source, tmpdir, parquet_text_field=config.parquet_text_field)
+        copy_files_in(config.decontaminate_source, tmpdir, text_field=config.text_field)
         seed_dir = os.path.join(tmpdir, "documents_seed")
         os.rename(os.path.join(tmpdir, "documents"), seed_dir)
 
         # 2) Pre-estimate ngram counts for ALL sizes before sharding
-        print(f"Pre-estimating ngram counts for sizes: {ngram_lengths}")
+        print(f"Pre-estimating ngram counts for sizes: {ngram_lengths}", flush=True)
         if not config.bloom_filter_size:
             # Temporarily symlink for estimation
             os.symlink(seed_dir, os.path.join(tmpdir, "documents"))
             pre_estimated_counts = estimate_total_ngrams_fast(tmpdir, ngram_lengths)
             os.remove(os.path.join(tmpdir, "documents"))
-            print(f"Pre-computed estimates: {pre_estimated_counts}")
+            print(f"Pre-computed estimates: {pre_estimated_counts}", flush=True)
         else:
             pre_estimated_counts = None
 
         # 3) Shard the training data once for parallel processing
-        print(f"Sharding training data into {config.processes} shards...")
+        print(f"Sharding training data into {config.processes} shards...", flush=True)
         os.symlink(seed_dir, os.path.join(tmpdir, "documents"))
-        _shard_documents_for_train_test_overlap(tmpdir, config.processes)
+        _shard_documents_for_train_test_overlap(tmpdir, config.processes, debug=True)
         os.remove(os.path.join(tmpdir, "documents"))
-        print("Training data sharded and originals removed")
+        print("Training data sharded and originals removed", flush=True)
 
         # 4) Stage test data under a separate directory
         _copy_multiple_inputs(config.input_path, tmpdir)
@@ -991,8 +910,7 @@ def _run_train_test_overlap(config: DedupeConfig):
         }
 
 
-@ray.remote(num_cpus=16, memory=1024 * 1024 * 1024 * 16)  # , resources={"TPU-v4-8-head": 1})
-def dedupe(config: DedupeConfig):
+def _dedupe_impl(config: DedupeConfig):
     """Top-level Ray task: dispatch between decontamination and deduplication workflows."""
     if config.mode == DedupMode.DECONTAMINATE:
         _run_decontamination(config)
@@ -1000,14 +918,46 @@ def dedupe(config: DedupeConfig):
         _run_deduplication(config)
     elif config.mode == DedupMode.TRAIN_TEST_OVERLAP:
         _run_train_test_overlap(config)
-
     else:
         raise ValueError(f"Unknown mode {config.mode}")
 
 
+def create_dedupe_remote_func(num_cpus: int, memory: int, resources: dict[str, float] | None = None):
+    """Create a Ray remote function with the specified resource configuration."""
+    remote_options = {
+        "num_cpus": num_cpus,
+        "memory": memory,
+    }
+
+    if resources is not None:
+        remote_options["resources"] = resources
+
+    return ray.remote(**remote_options)(_dedupe_impl)
+
+
+def dedupe_with_config_resources(config: DedupeConfig):
+    """Create and return a Ray remote function configured with the specified resources."""
+    # Create the remote function with the configured resources
+    remote_options = {
+        "num_cpus": config.num_cpus,
+        "memory": config.memory,
+    }
+
+    if config.resources is not None:
+        remote_options["resources"] = config.resources
+
+    # Return the configured remote function (not the result)
+    return ray.remote(**remote_options)(_dedupe_impl)
+
+
+# Default remote function with standard resources for backward compatibility
+dedupe = ray.remote(num_cpus=16, memory=16 * 1024 * 1024 * 1024)(_dedupe_impl)
+
+
 @draccus.wrap()
 def main(config: DedupeConfig):
-    ray.get(dedupe.remote(config))
+    remote_func = dedupe_with_config_resources(config)
+    ray.get(remote_func.remote(config))
 
 
 if __name__ == "__main__":
