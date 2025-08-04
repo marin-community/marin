@@ -29,22 +29,18 @@ def main():
     """
 
     # Define the model configuration
-    model_config = ModelConfig(
-        name="deeper-starling-sft",  # Model name for identification
-        path="gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/hf/step-1490000",  # HuggingFace format checkpoint
-        engine_kwargs=None,
-        apply_chat_template=True,  # SFT models typically use chat templates
-    )
     # model_config = ModelConfig(
-    #     name="microsoft/DialoGPT-small",  # Small model for testing (117M parameters)
-    #     path=None,  # Use HuggingFace model directly
-    #     engine_kwargs={
-    #         "trust_remote_code": True,
-    #         "max_model_len": 1024,  # Smaller for testing
-    #         "max_gen_toks": 512,
-    #     },
-    #     apply_chat_template=False,  # DialoGPT doesn't use chat templates
+    #     name="deeper-starling-sft",  # Model name for identification
+    #     path="gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/hf/step-1490000",  # HuggingFace format checkpoint
+    #     engine_kwargs=None,
+    #     apply_chat_template=True,  # SFT models typically use chat templates
     # )
+    model_config = ModelConfig(
+        name="meta-llama/Llama-3.2-1B",  # Small model for testing (117M parameters)
+        path=None,  # Use HuggingFace model directly
+        engine_kwargs=None,
+        apply_chat_template=True,  # DialoGPT doesn't use chat templates
+    )
 
     # Define evaluation tasks
     # Evalchemy supports various benchmarks - choose appropriate ones for SFT model

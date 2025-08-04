@@ -121,10 +121,10 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
             
             logger.info("Installing evalchemy.")
             os.chdir("..")
-            run_bash_command(["uv", "pip", "install", "evalchemy"], verbose=False)
+            run_bash_command(["uv", "pip", "install", "-e", "evalchemy/"], verbose=False)
             
             logger.info("Installing evalchemy/chat_benchmarks/MTBench.")
-            run_bash_command(["uv", "pip", "install", "evalchemy/eval/chat_benchmarks/MTBench"], verbose=False)
+            run_bash_command(["uv", "pip", "install", "-e", "evalchemy/eval/chat_benchmarks/MTBench"], verbose=False)
 
             for eval_task in evals:
                 logger.info(f"Start evalchemy:{eval_task.name} ({eval_task.num_fewshot} shot).")
@@ -179,6 +179,7 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
                 upload_to_gcs(self.LOCAL_RESULTS_PATH, output_path)
                 shutil.rmtree(self.LOCAL_RESULTS_PATH)
             
+            run_bash_command(["rm", "-rf", "evalchemy"], verbose=False)
             run_bash_command(["uv", "pip", "uninstall", "evalchemy"], verbose=False)
             run_bash_command(["uv", "pip", "uninstall", "evalchemy/eval/chat_benchmarks/MTBench"], verbose=False)
             run_bash_command(["uv", "cache", "clean"], verbose=False)
