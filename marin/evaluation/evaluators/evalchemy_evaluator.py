@@ -105,7 +105,7 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
                         pretrained_args += f",{key}={value}"
 
             # Install evalchemy (test)
-            run_bash_command(["git", "clone", "https://github.com/mlfoundations/evalchemy.git"])
+            run_bash_command(["git", "clone", "https://github.com/mlfoundations/evalchemy.git"], verbose=False)
             os.chdir("evalchemy")
             
             # Surgery to remove "fschat @ file:eval/chat_benchmarks/MTBench" from pyproject.toml
@@ -120,10 +120,11 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
             logger.info("Removed 'fschat @ file:eval/chat_benchmarks/MTBench' from pyproject.toml")
             
             logger.info("Installing evalchemy.")
-            run_bash_command(["uv", "pip", "install", "-e", "."])
+            os.chdir("..")
+            run_bash_command(["uv", "pip", "install", "evalchemy"], verbose=False)
             
             logger.info("Installing evalchemy/chat_benchmarks/MTBench.")
-            run_bash_command(["uv", "pip", "install", "-e", "eval/chat_benchmarks/MTBench"])
+            run_bash_command(["uv", "pip", "install", "evalchemy/eval/chat_benchmarks/MTBench"], verbose=False)
 
             for eval_task in evals:
                 logger.info(f"Start evalchemy:{eval_task.name} ({eval_task.num_fewshot} shot).")
@@ -148,6 +149,8 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
                     "auto",
                     "--output_path",
                     self.LOCAL_RESULTS_PATH,
+                    "--device",
+                    "cpu",
                 ]
 
                 if eval_task.num_fewshot > 0:
@@ -170,9 +173,13 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
             traceback.print_exc()
             raise RuntimeError("Evalchemy failed") from e
         finally:
-            if not os.path.exists(self.LOCAL_RESULTS_PATH):
+            if not os.path.exists(self.LOCAL_RESULTS_PATH) or not any(os.listdir(self.LOCAL_RESULTS_PATH)):
                 logger.warning(f"No results found in {self.LOCAL_RESULTS_PATH}")
             else:
                 upload_to_gcs(self.LOCAL_RESULTS_PATH, output_path)
                 shutil.rmtree(self.LOCAL_RESULTS_PATH)
+            
+            run_bash_command(["uv", "pip", "uninstall", "evalchemy"], verbose=False)
+            run_bash_command(["uv", "pip", "uninstall", "evalchemy/eval/chat_benchmarks/MTBench"], verbose=False)
+            run_bash_command(["uv", "cache", "clean"], verbose=False)
             self.cleanup(model)
