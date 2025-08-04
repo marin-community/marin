@@ -180,7 +180,12 @@ def candidate_configs(cfg: IsoFlopSweepConfig, budget: float):
 
     vocab_size = get_vocab_size_for_tokenizer(cfg.tokenizer)
 
-    for hidden_size in range(2**cfg.min_hidden_pow, (2**cfg.max_hidden_pow) + 1, 256):
+    if budget > 9e18:
+        step_size = 256
+    else:
+        step_size = 128
+
+    for hidden_size in range(2**cfg.min_hidden_pow, (2**cfg.max_hidden_pow) + 1, step_size):
         hs_pow = math.log2(hidden_size)
         intermediate_dim = hidden_size * MLP_RATIO
         num_layers = round(hidden_size / (cfg.base_hidden_layer_ratio + (hs_pow * 4) - cfg.min_hidden_pow))
