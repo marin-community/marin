@@ -24,7 +24,7 @@ from experiments.tootsie.exp1295_32b import nemotron_mix
 from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.resources import TpuPodConfig
 
-DEFAULT_BUDGETS = [1e19, 3e19, 6e19, 1e20]
+DEFAULT_BUDGETS = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
 MLP_RATIO = 4
 
 # TPU v5p hardware constants for memory estimation
@@ -180,7 +180,7 @@ def candidate_configs(cfg: IsoFlopSweepConfig, budget: float):
 
     vocab_size = get_vocab_size_for_tokenizer(cfg.tokenizer)
 
-    for hidden_size in range(2**cfg.min_hidden_pow, (2**cfg.max_hidden_pow) + 1, 512):
+    for hidden_size in range(2**cfg.min_hidden_pow, (2**cfg.max_hidden_pow) + 1, 256):
         hs_pow = math.log2(hidden_size)
         intermediate_dim = hidden_size * MLP_RATIO
         num_layers = round(hidden_size / (cfg.base_hidden_layer_ratio + (hs_pow * 4) - cfg.min_hidden_pow))

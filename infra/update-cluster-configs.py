@@ -37,11 +37,11 @@ configs = {
         "tpu_generation": "v5p",
         "min_workers": 1,
         "worker_targets": {
-            "v5p-8": 1,
+            "v5p-8": 12,
             "v5p-16": 1,
             "v5p-32": 1,
             "v5p-64": 1,
-            "v5p-128": 4,
+            "v5p-128": 0,
             "v5p-256": 0,
             "v5p-512": 0,
         },
