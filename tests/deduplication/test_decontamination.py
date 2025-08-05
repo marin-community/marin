@@ -6,7 +6,7 @@ import fsspec
 import pytest
 import ray
 
-from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
+from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe_with_config_resources
 from marin.utils import fsspec_exists
 
 
@@ -86,9 +86,12 @@ def test_exact_decontamination_paragraph(ray_tpu_cluster, sample_documents, test
             mode=DedupMode.DECONTAMINATE,
             decontaminate_source=temp_decontamination_dir,
             bloom_filter_path=os.path.join(temp_bloom_filter_dir, "deduper_bloom_filter.bin"),
+            num_cpus=2,
+            memory=2 * 1024 * 1024 * 1024,
         )
 
-        ray.get(dedupe.remote(dedupe_config))
+        remote_func = dedupe_with_config_resources(dedupe_config)
+        ray.get(remote_func.remote(dedupe_config))
 
         attribute_file_path = os.path.join(temp_attribute_dir, "test_docs.jsonl.gz")
         with fsspec.open(attribute_file_path, "r", compression="gzip") as f:

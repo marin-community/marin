@@ -189,18 +189,13 @@ class DedupeConfig:
         false_positive_rate (float): false positive rate for Bloom filter
         ngram (NGramConfig): settings for ngram matching including length, match threshold, and stride
         processes (int): number of processes to use for deduplication
-        # mode switch between decontamination (build filter) and regular deduplication
-        mode: DedupMode = DedupMode.DEDUPLICATE
-        # source to seed bloom filter when decontaminating
-        decontaminate_source: str | None = None
-        # path to write or read the bloom filter file
-        bloom_filter_path: str = "deduper_bloom_filter.bin"
-        # field to use for text content in Parquet files
-        text_field: str = "text"
-        # Ray resource configuration
-        num_cpus: int = 16
-        memory: int = 16GB in bytes
-        resources: dict[str, float] | None = None for custom resources
+        mode (DedupMode): switch between decontamination (build filter) and regular deduplication
+        decontaminate_source (str | None): source to seed bloom filter when decontaminating
+        bloom_filter_path (str): path to write or read the bloom filter file
+        text_field (str): field to use for text content in Parquet files
+        num_cpus (int): number of CPUs to allocate for Ray remote function
+        memory (int): memory in bytes to allocate for Ray remote function (16GB default)
+        resources (dict[str, float] | None): custom resources for Ray remote function
     """
 
     input_path: str | list[str]
@@ -920,19 +915,6 @@ def _dedupe_impl(config: DedupeConfig):
         _run_train_test_overlap(config)
     else:
         raise ValueError(f"Unknown mode {config.mode}")
-
-
-def create_dedupe_remote_func(num_cpus: int, memory: int, resources: dict[str, float] | None = None):
-    """Create a Ray remote function with the specified resource configuration."""
-    remote_options = {
-        "num_cpus": num_cpus,
-        "memory": memory,
-    }
-
-    if resources is not None:
-        remote_options["resources"] = resources
-
-    return ray.remote(**remote_options)(_dedupe_impl)
 
 
 def dedupe_with_config_resources(config: DedupeConfig):

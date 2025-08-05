@@ -32,6 +32,13 @@ Notes
 import logging
 
 from experiments.midtraining_datasets import finemath_3_plus
+from experiments.pretraining_datasets import (
+    dclm_baseline,
+    dolmino,
+    nemotron_cc,
+    proofpile_2,
+    starcoderdata,
+)
 from experiments.train_test_overlap.utils import EVAL_DATASET_STEPS, DatasetConfig, ShardedDedupeConfig, run_all_shards
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 
@@ -45,11 +52,11 @@ MAX_IN_FLIGHT = 32
 # finemath is parquet with 'text' as text key
 DATASET_CONFIGS = [
     DatasetConfig(name="finemath", path=finemath_3_plus, max_in_flight=MAX_IN_FLIGHT, text_field="text"),
-    # DatasetConfig(name="dclm", path=dclm_baseline, max_in_flight=MAX_IN_FLIGHT),
-    # DatasetConfig(name="starcoder", path=starcoderdata, max_in_flight=MAX_IN_FLIGHT, text_field="content"),
-    # DatasetConfig(name="proofpile", path=proofpile_2, max_in_flight=MAX_IN_FLIGHT),
-    # DatasetConfig(name="dolmino", path=dolmino, max_in_flight=MAX_IN_FLIGHT),
-    # DatasetConfig(name="nemotron_cc", path=nemotron_cc, max_in_flight=MAX_IN_FLIGHT),
+    DatasetConfig(name="dclm", path=dclm_baseline, max_in_flight=MAX_IN_FLIGHT),
+    DatasetConfig(name="starcoder", path=starcoderdata, max_in_flight=MAX_IN_FLIGHT, text_field="content"),
+    DatasetConfig(name="proofpile", path=proofpile_2, max_in_flight=MAX_IN_FLIGHT),
+    DatasetConfig(name="dolmino", path=dolmino, max_in_flight=MAX_IN_FLIGHT),
+    DatasetConfig(name="nemotron_cc", path=nemotron_cc, max_in_flight=MAX_IN_FLIGHT),
 ]
 
 
@@ -62,7 +69,7 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
         text_field=dataset_config.text_field,
     )
     return ExecutorStep(
-        name=f"train_test_overlap/dolma/total_debugv3/{dataset_config.name}",
+        name=f"train_test_overlap/dolma/total/{dataset_config.name}",
         fn=run_all_shards,
         config=cfg,
         description=f"Run dedupe train-test overlap on {dataset_config.name} shards",
