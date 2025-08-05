@@ -12,8 +12,26 @@ llama_600m_4096_config = dataclasses.replace(llama_600m, seq_len=4096)
 llama_1_4b_4096_config = dataclasses.replace(llama_1_4b, seq_len=4096)
 llama_1_9b_4096_config = dataclasses.replace(llama_1_9b, seq_len=4096)
 
-llama_3b_hf_config = transformers.LlamaConfig.from_pretrained("meta-llama/Llama-3.2-3B")
-llama_3b_config = LlamaConfig.from_hf_config(llama_3b_hf_config)
+llama_3b_config = LlamaConfig(
+    seq_len=4096,  # Seq len set to reproduce Tulu SFT
+    hidden_dim=3072,
+    intermediate_dim=8192,
+    num_layers=28,
+    num_heads=24,
+    num_kv_heads=8,
+    use_bias=False,
+    use_layer_norm_weight=True,
+    initializer_range=0.02,
+    rope=Llama3RotaryEmbeddingsConfig(
+        # Using Llama3 defaults from the code
+        theta=500000,
+        factor=32.0,
+        low_freq_factor=1.0,
+        high_freq_factor=4.0,
+        original_max_position_embeddings=8192,
+    ),
+    tie_word_embeddings=True,
+)
 
 llama_8b_config = LlamaConfig(
     seq_len=4096,  # Seq len set to reproduce Tulu SFT

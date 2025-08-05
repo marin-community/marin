@@ -1,11 +1,12 @@
 from experiments.data_efficiency.train import DataEfficiencyConfig, data_efficiency_train_step
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import executor_main
 
-# 800 steps ==> 200M tokens
+# 200 steps ==> 400M tokens
 
-# tasks = [
-
-# ]
+tasks = [
+    EvalTaskConfig(name="mathqa", num_fewshot=8),
+]
 
 train_steps = [
     data_efficiency_train_step(
@@ -20,18 +21,22 @@ train_steps = [
             wandb_project_name="suhas-cpt-data-efficiency",
             wandb_additional_tags=["octothinker-cpt"],
             model_name="l3b",
-            nametag=f"-bs{batch_size}",
+            nametag=f"-bs{batch_size}" + (f"-seed{seed}" if seed is not None else ""),
             initialize_from_hf=initialize_from_hf,
+            eval_harness_tasks=tasks,
+            train_seed=seed if seed else 0,
+            data_seed=seed if seed else 0,
         )
     )
-    for base_train_steps in [200]
-    for weight_decay in [0.1]
+    for base_train_steps in [1600]
+    for weight_decay in [0.4]
     for initialize_from_hf in [
         "meta-llama/Llama-3.2-3B",
     ]
-    for lr in [1e-5, 3e-5, 1e-4]
-    for epochs in [1]
-    for batch_size in [512]
+    for lr in [3e-5]
+    for epochs in [4]
+    for batch_size in [64]
+    for seed in [0, 1, 2, 3, 4]
 ]
 
 if __name__ == "__main__":
