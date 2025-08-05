@@ -24,6 +24,7 @@ from enum import Enum
 import draccus
 import fsspec
 import ray
+from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from tqdm import tqdm
 
 from marin.core.runtime import cached_or_construct_output, workflow_cached
