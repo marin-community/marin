@@ -24,7 +24,7 @@ provider:
 
 
 docker:
-    image: "us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:4a47ffc0"
+    image: "us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:18ee8d6a"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -112,7 +112,7 @@ available_node_types:
 
   tpu_slice_v5p_8:
     max_workers: 1024
-    min_workers: 0
+    min_workers: 12
     node_config:
       acceleratorType: v5p-8
       runtimeVersion: v2-alpha-tpuv5
@@ -124,7 +124,7 @@ available_node_types:
 
   tpu_slice_v5p_16:
     max_workers: 1024
-    min_workers: 0
+    min_workers: 1
     node_config:
       acceleratorType: v5p-16
       runtimeVersion: v2-alpha-tpuv5
@@ -136,7 +136,7 @@ available_node_types:
 
   tpu_slice_v5p_32:
     max_workers: 1024
-    min_workers: 8
+    min_workers: 1
     node_config:
       acceleratorType: v5p-32
       runtimeVersion: v2-alpha-tpuv5
@@ -148,7 +148,7 @@ available_node_types:
 
   tpu_slice_v5p_64:
     max_workers: 1024
-    min_workers: 0
+    min_workers: 1
     node_config:
       acceleratorType: v5p-64
       runtimeVersion: v2-alpha-tpuv5
