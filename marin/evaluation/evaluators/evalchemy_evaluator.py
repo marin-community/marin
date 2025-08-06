@@ -5,12 +5,14 @@ import traceback
 import tempfile
 import subprocess
 import argparse
+import ray
 
 from lm_eval.api.registry import get_model
 from lm_eval.utils import sanitize_model_name
 
 from typing import ClassVar
 
+from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
@@ -18,11 +20,10 @@ from marin.evaluation.utils import upload_to_gcs
 
 logger = logging.getLogger(__name__)
 
-
 class EvalchemyEvaluator(VllmTpuEvaluator):
     """
     Minimal Evalchemy evaluator that integrates the Evalchemy framework with Marin.
-    Some notes:
+    **Some notes:**
     1. Evalchemy needs to be installed in editable mode. The only way to do this is to
        to it as part of this script. We will then remove it after the evaluation is done.
        As such we don't add it in _pip_packages.
@@ -38,7 +39,8 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
-        # Dependency(name="evalchemy@git+https://github.com/chiheem/evalchemy.git"),
+        # Dependency(name="lm-eval"),
+        Dependency(name="evalchemy@git+https://github.com/chiheem/evalchemy.git"),
     ]
     _env_vars: ClassVar[dict[str, str]] = {
         # Human eval tests code from the model which requires permission to run
@@ -91,6 +93,34 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
 
         return lm
 
+    def launch_evaluate_with_ray(
+        self,
+        model: ModelConfig,
+        evals: list[EvalTaskConfig],
+        output_path: str,
+        max_eval_instances: int | None = None,
+        resource_config: ResourceConfig | None = None,
+    ) -> None:
+        """
+        Launches the evaluation run with Ray.
+        """
+        @ray.remote(
+            scheduling_strategy=self._get_scheduling_strategy(resource_config),
+            runtime_env=self.get_runtime_env(),
+            max_calls=1,
+            # num_gpus=1,
+            memory=64*1024*1024*1024, # 64GB
+        )
+        def launch(
+            model: ModelConfig,
+            evals: list[EvalTaskConfig],
+            output_path: str,
+            max_eval_instances: int | None = None,
+        ) -> None:
+            self.evaluate(model, evals, output_path, max_eval_instances)
+
+        ray.get(launch.remote(model, evals, output_path, max_eval_instances))
+
     def evaluate(
         self,
         model: ModelConfig,
@@ -135,6 +165,7 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
                     for key, value in model.engine_kwargs.items():
                         pretrained_args += f",{key}={value}"
 
+            
             # Clone the repository to a temporary directory
             logger.info(f"Cloning evalchemy to {self._temp_dir}")
             subprocess.check_call(["git", "clone", "https://github.com/chiheem/evalchemy.git", self._temp_dir])
@@ -176,7 +207,7 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
                 lm = self._initialize_model(
                     model="hf",
                     model_args=pretrained_args,
-                    device="cpu",
+                    device="gpu", # `gpu` or `cpu`
                     batch_size="auto"
                 )
 

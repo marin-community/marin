@@ -59,7 +59,7 @@ def main():
     eval_config = EvaluationConfig(
         evaluator="evalchemy",
         model_name=model_config.name,
-        evaluation_path="gs://marin-us-central2/evals/evalchemy/deeper_starling_nemotron_and_openthoughts3",  # Results path
+        evaluation_path="gs://marin-us-central2/evals/evalchemy/test_llama32_1b",  # Results path
         evals=evals,
         max_eval_instances=100,  # Limit for testing
         launch_with_ray=True,
@@ -71,12 +71,21 @@ def main():
 
     # Run the evaluation
     logger.info("Starting Evalchemy evaluation...")
-    evaluator.evaluate(
-        model=model_config,
-        evals=evals,
-        output_path=eval_config.evaluation_path,
-        max_eval_instances=eval_config.max_eval_instances,
-    )
+    if eval_config.launch_with_ray:
+        evaluator.launch_evaluate_with_ray(
+            model=model_config,
+            evals=evals,
+            output_path=eval_config.evaluation_path,
+            max_eval_instances=eval_config.max_eval_instances,
+            resource_config=eval_config.resource_config,
+        )
+    else:
+        evaluator.evaluate(
+            model=model_config,
+            evals=evals,
+            output_path=eval_config.evaluation_path,
+            max_eval_instances=eval_config.max_eval_instances,
+        )
     logger.info("Evalchemy evaluation completed!")
 
 
