@@ -49,12 +49,19 @@ value_pretty_name_dict = {
 }
 
 model_params = {
-        "150m4k": 0.15,
-        "300m4k": 0.3,
-        "600m4k": 0.6,
-        "1_4b4k": 1.4,
-        "1_9b4k": 1.9
-    }
+    "150m4k": 0.15,
+    "300m4k": 0.3,
+    "600m4k": 0.6,
+    "1_4b4k": 1.4,
+    "1_9b4k": 1.9
+}
+
+token_count_to_steps = {
+    "209M": 800,
+    "419M": 1600,
+    "838M": 3200,
+    "1.7B": 6400,
+}
 
 def format_sci(val):
     return f"{val:.0e}".replace("e-0", "e-").replace("e+0", "e+")
@@ -65,8 +72,12 @@ def value_to_pretty_name(value):
     return value
 
 def parse_run(run):
-    if (key not in run.tags and key != "none") or "ignore" in run.tags:
-        print(f"\033[91mSkipping run {run.id} because it does not have the key {key} or is ignored\033[0m")
+    if key != "none" and key not in run.tags:
+        print(f"\033[91mSkipping run {run.id} because it does not have the key {key}\033[0m")
+        return None
+
+    if "ignore" in run.tags:
+        print(f"\033[91mSkipping run {run.id} because it is ignored\033[0m")
         return None
     
     if run.state != "finished":
@@ -105,16 +116,13 @@ def parse_run(run):
         run_dict["ensemble_member_count"] = int(run_id.split("x-")[0])
         run_id = run_id.split("x-")[1]
 
-        if "209M" in run_id:
-            num_base_steps = 800
-        elif "419M" in run_id:
-            num_base_steps = 1600
-        elif "838M" in run_id:
-            num_base_steps = 3200
-        elif "1.7B" in run_id:
-            num_base_steps = 6400
+        for token_count in token_count_to_steps:
+            if token_count in run_id:
+                num_base_steps = token_count_to_steps[token_count]
+                break
         else:
             raise ValueError(f"Unknown token count: {run_id}")
+
         batch_size = 64
         seq_len = 4096
         base_tokens = num_base_steps * batch_size * seq_len
@@ -146,128 +154,59 @@ def parse_run(run):
     
     run_dict["loss_history"] = history_loss
     run_dict[f"final_{run_dict['data_name']}_loss"] = history_loss[f"eval/{run_dict['data_name']}/loss"].iloc[-1]
-    
-    # print(run_dict)
 
     return run_dict
 
-def create_multi_restriction_scatter(run_lists, labels, key, title="Loss vs Base Tokens"):
-    """
-    Creates a figure with two subplots:
-    1. Scatter plot with power law fits of the form A/x^B + C
-    2. Bar plot showing the asymptotes (C values) from the power law fits
-    
-    Args:
-        run_lists: List of run lists, each containing run dictionaries for a restriction
-        labels: List of labels for the legend
-        key: String identifier for the experiment
-        title: Title for the plot
-    """
-    def power_law(x, A, B, C):
-        return A / (x ** B) + C
+func_dict = {
+    "reciprocal": lambda x, A, C: A/x + C,
+    "power_law": lambda x, A, B, C: A/(x**B) + C,
+}
 
-    # Create figure with two subplots side by side, sharing y-axis
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 8), gridspec_kw={'width_ratios': [2, 1]}, dpi=300, sharey=True)
-    plt.title(title)
-    
-    colors = [LIGHT_BLUE, PURPLE, '#2ecc71', '#e74c3c']  # Add more colors for variety
-    scatter_handles = []
-    fit_handles = []
-    asymptotes = []
-    valid_labels = []
-    all_x_values = set()  # Track all x values that will be plotted
-    
-    # First subplot: Scatter plot with power law fits
-    for runs, label, color in zip(run_lists, labels, colors):
-        # Get unique base tokens and find best run for each
-        unique_base_tokens = sorted(list(set([run["base_tokens"] for run in runs])))[1:]
+class ScalingLaw:
+    def __init__(self):
+        self.params = None
 
-        best_runs = []
-        for tokens in unique_base_tokens:
-            matching_runs = [run for run in runs if run["base_tokens"] == tokens]
-            best_run = min(matching_runs, key=lambda r: r['final_dclm_loss'])
-            best_runs.append(best_run)
-        
-        # Print the runs that will be plotted
-        print(f"\nPlotted runs for {label}:")
-        for run in best_runs:
-            print(f"{run['final_dclm_loss']:.4f}: {run['run_id']}")
-        
-        x_values = [run["base_tokens"] / 1_000_000 for run in best_runs]  # Convert to millions
-        all_x_values.update(x_values)  # Add these x values to our set
-        losses = [run['final_dclm_loss'] for run in best_runs]
-        
-        # Plot points and connecting line
-        scatter = ax1.scatter(x_values, losses, color=color, label=f"{label} (data)", zorder=5)
-        ax1.plot(x_values, losses, color=color, alpha=0.3, zorder=4)
-        scatter_handles.append(scatter)
+    def func(self, x, params):
+        pass # implemented by subclass
 
-        # Fit power law
-        try:
-            popt, _ = curve_fit(power_law, x_values, losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
-            x_fit = np.linspace(min(x_values), max(x_values), 100)
-            y_fit = power_law(x_fit, *popt)
-            fit_line = ax1.plot(x_fit, y_fit, '--', color=color, label=f"{label} (fit: {popt[0]:.2f}/x^{popt[1]:.2f} + {popt[2]:.2f})", zorder=6)
-            fit_handles.append(fit_line[0])
-            
-            # Store asymptote for bar plot
-            asymptotes.append(popt[2])
-            valid_labels.append(label)
-        except RuntimeError as e:
-            print(f"\nWarning: Could not fit power law for {label}")
-            print(e)
-    
-    ax1.set_xlabel('Base Tokens (millions)')
-    ax1.set_ylabel('DCLM Loss')
-    ax1.set_xscale('log')
-    ax1.set_yscale('log')
-    
-    # Set x-ticks only for the actual data points
-    ax1.set_xticks(sorted(list(all_x_values)))
-    ax1.set_xticklabels([f'{int(round(x))}' for x in sorted(list(all_x_values))])
-    ax1.minorticks_off()  # Remove minor ticks
-    
-    # Second subplot: Bar plot of asymptotes
-    x_pos = np.arange(len(asymptotes))
-    ax2.bar(x_pos, asymptotes, color=colors[:len(asymptotes)])
-    ax2.set_xticks(x_pos)
-    ax2.set_xticklabels(valid_labels, rotation=45, ha='right')
-    ax2.set_xlabel('Restriction Type')
-    ax2.set_yscale('log')  # Use log scale to match main plot
-    
-    # Add value labels on top of bars
-    for i, v in enumerate(asymptotes):
-        ax2.text(i, v * 1.05, f'{v:.3f}', ha='center', va='bottom')
-    
-    # Combine scatter and fit handles/labels for legend
-    all_handles = scatter_handles + fit_handles
-    
-    # First adjust the subplots to be closer together
-    plt.subplots_adjust(right=0.75)
-    
-    # Then place the legend immediately after the adjusted subplots
-    fig.legend(handles=all_handles, bbox_to_anchor=(0.78, 0.5), loc='center left')
-    
-    output_path = f'plots/{key}_multi_restriction_loss.png'
-    plt.savefig(output_path, bbox_inches='tight')
-    plt.close()
+    def __str__(self):
+        pass # implemented by subclass
 
-def fit_curve(x, y, form="reciprocal"):
-    """Fits data to a curve of form y = A/x + B"""
-    if form == "reciprocal":
-        def func(x, A, B):
-            return A/x + B
-    elif form == "power_law":
-        def func(x, A, B, C):
-            return A/(x**B) + C
-    else:
-        raise ValueError(f"Invalid form: {form}")
+    def asymptote(self):
+        pass # implemented by subclass
+
+    def evaluate(self, x):
+        return self.func(x, *self.params)
+
+    def fit(self, x, y, p0=None, bounds=(-np.inf, np.inf)):
+        popt, pcov = curve_fit(self.func, x, y, p0=p0, bounds=bounds)
+        self.params = popt
+
+class ReciprocalScalingLaw(ScalingLaw):
+    def __init__(self):
+        super().__init__()
+
+    def func(self, x, A, C):
+        return A/x + C
     
-    popt, pcov = curve_fit(func, x, y)
-    A = popt[0]
-    B = 1.0 if form == "reciprocal" else popt[1]
-    C = popt[2]
-    return A, B, C
+    def __str__(self):
+        return f"{self.params[0]:.2f}/x + {self.params[1]:.2f}"
+
+    def asymptote(self):
+        return self.params[-1]
+    
+class PowerScalingLaw(ScalingLaw):
+    def __init__(self):
+        super().__init__()
+
+    def func(self, x, A, B, C):
+        return A/(x**B) + C
+    
+    def __str__(self):
+        return f"{self.params[0]:.2f}/x^{self.params[1]:.2f} + {self.params[2]:.2f}"
+    
+    def asymptote(self):
+        return self.params[-1]
 
 def create_heatmap(ax, all_fits, target_lr, use_asymptote=True):
     """Helper function to create a heatmap for a specific learning rate"""
@@ -284,7 +223,7 @@ def create_heatmap(ax, all_fits, target_lr, use_asymptote=True):
             matching_fits = [fit for fit in lr_fits if fit[0][0] == epoch and fit[0][2] == wd]
             if matching_fits:
                 if use_asymptote:
-                    heatmap_data[i, j] = matching_fits[0][5]  # C value (asymptote)
+                    heatmap_data[i, j] = matching_fits[0][3].asymptote()  # C value (asymptote)
                 else:
                     # Get loss for ensemble size 1
                     x_data = matching_fits[0][1]  # ensemble sizes
@@ -366,20 +305,21 @@ def plot_ensemble_scaling(model_name, base_tokens):
         
         # Fit 1/x curve
         # A, B, C = fit_curve(x_data, y_data, form="reciprocal")
-        A, B, C = fit_curve(x_data, y_data, form="power_law")
-        all_fits.append((unique_key, x_data, y_data, A, B, C))
+        power_law = PowerScalingLaw()
+        power_law.fit(x_data, y_data)
+        all_fits.append((unique_key, x_data, y_data, power_law))
     
-    # Sort by asymptote (B value)
-    all_fits.sort(key=lambda x: x[5])
+    # Sort by asymptote (C value)
+    all_fits.sort(key=lambda x: x[3].asymptote())
     
     # Plot in order of asymptote
-    for unique_key, x_data, y_data, A, B, C in all_fits:
+    for unique_key, x_data, y_data, power_law in all_fits:
         # Generate points for smooth curve
         x_fit = np.linspace(min(x_data), max(x_data), 100)
-        y_fit = A/(x_fit**B) + C
+        y_fit = power_law.evaluate(x_fit)
         
         plt.scatter(x_data, y_data)
-        plt.plot(x_fit, y_fit, '--', label=f'Fit (epochs={unique_key[0]}, lr={unique_key[1]}, wd={unique_key[2]}): {A:.3f}/(x^{B:.3f}) + {C:.3f}')
+        plt.plot(x_fit, y_fit, '--', label=f'Fit (epochs={unique_key[0]}, lr={unique_key[1]}, wd={unique_key[2]}): {power_law}')
 
     plt.xlabel('Ensemble Member Count')
     plt.ylabel('DCLM Loss')
@@ -407,18 +347,13 @@ def plot_ensemble_scaling(model_name, base_tokens):
     plt.savefig(f'plots/ensemble_scaling_heatmaps_{model_name}_{base_tokens}.png', bbox_inches='tight')
     plt.close()
 
-    if all_fits[0][5] < 1.8:
+    if all_fits[0][3].asymptote() < 1.8:
         print("SKIPPING FIRST RUN SINCE IT'S LIKELY BUGGED")
         return all_fits[1]
     return all_fits[0]
 
 def plot_model_scaling(best_run_dict, fit_type="power_law"):
     """Creates subplots showing loss vs model size for each token count with power law fits."""
-    def power_law(x, A, B, C):
-        return A / (x ** B) + C
-
-    def reciprocal_law(x, A, C):
-        return A / x + C
 
     # Get unique model sizes and token counts
     token_counts = sorted(best_run_dict.keys())
@@ -445,21 +380,23 @@ def plot_model_scaling(best_run_dict, fit_type="power_law"):
         # Fit power law
         try:
             if fit_type == "power_law":
-                popt, _ = curve_fit(power_law, x_values, y_values, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+                power_law = PowerScalingLaw()
+                power_law.fit(x_values, y_values, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
             elif fit_type == "reciprocal_law":
-                popt, _ = curve_fit(reciprocal_law, x_values, y_values, p0=[1.0, 2.0], bounds=([0, 0], [np.inf, np.inf]))
-            fitted_params[token_count] = popt
+                reciprocal_law = ReciprocalScalingLaw()
+                reciprocal_law.fit(x_values, y_values, p0=[1.0, 2.0], bounds=([0, 0], [np.inf, np.inf]))
+            # fitted_params[token_count] = power_law.params if fit_type == "power_law" else reciprocal_law.params
             valid_token_counts.append(token_count)
-            asymptotes.append(popt[-1])  # Store asymptote for reuse
+            asymptotes.append(power_law.asymptote())  # Store asymptote for reuse
             
             # Generate points for smooth curve
             x_fit = np.logspace(np.log10(min(x_values)), np.log10(max(x_values)), 100)
-            y_fit = power_law(x_fit, *popt) if fit_type == "power_law" else reciprocal_law(x_fit, *popt)
+            y_fit = power_law.evaluate(x_fit)
             
             # Plot data points and fitted curve
             axs[i].scatter(x_values, y_values, color=PURPLE, zorder=5)
             axs[i].plot(x_fit, y_fit, '--', color=PURPLE, 
-                       label=f'Fit: {popt[0]:.2f}/x^{popt[1]:.2f} + {popt[2]:.2f}' if fit_type == "power_law" else f'Fit: {popt[0]:.2f}/x + {popt[1]:.2f}', 
+                       label=f'Fit: {power_law}', 
                        zorder=4)
             
             # Set scales and labels
@@ -550,12 +487,13 @@ def plot_model_scaling(best_run_dict, fit_type="power_law"):
     token_counts_m = [tc / 1_000_000 for tc in token_counts]
     
     # Fit a power law to the asymptotes vs token_counts_m
-    popt, _ = curve_fit(power_law, token_counts_m, asymptotes, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    power_law = PowerScalingLaw()
+    power_law.fit(token_counts_m, asymptotes, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
     x_fit = np.logspace(np.log10(min(token_counts_m)), np.log10(max(token_counts_m)), 100)
-    y_fit = power_law(x_fit, *popt)
+    y_fit = power_law.evaluate(x_fit)
 
     plt.scatter(token_counts_m, asymptotes, color=PURPLE, s=100, zorder=5)
-    plt.plot(x_fit, y_fit, '--', color=PURPLE, zorder=4, label=f'Fit: {popt[0]:.2f}/x^{popt[1]:.2f} + {popt[2]:.2f}')
+    plt.plot(x_fit, y_fit, '--', color=PURPLE, zorder=4, label=f'Fit: {power_law}')
 
     # #### hacky
     # # heuristically selected hparams
@@ -624,27 +562,27 @@ def plot_seed_science(train_seed_losses, data_seed_losses, both_seed_losses):
     
     # Fit power laws to each curve
     x_data = np.array(range(1, 6))
+    x_fit = np.linspace(1, 5, 100)
     
     # Train seed curve fit
-    popt_train, _ = curve_fit(power_law, x_data, train_seed_losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
-    x_fit = np.linspace(1, 5, 100)
-    y_fit_train = power_law(x_fit, *popt_train)
+    train_seed_power_law = PowerScalingLaw()
+    train_seed_power_law.fit(x_data, train_seed_losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    train_seed_y_fit = train_seed_power_law.evaluate(x_fit)
     
     # Data seed curve fit  
-    popt_data, _ = curve_fit(power_law, x_data, data_seed_losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
-    y_fit_data = power_law(x_fit, *popt_data)
+    data_seed_power_law = PowerScalingLaw()
+    data_seed_power_law.fit(x_data, data_seed_losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    data_seed_y_fit = data_seed_power_law.evaluate(x_fit)
     
     # Both seeds curve fit
-    popt_both, _ = curve_fit(power_law, x_data, both_seed_losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
-    y_fit_both = power_law(x_fit, *popt_both)
+    both_seed_power_law = PowerScalingLaw()
+    both_seed_power_law.fit(x_data, both_seed_losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    both_seed_y_fit = both_seed_power_law.evaluate(x_fit)
 
     # Plot fitted curves
-    plt.plot(x_fit, y_fit_train, '--', color=PURPLE, zorder=4, 
-             label=f'Train seed fit: {popt_train[0]:.2f}/x^{popt_train[1]:.2f} + {popt_train[2]:.2f}')
-    plt.plot(x_fit, y_fit_data, '--', color=GREEN, zorder=4,
-             label=f'Data seed fit: {popt_data[0]:.2f}/x^{popt_data[1]:.2f} + {popt_data[2]:.2f}')
-    plt.plot(x_fit, y_fit_both, '--', color=LIGHT_BLUE, zorder=4,
-             label=f'Both seeds fit: {popt_both[0]:.2f}/x^{popt_both[1]:.2f} + {popt_both[2]:.2f}')
+    plt.plot(x_fit, train_seed_y_fit, '--', color=PURPLE, zorder=4, label=f'Train seed fit: {train_seed_power_law}')
+    plt.plot(x_fit, data_seed_y_fit, '--', color=GREEN, zorder=4, label=f'Data seed fit: {data_seed_power_law}')
+    plt.plot(x_fit, both_seed_y_fit, '--', color=LIGHT_BLUE, zorder=4, label=f'Both seeds fit: {both_seed_power_law}')
 
     # Plot data points
     plt.scatter(x_data, train_seed_losses, color=PURPLE, s=100, zorder=5)
@@ -692,23 +630,23 @@ def plot_token_scaling(best_run_dict, fit_type="power_law"):
         # Fit power law
         try:
             if fit_type == "power_law":
-                popt, _ = curve_fit(power_law, x_values, y_values, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+                scaling_law = PowerScalingLaw()
+                scaling_law.fit(x_values, y_values, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
             elif fit_type == "reciprocal_law":
-                popt, _ = curve_fit(reciprocal_law, x_values, y_values, p0=[1.0, 2.0], bounds=([0, 0], [np.inf, np.inf]))
+                reciprocal_law = ReciprocalScalingLaw()
+                reciprocal_law.fit(x_values, y_values, p0=[1.0, 2.0], bounds=([0, 0], [np.inf, np.inf]))
             
             # Store asymptote for reuse
-            asymptotes.append(popt[-1])  # Last parameter is the asymptote
+            asymptotes.append(scaling_law.asymptote())  # Last parameter is the asymptote
             valid_model_sizes.append(model_size)
             
             # Generate points for smooth curve
             x_fit = np.logspace(np.log10(min(x_values)), np.log10(max(x_values)), 100)
-            y_fit = power_law(x_fit, *popt) if fit_type == "power_law" else reciprocal_law(x_fit, *popt)
+            y_fit = scaling_law.evaluate(x_fit)
             
             # Plot data points and fitted curve
             axs[i].scatter(x_values, y_values, color=PURPLE, zorder=5)
-            axs[i].plot(x_fit, y_fit, '--', color=PURPLE, 
-                       label=f'Fit: {popt[0]:.2f}/x^{popt[1]:.2f} + {popt[2]:.2f}' if fit_type == "power_law" else f'Fit: {popt[0]:.2f}/x + {popt[1]:.2f}', 
-                       zorder=4)
+            axs[i].plot(x_fit, y_fit, '--', color=PURPLE, label=f'Fit: {scaling_law}', zorder=4)
             
             # Set scales and labels
             axs[i].set_xscale('log')
@@ -803,12 +741,13 @@ def plot_asymptotes_vs_model_size(model_sizes, asymptotes):
     model_params_values = [model_params[model] for model in model_sizes]
     
     # Fit a power law to the asymptotes vs model parameters
-    popt, _ = curve_fit(power_law, model_params_values, asymptotes, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    power_law = PowerScalingLaw()
+    power_law.fit(model_params_values, asymptotes, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
     x_fit = np.logspace(np.log10(min(model_params_values)), np.log10(max(model_params_values)), 100)
-    y_fit = power_law(x_fit, *popt)
+    y_fit = power_law.evaluate(x_fit)
 
     plt.scatter(model_params_values, asymptotes, color=PURPLE, s=100, zorder=5)
-    plt.plot(x_fit, y_fit, '--', color=PURPLE, zorder=4, label=f'Fit: {popt[0]:.2f}/x^{popt[1]:.2f} + {popt[2]:.2f}')
+    plt.plot(x_fit, y_fit, '--', color=PURPLE, zorder=4, label=f'Fit: {power_law}')
     
     # Set labels and title
     plt.xscale('log')
@@ -935,18 +874,20 @@ def plot_model_scaling_simple(best_run_dict, fit_type="power_law"):
         # Fit power law
         try:
             if fit_type == "power_law":
-                popt, _ = curve_fit(power_law, x_values, y_values, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+                scaling_law = PowerScalingLaw()
+                scaling_law.fit(x_values, y_values, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
             elif fit_type == "reciprocal_law":
-                popt, _ = curve_fit(reciprocal_law, x_values, y_values, p0=[1.0, 2.0], bounds=([0, 0], [np.inf, np.inf]))
+                scaling_law = ReciprocalScalingLaw()
+                scaling_law.fit(x_values, y_values, p0=[1.0, 2.0], bounds=([0, 0], [np.inf, np.inf]))
             
             # Generate points for smooth curve
             x_fit = np.logspace(np.log10(min(x_values)), np.log10(max(x_values)), 100)
-            y_fit = power_law(x_fit, *popt) if fit_type == "power_law" else reciprocal_law(x_fit, *popt)
+            y_fit = scaling_law.evaluate(x_fit)
             
             # Plot data points and fitted curve
             plt.scatter(x_values, y_values, color=color, zorder=5, s=60)
             plt.plot(x_fit, y_fit, '--', color=color, zorder=4, alpha=0.8,
-                    label=f'{int(token_count_m)}M tokens (fit: {popt[0]:.2f}/x^{popt[1]:.2f} + {popt[2]:.2f})' if fit_type == "power_law" else f'{int(token_count_m)}M tokens (fit: {popt[0]:.2f}/x + {popt[1]:.2f})')
+                    label=f'{int(token_count_m)}M tokens (fit: {scaling_law})')
                 
         except RuntimeError as e:
             print(f"\nWarning: Could not fit power law for token count {token_count}")
@@ -1000,19 +941,21 @@ def plot_token_scaling_simple(best_run_dict, fit_type="power_law"):
         # Fit power law
         try:
             if fit_type == "power_law":
-                popt, _ = curve_fit(power_law, x_values, y_values, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+                scaling_law = PowerScalingLaw()
+                scaling_law.fit(x_values, y_values, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
             elif fit_type == "reciprocal_law":
-                popt, _ = curve_fit(reciprocal_law, x_values, y_values, p0=[1.0, 2.0], bounds=([0, 0], [np.inf, np.inf]))
+                scaling_law = ReciprocalScalingLaw()
+                scaling_law.fit(x_values, y_values, p0=[1.0, 2.0], bounds=([0, 0], [np.inf, np.inf]))
             
             # Generate points for smooth curve
             x_fit = np.logspace(np.log10(min(x_values)), np.log10(max(x_values)), 100)
-            y_fit = power_law(x_fit, *popt) if fit_type == "power_law" else reciprocal_law(x_fit, *popt)
+            y_fit = scaling_law.evaluate(x_fit)
             
             # Plot data points and fitted curve
             model_name = value_pretty_name_dict.get(model_size, model_size)
             plt.scatter(x_values, y_values, color=color, zorder=5, s=60)
             plt.plot(x_fit, y_fit, '--', color=color, zorder=4, alpha=0.8,
-                    label=f'{model_name} (fit: {popt[0]:.2f}/x^{popt[1]:.2f} + {popt[2]:.2f})' if fit_type == "power_law" else f'{model_name} (fit: {popt[0]:.2f}/x + {popt[1]:.2f})')
+                    label=f'{model_name} (fit: {scaling_law})')
             
         except RuntimeError as e:
             print(f"\nWarning: Could not fit power law for model size {model_size}")
@@ -1038,10 +981,11 @@ def plot_token_scaling_simple(best_run_dict, fit_type="power_law"):
     for i, (model_size, (token_counts_m_current, losses)) in enumerate(ensemble_runs_manual.items()):
         color = colors[i % len(colors)]
         plt.scatter(token_counts_m_current, losses, color=color, s=100, zorder=5)
-        popt, _ = curve_fit(power_law, token_counts_m_current, losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+        scaling_law = PowerScalingLaw()
+        scaling_law.fit(token_counts_m_current, losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
         x_fit = np.logspace(np.log10(min(token_counts_m_current)), np.log10(max(token_counts_m_current)), 100)
-        y_fit = power_law(x_fit, *popt)
-        plt.plot(x_fit, y_fit, '-', color=color, zorder=4, label=f'{model_size} $\infty$ ensembles: {popt[0]:.2f}/x^{popt[1]:.2f} + {popt[2]:.2f}')
+        y_fit = scaling_law.evaluate(x_fit)
+        plt.plot(x_fit, y_fit, '-', color=color, zorder=4, label=f'{model_size} $\infty$ ensembles: {scaling_law}')
 
     # ensemble_tiered_asymptotes = []
     # for i in range(len(token_counts_m)):
@@ -1082,29 +1026,27 @@ def plot_token_scaling_simple(best_run_dict, fit_type="power_law"):
     plt.close()
 
 def plot_200M_sample(losses_for_200M):
-    def power_law(x, A, B, C):
-        return A / (x ** B) + C
-
     plt.figure(figsize=(8, 5), dpi=300)
-    max_x = max([max(x_data * model_params[model_size]) for model_size, (x_data, _, _, _, _) in losses_for_200M.items()])
+    max_x = max([max(x_data * model_params[model_size]) for model_size, (x_data, _, _) in losses_for_200M.items()])
 
     model_x_values = [0.15, 0.3, 0.6, 1.4]
     model_y_values = [3.750, 3.587, 3.510, 3.462]
     plt.scatter(model_x_values, model_y_values, color=PURPLE, s=50)
     # fit a power law to the model scaling
-    popt, _ = curve_fit(power_law, model_x_values, model_y_values, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    power_law = PowerScalingLaw()
+    power_law.fit(model_x_values, model_y_values, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
     model_x_fit = np.linspace(min(model_x_values), max_x * 25, 5000)
-    model_y_fit = power_law(model_x_fit, *popt)
-    plt.plot(model_x_fit, model_y_fit, '--', color=PURPLE, label=f"Model scaling: (Fit: {popt[0]:.2f}/x^{popt[1]:.2f} + {popt[2]:.2f})")
+    model_y_fit = power_law.evaluate(model_x_fit)
+    plt.plot(model_x_fit, model_y_fit, '--', color=PURPLE, label=f"Model scaling: (Fit: {power_law})")
 
     # add a shaded gray region for any y value above popt[2]
-    plt.fill_between(model_x_fit, 3.1, popt[2], color=PURPLE, alpha=0.2, label="Impossible with standard scaling, infinite compute")
+    plt.fill_between(model_x_fit, 3.1, power_law.asymptote(), color=PURPLE, alpha=0.2, label="Impossible with standard scaling, infinite compute")
 
-    for model_size, (x_data, y_data, A, B, C) in losses_for_200M.items():
+    for model_size, (x_data, y_data, power_law) in losses_for_200M.items():
         x_fit = np.linspace(min(x_data * model_params[model_size]), max_x * 25, 5000)
-        y_fit = A / ((x_fit / model_params[model_size]) ** B) + C
+        y_fit = power_law.evaluate(x_fit / model_params[model_size])
         plt.scatter(x_data * model_params[model_size], y_data)
-        plt.plot(x_fit, y_fit, '--', label=f'{value_pretty_name_dict[model_size]} ensembles (Fit: {A:.2f}/(x^{B:.2f}) + {C:.2f})')
+        plt.plot(x_fit, y_fit, '--', label=f'{value_pretty_name_dict[model_size]} ensembles (Fit: {power_law})')
     plt.legend()
     plt.xscale('log')
     plt.xlabel('Total model parameters (billions)')
@@ -1113,21 +1055,21 @@ def plot_200M_sample(losses_for_200M):
     plt.savefig('plots/200M_sample.png', bbox_inches='tight')
     plt.close()
 
-    plt.figure(figsize=(8, 5), dpi=300)
-    # plot AB/(A+Ce^Bx) for the same x values
-    x_fit = np.logspace(np.log10(0.00001), np.log10(max_x * 25), 5000)
-    plt.plot(x_fit, [popt[0] * popt[1] / (popt[0] + popt[2] * np.exp(popt[1] * np.log(x))) for x in x_fit], '--', color=PURPLE, label=f"Model scaling: (Fit: {popt[0]:.2f}/x^{popt[1]:.2f} + {popt[2]:.2f})")
-    for model_size, (x_data, y_data, A, B, C) in losses_for_200M.items():
-        x_fit = np.logspace(np.log10(min(x_data * model_params[model_size]) * 0.0001), np.log10(max_x * 25), 5000)
-        y_fit = A * B / (A + C * np.exp(B * np.log(x_fit / model_params[model_size])))
-        plt.plot(x_fit, y_fit, '--', label=f'{value_pretty_name_dict[model_size]} ensembles (Fit: {A:.2f}/(x^{B:.2f}) + {C:.2f})')
-    plt.legend()
-    plt.xscale('log')
-    plt.xlabel('Total model parameters (billions)')
-    plt.ylabel('Returns on excess log loss')
-    plt.title('Returns on excess log loss for 200M tokens')
-    plt.savefig('plots/200M_sample_AB_A_Ce_Bx.png', bbox_inches='tight')
-    plt.close()
+    # plt.figure(figsize=(8, 5), dpi=300)
+    # # plot AB/(A+Ce^Bx) for the same x values
+    # x_fit = np.logspace(np.log10(0.00001), np.log10(max_x * 25), 5000)
+    # plt.plot(x_fit, [popt[0] * popt[1] / (popt[0] + popt[2] * np.exp(popt[1] * np.log(x))) for x in x_fit], '--', color=PURPLE, label=f"Model scaling: (Fit: {popt[0]:.2f}/x^{popt[1]:.2f} + {popt[2]:.2f})")
+    # for model_size, (x_data, y_data, A, B, C) in losses_for_200M.items():
+    #     x_fit = np.logspace(np.log10(min(x_data * model_params[model_size]) * 0.0001), np.log10(max_x * 25), 5000)
+    #     y_fit = A * B / (A + C * np.exp(B * np.log(x_fit / model_params[model_size])))
+    #     plt.plot(x_fit, y_fit, '--', label=f'{value_pretty_name_dict[model_size]} ensembles (Fit: {A:.2f}/(x^{B:.2f}) + {C:.2f})')
+    # plt.legend()
+    # plt.xscale('log')
+    # plt.xlabel('Total model parameters (billions)')
+    # plt.ylabel('Returns on excess log loss')
+    # plt.title('Returns on excess log loss for 200M tokens')
+    # plt.savefig('plots/200M_sample_AB_A_Ce_Bx.png', bbox_inches='tight')
+    # plt.close()
 
 # Main execution
 if __name__ == "__main__":
@@ -1156,61 +1098,7 @@ if __name__ == "__main__":
     else:
         run_list = pickle.load(open(f"cache/{mode}_run_list.pkl", "rb"))
 
-    if mode == "data-scaling-laws-6-10":
-        def no_restriction(run):
-            return True
-
-        def zero_weight_decay_restriction(run):
-            return run["weight_decay"] == 0.0
-        
-        def one_epoch_restriction(run):
-            return run["epochs"] == 1 \
-                # and run["lr"] == 3e-3
-        
-        def one_epoch_zero_weight_decay_restriction(run):
-            return run["weight_decay"] == 0.0 \
-                and run["epochs"] == 1 \
-                # and run["lr"] == 3e-3
-
-        # Get unique model sizes
-        unique_models = sorted(list(set([run["model_name"] for run in run_list])))
-        
-        # Create separate plots for each model size
-        for model_size in unique_models:
-            print(f"\nCreating plot for model size: {model_size}")
-            
-            # Filter runs for this model size
-            model_runs = [run for run in run_list if run["model_name"] == model_size]
-            
-            # Create lists of runs for each restriction
-            no_restriction_runs = [run for run in model_runs if no_restriction(run)]
-            zero_wd_runs = [run for run in model_runs if zero_weight_decay_restriction(run)]
-            one_epoch_runs = [run for run in model_runs if one_epoch_restriction(run)]
-            one_epoch_zero_wd_runs = [run for run in model_runs if one_epoch_zero_weight_decay_restriction(run)]
-
-            # Create multi-restriction scatter plot
-            run_lists = [no_restriction_runs, zero_wd_runs, one_epoch_runs, one_epoch_zero_wd_runs]
-            labels = ["many epoch, yes wd", "many epoch, no wd", "one epoch, yes wd", "one epoch, no wd"]
-            
-            # Only include restrictions that have data
-            valid_run_lists = []
-            valid_labels = []
-            for runs, label in zip(run_lists, labels):
-                if len(runs) > 0:
-                    valid_run_lists.append(runs)
-                    valid_labels.append(label)
-            
-            if len(valid_run_lists) > 0:
-                create_multi_restriction_scatter(
-                    valid_run_lists, 
-                    valid_labels, 
-                    f"{key}_{model_size}", 
-                    title=f"Loss vs Base Tokens for {value_pretty_name_dict.get(model_size, model_size)}"
-                )
-            else:
-                print(f"No valid runs found for model size {model_size}")
-
-    elif mode == "varying-hparams-experiment":
+    if mode == "varying-hparams-experiment":
         unique_models = sorted(list(set([run["model_name"] for run in run_list])), key=lambda x: model_params[x])
         unique_base_tokens = sorted(list(set([run["base_tokens"] for run in run_list])))
 
@@ -1221,15 +1109,14 @@ if __name__ == "__main__":
             for base_tokens in unique_base_tokens:
                 ret = plot_ensemble_scaling(model_size, base_tokens)
                 if ret is not None:
-                    _, x_data, y_data, A, B, C = ret
-                    print(C)
+                    _, x_data, y_data, power_law = ret
+                    print(power_law.asymptote())
                     if base_tokens == min_base_tokens:
-                        losses_for_200M[model_size] = (x_data, y_data, A, B, C)
+                        losses_for_200M[model_size] = (x_data, y_data, power_law)
         
         plot_200M_sample(losses_for_200M)
 
     elif mode == "infinite-model-scaling":
-        # base_token_counts = [104857600.0, 209715200.0, 419430400.0, 838860800.0, 1677721600.0, 6291456000.0]
         base_token_counts = [209715200.0, 419430400.0, 838860800.0, 1677721600.0]
         model_sizes = ['150m4k', '300m4k', '600m4k', '1_4b4k']
 
