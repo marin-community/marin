@@ -43,16 +43,16 @@ def main():
     )
 
     # Define evaluation tasks
-    # Evalchemy supports various benchmarks - choose appropriate ones for SFT model
+    # Use evalchemy tasks
     evals = [
         EvalTaskConfig(
             name="AIME24",  # Instruction following evaluation
             num_fewshot=1,
         ),
-        EvalTaskConfig(
-            name="IFEval",  # Multiple choice benchmark
-            num_fewshot=1,
-        ),
+        # EvalTaskConfig(
+        #     name="IFEval",  # Multiple choice benchmark
+        #     num_fewshot=1,
+        # ),
     ]
 
     # Create evaluation configuration

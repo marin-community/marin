@@ -2,13 +2,19 @@ import logging
 import os
 import shutil
 import traceback
+import tempfile
 import subprocess
+import argparse
+
+from lm_eval.api.registry import get_model
+from lm_eval.utils import sanitize_model_name
+
 from typing import ClassVar
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
-from marin.evaluation.utils import upload_to_gcs, run_bash_command
+from marin.evaluation.utils import upload_to_gcs
 
 logger = logging.getLogger(__name__)
 
@@ -16,36 +22,15 @@ logger = logging.getLogger(__name__)
 class EvalchemyEvaluator(VllmTpuEvaluator):
     """
     Minimal Evalchemy evaluator that integrates the Evalchemy framework with Marin.
-
-    Evalchemy (https://github.com/mlfoundations/evalchemy) is a comprehensive evaluation
-    framework that supports multiple benchmarks including:
-
-    - HumanEval: Code generation evaluation
-    - MMLU: Multiple choice question answering
-    - MTBench: Multi-turn dialogue evaluation
-    - WildBench: Wild benchmark evaluation
-    - RepoBench: Repository-level code generation
-    - MixEval: Mixed evaluation tasks
-    - AlpacaEval: Instruction following evaluation
-    - IFEval: Instruction following evaluation
-    - ZeroEval: Zero-shot evaluation
-    - MBPP: Python programming evaluation
-    - ARC: AI2 Reasoning Challenge
-    - DROP: Reading comprehension evaluation
-
-    This evaluator runs Evalchemy as a subprocess and handles:
-    - Model downloading and configuration
-    - Task execution with few-shot/zero-shot settings
-    - Result upload to Google Cloud Storage
-    - Resource cleanup
-
-    Usage:
-        evaluator = EvalchemyEvaluator()
-        evaluator.evaluate(
-            model=ModelConfig(name="your-model"),
-            evals=[EvalTaskConfig(name="HumanEval", num_fewshot=0)],
-            output_path="gs://your-bucket/results"
-        )
+    Some notes:
+    1. Evalchemy needs to be installed in editable mode. The only way to do this is to
+       to it as part of this script. We will then remove it after the evaluation is done.
+       As such we don't add it in _pip_packages.
+    2. Running evalchemy in command line mode (e.g., subprocess.check_call) causes
+       TPUs to lock and cause the cluster to never run new jobs. This script
+       tries to avoid the issue by calling the package directly. We still
+       use subprocess.check_call, but only in 'safe' scenarios.
+    3.
     """
 
     CACHE_PATH: str = VllmTpuEvaluator.CACHE_PATH
@@ -53,12 +38,58 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
-        Dependency(name="evalchemy@git+https://github.com/mlfoundations/evalchemy.git"),
+        # Dependency(name="evalchemy@git+https://github.com/chiheem/evalchemy.git"),
     ]
     _env_vars: ClassVar[dict[str, str]] = {
         # Human eval tests code from the model which requires permission to run
         "HF_ALLOW_CODE_EVAL": "1",
     }
+
+    _temp_dir: str | None = tempfile.mkdtemp()
+
+    def _initialize_model(self, model, model_args=None, device=None, batch_size=None):
+        """Initialize a language model with proper chat template handling."""
+        if isinstance(model, str):
+            if model_args is None:
+                model_args = ""
+            config = {"device": device}
+            if "batch_size" not in model_args and batch_size is not None:
+                model_args += f",batch_size={batch_size}"
+            lm = get_model(model).create_from_arg_string(model_args, config)
+        else:
+            lm = model
+        lm.model_identifier = sanitize_model_name(f"model_{model}_model_args_{model_args}")
+
+        # Add or override apply_chat_template method to handle models without chat template
+        # Store the original method before overriding
+        original_apply_chat_template = getattr(lm, 'apply_chat_template', None)
+
+        def apply_chat_template(messages):
+            """Fallback chat template for models without built-in chat template."""
+            try:
+                # Try the original method first
+                if original_apply_chat_template is not None:
+                    return original_apply_chat_template(messages)
+                else:
+                    # No original method, use fallback
+                    raise AttributeError("No original apply_chat_template method")
+            except (ValueError, AttributeError):
+                # Fallback to simple concatenation
+                result = ""
+                for msg in messages:
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    if role == "system":
+                        result += f"System: {content}\n"
+                    elif role == "user":
+                        result += f"User: {content}\n"
+                    elif role == "assistant":
+                        result += f"Assistant: {content}\n"
+                return result.strip()
+
+        lm.apply_chat_template = apply_chat_template
+
+        return lm
 
     def evaluate(
         self,
@@ -86,13 +117,13 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
                 try:
                     from transformers import AutoModelForCausalLM
                     import inspect
-                    
+
                     # Load the model config to inspect supported parameters
                     model_config = AutoModelForCausalLM.from_pretrained(model_name_or_path, trust_remote_code=True)
                     model_class = model_config.__class__
                     init_signature = inspect.signature(model_class.__init__)
                     supported_params = set(init_signature.parameters.keys())
-                    
+
                     for key, value in model.engine_kwargs.items():
                         if key not in supported_params:
                             logger.warning(f"Skipping unsupported parameter '{key}' for model {model_name_or_path}")
@@ -104,83 +135,125 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
                     for key, value in model.engine_kwargs.items():
                         pretrained_args += f",{key}={value}"
 
-            # Install evalchemy (test)
-            run_bash_command(["git", "clone", "https://github.com/mlfoundations/evalchemy.git"], verbose=False)
-            os.chdir("evalchemy")
-            
-            # Surgery to remove "fschat @ file:eval/chat_benchmarks/MTBench" from pyproject.toml
-            # We will install the MTBench package separately after installing evalchemy
-            # See comments in `Quick Start::Installation` on `https://github.com/mlfoundations/evalchemy`
-            with open("pyproject.toml", "r") as f:
-                lines = f.readlines()
-            with open("pyproject.toml", "w") as f:
-                for line in lines:
-                    if "fschat @ file:eval/chat_benchmarks/MTBench" not in line:
-                        f.write(line)
-            logger.info("Removed 'fschat @ file:eval/chat_benchmarks/MTBench' from pyproject.toml")
-            
-            logger.info("Installing evalchemy.")
-            os.chdir("..")
-            run_bash_command(["uv", "pip", "install", "-e", "evalchemy/"], verbose=False)
-            
-            logger.info("Installing evalchemy/chat_benchmarks/MTBench.")
-            run_bash_command(["uv", "pip", "install", "-e", "evalchemy/eval/chat_benchmarks/MTBench"], verbose=False)
+            # Clone the repository to a temporary directory
+            logger.info(f"Cloning evalchemy to {self._temp_dir}")
+            subprocess.check_call(["git", "clone", "https://github.com/chiheem/evalchemy.git", self._temp_dir])
+
+            # Install evalchemy in editable mode
+            logger.info("Installing evalchemy in editable mode...")
+            subprocess.check_call(["pip", "install", "-e", self._temp_dir])
+            logger.info("Evalchemy installed successfully")
+
+            # Verify installation and add to path if needed
+            import sys
+            sys.path.insert(0, self._temp_dir)
+            logger.info(f"Added {self._temp_dir} to Python path")
+
+            # Import evalchemy functions directly from the eval directory
+            from eval.eval import evaluate
+            from eval.task import TaskManager as InstructTaskManager
+            from lm_eval.tasks import TaskManager as PretrainTaskManager
+
+            # Change to the cloned repository directory for proper data file resolution
+            original_cwd = os.getcwd()
+            os.chdir(self._temp_dir)
+            logger.info(f"Changed working directory to: {self._temp_dir}")
+
+            # Set HF_HUB_CACHE to the temporary directory
+            os.environ["HF_HUB_CACHE"] = self._temp_dir
+
+            # Create output directory
+            os.makedirs(self.LOCAL_RESULTS_PATH, exist_ok=True)
 
             for eval_task in evals:
                 logger.info(f"Start evalchemy:{eval_task.name} ({eval_task.num_fewshot} shot).")
+
+                # Prepare task list
+                task_list = [eval_task.name]
+                batch_sizes_list = ["auto"]
+
+                # Initialize model with CPU device
+                lm = self._initialize_model(
+                    model="hf",
+                    model_args=pretrained_args,
+                    device="cpu",
+                    batch_size="auto"
+                )
+
+                # Initialize task managers
+                task_manager = InstructTaskManager(verbosity="INFO")
+                pretrain_task_manager = PretrainTaskManager(verbosity="INFO")
+
+                # Create args object for evalchemy
+                args = argparse.Namespace()
+                args.model = "hf"
+                args.model_args = pretrained_args
+                args.device = "cpu"
+                args.batch_size = "auto"
+                args.limit = max_eval_instances
+                args.num_fewshot = eval_task.num_fewshot
+                args.verbosity = "INFO"
+
+                # Run evaluation using evalchemy framework
+                results = evaluate(
+                    lm=lm,
+                    task_manager=task_manager,
+                    pretrain_task_manager=pretrain_task_manager,
+                    task_list=task_list,
+                    batch_sizes_list=batch_sizes_list,
+                    verbosity="INFO",
+                    args=args,
+                    limit=max_eval_instances,
+                    num_fewshot=eval_task.num_fewshot,
+                    device="cpu",
+                )
+
+                # Save results
                 result_filepath = os.path.join(self.LOCAL_RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot")
+                import json
+                with open(f"{result_filepath}.json", "w") as f:
+                    json.dump(results, f, indent=2)
 
-                # Create the output directory
-                output_dir = os.path.dirname(result_filepath)
-                os.makedirs(output_dir, exist_ok=True)
-
-                # Build command
-                cmd = [
-                    "python3",
-                    "-m",
-                    "eval.eval",
-                    "--model",
-                    "hf",
-                    "--tasks",
-                    eval_task.name,
-                    "--model_args",
-                    pretrained_args,
-                    "--batch_size",
-                    "auto",
-                    "--output_path",
-                    self.LOCAL_RESULTS_PATH,
-                    "--device",
-                    "cpu",
-                ]
-
-                if eval_task.num_fewshot > 0:
-                    cmd.extend(["--num_fewshot", str(eval_task.num_fewshot)])
-                if max_eval_instances is not None:
-                    cmd.extend(["--limit", str(max_eval_instances)])
-                if model.apply_chat_template:
-                    cmd.append("--apply_chat_template")
-
-                # Add annotator model (default to auto for cost efficiency)
-                cmd.extend(["--annotator_model", "auto"])
-
-                # Run evaluation
-                try:
-                    run_bash_command(cmd)
-                except subprocess.CalledProcessError as e:
-                    raise RuntimeError(f"Evalchemy failed with exit code {e.returncode}: {e.stderr}")
+                logger.info(f"Completed evalchemy:{eval_task.name} evaluation")
 
         except Exception as e:
             traceback.print_exc()
             raise RuntimeError("Evalchemy failed") from e
         finally:
+            # Restore original working directory
+            if 'original_cwd' in locals():
+                os.chdir(original_cwd)
+                logger.info(f"Restored working directory to: {original_cwd}")
+
+            # Upload to GCS if results are found
             if not os.path.exists(self.LOCAL_RESULTS_PATH) or not any(os.listdir(self.LOCAL_RESULTS_PATH)):
                 logger.warning(f"No results found in {self.LOCAL_RESULTS_PATH}")
             else:
                 upload_to_gcs(self.LOCAL_RESULTS_PATH, output_path)
                 shutil.rmtree(self.LOCAL_RESULTS_PATH)
-            
-            run_bash_command(["rm", "-rf", "evalchemy"], verbose=False)
-            run_bash_command(["uv", "pip", "uninstall", "evalchemy"], verbose=False)
-            run_bash_command(["uv", "pip", "uninstall", "evalchemy/eval/chat_benchmarks/MTBench"], verbose=False)
-            run_bash_command(["uv", "cache", "clean"], verbose=False)
+            # Clean up temporary directory and uninstall evalchemy
+            if hasattr(self, '_temp_dir') and self._temp_dir:
+                try:
+                    # Remove from sys.path if added
+                    import sys
+                    if self._temp_dir in sys.path:
+                        sys.path.remove(self._temp_dir)
+                        logger.info(f"Removed {self._temp_dir} from Python path")
+
+                    # Uninstall evalchemy
+                    try:
+                        subprocess.check_call(["pip", "uninstall", "-y", "evalchemy"])
+                        logger.info("Uninstalled evalchemy package")
+                    except Exception as e:
+                        logger.warning(f"Failed to uninstall evalchemy: {e}")
+
+                    # Remove temporary directory
+                    if os.path.exists(self._temp_dir):
+                        shutil.rmtree(self._temp_dir)
+                        logger.info(f"Removed temporary directory: {self._temp_dir}")
+                except Exception as e:
+                    logger.error(f"Error during cleanup: {e}")
+            # Remove HF_HUB_CACHE
+            if "HF_HUB_CACHE" in os.environ:
+                del os.environ["HF_HUB_CACHE"]
             self.cleanup(model)
