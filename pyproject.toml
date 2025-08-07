@@ -38,6 +38,7 @@ dependencies = [
     "lz4",
     "wandb<=0.19.9",
     "openai",
+    "markdownify",
 ]
 
 [dependency-groups]

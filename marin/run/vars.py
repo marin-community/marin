@@ -1,5 +1,7 @@
 # Environment variables that we want to set in Ray
 ENV_VARS = {
+    "TPU_MIN_LOG_LEVEL": "3",
+    "TPU_STDERR_LOG_LEVEL": "3",
     "PYTHONPATH": "./submodules/levanter/src:${PYTHONPATH}",
     "LIBTPU_INIT_ARGS": (
         "--xla_tpu_scoped_vmem_limit_kib=81920 "
