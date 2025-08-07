@@ -1,15 +1,17 @@
+import dataclasses
 from pathlib import Path
 
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.resources import TpuPodConfig
 from marin.utils import fsspec_glob
+from experiments.models import get_model_local_path, llama_3_1_8b
 from levanter.infra.ray_tpu import run_on_pod_resumable
 
 from levanter.main.marin_eval_sliding_total import EvalSlidingTotalConfig, BookConfig, main as eval_sliding_main
-from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.distributed import RayConfig
+from experiments.llama import llama_8b
 import jmp
 import ray
 
@@ -57,24 +59,11 @@ eval_sliding_step = ExecutorStep(
     fn=run_levanter_eval_sliding,
     config=EvalSlidingTotalConfig(
         tokenizer_name="meta-llama/Llama-3.1-8B",
-        model=LlamaConfig(
-            seq_len=101,
-            hidden_dim=4096,
-            intermediate_dim=14336,
-            num_layers=32,
-            num_heads=32,
-            num_kv_heads=8,
-            flash_attention_block_size=512,
-            use_bias=False,
-            use_layer_norm_weight=True,
-            initializer_range=0.02,
-            rope={"type": "llama3"},
-        ),
+        model=dataclasses.replace(llama_8b, seq_len=101),  # Use standard llama_8b config, override seq_len
         trainer=TrainerConfig(
             seed=0,
             tracker=WandbConfig(
                 project="marin",
-                tags=["llama3", "eval", "8b"],
                 name="llama_3.1_8b_2_books",
             ),
             mp=jmp.get_policy("p=f32,c=f32"),
@@ -84,17 +73,16 @@ eval_sliding_step = ExecutorStep(
             batch_axis="batch",
             ray=RayConfig(auto_start_cluster=False, start_workers=False),
         ),
-        initialize_from_hf="/opt/gcsfuse_mount/models/meta-llama--Llama-3-1-8B",
+        initialize_from_hf=get_model_local_path(llama_3_1_8b),
         use_hf_model_config=False,
+        # if you change the below, make sure to update seq_len above!
         chunk_size=100,
         slice_length=2000,
         prompt_tokens=50,
         cursor_inc_chars=10,
         token_mode=True,
         cursor_inc_tokens=5,
-        # max batch size is 512 for TPU v4-128
-        eval_batch_size=512,
-        allow_nondivisible_batch_size=True,  # Allow batch size not divisible by 64
+        eval_batch_size=512,  # max batch size is 512 for TPU v4-128
         output_base_path=this_output_path(),
         gcp_log=True,  # Save plots and data to GCP instead of WandB artifacts
         books=create_books_from_gcp_directory("gs://marin-us-central2/books_evals/2_books/"),
