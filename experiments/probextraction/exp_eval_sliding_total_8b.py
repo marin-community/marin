@@ -54,6 +54,7 @@ def create_books_from_gcp_directory(gcp_dir: str) -> dict[str, BookConfig]:
 # -----------------------------------------------------------------------------
 # Multi-book sliding-window likelihood evaluation (Llama-3.1-8B)
 # -----------------------------------------------------------------------------
+# run with 2 books
 eval_sliding_step = ExecutorStep(
     name="probextraction/llama3.1_8b_2_books",
     fn=run_levanter_eval_sliding,
@@ -85,7 +86,12 @@ eval_sliding_step = ExecutorStep(
         eval_batch_size=512,  # max batch size is 512 for TPU v4-128
         output_base_path=this_output_path(),
         gcp_log=True,  # Save plots and data to GCP instead of WandB artifacts
-        books=create_books_from_gcp_directory("gs://marin-us-central2/books_evals/2_books/"),
+        # run with 50 books from open-weight copyright memorization paper
+        books=create_books_from_gcp_directory("gs://marin-us-central2/books_evals/50_books/"),
+        # run with 2 books (debugging)
+        # books=create_books_from_gcp_directory("gs://marin-us-central2/books_evals/2_books/"),
+        # run with 1 book (debugging)
+        # books=create_books_from_gcp_directory("gs://marin-us-central2/books_evals/1_books/"),
     ),
 )
 
