@@ -10,6 +10,7 @@ GitHub Issue: https://github.com/marin-community/marin/issues/1237
 import dataclasses
 
 from experiments.defaults import default_sft
+from experiments.evals.evals import default_sft_eval
 from experiments.exp808_sft_mixture import mixture_config as sft_mixture_llama3
 from experiments.llama import llama_8b
 from experiments.tootsie.exp600_tootsie import tootsie_8b_deeper_starling
@@ -46,7 +47,7 @@ if __name__ == "__main__":
     executor_main(
         [
             mixture_sft_deeper_starling,
-            # *default_sft_eval(mixture_sft_deeper_starling),
+            *default_sft_eval(mixture_sft_deeper_starling),
         ],
         description="SFT for Deeper Starling Model",
     )

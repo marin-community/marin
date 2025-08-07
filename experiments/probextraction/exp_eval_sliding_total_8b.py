@@ -56,7 +56,7 @@ def create_books_from_gcp_directory(gcp_dir: str) -> dict[str, BookConfig]:
 # -----------------------------------------------------------------------------
 # run with 2 books
 eval_sliding_step = ExecutorStep(
-    name="probextraction/llama3.1_8b_2_books",
+    name="probextraction/llama3.1_8b_50_books",
     fn=run_levanter_eval_sliding,
     config=EvalSlidingTotalConfig(
         tokenizer_name="meta-llama/Llama-3.1-8B",
@@ -65,7 +65,7 @@ eval_sliding_step = ExecutorStep(
             seed=0,
             tracker=WandbConfig(
                 project="marin",
-                name="llama_3.1_8b_2_books",
+                name="llama_3.1_8b_50_books",
             ),
             mp=jmp.get_policy("p=f32,c=f32"),
             per_device_eval_parallelism=-1,
