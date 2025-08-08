@@ -1,0 +1,15 @@
+{
+  "baseline_config": {
+    "beta1": 0.95,
+    "beta2": 0.95,
+    "learning_rate": 0.002,
+    "max_grad_norm": 1.0,
+    "min_lr_ratio": 0,
+    "train_batch_size": 128,
+    "warmup": 2000,
+    "weight_decay": 0.7
+  },
+  "model_size": "130m",
+  "optimizer_name": "lion",
+  "target_chinchilla": 1
+}
