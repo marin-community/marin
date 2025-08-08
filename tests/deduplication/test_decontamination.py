@@ -59,6 +59,7 @@ def test_exact_decontamination_paragraph(ray_tpu_cluster, sample_documents, test
         tempfile.TemporaryDirectory() as temp_attribute_dir,
         tempfile.TemporaryDirectory() as temp_decontamination_dir,
         tempfile.TemporaryDirectory() as temp_bloom_filter_dir,
+        tempfile.TemporaryDirectory() as temp_dedupe_dir,
     ):
         input_file_path = os.path.join(temp_input_dir, "test_docs.jsonl.gz")
         with fsspec.open(input_file_path, "w", compression="gzip") as f:
@@ -86,6 +87,7 @@ def test_exact_decontamination_paragraph(ray_tpu_cluster, sample_documents, test
             mode=DedupMode.DECONTAMINATE,
             decontaminate_source=temp_decontamination_dir,
             bloom_filter_path=os.path.join(temp_bloom_filter_dir, "deduper_bloom_filter.bin"),
+            temp_dir=temp_dedupe_dir,
             num_cpus=2,
             memory=2 * 1024 * 1024 * 1024,
         )

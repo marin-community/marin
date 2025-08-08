@@ -98,6 +98,10 @@ class ShardedDedupeConfig:
     num_cpus: int | None = None
     memory: int | None = None  # in bytes
     resources: dict[str, float] | None = None
+    # Directory for temporary files (defaults to /dev/shm for performance)
+    temp_dir: str | None = None
+    # Debug flag to control verbose print statements
+    debug: bool = False
 
 
 # Base dedupe configuration - modify this to change n-gram settings, processes, etc.
@@ -118,6 +122,8 @@ BASE_DEDUPE_CONFIG = DedupeConfig(
     num_cpus=16,
     memory=16 * 1024 * 1024 * 1024,  # 16GB
     resources=None,
+    # Debug flag - set to True to enable verbose print statements
+    debug=False,
 )
 
 
@@ -128,6 +134,8 @@ def make_task(
     eval_dataset_steps: list[ExecutorStep],
     text_field: str,
     base_config: DedupeConfig = BASE_DEDUPE_CONFIG,
+    temp_dir: str | None = None,
+    debug: bool = False,
 ) -> DedupeConfig:
     """Create a DedupeConfig for a single shard using the base config.
 
@@ -138,6 +146,7 @@ def make_task(
         eval_dataset_steps: List of evaluation dataset ExecutorSteps to resolve paths for
         text_field: Name of the text field in the data files
         base_config: Base configuration to modify for this shard
+        temp_dir: Directory for temporary files (overrides base_config if provided)
 
     Returns:
         DedupeConfig configured for this specific shard with resolved evaluation dataset paths
@@ -148,13 +157,19 @@ def make_task(
     output_path = os.path.join(base_output_path, relative_path)
 
     # Use dataclasses.replace to create a new config with the shard-specific values
-    return dataclasses.replace(
-        base_config,
-        input_path=eval_dataset_steps,
-        output_path=output_path,
-        decontaminate_source=shard_path,
-        text_field=text_field,
-    )
+    replace_args = {
+        "input_path": eval_dataset_steps,
+        "output_path": output_path,
+        "decontaminate_source": shard_path,
+        "text_field": text_field,
+        "debug": debug,
+    }
+
+    # Only include temp_dir if it's provided (don't override with None)
+    if temp_dir is not None:
+        replace_args["temp_dir"] = temp_dir
+
+    return dataclasses.replace(base_config, **replace_args)
 
 
 @ray.remote
@@ -208,6 +223,8 @@ def run_all_shards(config: ShardedDedupeConfig) -> str:
                 config.eval_dataset_steps,
                 config.text_field,
                 base_config=base_config,
+                temp_dir=config.temp_dir,
+                debug=config.debug,
             ),
         )
         for shard_path in shard_paths

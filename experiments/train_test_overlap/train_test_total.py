@@ -48,6 +48,10 @@ logger = logging.getLogger(__name__)
 
 MAX_IN_FLIGHT = 32
 
+# Custom temporary directory for deduplication processing
+# default uses ram, but let's use gcsfuse for speed
+TEMP_DIR = "/dev/shm"
+
 # starcoder is parquet with 'content' as text key
 # finemath is parquet with 'text' as text key
 DATASET_CONFIGS = [
@@ -67,6 +71,7 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
         max_in_flight=dataset_config.max_in_flight,
         eval_dataset_steps=EVAL_DATASET_STEPS,
         text_field=dataset_config.text_field,
+        temp_dir=TEMP_DIR,
     )
     return ExecutorStep(
         name=f"train_test_overlap/dolma/total/{dataset_config.name}",

@@ -24,7 +24,6 @@ from enum import Enum
 import draccus
 import fsspec
 import ray
-from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from tqdm import tqdm
 
 from marin.core.runtime import cached_or_construct_output, workflow_cached
@@ -86,7 +85,7 @@ def _get_path_stats(path: str) -> tuple[int, int]:
     return total_size, file_count
 
 
-def _check_input_size(input_path: str | list[str]) -> dict:
+def _check_input_size(input_path: str | list[str], debug: bool = False) -> dict:
     """Check if input has processable content before downloading"""
 
     # Handle list of paths
@@ -111,7 +110,8 @@ def _check_input_size(input_path: str | list[str]) -> dict:
                 has_any_content = False
                 errors.append(f"{path}: {e!s}")
 
-        print(f"total_size: {total_size}, file_count: {total_file_count}, paths: {len(input_path)}\n\n", flush=True)
+        if debug:
+            print(f"total_size: {total_size}, file_count: {total_file_count}, paths: {len(input_path)}\n\n", flush=True)
         result = {
             "has_content": has_any_content,
             "total_size_bytes": total_size,
@@ -125,7 +125,8 @@ def _check_input_size(input_path: str | list[str]) -> dict:
     # Handle single path (original logic)
     try:
         total_size, file_count = _get_path_stats(input_path)
-        print(f"total_size: {total_size}, file_count: {file_count}\n\n", flush=True)
+        if debug:
+            print(f"total_size: {total_size}, file_count: {file_count}\n\n", flush=True)
         return {
             "has_content": total_size > 100,  # 100 bytes is a reasonable minimum for a shard
             "total_size_bytes": total_size,
@@ -194,6 +195,7 @@ class DedupeConfig:
         decontaminate_source (str | None): source to seed bloom filter when decontaminating
         bloom_filter_path (str): path to write or read the bloom filter file
         text_field (str): field to use for text content in Parquet files
+        temp_dir (str | None): directory for temporary files (defaults to /dev/shm for performance)
         num_cpus (int): number of CPUs to allocate for Ray remote function
         memory (int): memory in bytes to allocate for Ray remote function (16GB default)
         resources (dict[str, float] | None): custom resources for Ray remote function
@@ -217,10 +219,14 @@ class DedupeConfig:
     bloom_filter_path: str = "deduper_bloom_filter.bin"
     # field to use for text content in Parquet files
     text_field: str = "text"
+    # directory for temporary files (defaults to /dev/shm for performance)
+    temp_dir: str | None = "/dev/shm"
     # Ray resource configuration
     num_cpus: int = 16
     memory: int = 16 * 1024 * 1024 * 1024  # 16GB in bytes
     resources: dict[str, float] | None = None
+    # Debug flag to control verbose print statements
+    debug: bool = False
 
 
 def _format_input_paths_for_error(input_paths: str | list[str], max_paths: int = 3) -> str:
@@ -236,16 +242,18 @@ def _format_input_paths_for_error(input_paths: str | list[str], max_paths: int =
         return input_paths
 
 
-def _copy_multiple_inputs(input_paths: str | list[str], local_base_dir: str, text_field: str = "text") -> None:
+def _copy_multiple_inputs(
+    input_paths: str | list[str], local_base_dir: str, text_field: str = "text", debug: bool = False
+) -> None:
     """Helper function to copy files from single path or list of paths."""
     if isinstance(input_paths, list):
         for path in input_paths:
-            copy_files_in(path, local_base_dir, text_field)
+            copy_files_in(path, local_base_dir, text_field, debug)
     else:
-        copy_files_in(input_paths, local_base_dir, text_field)
+        copy_files_in(input_paths, local_base_dir, text_field, debug)
 
 
-def copy_files_in(input_path, local_base_dir, text_field: str = "text"):
+def copy_files_in(input_path, local_base_dir, text_field: str = "text", debug: bool = False):
     # Ensure input_path doesn't end with a slash
     input_path = input_path.rstrip("/")
 
@@ -254,7 +262,8 @@ def copy_files_in(input_path, local_base_dir, text_field: str = "text"):
     if input_path.endswith(".parquet") or fsspec_glob(parquet_pattern):
         docs_dir = os.path.join(local_base_dir, "documents")
         parquet_to_jsonl_gz(input_path, docs_dir, text_field)
-        print(f"Converted Parquet → JSONL.gz into {docs_dir}", flush=True)
+        if debug:
+            print(f"Converted Parquet → JSONL.gz into {docs_dir}", flush=True)
         return
 
     # If input_path is a single file, copy only that file
@@ -274,7 +283,8 @@ def copy_files_in(input_path, local_base_dir, text_field: str = "text"):
             with fsspec.open(output_file, "wb", compression="gzip") as f_local:
                 f_local.write(f_remote.read())
 
-        print(f"Copied 1 file from {input_path} to {output_file}", flush=True)
+        if debug:
+            print(f"Copied 1 file from {input_path} to {output_file}", flush=True)
         return
 
     # Create a single pattern that matches all supported extensions recursively
@@ -298,13 +308,14 @@ def copy_files_in(input_path, local_base_dir, text_field: str = "text"):
             with fsspec.open(output_file, "wb", compression="gzip") as f_local:
                 f_local.write(f_remote.read())
 
-    print(
-        f"Copied {len(input_files)} files to {os.path.join(local_base_dir, 'documents')}",
-        flush=True,
-    )
+    if debug:
+        print(
+            f"Copied {len(input_files)} files to {os.path.join(local_base_dir, 'documents')}",
+            flush=True,
+        )
 
 
-def copy_files_out(local_base_dir, output_path, attribute_name):
+def copy_files_out(local_base_dir, output_path, attribute_name, debug: bool = False):
     # Ensure output_path doesn't end with a slash
     output_path = output_path.rstrip("/")
 
@@ -330,11 +341,12 @@ def copy_files_out(local_base_dir, output_path, attribute_name):
 
         files_uploaded += 1
 
-    print(f"Uploaded {files_uploaded} files to {output_path}", flush=True)
+    if debug:
+        print(f"Uploaded {files_uploaded} files to {output_path}", flush=True)
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
-def copy_file_out(input_file_path, output_file_path):
+def copy_file_out(input_file_path, output_file_path, debug: bool = False):
 
     # Ensure the output directory exists
     output_file_dir = os.path.dirname(output_file_path)
@@ -345,10 +357,11 @@ def copy_file_out(input_file_path, output_file_path):
         with fsspec.open(output_file_path, "wb") as f_remote:
             f_remote.write(f_local.read())
 
-    print(f"Uploaded file to {output_file_path}", flush=True)
+    if debug:
+        print(f"Uploaded file to {output_file_path}", flush=True)
 
 
-def delete_jsonl_files(dir_path):
+def delete_jsonl_files(dir_path, debug: bool = False):
     """
     Delete all JSONL files (both .jsonl and .jsonl.gz) in the specified directory and its subdirectories.
 
@@ -369,12 +382,15 @@ def delete_jsonl_files(dir_path):
         if fsspec_rm(file_path):
             files_deleted += 1
 
-    print(f"Deleted {files_deleted} JSONL files from {dir_path}", flush=True)
+    if debug:
+        print(f"Deleted {files_deleted} JSONL files from {dir_path}", flush=True)
     return files_deleted
 
 
 # Fast estimate of total n-grams by sampling a subset of documents
-def estimate_total_ngrams_fast(local_base_dir, ngram_lengths: list[int], sample_lines: int = 1000) -> dict[int, int]:
+def estimate_total_ngrams_fast(
+    local_base_dir, ngram_lengths: list[int], sample_lines: int = 1000, debug: bool = False
+) -> dict[int, int]:
     """
     Estimate *unique* n-gram count quickly by reading at most `sample_lines`
     JSONL lines across all `<documents_dir>/**/*.jsonl.gz`.
@@ -405,13 +421,16 @@ def estimate_total_ngrams_fast(local_base_dir, ngram_lengths: list[int], sample_
                     data = json.loads(raw_line)
                     text = data.get("text", "")
                     if not isinstance(text, str):
-                        print(
-                            f"Warning: 'text' field is not a string in {file}:{line_num}, type: {type(text)}", flush=True
-                        )
+                        if debug:
+                            print(
+                                f"Warning: 'text' field is not a string in {file}:{line_num}, type: {type(text)}",
+                                flush=True,
+                            )
                         malformed_lines += 1
                         continue
                 except json.JSONDecodeError as e:
-                    print(f"JSON decode error in {file}:{line_num}: {e}", flush=True)
+                    if debug:
+                        print(f"JSON decode error in {file}:{line_num}: {e}", flush=True)
                     malformed_lines += 1
                     continue
 
@@ -429,7 +448,8 @@ def estimate_total_ngrams_fast(local_base_dir, ngram_lengths: list[int], sample_
                 sample_lines_seen += 1
 
     if malformed_lines > 0:
-        print(f"Warning: Found {malformed_lines} malformed lines during sampling", flush=True)
+        if debug:
+            print(f"Warning: Found {malformed_lines} malformed lines during sampling", flush=True)
 
     if sample_lines_seen == 0:
         # nothing decoded ⇒ fall back to "one n-gram per line" heuristic
@@ -460,6 +480,7 @@ def do_dedup(
     bloom_filter_file="deduper_bloom_filter.bin",
     train_test_overlap=False,
     pre_estimated_counts: dict[int, int] | None = None,
+    debug: bool = False,
 ):
     bloom_filter_file = os.path.join(local_base_dir, bloom_filter_file)
 
@@ -467,11 +488,14 @@ def do_dedup(
     if ngram is not None and not bloom_filter_size and pre_estimated_counts is not None:
         ngram_length = ngram.ngram_length
         estimated_doc_count = pre_estimated_counts[ngram_length]
-        print(f"Using pre-computed estimate for {ngram_length}-grams: {estimated_doc_count}", flush=True)
+        if debug:
+            print(f"Using pre-computed estimate for {ngram_length}-grams: {estimated_doc_count}", flush=True)
         if estimated_doc_count < 100:
-            print(
-                f"Warning: Pre-computed estimate for {ngram_length}-grams is too low: {estimated_doc_count}", flush=True
-            )
+            if debug:
+                print(
+                    f"Warning: Pre-computed estimate for {ngram_length}-grams is too low: {estimated_doc_count}",
+                    flush=True,
+                )
 
     command = [
         "RUST_BACKTRACE=full",
@@ -541,12 +565,14 @@ def do_dedup(
         universal_newlines=True,
     )
     for line in process.stdout:
-        print(line, end="", flush=True)
+        if debug:
+            print(line, end="", flush=True)
     process.wait()
 
     # Rename temporary files
     attr_dir = os.path.join(local_base_dir, "attributes/duplicate_documents")
-    print(f"Checking for temporary files in: {attr_dir}", flush=True)
+    if debug:
+        print(f"Checking for temporary files in: {attr_dir}", flush=True)
     for root, _, files in os.walk(attr_dir):
         for file in files:
             if file.endswith(".jsonl.gz.tmp"):
@@ -626,7 +652,7 @@ def _shard_documents_for_train_test_overlap(local_base_dir: str, processes: int,
 @workflow_cached(success_suffix="SUCCESS")
 def _run_decontamination(config: DedupeConfig):
     # Check input sizes first before any processing
-    input_check = _check_input_size(config.input_path)
+    input_check = _check_input_size(config.input_path, config.debug)
     if not input_check["has_content"]:
         return {
             "success": True,
@@ -638,9 +664,10 @@ def _run_decontamination(config: DedupeConfig):
     if not config.decontaminate_source:
         raise ValueError("decontaminate_source is required in DECONTAMINATE mode")
 
-    source_check = _check_input_size(config.decontaminate_source)
+    source_check = _check_input_size(config.decontaminate_source, config.debug)
     if not source_check["has_content"]:
-        print(f"Empty decontaminate source: {config.decontaminate_source}", flush=True)
+        if config.debug:
+            print(f"Empty decontaminate source: {config.decontaminate_source}", flush=True)
         logger.info(f"Empty decontaminate source: {config.decontaminate_source}")
         return {
             "success": True,
@@ -649,10 +676,11 @@ def _run_decontamination(config: DedupeConfig):
             **source_check,
         }
 
-    print(f" content: {source_check['has_content']}", flush=True)
-    with tempfile.TemporaryDirectory(dir="/dev/shm", prefix="marin_dedupe_") as tmpdir:
+    if config.debug:
+        print(f" content: {source_check['has_content']}", flush=True)
+    with tempfile.TemporaryDirectory(dir=config.temp_dir, prefix="marin_dedupe_") as tmpdir:
         # 1) build the filter
-        copy_files_in(config.decontaminate_source, tmpdir, text_field=config.text_field)
+        copy_files_in(config.decontaminate_source, tmpdir, text_field=config.text_field, debug=config.debug)
         do_dedup(
             tmpdir,
             config.attribute_name,
@@ -667,11 +695,12 @@ def _run_decontamination(config: DedupeConfig):
             bloom_filter_file=config.bloom_filter_path,
             train_test_overlap=False,
             pre_estimated_counts=None,
+            debug=config.debug,
         )
         # 2) clear out JSONLs
-        delete_jsonl_files(tmpdir)
+        delete_jsonl_files(tmpdir, config.debug)
         # 3) apply filter to real input
-        _copy_multiple_inputs(config.input_path, tmpdir, text_field=config.text_field)
+        _copy_multiple_inputs(config.input_path, tmpdir, text_field=config.text_field, debug=config.debug)
         do_dedup(
             tmpdir,
             config.attribute_name,
@@ -686,9 +715,10 @@ def _run_decontamination(config: DedupeConfig):
             bloom_filter_file=config.bloom_filter_path,
             train_test_overlap=False,
             pre_estimated_counts=None,
+            debug=config.debug,
         )
         # 4) write results
-        copy_files_out(tmpdir, config.output_path, config.attribute_name)
+        copy_files_out(tmpdir, config.output_path, config.attribute_name, config.debug)
 
         return {
             "success": True,
@@ -702,7 +732,7 @@ def _run_decontamination(config: DedupeConfig):
 @workflow_cached(success_suffix="SUCCESS")
 def _run_deduplication(config: DedupeConfig):
     # Check input size first before any processing
-    input_check = _check_input_size(config.input_path)
+    input_check = _check_input_size(config.input_path, config.debug)
     if not input_check["has_content"]:
         return {
             "success": True,
@@ -711,9 +741,9 @@ def _run_deduplication(config: DedupeConfig):
             **input_check,
         }
 
-    with tempfile.TemporaryDirectory(dir="/dev/shm", prefix="marin_dedupe_") as tmpdir:
+    with tempfile.TemporaryDirectory(dir=config.temp_dir, prefix="marin_dedupe_") as tmpdir:
         # run standard deduplication
-        _copy_multiple_inputs(config.input_path, tmpdir, text_field=config.text_field)
+        _copy_multiple_inputs(config.input_path, tmpdir, text_field=config.text_field, debug=config.debug)
         do_dedup(
             tmpdir,
             config.attribute_name,
@@ -728,8 +758,9 @@ def _run_deduplication(config: DedupeConfig):
             bloom_filter_file=config.bloom_filter_path,
             train_test_overlap=False,
             pre_estimated_counts=None,
+            debug=config.debug,
         )
-        copy_files_out(tmpdir, config.output_path, config.attribute_name)
+        copy_files_out(tmpdir, config.output_path, config.attribute_name, config.debug)
 
         return {"success": True, "reason": "completed_normally", "mode": "deduplication", **input_check}
 
@@ -772,7 +803,7 @@ def _run_train_test_overlap(config: DedupeConfig):
     The sharding logic is now handled inside do_dedup when train_test_overlap=True.
     """
     # Check input sizes first before any processing
-    input_check = _check_input_size(config.input_path)
+    input_check = _check_input_size(config.input_path, config.debug)
     if not input_check["has_content"]:
         return {
             "success": True,
@@ -782,7 +813,7 @@ def _run_train_test_overlap(config: DedupeConfig):
         }
     if not config.decontaminate_source:
         raise ValueError("decontaminate_source is required in TRAIN_TEST_OVERLAP mode")
-    source_check = _check_input_size(config.decontaminate_source)
+    source_check = _check_input_size(config.decontaminate_source, config.debug)
     if not source_check["has_content"]:
         return {
             "success": True,
@@ -792,7 +823,7 @@ def _run_train_test_overlap(config: DedupeConfig):
         }
     if not config.ngram:
         raise ValueError("ngram config is required in TRAIN_TEST_OVERLAP mode")
-    with tempfile.TemporaryDirectory(dir="/dev/shm", prefix="marin_dedupe_") as tmpdir:
+    with tempfile.TemporaryDirectory(dir=config.temp_dir, prefix="marin_dedupe_") as tmpdir:
 
         # Handle single or multiple ngram_lengths
         ngram_lengths = (
@@ -800,30 +831,34 @@ def _run_train_test_overlap(config: DedupeConfig):
         )
 
         # 1) Convert decontaminate source to jsonl.gz format using copy_files_in
-        copy_files_in(config.decontaminate_source, tmpdir, text_field=config.text_field)
+        copy_files_in(config.decontaminate_source, tmpdir, text_field=config.text_field, debug=config.debug)
         seed_dir = os.path.join(tmpdir, "documents_seed")
         os.rename(os.path.join(tmpdir, "documents"), seed_dir)
 
         # 2) Pre-estimate ngram counts for ALL sizes before sharding
-        print(f"Pre-estimating ngram counts for sizes: {ngram_lengths}", flush=True)
+        if config.debug:
+            print(f"Pre-estimating ngram counts for sizes: {ngram_lengths}", flush=True)
         if not config.bloom_filter_size:
             # Temporarily symlink for estimation
             os.symlink(seed_dir, os.path.join(tmpdir, "documents"))
-            pre_estimated_counts = estimate_total_ngrams_fast(tmpdir, ngram_lengths)
+            pre_estimated_counts = estimate_total_ngrams_fast(tmpdir, ngram_lengths, debug=config.debug)
             os.remove(os.path.join(tmpdir, "documents"))
-            print(f"Pre-computed estimates: {pre_estimated_counts}", flush=True)
+            if config.debug:
+                print(f"Pre-computed estimates: {pre_estimated_counts}", flush=True)
         else:
             pre_estimated_counts = None
 
         # 3) Shard the training data once for parallel processing
-        print(f"Sharding training data into {config.processes} shards...", flush=True)
+        if config.debug:
+            print(f"Sharding training data into {config.processes} shards...", flush=True)
         os.symlink(seed_dir, os.path.join(tmpdir, "documents"))
-        _shard_documents_for_train_test_overlap(tmpdir, config.processes, debug=True)
+        _shard_documents_for_train_test_overlap(tmpdir, config.processes, debug=config.debug)
         os.remove(os.path.join(tmpdir, "documents"))
-        print("Training data sharded and originals removed", flush=True)
+        if config.debug:
+            print("Training data sharded and originals removed", flush=True)
 
         # 4) Stage test data under a separate directory
-        _copy_multiple_inputs(config.input_path, tmpdir)
+        _copy_multiple_inputs(config.input_path, tmpdir, debug=config.debug)
         test_dir = os.path.join(tmpdir, "documents_test")
         os.rename(os.path.join(tmpdir, "documents"), test_dir)
 
@@ -855,6 +890,7 @@ def _run_train_test_overlap(config: DedupeConfig):
                 bloom_filter_file=current_bloom_filter,
                 pre_estimated_counts=pre_estimated_counts,
                 train_test_overlap=True,
+                debug=config.debug,
             )
             os.remove(os.path.join(tmpdir, "documents"))
 
@@ -874,6 +910,7 @@ def _run_train_test_overlap(config: DedupeConfig):
                 bloom_filter_file=current_bloom_filter,
                 pre_estimated_counts=pre_estimated_counts,
                 train_test_overlap=True,
+                debug=config.debug,
             )
             os.remove(os.path.join(tmpdir, "documents"))
 
@@ -888,7 +925,7 @@ def _run_train_test_overlap(config: DedupeConfig):
                     if fname.endswith(".jsonl.gz") and os.path.isfile(fpath):
                         os.remove(fpath)
             # Now upload only test overlap files
-            copy_files_out(tmpdir, ngram_output, current_attr_name)
+            copy_files_out(tmpdir, ngram_output, current_attr_name, config.debug)
 
             # d) Clean up the bloom-filter file to save space
             bf_path = os.path.join(tmpdir, current_bloom_filter)
