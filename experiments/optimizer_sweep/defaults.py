@@ -37,7 +37,7 @@ from experiments.evals.task_configs import (
 from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
-from experiments.optimizer_train_config import SimpleTrainConfig
+from experiments.simple_train_config import SimpleTrainConfig
 from marin.download.huggingface.download import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig

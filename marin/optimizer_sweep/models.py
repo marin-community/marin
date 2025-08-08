@@ -1,4 +1,3 @@
-from levanter.models.attention import AttentionBackend
 from levanter.models.llama import LlamaConfig
 
 
@@ -9,7 +8,7 @@ def calculate_param(config):
 
 
 def calculate_chinchilla(config):
-    # 1x Chinchilla rule of thumb = 20 tokens/parameter
+    # 1× Chinchilla rule of thumb = 20 tokens/parameter
     return calculate_param(config) * 20
 
 
@@ -24,28 +23,8 @@ llama_130m = LlamaConfig(
     num_heads=8,
     num_kv_heads=8,  # following the same ratio as the original code
     num_layers=32,
-    attn_backend=AttentionBackend.JAX_FLASH,
 )
 
-llama_130m_new = LlamaConfig(
-    seq_len=4096,
-    hidden_dim=512,
-    intermediate_dim=2048,
-    num_heads=8,
-    num_kv_heads=8,  # following the same ratio as the original code
-    num_layers=32,
-    upcast_attn=True,
-)
-
-llama_130m_old = LlamaConfig(
-    seq_len=4096,
-    hidden_dim=512,
-    intermediate_dim=2048,
-    num_heads=8,
-    num_kv_heads=8,  # following the same ratio as the original code
-    num_layers=32,
-    attn_backend=AttentionBackend.SPLASH,
-)
 
 # 2) ~300M params: embed_dim=768 => intermediate=3072 => 12 heads
 llama_300m = LlamaConfig(
@@ -84,8 +63,6 @@ map_tag_to_model = {
     "300m": llama_300m,
     "520m": llama_520m,
     "1.2b": llama_1_2b,
-    "130m_new": llama_130m_new,
-    "130m_old": llama_130m_old,
 }
 
 
@@ -95,4 +72,4 @@ if __name__ == "__main__":
     for tag, model_cfg in map_tag_to_model.items():
         params = calculate_param(model_cfg)
         chinchilla_tokens = calculate_chinchilla(model_cfg)
-        print(f"{tag}: ~{params/1e6:.2f}M params, 1x Chinchilla = ~{chinchilla_tokens/1e9:.1f}B tokens")
+        print(f"{tag}: ~{params/1e6:.2f}M params, 1× Chinchilla = ~{chinchilla_tokens/1e9:.1f}B tokens")
