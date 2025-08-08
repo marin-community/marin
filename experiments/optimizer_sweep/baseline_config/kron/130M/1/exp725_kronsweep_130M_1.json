@@ -1,0 +1,21 @@
+{
+  "baseline_config": {
+    "beta1": 0.98,
+    "block_size": 256,
+    "learning_rate": 0.002,
+    "max_grad_norm": 1.0,
+    "min_lr_ratio": 0,
+    "normalize_grads": true,
+    "partition_grads_into_blocks": true,
+    "preconditioner_init_scale": 1.0,
+    "preconditioner_lr": 0.1,
+    "preconditioner_update_probability": 0.05,
+    "train_batch_size": 128,
+    "update_prob_flat_start": 500,
+    "warmup": 2000,
+    "weight_decay": 0.9
+  },
+  "model_size": "130m",
+  "optimizer_name": "kron",
+  "target_chinchilla": 1
+}

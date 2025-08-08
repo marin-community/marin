@@ -1,6 +1,0 @@
-#!/bin/bash
-
-while true; do
-    python experiments/optimizer_sweep/external_monitor.py
-    sleep 30
-done

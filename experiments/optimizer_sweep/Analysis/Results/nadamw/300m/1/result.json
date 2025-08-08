@@ -1,0 +1,135 @@
+{
+  "best_config": {
+    "learning_rate": 0.008,
+    "weight_decay": 0.1,
+    "min_lr_ratio": 0,
+    "warmup": 2000,
+    "beta1": 0.95,
+    "beta2": 0.98,
+    "epsilon": 1e-10,
+    "max_grad_norm": 1,
+    "nesterov": true,
+    "train_batch_size": 128
+  },
+  "min_loss": 3.247661828994751,
+  "baseline": {
+    "loss": 3.247661828994751,
+    "wandb_id": "sweep-300m-6B-nadamwf15cf6lr0.008-wd0.1-minlr0-warmup2000-b10.95-28ca3a"
+  },
+  "ablations": [
+    {
+      "param": "learning_rate",
+      "value": 0.016,
+      "loss": 7.537909030914307,
+      "wandb_id": "sweep-300m-6B-nadamwb4c393lr0.016-wd0.1-minlr0-warmup2000-b10.95-ea7a28"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.032,
+      "loss": 7.695487976074219,
+      "wandb_id": "sweep-300m-6B-nadamw33ba92lr0.032-wd0.1-minlr0-warmup2000-b10.95-131dc6"
+    },
+    {
+      "param": "weight_decay",
+      "value": 0,
+      "loss": 3.2826294898986816,
+      "wandb_id": "sweep-300m-6B-nadamwe5c125lr0.008-wd0-minlr0-warmup2000-b10.95-b-2568cb"
+    },
+    {
+      "param": "weight_decay",
+      "value": 0.2,
+      "loss": 3.256657123565674,
+      "wandb_id": "sweep-300m-6B-nadamw261788lr0.008-wd0.2-minlr0-warmup2000-b10.95-157b6b"
+    },
+    {
+      "param": "warmup",
+      "value": 500,
+      "loss": 7.744184970855713,
+      "wandb_id": "sweep-300m-6B-nadamw38bf56lr0.008-wd0.1-minlr0-warmup500-b10.95--60b55d"
+    },
+    {
+      "param": "warmup",
+      "value": 1000,
+      "loss": 7.420575141906738,
+      "wandb_id": "sweep-300m-6B-nadamw893e1dlr0.008-wd0.1-minlr0-warmup1000-b10.95-62bb8f"
+    },
+    {
+      "param": "warmup",
+      "value": 4000,
+      "loss": 3.256139039993286,
+      "wandb_id": "sweep-300m-6B-nadamw7d5985lr0.008-wd0.1-minlr0-warmup4000-b10.95-876f95"
+    },
+    {
+      "param": "beta1",
+      "value": 0.8,
+      "loss": 7.5422682762146,
+      "wandb_id": "sweep-300m-6B-nadamw0ba9cdlr0.008-wd0.1-minlr0-warmup2000-b10.8--70e8b0"
+    },
+    {
+      "param": "beta1",
+      "value": 0.9,
+      "loss": 7.054280757904053,
+      "wandb_id": "sweep-300m-6B-nadamwacb766lr0.008-wd0.1-minlr0-warmup2000-b10.9--ff6a2e"
+    },
+    {
+      "param": "beta1",
+      "value": 0.98,
+      "loss": 3.25406813621521,
+      "wandb_id": "sweep-300m-6B-nadamwd6541dlr0.008-wd0.1-minlr0-warmup2000-b10.98-84afaa"
+    },
+    {
+      "param": "beta2",
+      "value": 0.9,
+      "loss": 3.262681245803833,
+      "wandb_id": "sweep-300m-6B-nadamw6046ddlr0.008-wd0.1-minlr0-warmup2000-b10.95-127527"
+    },
+    {
+      "param": "beta2",
+      "value": 0.95,
+      "loss": 3.256038188934326,
+      "wandb_id": "sweep-300m-6B-nadamwc2a8e4lr0.008-wd0.1-minlr0-warmup2000-b10.95-3a5d38"
+    },
+    {
+      "param": "epsilon",
+      "value": 1e-25,
+      "loss": 3.250220775604248,
+      "wandb_id": "sweep-300m-6B-nadamwb27e94lr0.008-wd0.1-minlr0-warmup2000-b10.95-4bf48d"
+    },
+    {
+      "param": "epsilon",
+      "value": 1e-20,
+      "loss": 3.250220775604248,
+      "wandb_id": "sweep-300m-6B-nadamw43c706lr0.008-wd0.1-minlr0-warmup2000-b10.95-bf751b"
+    },
+    {
+      "param": "epsilon",
+      "value": 1e-15,
+      "loss": 3.249905586242676,
+      "wandb_id": "sweep-300m-6B-nadamw770e16lr0.008-wd0.1-minlr0-warmup2000-b10.95-126b23"
+    },
+    {
+      "param": "max_grad_norm",
+      "value": 0,
+      "loss": 3.260376453399658,
+      "wandb_id": "sweep-300m-6B-nadamw05eb2blr0.008-wd0.1-minlr0-warmup2000-b10.95-e73f92"
+    },
+    {
+      "param": "max_grad_norm",
+      "value": 2.0,
+      "loss": 3.250333786010742,
+      "wandb_id": "sweep-300m-6B-nadamwefd789lr0.008-wd0.1-minlr0-warmup2000-b10.95-adccc7"
+    },
+    {
+      "param": "train_batch_size",
+      "value": 256,
+      "loss": 3.2720677852630615,
+      "wandb_id": "sweep-300m-6B-nadamwac3d1clr0.008-wd0.1-minlr0-warmup2000-b10.95-62f9ad"
+    },
+    {
+      "param": "train_batch_size",
+      "value": 512,
+      "loss": 3.343742609024048,
+      "wandb_id": "sweep-300m-6B-nadamw3e994elr0.008-wd0.1-minlr0-warmup2000-b10.95-41f06f"
+    }
+  ]
+}

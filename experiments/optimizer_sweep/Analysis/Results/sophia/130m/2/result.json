@@ -1,0 +1,13 @@
+{
+  "best_config": {
+    "learning_rate": 0.004,
+    "weight_decay": 0.1,
+    "warmup": 4000,
+    "beta1": 0.95,
+    "beta2": 0.9,
+    "gamma": 0.0125,
+    "epsilon": 1e-07,
+    "train_batch_size": 128
+  },
+  "min_loss": 3.413950681686402
+}

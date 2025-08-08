@@ -1,0 +1,163 @@
+{
+  "best_config": {
+    "learning_rate": 0.001,
+    "weight_decay": 0.5,
+    "beta1": 0.95,
+    "preconditioner_lr": 0.2,
+    "preconditioner_init_scale": 1,
+    "max_grad_norm": 1,
+    "normalize_grads": true,
+    "partition_grads_into_blocks": true,
+    "block_size": 256,
+    "preconditioner_update_probability": 0.1,
+    "update_prob_flat_start": 2000,
+    "warmup": 1000,
+    "min_lr_ratio": 0,
+    "train_batch_size": 128
+  },
+  "min_loss": 3.2414581775665283,
+  "baseline": {
+    "loss": 3.2441420555114746,
+    "wandb_id": "sweep-300m-6B-kron9fb147lr0.001-wd0.5-b10.95-plr0.2-pis1-gn1-nor-d54c60"
+  },
+  "ablations": [
+    {
+      "param": "learning_rate",
+      "value": 0.0005,
+      "loss": 3.262598991394043,
+      "wandb_id": "sweep-300m-6B-kron4eb26flr0.0005-wd0.5-b10.95-plr0.2-pis1-gn1-no-3b9228"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.002,
+      "loss": 3.2454416751861572,
+      "wandb_id": "sweep-300m-6B-krond49014lr0.002-wd0.5-b10.95-plr0.2-pis1-gn1-nor-b57c7c"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.004,
+      "loss": 7.635653972625732,
+      "wandb_id": "sweep-300m-6B-kron351c0clr0.004-wd0.5-b10.95-plr0.2-pis1-gn1-nor-dea42d"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.008,
+      "loss": 6.923402786254883,
+      "wandb_id": "sweep-300m-6B-kronb28e04lr0.008-wd0.5-b10.95-plr0.2-pis1-gn1-nor-8d91a1"
+    },
+    {
+      "param": "weight_decay",
+      "value": 0.0,
+      "loss": 3.280364751815796,
+      "wandb_id": "sweep-300m-6B-kron1939b5lr0.001-wd0.0-b10.95-plr0.2-pis1-gn1-nor-2af8b7"
+    },
+    {
+      "param": "weight_decay",
+      "value": 0.7,
+      "loss": 3.2414581775665283,
+      "wandb_id": "sweep-300m-6B-kron0a397clr0.001-wd0.7-b10.95-plr0.2-pis1-gn1-nor-f6a567"
+    },
+    {
+      "param": "weight_decay",
+      "value": 0.9,
+      "loss": 3.2431282997131348,
+      "wandb_id": "sweep-300m-6B-kron844b62lr0.001-wd0.9-b10.95-plr0.2-pis1-gn1-nor-5156e6"
+    },
+    {
+      "param": "beta1",
+      "value": 0.9,
+      "loss": 3.247934103012085,
+      "wandb_id": "sweep-300m-6B-kron9ac4c0lr0.001-wd0.5-b10.9-plr0.2-pis1-gn1-norm-2f58ed"
+    },
+    {
+      "param": "beta1",
+      "value": 0.98,
+      "loss": 3.2437450885772705,
+      "wandb_id": "sweep-300m-6B-kron06f9b7lr0.001-wd0.5-b10.98-plr0.2-pis1-gn1-nor-67674b"
+    },
+    {
+      "param": "preconditioner_lr",
+      "value": 0.1,
+      "loss": 3.2468905448913574,
+      "wandb_id": "sweep-300m-6B-kron2dfba4lr0.001-wd0.5-b10.95-plr0.1-pis1-gn1-nor-276c3b"
+    },
+    {
+      "param": "max_grad_norm",
+      "value": 0.0,
+      "loss": 3.2441420555114746,
+      "wandb_id": "sweep-300m-6B-kronedc5a1lr0.001-wd0.5-b10.95-plr0.2-pis1-gn0.0-n-736741"
+    },
+    {
+      "param": "max_grad_norm",
+      "value": 2.0,
+      "loss": 3.2441420555114746,
+      "wandb_id": "sweep-300m-6B-krona55554lr0.001-wd0.5-b10.95-plr0.2-pis1-gn2.0-n-2b58f3"
+    },
+    {
+      "param": "normalize_grads",
+      "value": false,
+      "loss": 3.2525768280029297,
+      "wandb_id": "sweep-300m-6B-kronbd9170lr0.001-wd0.5-b10.95-plr0.2-pis1-gn1-nor-0add5a"
+    },
+    {
+      "param": "block_size",
+      "value": 128,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "block_size",
+      "value": 512,
+      "loss": 3.243102550506592,
+      "wandb_id": "sweep-300m-6B-kron1bfdd1lr0.001-wd0.5-b10.95-plr0.2-pis1-gn1-nor-534bfe"
+    },
+    {
+      "param": "preconditioner_update_probability",
+      "value": 0.05,
+      "loss": 3.244971513748169,
+      "wandb_id": "sweep-300m-6B-kron79a66dlr0.001-wd0.5-b10.95-plr0.2-pis1-gn1-nor-11f4a3"
+    },
+    {
+      "param": "update_prob_flat_start",
+      "value": 500,
+      "loss": 3.247555732727051,
+      "wandb_id": "sweep-300m-6B-krondc1418lr0.001-wd0.5-b10.95-plr0.2-pis1-gn1-nor-f0e290"
+    },
+    {
+      "param": "update_prob_flat_start",
+      "value": 1000,
+      "loss": 3.245354175567627,
+      "wandb_id": "sweep-300m-6B-krona5b2cclr0.001-wd0.5-b10.95-plr0.2-pis1-gn1-nor-c5851e"
+    },
+    {
+      "param": "warmup",
+      "value": 2000,
+      "loss": 3.2485809326171875,
+      "wandb_id": "sweep-300m-6B-kron624f48lr0.001-wd0.5-b10.95-plr0.2-pis1-gn1-nor-30df74"
+    },
+    {
+      "param": "warmup",
+      "value": 4000,
+      "loss": 3.2552976608276367,
+      "wandb_id": "sweep-300m-6B-kron725c70lr0.001-wd0.5-b10.95-plr0.2-pis1-gn1-nor-641c26"
+    },
+    {
+      "param": "train_batch_size",
+      "value": 256,
+      "loss": 3.268442392349243,
+      "wandb_id": "sweep-300m-6B-kron3e44e0lr0.001-wd0.5-b10.95-plr0.2-pis1-gn1-nor-e9e4f3"
+    },
+    {
+      "param": "train_batch_size",
+      "value": 512,
+      "loss": 3.30893874168396,
+      "wandb_id": "sweep-300m-6B-krond7d67alr0.001-wd0.5-b10.95-plr0.2-pis1-gn1-nor-85324c"
+    },
+    {
+      "param": "train_batch_size",
+      "value": 1024,
+      "loss": 3.392807722091675,
+      "wandb_id": "sweep-300m-6B-kron8b18a1lr0.001-wd0.5-b10.95-plr0.2-pis1-gn1-nor-4605e0"
+    }
+  ]
+}
