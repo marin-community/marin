@@ -1,26 +1,23 @@
 import wandb
-
-# Initialize the WandB API
-api = wandb.Api()
-username = "marin-community"
-project = "optimizer-scaling"
-thshold = 3e-3
 from marin.optimizer_sweep.utils_simp import approximate, create_configs, check_baseline_run, grab_best_run, convert_run_to_config, bad_number
 import copy
 import dataclasses
 import logging
 from collections.abc import Sequence
 from marin.resources import ResourceConfig, TpuPodConfig
-
 import ray
 from levanter.models.llama import LlamaConfig
 
-from experiments.optimizer_train_config import SimpleTrainConfig
+from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, versioned
 
 logger = logging.getLogger("ray")
 
-
+# Initialize the WandB API
+api = wandb.Api()
+username = "marin-community"
+project = "optimizer-scaling"
+thshold = 3e-3
 
 def config_to_train_config(
     config_in_dict,

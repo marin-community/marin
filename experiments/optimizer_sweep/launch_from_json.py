@@ -9,7 +9,6 @@ import argparse
 import json
 from pathlib import Path
 from typing import Any
-
 from marin.optimizer_sweep.template import template
 
 
@@ -27,7 +26,7 @@ def normalize_phase(phase: str) -> str:
         return phase
     raise ValueError(f"Unknown phase: {phase}")
 
-
+OPT_SWEEP_DIR = Path("experiments/optimizer_sweep")
 def find_jsons(phase: str, optimizer: str, chinchilla: int | float) -> list[tuple[Path, Path | None]]:
     phase_dir = OPT_SWEEP_DIR / "baseline_config" / phase / optimizer.lower() / str(chinchilla)
     grids_dir = OPT_SWEEP_DIR / "sweep_grids" / phase / optimizer.lower() / str(chinchilla)
@@ -109,8 +108,8 @@ def main() -> None:
                         "force_run": args.force_run,
                         "debug": args.debug,
                         "random_suffix": args.random_suffix,
-                        "baseline_config_keys": list(baseline_config.keys()),
-                        "sweep_grids_keys": list(sweep_grids.keys()),
+                        "baseline_config": baseline_config,
+                        "sweep_grids": sweep_grids,
                     }
                 )
             )
