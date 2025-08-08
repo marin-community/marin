@@ -1,7 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.patches import Patch
 from scipy.optimize import curve_fit
 
 # Set global font size for plots
@@ -83,6 +82,7 @@ for _, row in df.iterrows():
     records.append({"optimizer": row["optimizer"], "model_size": model_size, "D_opt": D_opt, "D_eff": D_eff})
 
 eff_df = pd.DataFrame(records)
+from matplotlib.patches import Patch
 
 # Plot D_eff vs D_opt with a y=x line for each model size
 for model_size in sorted(eff_df["model_size"].unique()):
@@ -92,9 +92,9 @@ for model_size in sorted(eff_df["model_size"].unique()):
     d_min, d_max = sub["D_opt"].min(), sub["D_opt"].max()
     x_vals = np.array([d_min, d_max])
 
-    grey_patch = Patch(facecolor="bisque", alpha=0.5, label=r"1.0-1.2$\times$")
-    blue_patch = Patch(facecolor="lightblue", alpha=0.5, label=r"1.2-1.3$\times$")
-    green_patch = Patch(facecolor="lightgreen", alpha=0.5, label=r"1.3-1.4$\times$")
+    grey_patch = Patch(facecolor="bisque", alpha=0.5, label=r"1.0–1.2$\times$")
+    blue_patch = Patch(facecolor="lightblue", alpha=0.5, label=r"1.2–1.3$\times$")
+    green_patch = Patch(facecolor="lightgreen", alpha=0.5, label=r"1.3–1.4$\times$")
     ax.fill_between(x_vals, x_vals, x_vals * 1.2, color="bisque", alpha=0.5)
     ax.fill_between(x_vals, x_vals * 1.2, x_vals * 1.3, color="lightblue", alpha=0.5)
     ax.fill_between(x_vals, x_vals * 1.3, x_vals * 1.4, color="lightgreen", alpha=0.5)
@@ -128,6 +128,4 @@ for model_size in sorted(eff_df["model_size"].unique()):
     plt.title(f"$D_{{eff}}$ vs $D_{{opt}}$ (Model Size: {model_size.upper()})", fontsize=20)
     # plt.legend(loc='best', fontsize=16)
     plt.tight_layout()
-    plt.savefig(
-        f"experiments/optimizer_sweep/Analysis/PhaseIII_16x/figs/D_eff_vs_D_opt_{model_size}M.pdf", bbox_inches="tight"
-    )
+    plt.savefig(f"experiments/optimizer_sweep/Analysis/PhaseIII_16x/figs/D_eff_vs_D_opt_{model_size}M.pdf", bbox_inches="tight")

@@ -30,7 +30,9 @@
     "130m": {
       "16": [
         {
-          "sweep_grids": {},
+          "sweep_grids": {
+            "learning_rate": [0.008, 0.004]
+          },
           "baseline_config": {
             "learning_rate": 0.008,
             "weight_decay": 0.1,

@@ -1,0 +1,206 @@
+\subsection{Sweeping Results for Adam-Mini}% mini - 130m on 1x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Adam-Mini on 130m on 1x Chinchilla Data}
+\label{tab:ablation_adam-mini_130m_on_1x_chinchilla_data}
+\begin{tabular}{ccccccccccc}
+\toprule
+$\beta_1$ & $\beta_2$ & $\epsilon$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{BSZ}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.9 & 0.98 & 1e-15 & 0.008 & 1 & 0 & 128 & 2000 & 0.1 & 3.542 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-minif4e66flr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-4d3c05}{0} \\
+\midrule
+0.95 & -- & -- & -- & -- & -- & -- & -- & -- & 3.560 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-minia4c40alr0.008-wd0.1-minlr0-warmup2000-b10.95-b-73290f}{1} \\
+0.98 & -- & -- & -- & -- & -- & -- & -- & -- & 7.733 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-mini59cf9alr0.008-wd0.1-minlr0-warmup2000-b10.98-b-df073b}{2} \\
+-- & 0.9 & -- & -- & -- & -- & -- & -- & -- & 3.554 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-mini84080dlr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-d74517}{3} \\
+-- & 0.95 & -- & -- & -- & -- & -- & -- & -- & 3.545 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-minic9835clr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-d57aa7}{4} \\
+-- & -- & 1e-25 & -- & -- & -- & -- & -- & -- & 3.546 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-mini510347lr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-9a27cf}{5} \\
+-- & -- & 1e-20 & -- & -- & -- & -- & -- & -- & 3.546 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-mini6d8617lr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-7a2d5e}{6} \\
+-- & -- & 1e-10 & -- & -- & -- & -- & -- & -- & 3.548 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-mini845331lr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-fadab9}{7} \\
+-- & -- & -- & 0.004 & -- & -- & -- & -- & -- & 3.558 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-mini08c39flr0.004-wd0.1-minlr0-warmup2000-b10.9-b2-1b064a}{8} \\
+-- & -- & -- & 0.016 & -- & -- & -- & -- & -- & 7.800 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-mini22b748lr0.016-wd0.1-minlr0-warmup2000-b10.9-b2-6d20c4}{9} \\
+-- & -- & -- & 0.032 & -- & -- & -- & -- & -- & 7.825 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-mini6489b1lr0.032-wd0.1-minlr0-warmup2000-b10.9-b2-fcd042}{10} \\
+-- & -- & -- & -- & 0 & -- & -- & -- & -- & 3.542 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-mini55874clr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-324f5b}{11} \\
+-- & -- & -- & -- & 2.0 & -- & -- & -- & -- & 3.542 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-mini08c2adlr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-4e9589}{12} \\
+-- & -- & -- & -- & -- & -- & 256 & -- & -- & 3.785 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-minidd6b61lr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-b988c3}{13} \\
+-- & -- & -- & -- & -- & -- & -- & 500 & -- & 7.725 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-mini0c2c00lr0.008-wd0.1-minlr0-warmup500-b10.9-b20-8094ab}{14} \\
+-- & -- & -- & -- & -- & -- & -- & 1000 & -- & 7.729 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-minibd49d8lr0.008-wd0.1-minlr0-warmup1000-b10.9-b2-28a98b}{15} \\
+-- & -- & -- & -- & -- & -- & -- & 4000 & -- & 3.587 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-minif55f2dlr0.008-wd0.1-minlr0-warmup4000-b10.9-b2-b00ef5}{16} \\
+-- & -- & -- & -- & -- & -- & -- & -- & 0 & 3.566 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-mini73fab0lr0.008-wd0-minlr0-warmup2000-b10.9-b20.-aac58f}{17} \\
+-- & -- & -- & -- & -- & -- & -- & -- & 0.2 & 3.589 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-2B-mini9fac99lr0.008-wd0.2-minlr0-warmup2000-b10.9-b2-86f1dc}{18} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% mini - 130m on 2x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Adam-Mini on 130m on 2x Chinchilla Data}
+\label{tab:ablation_adam-mini_130m_on_2x_chinchilla_data}
+\begin{tabular}{ccccccccccc}
+\toprule
+$\beta_1$ & $\beta_2$ & $\epsilon$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{BSZ}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.9 & 0.98 & 1e-20 & 0.008 & 2 & 0 & 128 & 2000 & 0.1 & 3.416 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-mini609ad2lr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-b557c0}{0} \\
+\midrule
+0.95 & -- & -- & -- & -- & -- & -- & -- & -- & 3.429 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-mini20b8b1lr0.008-wd0.1-minlr0-warmup2000-b10.95-b-b46cb8}{1} \\
+0.98 & -- & -- & -- & -- & -- & -- & -- & -- & 7.520 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-minideec58lr0.008-wd0.1-minlr0-warmup2000-b10.98-b-62bc48}{2} \\
+-- & 0.9 & -- & -- & -- & -- & -- & -- & -- & 3.422 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-minib27e6blr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-04f0b5}{3} \\
+-- & 0.95 & -- & -- & -- & -- & -- & -- & -- & 3.419 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-mini51a865lr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-856cfa}{4} \\
+-- & -- & 1e-25 & -- & -- & -- & -- & -- & -- & 3.416 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-mini7d5c8flr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-dd8629}{5} \\
+-- & -- & 1e-15 & -- & -- & -- & -- & -- & -- & 3.416 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-mini8f577dlr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-361bf6}{6} \\
+-- & -- & 1e-10 & -- & -- & -- & -- & -- & -- & 3.415 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-minidbb1e7lr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-9d6767}{7} \\
+-- & -- & -- & 0.004 & -- & -- & -- & -- & -- & 3.425 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-miniab7841lr0.004-wd0.1-minlr0-warmup2000-b10.9-b2-0d5f4f}{8} \\
+-- & -- & -- & 0.016 & -- & -- & -- & -- & -- & 7.796 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-mini3fbff3lr0.016-wd0.1-minlr0-warmup2000-b10.9-b2-e1ec05}{9} \\
+-- & -- & -- & 0.032 & -- & -- & -- & -- & -- & 7.721 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-minif2196dlr0.032-wd0.1-minlr0-warmup2000-b10.9-b2-bbaaf6}{10} \\
+-- & -- & -- & -- & 0 & -- & -- & -- & -- & 3.416 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-mini8d8c2clr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-4ed1ed}{11} \\
+-- & -- & -- & -- & 1.0 & -- & -- & -- & -- & 3.416 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-mini40a6c3lr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-ed39b1}{12} \\
+-- & -- & -- & -- & -- & -- & 256 & -- & -- & 3.487 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-mini4ff858lr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-e5ff00}{13} \\
+-- & -- & -- & -- & -- & -- & 512 & -- & -- & 3.758 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-mini9232dclr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-f9c99a}{14} \\
+-- & -- & -- & -- & -- & -- & -- & 500 & -- & 7.617 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-mini049b41lr0.008-wd0.1-minlr0-warmup500-b10.9-b20-54b29d}{15} \\
+-- & -- & -- & -- & -- & -- & -- & 1000 & -- & 7.445 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-mini0c45d6lr0.008-wd0.1-minlr0-warmup1000-b10.9-b2-a07cd7}{16} \\
+-- & -- & -- & -- & -- & -- & -- & 4000 & -- & 3.424 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-mini05a729lr0.008-wd0.1-minlr0-warmup4000-b10.9-b2-68948f}{17} \\
+-- & -- & -- & -- & -- & -- & -- & -- & 0 & 3.447 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-minicf80e8lr0.008-wd0-minlr0-warmup2000-b10.9-b20.-e3acc2}{18} \\
+-- & -- & -- & -- & -- & -- & -- & -- & 0.2 & 3.426 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-5B-minimc35720lr0.008-wd0.2-minlr0-warmup2000-b10.9-b-54c1f6}{19} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% mini - 130m on 4x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Adam-Mini on 130m on 4x Chinchilla Data}
+\label{tab:ablation_adam-mini_130m_on_4x_chinchilla_data}
+\begin{tabular}{ccccccccccc}
+\toprule
+$\beta_1$ & $\beta_2$ & $\epsilon$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{BSZ}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.9 & 0.98 & 1e-10 & 0.008 & 1 & 0 & 128 & 2000 & 0.1 & 3.328 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-mini8e0689lr0.008-wd0.1-minlr0-warmup2000-b10.9-b-1de787}{0} \\
+\midrule
+0.95 & -- & -- & -- & -- & -- & -- & -- & -- & 3.360 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-mini5655falr0.008-wd0.1-minlr0-warmup2000-b10.95--7977a5}{1} \\
+0.98 & -- & -- & -- & -- & -- & -- & -- & -- & 7.771 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-mini608e8clr0.008-wd0.1-minlr0-warmup2000-b10.98--851955}{2} \\
+-- & 0.9 & -- & -- & -- & -- & -- & -- & -- & 3.337 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-minic61cb4lr0.008-wd0.1-minlr0-warmup2000-b10.9-b-3daee1}{3} \\
+-- & 0.95 & -- & -- & -- & -- & -- & -- & -- & 3.331 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-minica3b57lr0.008-wd0.1-minlr0-warmup2000-b10.9-b-c56f5e}{4} \\
+-- & -- & 1e-25 & -- & -- & -- & -- & -- & -- & 3.331 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-mini98f892lr0.008-wd0.1-minlr0-warmup2000-b10.9-b-b90941}{5} \\
+-- & -- & 1e-20 & -- & -- & -- & -- & -- & -- & 3.331 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-mini3af704lr0.008-wd0.1-minlr0-warmup2000-b10.9-b-522688}{6} \\
+-- & -- & 1e-15 & -- & -- & -- & -- & -- & -- & 3.334 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-mini99be6blr0.008-wd0.1-minlr0-warmup2000-b10.9-b-c9b783}{7} \\
+-- & -- & -- & 0.004 & -- & -- & -- & -- & -- & 3.334 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-mini593d31lr0.004-wd0.1-minlr0-warmup2000-b10.9-b-17e1ff}{8} \\
+-- & -- & -- & 0.016 & -- & -- & -- & -- & -- & 7.717 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-mini76c7dflr0.016-wd0.1-minlr0-warmup2000-b10.9-b-42ab2c}{9} \\
+-- & -- & -- & 0.032 & -- & -- & -- & -- & -- & 7.652 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-mini7491aelr0.032-wd0.1-minlr0-warmup2000-b10.9-b-eec75e}{10} \\
+-- & -- & -- & -- & 0 & -- & -- & -- & -- & 3.329 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-minif4de6alr0.008-wd0.1-minlr0-warmup2000-b10.9-b-8231f8}{11} \\
+-- & -- & -- & -- & 2.0 & -- & -- & -- & -- & 3.329 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-minifd3dbflr0.008-wd0.1-minlr0-warmup2000-b10.9-b-06509e}{12} \\
+-- & -- & -- & -- & -- & -- & 256 & -- & -- & 3.363 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-mini5a8324lr0.008-wd0.1-minlr0-warmup2000-b10.9-b-b209a4}{13} \\
+-- & -- & -- & -- & -- & -- & 512 & -- & -- & 3.447 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-mini845331lr0.008-wd0.1-minlr0-warmup2000-b10.9-b-d5fe03}{14} \\
+-- & -- & -- & -- & -- & -- & 1024 & -- & -- & 3.784 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-mini3fca05lr0.008-wd0.1-minlr0-warmup2000-b10.9-b-a825c0}{15} \\
+-- & -- & -- & -- & -- & -- & -- & 500 & -- & 7.855 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-minio76dae9lr0.008-wd0.1-minlr0-warmup500-b10.9-b-134f1f}{16} \\
+-- & -- & -- & -- & -- & -- & -- & 1000 & -- & 7.411 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-mini684316lr0.008-wd0.1-minlr0-warmup1000-b10.9-b-419ffe}{17} \\
+-- & -- & -- & -- & -- & -- & -- & 4000 & -- & 3.331 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-mini48c902lr0.008-wd0.1-minlr0-warmup4000-b10.9-b-c9d5f8}{18} \\
+-- & -- & -- & -- & -- & -- & -- & -- & 0 & 3.364 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-mini774178lr0.008-wd0-minlr0-warmup2000-b10.9-b20-1ab0b9}{19} \\
+-- & -- & -- & -- & -- & -- & -- & -- & 0.2 & 3.365 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-10B-minic5c69blr0.008-wd0.2-minlr0-warmup2000-b10.9-b-0638b6}{20} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% mini - 130m on 8x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Adam-Mini on 130m on 8x Chinchilla Data}
+\label{tab:ablation_adam-mini_130m_on_8x_chinchilla_data}
+\begin{tabular}{ccccccccccc}
+\toprule
+$\beta_1$ & $\beta_2$ & $\epsilon$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{BSZ}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.9 & 0.98 & 1e-10 & 0.008 & 1 & 0 & 128 & 2000 & 0.1 & 3.266 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-miniac2e1elr0.008-wd0.1-minlr0-warmup2000-b10.9-b-d489dc}{0} \\
+\midrule
+0.95 & -- & -- & -- & -- & -- & -- & -- & -- & 3.290 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-mini117b84lr0.008-wd0.1-minlr0-warmup2000-b10.95--817e0e}{1} \\
+0.98 & -- & -- & -- & -- & -- & -- & -- & -- & 7.552 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-mini9179b1lr0.008-wd0.1-minlr0-warmup2000-b10.98--93bc9f}{2} \\
+-- & 0.9 & -- & -- & -- & -- & -- & -- & -- & 3.281 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-minic5318dlr0.008-wd0.1-minlr0-warmup2000-b10.9-b-6f8a67}{3} \\
+-- & 0.95 & -- & -- & -- & -- & -- & -- & -- & 3.267 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-minic96875lr0.008-wd0.1-minlr0-warmup2000-b10.9-b-fa1dd8}{4} \\
+-- & -- & 1e-25 & -- & -- & -- & -- & -- & -- & 3.267 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-minidd3b3clr0.008-wd0.1-minlr0-warmup2000-b10.9-b-1d94ce}{5} \\
+-- & -- & 1e-20 & -- & -- & -- & -- & -- & -- & 3.267 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-mini88561dlr0.008-wd0.1-minlr0-warmup2000-b10.9-b-f66e88}{6} \\
+-- & -- & 1e-15 & -- & -- & -- & -- & -- & -- & 3.266 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-mini3c1780lr0.008-wd0.1-minlr0-warmup2000-b10.9-b-9a05a7}{7} \\
+-- & -- & -- & 0.004 & -- & -- & -- & -- & -- & 3.264 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-mini5c5f85lr0.004-wd0.1-minlr0-warmup2000-b10.9-b-eaf3db}{8} \\
+-- & -- & -- & 0.016 & -- & -- & -- & -- & -- & 7.614 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-minidb82b6lr0.016-wd0.1-minlr0-warmup2000-b10.9-b-765b78}{9} \\
+-- & -- & -- & 0.032 & -- & -- & -- & -- & -- & 7.773 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-minid9a283lr0.032-wd0.1-minlr0-warmup2000-b10.9-b-3d6c8c}{10} \\
+-- & -- & -- & -- & 0 & -- & -- & -- & -- & 3.268 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-mini9fbdb0lr0.008-wd0.1-minlr0-warmup2000-b10.9-b-d9603a}{11} \\
+-- & -- & -- & -- & 2.0 & -- & -- & -- & -- & 3.270 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-mini7a2e9flr0.008-wd0.1-minlr0-warmup2000-b10.9-b-74c0e1}{12} \\
+-- & -- & -- & -- & -- & -- & 256 & -- & -- & 3.281 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-mini8e0689lr0.008-wd0.1-minlr0-warmup2000-b10.9-b-f8ffc0}{13} \\
+-- & -- & -- & -- & -- & -- & 512 & -- & -- & 3.324 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-mini5a8324lr0.008-wd0.1-minlr0-warmup2000-b10.9-b-82522f}{14} \\
+-- & -- & -- & -- & -- & -- & 1024 & -- & -- & 3.426 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-mini845331lr0.008-wd0.1-minlr0-warmup2000-b10.9-b-05faa2}{15} \\
+-- & -- & -- & -- & -- & -- & -- & 500 & -- & 7.868 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-minid9bbbalr0.008-wd0.1-minlr0-warmup500-b10.9-b2-744cf6}{16} \\
+-- & -- & -- & -- & -- & -- & -- & 1000 & -- & 7.022 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-mini056a5flr0.008-wd0.1-minlr0-warmup1000-b10.9-b-d7cc88}{17} \\
+-- & -- & -- & -- & -- & -- & -- & 4000 & -- & 3.266 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-mini9445d9lr0.008-wd0.1-minlr0-warmup4000-b10.9-b-ae303f}{18} \\
+-- & -- & -- & -- & -- & -- & -- & -- & 0 & 3.304 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-mini2e27bblr0.008-wd0-minlr0-warmup2000-b10.9-b20-c75282}{19} \\
+-- & -- & -- & -- & -- & -- & -- & -- & 0.2 & 3.291 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-130m-21B-mini593df5lr0.008-wd0.2-minlr0-warmup2000-b10.9-b-27dd40}{20} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% mini - 300m on 1x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Adam-Mini on 300m on 1x Chinchilla Data}
+\label{tab:ablation_adam-mini_300m_on_1x_chinchilla_data}
+\begin{tabular}{ccccccccccc}
+\toprule
+$\beta_1$ & $\beta_2$ & $\epsilon$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{BSZ}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.9 & 0.98 & 1e-25 & 0.004 & 2 & 0 & 128 & 2000 & 0.2 & 3.272 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-minimf93988lr0.004-wd0.2-minlr0-warmup2000-b10.9-b-1a622b}{0} \\
+\midrule
+0.95 & -- & -- & -- & -- & -- & -- & -- & -- & 3.276 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-minic68fa6lr0.004-wd0.2-minlr0-warmup2000-b10.95-b-61c14d}{1} \\
+0.98 & -- & -- & -- & -- & -- & -- & -- & -- & 8.024 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-minie808f4lr0.004-wd0.2-minlr0-warmup2000-b10.98-b-2ad92e}{2} \\
+-- & 0.9 & -- & -- & -- & -- & -- & -- & -- & 3.279 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-minim7e5831lr0.004-wd0.2-minlr0-warmup2000-b10.9-b-3f89ca}{3} \\
+-- & 0.95 & -- & -- & -- & -- & -- & -- & -- & 3.277 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-mini3022d1lr0.004-wd0.2-minlr0-warmup2000-b10.9-b2-0db993}{4} \\
+-- & -- & 1e-25 & -- & -- & -- & -- & -- & -- & 3.272 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-minimf93988lr0.004-wd0.2-minlr0-warmup2000-b10.9-b-1a622b}{5} \\
+-- & -- & 1e-20 & -- & -- & -- & -- & -- & -- & 3.272 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-mini3ff087lr0.004-wd0.2-minlr0-warmup2000-b10.9-b2-e0d948}{6} \\
+-- & -- & 1e-15 & -- & -- & -- & -- & -- & -- & 3.273 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-minim4cb19elr0.004-wd0.2-minlr0-warmup2000-b10.9-b-4a59e2}{7} \\
+-- & -- & 1e-10 & -- & -- & -- & -- & -- & -- & 3.273 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-minim8dac9blr0.004-wd0.2-minlr0-warmup2000-b10.9-b-2ed5f7}{8} \\
+-- & -- & -- & 0.008 & -- & -- & -- & -- & -- & 7.859 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-minim70e785lr0.008-wd0.2-minlr0-warmup2000-b10.9-b-8588ff}{9} \\
+-- & -- & -- & 0.016 & -- & -- & -- & -- & -- & 7.990 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-mini7b7df9lr0.016-wd0.2-minlr0-warmup2000-b10.9-b2-7d82fa}{10} \\
+-- & -- & -- & 0.032 & -- & -- & -- & -- & -- & 8.581 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-mini1247b4lr0.032-wd0.2-minlr0-warmup2000-b10.9-b2-b5154c}{11} \\
+-- & -- & -- & -- & 0 & -- & -- & -- & -- & 3.272 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-minimf375ddlr0.004-wd0.2-minlr0-warmup2000-b10.9-b-eeb31b}{12} \\
+-- & -- & -- & -- & 1.0 & -- & -- & -- & -- & 3.272 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-mini0658b0lr0.004-wd0.2-minlr0-warmup2000-b10.9-b2-47b3ae}{13} \\
+-- & -- & -- & -- & -- & -- & 256 & -- & -- & 5.691 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-minim043b8elr0.004-wd0.2-minlr0-warmup2000-b10.9-b-687e85}{14} \\
+-- & -- & -- & -- & -- & -- & 512 & -- & -- & 3.629 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-minim140e6dlr0.004-wd0.2-minlr0-warmup2000-b10.9-b-2bda97}{15} \\
+-- & -- & -- & -- & -- & -- & -- & 500 & -- & 7.020 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-minim159817lr0.004-wd0.2-minlr0-warmup500-b10.9-b2-8ca381}{16} \\
+-- & -- & -- & -- & -- & -- & -- & 1000 & -- & 7.042 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-mini1778f2lr0.004-wd0.2-minlr0-warmup1000-b10.9-b2-55a012}{17} \\
+-- & -- & -- & -- & -- & -- & -- & 4000 & -- & 3.280 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-minim6fb244lr0.004-wd0.2-minlr0-warmup4000-b10.9-b-4c5f20}{18} \\
+-- & -- & -- & -- & -- & -- & -- & -- & 0 & 3.336 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-mini59d801lr0.004-wd0-minlr0-warmup2000-b10.9-b20.-559ac1}{19} \\
+-- & -- & -- & -- & -- & -- & -- & -- & 0.1 & 3.280 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-6B-minimc4311dlr0.004-wd0.1-minlr0-warmup2000-b10.9-b-d451be}{20} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% mini - 520m on 1x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Adam-Mini on 520m on 1x Chinchilla Data}
+\label{tab:ablation_adam-mini_520m_on_1x_chinchilla_data}
+\begin{tabular}{ccccccccccc}
+\toprule
+$\beta_1$ & $\beta_2$ & $\epsilon$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{BSZ}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.9 & 0.98 & 1e-10 & 0.004 & 0 & 0 & 128 & 4000 & 0.1 & 3.112 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-mini9187d7lr0.004-wd0.1-minlr0-warmup4000-b10.9-b-398e5f}{0} \\
+\midrule
+0.95 & -- & -- & -- & -- & -- & -- & -- & -- & 3.113 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-minic83515lr0.004-wd0.1-minlr0-warmup4000-b10.95--2b99be}{1} \\
+0.98 & -- & -- & -- & -- & -- & -- & -- & -- & 7.459 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-mini61f7e6lr0.004-wd0.1-minlr0-warmup4000-b10.98--c8aa3c}{2} \\
+-- & 0.9 & -- & -- & -- & -- & -- & -- & -- & 3.120 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-minib059b0lr0.004-wd0.1-minlr0-warmup4000-b10.9-b-ef048a}{3} \\
+-- & 0.95 & -- & -- & -- & -- & -- & -- & -- & 3.115 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-minid80005lr0.004-wd0.1-minlr0-warmup4000-b10.9-b-4d59a5}{4} \\
+-- & -- & 1e-25 & -- & -- & -- & -- & -- & -- & 3.115 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-mini030aa2lr0.004-wd0.1-minlr0-warmup4000-b10.9-b-e031a9}{5} \\
+-- & -- & 1e-20 & -- & -- & -- & -- & -- & -- & 3.115 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-miniad4882lr0.004-wd0.1-minlr0-warmup4000-b10.9-b-375106}{6} \\
+-- & -- & 1e-15 & -- & -- & -- & -- & -- & -- & 3.112 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-minica5e495lr0.004-wd0.1-minlr0-warmup4000-b10.9--791457}{7} \\
+-- & -- & -- & 0.008 & -- & -- & -- & -- & -- & 7.771 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-mini8213c6lr0.008-wd0.1-minlr0-warmup4000-b10.9-b-cea98b}{8} \\
+-- & -- & -- & 0.016 & -- & -- & -- & -- & -- & 7.746 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-mini743375lr0.016-wd0.1-minlr0-warmup4000-b10.9-b-71d93a}{9} \\
+-- & -- & -- & 0.032 & -- & -- & -- & -- & -- & 7.778 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-mini616d96lr0.032-wd0.1-minlr0-warmup4000-b10.9-b-6809c5}{10} \\
+-- & -- & -- & -- & 1.0 & -- & -- & -- & -- & 3.112 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-mini0dcb2clr0.004-wd0.1-minlr0-warmup4000-b10.9-b-87a5de}{11} \\
+-- & -- & -- & -- & 2.0 & -- & -- & -- & -- & 3.112 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-mini515ac5lr0.004-wd0.1-minlr0-warmup4000-b10.9-b-6bf049}{12} \\
+-- & -- & -- & -- & -- & -- & 256 & -- & -- & 3.133 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-minib57861lr0.004-wd0.1-minlr0-warmup4000-b10.9-b-a05b39}{13} \\
+-- & -- & -- & -- & -- & -- & 512 & -- & -- & 3.200 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-mini05d195lr0.004-wd0.1-minlr0-warmup4000-b10.9-b-f943f3}{14} \\
+-- & -- & -- & -- & -- & -- & -- & 500 & -- & 7.457 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-mini7194dalr0.004-wd0.1-minlr0-warmup500-b10.9-b2-4a47f7}{15} \\
+-- & -- & -- & -- & -- & -- & -- & 1000 & -- & 7.274 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-mini358c33lr0.004-wd0.1-minlr0-warmup1000-b10.9-b-ac8e20}{16} \\
+-- & -- & -- & -- & -- & -- & -- & 2000 & -- & 7.289 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-mini5326c8lr0.004-wd0.1-minlr0-warmup2000-b10.9-b-df18d8}{17} \\
+-- & -- & -- & -- & -- & -- & -- & -- & 0 & 7.792 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-minia9054blr0.004-wd0-minlr0-warmup4000-b10.9-b20-1ef9ff}{18} \\
+-- & -- & -- & -- & -- & -- & -- & -- & 0.2 & 3.115 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-10B-mini52759flr0.004-wd0.2-minlr0-warmup4000-b10.9-b-8078e5}{19} \\
+\bottomrule
+\end{tabular}
+\end{table}
+

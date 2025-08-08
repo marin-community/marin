@@ -225,6 +225,7 @@ key_of_optimizer["soap"] = [
     "max_grad_norm",
     "train_batch_size",
 ]
+# key_of_optimizer['sophia'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'beta1', 'beta2', 'gamma', 'epsilon', 'max_grad_norm', 'train_batch_size']
 key_of_optimizer["soape"] = key_of_optimizer["soap"]
 key_of_optimizer["soapb"] = key_of_optimizer["soap"]
 key_of_optimizer["adamw"] = [

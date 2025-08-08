@@ -152,6 +152,21 @@ key_of_optimizer["muon"] = [
     "decay",
     "train_batch_size",
 ]
+key_of_optimizer["soap"] = [
+    "learning_rate",
+    "weight_decay",
+    "min_lr_ratio",
+    "warmup",
+    "beta1",
+    "beta2",
+    "shampoo_beta",
+    "precondition_frequency",
+    "partition_grads_into_blocks",
+    "block_size",
+    "epsilon",
+    "max_grad_norm",
+    "train_batch_size",
+]
 
 
 optimizers = list(key_of_optimizer.keys())

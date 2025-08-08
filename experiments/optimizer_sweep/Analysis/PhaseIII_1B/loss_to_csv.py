@@ -1,8 +1,6 @@
 import hashlib
 import json
 
-import pandas as pd
-
 color_map = {
     "mars": "#1f77b4",  # blue
     "muon": "#ff7f0e",  # orange
@@ -30,7 +28,7 @@ def get_cache_key(optimizer, model_size, data_size, target_chinchilla):
 model_and_data_size = [("1.2b", "24B", 1), ("1.2b", "48B", 2), ("1.2b", "96B", 4), ("1.2b", "193B", 8)]
 model_sizes = ["1.2b"]
 
-optimizers = ["adamw", "nadamw", "muon"]
+optimizers = ["adamw", "nadamw", "muon", "soap"]
 
 actual_list = {}
 
@@ -50,9 +48,10 @@ expected_params = {
     "1.2b": 1207959552,  # 32 * (1536*6144*3 + 1536*1536*4)
 }
 
+import pandas as pd
 
 df = pd.DataFrame(columns=["optimizer", "model_size", "chinchilla", "loss"])
-for model_size in model_sizes:
+for idx, model_size in enumerate(model_sizes):
     for optimizer in optimizers:
         optimizer_loss_list = []
         for chinchilla in [1, 2, 4, 8]:

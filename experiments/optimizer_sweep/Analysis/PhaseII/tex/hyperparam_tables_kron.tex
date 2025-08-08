@@ -1,0 +1,97 @@
+\subsection{Sweeping Results for Kron}% kron - 300m on 2x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Kron on 300m on 2x Chinchilla Data}
+\label{tab:ablation_kron_300m_on_2x_chinchilla_data}
+\begin{tabular}{cccccccccccccccc}
+\toprule
+$\beta_1$ & $\mathrm{block size}$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{NormGrad}$ & $\mathrm{Blocking}$ & $Init_{pc}$ & $\eta_{pc}$ & $p_{pc}$ & $\mathrm{BSZ}$ & $Step_{pc}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.95 & 256 & 0.001 & 1 & 0 & True & True & 1 & 0.2 & 0.1 & 128 & 2000 & 1000 & 0.7 & 3.151 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-12B-kronb21812lr0.001-wd0.7-b10.95-plr0.2-pis1-gn1-no-48c292}{0} \\
+\midrule
+-- & -- & 0.0005 & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & 3.157 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-12B-kron7436a9lr0.0005-wd0.7-b10.95-plr0.2-pis1-gn1-n-68efd2}{1} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% kron - 300m on 4x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Kron on 300m on 4x Chinchilla Data}
+\label{tab:ablation_kron_300m_on_4x_chinchilla_data}
+\begin{tabular}{cccccccccccccccc}
+\toprule
+$\beta_1$ & $\mathrm{block size}$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{NormGrad}$ & $\mathrm{Blocking}$ & $Init_{pc}$ & $\eta_{pc}$ & $p_{pc}$ & $\mathrm{BSZ}$ & $Step_{pc}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.95 & 256 & 0.0005 & 1 & 0 & True & True & 1 & 0.2 & 0.1 & 128 & 2000 & 1000 & 0.7 & 3.083 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-24B-kronb55572lr0.0005-wd0.7-b10.95-plr0.2-pis1-gn1-n-9479df}{0} \\
+\midrule
+-- & -- & 0.001 & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & 3.090 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-24B-kron7aa525lr0.001-wd0.7-b10.95-plr0.2-pis1-gn1-no-127f30}{1} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% kron - 300m on 8x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Kron on 300m on 8x Chinchilla Data}
+\label{tab:ablation_kron_300m_on_8x_chinchilla_data}
+\begin{tabular}{cccccccccccccccc}
+\toprule
+$\beta_1$ & $\mathrm{block size}$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{NormGrad}$ & $\mathrm{Blocking}$ & $Init_{pc}$ & $\eta_{pc}$ & $p_{pc}$ & $\mathrm{BSZ}$ & $Step_{pc}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.95 & 256 & 0.0005 & 1 & 0 & True & True & 1 & 0.2 & 0.1 & 128 & 2000 & 1000 & 0.7 & 3.031 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-48B-kronabb76feelr0.0005-wd0.7-b10.95-plr0.2-pis1-gn1-0ed5c4}{0} \\
+\midrule
+-- & -- & 0.001 & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & 3.074 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-300m-48B-kronk1aa5b2lr0.001-wd0.7-b10.95-plr0.2-pis1-gn1-n-e34850}{1} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% kron - 520m on 2x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Kron on 520m on 2x Chinchilla Data}
+\label{tab:ablation_kron_520m_on_2x_chinchilla_data}
+\begin{tabular}{cccccccccccccccc}
+\toprule
+$\beta_1$ & $\mathrm{block size}$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{NormGrad}$ & $\mathrm{Blocking}$ & $Init_{pc}$ & $\eta_{pc}$ & $p_{pc}$ & $\mathrm{BSZ}$ & $Step_{pc}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.95 & 256 & 0.0005 & 1 & 0 & True & True & 1 & 0.2 & 0.1 & 128 & 2000 & 1000 & 0.5 & 3.009 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-21B-krona6b124lr0.0005-wd0.5-b10.95-plr0.2-pis1-gn1-n-6acf07}{0} \\
+\midrule
+-- & -- & 0.001 & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & 3.009 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-21B-kron680ae4lr0.001-wd0.5-b10.95-plr0.2-pis1-gn1-no-405d3d}{1} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% kron - 520m on 4x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Kron on 520m on 4x Chinchilla Data}
+\label{tab:ablation_kron_520m_on_4x_chinchilla_data}
+\begin{tabular}{cccccccccccccccc}
+\toprule
+$\beta_1$ & $\mathrm{block size}$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{NormGrad}$ & $\mathrm{Blocking}$ & $Init_{pc}$ & $\eta_{pc}$ & $p_{pc}$ & $\mathrm{BSZ}$ & $Step_{pc}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.95 & 256 & 0.0005 & 1 & 0 & True & True & 1 & 0.2 & 0.1 & 128 & 2000 & 1000 & 0.5 & 2.946 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-42B-kronf21245lr0.0005-wd0.5-b10.95-plr0.2-pis1-gn1-n-e5e732}{0} \\
+\midrule
+-- & -- & 0.001 & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & 2.950 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-42B-kron644022lr0.001-wd0.5-b10.95-plr0.2-pis1-gn1-no-bbd127}{1} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% kron - 520m on 8x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Kron on 520m on 8x Chinchilla Data}
+\label{tab:ablation_kron_520m_on_8x_chinchilla_data}
+\begin{tabular}{cccccccccccccccc}
+\toprule
+$\beta_1$ & $\mathrm{block size}$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{NormGrad}$ & $\mathrm{Blocking}$ & $Init_{pc}$ & $\eta_{pc}$ & $p_{pc}$ & $\mathrm{BSZ}$ & $Step_{pc}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.95 & 256 & 0.0005 & 1 & 0 & True & True & 1 & 0.2 & 0.1 & 128 & 2000 & 1000 & 0.5 & 2.900 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-85B-kronc2a9f5lr0.0005-wd0.5-b10.95-plr0.2-pis1-gn1-n-7f654e}{0} \\
+\midrule
+-- & -- & 0.001 & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & 2.909 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-85B-kronea1c73lr0.001-wd0.5-b10.95-plr0.2-pis1-gn1-no-82b169}{1} \\
+-- & -- & -- & -- & -- & -- & -- & -- & -- & -- & 256 & -- & -- & -- & 2.902 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-520m-85B-kronf21245lr0.0005-wd0.5-b10.95-plr0.2-pis1-gn1-n-6bceac}{2} \\
+\bottomrule
+\end{tabular}
+\end{table}
+

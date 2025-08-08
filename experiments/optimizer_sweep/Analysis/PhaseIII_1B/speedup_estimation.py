@@ -1,7 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.patches import Patch
 from scipy.optimize import curve_fit
 
 # Set global font size for plots
@@ -52,10 +51,12 @@ line_style = {
     "cautious": "--",
 }
 
-optimizers = ["mini", "nadamw", "cautious", "mars", "lion", "muon", "soape", "kron", "scion"]
+optimizers = ["nadamw", "muon", "soape"]
 
 print(df)
+# map soap to soape
 
+print(df)
 
 # Define the scaling model
 def scaling_model(D, alpha, B, beta):
@@ -80,9 +81,10 @@ for _, row in df.iterrows():
     D_opt = row["chinchilla"]
     L_opt = row["loss"]
     D_eff = ((L_opt - beta) / alpha) ** (-1.0 / B)
-    records.append({"optimizer": row["optimizer"], "model_size": model_size, "D_opt": D_opt, "D_eff": D_eff})
+    records.append({"optimizer": row["optimizer"], "model_size": model_size, "D_opt": D_opt, "D_eff": D_eff, "Loss": L_opt})
 
 eff_df = pd.DataFrame(records)
+from matplotlib.patches import Patch
 
 # Plot D_eff vs D_opt with a y=x line for each model size
 for model_size in sorted(eff_df["model_size"].unique()):
@@ -92,9 +94,9 @@ for model_size in sorted(eff_df["model_size"].unique()):
     d_min, d_max = sub["D_opt"].min(), sub["D_opt"].max()
     x_vals = np.array([d_min, d_max])
 
-    grey_patch = Patch(facecolor="bisque", alpha=0.5, label=r"1.0-1.2$\times$")
-    blue_patch = Patch(facecolor="lightblue", alpha=0.5, label=r"1.2-1.3$\times$")
-    green_patch = Patch(facecolor="lightgreen", alpha=0.5, label=r"1.3-1.4$\times$")
+    grey_patch = Patch(facecolor="bisque", alpha=0.5, label=r"1.0–1.2$\times$")
+    blue_patch = Patch(facecolor="lightblue", alpha=0.5, label=r"1.2–1.3$\times$")
+    green_patch = Patch(facecolor="lightgreen", alpha=0.5, label=r"1.3–1.4$\times$")
     ax.fill_between(x_vals, x_vals, x_vals * 1.2, color="bisque", alpha=0.5)
     ax.fill_between(x_vals, x_vals * 1.2, x_vals * 1.3, color="lightblue", alpha=0.5)
     ax.fill_between(x_vals, x_vals * 1.3, x_vals * 1.4, color="lightgreen", alpha=0.5)
@@ -123,11 +125,84 @@ for model_size in sorted(eff_df["model_size"].unique()):
         handles=[grey_patch, blue_patch, green_patch], loc="lower right", title="Speedup", frameon=True, fontsize=20
     )
     plt.xticks([1, 2, 4, 8], ["1", "2", "4", "8"])
-    plt.xlabel("Actual Data Budget / Chinchilla ", fontsize=20)
-    plt.ylabel("Effective Data Budget / Chinchilla", fontsize=20)
+    plt.xlabel("Tokens / Chinchilla ", fontsize=20)
+    plt.ylabel("Tokens Needed by\n AdamW / Chinchilla", fontsize=20)
     plt.title(f"$D_{{eff}}$ vs $D_{{opt}}$ (Model Size: {model_size.upper()})", fontsize=20)
     # plt.legend(loc='best', fontsize=16)
     plt.tight_layout()
-    plt.savefig(
-        f"experiments/optimizer_sweep/Analysis/PhaseIII_1B/figs/D_eff_vs_D_opt_{model_size}M.pdf", bbox_inches="tight"
-    )
+    plt.savefig(f"experiments/optimizer_sweep/Analysis/PhaseIII_1B/figs/D_eff_vs_D_opt_{model_size}M.pdf", bbox_inches="tight")
+
+
+eff_df['speedup'] = eff_df['D_eff'] / eff_df['D_opt']
+
+
+# Create a new plot for speedup and loss vs model size
+fig, ax1 = plt.subplots(figsize=(10, 7))
+another_eff = pd.read_csv("experiments/optimizer_sweep/Analysis/PhaseII/speedup_estimation.csv")
+eff_df = pd.concat([eff_df, another_eff])
+
+expected_params = {
+    "130m": 134217728,  # 32 * (512*2048*3 + 512*512*4)
+    "300m": 301989888,  # 32 * (768*3072*3 + 768*768*4)
+    "520m": 536870912,  # 32 * (1024*4096*3 + 1024*1024*4)
+    "1.2b": 1207959552,  # 32 * (1536*6144*3 + 1536*1536*4)
+}
+eff_df['expected_params'] = eff_df['model_size'].map(expected_params)
+
+print(eff_df)
+
+# Create second y-axis for speedup
+# ax2 = ax1.twinx()
+
+# Plot loss on left y-axis and speedup on right y-axis
+for opt in ['adamw', 'nadamw', 'muon', 'soape']:
+    opt_data = eff_df[(eff_df['optimizer'] == opt) & (eff_df['D_opt'] == 8)].sort_values('expected_params')
+    print(opt_data)
+    if len(opt_data) > 0:
+        # # Plot loss on left y-axis (solid lines)
+        # line1 = ax1.plot(opt_data['expected_params'], opt_data['Loss'], 
+        #                 marker="o", linestyle='-',
+        #                 color=color_map[opt], 
+        #                 label=f'{correct_name[opt]} (Loss)')
+        
+        # Plot speedup on right y-axis (dashed lines)
+        if opt in ['muon', 'soape', 'nadamw']:
+            line2 = ax1.plot(opt_data['expected_params'], opt_data['speedup'], 
+                            marker="o", linestyle='--' if opt == 'nadamw' else '-',
+                            color=color_map[opt], 
+                        label=f'{correct_name[opt]}')
+        elif opt == 'adamw':
+            line2 = ax1.plot(opt_data['expected_params'], [1.0] * len(opt_data), 
+                            marker="s", linestyle='--',
+                            color=color_map[opt], 
+                            label=f'{correct_name[opt]}')
+
+ax1.set_xscale('log')
+ax1.set_xticks(list(expected_params.values()), [x.upper() for x in list(expected_params.keys())])
+ax1.tick_params(axis='x', labelsize=24)
+# Formatting for left y-axis (Loss)
+ax1.set_xlabel('Model Size', fontsize=26)
+# Formatting for right y-axis 
+ax1.set_ylabel('Speedup w.r.t. AdamW', fontsize=24, color='black')
+ax1.tick_params(axis='y', labelcolor='black', labelsize=24)
+ax1.set_ylim(0.96, 1.5)
+
+ax1.set_title('Speedup vs Model Size (8x Chinchilla)', fontsize=24)
+
+# Combine legends from both axes
+lines1, labels1 = ax1.get_legend_handles_labels()
+# lines2, labels2 = ax2.get_legend_handles_labels()
+ax1.legend(lines1, labels1, loc='best', fontsize=22, ncol=2)
+
+ax1.grid(True, alpha=0.3)
+
+# Add text box annotation
+plt.text(0.27, 0.76, "Optimizers' speedup w.r.t. AdamW \n decreases with model size",
+         transform=ax1.transAxes,
+         bbox=dict(facecolor='white', edgecolor='black', alpha=0.7),
+         verticalalignment='top',
+         fontsize=24)
+
+plt.tight_layout()
+plt.savefig("experiments/optimizer_sweep/Analysis/PhaseIII_1B/figs/speedup_vs_model_size.pdf", bbox_inches="tight")
+plt.show()

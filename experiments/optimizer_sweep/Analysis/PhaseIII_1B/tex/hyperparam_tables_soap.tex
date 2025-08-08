@@ -1,0 +1,60 @@
+\subsection{Sweeping Results for Soap}% soap - 1.2b on 1x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Soap on 1.2b on 1x Chinchilla Data}
+\label{tab:ablation_soap_1.2b_on_1x_chinchilla_data}
+\begin{tabular}{ccccccccccccccc}
+\toprule
+$\beta_1$ & $\beta_2$ & $\mathrm{block size}$ & $\epsilon$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{Blocking}$ & $f_{pc}$ & $\beta_{shampoo}$ & $\mathrm{BSZ}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.95 & 0.99 & 512 & 1e-10 & 0.004 & 1 & 0 & True & 10 & 0.9 & 256 & 1000 & 0.1 & 2.940 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-1.2b-24B-soapebf16d04f58lr0.004-wd0.1-minlr0.0-warmup1000--82b8d3}{0} \\
+\midrule
+\bottomrule
+\end{tabular}
+\end{table}
+
+% soap - 1.2b on 2x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Soap on 1.2b on 2x Chinchilla Data}
+\label{tab:ablation_soap_1.2b_on_2x_chinchilla_data}
+\begin{tabular}{ccccccccccccccc}
+\toprule
+$\beta_1$ & $\beta_2$ & $\mathrm{block size}$ & $\epsilon$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{Blocking}$ & $f_{pc}$ & $\beta_{shampoo}$ & $\mathrm{BSZ}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.95 & 0.99 & 512 & 1e-10 & 0.004 & 1 & 0 & True & 10 & 0.9 & 256 & 1000 & 0.1 & 2.829 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-1.2b-48B-soapeweightf32ae127elr0.004-wd0.1-minlr0.0-warmup-000547}{0} \\
+\midrule
+\bottomrule
+\end{tabular}
+\end{table}
+
+% soap - 1.2b on 4x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Soap on 1.2b on 4x Chinchilla Data}
+\label{tab:ablation_soap_1.2b_on_4x_chinchilla_data}
+\begin{tabular}{ccccccccccccccc}
+\toprule
+$\beta_1$ & $\beta_2$ & $\mathrm{block size}$ & $\epsilon$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{Blocking}$ & $f_{pc}$ & $\beta_{shampoo}$ & $\mathrm{BSZ}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.95 & 0.99 & 512 & 1e-10 & 0.004 & 1 & 0 & True & 10 & 0.9 & 256 & 1000 & 0.1 & 2.783 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-1.2b-96B-soapeweightf321bf579lr0.004-wd0.1-minlr0.0-warmup-7fd4b6}{0} \\
+\midrule
+\bottomrule
+\end{tabular}
+\end{table}
+
+% soap - 1.2b on 8x Chinchilla Data
+\begin{table}[H]
+\centering
+\caption{Hyperparameter ablation for Soap on 1.2b on 8x Chinchilla Data}
+\label{tab:ablation_soap_1.2b_on_8x_chinchilla_data}
+\begin{tabular}{ccccccccccccccc}
+\toprule
+$\beta_1$ & $\beta_2$ & $\mathrm{block size}$ & $\epsilon$ & $\eta$ & $\gradnorm$ & $\eta_{min}$ & $\mathrm{Blocking}$ & $f_{pc}$ & $\beta_{shampoo}$ & $\mathrm{BSZ}$ & $\mathrm{warmup}$ & $\lambda$ & Loss & Link \\
+\midrule
+0.95 & 0.99 & 512 & 1e-10 & 0.004 & 1 & 0 & True & 10 & 0.9 & 256 & 1000 & 0.1 & 2.749 & \href{https://wandb.ai/stanford-mercury/optimizer-scaling/runs/sweep-1.2b-193B-soapeweightf32ebf088lr0.004-wd0.1-minlr0.0-warmu-029405}{0} \\
+\midrule
+\bottomrule
+\end{tabular}
+\end{table}
+
