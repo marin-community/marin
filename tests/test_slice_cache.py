@@ -10,15 +10,11 @@ from levanter.store import SerialCacheWriter, TreeCache
 from marin.tokenize.slice_cache import SliceCacheConfig, _do_slice_cache
 from tests.test_utils import skip_in_ci
 
+pytestmark = pytest.mark.skip(reason="requires huggingface download")
+
 
 @dataclass
 class MockDatasetSource(LmDatasetSourceConfigBase):
-    # def __init__(self, cache_dir, num_docs: int, tokens_per_doc: int, tags):
-    #     self.num_docs = num_docs
-    #     self.tokens_per_doc = tokens_per_doc
-    #     self.format = TextLmDatasetFormat()
-    #     self.cache_dir = cache_dir
-    #     self.tags = tags
     num_docs: int = 100
     tokens_per_doc: int = 500
 
