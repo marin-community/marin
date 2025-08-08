@@ -36,6 +36,19 @@ sd0715_tokenized = default_tokenize(
     tokenizer=llama3_tokenizer,
 )
 
+sd0805 = default_download(
+    name="raw/data_efficiency/sd0805",
+    hf_dataset_id="konwoo/300Me1-200Mdata-16.1Mgen",
+    revision="b5d2a92",
+    override_output_path="raw/data_efficiency/sd0805",
+)
+
+sd0805_tokenized = default_tokenize(
+    name="data_efficiency/sd0805",
+    dataset=sd0805,
+    tokenizer=llama3_tokenizer,
+)
+
 # [BUGGED] distilling a 2 ensemble with 300M model trained on 200M tokens (using optimal hparams for an infinite ensemble)
 ens2d0715 = default_download(
     name="raw/data_efficiency/ens2d0715",
@@ -90,6 +103,19 @@ ens4x0728_tokenized = default_tokenize(
     tokenizer=llama3_tokenizer,
 )
 
+ens8x0730 = default_download(
+    name="raw/data_efficiency/ens8x0730",
+    hf_dataset_id="konwoo/300Me1-200Mdata-mix8seeds",
+    revision="d16b474",
+    override_output_path="raw/data_efficiency/ens8x0730",
+)
+
+ens8x0730_tokenized = default_tokenize(
+    name="data_efficiency/ens8x0730",
+    dataset=ens8x0730,
+    tokenizer=llama3_tokenizer,
+)
+
 octothinker_megamath = default_download(
     name="raw/octothinker-megamath",
     hf_dataset_id="OctoThinker/MegaMath-Web-Pro-Max",
@@ -107,10 +133,12 @@ data_dict = {
     "dclm": dclm_tokenized,
     "code": starcoderdata_tokenized,
     "sd0715": sd0715_tokenized,
+    "sd0805": sd0805_tokenized,
     "ens2d0715": ens2d0715_tokenized,
     "ens2d0717": ens2d0717_tokenized,
     "ens4d0721": ens4d0721_tokenized,
     "ens4x0728": ens4x0728_tokenized,
+    "ens8x0730": ens8x0730_tokenized,
     "octo": octothinker_megamath_tokenized,
 }
 
