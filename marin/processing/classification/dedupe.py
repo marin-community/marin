@@ -1,3 +1,18 @@
+"""
+Major problems with getting dedupe to work currently.
+
+Dolma requires some pretty old dependencies:
+1. tokenizers <=0.19.1 means that no modern transformers can be used hence why we have to use
+transformers==4.44.0.
+2. s3fs==2023.06 means that a pretty old version of s3fs needs to be used which means
+an old fsspec needs to be used. This is a problem because this version will not recognize
+the recursive glob pattern **/*.jsonl.gz correctly!
+
+We circumvent this using a custom runtime environment with just the required packages for
+just the Dolma package. We then schedule it directly on the node that is used to
+copy the files in to make sure there is data locality.
+"""
+
 import os
 import subprocess
 import tempfile
@@ -6,10 +21,11 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 import ray
+from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from tqdm import tqdm
 
 from marin.core.runtime import cached_or_construct_output
-from marin.utils import fsspec_glob, fsspec_mkdirs, fsspec_rm, rebase_file_path
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_mkdirs, fsspec_rm, rebase_file_path
 
 
 @dataclass
@@ -72,14 +88,16 @@ class DedupeConfig:
     processes: int = 1
     decontaminate: bool = False
     decontaminate_path: str | None = None
+    input_filetype: str = "jsonl.gz"
+    bloom_filter_path: str = None
 
 
-def copy_files_in(input_path, local_base_dir):
+def copy_files_in(input_path, local_base_dir, input_filetype):
     # Ensure input_path doesn't end with a slash
     input_path = input_path.rstrip("/")
 
     # Get all .jsonl.gz files in the input directory
-    glob_path = f"{input_path}/**/*.jsonl.gz"
+    glob_path = f"{input_path}/**/*.{input_filetype}"
     print(f"glob_path: {glob_path}")
     input_files = fsspec_glob(glob_path)
 
@@ -105,6 +123,7 @@ def copy_files_in(input_path, local_base_dir):
     print(f"Copied {len(input_files)} files to {os.path.join(local_base_dir, 'documents')}")
 
 
+@ray.remote
 def do_dedup(
     local_base_dir,
     attribute_name,
@@ -115,6 +134,7 @@ def do_dedup(
     false_positive_rate,
     ngram,
     processes,
+    input_filetype,
     read_only=False,
     bloom_filter_file="deduper_bloom_filter.bin",
 ):
@@ -124,7 +144,7 @@ def do_dedup(
         "dolma",
         "dedupe",
         "--documents",
-        f"{local_base_dir}/documents/**/*.jsonl.gz",
+        f"{local_base_dir}/documents/**/*.{input_filetype}",
         "--dedupe.paragraphs.attribute_name",
         attribute_name,
         "--dedupe.skip_empty",
@@ -194,14 +214,14 @@ def do_dedup(
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
-def copy_files_out(local_base_dir, output_path, attribute_name):
+def copy_files_out(local_base_dir, output_path, attribute_name, input_filetype):
     # Ensure output_path doesn't end with a slash
     output_path = output_path.rstrip("/")
 
     local_attribute_dir = os.path.join(local_base_dir, "attributes", attribute_name)
 
     # Get all .jsonl.gz files in the local attribute directory
-    glob_path = f"{local_attribute_dir}/**/*.jsonl.gz"
+    glob_path = f"{local_attribute_dir}/**/*.{input_filetype}"
     local_files = fsspec_glob(glob_path)
 
     files_uploaded = 0
@@ -238,7 +258,7 @@ def copy_file_out(input_file_path, output_file_path):
     print(f"Uploaded file to {output_file_path}")
 
 
-def delete_jsonl_files(dir_path):
+def delete_jsonl_files(dir_path, input_filetype):
     """
     Delete all JSONL files (both .jsonl and .jsonl.gz) in the specified directory and its subdirectories.
 
@@ -252,10 +272,9 @@ def delete_jsonl_files(dir_path):
     dir_path = dir_path.rstrip("/")
 
     # Get all .jsonl and .jsonl.gz files in the directory and its subdirectories
-    glob_path_jsonl = f"{dir_path}/**/*.jsonl"
-    glob_path_jsonl_gz = f"{dir_path}/**/*.jsonl.gz"
+    glob_path_files = os.path.join(dir_path, f"**/*.{input_filetype}")
 
-    files_to_delete = fsspec_glob(glob_path_jsonl) + fsspec_glob(glob_path_jsonl_gz)
+    files_to_delete = fsspec_glob(glob_path_files)
 
     files_deleted = 0
     for file_path in tqdm(files_to_delete, desc="Deleting files"):
@@ -280,56 +299,83 @@ def dolma_dedup(
     processes,
     decomtaminate_dir,
     decontaminate,
+    input_filetype,
+    bloom_filter_path,
 ):
 
+    dolma_dedupe_ray_remote_args = {
+        "scheduling_strategy": NodeAffinitySchedulingStrategy(
+            node_id=ray.get_runtime_context().get_node_id(),
+            soft=False,
+        ),
+        "runtime_env": {
+            "pip": ["dolma", "transformers==4.44.0"],
+        },
+    }
+    bloom_filter_file = "decontaminated_bloom_filter.bin"
+    remote_bloom_filter_path = os.path.join(bloom_filter_path, bloom_filter_file)
     with tempfile.TemporaryDirectory() as tmpdir:
+        local_bloom_filter_path = os.path.join(tmpdir, bloom_filter_file)
         try:
             if decontaminate:
                 # First we copy the files to the temporary directory to get bloom filter
-                copy_files_in(decomtaminate_dir, tmpdir)
-                do_dedup(
-                    tmpdir,
-                    attribute_name,
-                    min_length,
-                    min_words,
-                    bloom_filter_size,
-                    estimated_doc_count,
-                    false_positive_rate,
-                    ngram,
-                    processes,
-                    read_only=False,
-                    bloom_filter_file="decontaminated_bloom_filter.bin",
-                )
+                if not bloom_filter_path or not fsspec_exists(remote_bloom_filter_path):
+                    copy_files_in(decomtaminate_dir, tmpdir, input_filetype)
+                    ray.get(
+                        do_dedup.options(**dolma_dedupe_ray_remote_args).remote(
+                            tmpdir,
+                            attribute_name,
+                            min_length,
+                            min_words,
+                            bloom_filter_size,
+                            estimated_doc_count,
+                            false_positive_rate,
+                            ngram,
+                            processes,
+                            input_filetype,
+                            read_only=False,
+                            bloom_filter_file=bloom_filter_file,
+                        )
+                    )
 
-                # Delete all JSONL files in the temporary directory since we have bloom filter
-                delete_jsonl_files(tmpdir)
+                    # Delete all JSONL files in the temporary directory since we have bloom filter
+                    delete_jsonl_files(tmpdir, input_filetype)
+                    copy_file_out(local_bloom_filter_path, remote_bloom_filter_path)
+                else:
+                    copy_files_in(bloom_filter_path, tmpdir, bloom_filter_file)
                 # Then copy files of interest and apply bloom filter read only
-                copy_files_in(input_path, tmpdir)
-                do_dedup(
-                    tmpdir,
-                    attribute_name,
-                    min_length,
-                    min_words,
-                    bloom_filter_size,
-                    estimated_doc_count,
-                    false_positive_rate,
-                    ngram,
-                    processes,
-                    read_only=True,
-                    bloom_filter_file="decontaminated_bloom_filter.bin",
+                copy_files_in(input_path, tmpdir, input_filetype)
+                ray.get(
+                    do_dedup.options(**dolma_dedupe_ray_remote_args).remote(
+                        tmpdir,
+                        attribute_name,
+                        min_length,
+                        min_words,
+                        bloom_filter_size,
+                        estimated_doc_count,
+                        false_positive_rate,
+                        ngram,
+                        processes,
+                        input_filetype,
+                        read_only=True,
+                        bloom_filter_file=bloom_filter_file,
+                    )
                 )
             else:
-                copy_files_in(input_path, tmpdir)
-                do_dedup(
-                    tmpdir,
-                    attribute_name,
-                    min_length,
-                    min_words,
-                    bloom_filter_size,
-                    estimated_doc_count,
-                    false_positive_rate,
-                    ngram,
-                    processes,
+                copy_files_in(input_path, tmpdir, input_filetype)
+                ray.get(
+                    do_dedup.options(**dolma_dedupe_ray_remote_args).remote(
+                        tmpdir,
+                        attribute_name,
+                        min_length,
+                        min_words,
+                        bloom_filter_size,
+                        estimated_doc_count,
+                        false_positive_rate,
+                        ngram,
+                        processes,
+                        input_filetype,
+                    )
                 )
 
             # copy files out stays the same.
@@ -339,7 +385,7 @@ def dolma_dedup(
             local_attribute_dir = os.path.join(tmpdir, "attributes", attribute_name)
 
             # Get all .jsonl.gz files in the local attribute directory
-            glob_path = f"{local_attribute_dir}/**/*.jsonl.gz"
+            glob_path = f"{local_attribute_dir}/**/*.{input_filetype}"
             local_files = fsspec_glob(glob_path)
             for local_file in tqdm(local_files, desc="Uploading files"):
                 output_file = rebase_file_path(local_attribute_dir, local_file, output_path)
@@ -372,6 +418,8 @@ def dedupe(config: DedupeConfig):
             config.processes,
             config.decontaminate_path,
             config.decontaminate,
+            config.input_filetype,
+            config.bloom_filter_path,
         )
     )
     print(result)
