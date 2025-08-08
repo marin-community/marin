@@ -26,20 +26,20 @@ from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils import fsspec_utils
-from operations.download.huggingface.download import DownloadConfig
-from operations.download.huggingface.download_hf import download_hf
 
 from experiments.anneal_config import AnnealConfig
 from experiments.evals.task_configs import (
     CORE_TASKS,
-    CORE_TASKS_PLUS_MMLU,
+    MMLU_TASKS,
     convert_to_levanter_task_config,
     convert_to_task_metrics,
 )
 from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
-from experiments.simple_train_config import SimpleTrainConfig
+from experiments.optimizer_train_config import SimpleTrainConfig
+from marin.download.huggingface.download import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -304,7 +304,7 @@ def default_train(
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project="optimizer-scaling",
-                entity="marin-community",
+                entity="stanford-mercury",
                 tags=[*tags],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -523,7 +523,7 @@ def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
         tokenized=anneal_config.dataset_config,
         model_config=llama_8b,
         train_config=anneal_stage_train_config,
-        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+        eval_harness_tasks=MMLU_TASKS,
     )
 
 
