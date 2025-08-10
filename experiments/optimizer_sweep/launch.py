@@ -86,22 +86,13 @@ def main() -> None:
     parser.add_argument("--debug", action="store_true", help="Enable template DEBUG_MODE")
     parser.add_argument("--random-suffix", type=str, default=None, help="Random suffix for template prefix")
     parser.add_argument("--name-filter", type=str, default=None, help="Substring filter on JSON filename stem")
-    parser.add_argument(
-        "--allow-old-layout",
-        action="store_true",
-        help="If no configs found in new layout, also scan old Phase-based layout.",
-    )
 
     args = parser.parse_args()
 
     optimizer = args.optimizer.lower()
     chinchilla = int(args.chinchilla) if args.chinchilla.is_integer() else args.chinchilla  # keep 1 vs 1.0 tidy
 
-    # New layout first
     pairs = _find_jsons_new_layout(optimizer, chinchilla, args.model_size)
-    # Optional fallback to old layout for transition
-    if not pairs and args.allow_old_layout:
-        pairs = _find_jsons_old_layout(optimizer, chinchilla)
     if not pairs:
         raise SystemExit("No JSONs found for given inputs.")
 

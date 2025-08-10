@@ -91,7 +91,22 @@ for optimizer in optimizers:
         if stable:
             pass
         else:
-            non_stable_keys[key] = sorted(list(potential_value_of_key))
+            covering_boolean = [
+                (value in best_config_key_list[(model_size, target_chinchilla)]
+                for model_size, target_chinchilla in best_config_key_list) for value in potential_value_of_key
+            ]
+            # find the minimal subset of potential_value_of_key that it can cover all settings
+            from itertools import combinations
+            for i in range(len(potential_value_of_key) + 1):
+                found = False
+                for combo in combinations(potential_value_of_key, i):
+                    if all(any(value in best_config_key_list[(model_size, target_chinchilla)] for value in combo) for model_size, target_chinchilla in best_config_key_list):
+                        non_stable_keys[key] = sorted(list(combo))
+                        found = True
+                        break
+                if found:
+                    break
+
     non_stable_keys_by_optimizer[optimizer] = non_stable_keys
 
 
