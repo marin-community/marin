@@ -58,6 +58,28 @@
     "weight_decay": 0.1
   },
   "min_loss": 3.3273122310638428,
+  "approximate_best_config_list": [
+    {
+      "warmup": 2000,
+      "learning_rate": 0.008,
+      "train_batch_size": 128,
+      "beta1": 0.98,
+      "max_grad_norm": 2,
+      "weight_decay": 0.1,
+      "epsilon": 1e-15,
+      "beta2": 0.98
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.004,
+      "train_batch_size": 128,
+      "beta1": 0.98,
+      "max_grad_norm": 2,
+      "weight_decay": 0.1,
+      "epsilon": 1e-15,
+      "beta2": 0.98
+    }
+  ],
   "baseline": {
     "loss": 3.3320846557617188,
     "wandb_id": "sweep-130m-10B-cautious3e1de9lr0.008-wd0.1-minlr0-warmup2000-b10-3b5403"

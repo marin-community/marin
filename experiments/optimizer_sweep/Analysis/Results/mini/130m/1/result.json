@@ -55,6 +55,88 @@
     "weight_decay": 0.1
   },
   "min_loss": 3.542064666748047,
+  "approximate_best_config_list": [
+    {
+      "max_grad_norm": 1,
+      "epsilon": 1e-15,
+      "train_batch_size": 128,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "warmup": 2000,
+      "beta2": 0.98,
+      "beta1": 0.9
+    },
+    {
+      "max_grad_norm": 0,
+      "epsilon": 1e-20,
+      "train_batch_size": 128,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "warmup": 2000,
+      "beta2": 0.98,
+      "beta1": 0.9
+    },
+    {
+      "max_grad_norm": 1,
+      "epsilon": 9.999999999999999e-26,
+      "train_batch_size": 128,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "warmup": 2000,
+      "beta2": 0.98,
+      "beta1": 0.9
+    },
+    {
+      "max_grad_norm": 1,
+      "epsilon": 1e-20,
+      "train_batch_size": 128,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "warmup": 2000,
+      "beta2": 0.95,
+      "beta1": 0.9
+    },
+    {
+      "max_grad_norm": 1,
+      "epsilon": 1e-20,
+      "train_batch_size": 128,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "warmup": 2000,
+      "beta2": 0.98,
+      "beta1": 0.9
+    },
+    {
+      "max_grad_norm": 0,
+      "epsilon": 1e-15,
+      "train_batch_size": 128,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "warmup": 2000,
+      "beta2": 0.98,
+      "beta1": 0.9
+    },
+    {
+      "max_grad_norm": 2,
+      "epsilon": 1e-15,
+      "train_batch_size": 128,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "warmup": 2000,
+      "beta2": 0.98,
+      "beta1": 0.9
+    },
+    {
+      "max_grad_norm": 1,
+      "epsilon": 1e-15,
+      "train_batch_size": 128,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "warmup": 2000,
+      "beta2": 0.95,
+      "beta1": 0.9
+    }
+  ],
   "baseline": {
     "loss": 3.542064666748047,
     "wandb_id": "sweep-130m-2B-minif4e66flr0.008-wd0.1-minlr0-warmup2000-b10.9-b2-4d3c05"

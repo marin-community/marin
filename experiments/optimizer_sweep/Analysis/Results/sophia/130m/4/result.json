@@ -67,6 +67,108 @@
     "weight_decay": 0.2
   },
   "min_loss": 3.3275668621063232,
+  "approximate_best_config_list": [
+    {
+      "epsilon": 1e-07,
+      "train_batch_size": 128,
+      "gamma": 0.0125,
+      "learning_rate": 0.004,
+      "weight_decay": 0.2,
+      "warmup": 4000,
+      "beta2": 0.99,
+      "beta1": 0.95
+    },
+    {
+      "epsilon": 1e-07,
+      "train_batch_size": 128,
+      "gamma": 0.0125,
+      "learning_rate": 0.002,
+      "weight_decay": 0.2,
+      "warmup": 4000,
+      "beta2": 0.99,
+      "beta1": 0.95
+    },
+    {
+      "epsilon": 1e-07,
+      "train_batch_size": 128,
+      "gamma": 0.0125,
+      "learning_rate": 0.004,
+      "weight_decay": 0.2,
+      "warmup": 4000,
+      "beta2": 0.98,
+      "beta1": 0.95
+    },
+    {
+      "epsilon": 1e-07,
+      "train_batch_size": 128,
+      "gamma": 0.0125,
+      "learning_rate": 0.004,
+      "weight_decay": 0.1,
+      "warmup": 4000,
+      "beta2": 0.99,
+      "beta1": 0.95
+    },
+    {
+      "epsilon": 1e-07,
+      "train_batch_size": 128,
+      "gamma": 0.0125,
+      "learning_rate": 0.004,
+      "weight_decay": 0.3,
+      "warmup": 4000,
+      "beta2": 0.99,
+      "beta1": 0.95
+    },
+    {
+      "epsilon": 1e-07,
+      "train_batch_size": 128,
+      "gamma": 0.0125,
+      "learning_rate": 0.004,
+      "weight_decay": 0.2,
+      "warmup": 4000,
+      "beta2": 0.95,
+      "beta1": 0.95
+    },
+    {
+      "epsilon": 1e-07,
+      "train_batch_size": 128,
+      "gamma": 0.00625,
+      "learning_rate": 0.004,
+      "weight_decay": 0.2,
+      "warmup": 4000,
+      "beta2": 0.99,
+      "beta1": 0.95
+    },
+    {
+      "epsilon": 1e-07,
+      "train_batch_size": 128,
+      "gamma": 0.025,
+      "learning_rate": 0.004,
+      "weight_decay": 0.2,
+      "warmup": 4000,
+      "beta2": 0.99,
+      "beta1": 0.95
+    },
+    {
+      "epsilon": 1e-07,
+      "train_batch_size": 128,
+      "gamma": 0.0125,
+      "learning_rate": 0.004,
+      "weight_decay": 0.2,
+      "warmup": 4000,
+      "beta2": 0.99,
+      "beta1": 0.9
+    },
+    {
+      "epsilon": 1e-07,
+      "train_batch_size": 128,
+      "gamma": 0.0125,
+      "learning_rate": 0.004,
+      "weight_decay": 0.2,
+      "warmup": 4000,
+      "beta2": 0.9,
+      "beta1": 0.95
+    }
+  ],
   "baseline": {
     "loss": 3.329803943634033,
     "wandb_id": "sweep-130m-10B-sophia420680lr0.004-wd0.2-minlr0-warmup4000-b10.9-95e0d1"

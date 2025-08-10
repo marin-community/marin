@@ -64,6 +64,152 @@
     "weight_decay": 0.1
   },
   "min_loss": 3.294482469558716,
+  "approximate_best_config_list": [
+    {
+      "block_size": 256,
+      "warmup": 500,
+      "epsilon": 1e-15,
+      "precondition_frequency": 1,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.95
+    },
+    {
+      "block_size": 256,
+      "warmup": 500,
+      "epsilon": 1e-15,
+      "precondition_frequency": 10,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.98
+    },
+    {
+      "block_size": 256,
+      "warmup": 500,
+      "epsilon": 1e-15,
+      "precondition_frequency": 1,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.98
+    },
+    {
+      "block_size": 256,
+      "warmup": 500,
+      "epsilon": 1e-10,
+      "precondition_frequency": 1,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.98
+    },
+    {
+      "block_size": 256,
+      "warmup": 1000,
+      "epsilon": 1e-15,
+      "precondition_frequency": 1,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.98
+    },
+    {
+      "block_size": 256,
+      "warmup": 500,
+      "epsilon": 1e-15,
+      "precondition_frequency": 1,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.99
+    },
+    {
+      "block_size": 256,
+      "warmup": 500,
+      "epsilon": 1e-15,
+      "precondition_frequency": 5,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.98
+    },
+    {
+      "block_size": 256,
+      "warmup": 500,
+      "epsilon": 1e-15,
+      "precondition_frequency": 1,
+      "train_batch_size": 128,
+      "beta2": 0.98,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.98
+    },
+    {
+      "block_size": 128,
+      "warmup": 500,
+      "epsilon": 1e-15,
+      "precondition_frequency": 1,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.98
+    },
+    {
+      "block_size": 512,
+      "warmup": 500,
+      "epsilon": 1e-15,
+      "precondition_frequency": 1,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.98
+    },
+    {
+      "block_size": 256,
+      "warmup": 500,
+      "epsilon": 1e-20,
+      "precondition_frequency": 1,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.98
+    },
+    {
+      "block_size": 256,
+      "warmup": 500,
+      "epsilon": 1e-15,
+      "precondition_frequency": 1,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.9
+    }
+  ],
   "baseline": {
     "loss": null,
     "wandb_id": null

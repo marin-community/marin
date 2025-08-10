@@ -1,3 +1,11 @@
+"""Centralized plotting styles for optimizer comparison figures.
+
+Exports:
+- `color_map`: consistent color per optimizer key.
+- `correct_name`: readable names for optimizer keys.
+- `line_style`: dashed/solid style per optimizer. dashed optimizers are scalar-level and solid optimizers are matrix-level.
+"""
+
 color_map = {
     "mars": "#1f77b4",  # blue
     "muon": "#ff7f0e",  # orange

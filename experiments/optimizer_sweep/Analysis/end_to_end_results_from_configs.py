@@ -1,3 +1,19 @@
+"""End-to-end collection of best optimizer results and persistence utilities.
+
+This module:
+- Reads baseline configs under `experiments/optimizer_sweep/baseline_config/` and
+  matching sweep grids under `experiments/optimizer_sweep/sweep_grids/`.
+- Queries W&B via `marin.optimizer_sweep.utils_simp` to find near-best runs for
+  each (optimizer, model_size, chinchilla ratio).
+- Builds a JSON payload with the best config, per-parameter ablations, run
+  identifiers, and summary stats, then writes it to
+  `experiments/optimizer_sweep/Analysis/Results/{optimizer}/{model_size}/{chinchilla}/result.json`.
+- Exposes helpers for saving JSON and augmenting it with baseline/ablations.
+
+Run this file as a script to populate the Results tree. The default loop
+currently processes the `muon` optimizer.
+"""
+
 import json
 import os
 import pickle
@@ -189,9 +205,7 @@ def _augment_result_json_with_ablations(
 
 def main() -> None:
     combined_results: Dict[str, Dict] = {}
-
     optimizers = [d for d in os.listdir(BASELINE_ROOT) if os.path.isdir(os.path.join(BASELINE_ROOT, d))]
-    optimizers = ["scion"]
     with tqdm.tqdm(total=len(optimizers), desc="Optimizers") as pbar:
         for optimizer in optimizers:
             optimizer_lower = optimizer.lower()
@@ -227,7 +241,7 @@ def main() -> None:
 
                     # Best runs from W&B
                     current_best_config, approximate_best_config_list, min_loss = grab_best_run(
-                        keys, tags, return_loss=True, thshold=5e-3
+                        keys, tags, return_loss=True, thshold=7e-3
                     )
                     if not approximate_best_config_list:
                         continue

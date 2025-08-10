@@ -65,6 +65,58 @@
     "weight_decay": 0.3
   },
   "min_loss": 3.105455160140991,
+  "approximate_best_config_list": [
+    {
+      "epsilon": 1e-07,
+      "train_batch_size": 128,
+      "gamma": 0.0125,
+      "learning_rate": 0.002,
+      "weight_decay": 0.3,
+      "warmup": 4000,
+      "beta2": 0.9,
+      "beta1": 0.9
+    },
+    {
+      "epsilon": 1e-07,
+      "train_batch_size": 128,
+      "gamma": 0.0125,
+      "learning_rate": 0.002,
+      "weight_decay": 0.3,
+      "warmup": 4000,
+      "beta2": 0.9,
+      "beta1": 0.95
+    },
+    {
+      "epsilon": 1e-07,
+      "train_batch_size": 128,
+      "gamma": 0.025,
+      "learning_rate": 0.002,
+      "weight_decay": 0.3,
+      "warmup": 4000,
+      "beta2": 0.9,
+      "beta1": 0.95
+    },
+    {
+      "epsilon": 1e-07,
+      "train_batch_size": 128,
+      "gamma": 0.00625,
+      "learning_rate": 0.002,
+      "weight_decay": 0.3,
+      "warmup": 4000,
+      "beta2": 0.9,
+      "beta1": 0.95
+    },
+    {
+      "epsilon": 1e-07,
+      "train_batch_size": 128,
+      "gamma": 0.0125,
+      "learning_rate": 0.002,
+      "weight_decay": 0.2,
+      "warmup": 4000,
+      "beta2": 0.9,
+      "beta1": 0.95
+    }
+  ],
   "baseline": {
     "loss": 3.1056277751922607,
     "wandb_id": "sweep-520m-10B-sophia651c9blr0.002-wd0.3-minlr0-warmup4000-b10.9-46bf7a"

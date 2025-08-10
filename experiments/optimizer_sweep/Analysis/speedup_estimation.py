@@ -1,3 +1,16 @@
+"""Estimate effective data speedup relative to AdamW and generate figures.
+
+This module:
+- Loads per-optimizer loss results from `Analysis/Results/`.
+- Fits an AdamW baseline scaling curve per model size: L(D) = alpha * D^(-B) + beta.
+- Computes each optimizer's effective data budget D_eff achieving its observed loss.
+- Produces figures per model size comparing D_eff vs. D_opt (the actual data
+  budget), with shaded bands indicating 1.0–1.4x effective speedup.
+- Also plots speedup at 8x Chinchilla vs. model size for selected optimizers.
+
+Outputs are written to `experiments/optimizer_sweep/Analysis/figs/` as PDFs.
+"""
+
 import os
 import json
 import matplotlib.pyplot as plt

@@ -63,6 +63,53 @@
     "weight_decay": 0.7
   },
   "min_loss": 3.2508106231689453,
+  "approximate_best_config_list": [
+    {
+      "warmup": 2000,
+      "learning_rate": 0.001,
+      "train_batch_size": 128,
+      "beta1": 0.9,
+      "max_grad_norm": 1,
+      "weight_decay": 0.7,
+      "beta2": 0.98
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.001,
+      "train_batch_size": 128,
+      "beta1": 0.9,
+      "max_grad_norm": 1,
+      "weight_decay": 0.4,
+      "beta2": 0.98
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.0005,
+      "train_batch_size": 128,
+      "beta1": 0.9,
+      "max_grad_norm": 1,
+      "weight_decay": 0.7,
+      "beta2": 0.98
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.001,
+      "train_batch_size": 128,
+      "beta1": 0.9,
+      "max_grad_norm": 1,
+      "weight_decay": 0.5,
+      "beta2": 0.98
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.001,
+      "train_batch_size": 128,
+      "beta1": 0.9,
+      "max_grad_norm": 1,
+      "weight_decay": 0.6,
+      "beta2": 0.98
+    }
+  ],
   "baseline": {
     "loss": 3.251647710800171,
     "wandb_id": "sweep-130m-21B-lion85b813lr0.001-wd0.7-minlr0-warmup2000-b10.9-b-eef545"

@@ -25,6 +25,14 @@
     "weight_decay": 0.1
   },
   "min_loss": 2.912761926651001,
+  "approximate_best_config_list": [
+    {
+      "warmup": 1000,
+      "learning_rate": 0.004,
+      "weight_decay": 0.1,
+      "train_batch_size": 256
+    }
+  ],
   "baseline": {
     "loss": 2.912761926651001,
     "wandb_id": "sweep-520m-85B-adamwf14f39lr0.004-wd0.1-minlr0-warmup1000-b10.9--84afa9"

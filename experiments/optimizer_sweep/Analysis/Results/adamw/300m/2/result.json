@@ -25,6 +25,74 @@
     "weight_decay": 0.1
   },
   "min_loss": 3.1635448932647705,
+  "approximate_best_config_list": [
+    {
+      "warmup": 2000,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "train_batch_size": 128
+    },
+    {
+      "warmup": 4000,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "train_batch_size": 128
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "train_batch_size": 128
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "train_batch_size": 128
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.004,
+      "weight_decay": 0.1,
+      "train_batch_size": 128
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "train_batch_size": 128
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "train_batch_size": 128
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "train_batch_size": 128
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "train_batch_size": 128
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "train_batch_size": 256
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.004,
+      "weight_decay": 0.1,
+      "train_batch_size": 128
+    }
+  ],
   "baseline": {
     "loss": 3.1657376289367676,
     "wandb_id": "sweep-300m-12B-adamwo5dcabdlr0.008-wd0.1-minlr0-warmup2000-b10.9-3d4fae"

@@ -30,6 +30,24 @@
     "weight_decay": 0.1
   },
   "min_loss": 3.0036733150482178,
+  "approximate_best_config_list": [
+    {
+      "partition_grads_into_blocks": true,
+      "block_size": 512,
+      "warmup": 1000,
+      "precondition_frequency": 10,
+      "train_batch_size": 256,
+      "learning_rate": 0.008
+    },
+    {
+      "partition_grads_into_blocks": true,
+      "block_size": 512,
+      "warmup": 1000,
+      "precondition_frequency": 10,
+      "train_batch_size": 256,
+      "learning_rate": 0.004
+    }
+  ],
   "baseline": {
     "loss": 3.0036733150482178,
     "wandb_id": "sweep-520m-21B-soapea9baa74lr0.008-wd0.1-minlr0-warmup1000-b10.9-7994bc"

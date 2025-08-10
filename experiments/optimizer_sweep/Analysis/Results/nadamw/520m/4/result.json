@@ -23,6 +23,18 @@
     "weight_decay": 0.1
   },
   "min_loss": 2.954136371612549,
+  "approximate_best_config_list": [
+    {
+      "train_batch_size": 256,
+      "learning_rate": 0.004,
+      "warmup": 4000
+    },
+    {
+      "train_batch_size": 128,
+      "learning_rate": 0.004,
+      "warmup": 4000
+    }
+  ],
   "baseline": {
     "loss": 2.9545633792877197,
     "wandb_id": "sweep-520m-42B-nadamwcf9d95lr0.004-wd0.1-minlr0-warmup4000-b10.9-40428f"

@@ -19,6 +19,12 @@
     "weight_decay": 0.1
   },
   "min_loss": 3.200423002243042,
+  "approximate_best_config_list": [
+    {
+      "warmup": 2000,
+      "train_batch_size": 256
+    }
+  ],
   "baseline": {
     "loss": 3.200423002243042,
     "wandb_id": "sweep-130m-42B-nadamw6383f8lr0.008-wd0.1-minlr0-warmup2000-b10.9-d7e8d3"

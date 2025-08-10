@@ -31,6 +31,26 @@
     "weight_decay": 0.1
   },
   "min_loss": 3.0136630535125732,
+  "approximate_best_config_list": [
+    {
+      "learning_rate": 0.008,
+      "train_batch_size": 256,
+      "warmup": 2000,
+      "beta1": 0.98
+    },
+    {
+      "learning_rate": 0.008,
+      "train_batch_size": 256,
+      "warmup": 2000,
+      "beta1": 0.95
+    },
+    {
+      "learning_rate": 0.008,
+      "train_batch_size": 256,
+      "warmup": 2000,
+      "beta1": 0.9
+    }
+  ],
   "baseline": {
     "loss": 3.015342712402344,
     "wandb_id": "sweep-520m-21B-mars1ddcddlr0.008-wd0.1-minlr0-warmup2000-b10.95--e9c503"

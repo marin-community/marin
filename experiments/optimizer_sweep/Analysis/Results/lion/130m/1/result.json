@@ -67,6 +67,80 @@
     "weight_decay": 0.7
   },
   "min_loss": 3.549180746078491,
+  "approximate_best_config_list": [
+    {
+      "warmup": 2000,
+      "learning_rate": 0.002,
+      "train_batch_size": 128,
+      "beta1": 0.9,
+      "max_grad_norm": 1,
+      "weight_decay": 0.7,
+      "beta2": 0.95
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.001,
+      "train_batch_size": 128,
+      "beta1": 0.95,
+      "max_grad_norm": 1,
+      "weight_decay": 0.7,
+      "beta2": 0.95
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.002,
+      "train_batch_size": 128,
+      "beta1": 0.9,
+      "max_grad_norm": 1,
+      "weight_decay": 0.4,
+      "beta2": 0.95
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.002,
+      "train_batch_size": 128,
+      "beta1": 0.9,
+      "max_grad_norm": 1,
+      "weight_decay": 0.7,
+      "beta2": 0.9
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.002,
+      "train_batch_size": 128,
+      "beta1": 0.9,
+      "max_grad_norm": 1,
+      "weight_decay": 0.8,
+      "beta2": 0.95
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.002,
+      "train_batch_size": 128,
+      "beta1": 0.9,
+      "max_grad_norm": 1,
+      "weight_decay": 0.5,
+      "beta2": 0.95
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.001,
+      "train_batch_size": 128,
+      "beta1": 0.9,
+      "max_grad_norm": 1,
+      "weight_decay": 0.7,
+      "beta2": 0.95
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.002,
+      "train_batch_size": 128,
+      "beta1": 0.9,
+      "max_grad_norm": 1,
+      "weight_decay": 0.6,
+      "beta2": 0.95
+    }
+  ],
   "baseline": {
     "loss": 3.55153751373291,
     "wandb_id": "sweep-130m-2B-lion3532d0lr0.002-wd0.7-minlr0-warmup2000-b10.9-b2-2f88e4"

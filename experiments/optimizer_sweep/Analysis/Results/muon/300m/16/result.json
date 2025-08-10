@@ -23,6 +23,12 @@
     "weight_decay": 0.1
   },
   "min_loss": 2.9908766746520996,
+  "approximate_best_config_list": [
+    {
+      "warmup": 0,
+      "train_batch_size": 256
+    }
+  ],
   "baseline": {
     "loss": null,
     "wandb_id": null

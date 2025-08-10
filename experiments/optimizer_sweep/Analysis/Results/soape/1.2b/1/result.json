@@ -1,0 +1,34 @@
+{
+  "result": {
+    "Baseline": 2.94049334526062
+  },
+  "name": {
+    "Baseline": "sweep-1.2b-24B-soapebf16d04f58lr0.004-wd0.1-minlr0.0-warmup1000--82b8d3"
+  },
+  "num_left": 0,
+  "best_config": {
+    "learning_rate": 0.004,
+    "weight_decay": 0.1,
+    "min_lr_ratio": 0.0,
+    "warmup": 1000,
+    "beta1": 0.95,
+    "beta2": 0.99,
+    "shampoo_beta": 0.9,
+    "precondition_frequency": 10,
+    "block_size": 512,
+    "epsilon": 1e-10,
+    "max_grad_norm": 1,
+    "train_batch_size": 256
+  },
+  "min_loss": 2.897803783416748,
+  "approximate_best_config_list": [
+    {
+      "train_batch_size": 256,
+      "warmup": 1000
+    }
+  ],
+  "baseline": {
+    "loss": 2.94049334526062,
+    "wandb_id": "sweep-1.2b-24B-soapebf16d04f58lr0.004-wd0.1-minlr0.0-warmup1000--82b8d3"
+  }
+}

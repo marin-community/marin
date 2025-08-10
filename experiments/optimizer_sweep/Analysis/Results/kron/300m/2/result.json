@@ -27,6 +27,13 @@
     "weight_decay": 0.7
   },
   "min_loss": 3.1508798599243164,
+  "approximate_best_config_list": [
+    {
+      "train_batch_size": 128,
+      "warmup": 1000,
+      "learning_rate": 0.001
+    }
+  ],
   "baseline": {
     "loss": 3.1508798599243164,
     "wandb_id": "sweep-300m-12B-kronb21812lr0.001-wd0.7-b10.95-plr0.2-pis1-gn1-no-48c292"

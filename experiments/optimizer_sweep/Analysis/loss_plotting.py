@@ -1,3 +1,15 @@
+"""Aggregate `Results/` JSONs and plot loss vs. Chinchilla ratio per optimizer.
+
+Functionality:
+- Recursively scans `experiments/optimizer_sweep/Analysis/Results/` for
+  `{optimizer}/{model_size}/{chinchilla}/result.json` files.
+- Extracts a representative loss (prefers `min_loss`, falls back to baseline or
+  ablation minima) and assembles a DataFrame.
+- Produces one PDF per model size at `experiments/optimizer_sweep/Analysis/figs/`
+  named `optimizer_loss_scaling_{model_size}.pdf`, plotting loss vs. Chinchilla
+  ratio with consistent colors/labels from `plotting_config`.
+"""
+
 import os
 import json
 import matplotlib.pyplot as plt

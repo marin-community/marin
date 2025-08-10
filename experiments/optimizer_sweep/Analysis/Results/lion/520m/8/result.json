@@ -25,6 +25,26 @@
     "weight_decay": 0.6
   },
   "min_loss": 2.9147348403930664,
+  "approximate_best_config_list": [
+    {
+      "warmup": 2000,
+      "learning_rate": 0.001,
+      "train_batch_size": 256,
+      "beta2": 0.95
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.0005,
+      "train_batch_size": 256,
+      "beta2": 0.95
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.0005,
+      "train_batch_size": 256,
+      "beta2": 0.98
+    }
+  ],
   "baseline": {
     "loss": 2.9147348403930664,
     "wandb_id": "sweep-520m-85B-lionf86a38lr0.0005-wd0.6-minlr0-warmup2000-b10.9--54ea21"

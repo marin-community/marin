@@ -9,6 +9,10 @@
     "train_batch_size": [
       256,
       128
+    ],
+    "warmup": [
+      2000,
+      4000
     ]
   },
   "target_chinchilla": 4

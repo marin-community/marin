@@ -25,6 +25,32 @@
     "weight_decay": 0.7
   },
   "min_loss": 3.1004343032836914,
+  "approximate_best_config_list": [
+    {
+      "warmup": 2000,
+      "learning_rate": 0.001,
+      "train_batch_size": 128,
+      "beta2": 0.98
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.001,
+      "train_batch_size": 256,
+      "beta2": 0.95
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.001,
+      "train_batch_size": 256,
+      "beta2": 0.98
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.0005,
+      "train_batch_size": 256,
+      "beta2": 0.98
+    }
+  ],
   "baseline": {
     "loss": 3.1004343032836914,
     "wandb_id": "sweep-300m-24B-lion5aad2alr0.001-wd0.7-minlr0-warmup2000-b10.9-b-edb7fa"

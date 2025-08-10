@@ -25,6 +25,20 @@
     "weight_decay": 0.7
   },
   "min_loss": 3.042884588241577,
+  "approximate_best_config_list": [
+    {
+      "warmup": 2000,
+      "learning_rate": 0.001,
+      "train_batch_size": 256,
+      "beta2": 0.98
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.0005,
+      "train_batch_size": 256,
+      "beta2": 0.98
+    }
+  ],
   "baseline": {
     "loss": 3.0458250045776367,
     "wandb_id": "sweep-300m-48B-lioneb1a25lr0.001-wd0.7-minlr0-warmup2000-b10.9-b-2006af"

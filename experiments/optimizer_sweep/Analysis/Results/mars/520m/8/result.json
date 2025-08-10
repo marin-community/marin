@@ -31,6 +31,44 @@
     "weight_decay": 0.1
   },
   "min_loss": 2.905677080154419,
+  "approximate_best_config_list": [
+    {
+      "learning_rate": 0.004,
+      "train_batch_size": 256,
+      "warmup": 2000,
+      "beta1": 0.95
+    },
+    {
+      "learning_rate": 0.004,
+      "train_batch_size": 256,
+      "warmup": 2000,
+      "beta1": 0.9
+    },
+    {
+      "learning_rate": 0.004,
+      "train_batch_size": 256,
+      "warmup": 4000,
+      "beta1": 0.95
+    },
+    {
+      "learning_rate": 0.004,
+      "train_batch_size": 256,
+      "warmup": 2000,
+      "beta1": 0.95
+    },
+    {
+      "learning_rate": 0.004,
+      "train_batch_size": 256,
+      "warmup": 2000,
+      "beta1": 0.98
+    },
+    {
+      "learning_rate": 0.004,
+      "train_batch_size": 256,
+      "warmup": 1000,
+      "beta1": 0.95
+    }
+  ],
   "baseline": {
     "loss": 2.9063034057617188,
     "wandb_id": "sweep-520m-85B-mars995e4flr0.004-wd0.1-minlr0-warmup2000-b10.95--18e62c"

@@ -25,6 +25,13 @@
     "weight_decay": 0.7
   },
   "min_loss": 3.031358480453491,
+  "approximate_best_config_list": [
+    {
+      "train_batch_size": 128,
+      "warmup": 1000,
+      "learning_rate": 0.0005
+    }
+  ],
   "baseline": {
     "loss": 3.031358480453491,
     "wandb_id": "sweep-300m-48B-kronabb76feelr0.0005-wd0.7-b10.95-plr0.2-pis1-gn1-0ed5c4"

@@ -64,6 +64,116 @@
     "weight_decay": 0.1
   },
   "min_loss": 3.230889797210694,
+  "approximate_best_config_list": [
+    {
+      "block_size": 512,
+      "warmup": 1000,
+      "epsilon": 1e-10,
+      "precondition_frequency": 10,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.98
+    },
+    {
+      "block_size": 512,
+      "warmup": 1000,
+      "epsilon": 1e-10,
+      "precondition_frequency": 10,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.9
+    },
+    {
+      "block_size": 512,
+      "warmup": 1000,
+      "epsilon": 1e-10,
+      "precondition_frequency": 10,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.95
+    },
+    {
+      "block_size": 512,
+      "warmup": 500,
+      "epsilon": 1e-10,
+      "precondition_frequency": 10,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.9
+    },
+    {
+      "block_size": 512,
+      "warmup": 1000,
+      "epsilon": 1e-15,
+      "precondition_frequency": 10,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.9
+    },
+    {
+      "block_size": 256,
+      "warmup": 1000,
+      "epsilon": 1e-10,
+      "precondition_frequency": 10,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.9
+    },
+    {
+      "block_size": 512,
+      "warmup": 2000,
+      "epsilon": 1e-10,
+      "precondition_frequency": 10,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.9
+    },
+    {
+      "block_size": 512,
+      "warmup": 1000,
+      "epsilon": 1e-10,
+      "precondition_frequency": 10,
+      "train_batch_size": 128,
+      "beta2": 0.98,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.9
+    },
+    {
+      "block_size": 512,
+      "warmup": 1000,
+      "epsilon": 1e-20,
+      "precondition_frequency": 10,
+      "train_batch_size": 128,
+      "beta2": 0.99,
+      "weight_decay": 0.1,
+      "beta1": 0.95,
+      "learning_rate": 0.008,
+      "shampoo_beta": 0.9
+    }
+  ],
   "baseline": {
     "loss": 3.230889797210694,
     "wandb_id": "sweep-300m-6B-soape63ad3blr0.008-wd0.1-minlr0-warmup1000-b10.95--02f063"

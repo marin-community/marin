@@ -27,6 +27,62 @@
     "weight_decay": 0.2
   },
   "min_loss": 3.049351930618286,
+  "approximate_best_config_list": [
+    {
+      "learning_rate": 0.004,
+      "train_batch_size": 128,
+      "weight_decay": 0.1,
+      "warmup": 2000
+    },
+    {
+      "learning_rate": 0.002,
+      "train_batch_size": 128,
+      "weight_decay": 0.2,
+      "warmup": 2000
+    },
+    {
+      "learning_rate": 0.002,
+      "train_batch_size": 128,
+      "weight_decay": 0.2,
+      "warmup": 2000
+    },
+    {
+      "learning_rate": 0.002,
+      "train_batch_size": 128,
+      "weight_decay": 0.2,
+      "warmup": 2000
+    },
+    {
+      "learning_rate": 0.002,
+      "train_batch_size": 128,
+      "weight_decay": 0.2,
+      "warmup": 4000
+    },
+    {
+      "learning_rate": 0.002,
+      "train_batch_size": 128,
+      "weight_decay": 0.2,
+      "warmup": 2000
+    },
+    {
+      "learning_rate": 0.002,
+      "train_batch_size": 128,
+      "weight_decay": 0.2,
+      "warmup": 2000
+    },
+    {
+      "learning_rate": 0.002,
+      "train_batch_size": 256,
+      "weight_decay": 0.2,
+      "warmup": 2000
+    },
+    {
+      "learning_rate": 0.002,
+      "train_batch_size": 128,
+      "weight_decay": 0.1,
+      "warmup": 2000
+    }
+  ],
   "baseline": {
     "loss": 3.049351930618286,
     "wandb_id": "sweep-300m-48B-minic8695flr0.002-wd0.2-minlr0-warmup2000-b10.9-b-952cc4"

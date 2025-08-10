@@ -48,6 +48,48 @@
     "weight_decay": 0.1
   },
   "min_loss": 3.2586865425109863,
+  "approximate_best_config_list": [
+    {
+      "warmup": 2000,
+      "learning_rate": 0.008,
+      "train_batch_size": 128,
+      "beta1": 0.98,
+      "max_grad_norm": 2,
+      "weight_decay": 0.1,
+      "epsilon": 9.999999999999999e-26,
+      "beta2": 0.98
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.008,
+      "train_batch_size": 128,
+      "beta1": 0.98,
+      "max_grad_norm": 2,
+      "weight_decay": 0.1,
+      "epsilon": 1e-15,
+      "beta2": 0.98
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.008,
+      "train_batch_size": 128,
+      "beta1": 0.98,
+      "max_grad_norm": 1,
+      "weight_decay": 0.1,
+      "epsilon": 1e-25,
+      "beta2": 0.98
+    },
+    {
+      "warmup": 2000,
+      "learning_rate": 0.008,
+      "train_batch_size": 128,
+      "beta1": 0.98,
+      "max_grad_norm": 2,
+      "weight_decay": 0.1,
+      "epsilon": 1e-20,
+      "beta2": 0.98
+    }
+  ],
   "baseline": {
     "loss": 3.259650230407715,
     "wandb_id": "sweep-300m-6B-cautiousc8346clr0.008-wd0.1-minlr0-warmup2000-b10.-852297"
