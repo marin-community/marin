@@ -7,8 +7,9 @@ from experiments.defaults import AnnealConfig, default_anneal, default_tokenize
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK
 from experiments.exp1361_datashop_medical import datashop_runner
 from experiments.llama import llama3_tokenizer
-from marin.execution.executor import executor_main, output_path_of
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.export.hf_upload import upload_dir_to_hf
+from marin.processing.classification.dedupe import DedupeConfig, NGramConfig, dedupe
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.resources import TpuPodConfig
 
@@ -38,6 +39,25 @@ synthetic_medical_data = default_synthetic_data_generation(
     engine_kwargs=engine_kwargs,
     generation_kwargs=generation_kwargs,
     resource_config=TPU_V6E_8_STRICT_PACK,
+)
+
+synthetic_medical_data_dedupe_attributes = ExecutorStep(
+    name="attributes/datashop-medical-qa-whole-dedupe",
+    fn=dedupe,
+    config=DedupeConfig(
+        input_path=synthetic_medical_data,
+        output_path=this_output_path(),
+        attribute_name="duplicate_text",
+        min_length=0,
+        min_words=0,
+        estimated_doc_count=2_000_000_000,
+        false_positive_rate=0.001,
+        ngram=NGramConfig(
+            ngram_length=8,
+            stride=0,
+            overlap_threshold=0.7,
+        ),
+    ),
 )
 
 synthetic_medical_data_tokenized = default_tokenize(
@@ -73,4 +93,4 @@ datashop_medical_synthetic_exported = upload_dir_to_hf(
 )
 
 if __name__ == "__main__":
-    executor_main([datashop_medical_synthetic_exported])
+    executor_main([synthetic_medical_data_dedupe_attributes])

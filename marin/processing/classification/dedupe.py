@@ -301,22 +301,26 @@ def dolma_dedup(
     input_filetype,
     bloom_filter_path,
 ):
-
     dolma_dedupe_ray_remote_args = {
         "scheduling_strategy": ray.util.scheduling_strategies.NodeAffinitySchedulingStrategy(
             node_id=ray.get_runtime_context().get_node_id(),
             soft=False,
         ),
+        "num_cpus": 4,
+        "memory": 1 * 1024 * 1024 * 1024,
         "runtime_env": {
-            "pip": ["dolma", "transformers==4.44.0"],
+            "pip": ["dolma @ git+https://github.com/ahmeda14960/dolma.git"],
+            # "pip": ["dolma", "transformers==4.44.0"],
         },
     }
     bloom_filter_file = "decontaminated_bloom_filter.bin"
-    remote_bloom_filter_path = os.path.join(bloom_filter_path, bloom_filter_file)
-    with tempfile.TemporaryDirectory() as tmpdir:
+    gcsfuse_mount_dir = "/tmp"
+    fsspec_mkdirs(gcsfuse_mount_dir)
+    with tempfile.TemporaryDirectory(dir=gcsfuse_mount_dir) as tmpdir:
         local_bloom_filter_path = os.path.join(tmpdir, bloom_filter_file)
         try:
             if decontaminate:
+                remote_bloom_filter_path = os.path.join(bloom_filter_path, bloom_filter_file)
                 # First we copy the files to the temporary directory to get bloom filter
                 if not bloom_filter_path or not fsspec_exists(remote_bloom_filter_path):
                     copy_files_in(decomtaminate_dir, tmpdir, input_filetype)

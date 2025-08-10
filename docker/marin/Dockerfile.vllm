@@ -3,8 +3,13 @@
 FROM vllm/vllm-tpu:nightly
 
 # Setup gcsfuse
-RUN apt-get update && apt-get install lsb-release rsync docker.io -y
+# cmake, build-essential, libssl-dev, protobuf-compiler for dolma
+RUN apt-get update && apt-get install lsb-release rsync docker.io cmake build-essential libssl-dev protobuf-compiler -y
 RUN usermod -aG docker $(whoami)
+
+# Install rust for dolma
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH=$HOME/.cargo/bin:$PATH
 
 RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | tee /etc/apt/sources.list.d/gcsfuse.list
 RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
@@ -18,7 +23,7 @@ RUN curl -sSL https://sdk.cloud.google.com > /tmp/gcl && \
     && chown -R $(whoami) /root/gcloud
 
 # Install core dependencies
-RUN pip install --no-cache-dir draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1190 haliax==1.4.dev327 lm-eval https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
+RUN pip install --no-cache-dir draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1359 haliax==1.4.dev348 lm-eval https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
 
 # Need the latest accelerate due to some deprecations in the newest pytorch
 # RUN pip install --no-cache-dir https://github.com/huggingface/accelerate/archive/refs/heads/main.zip

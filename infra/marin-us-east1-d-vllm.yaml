@@ -21,7 +21,7 @@ provider:
   project_id: hai-gcp-models
 
 docker:
-    image: "us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:3aeb0e6d"
+    image: "us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:234b520d"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -75,7 +75,7 @@ available_node_types:
   head_default:
     min_workers: 0
     max_workers: 0
-    resources: {"CPU": 1}
+    resources: {"CPU": 0, "head_node": 1}
 
     # GCP-Specific Configuration; by default, Ray will configure unspecified fields (e.g., subnets, ssh-keys)
     #   => Ref: https://cloud.google.com/compute/docs/reference/rest/v1/instances/insert

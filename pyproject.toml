@@ -39,6 +39,7 @@ dependencies = [
     "html2text",
     "fsspec>=2024.04.09",
     "openai",
+    "cmake",
 ]
 
 [project.optional-dependencies]
