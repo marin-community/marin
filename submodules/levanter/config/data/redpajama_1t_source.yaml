@@ -1,5 +1,0 @@
-id: togethercomputer/RedPajama-Data-1T
-cache_dir: gs://levanter-data/tokenized/redpajama/
-tokenizer: EleutherAI/gpt-neox-20b
-splits:
-  - train
