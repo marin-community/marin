@@ -1,0 +1,44 @@
+{
+  "result": {
+    "Baseline": 2.9545633792877197,
+    "learning_rate=0.008": 2.9710631370544434,
+    "train_batch_size=256": 2.954136371612549
+  },
+  "name": {
+    "Baseline": "sweep-520m-42B-nadamwcf9d95lr0.004-wd0.1-minlr0-warmup4000-b10.9-40428f",
+    "learning_rate=0.008": "sweep-520m-42B-nadamwbd85falr0.008-wd0.1-minlr0-warmup4000-b10.9-2ceead",
+    "train_batch_size=256": "sweep-520m-42B-nadamw0a1fe6lr0.004-wd0.1-minlr0-warmup4000-b10.9-2395f8"
+  },
+  "num_left": 0,
+  "best_config": {
+    "beta1": 0.98,
+    "beta2": 0.98,
+    "epsilon": 1e-10,
+    "learning_rate": 0.004,
+    "max_grad_norm": 1,
+    "min_lr_ratio": 0,
+    "nesterov": true,
+    "train_batch_size": 128,
+    "warmup": 4000,
+    "weight_decay": 0.1
+  },
+  "min_loss": 2.954136371612549,
+  "baseline": {
+    "loss": 2.9545633792877197,
+    "wandb_id": "sweep-520m-42B-nadamwcf9d95lr0.004-wd0.1-minlr0-warmup4000-b10.9-40428f"
+  },
+  "ablations": [
+    {
+      "param": "learning_rate",
+      "value": 0.008,
+      "loss": 2.9710631370544434,
+      "wandb_id": "sweep-520m-42B-nadamwbd85falr0.008-wd0.1-minlr0-warmup4000-b10.9-2ceead"
+    },
+    {
+      "param": "train_batch_size",
+      "value": 256,
+      "loss": 2.954136371612549,
+      "wandb_id": "sweep-520m-42B-nadamw0a1fe6lr0.004-wd0.1-minlr0-warmup4000-b10.9-2395f8"
+    }
+  ]
+}

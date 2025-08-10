@@ -1,0 +1,48 @@
+{
+  "result": {
+    "Baseline": 3.083432674407959,
+    "learning_rate=0.001": 3.0895674228668213,
+    "train_batch_size=256": null
+  },
+  "name": {
+    "Baseline": "sweep-300m-24B-kronb55572lr0.0005-wd0.7-b10.95-plr0.2-pis1-gn1-n-9479df",
+    "learning_rate=0.001": "sweep-300m-24B-kron7aa525lr0.001-wd0.7-b10.95-plr0.2-pis1-gn1-no-127f30",
+    "train_batch_size=256": null
+  },
+  "num_left": 1,
+  "best_config": {
+    "beta1": 0.95,
+    "block_size": 256,
+    "learning_rate": 0.0005,
+    "max_grad_norm": 1,
+    "min_lr_ratio": 0,
+    "normalize_grads": true,
+    "partition_grads_into_blocks": true,
+    "preconditioner_init_scale": 1,
+    "preconditioner_lr": 0.2,
+    "preconditioner_update_probability": 0.1,
+    "train_batch_size": 128,
+    "update_prob_flat_start": 2000,
+    "warmup": 1000,
+    "weight_decay": 0.7
+  },
+  "min_loss": 3.083432674407959,
+  "baseline": {
+    "loss": 3.083432674407959,
+    "wandb_id": "sweep-300m-24B-kronb55572lr0.0005-wd0.7-b10.95-plr0.2-pis1-gn1-n-9479df"
+  },
+  "ablations": [
+    {
+      "param": "learning_rate",
+      "value": 0.001,
+      "loss": 3.0895674228668213,
+      "wandb_id": "sweep-300m-24B-kron7aa525lr0.001-wd0.7-b10.95-plr0.2-pis1-gn1-no-127f30"
+    },
+    {
+      "param": "train_batch_size",
+      "value": 256,
+      "loss": null,
+      "wandb_id": null
+    }
+  ]
+}

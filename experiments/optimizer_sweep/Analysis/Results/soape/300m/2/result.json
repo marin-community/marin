@@ -1,0 +1,63 @@
+{
+  "result": {
+    "Baseline": 3.147433280944824,
+    "block_size=256": 3.1501057147979736,
+    "block_size=128": 3.154287099838257,
+    "learning_rate=0.004": 3.1474742889404297,
+    "train_batch_size=256": 3.15336012840271
+  },
+  "name": {
+    "Baseline": "sweep-300m-12B-soapefe4b166lr0.008-wd0.1-minlr0-warmup1000-b10.9-cebb81",
+    "block_size=256": "sweep-300m-12B-soape1f2d4flr0.008-wd0.1-minlr0-warmup1000-b10.95-78cbf5",
+    "block_size=128": "sweep-300m-12B-soapeb93333lr0.008-wd0.1-minlr0-warmup1000-b10.95-feb227",
+    "learning_rate=0.004": "sweep-300m-12B-soapef97cdfclr0.004-wd0.1-minlr0-warmup1000-b10.9-dec1d6",
+    "train_batch_size=256": "sweep-300m-12B-soape63ad3blr0.008-wd0.1-minlr0-warmup1000-b10.95-b1cbe1"
+  },
+  "num_left": 0,
+  "best_config": {
+    "beta1": 0.95,
+    "beta2": 0.99,
+    "block_size": 512,
+    "epsilon": 1e-10,
+    "learning_rate": 0.008,
+    "max_grad_norm": 1,
+    "min_lr_ratio": 0,
+    "partition_grads_into_blocks": true,
+    "precondition_frequency": 10,
+    "shampoo_beta": 0.9,
+    "train_batch_size": 128,
+    "warmup": 1000,
+    "weight_decay": 0.1
+  },
+  "min_loss": 3.147433280944824,
+  "baseline": {
+    "loss": 3.147433280944824,
+    "wandb_id": "sweep-300m-12B-soapefe4b166lr0.008-wd0.1-minlr0-warmup1000-b10.9-cebb81"
+  },
+  "ablations": [
+    {
+      "param": "block_size",
+      "value": 256,
+      "loss": 3.1501057147979736,
+      "wandb_id": "sweep-300m-12B-soape1f2d4flr0.008-wd0.1-minlr0-warmup1000-b10.95-78cbf5"
+    },
+    {
+      "param": "block_size",
+      "value": 128,
+      "loss": 3.154287099838257,
+      "wandb_id": "sweep-300m-12B-soapeb93333lr0.008-wd0.1-minlr0-warmup1000-b10.95-feb227"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.004,
+      "loss": 3.1474742889404297,
+      "wandb_id": "sweep-300m-12B-soapef97cdfclr0.004-wd0.1-minlr0-warmup1000-b10.9-dec1d6"
+    },
+    {
+      "param": "train_batch_size",
+      "value": 256,
+      "loss": 3.15336012840271,
+      "wandb_id": "sweep-300m-12B-soape63ad3blr0.008-wd0.1-minlr0-warmup1000-b10.95-b1cbe1"
+    }
+  ]
+}

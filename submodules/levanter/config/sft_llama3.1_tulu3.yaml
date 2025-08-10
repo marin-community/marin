@@ -1,0 +1,58 @@
+dataset_type: chat_jsonl
+chat_train_urls:
+  - "gs://marin-us-central2/documents/allenai--tulu-v2-sft-mixture-0ba27c/data/**/*.jsonl.gz"
+supervised_data:
+# cache_dir before trying sequence packing
+  cache_dir: "gs://marin-us-central2/tokenized/tulu_3_sft_mixture_llama3_instruct_tokenizer-8f8ba3"
+
+max_seq_len: 4096
+tokenizer: "NousResearch/NousResearch-3.1-8B"
+model:  # 8B llama3 class model
+  type: llama
+  seq_len: 4096
+  hidden_dim: 4096
+  intermediate_dim: 14336
+  num_layers: 32
+  num_heads: 32
+  num_kv_heads: 8
+  flash_attention_block_size: 512
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  rope:
+    type: "llama3"
+
+trainer:
+  seed: 0
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["dolma", "olmo", "llama"]
+  wandb:
+    project: "marin"
+    name: "llama3.1_tulu3_sft"
+
+  mp: p=f32,c=bfloat16
+  # same as 606 sft in marin
+  train_batch_size: 128
+  # number of steps until we hit stop iteration
+  num_train_steps: 1845
+  steps_per_eval: 1000
+  tensor_parallel_axes: ["mlp", "heads"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+  checkpointer:
+    base_path: "gs://marin-us-central2/checkpoints/llama_3.1_tulusft/seed_0/"
+optimizer:
+  learning_rate: 5e-6
+  weight_decay: 0.0
+  min_lr_ratio: 0.0
+  lr_schedule: "linear"
+  warmup: 0.03
+
+hf_save_steps: 500
+hf_save_path: "gs://marin-us-central2/checkpoints/llama_3.1_tulusft/hf/seed_0/"
+
+initialize_from_hf: True
+model_name_or_path: "NousResearch/Llama-3.1-8B"
+epoch: 0

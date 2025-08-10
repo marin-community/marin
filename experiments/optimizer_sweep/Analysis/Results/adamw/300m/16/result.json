@@ -1,0 +1,26 @@
+{
+  "result": {
+    "Baseline": 3.0006392002105713
+  },
+  "name": {
+    "Baseline": "sweep-300m-96B-adamwfcee97lr0.004-wd0.1-minlr0-warmup2000-b10.9--18b705"
+  },
+  "num_left": 0,
+  "best_config": {
+    "beta1": 0.9,
+    "beta2": 0.98,
+    "epsilon": 1e-10,
+    "learning_rate": 0.004,
+    "max_grad_norm": 2,
+    "min_lr_ratio": 0,
+    "nesterov": false,
+    "train_batch_size": 256,
+    "warmup": 2000,
+    "weight_decay": 0.1
+  },
+  "min_loss": 3.0006392002105713,
+  "baseline": {
+    "loss": 3.0006392002105713,
+    "wandb_id": "sweep-300m-96B-adamwfcee97lr0.004-wd0.1-minlr0-warmup2000-b10.9--18b705"
+  }
+}

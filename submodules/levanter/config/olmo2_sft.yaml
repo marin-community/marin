@@ -1,0 +1,77 @@
+# Olmo2 SFT Configuration
+
+dataset_type: chat_jsonl
+
+# Config for supervised datasets
+supervised_data:
+  tulu:
+    cache_dir: "gs://marin-us-central2/tokenized/tulu_sft_v3_olmo2tokenizer-8cb4bb"
+    train_urls:
+      - "gs://marin-us-central2/documents/allenai--tulu-3-sft-mixture-55e9fd6-27c6a7/**/*.jsonl.gz"
+
+# Set all weight to the SFT dataset
+mixture_weights:
+  tulu: 1
+
+mixture_block_size: 2048
+stop_strategy: restart
+
+max_seq_len: 4096
+tokenizer: "allenai/OLMo-2-1124-7B-SFT"
+model:  # Olmo2 7B model config
+  type: olmo2
+  seq_len: 4096
+  hidden_dim: 4096
+  intermediate_dim: 11008
+  num_layers: 32
+  num_heads: 32
+  num_kv_heads: 32
+  flash_attention_block_size: 512
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  layer_norm_epsilon: 1e-6
+  activation_function: "silu"
+  attention_bias: false
+  upcast_attn: True
+  rope:
+    type: "default"
+    theta: 500000
+
+trainer:
+  seed: 0
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["dolma", "olmo", "mixture"]
+  wandb:
+    project: "marin"
+    name: "olmo2_sft_1e-5"
+
+  mp: p=f32,c=bfloat16
+  train_batch_size: 128
+  num_train_steps: 3000
+  steps_per_eval: 500
+  tensor_parallel_axes: ["mlp", "heads"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+  checkpointer:
+    base_path: "gs://marin-us-central2/checkpoints/olmo2_sft/seed_0/"
+
+optimizer:
+  learning_rate: 1e-5
+  weight_decay: 0.0  # Keep at 0.0, OLMo 2 doesn't use weight decay on embeddings
+  min_lr_ratio: 0.0
+  lr_schedule: "linear"
+  warmup: 0.03
+
+
+hf_save_steps: 1000
+hf_save_path: "gs://marin-us-central2/checkpoints/olmo2_sft/hf/seed_0/"
+
+initialize_from_hf: True
+model_name_or_path: "allenai/OLMo-2-1124-7B"
+
+messages_field: "messages"
+input_role: "user"
+output_role: "assistant"

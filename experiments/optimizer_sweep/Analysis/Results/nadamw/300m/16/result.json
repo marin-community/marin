@@ -1,0 +1,26 @@
+{
+  "result": {
+    "Baseline": 2.998051166534424
+  },
+  "name": {
+    "Baseline": "sweep-300m-96B-nadamw860e52lr0.004-wd0.1-minlr0-warmup2000-b10.9-8d9fe1"
+  },
+  "num_left": 0,
+  "best_config": {
+    "beta1": 0.95,
+    "beta2": 0.98,
+    "epsilon": 1e-10,
+    "learning_rate": 0.004,
+    "max_grad_norm": 1,
+    "min_lr_ratio": 0,
+    "nesterov": true,
+    "train_batch_size": 256,
+    "warmup": 2000,
+    "weight_decay": 0.1
+  },
+  "min_loss": 2.998051166534424,
+  "baseline": {
+    "loss": 2.998051166534424,
+    "wandb_id": "sweep-300m-96B-nadamw860e52lr0.004-wd0.1-minlr0-warmup2000-b10.9-8d9fe1"
+  }
+}

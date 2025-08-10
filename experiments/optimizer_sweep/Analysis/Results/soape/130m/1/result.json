@@ -1,18 +1,67 @@
 {
+  "result": {
+    "Baseline": 3.4834887981414795,
+    "beta1=0.8": 4.867911338806152,
+    "beta1=0.9": 4.546506404876709,
+    "beta2=0.9": 3.4961678981781006,
+    "beta2=0.95": 3.490642547607422,
+    "beta2=0.99": 3.4821648597717285,
+    "block_size=128": 3.4893829822540283,
+    "block_size=512": 3.487332582473755,
+    "epsilon=1e-20": 3.512610912322998,
+    "epsilon=1e-10": 3.4830760955810547,
+    "learning_rate=0.004": 3.5091822147369385,
+    "learning_rate=0.008": 3.4911434650421143,
+    "precondition_frequency=5": 3.4877212047576904,
+    "shampoo_beta=0.9": 3.4875731468200684,
+    "shampoo_beta=0.98": 3.488966226577759,
+    "shampoo_beta=0.99": 3.4910624027252197,
+    "train_batch_size=256": 3.5234508514404297,
+    "train_batch_size=512": 3.610713481903076,
+    "warmup=500": 3.4827587604522705,
+    "warmup=2000": 3.507314443588257,
+    "weight_decay=0": 3.5076451301574707,
+    "weight_decay=0.2": 3.5005056858062744
+  },
+  "name": {
+    "Baseline": "sweep-130m-2B-soaplff7de8lr0.016-wd0.1-minlr0-warmup1000-b10.95--f08df8",
+    "beta1=0.8": "sweep-130m-2B-soapl0e72d4lr0.016-wd0.1-minlr0-warmup1000-b10.8-b-24a77a",
+    "beta1=0.9": "sweep-130m-2B-soaplf498b0lr0.016-wd0.1-minlr0-warmup1000-b10.9-b-a0623f",
+    "beta2=0.9": "sweep-130m-2B-soaple0af61lr0.016-wd0.1-minlr0-warmup1000-b10.95--e189bd",
+    "beta2=0.95": "sweep-130m-2B-soapl8015a9lr0.016-wd0.1-minlr0-warmup1000-b10.95--a9e9d5",
+    "beta2=0.99": "sweep-130m-2B-soapla4071flr0.016-wd0.1-minlr0-warmup1000-b10.95--f307f3",
+    "block_size=128": "sweep-130m-2B-soaplc51c66lr0.016-wd0.1-minlr0-warmup1000-b10.95--a8e71b",
+    "block_size=512": "sweep-130m-2B-soapl55f9b8lr0.016-wd0.1-minlr0-warmup1000-b10.95--e77aea",
+    "epsilon=1e-20": "sweep-130m-2B-soapl69eb3flr0.016-wd0.1-minlr0-warmup1000-b10.95--7af120",
+    "epsilon=1e-10": "sweep-130m-2B-soapl8873b6lr0.016-wd0.1-minlr0-warmup1000-b10.95--0732e5",
+    "learning_rate=0.004": "sweep-130m-2B-soapl307a66lr0.004-wd0.1-minlr0-warmup1000-b10.95--2679d5",
+    "learning_rate=0.008": "sweep-130m-2B-soapld74347lr0.008-wd0.1-minlr0-warmup1000-b10.95--d32f3b",
+    "precondition_frequency=5": "sweep-130m-2B-soapa6f299lr0.016-wd0.1-minlr0-warmup1000-b10.95-b-7cc556",
+    "shampoo_beta=0.9": "sweep-130m-2B-soapl4361f2lr0.016-wd0.1-minlr0-warmup1000-b10.95--2ad60c",
+    "shampoo_beta=0.98": "sweep-130m-2B-soapl1db4cblr0.016-wd0.1-minlr0-warmup1000-b10.95--88f9b3",
+    "shampoo_beta=0.99": "sweep-130m-2B-soapl2e5bdclr0.016-wd0.1-minlr0-warmup1000-b10.95--e8f7e3",
+    "train_batch_size=256": "sweep-130m-2B-soapl601977lr0.016-wd0.1-minlr0-warmup1000-b10.95--3feb67",
+    "train_batch_size=512": "sweep-130m-2B-soapl47dbfblr0.016-wd0.1-minlr0-warmup1000-b10.95--cccc39",
+    "warmup=500": "sweep-130m-2B-soapl0c1650lr0.016-wd0.1-minlr0-warmup500-b10.95-b-5b4c4b",
+    "warmup=2000": "sweep-130m-2B-soapla7e9f5lr0.016-wd0.1-minlr0-warmup2000-b10.95--e1c5c4",
+    "weight_decay=0": "sweep-130m-2B-soapl222613lr0.016-wd0-minlr0-warmup1000-b10.95-b2-cae71c",
+    "weight_decay=0.2": "sweep-130m-2B-soapl3db00flr0.016-wd0.2-minlr0-warmup1000-b10.95--173d5a"
+  },
+  "num_left": 0,
   "best_config": {
-    "learning_rate": 0.016,
-    "weight_decay": 0.1,
-    "min_lr_ratio": 0,
-    "warmup": 1000,
     "beta1": 0.95,
     "beta2": 0.98,
-    "shampoo_beta": 0.95,
-    "precondition_frequency": 1,
-    "partition_grads_into_blocks": true,
     "block_size": 256,
     "epsilon": 1e-15,
-    "max_grad_norm": 1,
-    "train_batch_size": 128
+    "learning_rate": 0.016,
+    "max_grad_norm": 1.0,
+    "min_lr_ratio": 0,
+    "partition_grads_into_blocks": true,
+    "precondition_frequency": 1,
+    "shampoo_beta": 0.95,
+    "train_batch_size": 128,
+    "warmup": 1000,
+    "weight_decay": 0.1
   },
   "min_loss": 3.4821648597717285,
   "baseline": {
@@ -20,42 +69,6 @@
     "wandb_id": "sweep-130m-2B-soaplff7de8lr0.016-wd0.1-minlr0-warmup1000-b10.95--f08df8"
   },
   "ablations": [
-    {
-      "param": "learning_rate",
-      "value": 0.004,
-      "loss": 3.5091822147369385,
-      "wandb_id": "sweep-130m-2B-soapl307a66lr0.004-wd0.1-minlr0-warmup1000-b10.95--2679d5"
-    },
-    {
-      "param": "learning_rate",
-      "value": 0.008,
-      "loss": 3.4911434650421143,
-      "wandb_id": "sweep-130m-2B-soapld74347lr0.008-wd0.1-minlr0-warmup1000-b10.95--d32f3b"
-    },
-    {
-      "param": "weight_decay",
-      "value": 0,
-      "loss": 3.5076451301574707,
-      "wandb_id": "sweep-130m-2B-soapl222613lr0.016-wd0-minlr0-warmup1000-b10.95-b2-cae71c"
-    },
-    {
-      "param": "weight_decay",
-      "value": 0.2,
-      "loss": 3.5005056858062744,
-      "wandb_id": "sweep-130m-2B-soapl3db00flr0.016-wd0.2-minlr0-warmup1000-b10.95--173d5a"
-    },
-    {
-      "param": "warmup",
-      "value": 500,
-      "loss": 3.4827587604522705,
-      "wandb_id": "sweep-130m-2B-soapl0c1650lr0.016-wd0.1-minlr0-warmup500-b10.95-b-5b4c4b"
-    },
-    {
-      "param": "warmup",
-      "value": 2000,
-      "loss": 3.507314443588257,
-      "wandb_id": "sweep-130m-2B-soapla7e9f5lr0.016-wd0.1-minlr0-warmup2000-b10.95--e1c5c4"
-    },
     {
       "param": "beta1",
       "value": 0.8,
@@ -87,30 +100,6 @@
       "wandb_id": "sweep-130m-2B-soapla4071flr0.016-wd0.1-minlr0-warmup1000-b10.95--f307f3"
     },
     {
-      "param": "shampoo_beta",
-      "value": 0.9,
-      "loss": 3.4875731468200684,
-      "wandb_id": "sweep-130m-2B-soapl4361f2lr0.016-wd0.1-minlr0-warmup1000-b10.95--2ad60c"
-    },
-    {
-      "param": "shampoo_beta",
-      "value": 0.98,
-      "loss": 3.488966226577759,
-      "wandb_id": "sweep-130m-2B-soapl1db4cblr0.016-wd0.1-minlr0-warmup1000-b10.95--88f9b3"
-    },
-    {
-      "param": "shampoo_beta",
-      "value": 0.99,
-      "loss": 3.4910624027252197,
-      "wandb_id": "sweep-130m-2B-soapl2e5bdclr0.016-wd0.1-minlr0-warmup1000-b10.95--e8f7e3"
-    },
-    {
-      "param": "precondition_frequency",
-      "value": 5,
-      "loss": 3.4877212047576904,
-      "wandb_id": "sweep-130m-2B-soapa6f299lr0.016-wd0.1-minlr0-warmup1000-b10.95-b-7cc556"
-    },
-    {
       "param": "block_size",
       "value": 128,
       "loss": 3.4893829822540283,
@@ -135,6 +124,42 @@
       "wandb_id": "sweep-130m-2B-soapl8873b6lr0.016-wd0.1-minlr0-warmup1000-b10.95--0732e5"
     },
     {
+      "param": "learning_rate",
+      "value": 0.004,
+      "loss": 3.5091822147369385,
+      "wandb_id": "sweep-130m-2B-soapl307a66lr0.004-wd0.1-minlr0-warmup1000-b10.95--2679d5"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.008,
+      "loss": 3.4911434650421143,
+      "wandb_id": "sweep-130m-2B-soapld74347lr0.008-wd0.1-minlr0-warmup1000-b10.95--d32f3b"
+    },
+    {
+      "param": "precondition_frequency",
+      "value": 5,
+      "loss": 3.4877212047576904,
+      "wandb_id": "sweep-130m-2B-soapa6f299lr0.016-wd0.1-minlr0-warmup1000-b10.95-b-7cc556"
+    },
+    {
+      "param": "shampoo_beta",
+      "value": 0.9,
+      "loss": 3.4875731468200684,
+      "wandb_id": "sweep-130m-2B-soapl4361f2lr0.016-wd0.1-minlr0-warmup1000-b10.95--2ad60c"
+    },
+    {
+      "param": "shampoo_beta",
+      "value": 0.98,
+      "loss": 3.488966226577759,
+      "wandb_id": "sweep-130m-2B-soapl1db4cblr0.016-wd0.1-minlr0-warmup1000-b10.95--88f9b3"
+    },
+    {
+      "param": "shampoo_beta",
+      "value": 0.99,
+      "loss": 3.4910624027252197,
+      "wandb_id": "sweep-130m-2B-soapl2e5bdclr0.016-wd0.1-minlr0-warmup1000-b10.95--e8f7e3"
+    },
+    {
       "param": "train_batch_size",
       "value": 256,
       "loss": 3.5234508514404297,
@@ -145,6 +170,30 @@
       "value": 512,
       "loss": 3.610713481903076,
       "wandb_id": "sweep-130m-2B-soapl47dbfblr0.016-wd0.1-minlr0-warmup1000-b10.95--cccc39"
+    },
+    {
+      "param": "warmup",
+      "value": 500,
+      "loss": 3.4827587604522705,
+      "wandb_id": "sweep-130m-2B-soapl0c1650lr0.016-wd0.1-minlr0-warmup500-b10.95-b-5b4c4b"
+    },
+    {
+      "param": "warmup",
+      "value": 2000,
+      "loss": 3.507314443588257,
+      "wandb_id": "sweep-130m-2B-soapla7e9f5lr0.016-wd0.1-minlr0-warmup2000-b10.95--e1c5c4"
+    },
+    {
+      "param": "weight_decay",
+      "value": 0,
+      "loss": 3.5076451301574707,
+      "wandb_id": "sweep-130m-2B-soapl222613lr0.016-wd0-minlr0-warmup1000-b10.95-b2-cae71c"
+    },
+    {
+      "param": "weight_decay",
+      "value": 0.2,
+      "loss": 3.5005056858062744,
+      "wandb_id": "sweep-130m-2B-soapl3db00flr0.016-wd0.2-minlr0-warmup1000-b10.95--173d5a"
     }
   ]
 }

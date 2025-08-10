@@ -1,0 +1,30 @@
+{
+  "result": {
+    "Baseline": 2.8914880752563477
+  },
+  "name": {
+    "Baseline": "sweep-1.2b-24B-muon42df73lr0.004-wd0.1-minlr0.0-warmup0.0-b10.8--70a4b4"
+  },
+  "num_left": 0,
+  "best_config": {
+    "beta1": 0.8,
+    "beta2": 0.98,
+    "decay": 1.0,
+    "epsilon": 1e-15,
+    "learning_rate": 0.004,
+    "lr_schedule": "linear",
+    "max_grad_norm": 2,
+    "min_lr_ratio": 0.0,
+    "momentum": 0.98,
+    "muon_epsilon": 1e-05,
+    "muon_to_adam_lr": 0.3,
+    "train_batch_size": 256,
+    "warmup": 0,
+    "weight_decay": 0.1
+  },
+  "min_loss": 2.8862736225128174,
+  "baseline": {
+    "loss": 2.8914880752563477,
+    "wandb_id": "sweep-1.2b-24B-muon42df73lr0.004-wd0.1-minlr0.0-warmup0.0-b10.8--70a4b4"
+  }
+}

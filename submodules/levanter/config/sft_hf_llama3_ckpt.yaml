@@ -1,0 +1,18 @@
+# Model configuration
+model:
+  type: llama
+  seq_len: 4096
+  hidden_dim: 4096
+  intermediate_dim: 14336
+  num_layers: 32
+  num_heads: 32
+  num_kv_heads: 8
+  flash_attention_block_size: 512
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  rope:
+    type: "llama3"
+
+# need to set this!
+tokenizer: "NousResearch/NousResearch-3.1-8B"

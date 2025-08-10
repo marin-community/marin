@@ -1,0 +1,63 @@
+{
+  "result": {
+    "Baseline": 3.0036733150482178,
+    "block_size=256": 3.01035737991333,
+    "block_size=128": 3.012703657150269,
+    "learning_rate=0.004": 3.00821852684021,
+    "train_batch_size=128": 3.01082706451416
+  },
+  "name": {
+    "Baseline": "sweep-520m-21B-soapea9baa74lr0.008-wd0.1-minlr0-warmup1000-b10.9-7994bc",
+    "block_size=256": "sweep-520m-21B-soapea3d9681lr0.008-wd0.1-minlr0-warmup1000-b10.9-efedef",
+    "block_size=128": "sweep-520m-21B-soapeaf56540lr0.008-wd0.1-minlr0-warmup1000-b10.9-f05b1f",
+    "learning_rate=0.004": "sweep-520m-21B-soapea5a76ddlr0.004-wd0.1-minlr0-warmup1000-b10.9-f115eb",
+    "train_batch_size=128": "sweep-520m-21B-soapeaef50b6lr0.008-wd0.1-minlr0-warmup1000-b10.9-8aed93"
+  },
+  "num_left": 0,
+  "best_config": {
+    "beta1": 0.95,
+    "beta2": 0.99,
+    "block_size": 512,
+    "epsilon": 1e-10,
+    "learning_rate": 0.008,
+    "max_grad_norm": 1,
+    "min_lr_ratio": 0,
+    "partition_grads_into_blocks": true,
+    "precondition_frequency": 10,
+    "shampoo_beta": 0.95,
+    "train_batch_size": 256,
+    "warmup": 1000,
+    "weight_decay": 0.1
+  },
+  "min_loss": 3.0036733150482178,
+  "baseline": {
+    "loss": 3.0036733150482178,
+    "wandb_id": "sweep-520m-21B-soapea9baa74lr0.008-wd0.1-minlr0-warmup1000-b10.9-7994bc"
+  },
+  "ablations": [
+    {
+      "param": "block_size",
+      "value": 256,
+      "loss": 3.01035737991333,
+      "wandb_id": "sweep-520m-21B-soapea3d9681lr0.008-wd0.1-minlr0-warmup1000-b10.9-efedef"
+    },
+    {
+      "param": "block_size",
+      "value": 128,
+      "loss": 3.012703657150269,
+      "wandb_id": "sweep-520m-21B-soapeaf56540lr0.008-wd0.1-minlr0-warmup1000-b10.9-f05b1f"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.004,
+      "loss": 3.00821852684021,
+      "wandb_id": "sweep-520m-21B-soapea5a76ddlr0.004-wd0.1-minlr0-warmup1000-b10.9-f115eb"
+    },
+    {
+      "param": "train_batch_size",
+      "value": 128,
+      "loss": 3.01082706451416,
+      "wandb_id": "sweep-520m-21B-soapeaef50b6lr0.008-wd0.1-minlr0-warmup1000-b10.9-8aed93"
+    }
+  ]
+}

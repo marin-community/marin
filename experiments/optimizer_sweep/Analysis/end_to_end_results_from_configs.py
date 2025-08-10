@@ -1,7 +1,7 @@
 import json
 import os
 import pickle
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 
 import tqdm
 
@@ -12,11 +12,83 @@ from marin.optimizer_sweep.utils_simp import (
     grab_best_run,
     grab_run,
 )
-from experiments.optimizer_sweep.Analysis.PhaseI.results_io import (
-    CACHE_FILE_DEFAULT,
-    RESULTS_DIR_DEFAULT,
-    persist_result,
-)
+RESULTS_DIR_DEFAULT = "experiments/optimizer_sweep/Analysis/Results"
+
+
+def _stringify_key(key: Any) -> str:
+    """Convert tuple keys like (param, value) into a readable string 'param=value'."""
+    if isinstance(key, tuple) and len(key) == 2:
+        return f"{key[0]}={key[1]}"
+    return str(key)
+
+
+def _make_json_friendly(result_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert result dict so keys are JSON-serializable and easy to read."""
+    json_ready: Dict[str, Any] = {}
+    for top_key in [
+        "result",
+        "name",
+        "num_left",
+        "best_config",
+        "min_loss",
+        "approximate_best_config_list",
+    ]:
+        if top_key not in result_dict:
+            continue
+        value = result_dict[top_key]
+        if isinstance(value, dict):
+            json_ready[top_key] = {_stringify_key(k): v for k, v in value.items()}
+        else:
+            json_ready[top_key] = value
+    return json_ready
+
+def _ensure_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+
+def save_to_results_dir(
+    optimizer: str,
+    model_size: str,
+    chinchilla_ratio: int,
+    result: Dict[str, Any],
+    results_dir: str = RESULTS_DIR_DEFAULT,
+) -> str:
+    """Save the given result dict to Results/{optimizer}/{model_size}/{chinchilla_ratio}/result.json.
+
+    Returns the path to the written JSON file.
+    """
+    output_dir = os.path.join(results_dir, str(optimizer), str(model_size), str(chinchilla_ratio))
+    _ensure_dir(output_dir)
+    output_path = os.path.join(output_dir, "result.json")
+    with open(output_path, "w") as f:
+        json.dump(_make_json_friendly(result), f, indent=2)
+    return output_path
+def persist_result(
+    optimizer: str,
+    model_size: str,
+    chinchilla_ratio: int,
+    data_size: str,
+    result: Dict[str, Any],
+    *,
+    results_dir: str = RESULTS_DIR_DEFAULT,
+) -> Tuple[str, str]:
+    """Persist a single best-result payload:
+    - Saves human-friendly JSON to Results/{optimizer}/{model_size}/{chinchilla_ratio}/result.json
+    - Updates the wandb cache keyed by md5(optimizer, model_size, data_size, chinchilla_ratio)
+
+    Returns (results_path, cache_key).
+    """
+    results_path = save_to_results_dir(
+        optimizer=optimizer,
+        model_size=model_size,
+        chinchilla_ratio=chinchilla_ratio,
+        result=result,
+        results_dir=results_dir,
+    )
+    # No cache implementation yet; return a placeholder for the cache key
+    cache_key = None
+    return results_path, cache_key
+
+
 
 
 BASELINE_ROOT = os.path.join(
@@ -25,149 +97,6 @@ BASELINE_ROOT = os.path.join(
 SWEEP_ROOT = os.path.join(
     "experiments", "optimizer_sweep", "sweep_grids"
 )
-
-
-key_of_optimizer: Dict[str, List[str]] = {
-    "mars": [
-        "learning_rate",
-        "weight_decay",
-        "min_lr_ratio",
-        "warmup",
-        "beta1",
-        "beta2",
-        "gamma",
-        "epsilon",
-        "max_grad_norm",
-        "train_batch_size",
-    ],
-    "sophia": [
-        "learning_rate",
-        "weight_decay",
-        "warmup",
-        "beta1",
-        "beta2",
-        "gamma",
-        "epsilon",
-        "train_batch_size",
-    ],
-    "muon": [
-        "learning_rate",
-        "weight_decay",
-        "min_lr_ratio",
-        "warmup",
-        "momentum",
-        "beta1",
-        "beta2",
-        "epsilon",
-        "muon_epsilon",
-        "max_grad_norm",
-        "lr_schedule",
-        "muon_to_adam_lr",
-        "decay",
-        "train_batch_size",
-    ],
-    "lion": [
-        "learning_rate",
-        "weight_decay",
-        "min_lr_ratio",
-        "warmup",
-        "beta1",
-        "beta2",
-        "max_grad_norm",
-        "train_batch_size",
-    ],
-    "nadamw": [
-        "learning_rate",
-        "weight_decay",
-        "min_lr_ratio",
-        "warmup",
-        "beta1",
-        "beta2",
-        "epsilon",
-        "max_grad_norm",
-        "nesterov",
-        "train_batch_size",
-    ],
-    "kron": [
-        "learning_rate",
-        "weight_decay",
-        "beta1",
-        "preconditioner_lr",
-        "preconditioner_init_scale",
-        "max_grad_norm",
-        "normalize_grads",
-        "partition_grads_into_blocks",
-        "block_size",
-        "preconditioner_update_probability",
-        "update_prob_flat_start",
-        "warmup",
-        "min_lr_ratio",
-        "train_batch_size",
-    ],
-    "scion": [
-        "learning_rate",
-        "weight_decay",
-        "min_lr_ratio",
-        "warmup",
-        "momentum",
-        "beta1",
-        "scion_epsilon",
-        "max_grad_norm",
-        "lr_schedule",
-        "scion_to_signum_lr",
-        "decay",
-        "train_batch_size",
-    ],
-    "cautious": [
-        "learning_rate",
-        "weight_decay",
-        "min_lr_ratio",
-        "warmup",
-        "beta1",
-        "beta2",
-        "epsilon",
-        "max_grad_norm",
-        "train_batch_size",
-    ],
-    "soape": [
-        "learning_rate",
-        "weight_decay",
-        "min_lr_ratio",
-        "warmup",
-        "beta1",
-        "beta2",
-        "shampoo_beta",
-        "precondition_frequency",
-        "partition_grads_into_blocks",
-        "block_size",
-        "epsilon",
-        "max_grad_norm",
-        "train_batch_size",
-    ],
-    "adamw": [
-        "learning_rate",
-        "weight_decay",
-        "min_lr_ratio",
-        "warmup",
-        "beta1",
-        "beta2",
-        "epsilon",
-        "max_grad_norm",
-        "nesterov",
-        "train_batch_size",
-    ],
-    "mini": [
-        "learning_rate",
-        "weight_decay",
-        "min_lr_ratio",
-        "warmup",
-        "beta1",
-        "beta2",
-        "epsilon",
-        "max_grad_norm",
-        "train_batch_size",
-    ],
-}
 
 
 def _first_json_in_dir(path: str) -> str:
@@ -262,14 +191,10 @@ def main() -> None:
     combined_results: Dict[str, Dict] = {}
 
     optimizers = [d for d in os.listdir(BASELINE_ROOT) if os.path.isdir(os.path.join(BASELINE_ROOT, d))]
+    optimizers = ["scion"]
     with tqdm.tqdm(total=len(optimizers), desc="Optimizers") as pbar:
         for optimizer in optimizers:
             optimizer_lower = optimizer.lower()
-            if optimizer_lower not in key_of_optimizer:
-                pbar.update(1)
-                continue
-
-            keys = key_of_optimizer[optimizer_lower]
             optimizer_dir = os.path.join(BASELINE_ROOT, optimizer)
             model_sizes = [d for d in os.listdir(optimizer_dir) if os.path.isdir(os.path.join(optimizer_dir, d))]
 
@@ -290,13 +215,19 @@ def main() -> None:
                     sweep_payload = _load_json(sweep_json_path)
                     sweep_grids = sweep_payload.get("sweep_grids", {})
 
+                    # Dynamically determine keys from sweep_grids and ensure required fields
+                    keys_set = set(sweep_grids.keys())
+                    # Always include fields needed to build configs and tags
+                    keys_set.update({"warmup", "train_batch_size"})
+                    keys = list(keys_set)
+
                     # Tags and data size
                     target_data, data_size = calculate_data_tag(model_size, chin_ratio)
                     tags = (model_size, data_size, optimizer_lower)
 
                     # Best runs from W&B
                     current_best_config, approximate_best_config_list, min_loss = grab_best_run(
-                        keys, tags, return_loss=True, thshold=6e-3
+                        keys, tags, return_loss=True, thshold=5e-3
                     )
                     if not approximate_best_config_list:
                         continue
@@ -305,17 +236,22 @@ def main() -> None:
                     current_num_left = 10 ** 9
                     best_payload = {}
                     for candidate in approximate_best_config_list:
+                        # Merge candidate with full baseline so best_config has every key baseline has
+                        candidate_full: Dict = dict(baseline_config)
+                        if candidate is not None:
+                            candidate_full.update(candidate)
                         num_left, cfg_to_loss, cfg_to_name = _config_to_loss_and_id(
-                            candidate, sweep_grids, target_data, tags
+                            candidate_full, sweep_grids, target_data, tags
                         )
                         if num_left < current_num_left:
                             current_num_left = num_left
                             best_payload = {
-                                "result": cfg_to_loss,
                                 "name": cfg_to_name,
+                                "result": cfg_to_loss,
                                 "num_left": num_left,
-                                "best_config": candidate,
+                                "best_config": candidate_full,
                                 "min_loss": min_loss,
+                                "approximate_best_config_list": approximate_best_config_list,
                             }
 
                     if best_payload:
@@ -335,11 +271,6 @@ def main() -> None:
             combined_results[optimizer_lower] = collected_for_opt
             pbar.update(1)
 
-    # Write combined pickle into Results
-    results_root_pkl = os.path.join(RESULTS_DIR_DEFAULT, "1d_losses.pkl")
-    os.makedirs(os.path.dirname(results_root_pkl), exist_ok=True)
-    with open(results_root_pkl, "wb") as f:
-        pickle.dump(combined_results, f)
 
 
 if __name__ == "__main__":

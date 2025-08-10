@@ -1,15 +1,188 @@
 {
+  "result": {
+    "Baseline": 3.09255051612854,
+    "beta1=0.8": null,
+    "beta1=0.9": null,
+    "beta1=0.95": null,
+    "beta2=0.9": null,
+    "beta2=0.95": null,
+    "epsilon=1e-25": null,
+    "epsilon=1e-20": null,
+    "epsilon=1e-15": null,
+    "learning_rate=0.008": 3.0993051528930664,
+    "learning_rate=0.016": null,
+    "learning_rate=0.032": null,
+    "max_grad_norm=0": null,
+    "max_grad_norm=2.0": null,
+    "train_batch_size=256": null,
+    "train_batch_size=512": null,
+    "warmup=500": null,
+    "warmup=1000": null,
+    "warmup=2000": null,
+    "weight_decay=0": null,
+    "weight_decay=0.2": null
+  },
+  "name": {
+    "Baseline": "sweep-520m-10B-nadamw98f1d8lr0.004-wd0.1-minlr0-warmup4000-b10.9-a6dcf4",
+    "beta1=0.8": null,
+    "beta1=0.9": null,
+    "beta1=0.95": null,
+    "beta2=0.9": null,
+    "beta2=0.95": null,
+    "epsilon=1e-25": null,
+    "epsilon=1e-20": null,
+    "epsilon=1e-15": null,
+    "learning_rate=0.008": "sweep-520m-10B-nadamwtf0f005lr0.008-wd0.1-minlr0-warmup4000-b10.-24ef29",
+    "learning_rate=0.016": null,
+    "learning_rate=0.032": null,
+    "max_grad_norm=0": null,
+    "max_grad_norm=2.0": null,
+    "train_batch_size=256": null,
+    "train_batch_size=512": null,
+    "warmup=500": null,
+    "warmup=1000": null,
+    "warmup=2000": null,
+    "weight_decay=0": null,
+    "weight_decay=0.2": null
+  },
+  "num_left": 19,
   "best_config": {
-    "learning_rate": 0.008,
-    "weight_decay": 0.1,
-    "min_lr_ratio": 0,
-    "warmup": 4000,
-    "beta1": 0.95,
+    "beta1": 0.98,
     "beta2": 0.98,
     "epsilon": 1e-10,
+    "learning_rate": 0.004,
     "max_grad_norm": 1,
+    "min_lr_ratio": 0,
     "nesterov": true,
-    "train_batch_size": 128
+    "train_batch_size": 128,
+    "warmup": 4000,
+    "weight_decay": 0.1
   },
-  "min_loss": 3.0993051528930664
+  "min_loss": 3.09255051612854,
+  "baseline": {
+    "loss": 3.09255051612854,
+    "wandb_id": "sweep-520m-10B-nadamw98f1d8lr0.004-wd0.1-minlr0-warmup4000-b10.9-a6dcf4"
+  },
+  "ablations": [
+    {
+      "param": "beta1",
+      "value": 0.8,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "beta1",
+      "value": 0.9,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "beta1",
+      "value": 0.95,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "beta2",
+      "value": 0.9,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "beta2",
+      "value": 0.95,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "epsilon",
+      "value": 1e-25,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "epsilon",
+      "value": 1e-20,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "epsilon",
+      "value": 1e-15,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.008,
+      "loss": 3.0993051528930664,
+      "wandb_id": "sweep-520m-10B-nadamwtf0f005lr0.008-wd0.1-minlr0-warmup4000-b10.-24ef29"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.016,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.032,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "max_grad_norm",
+      "value": 0,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "max_grad_norm",
+      "value": 2.0,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "train_batch_size",
+      "value": 256,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "train_batch_size",
+      "value": 512,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "warmup",
+      "value": 500,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "warmup",
+      "value": 1000,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "warmup",
+      "value": 2000,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "weight_decay",
+      "value": 0,
+      "loss": null,
+      "wandb_id": null
+    },
+    {
+      "param": "weight_decay",
+      "value": 0.2,
+      "loss": null,
+      "wandb_id": null
+    }
+  ]
 }

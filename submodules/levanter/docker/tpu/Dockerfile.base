@@ -1,0 +1,24 @@
+FROM python:3.10 AS build
+RUN apt-get update && apt-get install -y clang
+RUN pip install virtualenv
+
+# venv binaries encode their directory, so we need to setup the venv in the final location
+RUN pip install uv
+RUN uv venv /opt/levanter/.venv
+ENV PATH=/opt/levanter/.venv/bin:$PATH
+
+# Install package dependencies to make incremental builds faster.
+WORKDIR /tmp/
+
+ADD pyproject.toml README.md /tmp/
+# work around setuptools bug
+RUN mkdir -p /tmp/src/levanter
+RUN touch /tmp/src/levanter/__init__.py || true
+RUN uv pip install -e .[test,tpu]
+
+FROM python:3.10
+
+WORKDIR /opt/levanter
+# reinstall uv
+RUN pip install uv
+COPY --from=build /opt/levanter/.venv /opt/levanter/.venv

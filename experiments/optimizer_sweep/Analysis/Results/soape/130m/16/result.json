@@ -1,0 +1,29 @@
+{
+  "result": {
+    "Baseline": 3.1911556720733643
+  },
+  "name": {
+    "Baseline": "sweep-130m-42B-soape1786aelr0.008-wd0.1-minlr0-warmup1000-b10.95-c390d2"
+  },
+  "num_left": 0,
+  "best_config": {
+    "beta1": 0.95,
+    "beta2": 0.99,
+    "block_size": 512,
+    "epsilon": 1e-10,
+    "learning_rate": 0.008,
+    "max_grad_norm": 1,
+    "min_lr_ratio": 0,
+    "partition_grads_into_blocks": true,
+    "precondition_frequency": 10,
+    "shampoo_beta": 0.98,
+    "train_batch_size": 256,
+    "warmup": 1000,
+    "weight_decay": 0.1
+  },
+  "min_loss": 3.1911556720733643,
+  "baseline": {
+    "loss": 3.1911556720733643,
+    "wandb_id": "sweep-130m-42B-soape1786aelr0.008-wd0.1-minlr0-warmup1000-b10.95-c390d2"
+  }
+}

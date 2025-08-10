@@ -1,78 +1,213 @@
 {
+  "result": {
+    "Baseline": 3.232110500335694,
+    "beta1=0.8": 3.256382942199707,
+    "beta1=0.9": 3.2401630878448486,
+    "beta1=0.95": 3.2359654903411865,
+    "decay=0.0": 3.4969236850738525,
+    "decay=0.2": 3.271408796310425,
+    "decay=0.4": 3.2449374198913574,
+    "decay=0.6": 3.2342286109924316,
+    "decay=1.0": 3.2370758056640625,
+    "learning_rate=0.016": 3.242058277130127,
+    "learning_rate=0.032": 3.3014321327209473,
+    "learning_rate=0.064": 3.3999602794647217,
+    "learning_rate=0.128": 5.626926422119141,
+    "max_grad_norm=0": 3.2330775260925293,
+    "max_grad_norm=1.0": 3.232654333114624,
+    "momentum=0.8": 3.2402822971343994,
+    "momentum=0.95": 3.231102705001831,
+    "momentum=0.98": 3.236327886581421,
+    "scion_epsilon=1e-20": 3.2323365211486816,
+    "scion_epsilon=1e-15": 3.2323365211486816,
+    "scion_epsilon=1e-10": 3.232644557952881,
+    "scion_to_signum_lr=0.2": 3.2372758388519287,
+    "scion_to_signum_lr=0.3": 3.2415387630462646,
+    "scion_to_signum_lr=0.4": 3.2420225143432617,
+    "scion_to_signum_lr=0.5": 3.24072527885437,
+    "scion_to_signum_lr=0.6": 3.242919683456421,
+    "train_batch_size=256": 3.258669137954712,
+    "train_batch_size=512": 3.3193631172180176,
+    "train_batch_size=1024": 3.432133913040161,
+    "weight_decay=0": 3.3032004833221436,
+    "weight_decay=0.2": 3.2407896518707275
+  },
+  "name": {
+    "Baseline": "sweep-300m-6B-sciond108279lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-99a9f4",
+    "beta1=0.8": "sweep-300m-6B-sciond3c2ebclr0.008-wd0.1-minlr0-warmup0-b10.8-gn2-8c6e43",
+    "beta1=0.9": "sweep-300m-6B-sciond8d2973lr0.008-wd0.1-minlr0-warmup0-b10.9-gn2-1189a9",
+    "beta1=0.95": "sweep-300m-6B-sciondd97ff2lr0.008-wd0.1-minlr0-warmup0-b10.95-gn-16dc4b",
+    "decay=0.0": "sweep-300m-6B-sciond7cb949lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-78e5fe",
+    "decay=0.2": "sweep-300m-6B-sciondf6ecb9lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-cafe64",
+    "decay=0.4": "sweep-300m-6B-sciond4823d5lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-330e18",
+    "decay=0.6": "sweep-300m-6B-sciond582086lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-14e557",
+    "decay=1.0": "sweep-300m-6B-sciondaa2504lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-fbb75e",
+    "learning_rate=0.016": "sweep-300m-6B-sciond859faelr0.016-wd0.1-minlr0-warmup0-b10.98-gn-e582af",
+    "learning_rate=0.032": "sweep-300m-6B-sciond99bb86lr0.032-wd0.1-minlr0-warmup0-b10.98-gn-1251a1",
+    "learning_rate=0.064": "sweep-300m-6B-sciond92cc85lr0.064-wd0.1-minlr0-warmup0-b10.98-gn-c0733d",
+    "learning_rate=0.128": "sweep-300m-6B-sciond02a6a1lr0.128-wd0.1-minlr0-warmup0-b10.98-gn-465361",
+    "max_grad_norm=0": "sweep-300m-6B-sciond8e7d0flr0.008-wd0.1-minlr0-warmup0-b10.98-gn-35a8c6",
+    "max_grad_norm=1.0": "sweep-300m-6B-sciond35f816lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-b2bf17",
+    "momentum=0.8": "sweep-300m-6B-sciondb93cablr0.008-wd0.1-minlr0-warmup0-b10.98-gn-7a2ff9",
+    "momentum=0.95": "sweep-300m-6B-sciond26da5flr0.008-wd0.1-minlr0-warmup0-b10.98-gn-4234e5",
+    "momentum=0.98": "sweep-300m-6B-sciondba6c4clr0.008-wd0.1-minlr0-warmup0-b10.98-gn-60d1af",
+    "scion_epsilon=1e-20": "sweep-300m-6B-sciond2cd962lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-9ae6b3",
+    "scion_epsilon=1e-15": "sweep-300m-6B-sciond1c6c6alr0.008-wd0.1-minlr0-warmup0-b10.98-gn-39d488",
+    "scion_epsilon=1e-10": "sweep-300m-6B-sciondbedd5alr0.008-wd0.1-minlr0-warmup0-b10.98-gn-03c420",
+    "scion_to_signum_lr=0.2": "sweep-300m-6B-scionfa9d01lr0.008-wd0.1-minlr0-warmup0-b10.98-gn2-d33d38",
+    "scion_to_signum_lr=0.3": "sweep-300m-6B-sciond6c4a32lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-c70e3a",
+    "scion_to_signum_lr=0.4": "sweep-300m-6B-sciond4688b4lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-cc3a61",
+    "scion_to_signum_lr=0.5": "sweep-300m-6B-sciond8d54b4lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-e2040c",
+    "scion_to_signum_lr=0.6": "sweep-300m-6B-scionda31eablr0.008-wd0.1-minlr0-warmup0-b10.98-gn-ed268b",
+    "train_batch_size=256": "sweep-300m-6B-sciond8e6297lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-6108e9",
+    "train_batch_size=512": "sweep-300m-6B-sciond374b61lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-c7f214",
+    "train_batch_size=1024": "sweep-300m-6B-sciond7a848flr0.008-wd0.1-minlr0-warmup0-b10.98-gn-9d7008",
+    "weight_decay=0": "sweep-300m-6B-sciond3438f5lr0.008-wd0-minlr0-warmup0-b10.98-gn2--e2425a",
+    "weight_decay=0.2": "sweep-300m-6B-sciond9f11fclr0.008-wd0.2-minlr0-warmup0-b10.98-gn-585125"
+  },
+  "num_left": 0,
   "best_config": {
-    "learning_rate": 0.008,
-    "weight_decay": 0.1,
-    "min_lr_ratio": 0,
-    "warmup": 0,
-    "momentum": 0.9,
     "beta1": 0.98,
-    "scion_epsilon": 1e-05,
-    "max_grad_norm": 2,
-    "lr_schedule": "linear",
-    "scion_to_signum_lr": 0.1,
     "decay": 0.8,
-    "train_batch_size": 128
+    "learning_rate": 0.008,
+    "lr_schedule": "linear",
+    "max_grad_norm": 2,
+    "min_lr_ratio": 0,
+    "momentum": 0.9,
+    "scion_epsilon": 1e-05,
+    "scion_to_signum_lr": 0.1,
+    "train_batch_size": 128,
+    "warmup": 0,
+    "weight_decay": 0.1
   },
   "min_loss": 3.231102705001831,
+  "approximate_best_config_list": [
+    {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "momentum": 0.95,
+      "beta1": 0.98,
+      "decay": 0.8,
+      "train_batch_size": 128,
+      "warmup": 0,
+      "max_grad_norm": 2,
+      "scion_to_signum_lr": 0.2,
+      "scion_epsilon": 1e-05
+    },
+    {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "momentum": 0.9,
+      "beta1": 0.98,
+      "decay": 0.8,
+      "train_batch_size": 128,
+      "warmup": 0,
+      "max_grad_norm": 2,
+      "scion_to_signum_lr": 0.1,
+      "scion_epsilon": 1e-05
+    },
+    {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "momentum": 0.9,
+      "beta1": 0.98,
+      "decay": 0.8,
+      "train_batch_size": 128,
+      "warmup": 0,
+      "max_grad_norm": 2,
+      "scion_to_signum_lr": 0.1,
+      "scion_epsilon": 1e-20
+    },
+    {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "momentum": 0.9,
+      "beta1": 0.98,
+      "decay": 0.8,
+      "train_batch_size": 128,
+      "warmup": 0,
+      "max_grad_norm": 0,
+      "scion_to_signum_lr": 0.1,
+      "scion_epsilon": 1e-05
+    },
+    {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "momentum": 0.9,
+      "beta1": 0.98,
+      "decay": 0.8,
+      "train_batch_size": 128,
+      "warmup": 0,
+      "max_grad_norm": 2,
+      "scion_to_signum_lr": 0.1,
+      "scion_epsilon": 1e-10
+    },
+    {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "momentum": 0.9,
+      "beta1": 0.95,
+      "decay": 0.8,
+      "train_batch_size": 128,
+      "warmup": 0,
+      "max_grad_norm": 2,
+      "scion_to_signum_lr": 0.1,
+      "scion_epsilon": 1e-05
+    },
+    {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "momentum": 0.95,
+      "beta1": 0.98,
+      "decay": 0.8,
+      "train_batch_size": 128,
+      "warmup": 0,
+      "max_grad_norm": 2,
+      "scion_to_signum_lr": 0.1,
+      "scion_epsilon": 1e-05
+    },
+    {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "momentum": 0.9,
+      "beta1": 0.98,
+      "decay": 0.6,
+      "train_batch_size": 128,
+      "warmup": 0,
+      "max_grad_norm": 2,
+      "scion_to_signum_lr": 0.1,
+      "scion_epsilon": 1e-05
+    },
+    {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "momentum": 0.9,
+      "beta1": 0.98,
+      "decay": 0.8,
+      "train_batch_size": 128,
+      "warmup": 0,
+      "max_grad_norm": 2,
+      "scion_to_signum_lr": 0.1,
+      "scion_epsilon": 1e-15
+    },
+    {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "momentum": 0.9,
+      "beta1": 0.98,
+      "decay": 0.8,
+      "train_batch_size": 128,
+      "warmup": 0,
+      "max_grad_norm": 1,
+      "scion_to_signum_lr": 0.1,
+      "scion_epsilon": 1e-05
+    }
+  ],
   "baseline": {
     "loss": 3.232110500335694,
     "wandb_id": "sweep-300m-6B-sciond108279lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-99a9f4"
   },
   "ablations": [
-    {
-      "param": "learning_rate",
-      "value": 0.016,
-      "loss": 3.242058277130127,
-      "wandb_id": "sweep-300m-6B-sciond859faelr0.016-wd0.1-minlr0-warmup0-b10.98-gn-e582af"
-    },
-    {
-      "param": "learning_rate",
-      "value": 0.032,
-      "loss": 3.3014321327209473,
-      "wandb_id": "sweep-300m-6B-sciond99bb86lr0.032-wd0.1-minlr0-warmup0-b10.98-gn-1251a1"
-    },
-    {
-      "param": "learning_rate",
-      "value": 0.064,
-      "loss": 3.3999602794647217,
-      "wandb_id": "sweep-300m-6B-sciond92cc85lr0.064-wd0.1-minlr0-warmup0-b10.98-gn-c0733d"
-    },
-    {
-      "param": "learning_rate",
-      "value": 0.128,
-      "loss": 5.626926422119141,
-      "wandb_id": "sweep-300m-6B-sciond02a6a1lr0.128-wd0.1-minlr0-warmup0-b10.98-gn-465361"
-    },
-    {
-      "param": "weight_decay",
-      "value": 0,
-      "loss": 3.3032004833221436,
-      "wandb_id": "sweep-300m-6B-sciond3438f5lr0.008-wd0-minlr0-warmup0-b10.98-gn2--e2425a"
-    },
-    {
-      "param": "weight_decay",
-      "value": 0.2,
-      "loss": 3.2407896518707275,
-      "wandb_id": "sweep-300m-6B-sciond9f11fclr0.008-wd0.2-minlr0-warmup0-b10.98-gn-585125"
-    },
-    {
-      "param": "momentum",
-      "value": 0.8,
-      "loss": 3.2402822971343994,
-      "wandb_id": "sweep-300m-6B-sciondb93cablr0.008-wd0.1-minlr0-warmup0-b10.98-gn-7a2ff9"
-    },
-    {
-      "param": "momentum",
-      "value": 0.95,
-      "loss": 3.231102705001831,
-      "wandb_id": "sweep-300m-6B-sciond26da5flr0.008-wd0.1-minlr0-warmup0-b10.98-gn-4234e5"
-    },
-    {
-      "param": "momentum",
-      "value": 0.98,
-      "loss": 3.236327886581421,
-      "wandb_id": "sweep-300m-6B-sciondba6c4clr0.008-wd0.1-minlr0-warmup0-b10.98-gn-60d1af"
-    },
     {
       "param": "beta1",
       "value": 0.8,
@@ -90,36 +225,6 @@
       "value": 0.95,
       "loss": 3.2359654903411865,
       "wandb_id": "sweep-300m-6B-sciondd97ff2lr0.008-wd0.1-minlr0-warmup0-b10.95-gn-16dc4b"
-    },
-    {
-      "param": "scion_epsilon",
-      "value": 1e-20,
-      "loss": 3.2323365211486816,
-      "wandb_id": "sweep-300m-6B-sciond2cd962lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-9ae6b3"
-    },
-    {
-      "param": "scion_epsilon",
-      "value": 1e-15,
-      "loss": 3.2323365211486816,
-      "wandb_id": "sweep-300m-6B-sciond1c6c6alr0.008-wd0.1-minlr0-warmup0-b10.98-gn-39d488"
-    },
-    {
-      "param": "scion_epsilon",
-      "value": 1e-10,
-      "loss": 3.232644557952881,
-      "wandb_id": "sweep-300m-6B-sciondbedd5alr0.008-wd0.1-minlr0-warmup0-b10.98-gn-03c420"
-    },
-    {
-      "param": "max_grad_norm",
-      "value": 0,
-      "loss": 3.2330775260925293,
-      "wandb_id": "sweep-300m-6B-sciond8e7d0flr0.008-wd0.1-minlr0-warmup0-b10.98-gn-35a8c6"
-    },
-    {
-      "param": "max_grad_norm",
-      "value": 1.0,
-      "loss": 3.232654333114624,
-      "wandb_id": "sweep-300m-6B-sciond35f816lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-b2bf17"
     },
     {
       "param": "decay",
@@ -150,6 +255,78 @@
       "value": 1.0,
       "loss": 3.2370758056640625,
       "wandb_id": "sweep-300m-6B-sciondaa2504lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-fbb75e"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.016,
+      "loss": 3.242058277130127,
+      "wandb_id": "sweep-300m-6B-sciond859faelr0.016-wd0.1-minlr0-warmup0-b10.98-gn-e582af"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.032,
+      "loss": 3.3014321327209473,
+      "wandb_id": "sweep-300m-6B-sciond99bb86lr0.032-wd0.1-minlr0-warmup0-b10.98-gn-1251a1"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.064,
+      "loss": 3.3999602794647217,
+      "wandb_id": "sweep-300m-6B-sciond92cc85lr0.064-wd0.1-minlr0-warmup0-b10.98-gn-c0733d"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.128,
+      "loss": 5.626926422119141,
+      "wandb_id": "sweep-300m-6B-sciond02a6a1lr0.128-wd0.1-minlr0-warmup0-b10.98-gn-465361"
+    },
+    {
+      "param": "max_grad_norm",
+      "value": 0,
+      "loss": 3.2330775260925293,
+      "wandb_id": "sweep-300m-6B-sciond8e7d0flr0.008-wd0.1-minlr0-warmup0-b10.98-gn-35a8c6"
+    },
+    {
+      "param": "max_grad_norm",
+      "value": 1.0,
+      "loss": 3.232654333114624,
+      "wandb_id": "sweep-300m-6B-sciond35f816lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-b2bf17"
+    },
+    {
+      "param": "momentum",
+      "value": 0.8,
+      "loss": 3.2402822971343994,
+      "wandb_id": "sweep-300m-6B-sciondb93cablr0.008-wd0.1-minlr0-warmup0-b10.98-gn-7a2ff9"
+    },
+    {
+      "param": "momentum",
+      "value": 0.95,
+      "loss": 3.231102705001831,
+      "wandb_id": "sweep-300m-6B-sciond26da5flr0.008-wd0.1-minlr0-warmup0-b10.98-gn-4234e5"
+    },
+    {
+      "param": "momentum",
+      "value": 0.98,
+      "loss": 3.236327886581421,
+      "wandb_id": "sweep-300m-6B-sciondba6c4clr0.008-wd0.1-minlr0-warmup0-b10.98-gn-60d1af"
+    },
+    {
+      "param": "scion_epsilon",
+      "value": 1e-20,
+      "loss": 3.2323365211486816,
+      "wandb_id": "sweep-300m-6B-sciond2cd962lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-9ae6b3"
+    },
+    {
+      "param": "scion_epsilon",
+      "value": 1e-15,
+      "loss": 3.2323365211486816,
+      "wandb_id": "sweep-300m-6B-sciond1c6c6alr0.008-wd0.1-minlr0-warmup0-b10.98-gn-39d488"
+    },
+    {
+      "param": "scion_epsilon",
+      "value": 1e-10,
+      "loss": 3.232644557952881,
+      "wandb_id": "sweep-300m-6B-sciondbedd5alr0.008-wd0.1-minlr0-warmup0-b10.98-gn-03c420"
     },
     {
       "param": "scion_to_signum_lr",
@@ -198,6 +375,18 @@
       "value": 1024,
       "loss": 3.432133913040161,
       "wandb_id": "sweep-300m-6B-sciond7a848flr0.008-wd0.1-minlr0-warmup0-b10.98-gn-9d7008"
+    },
+    {
+      "param": "weight_decay",
+      "value": 0,
+      "loss": 3.3032004833221436,
+      "wandb_id": "sweep-300m-6B-sciond3438f5lr0.008-wd0-minlr0-warmup0-b10.98-gn2--e2425a"
+    },
+    {
+      "param": "weight_decay",
+      "value": 0.2,
+      "loss": 3.2407896518707275,
+      "wandb_id": "sweep-300m-6B-sciond9f11fclr0.008-wd0.2-minlr0-warmup0-b10.98-gn-585125"
     }
   ]
 }

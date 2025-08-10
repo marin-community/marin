@@ -1,0 +1,52 @@
+data:
+  configs:
+    owt:
+      train_urls:
+        - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz"
+      validation_urls:
+        - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz"
+    wikitext:
+      id: dlwh/wikitext_103_detokenized
+  train_weights:
+    - [0, {"owt": 0.8, "wikitext": 0.2}]
+    - [1000, {"owt": 0.5, "wikitext": 0.5}]
+  tokenizer: gpt2
+  cache_dir: "gs://levanter-data/tokenized/data_mix"
+  mixture_block_size: 128
+model:
+  type: gpt2
+  hidden_dim: 768
+  num_heads: 12
+  num_layers: 12
+  seq_len: 1024
+  gradient_checkpointing: true
+  scale_attn_by_inverse_layer_idx: true
+trainer:
+  tracker:
+    - type: wandb
+      project: "levanter"
+      tags: [ "openwebtext", "gpt2", "itest"]
+
+  mp: p=f32,c=bfloat16
+  model_axis_size: 1
+  per_device_parallelism: -1
+  per_device_eval_parallelism: 128
+
+  train_batch_size:
+    - start: 0
+      value: 64
+    - start: 64
+      value: 128
+    - start: 256
+      value: 64
+    - start: 1024
+      value: 256
+  num_train_steps: 20000
+  allow_nondivisible_batch_size: true
+
+#  tensor_parallel_axes: ["position", "key_position"]
+#  tensor_parallel_axes: ["heads", "mlp"]
+optimizer:
+  learning_rate: 1E-3
+  weight_decay: 0.1
+  warmup: 0.01

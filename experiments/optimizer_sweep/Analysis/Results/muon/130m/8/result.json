@@ -1,80 +1,97 @@
 {
+  "result": {
+    "Baseline": 3.2398157119750977,
+    "beta1=0.9": 3.240046501159668,
+    "beta1=0.95": 3.240131139755249,
+    "beta1=0.98": 3.2409043312072754,
+    "beta2=0.9": 3.26017689704895,
+    "beta2=0.95": 3.246816635131836,
+    "decay=0.2": 3.2804994583129883,
+    "decay=0.4": 3.257462978363037,
+    "decay=0.6": 3.2478554248809814,
+    "decay=0.8": 3.242140293121338,
+    "epsilon=1e-25": 3.238452911376953,
+    "epsilon=1e-20": 3.238452911376953,
+    "epsilon=1e-10": 3.2405478954315186,
+    "learning_rate=0.016": 3.253410577774048,
+    "learning_rate=0.032": 3.2978804111480713,
+    "learning_rate=0.064": 3.4071879386901855,
+    "learning_rate=0.128": 5.568262577056885,
+    "max_grad_norm=0": 3.239729404449463,
+    "max_grad_norm=2.0": 3.2392566204071045,
+    "momentum=0.8": 3.2650187015533447,
+    "momentum=0.9": 3.2496399879455566,
+    "momentum=0.95": 3.2428536415100098,
+    "muon_epsilon=1e-25": 3.239105463027954,
+    "muon_epsilon=1e-20": 3.239105463027954,
+    "muon_epsilon=1e-15": 3.239105463027954,
+    "muon_epsilon=1e-10": 3.239105463027954,
+    "muon_to_adam_lr=0.1": 3.248532295227051,
+    "muon_to_adam_lr=0.2": 3.2425036430358887,
+    "train_batch_size=256": 3.2396748065948486,
+    "train_batch_size=512": 3.25710129737854,
+    "train_batch_size=1024": 3.301875114440918,
+    "weight_decay=0": 3.3102452754974365,
+    "weight_decay=0.2": 3.2557144165039062
+  },
+  "name": {
+    "Baseline": "sweep-130m-21B-muon9841d7lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-6269f2",
+    "beta1=0.9": "sweep-130m-21B-muon84cfa5lr0.008-wd0.1-minlr0-warmup0-b10.9-b20.-e91d3e",
+    "beta1=0.95": "sweep-130m-21B-muon0df321lr0.008-wd0.1-minlr0-warmup0-b10.95-b20-df585f",
+    "beta1=0.98": "sweep-130m-21B-muonfd2768lr0.008-wd0.1-minlr0-warmup0-b10.98-b20-ee9b19",
+    "beta2=0.9": "sweep-130m-21B-muon6d8811lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-2cfe0a",
+    "beta2=0.95": "sweep-130m-21B-muon8b9bb9lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-74bf2d",
+    "decay=0.2": "sweep-130m-21B-muon4353c9lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-66d626",
+    "decay=0.4": "sweep-130m-21B-muon019394lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-d9267d",
+    "decay=0.6": "sweep-130m-21B-muonc5c7a2lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-285fdb",
+    "decay=0.8": "sweep-130m-21B-muon740327lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-5585f4",
+    "epsilon=1e-25": "sweep-130m-21B-muon438751lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-d942b8",
+    "epsilon=1e-20": "sweep-130m-21B-muonadb698lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-d2374c",
+    "epsilon=1e-10": "sweep-130m-21B-muoned85fdlr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-c84b6d",
+    "learning_rate=0.016": "sweep-130m-21B-muon106105lr0.016-wd0.1-minlr0-warmup0-b10.8-b20.-145c38",
+    "learning_rate=0.032": "sweep-130m-21B-muon8561f0lr0.032-wd0.1-minlr0-warmup0-b10.8-b20.-2b4c80",
+    "learning_rate=0.064": "sweep-130m-21B-muonc0fdedlr0.064-wd0.1-minlr0-warmup0-b10.8-b20.-de3c13",
+    "learning_rate=0.128": "sweep-130m-21B-muona3b5c1lr0.128-wd0.1-minlr0-warmup0-b10.8-b20.-2bfad0",
+    "max_grad_norm=0": "sweep-130m-21B-muon3c0689lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-9eb7b5",
+    "max_grad_norm=2.0": "sweep-130m-21B-muonaf4344lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-66a04c",
+    "momentum=0.8": "sweep-130m-21B-muon118538lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-1a35c1",
+    "momentum=0.9": "sweep-130m-21B-muon5b982elr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-f92115",
+    "momentum=0.95": "sweep-130m-21B-muonaaa155lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-1a184f",
+    "muon_epsilon=1e-25": "sweep-130m-21B-muonf5a17flr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-d3ea9f",
+    "muon_epsilon=1e-20": "sweep-130m-21B-muonba539dlr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-be254c",
+    "muon_epsilon=1e-15": "sweep-130m-21B-muon76efcelr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-47ca65",
+    "muon_epsilon=1e-10": "sweep-130m-21B-muond1317flr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-b6514e",
+    "muon_to_adam_lr=0.1": "sweep-130m-21B-muondf893alr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-9ec54b",
+    "muon_to_adam_lr=0.2": "sweep-130m-21B-muon5db4falr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-642691",
+    "train_batch_size=256": "sweep-130m-21B-muon284dcblr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-103e2d",
+    "train_batch_size=512": "sweep-130m-21B-muonfc6df6lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-e8f442",
+    "train_batch_size=1024": "sweep-130m-21B-muonc12bf0lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-3a6695",
+    "weight_decay=0": "sweep-130m-21B-muon20f1celr0.008-wd0-minlr0-warmup0-b10.8-b20.98-0351b6",
+    "weight_decay=0.2": "sweep-130m-21B-muon11e37alr0.008-wd0.2-minlr0-warmup0-b10.8-b20.-9c2c15"
+  },
+  "num_left": 0,
   "best_config": {
-    "learning_rate": 0.008,
-    "weight_decay": 0.1,
-    "min_lr_ratio": 0,
-    "warmup": 0,
-    "momentum": 0.98,
     "beta1": 0.8,
     "beta2": 0.98,
-    "epsilon": 1e-15,
-    "muon_epsilon": 1e-05,
-    "max_grad_norm": 1,
-    "lr_schedule": "linear",
-    "muon_to_adam_lr": 0.3,
     "decay": 1,
-    "train_batch_size": 128
+    "epsilon": 1e-15,
+    "learning_rate": 0.008,
+    "lr_schedule": "linear",
+    "max_grad_norm": 1,
+    "min_lr_ratio": 0,
+    "momentum": 0.98,
+    "muon_epsilon": 1e-05,
+    "muon_to_adam_lr": 0.3,
+    "train_batch_size": 128,
+    "warmup": 0,
+    "weight_decay": 0.1
   },
-  "min_loss": 3.238452911376953,
+  "min_loss": 3.2373132705688477,
   "baseline": {
     "loss": 3.2398157119750977,
     "wandb_id": "sweep-130m-21B-muon9841d7lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-6269f2"
   },
   "ablations": [
-    {
-      "param": "learning_rate",
-      "value": 0.016,
-      "loss": 3.253410577774048,
-      "wandb_id": "sweep-130m-21B-muon106105lr0.016-wd0.1-minlr0-warmup0-b10.8-b20.-145c38"
-    },
-    {
-      "param": "learning_rate",
-      "value": 0.032,
-      "loss": 3.2978804111480713,
-      "wandb_id": "sweep-130m-21B-muon8561f0lr0.032-wd0.1-minlr0-warmup0-b10.8-b20.-2b4c80"
-    },
-    {
-      "param": "learning_rate",
-      "value": 0.064,
-      "loss": 3.4071879386901855,
-      "wandb_id": "sweep-130m-21B-muonc0fdedlr0.064-wd0.1-minlr0-warmup0-b10.8-b20.-de3c13"
-    },
-    {
-      "param": "learning_rate",
-      "value": 0.128,
-      "loss": 5.568262577056885,
-      "wandb_id": "sweep-130m-21B-muona3b5c1lr0.128-wd0.1-minlr0-warmup0-b10.8-b20.-2bfad0"
-    },
-    {
-      "param": "weight_decay",
-      "value": 0,
-      "loss": 3.3102452754974365,
-      "wandb_id": "sweep-130m-21B-muon20f1celr0.008-wd0-minlr0-warmup0-b10.8-b20.98-0351b6"
-    },
-    {
-      "param": "weight_decay",
-      "value": 0.2,
-      "loss": 3.2557144165039062,
-      "wandb_id": "sweep-130m-21B-muon11e37alr0.008-wd0.2-minlr0-warmup0-b10.8-b20.-9c2c15"
-    },
-    {
-      "param": "momentum",
-      "value": 0.8,
-      "loss": 3.2650187015533447,
-      "wandb_id": "sweep-130m-21B-muon118538lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-1a35c1"
-    },
-    {
-      "param": "momentum",
-      "value": 0.9,
-      "loss": 3.2496399879455566,
-      "wandb_id": "sweep-130m-21B-muon5b982elr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-f92115"
-    },
-    {
-      "param": "momentum",
-      "value": 0.95,
-      "loss": 3.2428536415100098,
-      "wandb_id": "sweep-130m-21B-muonaaa155lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-1a184f"
-    },
     {
       "param": "beta1",
       "value": 0.9,
@@ -106,6 +123,30 @@
       "wandb_id": "sweep-130m-21B-muon8b9bb9lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-74bf2d"
     },
     {
+      "param": "decay",
+      "value": 0.2,
+      "loss": 3.2804994583129883,
+      "wandb_id": "sweep-130m-21B-muon4353c9lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-66d626"
+    },
+    {
+      "param": "decay",
+      "value": 0.4,
+      "loss": 3.257462978363037,
+      "wandb_id": "sweep-130m-21B-muon019394lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-d9267d"
+    },
+    {
+      "param": "decay",
+      "value": 0.6,
+      "loss": 3.2478554248809814,
+      "wandb_id": "sweep-130m-21B-muonc5c7a2lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-285fdb"
+    },
+    {
+      "param": "decay",
+      "value": 0.8,
+      "loss": 3.242140293121338,
+      "wandb_id": "sweep-130m-21B-muon740327lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-5585f4"
+    },
+    {
       "param": "epsilon",
       "value": 1e-25,
       "loss": 3.238452911376953,
@@ -122,6 +163,60 @@
       "value": 1e-10,
       "loss": 3.2405478954315186,
       "wandb_id": "sweep-130m-21B-muoned85fdlr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-c84b6d"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.016,
+      "loss": 3.253410577774048,
+      "wandb_id": "sweep-130m-21B-muon106105lr0.016-wd0.1-minlr0-warmup0-b10.8-b20.-145c38"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.032,
+      "loss": 3.2978804111480713,
+      "wandb_id": "sweep-130m-21B-muon8561f0lr0.032-wd0.1-minlr0-warmup0-b10.8-b20.-2b4c80"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.064,
+      "loss": 3.4071879386901855,
+      "wandb_id": "sweep-130m-21B-muonc0fdedlr0.064-wd0.1-minlr0-warmup0-b10.8-b20.-de3c13"
+    },
+    {
+      "param": "learning_rate",
+      "value": 0.128,
+      "loss": 5.568262577056885,
+      "wandb_id": "sweep-130m-21B-muona3b5c1lr0.128-wd0.1-minlr0-warmup0-b10.8-b20.-2bfad0"
+    },
+    {
+      "param": "max_grad_norm",
+      "value": 0,
+      "loss": 3.239729404449463,
+      "wandb_id": "sweep-130m-21B-muon3c0689lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-9eb7b5"
+    },
+    {
+      "param": "max_grad_norm",
+      "value": 2.0,
+      "loss": 3.2392566204071045,
+      "wandb_id": "sweep-130m-21B-muonaf4344lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-66a04c"
+    },
+    {
+      "param": "momentum",
+      "value": 0.8,
+      "loss": 3.2650187015533447,
+      "wandb_id": "sweep-130m-21B-muon118538lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-1a35c1"
+    },
+    {
+      "param": "momentum",
+      "value": 0.9,
+      "loss": 3.2496399879455566,
+      "wandb_id": "sweep-130m-21B-muon5b982elr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-f92115"
+    },
+    {
+      "param": "momentum",
+      "value": 0.95,
+      "loss": 3.2428536415100098,
+      "wandb_id": "sweep-130m-21B-muonaaa155lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-1a184f"
     },
     {
       "param": "muon_epsilon",
@@ -146,42 +241,6 @@
       "value": 1e-10,
       "loss": 3.239105463027954,
       "wandb_id": "sweep-130m-21B-muond1317flr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-b6514e"
-    },
-    {
-      "param": "max_grad_norm",
-      "value": 0,
-      "loss": 3.239729404449463,
-      "wandb_id": "sweep-130m-21B-muon3c0689lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-9eb7b5"
-    },
-    {
-      "param": "max_grad_norm",
-      "value": 2.0,
-      "loss": 3.2392566204071045,
-      "wandb_id": "sweep-130m-21B-muonaf4344lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-66a04c"
-    },
-    {
-      "param": "decay",
-      "value": 0.2,
-      "loss": 3.2804994583129883,
-      "wandb_id": "sweep-130m-21B-muon4353c9lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-66d626"
-    },
-    {
-      "param": "decay",
-      "value": 0.4,
-      "loss": 3.257462978363037,
-      "wandb_id": "sweep-130m-21B-muon019394lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-d9267d"
-    },
-    {
-      "param": "decay",
-      "value": 0.6,
-      "loss": 3.2478554248809814,
-      "wandb_id": "sweep-130m-21B-muonc5c7a2lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-285fdb"
-    },
-    {
-      "param": "decay",
-      "value": 0.8,
-      "loss": 3.242140293121338,
-      "wandb_id": "sweep-130m-21B-muon740327lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-5585f4"
     },
     {
       "param": "muon_to_adam_lr",
@@ -212,6 +271,18 @@
       "value": 1024,
       "loss": 3.301875114440918,
       "wandb_id": "sweep-130m-21B-muonc12bf0lr0.008-wd0.1-minlr0-warmup0-b10.8-b20.-3a6695"
+    },
+    {
+      "param": "weight_decay",
+      "value": 0,
+      "loss": 3.3102452754974365,
+      "wandb_id": "sweep-130m-21B-muon20f1celr0.008-wd0-minlr0-warmup0-b10.8-b20.98-0351b6"
+    },
+    {
+      "param": "weight_decay",
+      "value": 0.2,
+      "loss": 3.2557144165039062,
+      "wandb_id": "sweep-130m-21B-muon11e37alr0.008-wd0.2-minlr0-warmup0-b10.8-b20.-9c2c15"
     }
   ]
 }

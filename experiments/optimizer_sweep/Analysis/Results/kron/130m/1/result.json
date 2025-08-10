@@ -1,19 +1,70 @@
 {
+  "result": {
+    "Baseline": 3.492459774017334,
+    "beta1=0.9": 3.500293254852295,
+    "beta1=0.98": 3.4966073036193848,
+    "block_size=128": 3.4917666912078857,
+    "block_size=512": 3.4939005374908447,
+    "learning_rate=0.0005": 3.5275721549987793,
+    "learning_rate=0.001": 3.5006821155548096,
+    "learning_rate=0.004": 3.5136287212371826,
+    "learning_rate=0.008": 7.837914943695068,
+    "max_grad_norm=0.0": 3.492459774017334,
+    "max_grad_norm=2.0": 3.492459774017334,
+    "normalize_grads=False": 3.493178606033325,
+    "preconditioner_lr=0.1": 3.4977195262908936,
+    "preconditioner_update_probability=0.1": 3.4926910400390625,
+    "train_batch_size=256": 3.5249440670013428,
+    "train_batch_size=512": 3.632335662841797,
+    "update_prob_flat_start=500": 3.5025596618652344,
+    "update_prob_flat_start=1000": 3.497672319412231,
+    "warmup=2000": 3.507153034210205,
+    "warmup=4000": 3.5834949016571045,
+    "weight_decay=0.0": 3.518787384033203,
+    "weight_decay=0.5": 3.4907355308532715,
+    "weight_decay=0.9": 3.4950366020202637
+  },
+  "name": {
+    "Baseline": "sweep-130m-2B-kron811b3clr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-45d11f",
+    "beta1=0.9": "sweep-130m-2B-kron18ad0flr0.002-wd0.7-b10.9-plr0.2-pis1-gn1-norm-7cd768",
+    "beta1=0.98": "sweep-130m-2B-kron13e12blr0.002-wd0.7-b10.98-plr0.2-pis1-gn1-nor-259ac0",
+    "block_size=128": "sweep-130m-2B-kroncd6d30lr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-1527d0",
+    "block_size=512": "sweep-130m-2B-krond41926lr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-e72480",
+    "learning_rate=0.0005": "sweep-130m-2B-kron6787f2lr0.0005-wd0.7-b10.95-plr0.2-pis1-gn1-no-d99f80",
+    "learning_rate=0.001": "sweep-130m-2B-kron5fbd9blr0.001-wd0.7-b10.95-plr0.2-pis1-gn1-nor-fbd5ad",
+    "learning_rate=0.004": "sweep-130m-2B-krone14983lr0.004-wd0.7-b10.95-plr0.2-pis1-gn1-nor-0f833d",
+    "learning_rate=0.008": "sweep-130m-2B-kroncc6d1clr0.008-wd0.7-b10.95-plr0.2-pis1-gn1-nor-5daa90",
+    "max_grad_norm=0.0": "sweep-130m-2B-kron42860dlr0.002-wd0.7-b10.95-plr0.2-pis1-gn0.0-n-66bad7",
+    "max_grad_norm=2.0": "sweep-130m-2B-kron39ffb0lr0.002-wd0.7-b10.95-plr0.2-pis1-gn2.0-n-4e30bb",
+    "normalize_grads=False": "sweep-130m-2B-kron15f63alr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-c86fe3",
+    "preconditioner_lr=0.1": "sweep-130m-2B-krone65b57lr0.002-wd0.7-b10.95-plr0.1-pis1-gn1-nor-83c7e9",
+    "preconditioner_update_probability=0.1": "sweep-130m-2B-krone7ca20lr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-836663",
+    "train_batch_size=256": "sweep-130m-2B-kron6a290elr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-00e7d9",
+    "train_batch_size=512": "sweep-130m-2B-kronbe1c48lr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-6b988f",
+    "update_prob_flat_start=500": "sweep-130m-2B-kron8b3feelr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-dac9d4",
+    "update_prob_flat_start=1000": "sweep-130m-2B-kron8264balr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-52689f",
+    "warmup=2000": "sweep-130m-2B-kron9117dclr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-df1fa7",
+    "warmup=4000": "sweep-130m-2B-kron1999a2lr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-a2c96d",
+    "weight_decay=0.0": "sweep-130m-2B-kron26d3dclr0.002-wd0.0-b10.95-plr0.2-pis1-gn1-nor-978d74",
+    "weight_decay=0.5": "sweep-130m-2B-kronf8119alr0.002-wd0.5-b10.95-plr0.2-pis1-gn1-nor-2ef7b8",
+    "weight_decay=0.9": "sweep-130m-2B-kron476954lr0.002-wd0.9-b10.95-plr0.2-pis1-gn1-nor-356b60"
+  },
+  "num_left": 0,
   "best_config": {
-    "learning_rate": 0.002,
-    "weight_decay": 0.7,
     "beta1": 0.95,
-    "preconditioner_lr": 0.2,
-    "preconditioner_init_scale": 1,
+    "block_size": 256,
+    "learning_rate": 0.002,
     "max_grad_norm": 1,
+    "min_lr_ratio": 0,
     "normalize_grads": true,
     "partition_grads_into_blocks": true,
-    "block_size": 256,
+    "preconditioner_init_scale": 1.0,
+    "preconditioner_lr": 0.2,
     "preconditioner_update_probability": 0.05,
+    "train_batch_size": 128,
     "update_prob_flat_start": 2000,
     "warmup": 1000,
-    "min_lr_ratio": 0,
-    "train_batch_size": 128
+    "weight_decay": 0.7
   },
   "min_loss": 3.4907355308532715,
   "baseline": {
@@ -21,6 +72,30 @@
     "wandb_id": "sweep-130m-2B-kron811b3clr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-45d11f"
   },
   "ablations": [
+    {
+      "param": "beta1",
+      "value": 0.9,
+      "loss": 3.500293254852295,
+      "wandb_id": "sweep-130m-2B-kron18ad0flr0.002-wd0.7-b10.9-plr0.2-pis1-gn1-norm-7cd768"
+    },
+    {
+      "param": "beta1",
+      "value": 0.98,
+      "loss": 3.4966073036193848,
+      "wandb_id": "sweep-130m-2B-kron13e12blr0.002-wd0.7-b10.98-plr0.2-pis1-gn1-nor-259ac0"
+    },
+    {
+      "param": "block_size",
+      "value": 128,
+      "loss": 3.4917666912078857,
+      "wandb_id": "sweep-130m-2B-kroncd6d30lr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-1527d0"
+    },
+    {
+      "param": "block_size",
+      "value": 512,
+      "loss": 3.4939005374908447,
+      "wandb_id": "sweep-130m-2B-krond41926lr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-e72480"
+    },
     {
       "param": "learning_rate",
       "value": 0.0005,
@@ -46,42 +121,6 @@
       "wandb_id": "sweep-130m-2B-kroncc6d1clr0.008-wd0.7-b10.95-plr0.2-pis1-gn1-nor-5daa90"
     },
     {
-      "param": "weight_decay",
-      "value": 0.0,
-      "loss": 3.518787384033203,
-      "wandb_id": "sweep-130m-2B-kron26d3dclr0.002-wd0.0-b10.95-plr0.2-pis1-gn1-nor-978d74"
-    },
-    {
-      "param": "weight_decay",
-      "value": 0.5,
-      "loss": 3.4907355308532715,
-      "wandb_id": "sweep-130m-2B-kronf8119alr0.002-wd0.5-b10.95-plr0.2-pis1-gn1-nor-2ef7b8"
-    },
-    {
-      "param": "weight_decay",
-      "value": 0.9,
-      "loss": 3.4950366020202637,
-      "wandb_id": "sweep-130m-2B-kron476954lr0.002-wd0.9-b10.95-plr0.2-pis1-gn1-nor-356b60"
-    },
-    {
-      "param": "beta1",
-      "value": 0.9,
-      "loss": 3.500293254852295,
-      "wandb_id": "sweep-130m-2B-kron18ad0flr0.002-wd0.7-b10.9-plr0.2-pis1-gn1-norm-7cd768"
-    },
-    {
-      "param": "beta1",
-      "value": 0.98,
-      "loss": 3.4966073036193848,
-      "wandb_id": "sweep-130m-2B-kron13e12blr0.002-wd0.7-b10.98-plr0.2-pis1-gn1-nor-259ac0"
-    },
-    {
-      "param": "preconditioner_lr",
-      "value": 0.1,
-      "loss": 3.4977195262908936,
-      "wandb_id": "sweep-130m-2B-krone65b57lr0.002-wd0.7-b10.95-plr0.1-pis1-gn1-nor-83c7e9"
-    },
-    {
       "param": "max_grad_norm",
       "value": 0.0,
       "loss": 3.492459774017334,
@@ -100,22 +139,28 @@
       "wandb_id": "sweep-130m-2B-kron15f63alr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-c86fe3"
     },
     {
-      "param": "block_size",
-      "value": 128,
-      "loss": 3.4917666912078857,
-      "wandb_id": "sweep-130m-2B-kroncd6d30lr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-1527d0"
-    },
-    {
-      "param": "block_size",
-      "value": 512,
-      "loss": 3.4939005374908447,
-      "wandb_id": "sweep-130m-2B-krond41926lr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-e72480"
+      "param": "preconditioner_lr",
+      "value": 0.1,
+      "loss": 3.4977195262908936,
+      "wandb_id": "sweep-130m-2B-krone65b57lr0.002-wd0.7-b10.95-plr0.1-pis1-gn1-nor-83c7e9"
     },
     {
       "param": "preconditioner_update_probability",
       "value": 0.1,
       "loss": 3.4926910400390625,
       "wandb_id": "sweep-130m-2B-krone7ca20lr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-836663"
+    },
+    {
+      "param": "train_batch_size",
+      "value": 256,
+      "loss": 3.5249440670013428,
+      "wandb_id": "sweep-130m-2B-kron6a290elr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-00e7d9"
+    },
+    {
+      "param": "train_batch_size",
+      "value": 512,
+      "loss": 3.632335662841797,
+      "wandb_id": "sweep-130m-2B-kronbe1c48lr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-6b988f"
     },
     {
       "param": "update_prob_flat_start",
@@ -142,16 +187,22 @@
       "wandb_id": "sweep-130m-2B-kron1999a2lr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-a2c96d"
     },
     {
-      "param": "train_batch_size",
-      "value": 256,
-      "loss": 3.5249440670013428,
-      "wandb_id": "sweep-130m-2B-kron6a290elr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-00e7d9"
+      "param": "weight_decay",
+      "value": 0.0,
+      "loss": 3.518787384033203,
+      "wandb_id": "sweep-130m-2B-kron26d3dclr0.002-wd0.0-b10.95-plr0.2-pis1-gn1-nor-978d74"
     },
     {
-      "param": "train_batch_size",
-      "value": 512,
-      "loss": 3.632335662841797,
-      "wandb_id": "sweep-130m-2B-kronbe1c48lr0.002-wd0.7-b10.95-plr0.2-pis1-gn1-nor-6b988f"
+      "param": "weight_decay",
+      "value": 0.5,
+      "loss": 3.4907355308532715,
+      "wandb_id": "sweep-130m-2B-kronf8119alr0.002-wd0.5-b10.95-plr0.2-pis1-gn1-nor-2ef7b8"
+    },
+    {
+      "param": "weight_decay",
+      "value": 0.9,
+      "loss": 3.4950366020202637,
+      "wandb_id": "sweep-130m-2B-kron476954lr0.002-wd0.9-b10.95-plr0.2-pis1-gn1-nor-356b60"
     }
   ]
 }
