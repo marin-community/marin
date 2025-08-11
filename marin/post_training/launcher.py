@@ -84,7 +84,44 @@ if __name__ == "__main__":
     launch_config_path = os.path.join(os.path.dirname(__file__), "launch_config.json")
 
     available_tpus = [
+<<<<<<< HEAD
         ("ray-marin-us-central1-worker-093d297d-tpu", "us-central1-a"),
+=======
+        ("ray-marin-us-central1-worker-4065015a-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-d79673a3-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-ca2b50da-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-f072d76d-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-1780ab4e-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-6d8fe698-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-e979dd4d-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-688be651-tpu", "us-central1-a"),
+        ("ray-marin-us-east5-a-worker-71f74779-tpu", "us-east5-a"),
+        ("ray-marin-us-central1-worker-877501fe-tpu", "us-central1-a"),
+        ("ray-marin-us-east5-a-worker-cedab558-tpu", "us-east5-a"),
+        ("ray-marin-us-central1-worker-f4b6d22b-tpu", "us-central1-a"),
+        ("ray-marin-us-east5-a-worker-9a8aaa7f-tpu", "us-east5-a"),
+        ("ray-marin-us-central1-worker-20da5014-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-0713ef45-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-6b36dc33-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-095ac431-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-df09da79-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-85d333be-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-a2665efb-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-af194197-tpu", "us-central1-a"),
+        ("ray-marin-us-east5-a-worker-f0d9e433-tpu", "us-east5-a"),
+        ("ray-marin-us-central1-worker-2be8053d-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-aea175f2-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-98689ec9-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-439d0aa0-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-6a578dc7-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-288982f3-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-e08bbbc6-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-98c7d2f8-tpu", "us-central1-a"),
+        ("ray-marin-us-east5-a-worker-cf2934d6-tpu", "us-east5-a"),
+        ("ray-marin-us-east5-a-worker-01f7a8ed-tpu", "us-east5-a"),
+        ("ray-marin-us-central1-worker-627334fa-tpu", "us-central1-a"),
+        ("ray-marin-us-central1-worker-d9ae42e3-tpu", "us-central1-a"),
+>>>>>>> ffec06b9 (auto relaunch failed experiment with the lastest checkpoint)
         ("post-training-v5p-8", "us-east5-a"),
     ]
 

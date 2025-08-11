@@ -1,22 +1,83 @@
+#!/bin/bash
+
+# Updated training_run.sh with checkpoint resumption capability
+
+# Source the checkpoint detection functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/find_checkpoint.sh"
+
 (
     source ~/miniconda3/bin/activate llama3_train
+<<<<<<< HEAD
     export RUN_NAME="llama3_8b_math_test_experiment"
     export GCLOUD_TOKEN_PATH="$HOME/.config/gcloud/application_default_credentials.json"
     export GCLOUD_PROJECT="hai-gcp-models"
+=======
+    export RUN_NAME="5envs_restart"
+    export GCLOUD_TOKEN_PATH="$HOME/.config/gcloud/application_default_credentials.json"
+    export GCLOUD_PROJECT="hai-gcp-models"
+    
+    # Default model paths (base model)
+    DEFAULT_PARAMS="gs://marin-us-central2/checkpoints/Llama-3.1-8B-Instruct-converted/params.msgpack"
+    DEFAULT_TOKENIZER="meta-llama/Meta-Llama-3-8B-Instruct"
+    DEFAULT_CONFIG="gs://marin-us-central2/checkpoints/Llama-3.1-8B-Instruct-converted/config.json"
+    
+    # Try to find the latest checkpoint
+    echo "==========================================="
+    echo "Checking for existing checkpoints..."
+    echo "Run name: $RUN_NAME"
+    echo "==========================================="
+    
+    if latest_checkpoint=$(find_latest_checkpoint "$RUN_NAME"); then
+        echo "✓ Found existing checkpoint: $latest_checkpoint"
+        echo "Will resume training from checkpoint"
+        
+        # Use checkpoint paths
+        PARAMS_PATH="$latest_checkpoint/params.msgpack"
+        CONFIG_PATH="$latest_checkpoint/config.json"
+        # Note: Keep using HuggingFace tokenizer as it doesn't change
+        TOKENIZER_PATH="$DEFAULT_TOKENIZER"
+        
+        echo "Using checkpoint paths:"
+        echo "  Params: $PARAMS_PATH"
+        echo "  Config: $CONFIG_PATH"
+        echo "  Tokenizer: $TOKENIZER_PATH"
+        
+    else
+        echo "✗ No existing checkpoints found"
+        echo "Will start training from base model"
+        
+        # Use default paths
+        PARAMS_PATH="$DEFAULT_PARAMS"
+        CONFIG_PATH="$DEFAULT_CONFIG"
+        TOKENIZER_PATH="$DEFAULT_TOKENIZER"
+        
+        echo "Using base model paths:"
+        echo "  Params: $PARAMS_PATH"
+        echo "  Config: $CONFIG_PATH"  
+        echo "  Tokenizer: $TOKENIZER_PATH"
+    fi
+    
+    echo "==========================================="
+    echo "Starting training..."
+    echo "==========================================="
+    
+>>>>>>> ffec06b9 (auto relaunch failed experiment with the lastest checkpoint)
     python -m post_training.train \
             --load_model="paths:{
-                \"params\": \"gs://marin-us-central2/checkpoints/Llama-3.1-8B-Instruct-converted/params.msgpack\",
-                \"tokenizer\": \"meta-llama/Meta-Llama-3-8B-Instruct\",
-                \"config\": \"gs://marin-us-central2/checkpoints/Llama-3.1-8B-Instruct-converted/config.json\"
+                \"params\": \"$PARAMS_PATH\",
+                \"tokenizer\": \"$TOKENIZER_PATH\",
+                \"config\": \"$CONFIG_PATH\"
             }" \
-            --output_dir="gs://marin-us-central2/experiments/math_rloo_test_experiments/" \
+            --output_dir="gs://marin-us-central2/post_training/experiments/$RUN_NAME" \
             --sharding="1,4,1,-1" \
-            --num_train_steps=2048 \
-            --max_input_length=256 \
+            --num_train_steps=256 \
+            --max_input_length=1024 \
             --max_output_length=1025 \
-            --train_bsize=64 \
-            --decode_bsize=1024 \
+            --train_bsize=32 \
+            --decode_bsize=128\
             --prefill_bsize=16 \
+<<<<<<< HEAD
             --reference_logprobs_bsize=256 \
             --n_prompts_per_step=16 \
             --log_freq=8 \
@@ -24,6 +85,15 @@
             --save_model_freq=0 \
             --environments_path="post_training/environments.json" \
             --wandb_project="math_rloo_math_test_experiments" \
+=======
+            --reference_logprobs_bsize=128 \
+            --n_prompts_per_step=4 \
+            --log_freq=1 \
+            --num_eval_examples=32 \
+            --save_model_freq=5 \
+            --environments_path="post_training/environments.json" \
+            --wandb_project="mlebench_tpu" \
+>>>>>>> ffec06b9 (auto relaunch failed experiment with the lastest checkpoint)
             --inference_param_dtype="bf16" \
             --inference_activation_dtype="bf16" \
             --training_param_dtype="fp32" \
