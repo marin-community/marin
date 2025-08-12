@@ -10,6 +10,7 @@ import logging
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.evaluator_factory import get_evaluator
+from experiments.exp964_custom_chat_tokenizer import llama3_instruct_chat_format
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -29,21 +30,24 @@ def main():
     """
 
     # Define the model configuration
-    # model_config = ModelConfig(
-    #     name="deeper-starling-sft",  # Model name for identification
-    #     path="gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/hf/step-1490000",  # HuggingFace format checkpoint
-    #     engine_kwargs=None,
-    #     apply_chat_template=True,  # SFT models typically use chat templates
-    # )
     model_config = ModelConfig(
-        name="meta-llama/Llama-3.2-1B",  # Small model for testing (117M parameters)
-        path=None,  # Use HuggingFace model directly
+        name="deeper-starling-sft",  # Model name for identification
+        path="gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/hf/step-1490000",  # HuggingFace format checkpoint
         engine_kwargs=None,
-        apply_chat_template=True,  # DialoGPT doesn't use chat templates
+        apply_chat_template=True,  # SFT models typically use chat templates
     )
+    
+    # Alternative test for a Huggingface model
+    # Note that VLLM allows only models with head sizes that are multiples of 128.
+    #
+    # model_config = ModelConfig(
+    #     name="meta-llama/Llama-3.2-1B",  # Small model for testing (117M parameters)
+    #     path=None,  # Use HuggingFace model directly
+    #     engine_kwargs=None,
+    #     apply_chat_template=True,  # DialoGPT doesn't use chat templates
+    # )
 
     # Define evaluation tasks
-    # Use evalchemy tasks
     evals = [
         EvalTaskConfig(
             name="AIME24",  # Instruction following evaluation
@@ -59,9 +63,9 @@ def main():
     eval_config = EvaluationConfig(
         evaluator="evalchemy",
         model_name=model_config.name,
-        evaluation_path="gs://marin-us-central2/evals/evalchemy/test_llama32_1b",  # Results path
+        evaluation_path="gs://marin-us-central2/evals/evalchemy/test_evalchemy",  # Results path
         evals=evals,
-        max_eval_instances=100,  # Limit for testing
+        max_eval_instances=10,  # Limit for testing
         launch_with_ray=True,
         apply_chat_template=True,  # Match model config
     )
