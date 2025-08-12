@@ -15,6 +15,7 @@ from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 
+@OptimizerConfig.register_subclass("adamax")
 @dataclass(frozen=True)
 class AdamaxConfig(OptimizerConfig):
     beta1: float = 0.9
@@ -24,13 +25,6 @@ class AdamaxConfig(OptimizerConfig):
 
     def build(self, num_train_steps):
         print(f"Building optimizer: {self.__class__.__name__}")
-
-        # try to register the class if it's not already registered
-        try:
-            OptimizerConfig.register_subclass("adamax")(AdamaxConfig)
-        except ValueError:
-            # ignore and use the already registered class
-            pass
 
         def _optimizer(learning_rate):
             components = []
