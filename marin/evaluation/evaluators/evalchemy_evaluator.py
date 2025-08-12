@@ -36,11 +36,15 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
+        'vllm[tpu]',
     ]
     _env_vars: ClassVar[dict[str, str]] = {
         # Human eval tests code from the model which requires permission to run
         "HF_ALLOW_CODE_EVAL": "1",
         "VLLM_USE_V1": "0",
+        "RAY_LOG_TO_DRIVER": "0",       # hide INFO/WARNING from glog/XLA C++
+        "GLOG_minloglevel": "1",        # 1 hides INFO; 2 hides INFO+WARN; 3 hides INFO+WARN+ERROR
+        "TF_CPP_MIN_LOG_LEVEL": "3",    # stop forwarding worker logs to driver (hides (pid=..., ip=...) lines)
     }
 
     _temp_dir: str | None = tempfile.mkdtemp()
@@ -92,7 +96,10 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
         """
         try:
             # Clean up hack
-            # run_bash_command(["rm", "-rf", "/tmp/*"])      
+            # run_bash_command(["rm", "-rf", "/tmp/*"])
+            
+            # Update vllm
+            subprocess.check_call(["pip", "install", "vllm", "--upgrade"])
             
             # Clone the repository to a temporary directory
             logger.info(f"Cloning evalchemy to {self._temp_dir}")
@@ -160,13 +167,7 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
                 logger.info(f"Running evalchemy command: {' '.join(command)}")
 
                 # Run evaluation using evalchemy command line interface
-                try:
-                    run_bash_command(command)
-                except subprocess.CalledProcessError as e:
-                    logger.error(f"Evalchemy command failed with exit code {e.returncode}")
-                    logger.error(f"Command was: {' '.join(command)}")
-                    logger.error(f"Error output: {e.stderr if hasattr(e, 'stderr') else 'No stderr available'}")
-                    raise
+                run_bash_command(command)
 
                 logger.info(f"Completed evalchemy:{eval_task.name} evaluation")
 
