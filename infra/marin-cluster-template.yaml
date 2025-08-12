@@ -36,6 +36,7 @@ docker:
       - --privileged
       - -v "/tmp:/tmp"
       - --ulimit nofile=1048576:1048576
+      - -e RAY_TPU_MAX_CONCURRENT_ACTIVE_CONNECTIONS=64
 
 
 initialization_commands:

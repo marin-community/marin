@@ -15,7 +15,7 @@ from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 
-@dataclass
+@dataclass(frozen=True)
 class AdamaxConfig(OptimizerConfig):
     beta1: float = 0.9
     beta2: float = 0.95

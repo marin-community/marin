@@ -40,6 +40,7 @@ docker:
       - --privileged
       - -v "/tmp:/tmp"
       - --ulimit nofile=1048576:1048576
+      - -e RAY_TPU_MAX_CONCURRENT_ACTIVE_CONNECTIONS=64
 
 
 initialization_commands:
@@ -199,6 +200,18 @@ available_node_types:
     min_workers: 0
     node_config:
       acceleratorType: v5p-1024
+      runtimeVersion: v2-alpha-tpuv5
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v5p_2048:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v5p-2048
       runtimeVersion: v2-alpha-tpuv5
       schedulingConfig:
         preemptible: true
