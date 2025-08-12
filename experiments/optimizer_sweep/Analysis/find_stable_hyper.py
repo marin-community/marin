@@ -48,6 +48,8 @@ for optimizer in optimizers:
 
 optimizers = ["adamw", "nadamw", "lion", "mini", "cautious", "mars", "scion", "muon", "soape", "kron"]
 
+
+# for each optimizer, contains a dictionary of non-stable keys mapping to a set of values that covers the approximately best configs across all model sizes and chinchilla ratios
 non_stable_keys_by_optimizer = {}
 
 for optimizer in optimizers:

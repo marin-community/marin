@@ -2,8 +2,14 @@ import copy
 
 import wandb
 
-# Initialize the WandB API
-api = wandb.Api()
+# Lazy-initialize the WandB API (avoid top-level side effects)
+_wandb_api = None
+
+def get_wandb_api():
+    global _wandb_api
+    if _wandb_api is None:
+        _wandb_api = wandb.Api()
+    return _wandb_api
 # Define your details
 username = "marin-community"
 project = "optimizer-scaling"
@@ -22,7 +28,7 @@ def convert_run_to_config(run, keys):
 def grab_best_run(keys, tags, return_loss=False, thshold=3e-3):
     filters = {"tags": {"$all": tags}}
     print(tags)
-    runs = api.runs(f"{username}/{project}", filters=filters)
+    runs = get_wandb_api().runs(f"{username}/{project}", filters=filters)
     min_loss = 10000
     min_run = None
     for run in runs:
@@ -101,7 +107,7 @@ def approximate(baseline, config):
 
 def check_baseline_run(baseline, tags, strict=True, return_loss=False):
     filters = {"tags": {"$all": tags}}
-    runs = api.runs(f"{username}/{project}", filters=filters)
+    runs = get_wandb_api().runs(f"{username}/{project}", filters=filters)
     for run in runs:
         config = convert_run_to_config(run, baseline.keys())
         if approximate(baseline, config) and (
@@ -123,7 +129,7 @@ def check_baseline_run(baseline, tags, strict=True, return_loss=False):
 
 def grab_run(baseline, tags):
     filters = {"tags": {"$all": tags}}
-    runs = api.runs(f"{username}/{project}", filters=filters)
+    runs = get_wandb_api().runs(f"{username}/{project}", filters=filters)
     print(runs)
 
     for run in runs:

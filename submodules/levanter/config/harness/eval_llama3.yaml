@@ -1,0 +1,52 @@
+eval_harness:
+  task_spec:
+    - task: commonsense_qa  # 5-way multiple-choice questions based on common-sense, everyday scenarios
+      num_fewshot: 10
+#    - task: agieval_lsat_ar  # 3-shot tests in legal domain
+#      num_fewshot: 3
+#    - task: arc_easy  # 10-shot, four-way MCQ questions involving grade 3-9 basic science
+#      num_fewshot: 10
+#    - task: arc_challenge  # a (harder) version of arc_easy
+#      num_fewshot: 10
+#    - task: boolq  # answer yes/no questions based on a passage
+#      num_fewshot: 10
+#    - task: copa  # use causal reasoning to predict the correct outcome of a given scenario
+#      num_fewshot: 0
+#    - task: hellaswag  # 4-way multiple choice commonsense reasoning dataset
+#      num_fewshot: 0
+#      task_alias: hellaswag_0shot
+#    - task: hellaswag  # 4-way multiple choice commonsense reasoning dataset
+#      num_fewshot: 10
+#      task_alias: hellaswag_10shot
+#    - task: lambada  # predict the endings of text passages
+#      num_fewshot: 0
+#    - task: openbookqa  # 4-way multiple choice question answering task that requires multi-step reasoning
+#      num_fewshot: 0
+#    - task: piqa  # answer questions based on a passage
+#      num_fewshot: 10
+#    - task: wsc273  # Winograd Schema Challenge
+#      num_fewshot: 0
+#    - task: winogrande  # Winograd challenge, extended to more domains
+#      num_fewshot: 0
+      # requires generation
+##    - task: squadv2  # reading comprehension benchmark
+#      num_fewshot: 10
+  max_eval_length: 4096
+tokenizer: NousResearch/NousResearch-3-8B
+model:
+  type: llama
+#checkpoint_path: gs://marin-us-central2/checkpoints/dclm_baseline_1b_1x_replication_nov12_3404462497seed-b68241/hf/step-54930
+checkpoint_path: NousResearch/NousResearch-3-8B
+checkpoint_is_hf: true
+trainer:
+  mp: f32
+  profiler: true
+
+  per_device_parallelism: -1
+  train_batch_size: 512
+
+  tensor_parallel_axes: ["mlp", "heads"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+  ray:
+    auto_start_cluster: false

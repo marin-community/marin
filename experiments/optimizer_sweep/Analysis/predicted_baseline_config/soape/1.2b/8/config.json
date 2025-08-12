@@ -1,0 +1,14 @@
+{
+  "beta1": 0.95,
+  "beta2": 0.99,
+  "block_size": 516.466393834417,
+  "epsilon": 1.0386758802151536e-10,
+  "learning_rate": 0.007366148327149689,
+  "max_grad_norm": 1.0,
+  "min_lr_ratio": 0.0,
+  "precondition_frequency": 10.000712505823392,
+  "shampoo_beta": 0.9214189843854559,
+  "train_batch_size": 367.1030670135567,
+  "warmup": 1004.766476807961,
+  "weight_decay": 0.1
+}

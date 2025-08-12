@@ -1,0 +1,32 @@
+data: !include data/dclm_gpt_neo.yaml
+model:  # 7B class model
+  type: llama
+  seq_len: 2048
+  hidden_dim: 4096
+  intermediate_dim: 11008
+  num_layers: 32
+  num_heads: 32
+  num_kv_heads: 32
+trainer:
+  tracker:
+    type: wandb
+    entity: "stanford-mercury"
+    project: "marin"
+    tags: ["dclm", "7B", "llama"]
+
+  mp: p=f32,c=bfloat16
+  train_batch_size: 2048
+  num_train_steps: 480000  # 2T / 4M
+  steps_per_eval: 1000
+  tensor_parallel_axes: ["mlp", "heads"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+optimizer:
+  learning_rate: 4e-4
+  weight_decay: 0.1
+  min_lr_ratio: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  warmup: 5000
+
+z_loss_weight: 5e-6

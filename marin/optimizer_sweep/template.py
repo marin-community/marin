@@ -1,3 +1,43 @@
+"""Optimizer hyperparameter sweep template.
+
+This module builds and launches a sweep of training runs to find strong
+hyperparameters for a given optimizer and model size within Marin.
+
+High-level flow:
+- Computes a target token budget using Chinchilla scaling for the selected
+  model size, scaled by a user-provided multiplier (`target_chinchilla`).
+- Expands a `baseline_config` with `sweep_grids` into concrete training
+  configurations and converts them to executable train configs.
+- Skips configurations that have already been completed by consulting
+  experiment tracking (e.g., Weights & Biases) via `check_baseline_run`.
+- Optionally chooses a previously observed near-best baseline to minimize the
+  number of remaining runs, then dispatches the sweep as Marin steps.
+
+Data and models:
+- Uses the DCLM mixture configured for Llama 3 tokenization
+  (`dclm_mixture_config_llama3`).
+- Maps `model_size` and `optimizer` tags to concrete model and optimizer
+  configurations via `map_tag_to_model` and `map_tag_to_config`.
+
+Entrypoint:
+- `template(...)` orchestrates the sweep. When `DEBUG_MODE` is `False`, it
+  creates and executes steps via the Marin executor. When `force_run` is
+  `True`, only the baseline configuration is executed (no sweep).
+
+Example:
+    template(
+        model_size="1.2b",
+        target_chinchilla=1.0,
+        optimizer="adamw",
+        baseline_config={...},
+        sweep_grids={...},
+        tpu_type="v5litepod-128",
+        DEBUG_MODE=False,
+        random_suffix=None,
+        force_run=False,
+    )
+"""
+
 # https://github.com/stanford-crfm/marin/issues/725
 # Sweep to determine optimal hyperparameters for Adam on small scale
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3

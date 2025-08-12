@@ -1,0 +1,22 @@
+data:
+  id: dlwh/wikitext_103_detokenized
+model:
+  type: backpack
+  hidden_dim: 32
+  num_heads: 4
+  num_layers: 2
+  seq_len: 512
+  gradient_checkpointing: true
+  scale_attn_by_inverse_layer_idx: true
+  num_senses: 16
+  sense_intermediate_scale: 4
+trainer:
+  mp: f32
+
+  num_train_steps: 100
+  train_batch_size: 32
+  model_axis_size: 1
+
+optimizer:
+  learning_rate: 6E-4
+  weight_decay: 0.1
