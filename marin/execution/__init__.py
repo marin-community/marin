@@ -15,6 +15,7 @@ from .executor import (
     unwrap_versioned_value,
     versioned,
 )
+from .dynamic_executor import DynamicExecutor, prepare_step, use_step
 from .executor_step_status import (
     STATUS_CANCELLED,
     STATUS_DEP_FAILED,
