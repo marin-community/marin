@@ -17,7 +17,9 @@ from marin.utils import remove_tpu_lockfile_on_exit
 class VllmTpuEvaluator(Evaluator, ABC):
     """For `Evaluator`s that runs inference with VLLM on TPUs."""
 
-    DEFAULT_PIP_PACKAGES: ClassVar[list[Dependency]] = []
+    DEFAULT_PIP_PACKAGES: ClassVar[list[Dependency]] = [
+        'vllm[tpu]'
+    ]
 
     # Where to store checkpoints, cache inference results, etc.
     CACHE_PATH: str = "/tmp"
