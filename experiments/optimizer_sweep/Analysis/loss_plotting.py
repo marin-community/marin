@@ -28,23 +28,23 @@ def _load_loss_from_result_json(result_path: str):
 
     # Prefer explicit min_loss if present
     min_loss = payload.get("min_loss")
-    if isinstance(min_loss, (int, float)):
-        return float(min_loss)
+    if isinstance(min_loss, float):
+        return min_loss
 
     # Otherwise compute min across available fields
     candidate_losses = []
     baseline = payload.get("baseline")
-    if isinstance(baseline, dict) and isinstance(baseline.get("loss"), (int, float)):
-        candidate_losses.append(float(baseline["loss"]))
+    if isinstance(baseline, dict) and isinstance(baseline.get("loss"), float):
+        candidate_losses.append(baseline["loss"])
 
     for ab in payload.get("ablations", []) or []:
-        if isinstance(ab, dict) and isinstance(ab.get("loss"), (int, float)):
-            candidate_losses.append(float(ab["loss"]))
+        if isinstance(ab, dict) and isinstance(ab.get("loss"), float):
+            candidate_losses.append(ab["loss"])
 
     if not candidate_losses and isinstance(payload.get("result"), dict):
         for v in payload["result"].values():
-            if isinstance(v, (int, float)):
-                candidate_losses.append(float(v))
+            if isinstance(v, float):
+                candidate_losses.append(v)
 
     if not candidate_losses:
         return None
@@ -97,7 +97,6 @@ def collect_results(results_root: str) -> pd.DataFrame:
 df_loss = collect_results(RESULTS_ROOT)
 if df_loss.empty:
     raise SystemExit(f"No results found under {RESULTS_ROOT}")
-
 
 
 # Generate a plot for each model size

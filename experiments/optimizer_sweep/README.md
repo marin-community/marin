@@ -62,7 +62,7 @@ This directory contains the code and configs to reproduce the optimizer study de
 - `Analysis/speedup_estimation.py`
   - Fits an AdamW baseline scaling curve per model size, L(D) = α·D^(−B) + β, using losses from `Analysis/Results`.
   - For each optimizer point, computes the effective data budget D_adamw that would achieve its observed loss on the AdamW curve.
-  - Plots D_adamw vs. D (with 1.0–1.4× speedup bands) per model size and a cross-size 8×-Chinchilla speedup summary.
+  - Plots D_adamw vs. D (with 1.0-1.4x speedup bands) per model size and a cross-size 8x-Chinchilla speedup summary.
   - Outputs PDFs under `Analysis/figs/`.
   - Run:
     ```bash
@@ -79,7 +79,7 @@ This directory contains the code and configs to reproduce the optimizer study de
 
 - `Analysis/hyper_scaling.py`
   - Fits simple power-law parameterizations over model size and data scale for each hyperparameter using the best-configs in `Analysis/Results`.
-  - Emits text reports `hyperparameters_fit_{optimizer}.md` and predicted baseline configs at `Analysis/predicted_baseline_config/{optimizer}/{model_size}/{chinchilla}/config.json` (e.g., 1.2B at 1/2/4/8× Chinchilla).
+  - Emits text reports `hyperparameters_fit_{optimizer}.md` and predicted baseline configs at `Analysis/predicted_baseline_config/{optimizer}/{model_size}/{chinchilla}/config.json` (e.g., 1.2B at 1/2/4/8x Chinchilla).
   - Run:
     ```bash
     python experiments/optimizer_sweep/Analysis/hyper_scaling.py
@@ -113,6 +113,4 @@ This directory contains the code and configs to reproduce the optimizer study de
 ### Notes
 
 - Model sizes follow the study (e.g., 130M/300M/520M/1.2B) and “Chinchilla ratio” refers to tokens relative to a Chinchilla-optimal budget (20x non-embedding parameters)
-- The overall findings and motivation, including why matrix preconditioners (e.g., Muon, Soap, Kron) often lead at higher budgets and the observed ≤1.4× speedups, are summarized in [marin-community/marin#1290](https://github.com/marin-community/marin/issues/1290).
-
-
+- The overall findings and motivation, including why matrix preconditioners (e.g., Muon, Soap, Kron) often lead at higher budgets and the observed ≤1.4x speedups, are summarized in [marin-community/marin#1290](https://github.com/marin-community/marin/issues/1290).

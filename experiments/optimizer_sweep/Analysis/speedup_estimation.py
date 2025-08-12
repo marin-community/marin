@@ -5,7 +5,7 @@ This module:
 - Fits an AdamW baseline scaling curve per model size: L(D) = alpha * D^(-B) + beta.
 - Computes each optimizer's effective data budget D_eff achieving its observed loss.
 - Produces figures per model size comparing D_eff vs. D_opt (the actual data
-  budget), with shaded bands indicating 1.0–1.4x effective speedup.
+  budget), with shaded bands indicating 1.0-1.4x effective speedup.
 - Also plots speedup at 8x Chinchilla vs. model size for selected optimizers.
 
 Outputs are written to `experiments/optimizer_sweep/Analysis/figs/` as PDFs.
@@ -19,6 +19,7 @@ import pandas as pd
 from scipy.optimize import curve_fit
 from plotting_config import color_map, correct_name, line_style
 from marin.optimizer_sweep.utils_simp import expected_params
+from matplotlib.patches import Patch
 
 # Set global font size for plots
 plt.rcParams.update({"font.size": 20})
@@ -90,10 +91,7 @@ def load_results_to_df(results_dir: str = RESULTS_DIR_DEFAULT) -> pd.DataFrame:
 df = load_results_to_df(RESULTS_DIR_DEFAULT)
 
 
-
-
 optimizers = ["mini", "nadamw", "cautious", "mars", "lion", "muon", "soape", "kron"]
-
 
 
 # Define the scaling model
@@ -119,10 +117,11 @@ for _, row in df.iterrows():
     D_opt = row["chinchilla"]
     L_opt = row["loss"]
     D_eff = ((L_opt - beta) / alpha) ** (-1.0 / B)
-    records.append({"optimizer": row["optimizer"], "model_size": model_size, "D_opt": D_opt, "D_eff": D_eff, "Loss": L_opt})
+    records.append(
+        {"optimizer": row["optimizer"], "model_size": model_size, "D_opt": D_opt, "D_eff": D_eff, "Loss": L_opt}
+    )
 
 eff_df = pd.DataFrame(records)
-from matplotlib.patches import Patch
 
 # Plot D_eff vs D_opt with a y=x line for each model size
 for model_size in sorted(eff_df["model_size"].unique()):
@@ -132,9 +131,9 @@ for model_size in sorted(eff_df["model_size"].unique()):
     d_min, d_max = sub["D_opt"].min(), sub["D_opt"].max()
     x_vals = np.array([d_min, d_max])
 
-    grey_patch = Patch(facecolor="bisque", alpha=0.5, label=r"1.0–1.2$\times$")
-    blue_patch = Patch(facecolor="lightblue", alpha=0.5, label=r"1.2–1.3$\times$")
-    green_patch = Patch(facecolor="lightgreen", alpha=0.5, label=r"1.3–1.4$\times$")
+    grey_patch = Patch(facecolor="bisque", alpha=0.5, label=r"1.0-1.2$\times$")
+    blue_patch = Patch(facecolor="lightblue", alpha=0.5, label=r"1.2-1.3$\times$")
+    green_patch = Patch(facecolor="lightgreen", alpha=0.5, label=r"1.3-1.4$\times$")
     ax.fill_between(x_vals, x_vals, x_vals * 1.2, color="bisque", alpha=0.5)
     ax.fill_between(x_vals, x_vals * 1.2, x_vals * 1.3, color="lightblue", alpha=0.5)
     ax.fill_between(x_vals, x_vals * 1.3, x_vals * 1.4, color="lightgreen", alpha=0.5)
@@ -171,32 +170,29 @@ for model_size in sorted(eff_df["model_size"].unique()):
     plt.savefig(f"{FIGURES_DIR}/D_eff_vs_D_opt_{model_size}.pdf", bbox_inches="tight")
 
 # Add speedup calculation and plot speedup vs model size
-eff_df['speedup'] = eff_df['D_eff'] / eff_df['D_opt']
+eff_df["speedup"] = eff_df["D_eff"] / eff_df["D_opt"]
 
 
 # Create a new plot for speedup vs model size
 fig, ax = plt.subplots(figsize=(10, 6))
-eff_df['expected_params'] = eff_df['model_size'].map(expected_params)
+eff_df["expected_params"] = eff_df["model_size"].map(expected_params)
 
 # Plot speedup for each optimizer across model sizes
-for opt in ['muon', 'soape', 'nadamw']:
-    opt_data = eff_df[(eff_df['optimizer'] == opt) & (eff_df['D_opt'] == 8)].sort_values('expected_params')
+for opt in ["muon", "soape", "nadamw"]:
+    opt_data = eff_df[(eff_df["optimizer"] == opt) & (eff_df["D_opt"] == 8)].sort_values("expected_params")
     if len(opt_data) > 0:
-        ax.plot(opt_data['expected_params'], opt_data['speedup'], 
-                color=color_map[opt], 
-                label=correct_name[opt])
+        ax.plot(opt_data["expected_params"], opt_data["speedup"], color=color_map[opt], label=correct_name[opt])
 # Add horizontal line at speedup = 1.0 for reference
-ax.axhline(y=1.0, color='grey', linestyle=':', alpha=0.7, linewidth=1)
+ax.axhline(y=1.0, color="grey", linestyle=":", alpha=0.7, linewidth=1)
 ax.set_xticks(list(expected_params.values()))
 ax.set_xticklabels(list(expected_params.keys()))
 # Formatting
-ax.set_xlabel('Model Size', fontsize=20)
-ax.set_ylabel('Speedup', fontsize=20)
-ax.set_xscale('log')
-ax.set_title('Loss \& Speedup vs Model Size (8x Chinchilla)', fontsize=20)
-ax.legend(loc='best', fontsize=16, ncol=2)
+ax.set_xlabel("Model Size", fontsize=20)
+ax.set_ylabel("Speedup", fontsize=20)
+ax.set_xscale("log")
+ax.set_title(r"Loss \& Speedup vs Model Size (8x Chinchilla)", fontsize=20)
+ax.legend(loc="best", fontsize=16, ncol=2)
 ax.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.savefig(f"{FIGURES_DIR}/speedup_vs_model_size.pdf", bbox_inches="tight")
 plt.show()
-

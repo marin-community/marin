@@ -1,5 +1,6 @@
 # %%
-# This script launches optimizer sweep experiments by reading configuration from JSON files contain ingbaseline configurations and sweep grids
+# This script launches optimizer sweep experiments by reading configuration from JSON files
+# The json files contain baseline configurations and sweep grids
 # For each optimizer (e.g. AdamW, Muon, Sophia), model size, and target Chinchilla ratio,
 # this script:
 # 1. Loads the baseline config JSON containing default hyperparameters
@@ -16,6 +17,7 @@ def _iter_model_size_dirs(base: Path) -> list[Path]:
     if not base.exists():
         return []
     return sorted([p for p in base.iterdir() if p.is_dir()])
+
 
 OPT_SWEEP_DIR = Path("experiments/optimizer_sweep")
 
@@ -79,7 +81,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Launch optimizer sweep jobs from extracted JSONs")
     parser.add_argument("optimizer", type=str, help="Optimizer name, e.g., adamw, muon, sophia, etc.")
     parser.add_argument("chinchilla", type=float, help="Target chinchilla ratio (e.g., 1, 2, 4, 8, 16)")
-    parser.add_argument("model_size", type=str, default=None, help="Optional model size directory to filter (e.g., 130M, 300M, 1.2B)")
+    parser.add_argument(
+        "model_size", type=str, default=None, help="Optional model size directory to filter (e.g., 130M, 300M, 1.2B)"
+    )
     parser.add_argument("--dry-run", action="store_true", help="Only print intended launches without executing")
     parser.add_argument("--force-run", action="store_true", help="Pass force_run=True to template")
     parser.add_argument("--tpu-type", type=str, default="v5litepod-128", help="TPU type")
@@ -157,5 +161,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

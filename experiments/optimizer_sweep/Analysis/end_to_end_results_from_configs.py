@@ -16,8 +16,7 @@ currently processes the `muon` optimizer.
 
 import json
 import os
-import pickle
-from typing import Dict, List, Tuple, Any
+from typing import Any
 
 import tqdm
 
@@ -28,6 +27,7 @@ from marin.optimizer_sweep.utils_simp import (
     grab_best_run,
     grab_run,
 )
+
 RESULTS_DIR_DEFAULT = "experiments/optimizer_sweep/Analysis/Results"
 
 
@@ -38,9 +38,9 @@ def _stringify_key(key: Any) -> str:
     return str(key)
 
 
-def _make_json_friendly(result_dict: Dict[str, Any]) -> Dict[str, Any]:
+def _make_json_friendly(result_dict: dict[str, Any]) -> dict[str, Any]:
     """Convert result dict so keys are JSON-serializable and easy to read."""
-    json_ready: Dict[str, Any] = {}
+    json_ready: dict[str, Any] = {}
     for top_key in [
         "result",
         "name",
@@ -58,14 +58,16 @@ def _make_json_friendly(result_dict: Dict[str, Any]) -> Dict[str, Any]:
             json_ready[top_key] = value
     return json_ready
 
+
 def _ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
+
 
 def save_to_results_dir(
     optimizer: str,
     model_size: str,
     chinchilla_ratio: int,
-    result: Dict[str, Any],
+    result: dict[str, Any],
     results_dir: str = RESULTS_DIR_DEFAULT,
 ) -> str:
     """Save the given result dict to Results/{optimizer}/{model_size}/{chinchilla_ratio}/result.json.
@@ -78,15 +80,17 @@ def save_to_results_dir(
     with open(output_path, "w") as f:
         json.dump(_make_json_friendly(result), f, indent=2)
     return output_path
+
+
 def persist_result(
     optimizer: str,
     model_size: str,
     chinchilla_ratio: int,
     data_size: str,
-    result: Dict[str, Any],
+    result: dict[str, Any],
     *,
     results_dir: str = RESULTS_DIR_DEFAULT,
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     """Persist a single best-result payload:
     - Saves human-friendly JSON to Results/{optimizer}/{model_size}/{chinchilla_ratio}/result.json
     - Updates the wandb cache keyed by md5(optimizer, model_size, data_size, chinchilla_ratio)
@@ -105,14 +109,8 @@ def persist_result(
     return results_path, cache_key
 
 
-
-
-BASELINE_ROOT = os.path.join(
-    "experiments", "optimizer_sweep", "baseline_config"
-)
-SWEEP_ROOT = os.path.join(
-    "experiments", "optimizer_sweep", "sweep_grids"
-)
+BASELINE_ROOT = os.path.join("experiments", "optimizer_sweep", "baseline_config")
+SWEEP_ROOT = os.path.join("experiments", "optimizer_sweep", "sweep_grids")
 
 
 def _first_json_in_dir(path: str) -> str:
@@ -122,12 +120,12 @@ def _first_json_in_dir(path: str) -> str:
     raise FileNotFoundError(f"No JSON found in {path}")
 
 
-def _load_json(path: str) -> Dict:
+def _load_json(path: str) -> dict:
     with open(path, "r") as f:
         return json.load(f)
 
 
-def _maybe_get_run_id(config: Dict, tags: Tuple[str, str, str]):
+def _maybe_get_run_id(config: dict, tags: tuple[str, str, str]):
     try:
         run = grab_run(config, tags)
         return getattr(run, "id", None) if run is not None else None
@@ -136,13 +134,11 @@ def _maybe_get_run_id(config: Dict, tags: Tuple[str, str, str]):
 
 
 def _config_to_loss_and_id(
-    baseline_config: Dict, sweep_grids: Dict, target_data: int, tags: Tuple[str, str, str]
-) -> Tuple[int, Dict, Dict]:
-    target_steps, config_in_dict = create_configs(
-        baseline_config, sweep_grids, target_data=target_data
-    )
-    config_to_loss: Dict = {}
-    config_to_name: Dict = {}
+    baseline_config: dict, sweep_grids: dict, target_data: int, tags: tuple[str, str, str]
+) -> tuple[int, dict, dict]:
+    target_steps, config_in_dict = create_configs(baseline_config, sweep_grids, target_data=target_data)
+    config_to_loss: dict = {}
+    config_to_name: dict = {}
     num_left = 0
     for config in config_in_dict:
         exist, loss = check_baseline_run(config, tags, return_loss=True)
@@ -161,9 +157,7 @@ def _config_to_loss_and_id(
     return num_left, config_to_loss, config_to_name
 
 
-def _augment_result_json_with_ablations(
-    results_path: str, result_map: Dict, name_map: Dict
-) -> None:
+def _augment_result_json_with_ablations(results_path: str, result_map: dict, name_map: dict) -> None:
     baseline = None
     if "Baseline" in result_map:
         baseline = {
@@ -185,7 +179,7 @@ def _augment_result_json_with_ablations(
                 }
             )
 
-    existing: Dict = {}
+    existing: dict = {}
     if os.path.exists(results_path):
         try:
             with open(results_path, "r") as f:
@@ -204,7 +198,7 @@ def _augment_result_json_with_ablations(
 
 
 def main() -> None:
-    combined_results: Dict[str, Dict] = {}
+    combined_results: dict[str, dict] = {}
     optimizers = [d for d in os.listdir(BASELINE_ROOT) if os.path.isdir(os.path.join(BASELINE_ROOT, d))]
     with tqdm.tqdm(total=len(optimizers), desc="Optimizers") as pbar:
         for optimizer in optimizers:
@@ -212,10 +206,14 @@ def main() -> None:
             optimizer_dir = os.path.join(BASELINE_ROOT, optimizer)
             model_sizes = [d for d in os.listdir(optimizer_dir) if os.path.isdir(os.path.join(optimizer_dir, d))]
 
-            collected_for_opt: Dict = {}
+            collected_for_opt: dict = {}
 
             for model_dir in model_sizes:
-                chin_dirs = [d for d in os.listdir(os.path.join(optimizer_dir, model_dir)) if os.path.isdir(os.path.join(optimizer_dir, model_dir, d))]
+                chin_dirs = [
+                    d
+                    for d in os.listdir(os.path.join(optimizer_dir, model_dir))
+                    if os.path.isdir(os.path.join(optimizer_dir, model_dir, d))
+                ]
                 for chin_ratio_str in chin_dirs:
                     baseline_json_path = _first_json_in_dir(os.path.join(optimizer_dir, model_dir, chin_ratio_str))
                     baseline_payload = _load_json(baseline_json_path)
@@ -247,11 +245,11 @@ def main() -> None:
                         continue
 
                     # Evaluate ablations for each near-best config
-                    current_num_left = 10 ** 9
+                    current_num_left = 10**9
                     best_payload = {}
                     for candidate in approximate_best_config_list:
                         # Merge candidate with full baseline so best_config has every key baseline has
-                        candidate_full: Dict = dict(baseline_config)
+                        candidate_full: dict = dict(baseline_config)
                         if candidate is not None:
                             candidate_full.update(candidate)
                         num_left, cfg_to_loss, cfg_to_name = _config_to_loss_and_id(
@@ -277,17 +275,12 @@ def main() -> None:
                             data_size=data_size,
                             result=best_payload,
                         )
-                        _augment_result_json_with_ablations(
-                            results_path, best_payload["result"], best_payload["name"]
-                        )
+                        _augment_result_json_with_ablations(results_path, best_payload["result"], best_payload["name"])
                         collected_for_opt[(model_size, chin_ratio, optimizer_lower)] = best_payload
 
             combined_results[optimizer_lower] = collected_for_opt
             pbar.update(1)
 
 
-
 if __name__ == "__main__":
     main()
-
-

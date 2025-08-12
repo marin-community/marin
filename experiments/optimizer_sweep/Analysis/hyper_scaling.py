@@ -1,3 +1,43 @@
+"""Fit hyperparameter scaling rules and emit predicted baseline configs.
+
+This script reads canonical optimizer-sweep results from
+`experiments/optimizer_sweep/Analysis/Results`, fits a simple power-law
+parameterization for each scalar hyperparameter using the recorded best
+configs, and writes both human-readable fit summaries and machine-usable
+predicted configs.
+
+Outputs:
+- Per-optimizer markdown reports `hyperparameters_fit_{optimizer}.md` that
+  include the relative fit error on a held-out largest-data point and the
+  predicted values for a 1.2B model at {1, 2, 4, 8}x Chinchilla.
+- JSON configs at
+  `experiments/optimizer_sweep/Analysis/predicted_baseline_config/{optimizer}/{model_size}/{chinchilla}/config.json`
+  containing predicted baseline hyperparameters (produced here for `1.2b`).
+
+Scope:
+- Fits use model sizes `130m`, `300m`, `520m` and optimizers
+  `adamw`, `nadamw`, `muon`, `soape`. Predictions are emitted for `1.2b` at
+  Chinchilla ratios 1, 2, 4, and 8.
+
+Method:
+- For each hyperparameter key present in a run's `best_config`, we fit the
+  form
+      h(model_size, chinchilla) ≈ A * model_size**B * chinchilla**C + D
+  via non-linear least squares (`scipy.optimize.curve_fit`), where numeric
+  model-size proxies come from `marin.optimizer_sweep.utils_simp.expected_params`.
+  Non-scalar values and explicitly skipped keys are ignored.
+
+Inputs and assumptions:
+- Results are expected at
+  `experiments/optimizer_sweep/Analysis/Results/{optimizer}/{model_size}/{chinchilla}/result.json`
+  and must contain a `best_config` mapping of hyperparameter name → value.
+- Missing or malformed result files are skipped.
+- The base input directory can be changed via `RESULTS_DIR_DEFAULT`.
+
+Usage:
+    python experiments/optimizer_sweep/Analysis/hyper_scaling.py
+"""
+
 import os
 import json
 
@@ -10,7 +50,8 @@ RESULTS_DIR_DEFAULT = "experiments/optimizer_sweep/Analysis/Results"
 
 model_sizes = ["130m", "300m", "520m"]
 
-optimizers = ["adamw", "nadamw", "muon",  "soape"]
+optimizers = ["adamw", "nadamw", "muon", "soape"]
+
 
 def _load_results_payloads(results_dir: str = RESULTS_DIR_DEFAULT) -> dict:
     records = {}
@@ -47,7 +88,6 @@ def _load_results_payloads(results_dir: str = RESULTS_DIR_DEFAULT) -> dict:
 actual_list = _load_results_payloads(RESULTS_DIR_DEFAULT)
 
 
-
 predicted_configs = {}
 # optimal hyperparameters for AdamW
 for optimizer_name in optimizers:
@@ -62,42 +102,34 @@ for optimizer_name in optimizers:
         continue
     keys = list(hyperparameters_dict[(model_sizes[0], 1)].keys())
 
-    with open(f"hyperparameters_fit_{optimizer_name}.md", "w") as f:
-        for key in keys:
-            # fit a power law that is A * model_size^B * chinchilla^C + D
-            x = [(expected_params[model_size], chinchilla) for model_size in model_sizes for chinchilla in [1, 2, 4, 8]]
-            y = [
-                hyperparameters_dict[(model_size, chinchilla)][key]
-                for model_size in model_sizes
-                for chinchilla in [1, 2, 4, 8]
-            ]
-            # fit a power law and print error
-            if type(y[-1]) == float or type(y[-1]) == int:
-                if key == "muon_to_adam_lr":
-                    continue
-                baseline = np.mean(y[:-1])
-                popt, _ = curve_fit(
-                    lambda t, A, B, C, D: A * t[:, 0] ** B * t[:, 1] ** C + D,
-                    x[1:-1],
-                    y[1:-1],
-                    p0=[0.0, -0.5, -0.5, baseline],
-                    maxfev=200000,
+    for key in keys:
+        # fit a power law that is A * model_size^B * chinchilla^C + D
+        x = [(expected_params[model_size], chinchilla) for model_size in model_sizes for chinchilla in [1, 2, 4, 8]]
+        y = [
+            hyperparameters_dict[(model_size, chinchilla)][key]
+            for model_size in model_sizes
+            for chinchilla in [1, 2, 4, 8]
+        ]
+        # fit a power law and print error
+        if isinstance(y[-1], float | int):
+            baseline = np.mean(y[:-1])
+            popt, _ = curve_fit(
+                lambda t, A, B, C, D: A * t[:, 0] ** B * t[:, 1] ** C + D,
+                x[1:-1],
+                y[1:-1],
+                p0=[0.0, -0.5, -0.5, baseline],
+                maxfev=200000,
+            )
+            # print error on the last point
+            predicted_loss = popt[0] * x[-1][0] ** popt[1] * x[-1][1] ** popt[2] + popt[3]
+            error = np.sqrt(np.mean((predicted_loss - y[-1]) ** 2))
+            parameter = expected_params["1.2b"]
+            for chinchilla in [1, 2, 4, 8]:
+                if (optimizer_name, "1.2b", chinchilla) not in predicted_configs:
+                    predicted_configs[(optimizer_name, "1.2b", chinchilla)] = {}
+                predicted_configs[(optimizer_name, "1.2b", chinchilla)][key] = float(
+                    popt[0] * parameter ** popt[1] * chinchilla ** popt[2] + popt[3]
                 )
-                # print error on the last point
-                predicted_loss = popt[0] * x[-1][0] ** popt[1] * x[-1][1] ** popt[2] + popt[3]
-                error = np.sqrt(np.mean((predicted_loss - y[-1]) ** 2))
-                f.write(f"Relative error for {key}: {error / (y[-1] + 1e-6)}\n")
-                parameter = expected_params["1.2b"]
-                for chinchilla in [1, 2, 4, 8]:
-                    f.write(
-                        f"For 1.2B with {chinchilla} chinchilla, {key} = {popt[0] * parameter**popt[1] * chinchilla**popt[2] + popt[3]}\n"
-                    )
-                    if (optimizer_name, "1.2b", chinchilla) not in predicted_configs:
-                        predicted_configs[(optimizer_name, "1.2b", chinchilla)] = {}
-                    predicted_configs[(optimizer_name, "1.2b", chinchilla)][key] = float(
-                        popt[0] * parameter ** popt[1] * chinchilla ** popt[2] + popt[3]
-                    )
-    print(f"Predicted configs for {optimizer_name}: {predicted_configs}")
 
 OUTPUT_DIR = "experiments/optimizer_sweep/Analysis/predicted_baseline_config"
 os.makedirs(OUTPUT_DIR, exist_ok=True)

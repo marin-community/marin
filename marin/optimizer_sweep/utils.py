@@ -1,10 +1,8 @@
 import wandb
-from marin.optimizer_sweep.utils_simp import approximate, create_configs, check_baseline_run, grab_best_run, convert_run_to_config, bad_number
-import copy
 import dataclasses
 import logging
 from collections.abc import Sequence
-from marin.resources import ResourceConfig, TpuPodConfig
+from marin.resources import TpuPodConfig
 import ray
 from levanter.models.llama import LlamaConfig
 
@@ -19,6 +17,7 @@ username = "marin-community"
 project = "optimizer-scaling"
 thshold = 3e-3
 
+
 def config_to_train_config(
     config_in_dict,
     target_steps,
@@ -28,7 +27,7 @@ def config_to_train_config(
     train_configs = []
     for config, target_step in zip(config_in_dict, target_steps, strict=False):
         new_config = config.copy()
-        train_batch_size = new_config.pop('train_batch_size')
+        train_batch_size = new_config.pop("train_batch_size")
         optimizer_config = config_generator(**new_config)
         if isinstance(tpu_type, str):
             tpu_type = TpuPodConfig(versioned(tpu_type))
@@ -82,4 +81,3 @@ def make_sweep_steps(
 
         steps.append(step)
     return steps
-

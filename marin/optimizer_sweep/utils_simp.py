@@ -5,11 +5,14 @@ import wandb
 # Lazy-initialize the WandB API (avoid top-level side effects)
 _wandb_api = None
 
+
 def get_wandb_api():
     global _wandb_api
     if _wandb_api is None:
         _wandb_api = wandb.Api()
     return _wandb_api
+
+
 # Define your details
 username = "marin-community"
 project = "optimizer-scaling"

@@ -3,7 +3,8 @@
 Exports:
 - `color_map`: consistent color per optimizer key.
 - `correct_name`: readable names for optimizer keys.
-- `line_style`: dashed/solid style per optimizer. dashed optimizers are scalar-level and solid optimizers are matrix-level.
+- `line_style`: dashed/solid style per optimizer.
+- dashed optimizers are scalar-level and solid optimizers are matrix-level.
 """
 
 color_map = {

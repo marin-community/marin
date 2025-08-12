@@ -8,7 +8,7 @@ def calculate_param(config):
 
 
 def calculate_chinchilla(config):
-    # 1× Chinchilla rule of thumb = 20 tokens/parameter
+    # 1x Chinchilla rule of thumb = 20 tokens/parameter
     return calculate_param(config) * 20
 
 
@@ -72,4 +72,4 @@ if __name__ == "__main__":
     for tag, model_cfg in map_tag_to_model.items():
         params = calculate_param(model_cfg)
         chinchilla_tokens = calculate_chinchilla(model_cfg)
-        print(f"{tag}: ~{params/1e6:.2f}M params, 1× Chinchilla = ~{chinchilla_tokens/1e9:.1f}B tokens")
+        print(f"{tag}: ~{params/1e6:.2f}M params, 1x Chinchilla = ~{chinchilla_tokens/1e9:.1f}B tokens")
