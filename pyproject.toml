@@ -1,6 +1,7 @@
 [build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.7.19,<0.8.0"]
+build-backend = "uv_build"
+requires-python = ">=3.11"
 
 [project]
 name = "marin"
@@ -33,7 +34,7 @@ dependencies = [
     # We have levanter deps for now. @TODO :: Remove them
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1359",
-    "haliax>=1.4.dev348",
+    "haliax>=1.4.dev381",
     "sentencepiece",
     "lz4",
     "wandb<=0.19.9",
@@ -54,7 +55,7 @@ test = [
 lint = [
     "ruff>=0.5.7",
     "black>=24.8.0",
-    "pre-commit",
+    "pre-commit==4.2",
     "mypy>=1.4.1",
     "types-PyYAML",
     "types-requests",
@@ -72,12 +73,6 @@ docs = [
     "mkdocs-include-markdown-plugin>=7.1.5",
 ]
 
-gcp = [
-  "google-api-python-client>=2.175.0",  # ray GCP workaround
-  "cryptography>=45",
-  "google-cloud-storage",
-  "google-cloud-storage-transfer",
-]
 
 math = [
   "pylatexenc",
@@ -89,6 +84,8 @@ metrics = [
 ]
 
 
+
+
 transform_test_deps = [
     "trafilatura>=2.0",
     "readabilipy",
@@ -98,9 +95,17 @@ transform_test_deps = [
     "resiliparse",
 ]
 
+dev = [
+    {include-group="test"},
+    {include-group="lint"},
+    {include-group="docs"},
+#    {include-group="gcp"},
+    {include-group="math"},
+    {include-group="transform_test_deps"},
+    "marin[gcp]"
+]
 
 [tool.uv]
-default-groups = ["test", "lint", "docs", "gcp", "math", "transform_test_deps"]
 
 conflicts = [
     [
@@ -115,18 +120,73 @@ conflicts = [
         { extra = "crawl" },
         { group = "transform-test-deps" },
     ],
-
+    [
+        { extra = "tpu" },
+        { extra = "cuda12" },
+    ],
+    [
+        { extra = "cuda12" },
+        { extra = "cpu" },
+    ],
+    [
+        { extra = "tpu" },
+        { extra = "cpu" },
+    ]
 ]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu",  extra = "cpu" },
+  # CUDA12 index only when --extra cuda12 *and* NOT --extra cpu
+  { index = "pytorch-cu128", extra = "cuda12" },
+#   Default index for all other cases
+#  { index = "pytorch-default", marker = "extra != 'cuda12' and extra != 'cpu'" },
+]
+sentencepiece = { git = "https://github.com/google/sentencepiece/", subdirectory = "python" }
+
+
+resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+
+[[tool.uv.index]]
+name = "pytorch-default"
+url = "https://download.pytorch.org/whl/torch_stable.html"
+
 
 [project.optional-dependencies]
 
+
+gcp = [
+    "google-api-python-client>=2.175.0",  # ray GCP workaround
+    "cryptography>=45",
+    "google-cloud-storage",
+    "google-cloud-storage-transfer",
+    "google-cloud-compute",
+]
+
 cuda12 = [
-    "jax[cuda12]>=0.5.1",
-    "torch>=2.7.0",
+    "jax[cuda12]>=0.6.2",
+    "torch",
 ]
 
 tpu = [
-    "jax[tpu]>=0.5.1",
+    "jax[tpu]>=0.6.2",
+    "torch>=2.7.0",
+]
+
+cpu = [
+    "torch>=2.7.0",
+    "jax>=0.6.2",
 ]
 
 crawl = [
@@ -202,7 +262,6 @@ tokenize_train = [
 
 post_training = [
     "gcsfs",
-    "jax==0.5.2",
     "transformers",
     "flax==0.10.0",
     "sentencepiece>=0.1.99",
@@ -211,8 +270,7 @@ post_training = [
     "tyro==0.8.11",
     "tqdm",
     "wandb",
-    "einops==0.8.0",
-    "numpy<2.0.0",
+    "einops",
     "ringattention==0.1.2",
     "redis==4.3.4",
     "Flask==3.0.3",
@@ -233,13 +291,6 @@ eval = [
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
 
-
-[tool.setuptools.packages.find]
-where = ["."]
-exclude = ["cache", "infra"]
-
-[tool.setuptools.package-data]
-"marin" = ["py.typed"]
 
 [tool.black]
 line-length = 121
@@ -277,5 +328,6 @@ exclude = [
     "scripts/"
 ]
 
-[tool.uv.sources]
-resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
+
+[tool.uv_build]
+package-dir = "src"

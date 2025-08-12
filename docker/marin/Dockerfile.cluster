@@ -64,9 +64,12 @@ RUN conda install -c conda-forge ncurses -y
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH=$HOME/.cargo/bin:$PATH
 
-WORKDIR /tmp/
-COPY pyproject.toml /tmp/
-RUN uv pip install -e .[dev,tpu] --system --torch-backend=cpu
+WORKDIR /tmp/marin
+COPY pyproject.toml /tmp/marin
+RUN mkdir -p src/marin && touch src/marin/__init__.py && touch README.md && touch LICENSE
+RUN uv pip install -e .[dev,tpu,gcp] --system --torch-backend=cpu
+WORKDIR /opt/marin
+RUN rm -rf /tmp/marin
 
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
