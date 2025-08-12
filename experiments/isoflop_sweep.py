@@ -337,7 +337,7 @@ dclm_tokenized = dataclasses.replace(
 dclm_mix = lm_mixture_data_config(
     components={"dclm": dclm_tokenized},
     weights={"dclm": 1.0},
-    num_validation_sequences = {"dclm": 1024},
+    num_validation_sequences={"dclm": 1024},
 )
 
 
