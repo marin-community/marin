@@ -13,7 +13,7 @@ import matplotlib.colors as mcolors
 from convex_certificate_scaling import get_bounding_box
 
 plt.rcParams.update({
-    "font.family": "Palatino Linotype"
+    "font.family": "Palatino"
 })
 
 # Custom color scheme
@@ -984,10 +984,92 @@ def plot_token_scaling_simple(best_run_dict, fit_type="power_law"):
     plt.savefig('plots/token_scaling_simple.png', bbox_inches='tight')
     plt.close()
 
+
+def plot_benchmark_results():
+    from eval_200m_models import VANILLA_MODEL_SCALING, ENSEMBLE_MODEL_SCALING, get_base_name
+    import json 
+    with open('experiments/data_efficiency/200m_benchmark_results.json', 'r') as f:
+        benchmark_results = json.load(f)
+    for model in VANILLA_MODEL_SCALING + ENSEMBLE_MODEL_SCALING:
+        for seed in range(model.num_seeds):
+            base_name = get_base_name(model)
+            ensemble_results = benchmark_results[base_name][str(seed + 1)]
+            benchmark_results[base_name][str(seed + 1)]["avg_acc"] = np.mean([ensemble_results[task]["acc"] for task in ensemble_results])
+
+    plt.figure(figsize=(8, 5), dpi=300)
+    model_x_values = [model_params[model.model_size] for model in VANILLA_MODEL_SCALING]
+    model_y_values = [1.0 - benchmark_results[get_base_name(model)]["1"]["avg_acc"] for model in VANILLA_MODEL_SCALING]
+    plt.plot(model_x_values, model_y_values, color=PURPLE, label="Model Scaling", marker='o')
+    for model in ENSEMBLE_MODEL_SCALING:
+        model_x_values = [model_params[model.model_size] * (seed + 1) for seed in range(model.num_seeds)]
+        model_y_values = [1.0 - benchmark_results[get_base_name(model)][str(seed + 1)]["avg_acc"] for seed in range(model.num_seeds)]
+        plt.plot(model_x_values, model_y_values, label=f"Ensemble {value_pretty_name_dict[model.model_size]} Scaling", marker='o')
+
+    plt.legend()
+    plt.grid(True, which='major', linestyle='--', alpha=0.7)
+    plt.xscale('log')
+    plt.xlabel('Total model parameters (billions)')
+    plt.ylabel('Average Error')
+    plt.title('Scaling Models and Ensembles for 200M Tokens (Downstream Benchmarks)')
+    plt.savefig('plots/benchmark_results.png', bbox_inches='tight')
+    plt.close()
+
+
+def plot_distillation(losses_for_200M):
+    plt.figure(figsize=(8, 5), dpi=300)
+    max_x = max([max(x_data * model_params[model_size]) for model_size, (x_data, _, _) in losses_for_200M.items()])
+
+    # TODO: standardize this
+    model_x_values = [0.15, 0.3, 0.6, 1.4]
+    model_y_values = [3.750, 3.587, 3.510, 3.462]
+    plt.scatter(model_x_values, model_y_values, color=PURPLE, s=50)
+
+    # fit a power law to the model scaling
+    base_power_law = PowerScalingLaw()
+    base_power_law.fit(model_x_values, model_y_values, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    model_x_fit = np.linspace(min(model_x_values), max_x * 25, 5000)
+    model_y_fit = base_power_law.evaluate(model_x_fit)
+    plt.plot(model_x_fit, model_y_fit, '--', color=PURPLE, label=f"Model scaling: (Fit: {base_power_law})")
+
+    # add a shaded gray region for any y value above popt[2]
+    plt.fill_between(model_x_fit, 3.1, base_power_law.asymptote(), color=PURPLE, alpha=0.2, label="Impossible with standard scaling, infinite compute")
+
+    for model_size, (x_data, y_data, power_law) in losses_for_200M.items():
+        if model_size == '300m4k':
+            x_fit = np.linspace(min(x_data * model_params[model_size]), max_x * 25, 5000)
+            y_fit = power_law.evaluate(x_fit / model_params[model_size])
+            plt.scatter(x_data * model_params[model_size], y_data, color='tab:orange')
+            plt.plot(x_fit, y_fit, '--', color='tab:orange', label=f'{value_pretty_name_dict[model_size]} ensembles (Fit: {power_law})')
+
+            # Best self-distill run: 300m4k-209Mx16-dclm+sd0805^0.75-cos-lr0.0030-wd0.10-bs64 (3.43243)
+            plt.scatter(0.3, 3.43243, color='tab:red', edgecolors='black', linewidths=0.8,
+                        marker='*', s=120, zorder=6, label=f"Self-Distill: 3.43")
+            plt.annotate('', xytext=(0.3 * x_data[0], y_data[0]), xy=(0.3, 3.43243),
+                        arrowprops=dict(arrowstyle='->', color='black', linestyle='--', alpha=0.5,
+                                        connectionstyle='arc3,rad=0.25'), zorder=0)
+
+
+            # Best 8-mixture distill run: 300m4k-209Mx16-dclm+ens8x0730^0.95-cos-lr0.0030-wd0.01-bs64 (3.3612)
+            plt.scatter(0.3, 3.3612, color=LIGHT_BLUE, edgecolors='black', linewidths=0.8,
+                        marker='*', s=120, zorder=6, label=f"8-Ensemble Distill: 3.36")
+            plt.annotate('', xytext=(0.3 * x_data[-1], y_data[-1]), xy=(0.3, 3.3612),
+                        arrowprops=dict(arrowstyle='->', color='black', linestyle='--', alpha=0.5,
+                                        connectionstyle='arc3,rad=-0.25'), zorder=0)
+
+            plt.axvline(x=0.3, color='grey', linestyle='--', alpha=0.3, zorder=0)
+    plt.legend()
+    plt.xscale('log')
+    plt.xlabel('Total model parameters (billions)')
+    plt.ylabel('DCLM Loss')
+    plt.title('Distilling a 300M model (200M seed tokens)')
+    plt.savefig('plots/distillation.png', bbox_inches='tight')
+    plt.close()
+
 def plot_200M_sample(losses_for_200M):
     plt.figure(figsize=(8, 5), dpi=300)
     max_x = max([max(x_data * model_params[model_size]) for model_size, (x_data, _, _) in losses_for_200M.items()])
 
+    # TODO: standardize this
     model_x_values = [0.15, 0.3, 0.6, 1.4]
     model_y_values = [3.750, 3.587, 3.510, 3.462]
     plt.scatter(model_x_values, model_y_values, color=PURPLE, s=50)
@@ -1045,6 +1127,8 @@ if __name__ == "__main__":
         "varying-hparams-experiment": ("none", "stanford-mercury/suhas-eval-data-efficiency"),
         "infinite-model-scaling": ("none", "stanford-mercury/suhas-data-efficiency"),
         "seed-science": ("seed-science-7-9", "stanford-mercury/suhas-eval-data-efficiency"),
+        "benchmark-results": ("none", "none"),
+        "distillation": ("none", "stanford-mercury/suhas-eval-data-efficiency"),
     }[mode]
 
     if args.build_cache:
@@ -1057,7 +1141,8 @@ if __name__ == "__main__":
                 run_list.append(run_dict)
         pickle.dump(run_list, open(f"cache/{mode}_run_list.pkl", "wb"))
     else:
-        run_list = pickle.load(open(f"cache/{mode}_run_list.pkl", "rb"))
+        if mode != "benchmark-results":
+            run_list = pickle.load(open(f"cache/{mode}_run_list.pkl", "rb"))
 
     if mode == "varying-hparams-experiment":
         unique_models = sorted(list(set([run["model_name"] for run in run_list])), key=lambda x: model_params[x])
@@ -1147,3 +1232,24 @@ if __name__ == "__main__":
         both_seed_losses = [run["final_dclm_loss"] for run in run_list if "both" in run["seed_types"]]
 
         plot_seed_science(train_seed_losses, data_seed_losses, both_seed_losses)
+
+    elif mode == "benchmark-results":
+        plot_benchmark_results()
+
+    elif mode == "distillation":
+        unique_models = sorted(list(set([run["model_name"] for run in run_list])), key=lambda x: model_params[x])
+        unique_base_tokens = sorted(list(set([run["base_tokens"] for run in run_list])))
+
+        best_ensembles = {}
+
+        for model_size in unique_models:
+            best_ensembles[model_size] = {}
+            for base_tokens in unique_base_tokens:
+                ret = plot_ensemble_scaling(model_size, base_tokens)
+                if ret is not None:
+                    _, x_data, y_data, power_law = ret
+                    print(power_law.asymptote())
+                    best_ensembles[model_size][base_tokens] = (x_data, y_data, power_law)
+        
+        for base_tokens in unique_base_tokens[:1]:
+            plot_distillation({model_size: best_ensembles[model_size][base_tokens] for model_size in unique_models})
