@@ -10,22 +10,22 @@ import math
 from dataclasses import dataclass, replace
 
 from levanter.data.text import LMMixtureDatasetConfig
-from levanter.models.llama import LlamaConfig, HFCompatConfig
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from levanter.models.qwen import Qwen3Config
 from levanter.optim.cautious import CautiousConfig
-from levanter.optim.config import AdamConfig, OptimizerConfig
+from levanter.optim.config import OptimizerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 
 from experiments.defaults import default_train
 from experiments.llama import compute_num_parameters
 from experiments.metrics.wandb_related import get_vocab_size_for_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
+from experiments.data_efficiency.data import dclm_tokenized
 from marin.processing.tokenize import lm_mixture_data_config
 from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.resources import TpuPodConfig
 
-from data import dclm_tokenized
-
-DEFAULT_BUDGETS = [1e18, 3e18, 6e18]
+DEFAULT_BUDGETS = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
 MLP_RATIO = 4
 
 # TPU v5p hardware constants for memory estimation
@@ -72,7 +72,7 @@ def estimate_bytes(
 
 
 def pick_v5p_type(
-    config: HFCompatConfig,
+    config: Qwen3Config,
     hidden: int,
     layers: int,
     batch: int,
@@ -106,7 +106,7 @@ class IsoFlopSweepConfig:
     tokenizer: str = "stanford-crfm/marin-tokenizer"
     budgets: list[float] = dataclasses.field(default_factory=lambda: DEFAULT_BUDGETS)
     seq_len: int = 4096
-    batch_size: int = 64
+    steps_per_run: int = 2**16
     flop_tolerance: float = 0.01
     base_hidden_layer_ratio: int = 64
     hidden_head_ratio: int = 128
@@ -182,9 +182,9 @@ def candidate_configs(cfg: IsoFlopSweepConfig, budget: float):
     vocab_size = get_vocab_size_for_tokenizer(cfg.tokenizer)
 
     if budget > 9e18:
-        step_size = 512
-    else:
         step_size = 256
+    else:
+        step_size = 128
 
     for hidden_size in range(2**cfg.min_hidden_pow, (2**cfg.max_hidden_pow) + 1, step_size):
         hs_pow = math.log2(hidden_size)
@@ -193,10 +193,27 @@ def candidate_configs(cfg: IsoFlopSweepConfig, budget: float):
         n_heads = max(1, hidden_size // cfg.hidden_head_ratio)
         n_kv_heads = n_heads
 
-        batch_size = cfg.batch_size
+        batch_exact = budget / compute_total_flops(
+            1,
+            num_layers,
+            hidden_size,
+            intermediate_dim,
+            n_kv_heads,
+            n_heads,
+            cfg.steps_per_run,
+            cfg.seq_len,
+            vocab_size,
+        )
+
+        batch_size = round_to_power_of_two(batch_exact)
         lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
-        assert lr < 0.01, f"lr is too high: {lr}"
-        # b2 = 0.98 ** (batch_size / 128)  # https://arxiv.org/pdf/2507.07101
+        while lr > 0.01:
+            batch_size //= 2
+            lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
+        b2 = 0.98 ** (batch_size / 128)  # https://arxiv.org/pdf/2507.07101
+
+        if batch_size < 8:
+            continue
 
         steps_exact = budget / compute_total_flops(
             batch_size,
@@ -226,7 +243,7 @@ def candidate_configs(cfg: IsoFlopSweepConfig, budget: float):
         if abs(achieved_flops - budget) / budget > cfg.flop_tolerance:
             continue
 
-        yield (hidden_size, intermediate_dim, num_layers, n_heads, n_kv_heads, batch_size, train_steps, lr)
+        yield (hidden_size, intermediate_dim, num_layers, n_heads, n_kv_heads, batch_size, train_steps, lr, b2)
 
 
 def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> list[ExecutorStep]:
@@ -245,15 +262,16 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
             batch_size,
             train_steps,
             lr,
-            # b2,
+            b2,
         ) in candidate_configs(config, budget):
-            model_cfg = LlamaConfig(
+            model_cfg = Qwen3Config(
                 seq_len=config.seq_len,
                 hidden_dim=hidden_size,
                 intermediate_dim=intermediate_dim,
                 num_heads=n_heads,
                 num_kv_heads=n_kv_heads,
                 num_layers=num_layers,
+                rope=Llama3RotaryEmbeddingsConfig(),
             )
             tpu_type = pick_v5p_type(
                 config=model_cfg,
@@ -263,7 +281,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
                 seq_len=config.seq_len,
                 vocab=vocab_size,
             )
-            optimizer_cfg = replace(config.base_optimizer_config, learning_rate=lr)
+            optimizer_cfg = replace(config.base_optimizer_config, learning_rate=lr, beta2=b2)
             train_cfg = replace(
                 config.base_train_config,
                 train_batch_size=batch_size,
@@ -280,7 +298,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
                 train_config=train_cfg,
                 eval_harness_tasks=[],
                 tags=(
-                    "suhas-dclm-chinchilla",
+                    "dclm-default-sweep",
                     f"FLOPs={budget:.1e}",
                     f"d={hidden_size}",
                     f"L={num_layers}",
@@ -294,6 +312,13 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
     return steps
 
 
+dclm_mix = lm_mixture_data_config(
+    components={"dclm": dclm_tokenized},
+    weights={"dclm": 1.0},
+    num_validation_sequences={"dclm": 1024},
+)
+
+
 def generate_isoflop_sweep(
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     experiment_name: str,
@@ -305,34 +330,6 @@ def generate_isoflop_sweep(
     return steps
 
 
-dclm_mix = lm_mixture_data_config(
-    components={"dclm": dclm_tokenized},
-    weights={"dclm": 1.0},
-    num_validation_sequences={"dclm": 1024},
-)
-
-
 if __name__ == "__main__":
-    steps = generate_isoflop_sweep(
-        dclm_mix,
-        experiment_name="dclm-llama-adamw",
-        base_optimizer_config=AdamConfig(
-            learning_rate=1.0,
-            weight_decay=0.1,
-            lr_schedule="cosine",
-            decay=None,
-            min_lr_ratio=0.0,
-        ),
-        base_train_config=SimpleTrainConfig(
-            resources=TpuPodConfig(tpu_type="v5p-8"),
-            train_batch_size=1,
-            num_train_steps=50_000,
-            learning_rate=1.0,  # Placeholder
-            weight_decay=0.1,
-            min_lr_ratio=0.0,
-            lr_schedule="cosine",
-            decay=None,
-        ),
-    )
-
+    steps = generate_isoflop_sweep(dclm_mix, experiment_name="dclm-default")
     executor_main(steps=steps)

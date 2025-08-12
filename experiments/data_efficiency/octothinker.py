@@ -36,7 +36,7 @@ train_steps = [
     for lr in [3e-5]
     for epochs in [4]
     for batch_size in [64]
-    for seed in [0, 1, 2, 3, 4]
+    for seed in [0, 1, 2, 3, 4, 5, 6, 7]
 ]
 
 if __name__ == "__main__":
