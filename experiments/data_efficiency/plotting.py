@@ -54,6 +54,9 @@ token_count_to_steps = {
 
 
 def parse_run(run):
+    if key == "dclm-default-sweep":
+        return parse_chinchilla_run(run)
+
     if key != "none" and key not in run.tags:
         print(f"\033[91mSkipping run {run.id} because it does not have the key {key}\033[0m")
         return None
@@ -142,6 +145,67 @@ def parse_run(run):
     return run_dict
 
 
+def parse_chinchilla_run(run):
+    if key != "none" and key not in run.tags:
+        print(f"\033[91mSkipping run {run.id} because it does not have the key {key}\033[0m")
+        return None
+
+    if "ignore" in run.tags:
+        print(f"\033[91mSkipping run {run.id} because it is ignored\033[0m")
+        return None
+
+    if run.state != "finished":
+        print(f"\033[91mSkipping run {run.id} because it is not finished\033[0m")
+        return None
+
+    run_dict = {}
+    run_id = run.id
+    run_dict["run_id"] = run_id
+    run_json_config = json.loads(run.json_config)
+    run_summary_dict = run._attrs["summaryMetrics"]
+
+    run_dict["parameter_count"] = run_summary_dict["parameter_count"]
+    run_dict["token_count"] = run_summary_dict["throughput/total_tokens"]
+    run_dict["data_name"] = "dclm"
+
+    flop_str = run_id.split("-")[1]
+    run_dict["flops"] = int(flop_str.split("e+")[0]) * (10 ** int(flop_str.split("e+")[1]))
+
+    run_dict["batch_size"] = run_json_config["trainer"]["value"]["train_batch_size"]
+
+    run_dict["num_layers"] = run_json_config["model"]["value"]["num_layers"]
+    run_dict["intermediate_dim"] = run_json_config["model"]["value"]["intermediate_dim"]
+    run_dict["hidden_dim"] = run_json_config["model"]["value"]["hidden_dim"]
+    run_dict["num_heads"] = run_json_config["model"]["value"]["num_heads"]
+    run_dict["num_kv_heads"] = run_json_config["model"]["value"]["num_kv_heads"]
+    run_dict["seq_len"] = run_json_config["model"]["value"]["seq_len"]
+    run_dict["vocab_size"] = 128_256
+
+    # run_dict["flops_per_token"] = lm_flops_per_token(
+    #     run_dict["hidden_dim"],
+    #     run_dict["intermediate_dim"],
+    #     run_dict["num_layers"],
+    #     run_dict["num_kv_heads"],
+    #     run_dict["num_heads"],
+    #     run_dict["seq_len"],
+    #     run_dict["vocab_size"],
+    #     glu=True,
+    # )
+
+    run_history_loss_keys = [f"eval/{run_dict['data_name']}/loss"]
+
+    history_loss = run.history(keys=run_history_loss_keys)
+
+    if f"eval/{run_dict['data_name']}/loss" not in history_loss.columns:
+        print(f"\033[91mSkipping run {run_id} because it does not have the loss history\033[0m")
+        return None
+
+    run_dict["loss_history"] = history_loss
+    run_dict[f"final_{run_dict['data_name']}_loss"] = history_loss[f"eval/{run_dict['data_name']}/loss"].iloc[-1]
+
+    return run_dict
+
+
 class ScalingLaw:
     def __init__(self):
         self.params = None
@@ -186,6 +250,25 @@ class PowerScalingLaw(ScalingLaw):
 
     def __str__(self):
         return f"{self.params[0]:.2f}/x^{self.params[1]:.2f} + {self.params[2]:.2f}"
+
+    def asymptote(self):
+        return self.params[-1]
+
+
+class ChinchillaScalingLaw(ScalingLaw):
+    def __init__(self):
+        super().__init__()
+
+    def func(self, x, A, alpha, B, beta, E):
+        n, d = x
+        return A / (n**alpha) + B / (d**beta) + E
+
+    def __str__(self):
+        return (
+            f"{self.params[0]:.2f}/n^{self.params[1]:.2f} + "
+            f"{self.params[2]:.2f}/d^{self.params[3]:.2f} + "
+            f"{self.params[4]:.2f}"
+        )
 
     def asymptote(self):
         return self.params[-1]
@@ -1224,6 +1307,114 @@ def plot_200M_sample(losses_for_200M):
     plt.close()
 
 
+def plot_batch_size_ablation(run_list):
+    run_list = sorted(run_list, key=lambda x: x["batch_size"])
+    batch_sizes = sorted(list(set([run["batch_size"] for run in run_list])))
+    losses = [run["final_dclm_loss"] for run in run_list]
+    plt.figure(figsize=(4, 4), dpi=300)
+    plt.plot(batch_sizes, losses, marker="o", color=LIGHT_BLUE)
+    plt.xlabel("Batch size")
+    plt.ylabel("Loss")
+    plt.xscale("log")
+    plt.xticks(batch_sizes, [f"{x}" for x in batch_sizes])
+    plt.xticks([], [], minor=True)
+    plt.tight_layout()
+    plt.savefig("plots/ablation_batch_size.png", bbox_inches="tight")
+    plt.close()
+
+
+def plot_epoch_overfitting_ablation(run_list):
+    run_list = sorted(run_list, key=lambda x: x["epochs"])
+    epochs = [run["epochs"] for run in run_list]
+    losses = [run["final_dclm_loss"] for run in run_list]
+    plt.figure(figsize=(4, 4), dpi=300)
+    plt.plot(epochs, losses, marker="o", color=LIGHT_BLUE)
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.xscale("log")
+    plt.xticks(epochs, [f"{x}" for x in epochs])
+    plt.xticks([], [], minor=True)
+    plt.tight_layout()
+    plt.savefig("plots/ablation_epoch_overfitting.png", bbox_inches="tight")
+    plt.close()
+
+
+def plot_weight_decay_ablation(run_list):
+    # run_list_300m4k_one_pass = sorted(
+    #     [run for run in run_list if run["model_name"] == "300m4k" and run["epochs"] == 1],
+    #     key=lambda x: x["weight_decay"],
+    # )
+    run_list_300m4k = sorted(
+        [run for run in run_list if run["model_name"] == "300m4k" and run["epochs"] > 1], key=lambda x: x["weight_decay"]
+    )
+    run_list_1_4b4k = sorted(
+        [run for run in run_list if run["model_name"] == "1_4b4k" and run["epochs"] > 1], key=lambda x: x["weight_decay"]
+    )
+
+    # wd_300m4k_one_pass = [run["weight_decay"] for run in run_list_300m4k_one_pass]
+    wd_300m4k = [run["weight_decay"] for run in run_list_300m4k]
+    wd_1_4b4k = [run["weight_decay"] for run in run_list_1_4b4k]
+
+    # losses_300m4k_one_pass = [run["final_dclm_loss"] for run in run_list_300m4k_one_pass]
+    losses_300m4k = [run["final_dclm_loss"] for run in run_list_300m4k]
+    losses_1_4b4k = [run["final_dclm_loss"] for run in run_list_1_4b4k]
+
+    plt.figure(figsize=(4, 4), dpi=300)
+
+    # plt.plot(wd_300m4k_one_pass, losses_300m4k_one_pass, marker="o",
+    #  color=LIGHT_BLUE, label="300M parameters (one pass)")
+    plt.plot(wd_300m4k, losses_300m4k, marker="o", color=LIGHT_BLUE, label="300M parameters")
+    plt.plot(wd_1_4b4k, losses_1_4b4k, marker="o", color=PURPLE, label="1.4B parameters")
+    plt.xlabel("Weight decay")
+    plt.ylabel("Loss")
+    plt.xscale("log")
+
+    plt.xticks(wd_300m4k, [f"{x}" for x in wd_300m4k])
+    plt.xticks([], [], minor=True)
+
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("plots/ablation_weight_decay.png", bbox_inches="tight")
+    plt.close()
+
+
+def plot_chinchilla_scaling_law(run_list):
+    valid_flops = [3e18, 6e18, 1e19, 3e19]
+    run_list = [run for run in run_list if run["flops"] in valid_flops]
+
+    scaling_law = ChinchillaScalingLaw()
+    parameter_counts = np.array([run["parameter_count"] / 10**9 for run in run_list])
+    token_counts = np.array([run["token_count"] / 10**9 for run in run_list])
+    losses = np.array([run["final_dclm_loss"] for run in run_list])
+    scaling_law.fit((parameter_counts, token_counts), losses, p0=[1, 1, 1, 1, 1], bounds=(0, np.inf))
+    print(scaling_law)
+    print("Infinite model size, 200M tokens:", scaling_law.evaluate((1000000000000, 0.2)))
+    print("Infinite model size, 400M tokens:", scaling_law.evaluate((1000000000000, 0.4)))
+    print("Infinite model size, 800M tokens:", scaling_law.evaluate((1000000000000, 0.8)))
+    print("Infinite model size, 1.6B tokens:", scaling_law.evaluate((1000000000000, 1.6)))
+
+    plt.figure(figsize=(7, 7), dpi=300)
+
+    for flops in valid_flops:
+        flop_runs = sorted([run for run in run_list if run["flops"] == flops], key=lambda x: x["token_count"])
+        flop_token_counts = np.array([run["token_count"] / 10**9 for run in flop_runs])
+        flop_parameter_counts = np.array([run["parameter_count"] / 10**9 for run in flop_runs])
+        flop_losses = np.array([run["final_dclm_loss"] for run in flop_runs])
+        plt.scatter(flop_token_counts, flop_losses, label=f"FLOPS: {flops}")
+
+        projected_losses = scaling_law.evaluate((flop_parameter_counts, flop_token_counts))
+        plt.plot(flop_token_counts, projected_losses, linestyle="--")
+
+    plt.plot([], [], label=f"Chinchilla: {scaling_law}", color="black", linestyle="--")
+    plt.legend()
+    plt.xlabel("Tokens (B)")
+    plt.ylabel("Loss")
+    plt.xscale("log")
+    plt.tight_layout()
+    plt.savefig("plots/chinchilla_scaling_law.png")
+    plt.close()
+
+
 # Main execution
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -1239,6 +1430,10 @@ if __name__ == "__main__":
         "seed-science": ("seed-science-8-7", "stanford-mercury/suhas-eval-data-efficiency"),
         "benchmark-results": ("none", "none"),
         "distillation": ("none", "stanford-mercury/suhas-eval-data-efficiency"),
+        "standard-batch-size": ("batch-size-test-8-4", "stanford-mercury/suhas-data-efficiency"),
+        "standard-epoch-overfitting": ("epoch-overfitting-8-4", "stanford-mercury/suhas-data-efficiency"),
+        "standard-weight-decay": ("weight-decay-8-4", "stanford-mercury/suhas-data-efficiency"),
+        "dclm-chinchilla": ("dclm-default-sweep", "stanford-mercury/marin"),
     }[mode]
 
     if args.build_cache:
@@ -1382,3 +1577,15 @@ if __name__ == "__main__":
 
         for base_tokens in unique_base_tokens[:1]:
             plot_distillation({model_size: best_ensembles[model_size][base_tokens] for model_size in unique_models})
+
+    elif mode == "standard-batch-size":
+        plot_batch_size_ablation(run_list)
+
+    elif mode == "standard-epoch-overfitting":
+        plot_epoch_overfitting_ablation(run_list)
+
+    elif mode == "standard-weight-decay":
+        plot_weight_decay_ablation(run_list)
+
+    elif mode == "dclm-chinchilla":
+        plot_chinchilla_scaling_law(run_list)
