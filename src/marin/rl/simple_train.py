@@ -13,7 +13,6 @@ import levanter
 from haliax import NamedArray
 from haliax.jax_utils import maybe_rng_split
 from levanter.compat.hf_checkpoints import HFCompatConfig, load_tokenizer
-from levanter.layers import AttentionMask
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample
 from levanter.models.loss import next_token_loss
@@ -97,7 +96,12 @@ class RlExample(eqx.Module):
 
 
 def create_dataset_from_environment(
-    n_examples, prng_key, max_input_length, train_bsize, tokenizer, **kwargs,
+    n_examples,
+    prng_key,
+    max_input_length,
+    train_bsize,
+    tokenizer,
+    **kwargs,
 ):
     # This is a dummy implementation that generates random data.
     # Replace this with your actual data loading logic.
@@ -197,7 +201,7 @@ def main(config: TrainRlConfig):
         token_loss = next_token_loss(
             "position", Vocab, logits, example.tokens, loss_mask=example.loss_mask, reduction=None
         )
-        log_ratio = hax.exp((-token_loss)) #- jax.lax.stop_gradient(-token_loss)))
+        log_ratio = hax.exp(-token_loss)  # - jax.lax.stop_gradient(-token_loss)))
         weighted_log_ratio = log_ratio * batch.loss_weights
         reinforce_loss = hax.mean(hax.negative(weighted_log_ratio), where=batch.loss_mask)
         ref_log_ratio = batch.reference_logprobs + token_loss
@@ -236,11 +240,15 @@ def main(config: TrainRlConfig):
             )
             reference_model = hax.named_jit(trainer.mp.cast_to_param, trainer.parameter_axis_mapping)(reference_model)
         elif config.initialize_from_scratch:
+
             def init(key):
                 return trainer.mp.cast_to_param(config.model.build(Vocab, key=key))
+
             reference_model = hax.named_jit(init, trainer.parameter_axis_mapping)(model_key)
         else:
-            raise ValueError("Must specify initialize_from_checkpoint_path or initialize_from_hf or initialize_from_scratch")
+            raise ValueError(
+                "Must specify initialize_from_checkpoint_path or initialize_from_hf or initialize_from_scratch"
+            )
 
         # create a copy of reference model
         init_model = reference_model  # full precision
@@ -250,7 +258,7 @@ def main(config: TrainRlConfig):
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.model)})
 
         # TODO: sampler
-        sampler = None
+        # sampler = None
 
         def get_logprobs(model, batch: RlExample, key=None):
             example = batch.to_lm_example()

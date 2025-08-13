@@ -23,9 +23,11 @@ __all__ = [
 # Rollouts & Turns
 # ---------------------------------------------------------------------------
 
+
 @dataclass(slots=True)
 class InferenceMetadata:
     """Metadata about the inference of a turn."""
+
     model_version: str
     sampling_params: dict[str, Any]
     inference_time: float
