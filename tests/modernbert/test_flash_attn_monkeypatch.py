@@ -5,9 +5,9 @@ import types
 
 import pytest
 import ray
-import torch
 
 try:
+    import torch
     import torch_xla.core.xla_model as xm
 except ImportError:
     pytest.skip("torch_xla is not installed", allow_module_level=True)
