@@ -70,8 +70,6 @@ def run_envs_to_parquet(
             actors.append(actor)
             seed += 1
 
-    print("Hi", len(actors))
-
     # Optionally keep the process alive for a while to collect data
     if max_runtime_s is not None:
         try:
