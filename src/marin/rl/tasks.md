@@ -7,23 +7,37 @@
 
 - [x] understand charlie's code
 - [ ] do we want to do disaggegrated inference?
+- [ ] unify naming: prefer `datatypes.py` and remove/alias `types.py`
+- [ ] fix minor typing nits (e.g., `Turn.reward: float | None | None` -> `float | None`)
+- [ ] README in `marin.rl/` describing the new async push-based design and how it maps to `post_training`
 
 ## Transfer
 - [x] Implement weight transfer coordinator
 - [x] make benchmark_weight_transfer to use new coordinator
 - [ ] Multiple servers (one per training node)
+- [ ] Trainer publishes weights every N steps using `process_weight_transfers(...)`
+- [ ] Env-side receiver pulls weights via `receive_weight_transfers(...)` and hot-swaps sampler params
+- [ ] Add retry/backoff + metrics for transfer failures/timeouts
 
 ## Coordination
-- [ ] parameterize and initialize environments
-- [ ] gather and log rollouts
-- [ ] central coordinator that holds weight server address, does logging, and spins up environments
+- [ ] parameterize and initialize environments (via `AbstractEnvConfig`)
+- [ ] central runner that:
+  - [ ] starts Ray, weight transfer server, and a named `WeightTransferCoordinator`
+  - [ ] instantiates env actors per `MarinRlConfig.envs` with varying seeds
+  - [ ] wires a `RolloutSink` to Parquet (see Parquet section) and/or ReplayBuffer
+  - [ ] exposes health/metrics endpoint and graceful shutdown
+- [ ] gather and log rollouts (counts, eps, per-env throughput)
+- [ ] allow multiple coordinators (one per training node) and envs selecting nearest coordinator
 
 
 
 ## ReplayBuffer
 
 - [ ] Make ReplayBuffer skeleton
--
+  - [ ] Ray actor: concurrent append; sampling by group for GRPO; capacity/eviction
+  - [ ] Support persistence: optional Parquet append on a background thread
+  - [ ] API: `add(groups: list[RolloutGroup])`, `sample(num_groups: int, strategy="by_group")`
+  - [ ] Metrics: occupancy, enqueue/dequeue rate, drop count
 
 
 
@@ -34,6 +48,13 @@
 - [ ] verify objective function works
 - [x] optimizer
 - [x] aux losses (kl) and logging
+- [ ] integrate real data path (replace dummy dataset)
+  - Option A (fastest): use `legacy_adapter.NewStyleEnvWrapper` + `post_training.rl_dataset.create_dataset_from_environment`
+  - Option B (clean): port `post_training.rl_dataset` into `marin.rl` and consume `RolloutGroup`
+- [ ] implement sampler (prefill/generate) or reuse `post_training.inference.build_sampler`
+- [ ] wire `reference_logprobs` computation path (current `get_logprobs`)
+- [ ] periodic evaluation on held-out prompts (see Evaluation)
+- [ ] scheduler hooks to `process_weight_transfers(...)`
 
 
 ## Metrics
@@ -58,7 +79,17 @@
 - [ ] **train/format_rewards**
 - [ ] **train/correct_rewards**
 - [ ] **train/output_length**
+- [ ] weight transfer metrics: bytes/transfer, time_elapsed, transfers/step
+- [ ] env metrics: per-env eps, errors, formatting rate
 
+
+
+## Environments
+- [x] hello world
+- [x] chat echo (OpenAI-compatible)
+- [x] math env (via OAI, correctness by `post_training` utils)
+- [ ] port additional `post_training.environments` as needed (swe-bench, olympiad, etc.) to async API
+- [ ] add option to emit to Parquet sink directly
 
 
 ## Sketches
@@ -67,7 +98,7 @@
 ```python
 import haliax.haxtyping as ht
 import jaxtyping as jt
-from marin.rl.types import Rollout
+from marin.rl.datatypes import Rollout
 
 @dataclass(frozen=True)
 class ProcessedRollout:
@@ -163,3 +194,106 @@ def compute_rloo_advantages_for_group(rewards: np.ndarray) -> np.ndarray:
 
 
 ```
+
+## Data processing & storage
+- [x] Parquet IO for `RolloutGroup`
+- [ ] add `RolloutSink` that writes groups via `parquet_store.write_rollout_groups`
+- [ ] implement `iter_live_dataset(...)` that merges live ReplayBuffer and on-disk Parquet
+- [ ] implement `process_rollout_group(...)` to produce training batches (port from `post_training.rl_dataset`)
+
+## Evaluation
+- [ ] hook for periodic eval using env-provided prompts or fixed eval sets
+- [ ] mirror `post_training.Trainer.evaluate_data_from_environment`
+- [ ] log eval metrics under `eval/*`
+
+## Orchestration & CLI
+- [ ] CLI: `marin-rl-train` main that loads `tiny_grpo.yaml`-style config, launches runner, starts training
+- [ ] YAML schema: extend `tiny_grpo.yaml` to include `envs`, `inference`, `learner_resources`, `parquet_path`, `replay_buffer`
+- [ ] integrate Ray resource configs (`RayResources`) and `ResourceConfig` for learner actor
+
+## Parity with `post_training`
+Map of what to copy/reuse vs. re-implement:
+- **Sampler & inference**: reuse `post_training.inference.build_sampler`
+- **Dataset shaping**: reuse/port `post_training.rl_dataset.RLDataset` and `create_dataset_from_environment`
+- **Optimizer & schedules**: reuse `post_training.optimizer.load_adamw_optimizer`
+- **Utils (checkpointing, dtype, logging)**: reuse `post_training.utils` (logger, save/load)
+- **Environment wrappers**: keep `legacy_adapter.NewStyleEnvWrapper` for compatibility
+
+## Prioritized next steps (execute in order)
+1) Wire training to real data quickly: use `NewStyleEnvWrapper(MathEnvConfig)` + `post_training.rl_dataset.create_dataset_from_environment` in `simple_train.py` (replace dummy dataset).
+2) Add a minimal runner that: starts Ray, weight transfer server + coordinator, and launches a few `MathEnv` actors writing to Parquet and/or ReplayBuffer.
+3) Add a `RolloutSink` in runner that calls `parquet_store.write_rollout_groups` and increments eps metrics.
+4) Enable weight publishing from trainer every K steps using `process_weight_transfers(...)` and have envs pull via `receive_weight_transfers(...)` to hot-swap sampler params.
+5) Implement metrics logging: eps, reinforce_loss, kl_loss, transfer stats; log to WandB via Levanter tracker or `post_training.utils.WandbLogger`.
+6) Clean up API surface: fix typing nits, unify `datatypes.py` vs `types.py`, document the design.
+
+## Inference (OpenAI-compatible layer)
+- Goal: Provide an OAI-compatible server that `openai.Client` can talk to via `base_url`, supporting `/v1/chat/completions` for our envs. Prefer Ray Serve for scalability/co-location per the design doc.
+
+- MVP endpoints
+  - [ ] `GET /healthz` and `GET /readyz`
+  - [ ] `GET /v1/models`: return configured model IDs; the active weight version must be returned as a model ID
+  - [ ] `POST /v1/chat/completions`: subset of fields: `model`, `messages`, `max_tokens`, `temperature`, `top_p`, `n`, `stream`, `logprobs`
+  - [ ] (Optional) `POST /v1/completions` compatibility shim (maps to chat)
+
+- Server implementation
+  - [ ] New module `marin.inference.oai_server`
+    - Option A: Ray Serve deployment(s) for `chat.completions` with autoscaling
+    - Option B (dev): FastAPI + Uvicorn single-process runner
+  - [ ] Pydantic request/response schemas (minimal OpenAI v1)
+  - [ ] Auth: Bearer token; 401 on missing/invalid
+  - [ ] CORS, request size limits, timeouts
+  - [ ] Streaming: SSE/chunking with `data: {"choices":[{"delta":{"content":"..."}}]}` and terminating `[DONE]`
+  - [ ] Non-streaming: assemble and return one-shot response
+  - [ ] Response metadata: deterministic `id`, `created`, `model` set to current weight version
+
+- Model, tokenizer, sampler
+  - [ ] Load tokenizer; initialize sampler via `post_training.inference.build_sampler`
+  - [ ] Chat templating: map `messages` → prompt string; start with a simple role template
+  - [ ] Params loading: checkpoint paths (or random tiny for dev); support attention kernel configs like post-training
+
+- Logprobs support
+  - [ ] If `logprobs` requested, compute token logprobs for returned tokens using a `get_logprobs` function
+  - [ ] Return per-token `logprobs` (OpenAI-compatible) or omit initially and return aggregate in `usage`
+
+- Weight broadcaster integration (hot-swap)
+  - [ ] Start local JAX `TransferServer`
+  - [ ] Background task periodically `receive_weight_transfers(...)` from a named `WeightTransferCoordinator`
+  - [ ] Maintain `current_params` and `current_weight_version`; update atomically behind an RW lock
+  - [ ] Expose `weight_version` as the OpenAI `model` field in responses
+  - [ ] Metrics: bytes/transfer, transfer latency, time since last update
+
+- Configuration & CLI
+  - [ ] Pydantic settings: model/tokenizer paths, sharding, dtypes, coordinator name/address, auth token, host/port
+  - [ ] CLI `marin-oai-serve` to launch server with config/env vars
+  - [ ] Optional Ray Serve deployment script to scale replicas, set resource requirements
+
+- Observability & reliability
+  - [ ] Structured logs: request latency, tokens, stream vs batch, error codes
+  - [ ] Optional Prometheus metrics endpoint
+  - [ ] Basic rate limiting (token bucket)
+  - [ ] Graceful shutdown and in-flight request draining
+
+- Testing
+  - [ ] Unit tests: chat templating; auth; model id = weight version
+  - [ ] E2E: start server; call via `openai.Client(base_url=...)` (reuse env tests shape)
+  - [ ] Streaming test: multiple chunks + final `[DONE]`
+  - [ ] Logprobs test: sanity check with tiny model
+
+- Stretch
+  - [ ] Tools/function-calling no-op support (accept/ignore)
+  - [ ] JSON mode `response_format`
+  - [ ] Batch endpoint to amortize overhead under high QPS
+
+## Overseer
+- [ ] Implement an `Overseer` Ray actor that:
+  - [ ] Boots the learner and a Ray Serve (or FastAPI) inference deployment with proper resources
+  - [ ] Launches env actors based on `MarinRlConfig.envs`, wiring sinks to Parquet/ReplayBuffer
+  - [ ] Ties the learner’s weight publisher to the coordinator; registers inference servers
+  - [ ] Aggregates metrics from all components and logs to WandB
+  - [ ] Exposes health, topology, and simple control operations (pause/resume/scale)
+
+## Spec alignment with design doc
+- [ ] `Turn.inference_metadata` should be `dict[str, Any]` and include at least `model_version` (aka weight version), temperature/top_p, etc.
+- [ ] Response adapters from OAI → `RolloutGroup` should populate `turn.logprobs` when available and always include `model_version`
+- [ ] Ensure envs are push-based and can be wrapped from pull-based via `legacy_adapter.NewStyleEnvWrapper`
