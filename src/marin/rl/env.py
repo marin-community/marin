@@ -1,7 +1,7 @@
 """Base environment interface for Marin RL.
 
 An *environment* is a Ray actor that continuously produces
-:class:`~marin.rl.types.RolloutGroup` objects and dispatches them to the
+:class:`~marin.rl.datatypes.RolloutGroup` objects and dispatches them to the
 provided ``rollout_sink`` callback.
 
 Concrete environments should inherit from :class:`AbstractMarinEnv` and
@@ -50,12 +50,12 @@ class AbstractMarinEnv(abc.ABC):
         Main loop that subclasses must implement.
 
         An environment is a Ray actor that continuously produces
-        :class:`~marin.rl.types.RolloutGroup` objects and dispatches them to the
+        :class:`~marin.rl.datatypes.RolloutGroup` objects and dispatches them to the
         provided ``rollout_sink`` callback.
 
         The environment should periodically check for a stop signal and terminate
         when it is received.  The environment should also call the ``rollout_sink``
-        callback with a list of :class:`~marin.rl.types.RolloutGroup` objects as soon as it has generated them.
+        callback with a list of :class:`~marin.rl.datatypes.RolloutGroup` objects as soon as it has generated them.
         """
 
         raise NotImplementedError

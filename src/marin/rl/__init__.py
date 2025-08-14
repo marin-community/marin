@@ -6,12 +6,12 @@ heavy dependencies outside of training scripts.
 """
 
 # Configs now live in .config
-from .config import AbstractEnvConfig, MarinRlConfig, RlTrainingConfig
-from .datatypes import Rollout, RolloutGroup, RolloutSink, Turn
+from marin.rl.config import AbstractEnvConfig, MarinRlConfig, RlTrainingConfig
+from marin.rl.datatypes import Rollout, RolloutGroup, RolloutSink, Turn
 
-from .env import AbstractMarinEnv
-from .envs.hello import HelloEnvConfig
-from .envs.openai_echo import ChatEchoEnvConfig
+from marin.rl.env import AbstractMarinEnv
+from marin.rl.envs.hello import HelloEnvConfig
+from marin.rl.envs.openai_echo import ChatEchoEnvConfig
 
 __all__ = [
     "AbstractEnvConfig",

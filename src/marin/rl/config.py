@@ -1,6 +1,6 @@
 """Configuration dataclasses for Marin RL.
 
-These are separated from :pymod:`marin.rl.types` so that the low-level data
+These are separated from :pymod:`marin.rl.datatypes` so that the low-level data
 structures remain dependency-free, while configs can import heavier utilities
 (e.g. `RayResources`, `ResourceConfig`).
 """
@@ -13,7 +13,7 @@ from levanter.utils.ray_utils import RayResources
 from ray.actor import ActorHandle
 
 from ..resources import ResourceConfig
-from .datatypes import InferenceConfig, InferenceEndpoint, RolloutSink
+from .datatypes import InferenceEndpoint, RolloutSink
 
 __all__ = [
     "AbstractEnvConfig",
@@ -33,11 +33,11 @@ class AbstractEnvConfig(abc.ABC):
     def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, seed: int) -> ActorHandle:
         """Instantiate the environment.
 
-        The *rollout_sink* should be called with :class:`~marin.rl.types.RolloutGroup` batches.
+        The *rollout_sink* should be called with :class:`~marin.rl.datatypes.RolloutGroup` batches.
         """
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class RlTrainingConfig:
     """Learner hyper-parameters common to most RL algorithms."""
 
@@ -46,7 +46,19 @@ class RlTrainingConfig:
     # Extend with learning-rate schedules, clip settings, etc. as needed.
 
 
+# Placeholders for inference endpoints and environments.
 @dataclass(slots=True, frozen=True)
+class InferenceConfig:
+    """Configuration for inference endpoints.
+
+    This is a placeholder for future extensions (e.g. multiple endpoints,
+    failover, etc.).
+    """
+
+    endpoint: InferenceEndpoint
+
+
+@dataclass(frozen=True)
 class MarinRlConfig:
     """Root config that ties together env, learner, and infra settings."""
 

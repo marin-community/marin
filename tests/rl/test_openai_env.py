@@ -13,7 +13,7 @@ except ImportError:  # pragma: no cover
 
 
 from marin.rl.envs.openai_echo import ChatEchoEnv
-from marin.rl.types import InferenceEndpoint, RolloutGroup
+from marin.rl.datatypes import InferenceEndpoint, RolloutGroup
 
 
 @pytest.mark.skipif(openai_responses is None, reason="openai_responses not installed")
