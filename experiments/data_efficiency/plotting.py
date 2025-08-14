@@ -24,13 +24,17 @@ value_pretty_name_dict = {
     "300m4k": "300M",
     "600m4k": "600M",
     "1_4b4k": "1.4B",
+    0.15: "150M",
+    0.3: "300M",
+    0.6: "600M",
+    1.4: "1.4B",
     209715200.0: "209M",
     419430400.0: "419M",
     838860800.0: "838M",
     1677721600.0: "1.7B",
 }
 
-model_params = {"150m4k": 0.15, "300m4k": 0.3, "600m4k": 0.6, "1_4b4k": 1.4}
+param_str_to_count = {"150m4k": 0.15, "300m4k": 0.3, "600m4k": 0.6, "1_4b4k": 1.4}
 
 token_str_to_steps = {
     "209M": 800,
@@ -46,7 +50,7 @@ token_count_color_dict = {
     1677721600.0: RED,
 }
 
-model_size_marker_dict = {
+param_str_marker_dict = {
     "150m4k": "o",
     "300m4k": "^",
     "600m4k": "s",
@@ -432,7 +436,7 @@ def plot_model_scaling(best_run_dict, fit_type="power_law"):
 
     # Get unique model sizes and token counts
     token_counts = sorted(best_run_dict.keys())
-    model_sizes = sorted(list(best_run_dict[token_counts[0]].keys()), key=lambda x: model_params[x])
+    model_sizes = sorted(list(best_run_dict[token_counts[0]].keys()), key=lambda x: param_str_to_count[x])
 
     valid_token_counts = []
     asymptotes = []
@@ -446,7 +450,7 @@ def plot_model_scaling(best_run_dict, fit_type="power_law"):
 
     for i, token_count in enumerate(token_counts):
         # Get data for this token count
-        x_values = np.array([model_params[model] for model in model_sizes])
+        x_values = np.array([param_str_to_count[model] for model in model_sizes])
         y_values = np.array([best_run_dict[token_count][model]["final_dclm_loss"] for model in model_sizes])
         certified_values = np.array([best_run_dict[token_count][model]["convex_certificate"] for model in model_sizes])
 
@@ -547,107 +551,9 @@ def plot_model_scaling(best_run_dict, fit_type="power_law"):
     plt.close()
 
 
-def plot_ensemble_model_seed_scaling_old():
-    """Creates a plot showing asymptotes vs token count using pre-fitted results."""
-
-    # Create plot
-    plt.figure(figsize=(8, 6), dpi=300)
-
-    # Convert token counts to millions for better readability
-    # token_counts_b = [tc / 1_000_000_000 for tc in token_counts]
-
-    # # Fit a power law to the asymptotes vs token_counts_m
-    # power_law = PowerScalingLaw()
-    # power_law.fit(token_counts_b, asymptotes, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
-    # x_fit = np.logspace(np.log10(min(token_counts_b)), np.log10(max(token_counts_b)), 100)
-    # y_fit = power_law.evaluate(x_fit)
-
-    # plt.scatter(token_counts_m, asymptotes, color=PURPLE, s=100, zorder=5)
-    # plt.plot(x_fit, y_fit, "--", color=PURPLE, zorder=4, label=f"Fit: {power_law}")
-
-    # # Add value labels
-    # for x, y in zip(token_counts_m, asymptotes, strict=False):
-    #     plt.text(x * 1.1, y, f"{y:.3f}", ha="center", va="bottom")
-
-    best_ensembles = pickle.load(open("cache/varying-hparams-experiment_best_ensembles.pkl", "rb"))
-    ensemble_runs = {}
-    token_counts = None
-    for model_size, base_tokens_dict in best_ensembles.items():
-        ensemble_runs[model_size] = []
-        if token_counts is None:
-            token_counts = base_tokens_dict.keys()
-        for _, (_, _, power_law) in base_tokens_dict.items():
-            ensemble_runs[model_size].append(power_law.asymptote())
-
-    token_counts_b = [tc / 1_000_000_000 for tc in token_counts]
-    print(token_counts_b)
-
-    # Track the highest y value for each x coordinate
-    highest_y_values = []
-    for i in range(len(token_counts_b)):
-        max_y = -float("inf")
-        for _, losses in ensemble_runs.items():
-            if i < len(losses):
-                max_y = max(max_y, losses[i])
-        highest_y_values.append(max_y)
-
-    for model_size, losses in ensemble_runs.items():
-        plt.scatter(token_counts_b, losses, s=100, zorder=5)
-        power_law = PowerScalingLaw()
-        power_law.fit(token_counts_b, losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
-        x_fit = np.logspace(np.log10(min(token_counts_b)), np.log10(max(token_counts_b)), 100)
-        y_fit = power_law.evaluate(x_fit)
-        plt.plot(x_fit, y_fit, "--", zorder=4, label=rf"{model_size} $\infty$ ensembles: {power_law}")
-
-    ensemble_tiered_asymptotes = []
-    for i in range(len(token_counts_b)):
-        model_sizes = []
-        all_losses = []
-        for model_size, losses in ensemble_runs.items():
-            if i < len(token_counts_b):
-                model_sizes.append(model_params[model_size])
-                all_losses.append(losses[i])
-        power_law = PowerScalingLaw()
-        power_law.fit(model_sizes, all_losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
-        ensemble_tiered_asymptotes.append(power_law.asymptote())
-
-    plt.scatter(token_counts_b, ensemble_tiered_asymptotes, color=LIGHT_BLUE, s=100, zorder=5)
-    power_law = PowerScalingLaw()
-    power_law.fit(
-        token_counts_b, ensemble_tiered_asymptotes, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf])
-    )
-    x_fit = np.logspace(np.log10(min(token_counts_b)), np.log10(max(token_counts_b)), 100)
-    y_fit = power_law.evaluate(x_fit)
-    plt.plot(x_fit, y_fit, "--", color=LIGHT_BLUE, zorder=4, label=f"Tiered fit: {power_law}")
-
-    # Add arrows from highest y values to tiered fit y values
-    for _, (x, highest_y, tiered_y) in enumerate(
-        zip(token_counts_b, highest_y_values, ensemble_tiered_asymptotes, strict=False)
-    ):
-        plt.annotate(
-            "",
-            xy=(x, tiered_y),
-            xytext=(x, highest_y),
-            arrowprops=dict(arrowstyle="->, head_length = 1, head_width = 0.5", color="black", alpha=0.7, linewidth=1.0),
-            zorder=6,
-        )
-
-    # Set labels and title
-    plt.xscale("log")
-    plt.xticks(token_counts_b, [f"{x:.1f}B" for x in token_counts_b])
-    plt.xticks([], [], minor=True)
-    plt.xlabel("Seed token count")
-    plt.ylabel("Loss")
-    plt.title("Loss for ensemble asymptotes")
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-
-    plt.tight_layout()
-    plt.savefig("plots/asymptotes_vs_tokens.png", bbox_inches="tight")
-    plt.close()
-
-
 def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
+    y_lower = 2.6
+    y_upper = 3.85
     """Plot 1: Varying ensemble member count, fixed model size and token count"""
 
     # Create plot
@@ -656,19 +562,19 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     best_ensembles = pickle.load(open("cache/varying-hparams-experiment_best_ensembles.pkl", "rb"))
     token_counts = list(best_ensembles[next(iter(best_ensembles.keys()))].keys())
 
-    for model_size, token_count_losses in best_ensembles.items():
+    for param_str, token_count_losses in best_ensembles.items():
         for token_count, (x_data, y_data, power_law) in token_count_losses.items():
             color = token_count_color_dict[token_count]
-            marker = model_size_marker_dict[model_size]
+            marker = param_str_marker_dict[param_str]
             plt.scatter(x_data, y_data, s=100, color=color, marker=marker)
             x_fit = np.logspace(np.log10(min(x_data)), np.log10(max(x_data)), 100)
             y_fit = power_law.evaluate(x_fit)
             plt.plot(x_fit, y_fit, "--", color=color)
 
-    for model_size in best_ensembles.keys():
-        marker = model_size_marker_dict[model_size]
+    for param_str in best_ensembles.keys():
+        marker = param_str_marker_dict[param_str]
         plt.scatter(
-            [], [], s=100, zorder=5, color="black", marker=marker, label=f"{value_pretty_name_dict[model_size]} params"
+            [], [], s=100, zorder=5, color="black", marker=marker, label=f"{value_pretty_name_dict[param_str]} params"
         )
 
     for token_count in token_counts:
@@ -681,6 +587,7 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     plt.title("Loss for increasing ensemble member count")
     plt.xticks([1, 2, 3, 4, 5], [1, 2, 3, 4, 5])
     plt.xticks([], [], minor=True)
+    plt.ylim(y_lower, y_upper)
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
@@ -693,24 +600,24 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
 
     tiered_asymptotes = []
     for token_count in token_counts:
-        model_sizes = []
+        param_counts = []
         asymptotes = []
-        for model_size, token_count_losses in best_ensembles.items():
-            model_sizes.append(model_params[model_size])
+        for param_str, token_count_losses in best_ensembles.items():
+            param_counts.append(param_str_to_count[param_str])
             asymptote = token_count_losses[token_count][2].asymptote()
             asymptotes.append(asymptote)
 
             plt.scatter(
-                model_params[model_size],
+                param_str_to_count[param_str],
                 asymptote,
                 s=100,
                 color=token_count_color_dict[token_count],
-                marker=model_size_marker_dict[model_size],
+                marker=param_str_marker_dict[param_str],
             )
 
         power_law = PowerScalingLaw()
-        power_law.fit(model_sizes, asymptotes, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
-        x_fit = np.logspace(np.log10(min(model_sizes)), np.log10(max(model_sizes)), 100)
+        power_law.fit(param_counts, asymptotes, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+        x_fit = np.logspace(np.log10(min(param_counts)), np.log10(max(param_counts)), 100)
         y_fit = power_law.evaluate(x_fit)
         plt.plot(
             x_fit,
@@ -723,9 +630,12 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
         tiered_asymptotes.append(power_law.asymptote())
 
     plt.xscale("log")
-    plt.xlabel("Model size for $\\infty$ ensembles")
+    plt.xlabel("Parameter count for $\\infty$ ensembles")
     plt.ylabel("Loss")
     plt.title("Loss for increasing model size of $\\infty$ ensembles")
+    plt.xticks(param_counts, [value_pretty_name_dict[param_count] for param_count in param_counts])
+    plt.xticks([], [], minor=True)
+    plt.ylim(y_lower, y_upper)
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
@@ -758,6 +668,9 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     plt.xlabel("Seed token count")
     plt.ylabel("Loss")
     plt.title("Loss for increasing seed token count")
+    plt.xticks(token_counts, [value_pretty_name_dict[token_count] for token_count in token_counts])
+    plt.xticks([], [], minor=True)
+    plt.ylim(y_lower, y_upper)
     plt.grid(True, alpha=0.3)
     plt.legend()
 
@@ -818,7 +731,7 @@ def plot_token_scaling(best_run_dict, fit_type="power_law"):
 
     # Get unique model sizes and token counts
     token_counts = sorted(best_run_dict.keys())
-    model_sizes = sorted(list(best_run_dict[token_counts[0]].keys()), key=lambda x: model_params[x])
+    model_sizes = sorted(list(best_run_dict[token_counts[0]].keys()), key=lambda x: param_str_to_count[x])
 
     # Store asymptotes for reuse
     asymptotes = []
@@ -944,7 +857,7 @@ def plot_asymptotes_vs_model_size(model_sizes, asymptotes):
     plt.figure(figsize=(10, 6), dpi=300)
 
     # Convert model sizes to parameter counts
-    model_params_values = [model_params[model] for model in model_sizes]
+    model_params_values = [param_str_to_count[model] for model in model_sizes]
 
     # Fit a power law to the asymptotes vs model parameters
     power_law = PowerScalingLaw()
@@ -989,12 +902,12 @@ def fit_joint_scaling_law(best_run_dict):
     losses = []
 
     token_counts = sorted(best_run_dict.keys())
-    model_names = sorted(list(best_run_dict[token_counts[0]].keys()), key=lambda x: model_params[x])
+    model_names = sorted(list(best_run_dict[token_counts[0]].keys()), key=lambda x: param_str_to_count[x])
 
     for token_count in token_counts:
         for model_name in model_names:
             run = best_run_dict[token_count][model_name]
-            model_sizes.append(model_params[model_name])  # In billions
+            model_sizes.append(param_str_to_count[model_name])  # In billions
             data_sizes.append(token_count / 1_000_000)  # Convert to millions
             losses.append(run["final_dclm_loss"])
 
@@ -1053,19 +966,21 @@ def fit_joint_scaling_law(best_run_dict):
 
 
 def plot_standard_model_seed_scaling(best_run_dict, fit_type="power_law"):
-    """Creates a single plot showing loss vs model size for all token counts with power law fits."""
+    y_lower = 2.6
+    y_upper = 3.85
+    """Plot 1: Varying model size, fixed token count"""
 
     # Get unique model sizes and token counts
     token_counts = sorted(best_run_dict.keys())
-    model_sizes = sorted(list(best_run_dict[token_counts[0]].keys()), key=lambda x: model_params[x])
+    model_sizes = sorted(list(best_run_dict[token_counts[0]].keys()), key=lambda x: param_str_to_count[x])
 
     # Create single plot
-    plt.figure(figsize=(8, 5), dpi=300)
+    plt.figure(figsize=(8, 6), dpi=300)
 
     asymptotes = []
     for _, token_count in enumerate(token_counts):
         # Get data for this token count
-        x_values = np.array([model_params[model] for model in model_sizes])
+        x_values = np.array([param_str_to_count[model] for model in model_sizes])
         y_values = np.array([best_run_dict[token_count][model]["final_dclm_loss"] for model in model_sizes])
 
         color = token_count_color_dict[token_count]
@@ -1087,12 +1002,12 @@ def plot_standard_model_seed_scaling(best_run_dict, fit_type="power_law"):
             # Plot data points and fitted curve
             for model_size, loss in zip(model_sizes, y_values, strict=False):
                 plt.scatter(
-                    model_params[model_size],
+                    param_str_to_count[model_size],
                     loss,
                     color=color,
                     zorder=5,
                     s=60,
-                    marker=model_size_marker_dict[model_size],
+                    marker=param_str_marker_dict[model_size],
                 )
             plt.plot(
                 x_fit,
@@ -1115,20 +1030,22 @@ def plot_standard_model_seed_scaling(best_run_dict, fit_type="power_law"):
     plt.xlabel("Parameter count")
     plt.ylabel("Loss")
     plt.title("Fixed token count, model size asymptote")
-
+    plt.ylim(y_lower, y_upper)
     # Set x-ticks to model sizes
-    model_params_values = [model_params[model] for model in model_sizes]
+    model_params_values = [param_str_to_count[model] for model in model_sizes]
     plt.xticks(model_params_values, [value_pretty_name_dict.get(model, model) for model in model_sizes])
 
     # Add grid and legend
-    plt.grid(True, which="major", linestyle="--", alpha=0.7)
+    plt.grid(True, alpha=0.3)
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig("plots/model_scaling_simple.png", bbox_inches="tight")
+    plt.savefig("plots/standard_seed_scaling_model_size.png", bbox_inches="tight")
     plt.close()
 
-    plt.figure(figsize=(8, 5), dpi=300)
+    """Plot 2: Varying seed token count, infinite model size"""
+
+    plt.figure(figsize=(8, 6), dpi=300)
     seed_token_power_law = PowerScalingLaw()
     seed_token_power_law.fit(token_counts, asymptotes, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
     x_fit = np.logspace(np.log10(min(token_counts)), np.log10(max(token_counts)), 100)
@@ -1149,13 +1066,13 @@ def plot_standard_model_seed_scaling(best_run_dict, fit_type="power_law"):
     plt.ylabel("Loss")
     plt.title("Loss of infinite parameter asymptote vs seed token count")
     plt.legend()
-
+    plt.ylim(y_lower, y_upper)
     plt.xticks(token_counts, [f"{int(x / 1_000_000)}M" for x in token_counts])
     plt.xticks([], [], minor=True)
-    plt.grid(True, which="major", linestyle="--", alpha=0.7)
+    plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("plots/model_scaling_simple_asymptote.png", bbox_inches="tight")
+    plt.savefig("plots/standard_seed_scaling_token_count.png", bbox_inches="tight")
     plt.close()
 
     return asymptotes, seed_token_power_law
@@ -1167,7 +1084,7 @@ def plot_token_scaling_simple(best_run_dict, fit_type="power_law"):
     # Get unique model sizes and token counts
     token_counts = sorted(best_run_dict.keys())
     token_counts_m = [tc / 1_000_000 for tc in token_counts]
-    model_sizes = sorted(list(best_run_dict[token_counts[0]].keys()), key=lambda x: model_params[x])
+    model_sizes = sorted(list(best_run_dict[token_counts[0]].keys()), key=lambda x: param_str_to_count[x])
 
     # Create single plot
     plt.figure(figsize=(8, 5), dpi=300)
@@ -1308,11 +1225,11 @@ def plot_benchmark_results():
             )
 
     plt.figure(figsize=(8, 5), dpi=300)
-    model_x_values = [model_params[model.model_size] for model in VANILLA_MODEL_SCALING]
+    model_x_values = [param_str_to_count[model.model_size] for model in VANILLA_MODEL_SCALING]
     model_y_values = [1.0 - benchmark_results[get_base_name(model)]["1"]["avg_acc"] for model in VANILLA_MODEL_SCALING]
     plt.plot(model_x_values, model_y_values, color=PURPLE, label="Model Scaling", marker="o")
     for model in ENSEMBLE_MODEL_SCALING:
-        model_x_values = [model_params[model.model_size] * (seed + 1) for seed in range(model.num_seeds)]
+        model_x_values = [param_str_to_count[model.model_size] * (seed + 1) for seed in range(model.num_seeds)]
         model_y_values = [
             1.0 - benchmark_results[get_base_name(model)][str(seed + 1)]["avg_acc"] for seed in range(model.num_seeds)
         ]
@@ -1335,7 +1252,7 @@ def plot_benchmark_results():
 
 def plot_distillation(losses_for_200M):
     plt.figure(figsize=(8, 5), dpi=300)
-    max_x = max([max(x_data * model_params[model_size]) for model_size, (x_data, _, _) in losses_for_200M.items()])
+    max_x = max([max(x_data * param_str_to_count[model_size]) for model_size, (x_data, _, _) in losses_for_200M.items()])
 
     # TODO: standardize this
     model_x_values = [0.15, 0.3, 0.6, 1.4]
@@ -1361,9 +1278,9 @@ def plot_distillation(losses_for_200M):
 
     for model_size, (x_data, y_data, power_law) in losses_for_200M.items():
         if model_size == "300m4k":
-            x_fit = np.linspace(min(x_data * model_params[model_size]), max_x * 25, 5000)
-            y_fit = power_law.evaluate(x_fit / model_params[model_size])
-            plt.scatter(x_data * model_params[model_size], y_data, color="tab:orange")
+            x_fit = np.linspace(min(x_data * param_str_to_count[model_size]), max_x * 25, 5000)
+            y_fit = power_law.evaluate(x_fit / param_str_to_count[model_size])
+            plt.scatter(x_data * param_str_to_count[model_size], y_data, color="tab:orange")
             plt.plot(
                 x_fit,
                 y_fit,
@@ -1428,7 +1345,7 @@ def plot_distillation(losses_for_200M):
 
 def plot_200M_sample(losses_for_200M):
     plt.figure(figsize=(8, 5), dpi=300)
-    max_x = max([max(x_data * model_params[model_size]) for model_size, (x_data, _, _) in losses_for_200M.items()])
+    max_x = max([max(x_data * param_str_to_count[model_size]) for model_size, (x_data, _, _) in losses_for_200M.items()])
 
     # TODO: standardize this
     model_x_values = [0.15, 0.3, 0.6, 1.4]
@@ -1452,9 +1369,9 @@ def plot_200M_sample(losses_for_200M):
     )
 
     for model_size, (x_data, y_data, power_law) in losses_for_200M.items():
-        x_fit = np.linspace(min(x_data * model_params[model_size]), max_x * 25, 5000)
-        y_fit = power_law.evaluate(x_fit / model_params[model_size])
-        plt.scatter(x_data * model_params[model_size], y_data)
+        x_fit = np.linspace(min(x_data * param_str_to_count[model_size]), max_x * 25, 5000)
+        y_fit = power_law.evaluate(x_fit / param_str_to_count[model_size])
+        plt.scatter(x_data * param_str_to_count[model_size], y_data)
         plt.plot(x_fit, y_fit, "--", label=f"{value_pretty_name_dict[model_size]} ensembles (Fit: {power_law})")
     plt.legend()
     plt.xscale("log")
@@ -1477,8 +1394,8 @@ def plot_200M_sample(losses_for_200M):
     )
     for model_size, (x_data, _, power_law) in losses_for_200M.items():
         A, B, C = power_law.params
-        x_fit = np.logspace(np.log10(min(x_data * model_params[model_size]) * 0.0001), np.log10(max_x * 25), 5000)
-        y_fit = A * B / (A + C * np.exp(B * np.log(x_fit / model_params[model_size])))
+        x_fit = np.logspace(np.log10(min(x_data * param_str_to_count[model_size]) * 0.0001), np.log10(max_x * 25), 5000)
+        y_fit = A * B / (A + C * np.exp(B * np.log(x_fit / param_str_to_count[model_size])))
         plt.plot(
             x_fit,
             y_fit,
@@ -1637,7 +1554,7 @@ if __name__ == "__main__":
             run_list = pickle.load(open(f"cache/{mode}_run_list.pkl", "rb"))
 
     if mode == "varying-hparams-experiment":
-        unique_models = sorted(list(set([run["model_name"] for run in run_list])), key=lambda x: model_params[x])
+        unique_models = sorted(list(set([run["model_name"] for run in run_list])), key=lambda x: param_str_to_count[x])
         unique_base_tokens = sorted(list(set([run["base_tokens"] for run in run_list])))
 
         best_ensembles = {}
@@ -1749,7 +1666,7 @@ if __name__ == "__main__":
         plot_benchmark_results()
 
     elif mode == "distillation":
-        unique_models = sorted(list(set([run["model_name"] for run in run_list])), key=lambda x: model_params[x])
+        unique_models = sorted(list(set([run["model_name"] for run in run_list])), key=lambda x: param_str_to_count[x])
         unique_base_tokens = sorted(list(set([run["base_tokens"] for run in run_list])))
 
         best_ensembles = {}
