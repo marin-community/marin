@@ -42,7 +42,7 @@ def chat(
             with open(output_file, "a") as f:
                 f.write(f"Input prompt: {result['request_params']['input_prompt']}\n")
                 f.write(f"Response:\n{result['choices'][0]['message']['content']}\n")
-                f.write("-" * 40 + "\n")
+                f.write("*" * 40 + "\n")
         print(f"Response: {result['choices'][0]['message']['content']}")
         print(f"Generation time: {result['statistics']['generation_time']:.2f}s")
     else:
@@ -65,33 +65,33 @@ def main():
     try:
         chat(
             "Quickly count from 1 to 10",
-            max_length=512,
-            max_think_effort=256,
-            temperature=0.1,
-            do_sample=True,
-            output_file=output_file
-        )
-        chat(
-            long_prompt,
             max_length=1024,
-            max_think_effort=None,
+            max_think_effort=768,
             temperature=0.1,
             do_sample=True,
             output_file=output_file
         )
         chat(
             "What is the capital of France?",
-            max_length=700,
-            max_think_effort=512,
+            max_length=1024,
+            max_think_effort=768,
             temperature=0.1,
             do_sample=True,
             output_file=output_file
         )
         chat(
-            "Write a 50 words short story about a robot learning to paint",
-            max_length=1024,
-            max_think_effort=512,
+            "Write a 100 words short story about a robot learning to paint",
+            max_length=4096,
+            max_think_effort=2048,
             temperature=0.7,
+            do_sample=True,
+            output_file=output_file
+        )
+        chat(
+            long_prompt,
+            max_length=8192,
+            max_think_effort=None,
+            temperature=0.1,
             do_sample=True,
             output_file=output_file
         )

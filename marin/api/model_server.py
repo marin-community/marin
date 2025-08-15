@@ -295,7 +295,9 @@ def generate_with_think(
         return_dict_in_generate=True,
         output_scores=False,
         forced_eos_token_id=end_think_token_id,
-        eos_token_id=[generation_config.eot_token_id, end_think_token_id],
+        eos_token_id=[end_think_token_id],
+        early_stopping=True,
+        bad_words_ids=[[generation_config.eot_token_id]],
         max_new_tokens=max_think_effort,
     )
 
@@ -316,6 +318,23 @@ def generate_with_think(
     # Return all generated tokens as one sequence
     all_generated_tokens = final_sequence[inputs["input_ids"].shape[1]:]
     return MockGenerationOutput(final_sequence, [all_generated_tokens])
+
+
+def generate_without_think(
+    model: AutoModelForCausalLM,
+    inputs: Dict[str, torch.Tensor],
+    generation_config: GenerationConfig,
+    max_length: int,
+) -> Any:
+    """Generate text without think effort monitoring."""
+    return model.generate(
+        **inputs,
+        generation_config=generation_config,
+        return_dict_in_generate=True,
+        output_scores=False,
+        max_new_tokens=max_length,
+        eos_token_id=generation_config.eot_token_id,
+    )
 
 def _clear_gpu_cache():
     """Clear GPU cache with synchronization."""
@@ -502,11 +521,11 @@ async def generate_text(request: GenerateRequest):
                 else:
                     logger.info("Generating without think effort monitoring")
                     # Standard generation
-                    outputs = model.generate(
-                        **inputs,
-                        generation_config=generation_config,
-                        return_dict_in_generate=True,
-                        output_scores=False,
+                    outputs = generate_without_think(
+                        model,
+                        inputs,
+                        generation_config,
+                        request.max_length
                     )
             except torch.cuda.OutOfMemoryError:
                 logger.warning("GPU out of memory during generation, attempting memory cleanup...")
@@ -531,11 +550,11 @@ async def generate_text(request: GenerateRequest):
                             "cpu",
                         )
                     else:
-                        outputs = model.generate(
-                            **inputs,
-                            generation_config=generation_config,
-                            return_dict_in_generate=True,
-                            output_scores=False,
+                        outputs = generate_without_think(
+                            model,
+                            inputs,
+                            generation_config,
+                            request.max_length
                         )
                     
                     # Move model back to CPU (it was already there)
