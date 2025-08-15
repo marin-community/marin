@@ -10,7 +10,6 @@ import logging
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.evaluator_factory import get_evaluator
-from experiments.exp964_custom_chat_tokenizer import llama3_instruct_chat_format
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -41,10 +40,10 @@ def main():
     # Note that VLLM allows only models with head sizes that are multiples of 128.
     #
     # model_config = ModelConfig(
-    #     name="meta-llama/Llama-3.2-1B",  # Small model for testing (117M parameters)
+    #     name="meta-llama/Meta-Llama-3-8B-Instruct",
     #     path=None,  # Use HuggingFace model directly
     #     engine_kwargs=None,
-    #     apply_chat_template=True,  # DialoGPT doesn't use chat templates
+    #     apply_chat_template=True,
     # )
 
     # Define evaluation tasks

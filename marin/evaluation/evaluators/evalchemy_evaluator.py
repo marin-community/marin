@@ -44,7 +44,7 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
         "VLLM_USE_V1": "0",
         "RAY_LOG_TO_DRIVER": "0",       # hide INFO/WARNING from glog/XLA C++
         "GLOG_minloglevel": "1",        # 1 hides INFO; 2 hides INFO+WARN; 3 hides INFO+WARN+ERROR
-        "TF_CPP_MIN_LOG_LEVEL": "3",    # stop forwarding worker logs to driver (hides (pid=..., ip=...) lines)
+        "TF_CPP_MIN_LOG_LEVEL": "2",    # stop forwarding worker logs to driver (hides (pid=..., ip=...) lines)
     }
 
     _temp_dir: str | None = tempfile.mkdtemp()
@@ -64,7 +64,7 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
             scheduling_strategy=self._get_scheduling_strategy(resource_config),
             runtime_env=self.get_runtime_env(),
             max_calls=1,
-            resources={"TPU": 1},
+            resources={"TPU-v4-8-head": 1, "TPU": 1},
         )
         
         @remove_tpu_lockfile_on_exit
