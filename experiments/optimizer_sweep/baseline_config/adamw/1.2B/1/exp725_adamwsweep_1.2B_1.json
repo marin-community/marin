@@ -1,0 +1,17 @@
+{
+  "baseline_config": {
+    "beta1": 0.9,
+    "beta2": 0.98,
+    "epsilon": 1e-10,
+    "learning_rate": 0.004,
+    "max_grad_norm": 2.0,
+    "min_lr_ratio": 0.0,
+    "nesterov": 0.0,
+    "train_batch_size": 256,
+    "warmup": 1000.0,
+    "weight_decay": 0.2
+  },
+  "model_size": "1.2b",
+  "optimizer_name": "adamw",
+  "target_chinchilla": 1
+}

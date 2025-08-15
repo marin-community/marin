@@ -1,0 +1,14 @@
+{
+  "beta1": 0.8,
+  "beta2": 0.98,
+  "decay": 1.0477325540801985,
+  "epsilon": 4.1760312657743255e-16,
+  "learning_rate": 0.006010946493792101,
+  "max_grad_norm": 2.1046857208509664,
+  "min_lr_ratio": 0.0,
+  "momentum": 0.9805789215762512,
+  "muon_epsilon": 1e-05,
+  "train_batch_size": 289.9184870721074,
+  "warmup": 0.0,
+  "weight_decay": 0.1
+}
