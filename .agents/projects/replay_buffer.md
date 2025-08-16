@@ -1,4 +1,8 @@
 # Replay Buffer — Full Spec (Ray Actor + Parquet)
+## Status
+
+- [x] Data Types
+- [x] ReplayBuffer actor skeleton
 
 ## Goals & Context
 

@@ -5,6 +5,8 @@ from collections import deque
 
 import pytest
 
+pytest.importorskip("levanter")
+
 try:
     import openai_responses  # type: ignore
 except ImportError:  # pragma: no cover
@@ -91,7 +93,7 @@ def test_math_env_rollout(openai_mock, monkeypatch):  # type: ignore[valid-type]
     assert len(collected) == 1
     group = collected.pop()
     assert group.metadata["correct"] is True
-    assert group.rollouts[0].turns[1].reward == 1.0
+    assert group.rollouts[0].reward == 1.0
 
     # The mocked endpoint should have been called exactly once
     assert openai_mock.chat.completions.create.route.call_count == 1
