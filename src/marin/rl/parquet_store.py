@@ -22,7 +22,7 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 
-from .types import Rollout, RolloutGroup, Turn
+from .datatypes import Rollout, RolloutGroup, Turn
 
 # ---------------------------------------------------------------------------
 # Conversion helpers

@@ -14,14 +14,14 @@ from levanter.utils.ray_utils import RayResources
 from ray.actor import ActorHandle
 
 from ..config import AbstractEnvConfig
-from ..env import SimpleEnv
-from ..types import (
+from ..datatypes import (
     InferenceEndpoint,
     Rollout,
     RolloutGroup,
     RolloutSink,
     Turn,
 )
+from ..env import SimpleEnv
 
 logger = logging.getLogger(__name__)
 

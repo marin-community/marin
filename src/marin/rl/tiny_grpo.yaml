@@ -1,0 +1,25 @@
+initialize_from_scratch: true
+model:
+  type: llama
+  hidden_dim: 32
+  intermediate_dim: 128
+  num_heads: 2
+  num_kv_heads: 2
+  num_layers: 2
+  seq_len: 512
+  gradient_checkpointing: true
+trainer:
+  tracker:
+    - type: wandb
+      project: "marin-rl"
+
+  mp: p=f32,c=bfloat16
+  model_axis_size: 1
+  per_device_parallelism: -1
+
+  train_batch_size: 16
+  num_train_steps: 20
+optimizer:
+  learning_rate: 1E-3
+  weight_decay: 0.1
+  warmup: 0.01

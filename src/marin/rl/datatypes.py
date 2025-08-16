@@ -24,6 +24,15 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
+@dataclass(slots=True)
+class InferenceMetadata:
+    """Metadata about the inference of a turn."""
+
+    model_version: str
+    sampling_params: dict[str, Any]
+    inference_time: float
+
+
 @dataclass(slots=True, frozen=True)
 class Turn:
     """A single message-level interaction within a rollout.
@@ -50,8 +59,8 @@ class Turn:
     message: str
     logprobs: Sequence[float] | None
     role: str
-    reward: float | None | None
-    inference_metadata: dict[str, Any]
+    reward: float | None
+    inference_metadata: dict[str, Any] | InferenceMetadata
 
 
 @dataclass(slots=True, frozen=True)
@@ -103,12 +112,3 @@ class InferenceEndpoint:
     """
 
     address: str
-
-
-# Placeholders for inference endpoints and environments.
-InferenceConfig = Any
-
-
-# ---------------------------------------------------------------------------
-# Configs now reside in :pymod:`marin.rl.config`.
-# ---------------------------------------------------------------------------

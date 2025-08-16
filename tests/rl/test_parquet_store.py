@@ -6,7 +6,7 @@ from dataclasses import asdict
 import pyarrow as pa  # noqa: F401  # ensures pyarrow import works in CI
 
 from marin.rl.parquet_store import iter_rollout_groups, write_rollout_groups
-from marin.rl.types import Rollout, RolloutGroup, Turn
+from marin.rl.datatypes import Rollout, RolloutGroup, Turn
 
 
 def _make_sample_groups() -> list[RolloutGroup]:
