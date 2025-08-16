@@ -1,7 +1,7 @@
 """Base environment interface for Marin RL.
 
 An *environment* is a Ray actor that continuously produces
-:class:`~marin.rl.datatypes.LegacyRolloutGroup` objects and dispatches them to the
+:class:`~marin.rl.datatypes.RolloutGroup` objects and dispatches them to the
 provided ``rollout_sink`` callback.
 
 Concrete environments should inherit from :class:`AbstractMarinEnv` and
@@ -13,7 +13,7 @@ import asyncio
 import logging
 from typing import Final
 
-from .datatypes import InferenceEndpoint, LegacyRolloutGroup, RolloutSink
+from .datatypes import InferenceEndpoint, RolloutGroup, RolloutSink
 
 logger: Final = logging.getLogger(__name__)
 
@@ -50,12 +50,12 @@ class AbstractMarinEnv(abc.ABC):
         Main loop that subclasses must implement.
 
         An environment is a Ray actor that continuously produces
-        :class:`~marin.rl.datatypes.LegacyRolloutGroup` objects and dispatches them to the
+        :class:`~marin.rl.datatypes.RolloutGroup` objects and dispatches them to the
         provided ``rollout_sink`` callback.
 
         The environment should periodically check for a stop signal and terminate
         when it is received.  The environment should also call the ``rollout_sink``
-        callback with a list of :class:`~marin.rl.datatypes.LegacyRolloutGroup` objects as soon as it has generated them.
+        callback with a list of :class:`~marin.rl.datatypes.RolloutGroup` objects as soon as it has generated them.
         """
 
         raise NotImplementedError
@@ -76,7 +76,7 @@ class AbstractMarinEnv(abc.ABC):
 class SimpleEnv(AbstractMarinEnv):
     """Concrete base that hides ``async`` details from subclasses."""
 
-    def do_rollout(self) -> list[LegacyRolloutGroup]:  # pragma: no cover - abstract
+    def do_rollout(self) -> list[RolloutGroup]:  # pragma: no cover - abstract
         """Produce one or more rollout groups.
 
         Subclasses implement their rollout logic here as a regular function

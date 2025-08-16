@@ -4,7 +4,7 @@ from typing import List
 import numpy as np
 import ray
 
-from .datatypes import LegacyRolloutGroup, Turn
+from .datatypes import RolloutGroup
 from marin.post_training.environments.marin_env import EnvStep, MarinEnv  # old-style
 
 # ---------------------------------------------------------------------------
@@ -25,7 +25,7 @@ class _GroupBuffer:
 
         self._queue = asyncio.Queue()
 
-    async def push(self, groups: list[LegacyRolloutGroup]):  # called from env actor
+    async def push(self, groups: list[RolloutGroup]):  # called from env actor
         for g in groups:
             await self._queue.put(g)
 
@@ -82,7 +82,7 @@ class NewStyleEnvWrapper(MarinEnv):
     inference:
         Inference endpoint object forwarded to *env_cfg.build*.
     batch_size:
-        Minimum number of *LegacyRolloutGroup* objects that constitute one `step()`.
+        Minimum number of *RolloutGroup* objects that constitute one `step()`.
     replica_id:
         Passed through to *env_cfg.build* and can be used to vary seeds.
     """
@@ -121,7 +121,7 @@ class NewStyleEnvWrapper(MarinEnv):
         """
         # Fetch exactly n_examples groups; each group may contain multiple rollouts
         need_groups = max(1, int(n_examples))
-        groups: List[LegacyRolloutGroup] = ray.get(self._buffer.fetch.remote(need_groups))
+        groups: List[RolloutGroup] = ray.get(self._buffer.fetch.remote(need_groups))
 
         gens = max(1, int(n_generations))
         examples: list[dict] = []
@@ -133,28 +133,24 @@ class NewStyleEnvWrapper(MarinEnv):
             if not rollouts:
                 continue
 
-            # Prompt from first rollout's first user turn
-            user_turns0 = [t for t in rollouts[0].turns if t.role == "user"]
-            prompt = user_turns0[0].message if user_turns0 else ""
+            prompt = g.metadata.get("prompt", "")
+            if not prompt and rollouts and rollouts[0].metadata:
+                prompt = rollouts[0].metadata.get("prompt", "")  # type: ignore[assignment]
             examples.append({"prompt": prompt, "answer": None})
 
             gen_list: list[dict] = []
             reward_list: list[float] = []
             for r in rollouts[:gens]:
-                assistant_turns = [t for t in r.turns if t.role == "assistant"]
-                if assistant_turns:
-                    text = assistant_turns[-1].message
-                    if self._tokenizer is not None:
-                        toks = self._tokenizer.encode(text, add_special_tokens=False)
-                    else:
-                        toks = []
-                    gen_list.append({"tokens": toks, "logprobs": [], "text": text})
-                    reward_list.append(float(assistant_turns[-1].reward or 0.0))
+                text = ""
+                if r.metadata is not None:
+                    text = r.metadata.get("response", "")
+                if self._tokenizer is not None and text:
+                    toks = self._tokenizer.encode(text, add_special_tokens=False)
                 else:
-                    gen_list.append({"tokens": [], "logprobs": [], "text": ""})
-                    reward_list.append(0.0)
+                    toks = []
+                gen_list.append({"tokens": toks, "logprobs": [], "text": text})
+                reward_list.append(float(r.reward or 0.0))
 
-            # If fewer than gens rollouts, pad with empties
             while len(gen_list) < gens:
                 gen_list.append({"tokens": [], "logprobs": [], "text": ""})
                 reward_list.append(0.0)

@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover
 import datasets
 
 from marin.rl.envs.math_env import MathEnv
-from marin.rl.datatypes import InferenceEndpoint, LegacyRolloutGroup
+from marin.rl.datatypes import InferenceEndpoint, RolloutGroup
 
 
 @pytest.mark.skipif(openai_responses is None, reason="openai_responses not installed")
@@ -70,7 +70,7 @@ def test_math_env_rollout(openai_mock, monkeypatch):  # type: ignore[valid-type]
     # ------------------------------------------------------------------
     # Collect rollouts emitted by the environment
     # ------------------------------------------------------------------
-    collected: deque[LegacyRolloutGroup] = deque()
+    collected: deque[RolloutGroup] = deque()
 
     def sink(groups):  # type: ignore[override]
         collected.extend(groups)
@@ -93,7 +93,7 @@ def test_math_env_rollout(openai_mock, monkeypatch):  # type: ignore[valid-type]
     assert len(collected) == 1
     group = collected.pop()
     assert group.metadata["correct"] is True
-    assert group.rollouts[0].turns[1].reward == 1.0
+    assert group.rollouts[0].reward == 1.0
 
     # The mocked endpoint should have been called exactly once
     assert openai_mock.chat.completions.create.route.call_count == 1

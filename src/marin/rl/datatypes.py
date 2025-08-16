@@ -14,7 +14,6 @@ from typing import Any, Optional
 __all__ = [
     "InferenceEndpoint",
     "Rollout",
-    "LegacyRolloutGroup",
     "RolloutRecord",
     "RolloutGroup",
     "GroupKey",
@@ -79,27 +78,8 @@ class Rollout:
         return iter(self.turns)
 
 
-@dataclass(slots=True, frozen=True)
-class LegacyRolloutGroup:
-    """A collection of rollouts that should be processed together (e.g. a batch).
-
-    Grouping rollouts enables algorithms such as GRPO that operate on multiple
-    trajectories simultaneously while preserving per-group metadata (problem
-    name, seed, etc.).
-    """
-
-    id: str
-    source: str  # name of the environment that produced the rollouts
-    created: float  # POSIX timestamp (seconds since epoch)
-    rollouts: list[Rollout]
-    metadata: dict[str, Any]
-
-    def __iter__(self):
-        return iter(self.rollouts)
-
-
-# A callable that accepts a *batch* of :class:`LegacyRolloutGroup` objects.
-RolloutSink = Callable[[list[LegacyRolloutGroup]], None]
+# A callable that accepts a *batch* of :class:`RolloutGroup` objects.
+RolloutSink = Callable[[list["RolloutGroup"]], None]
 
 
 # ---------------------------------------------------------------------------

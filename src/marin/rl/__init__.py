@@ -1,6 +1,6 @@
 """Marin RL public interface with lightweight exports."""
 
-from .datatypes import LegacyRolloutGroup as RolloutGroup, Rollout, RolloutSink, Turn
+from .datatypes import Rollout, RolloutGroup, RolloutSink, Turn
 
 __all__ = [
     "Rollout",

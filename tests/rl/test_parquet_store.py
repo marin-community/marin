@@ -6,60 +6,59 @@ from dataclasses import asdict
 import pyarrow as pa  # noqa: F401  # ensures pyarrow import works in CI
 
 from marin.rl.parquet_store import iter_rollout_groups, write_rollout_groups
-from marin.rl.datatypes import Rollout, LegacyRolloutGroup, Turn
+from marin.rl.datatypes import RolloutGroup, RolloutRecord
 
 
-def _make_sample_groups() -> list[LegacyRolloutGroup]:
+def _make_sample_groups() -> list[RolloutGroup]:
     ts = time.time()
 
-    turn1 = Turn(
-        message="Hello",
-        role="user",
-        logprobs=None,
-        reward=None,
-        inference_metadata={"model": "v0"},
-    )
-    turn2 = Turn(
-        message="Hi there!",
-        role="assistant",
-        logprobs=[-0.3, -0.2],
+    r = RolloutRecord(
+        environment="dummy_env",
+        example_id="ex1",
+        policy_version="v0",
+        rollout_uid="u1",
+        replica_id="rep",
         reward=1.0,
-        inference_metadata={"model": "v0"},
+        metadata={"text": "Hi there!"},
+        created_ts=ts,
     )
 
-    rollout = Rollout(turns=[turn1, turn2], metadata={"seed": 42})
-
-    g1 = LegacyRolloutGroup(
+    g1 = RolloutGroup(
         id="g1",
-        source="dummy_env",
-        created=ts,
-        rollouts=[rollout],
+        environment="dummy_env",
+        example_id="ex1",
+        policy_version="v0",
+        segment_idx=0,
+        rollouts=[r],
+        sealed_ts=ts,
         metadata={"env": "dummy_env"},
     )
 
-    g2 = LegacyRolloutGroup(
+    g2 = RolloutGroup(
         id="g2",
-        source="dummy_env",
-        created=ts + 1,
-        rollouts=[rollout],
+        environment="dummy_env",
+        example_id="ex1",
+        policy_version="v0",
+        segment_idx=0,
+        rollouts=[r],
+        sealed_ts=ts + 1,
         metadata={"env": "dummy_env", "difficulty": "hard"},
     )
 
     return [g1, g2]
 
 
-def _sort_by_id(groups: list[LegacyRolloutGroup]) -> list[LegacyRolloutGroup]:
+def _sort_by_id(groups: list[RolloutGroup]) -> list[RolloutGroup]:
     return sorted(groups, key=lambda g: g.id)
 
 
-def _groups_equal(a: LegacyRolloutGroup, b: LegacyRolloutGroup) -> bool:
+def _groups_equal(a: RolloutGroup, b: RolloutGroup) -> bool:
     """Deep equality helper via dataclasses.asdict with float tolerance."""
 
     da, db = asdict(a), asdict(b)
-    # Allow tiny float differences in "created"
-    if abs(da["created"] - db["created"]) > 1e-9:
+    if abs(da["sealed_ts"] - db["sealed_ts"]) > 1e-9:
         return False
-    da["created"] = db["created"] = 0  # normalise
+    da["sealed_ts"] = db["sealed_ts"] = 0
     return da == db
 
 

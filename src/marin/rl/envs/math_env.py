@@ -4,7 +4,7 @@ This environment samples problems from the MATH dataset (via the
 `DigitalLearningGmbH/MATH-lighteval` split), queries an
 OpenAI-compatible inference endpoint for answers, evaluates the answer
 against the dataset's ground-truth solution, and emits the interaction
-as a :class:`~marin.rl.datatypes.LegacyRolloutGroup`.
+as a :class:`~marin.rl.datatypes.RolloutGroup`.
 
 Both the dataset loading and answer checking logic are largely ported
 from `marin.post_training.environments.math_env.MathEnv` but translated
@@ -34,10 +34,9 @@ from marin.post_training.utils import validate_format
 from ..config import AbstractEnvConfig
 from ..datatypes import (
     InferenceEndpoint,
-    Rollout,
-    LegacyRolloutGroup,
+    RolloutGroup,
+    RolloutRecord,
     RolloutSink,
-    Turn,
 )
 from ..env import AbstractMarinEnv
 
@@ -149,31 +148,28 @@ class MathEnv(AbstractMarinEnv):
             # ------------------------------------------------------------------
             # Build rollout & emit.
             # ------------------------------------------------------------------
-            turns = [
-                Turn(
-                    message=user_prompt,
-                    role="user",
-                    logprobs=None,
-                    reward=None,
-                    inference_metadata={},
-                ),
-                Turn(
-                    message=assistant_msg,
-                    role="assistant",
-                    logprobs=None,  # logprobs not available via OpenAI client
-                    reward=reward,
-                    inference_metadata={
-                        "model": self._model,
-                        "finish_reason": completion.choices[0].finish_reason,
-                    },
-                ),
-            ]
-            rollout = Rollout(turns=turns, metadata={"problem": user_prompt})
-            group = LegacyRolloutGroup(
+            record = RolloutRecord(
+                environment="math_env",
+                example_id=f"math-{iteration}",
+                policy_version="v0",
+                rollout_uid=f"math-{iteration}",
+                replica_id="math",
+                reward=reward,
+                metadata={
+                    "prompt": user_prompt,
+                    "response": assistant_msg,
+                    "valid_format": is_valid,
+                    "correct": is_correct,
+                },
+            )
+            group = RolloutGroup(
                 id=f"math-{iteration}",
-                source="math_env",
-                created=time.time(),
-                rollouts=[rollout],
+                environment="math_env",
+                example_id=f"math-{iteration}",
+                policy_version="v0",
+                segment_idx=0,
+                rollouts=[record],
+                sealed_ts=time.time(),
                 metadata={"valid_format": is_valid, "correct": is_correct},
             )
 

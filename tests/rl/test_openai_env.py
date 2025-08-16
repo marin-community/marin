@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover
 
 
 from marin.rl.envs.openai_echo import ChatEchoEnv
-from marin.rl.datatypes import InferenceEndpoint, LegacyRolloutGroup
+from marin.rl.datatypes import InferenceEndpoint, RolloutGroup
 
 
 @pytest.mark.skipif(openai_responses is None, reason="openai_responses not installed")
@@ -33,9 +33,9 @@ def test_chat_echo_env(openai_mock):  # type: ignore[valid-type]
     }
 
     # Collect rollouts emitted by the env
-    collected: deque[LegacyRolloutGroup] = deque()
+    collected: deque[RolloutGroup] = deque()
 
-    def sink(groups: list[LegacyRolloutGroup]):
+    def sink(groups: list[RolloutGroup]):
         collected.extend(groups)
 
     env = ChatEchoEnv(
@@ -51,6 +51,6 @@ def test_chat_echo_env(openai_mock):  # type: ignore[valid-type]
     # Ensure sink received one rollout group with expected content
     assert len(collected) == 1
     rg = collected.pop()
-    assert rg.rollouts[0].turns[0].message == "Hello! How can I help?"
+    assert rg.rollouts[0].metadata["response"] == "Hello! How can I help?"
     # Mock should have been hit exactly once
     assert openai_mock.chat.completions.create.route.call_count == 1

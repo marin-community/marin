@@ -1,6 +1,6 @@
 """Rollout sinks for Marin RL.
 
-This module provides utilities to create sinks that consume ``LegacyRolloutGroup``
+This module provides utilities to create sinks that consume ``RolloutGroup``
 batches and persist them. The primary sink writes groups to a Parquet dataset.
 """
 
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ray
 
-from .datatypes import LegacyRolloutGroup, RolloutSink
+from .datatypes import RolloutGroup, RolloutSink
 from .parquet_store import write_rollout_groups
 
 
@@ -23,7 +23,7 @@ def make_parquet_sink(root_path: str, *, compression: str = "zstd") -> RolloutSi
         A callable suitable to pass into environment ``build`` methods.
     """
 
-    def sink(groups: list[LegacyRolloutGroup]) -> None:
+    def sink(groups: list[RolloutGroup]) -> None:
         if not groups:
             return
         write_rollout_groups(groups, root_path, compression=compression)
@@ -35,7 +35,7 @@ def make_parquet_sink(root_path: str, *, compression: str = "zstd") -> RolloutSi
 def tee_sinks(*sinks: RolloutSink) -> RolloutSink:
     """Create a sink that dispatches to multiple sinks (fan-out)."""
 
-    def sink(groups: list[LegacyRolloutGroup]) -> None:
+    def sink(groups: list[RolloutGroup]) -> None:
         for s in sinks:
             s(groups)
 
@@ -50,7 +50,7 @@ class ParquetWriter:
         self._root_path = root_path
         self._compression = compression
 
-    def write(self, groups: list[LegacyRolloutGroup]) -> None:
+    def write(self, groups: list[RolloutGroup]) -> None:
         if groups:
             write_rollout_groups(groups, self._root_path, compression=self._compression)
 
@@ -67,7 +67,7 @@ def make_parquet_actor_sink(root_path: str, *, compression: str = "zstd") -> tup
 
     writer = ParquetWriter.remote(root_path, compression)
 
-    def sink(groups: list[LegacyRolloutGroup]) -> None:
+    def sink(groups: list[RolloutGroup]) -> None:
         if groups:
             writer.write.remote(groups)
 
