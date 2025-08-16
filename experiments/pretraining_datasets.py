@@ -141,9 +141,8 @@ dolmino = (
             gcs_output_path=this_output_path(),
             wait_for_completion=True,
         ),
-    )
-    .with_output_path("raw/dolmino-mix-1124-157960")
-    .cd("bb54cab")
+    ).with_output_path("raw/dolmino-mix-1124-157960")
+    # .cd("bb54cab")
 )
 
 nemotron_cc = ExecutorStep(
