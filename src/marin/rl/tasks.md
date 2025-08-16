@@ -14,17 +14,17 @@
 ## Transfer
 - [x] Implement weight transfer coordinator
 - [x] make benchmark_weight_transfer to use new coordinator
-- [ ] Multiple servers (one per training node)
-- [ ] Trainer publishes weights every N steps using `process_weight_transfers(...)`
-- [ ] Env-side receiver pulls weights via `receive_weight_transfers(...)` and hot-swaps sampler params
-- [ ] Add retry/backoff + metrics for transfer failures/timeouts
+- [ ] Multiple servers (one per training node) p3
+- [ ] Trainer publishes weights every N steps using `process_weight_transfers(...)` p1
+- [ ] Inference server receiver pulls weights via `receive_weight_transfers(...)` and hot-swaps sampler params p1
+- [ ] Add retry/backoff + metrics for transfer failures/timeouts p3
 
 ## Coordination
-- [ ] parameterize and initialize environments (via `AbstractEnvConfig`)
-- [ ] central runner that:
-  - [ ] starts Ray, weight transfer server, and a named `WeightTransferCoordinator`
-  - [ ] instantiates env actors per `MarinRlConfig.envs` with varying seeds
-  - [ ] wires a `RolloutSink` to Parquet (see Parquet section) and/or ReplayBuffer
+- [ ] parameterize and initialize environments (via `AbstractEnvConfig`) p1
+- [ ] central runner that: 
+  - [ ] starts Ray, weight transfer server, and a named `WeightTransferCoordinator` p1
+  - [x] instantiates env actors per `MarinRlConfig.envs` with varying seeds p1
+  - [x] wires a `RolloutSink` to Parquet (see Parquet section) and/or ReplayBuffer p1
   - [ ] exposes health/metrics endpoint and graceful shutdown
 - [ ] gather and log rollouts (counts, eps, per-env throughput)
 - [ ] allow multiple coordinators (one per training node) and envs selecting nearest coordinator
@@ -33,10 +33,10 @@
 
 ## ReplayBuffer
 
-- [ ] Make ReplayBuffer skeleton
-  - [ ] Ray actor: concurrent append; sampling by group for GRPO; capacity/eviction
-  - [ ] Support persistence: optional Parquet append on a background thread
-  - [ ] API: `add(groups: list[RolloutGroup])`, `sample(num_groups: int, strategy="by_group")`
+- [ ] Make ReplayBuffer skeleton p0
+  - [ ] Ray actor: concurrent append; sampling by group for GRPO; capacity/eviction p1
+  - [ ] Support persistence: optional Parquet append on a background thread p1
+  - [ ] API: `add(groups: list[RolloutGroup])`, `sample(num_groups: int, strategy="by_group")` p1
   - [ ] Metrics: occupancy, enqueue/dequeue rate, drop count
 
 
@@ -90,6 +90,11 @@
 - [x] math env (via OAI, correctness by `post_training` utils)
 - [ ] port additional `post_training.environments` as needed (swe-bench, olympiad, etc.) to async API
 - [ ] add option to emit to Parquet sink directly
+- [ ] handle environments where groups come from multiple replicas
+  - [ ] eval-style envs that only run once per replica (e.g., SWE-bench, olympiad)
+  - [ ] coordinate group assembly across replicas before calling `rollout_sink`
+  - [ ] ensure `RolloutGroup` metadata includes replica info for proper batching
+  - [ ] consider adding a "group coordinator" actor that collects from multiple env replicas
 
 
 ## Sketches
@@ -197,8 +202,7 @@ def compute_rloo_advantages_for_group(rewards: np.ndarray) -> np.ndarray:
 
 ## Data processing & storage
 - [x] Parquet IO for `RolloutGroup`
-- [ ] add `RolloutSink` that writes groups via `parquet_store.write_rollout_groups`
-- [ ] implement `iter_live_dataset(...)` that merges live ReplayBuffer and on-disk Parquet
+- [x] add `RolloutSink` that writes groups via `parquet_store.write_rollout_groups`
 - [ ] implement `process_rollout_group(...)` to produce training batches (port from `post_training.rl_dataset`)
 
 ## Evaluation
@@ -225,7 +229,6 @@ Map of what to copy/reuse vs. re-implement:
 3) Add a `RolloutSink` in runner that calls `parquet_store.write_rollout_groups` and increments eps metrics.
 4) Enable weight publishing from trainer every K steps using `process_weight_transfers(...)` and have envs pull via `receive_weight_transfers(...)` to hot-swap sampler params.
 5) Implement metrics logging: eps, reinforce_loss, kl_loss, transfer stats; log to WandB via Levanter tracker or `post_training.utils.WandbLogger`.
-6) Clean up API surface: fix typing nits, unify `datatypes.py` vs `types.py`, document the design.
 
 ## Inference (OpenAI-compatible layer)
 - Goal: Provide an OAI-compatible server that `openai.Client` can talk to via `base_url`, supporting `/v1/chat/completions` for our envs. Prefer Ray Serve for scalability/co-location per the design doc.

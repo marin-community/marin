@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -9,6 +10,7 @@ import haliax.haxtyping as ht
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
+import numpy as np
 import levanter
 from haliax import NamedArray
 from haliax.jax_utils import maybe_rng_split
@@ -21,6 +23,13 @@ from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 
 from levanter.checkpoint import load_checkpoint_or_initialize
+import ray
+from marin.rl.datatypes import InferenceEndpoint
+from marin.rl.legacy_adapter import NewStyleEnvWrapper
+from marin.rl.envs.hello import HelloEnvConfig
+from marin.post_training.rl_dataset import (
+    create_dataset_from_environment as pt_create_dataset_from_environment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +78,7 @@ class TrainRlConfig:
     generate_attention_kernel_config: str = "paged: {}"
 
     # configs that were json strings
-    generation_config: dict[str, Any] = field(default_factory=dict)
+    generation_config: dict[str, Any] = dataclasses.field(default_factory=lambda: {"n_generations": 4})
     test_generation_config: dict[str, Any] = field(default_factory=dict)
     model_config_override: dict[str, Any] = field(default_factory=dict)
     tokenizer_override: dict[str, Any] = field(default_factory=dict)
@@ -95,51 +104,8 @@ class RlExample(eqx.Module):
         )
 
 
-def create_dataset_from_environment(
-    n_examples,
-    prng_key,
-    max_input_length,
-    train_bsize,
-    tokenizer,
-    **kwargs,
-):
-    # This is a dummy implementation that generates random data.
-    # Replace this with your actual data loading logic.
-    del kwargs
-    Batch = hax.Axis("batch", train_bsize)
-    Pos = hax.Axis("position", max_input_length)
-    vocab_size = len(tokenizer)
-
-    @hax.named_jit
-    def example_generator(key):
-        # while True:
-        key, subkey = jax.random.split(key)
-        input_ids = hax.random.randint(subkey, (Batch, Pos), 0, vocab_size, dtype=jnp.int32)
-        loss_mask = hax.random.bernoulli(subkey, p=0.5, shape=(Batch, Pos))
-        segment_ids = hax.ones((Batch, Pos), dtype=jnp.int32)
-        loss_weights = hax.random.normal(subkey, (Batch, Pos))
-        policy_logprobs = hax.random.normal(subkey, (Batch, Pos))
-        reference_logprobs = hax.random.normal(subkey, (Batch, Pos))
-
-        return RlExample(
-            input_ids=input_ids,
-            loss_mask=loss_mask,
-            segment_ids=segment_ids,
-            loss_weights=loss_weights,
-            policy_logprobs=policy_logprobs,
-            reference_logprobs=reference_logprobs,
-        )
-
-    class StubDataset:
-        def __init__(self, key):
-            self.key = key
-
-        def __iter__(self):
-            while True:
-                self.key, subkey = jax.random.split(self.key)
-                yield example_generator(subkey)
-
-    return StubDataset(prng_key), None
+def create_dataset_from_environment(*args, **kwargs):
+    return pt_create_dataset_from_environment(*args, **kwargs)
 
 
 def main(config: TrainRlConfig):
@@ -183,8 +149,16 @@ def main(config: TrainRlConfig):
     Vocab = hax.Axis("vocab", len(tokenizer))
     data_key, loader_key, model_key, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 4)
 
-    # Load Environment
-    environment = None  # TODO: implement this
+    # Initialize Ray and load Environment via wrapper (push-based RL env -> MarinEnv API)
+    if not ray.is_initialized():
+        ray.init(ignore_reinit_error=True)
+    environment = NewStyleEnvWrapper(
+        env_cfg=HelloEnvConfig(),
+        inference=InferenceEndpoint("http://unused"),
+        batch_size=1,
+        replica_id=0,
+        tokenizer=tokenizer,
+    )
 
     # Loss function
     def loss_fn(model, batch: RlExample, reduction=hax.mean, reduction_axis=None, **kwargs):
@@ -257,21 +231,18 @@ def main(config: TrainRlConfig):
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.model)})
 
-        # TODO: sampler
-        # sampler = None
+        # Sampler is unused by NewStyleEnvWrapper; pass None
+        sampler = None
 
-        def get_logprobs(model, batch: RlExample, key=None):
-            example = batch.to_lm_example()
-            logits = model(
-                input_ids=example.tokens,
-                attn_mask=example.attn_mask,
-                key=key,
-            )
-            logits = logits.astype(jnp.float32)
-            token_loss = next_token_loss(
-                "position", "vocab", logits, example.tokens, loss_mask=example.loss_mask, reduction=None
-            )
-            return -token_loss
+        def get_reference_logprobs(
+            params,
+            prompt_tokens: np.ndarray,
+            prompt_attention_mask: np.ndarray,
+            answer_tokens: np.ndarray,
+            answer_attention_mask: np.ndarray,
+        ) -> np.ndarray:
+            # Minimal stub: return zeros to wire through pipeline without model dependency
+            return np.zeros_like(answer_tokens, dtype=np.float32)
 
         # Evaluation Hook
         # def eval_hook(step_info: StepInfo):
@@ -296,10 +267,10 @@ def main(config: TrainRlConfig):
                 self.key = key
                 self.dataset, _ = create_dataset_from_environment(
                     environment=environment,
-                    # sampler=sampler,
-                    # params=trainer.state.model.params,
-                    # reference_params=reference_model,
-                    get_logprobs_fn=get_logprobs,
+                    sampler=sampler,
+                    params=state.model,
+                    reference_params=reference_model,
+                    get_logprobs_fn=get_reference_logprobs,
                     n_examples=config.n_prompts_per_step,
                     prng_key=self.key,
                     reference_logprobs_bsize=config.reference_logprobs_bsize,
@@ -308,16 +279,47 @@ def main(config: TrainRlConfig):
                     pad_token_id=config.pad_token_id,
                     tokenizer=tokenizer,
                     generation_config=config.generation_config,
-                    train_bsize=config.trainer.TrainBatch.size,
                     mode="train",
                 )
-                self.iterator = iter(self.dataset)
+                # Use dataset's batch iterator instead of iterating the dataset directly
+                self.iterator = self.dataset.iterate_batches(
+                    batch_size=config.reference_logprobs_bsize, shuffle=True, loop=True
+                )
 
             def __iter__(self):
                 return self
 
             def __next__(self):
-                return next(self.iterator)
+                batch = next(self.iterator)
+                # Convert dict -> RlExample with Haliax named arrays
+                batch_size = batch["input_ids"].shape[0]
+                seq_len = batch["input_ids"].shape[1]
+                Batch = hax.Axis("batch", batch_size)
+                Pos = hax.Axis("position", seq_len)
+
+                input_ids = hax.named(jnp.asarray(batch["input_ids"]).astype(jnp.int32), (Batch, Pos))
+                loss_mask = hax.named(jnp.asarray(batch["loss_masks"]).astype(jnp.bool_), (Batch, Pos))
+                segment_ids = hax.named(jnp.zeros_like(input_ids.array, dtype=jnp.int32), (Batch, Pos))
+                loss_weights = hax.named(jnp.asarray(batch["loss_weights"]).astype(jnp.float32), (Batch, Pos))
+                reference_logprobs = hax.named(
+                    jnp.asarray(batch["reference_logprobs"]).astype(jnp.float32), (Batch, Pos)
+                )
+                # Policy logprobs are optional; use zeros if not provided
+                if "policy_logprobs" in batch:
+                    policy_logprobs = hax.named(
+                        jnp.asarray(batch["policy_logprobs"]).astype(jnp.float32), (Batch, Pos)
+                    )
+                else:
+                    policy_logprobs = hax.named(jnp.zeros_like(reference_logprobs.array), (Batch, Pos))
+
+                return RlExample(
+                    input_ids=input_ids,
+                    loss_mask=loss_mask,
+                    segment_ids=segment_ids,
+                    loss_weights=loss_weights,
+                    policy_logprobs=policy_logprobs,
+                    reference_logprobs=reference_logprobs,
+                )
 
         # TODO: fix resume
         train_loader = RlDatasetIterator(loader_key)
