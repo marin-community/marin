@@ -5,6 +5,8 @@ from collections import deque
 
 import pytest
 
+pytest.importorskip("levanter")
+
 try:
     import openai_responses
 except ImportError:  # pragma: no cover
@@ -13,7 +15,7 @@ except ImportError:  # pragma: no cover
 
 
 from marin.rl.envs.openai_echo import ChatEchoEnv
-from marin.rl.datatypes import InferenceEndpoint, RolloutGroup
+from marin.rl.datatypes import InferenceEndpoint, LegacyRolloutGroup
 
 
 @pytest.mark.skipif(openai_responses is None, reason="openai_responses not installed")
@@ -31,9 +33,9 @@ def test_chat_echo_env(openai_mock):  # type: ignore[valid-type]
     }
 
     # Collect rollouts emitted by the env
-    collected: deque[RolloutGroup] = deque()
+    collected: deque[LegacyRolloutGroup] = deque()
 
-    def sink(groups: list[RolloutGroup]):
+    def sink(groups: list[LegacyRolloutGroup]):
         collected.extend(groups)
 
     env = ChatEchoEnv(

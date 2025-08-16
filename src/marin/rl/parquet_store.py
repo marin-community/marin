@@ -22,7 +22,7 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 
-from .datatypes import Rollout, RolloutGroup, Turn
+from .datatypes import Rollout, LegacyRolloutGroup, Turn
 
 # ---------------------------------------------------------------------------
 # Conversion helpers
@@ -50,7 +50,7 @@ def _rollout_to_pyobj(rollout: Rollout) -> dict:
     }
 
 
-def _groups_to_table(groups: list[RolloutGroup]) -> pa.Table:
+def _groups_to_table(groups: list[LegacyRolloutGroup]) -> pa.Table:
     rows = []
     for g in groups:
         for r in g.rollouts:
@@ -70,7 +70,7 @@ def _groups_to_table(groups: list[RolloutGroup]) -> pa.Table:
 
 
 def write_rollout_groups(
-    groups: list[RolloutGroup],
+    groups: list[LegacyRolloutGroup],
     root_path: str,
     *,
     compression: str = "zstd",
@@ -97,12 +97,12 @@ def write_rollout_groups(
     pq.write_table(table, filename, compression=compression, filesystem=fs)
 
 
-def iter_rollout_groups(root_path: str) -> Iterator[RolloutGroup]:
-    """Yield :class:`RolloutGroup` objects stored under *root_path*.
+def iter_rollout_groups(root_path: str) -> Iterator[LegacyRolloutGroup]:
+    """Yield :class:`LegacyRolloutGroup` objects stored under *root_path*.
 
     Groups are reconstructed on a *best-effort* basis using the serialized group
     metadata.  If multiple rollouts share identical ``group_metadata_json`` they
-    will be packed into the same :class:`RolloutGroup`.
+    will be packed into the same :class:`LegacyRolloutGroup`.
     """
 
     fs, dataset_root = pafs.FileSystem.from_uri(root_path)
@@ -110,7 +110,7 @@ def iter_rollout_groups(root_path: str) -> Iterator[RolloutGroup]:
     dataset = ds.dataset(dataset_root, format="parquet", filesystem=fs)
 
     # We'll accumulate rows with identical group metadata together.
-    pending: dict[str, RolloutGroup] = {}
+    pending: dict[str, LegacyRolloutGroup] = {}
 
     # Iterate over record batches to avoid loading the full dataset in memory.
     for batch in dataset.to_batches():
@@ -139,7 +139,7 @@ def iter_rollout_groups(root_path: str) -> Iterator[RolloutGroup]:
             )
 
             if gid not in pending:
-                pending[gid] = RolloutGroup(
+                pending[gid] = LegacyRolloutGroup(
                     id=gid,
                     source=source,
                     created=created,
@@ -148,7 +148,7 @@ def iter_rollout_groups(root_path: str) -> Iterator[RolloutGroup]:
                 )
             else:
                 grp = pending[gid]
-                pending[gid] = RolloutGroup(
+                pending[gid] = LegacyRolloutGroup(
                     id=gid,
                     source=source,
                     created=created,

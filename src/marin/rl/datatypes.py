@@ -7,13 +7,18 @@ introducing heavy dependencies at import time.
 """
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+import time
+from typing import Any, Optional
 
 __all__ = [
     "InferenceEndpoint",
     "Rollout",
+    "LegacyRolloutGroup",
+    "RolloutRecord",
     "RolloutGroup",
+    "GroupKey",
+    "SampledBatch",
     "RolloutSink",
     "Turn",
 ]
@@ -75,7 +80,7 @@ class Rollout:
 
 
 @dataclass(slots=True, frozen=True)
-class RolloutGroup:
+class LegacyRolloutGroup:
     """A collection of rollouts that should be processed together (e.g. a batch).
 
     Grouping rollouts enables algorithms such as GRPO that operate on multiple
@@ -93,8 +98,8 @@ class RolloutGroup:
         return iter(self.rollouts)
 
 
-# A callable that accepts a *batch* of :class:`RolloutGroup` objects.
-RolloutSink = Callable[[list[RolloutGroup]], None]
+# A callable that accepts a *batch* of :class:`LegacyRolloutGroup` objects.
+RolloutSink = Callable[[list[LegacyRolloutGroup]], None]
 
 
 # ---------------------------------------------------------------------------
@@ -112,3 +117,56 @@ class InferenceEndpoint:
     """
 
     address: str
+
+
+# ---------------------------------------------------------------------------
+# Replay buffer data types
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RolloutRecord:
+    """Metadata and payload for a single rollout emitted by an environment."""
+
+    environment: str
+    example_id: str
+    policy_version: str
+    segment_idx: int = 0
+    is_last_segment: bool = True
+    replica_id: str = "unknown"
+    rollout_uid: str = ""
+    token_count: int = 0
+    reward: Optional[float] = None
+    logprobs: Optional[bytes] = None
+    output_tokens: Optional[bytes] = None
+    metadata: Optional[dict] = None
+    created_ts: float = field(default_factory=lambda: time.time())
+
+
+@dataclass(frozen=True)
+class RolloutGroup:
+    """A sealed collection of rollouts sharing the same group key."""
+
+    id: str
+    environment: str
+    example_id: str
+    policy_version: str
+    segment_idx: int
+    rollouts: list[RolloutRecord]
+    sealed_ts: float
+    metadata: dict
+
+
+@dataclass(frozen=True)
+class GroupKey:
+    environment: str
+    example_id: str
+    policy_version: str
+    segment_idx: int
+
+
+@dataclass(frozen=True)
+class SampledBatch:
+    batch_id: str
+    group_ids: list[str]
+    ts: float

@@ -33,7 +33,7 @@ class AbstractEnvConfig(abc.ABC):
     def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, seed: int) -> ActorHandle:
         """Instantiate the environment.
 
-        The *rollout_sink* should be called with :class:`~marin.rl.datatypes.RolloutGroup` batches.
+        The *rollout_sink* should be called with :class:`~marin.rl.datatypes.LegacyRolloutGroup` batches.
         """
 
 

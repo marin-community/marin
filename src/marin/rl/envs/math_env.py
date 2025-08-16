@@ -4,7 +4,7 @@ This environment samples problems from the MATH dataset (via the
 `DigitalLearningGmbH/MATH-lighteval` split), queries an
 OpenAI-compatible inference endpoint for answers, evaluates the answer
 against the dataset's ground-truth solution, and emits the interaction
-as a :class:`~marin.rl.datatypes.RolloutGroup`.
+as a :class:`~marin.rl.datatypes.LegacyRolloutGroup`.
 
 Both the dataset loading and answer checking logic are largely ported
 from `marin.post_training.environments.math_env.MathEnv` but translated
@@ -35,7 +35,7 @@ from ..config import AbstractEnvConfig
 from ..datatypes import (
     InferenceEndpoint,
     Rollout,
-    RolloutGroup,
+    LegacyRolloutGroup,
     RolloutSink,
     Turn,
 )
@@ -169,7 +169,7 @@ class MathEnv(AbstractMarinEnv):
                 ),
             ]
             rollout = Rollout(turns=turns, metadata={"problem": user_prompt})
-            group = RolloutGroup(
+            group = LegacyRolloutGroup(
                 id=f"math-{iteration}",
                 source="math_env",
                 created=time.time(),

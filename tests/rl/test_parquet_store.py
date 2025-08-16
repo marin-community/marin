@@ -6,10 +6,10 @@ from dataclasses import asdict
 import pyarrow as pa  # noqa: F401  # ensures pyarrow import works in CI
 
 from marin.rl.parquet_store import iter_rollout_groups, write_rollout_groups
-from marin.rl.datatypes import Rollout, RolloutGroup, Turn
+from marin.rl.datatypes import Rollout, LegacyRolloutGroup, Turn
 
 
-def _make_sample_groups() -> list[RolloutGroup]:
+def _make_sample_groups() -> list[LegacyRolloutGroup]:
     ts = time.time()
 
     turn1 = Turn(
@@ -29,7 +29,7 @@ def _make_sample_groups() -> list[RolloutGroup]:
 
     rollout = Rollout(turns=[turn1, turn2], metadata={"seed": 42})
 
-    g1 = RolloutGroup(
+    g1 = LegacyRolloutGroup(
         id="g1",
         source="dummy_env",
         created=ts,
@@ -37,7 +37,7 @@ def _make_sample_groups() -> list[RolloutGroup]:
         metadata={"env": "dummy_env"},
     )
 
-    g2 = RolloutGroup(
+    g2 = LegacyRolloutGroup(
         id="g2",
         source="dummy_env",
         created=ts + 1,
@@ -48,11 +48,11 @@ def _make_sample_groups() -> list[RolloutGroup]:
     return [g1, g2]
 
 
-def _sort_by_id(groups: list[RolloutGroup]) -> list[RolloutGroup]:
+def _sort_by_id(groups: list[LegacyRolloutGroup]) -> list[LegacyRolloutGroup]:
     return sorted(groups, key=lambda g: g.id)
 
 
-def _groups_equal(a: RolloutGroup, b: RolloutGroup) -> bool:
+def _groups_equal(a: LegacyRolloutGroup, b: LegacyRolloutGroup) -> bool:
     """Deep equality helper via dataclasses.asdict with float tolerance."""
 
     da, db = asdict(a), asdict(b)

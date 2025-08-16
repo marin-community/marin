@@ -4,7 +4,7 @@ from typing import List
 import numpy as np
 import ray
 
-from .datatypes import RolloutGroup, Turn
+from .datatypes import LegacyRolloutGroup, Turn
 from marin.post_training.environments.marin_env import EnvStep, MarinEnv  # old-style
 
 # ---------------------------------------------------------------------------
@@ -25,7 +25,7 @@ class _GroupBuffer:
 
         self._queue = asyncio.Queue()
 
-    async def push(self, groups: list[RolloutGroup]):  # called from env actor
+    async def push(self, groups: list[LegacyRolloutGroup]):  # called from env actor
         for g in groups:
             await self._queue.put(g)
 
@@ -82,7 +82,7 @@ class NewStyleEnvWrapper(MarinEnv):
     inference:
         Inference endpoint object forwarded to *env_cfg.build*.
     batch_size:
-        Minimum number of *RolloutGroup* objects that constitute one `step()`.
+        Minimum number of *LegacyRolloutGroup* objects that constitute one `step()`.
     replica_id:
         Passed through to *env_cfg.build* and can be used to vary seeds.
     """
@@ -121,7 +121,7 @@ class NewStyleEnvWrapper(MarinEnv):
         """
         # Fetch exactly n_examples groups; each group may contain multiple rollouts
         need_groups = max(1, int(n_examples))
-        groups: List[RolloutGroup] = ray.get(self._buffer.fetch.remote(need_groups))
+        groups: List[LegacyRolloutGroup] = ray.get(self._buffer.fetch.remote(need_groups))
 
         gens = max(1, int(n_generations))
         examples: list[dict] = []

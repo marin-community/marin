@@ -5,6 +5,8 @@ from collections import deque
 
 import pytest
 
+pytest.importorskip("levanter")
+
 try:
     import openai_responses  # type: ignore
 except ImportError:  # pragma: no cover
@@ -13,7 +15,7 @@ except ImportError:  # pragma: no cover
 import datasets
 
 from marin.rl.envs.math_env import MathEnv
-from marin.rl.datatypes import InferenceEndpoint, RolloutGroup
+from marin.rl.datatypes import InferenceEndpoint, LegacyRolloutGroup
 
 
 @pytest.mark.skipif(openai_responses is None, reason="openai_responses not installed")
@@ -68,7 +70,7 @@ def test_math_env_rollout(openai_mock, monkeypatch):  # type: ignore[valid-type]
     # ------------------------------------------------------------------
     # Collect rollouts emitted by the environment
     # ------------------------------------------------------------------
-    collected: deque[RolloutGroup] = deque()
+    collected: deque[LegacyRolloutGroup] = deque()
 
     def sink(groups):  # type: ignore[override]
         collected.extend(groups)

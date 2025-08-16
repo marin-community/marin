@@ -33,7 +33,7 @@
 
 ## ReplayBuffer
 
-- [ ] Make ReplayBuffer skeleton p0
+- [x] Make ReplayBuffer skeleton p0
   - [ ] Ray actor: concurrent append; sampling by group for GRPO; capacity/eviction p1
   - [ ] Support persistence: optional Parquet append on a background thread p1
   - [ ] API: `add(groups: list[RolloutGroup])`, `sample(num_groups: int, strategy="by_group")` p1

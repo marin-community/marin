@@ -14,7 +14,7 @@ import ray
 from levanter.utils.ray_utils import RayResources
 
 from ..config import AbstractEnvConfig
-from ..datatypes import InferenceEndpoint, Rollout, RolloutGroup, RolloutSink, Turn
+from ..datatypes import InferenceEndpoint, Rollout, LegacyRolloutGroup, RolloutSink, Turn
 from ..env import AbstractMarinEnv
 
 
@@ -66,7 +66,7 @@ class ChatEchoEnv(AbstractMarinEnv):
                 inference_metadata={"model": self._model},
             )
             rollout = Rollout(turns=[turn], metadata={"iteration": counter})
-            group = RolloutGroup(
+            group = LegacyRolloutGroup(
                 id=f"chat-{counter}",
                 source="chat_echo_env",
                 created=time.time(),

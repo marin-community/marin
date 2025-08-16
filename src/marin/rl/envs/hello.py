@@ -17,7 +17,7 @@ from ..config import AbstractEnvConfig
 from ..datatypes import (
     InferenceEndpoint,
     Rollout,
-    RolloutGroup,
+    LegacyRolloutGroup,
     RolloutSink,
     Turn,
 )
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 class HelloWorldEnv(SimpleEnv):
     """Simple environment that produces deterministic dummy rollouts."""
 
-    def do_rollout(self) -> list[RolloutGroup]:
+    def do_rollout(self) -> list[LegacyRolloutGroup]:
         if not hasattr(self, "_counter"):
             self._counter = 0
 
@@ -44,7 +44,7 @@ class HelloWorldEnv(SimpleEnv):
             inference_metadata={"model": "dummy"},
         )
         rollout = Rollout(turns=[turn], metadata={"iteration": self._counter})
-        group = RolloutGroup(
+        group = LegacyRolloutGroup(
             id=f"hello-{self._counter}",
             source="hello_env",
             created=time.time(),
