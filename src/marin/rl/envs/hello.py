@@ -16,8 +16,8 @@ from ray.actor import ActorHandle
 from ..config import AbstractEnvConfig
 from ..datatypes import (
     InferenceEndpoint,
-    Rollout,
     RolloutGroup,
+    RolloutRecord,
     RolloutSink,
     Turn,
 )
@@ -36,19 +36,40 @@ class HelloWorldEnv(SimpleEnv):
         # Simulate calling the inference server (here we just echo text)
         response_text = f"Hello #{self._counter} from {self._inference.address}"
 
-        turn = Turn(
-            message=response_text,
-            role="assistant",
-            logprobs=None,
+        record = RolloutRecord(
+            environment="hello_env",
+            example_id=f"hello-{self._counter}",
+            policy_version="v0",
+            rollout_uid=f"hello-{self._counter}",
+            replica_id="hello",
             reward=0.0,
-            inference_metadata={"model": "dummy"},
+            turns=[
+                Turn(
+                    message="Hello, world",
+                    logprobs=None,
+                    role="user",
+                    reward=None,
+                    inference_metadata={},
+                ),
+                Turn(
+                    message=response_text,
+                    logprobs=None,
+                    role="assistant",
+                    reward=0.0,
+                    inference_metadata={},
+                ),
+            ],
+            metadata={"response": response_text},
+            created_ts=time.time(),
         )
-        rollout = Rollout(turns=[turn], metadata={"iteration": self._counter})
         group = RolloutGroup(
             id=f"hello-{self._counter}",
-            source="hello_env",
-            created=time.time(),
-            rollouts=[rollout],
+            environment="hello_env",
+            example_id=f"hello-{self._counter}",
+            policy_version="v0",
+            segment_idx=0,
+            rollouts=[record],
+            sealed_ts=time.time(),
             metadata={},
         )
 
