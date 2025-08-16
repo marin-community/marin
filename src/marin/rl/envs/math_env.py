@@ -37,6 +37,7 @@ from ..datatypes import (
     RolloutGroup,
     RolloutRecord,
     RolloutSink,
+    Turn,
 )
 from ..env import AbstractMarinEnv
 
@@ -155,12 +156,29 @@ class MathEnv(AbstractMarinEnv):
                 rollout_uid=f"math-{iteration}",
                 replica_id="math",
                 reward=reward,
+                turns=[
+                    Turn(
+                        message=user_prompt,
+                        logprobs=None,
+                        role="user",
+                        reward=None,
+                        inference_metadata={},
+                    ),
+                    Turn(
+                        message=assistant_msg,
+                        logprobs=None,
+                        role="assistant",
+                        reward=reward,
+                        inference_metadata={},
+                    ),
+                ],
                 metadata={
                     "prompt": user_prompt,
                     "response": assistant_msg,
                     "valid_format": is_valid,
                     "correct": is_correct,
                 },
+                created_ts=time.time(),
             )
             group = RolloutGroup(
                 id=f"math-{iteration}",

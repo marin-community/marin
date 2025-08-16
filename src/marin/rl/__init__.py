@@ -1,10 +1,11 @@
 """Marin RL public interface with lightweight exports."""
 
-from .datatypes import Rollout, RolloutGroup, RolloutSink, Turn
+from .datatypes import Rollout, RolloutGroup, RolloutRecord, RolloutSink, Turn
 
 __all__ = [
     "Rollout",
     "RolloutGroup",
+    "RolloutRecord",
     "RolloutSink",
     "Turn",
 ]

@@ -6,9 +6,10 @@ components.  Implementation-specific logic should live elsewhere to avoid
 introducing heavy dependencies at import time.
 """
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
-import time
+from collections.abc import Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+import numpy as np
 from typing import Any, Optional
 
 __all__ = [
@@ -41,14 +42,15 @@ class InferenceMetadata:
 class Turn:
     """A single message-level interaction within a rollout.
 
-    Parameters
+    Attributes
     ----------
     message:
         The textual contents of the turn (usually a single chat message).
     logprobs:
-        Token-level log probabilities corresponding to *message*.  The length of
-        *logprobs* should match the number of generated tokens, but can be
-        omitted when not available.
+        Token-level log probabilities corresponding to *message* stored as a
+        :class:`numpy.ndarray`. The array length should match the number of
+        generated tokens. ``None`` indicates that log probabilities were not
+        recorded.
     role:
         The role that produced the message (e.g. "user", "assistant",
         "system", "tool").
@@ -61,7 +63,7 @@ class Turn:
     """
 
     message: str
-    logprobs: Sequence[float] | None
+    logprobs: np.ndarray | None
     role: str
     reward: float | None
     inference_metadata: dict[str, Any] | InferenceMetadata
@@ -106,26 +108,70 @@ class InferenceEndpoint:
 
 @dataclass(frozen=True)
 class RolloutRecord:
-    """Metadata and payload for a single rollout emitted by an environment."""
+    """Fully materialized rollout plus associated metadata.
+
+    Attributes
+    ----------
+    environment:
+        Name of the environment that produced the rollout.
+    example_id:
+        Identifier for the dataset example or task instance.
+    policy_version:
+        Version of the policy used to generate the rollout.
+    segment_idx:
+        Index of the segment within a multi-part rollout (default ``0``).
+    is_last_segment:
+        ``True`` if this is the final segment of the rollout.
+    replica_id:
+        Identifier for the environment replica that produced the rollout.
+    rollout_uid:
+        Unique identifier for deduplicating rollouts.
+    reward:
+        Scalar reward for the rollout (if available).
+    turns:
+        Ordered list of :class:`Turn` objects comprising the rollout.
+    metadata:
+        Additional implementation-defined metadata.
+    created_ts:
+        UNIX timestamp when the rollout was generated.
+    """
 
     environment: str
     example_id: str
     policy_version: str
+    turns: list[Turn]
+    created_ts: float
     segment_idx: int = 0
     is_last_segment: bool = True
     replica_id: str = "unknown"
     rollout_uid: str = ""
-    token_count: int = 0
     reward: Optional[float] = None
-    logprobs: Optional[bytes] = None
-    output_tokens: Optional[bytes] = None
-    metadata: Optional[dict] = None
-    created_ts: float = field(default_factory=lambda: time.time())
+    metadata: Optional[dict[str, Any]] = None
 
 
 @dataclass(frozen=True)
 class RolloutGroup:
-    """A sealed collection of rollouts sharing the same group key."""
+    """A sealed collection of rollouts sharing the same group key.
+
+    Attributes
+    ----------
+    id:
+        Deterministic identifier of the group.
+    environment:
+        Name of the environment that produced the rollouts.
+    example_id:
+        Identifier of the dataset example shared by all rollouts in the group.
+    policy_version:
+        Policy version associated with the rollouts.
+    segment_idx:
+        Segment index for multi-part rollouts.
+    rollouts:
+        List of :class:`RolloutRecord` objects belonging to the group.
+    sealed_ts:
+        UNIX timestamp when the group was sealed.
+    metadata:
+        Additional metadata about the group (e.g. counts, replica info).
+    """
 
     id: str
     environment: str
@@ -139,6 +185,8 @@ class RolloutGroup:
 
 @dataclass(frozen=True)
 class GroupKey:
+    """Key identifying a rollout group before it is sealed."""
+
     environment: str
     example_id: str
     policy_version: str
@@ -147,6 +195,8 @@ class GroupKey:
 
 @dataclass(frozen=True)
 class SampledBatch:
+    """Batch of group identifiers returned by the replay buffer sampler."""
+
     batch_id: str
     group_ids: list[str]
     ts: float

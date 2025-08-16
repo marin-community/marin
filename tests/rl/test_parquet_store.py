@@ -6,7 +6,7 @@ from dataclasses import asdict
 import pyarrow as pa  # noqa: F401  # ensures pyarrow import works in CI
 
 from marin.rl.parquet_store import iter_rollout_groups, write_rollout_groups
-from marin.rl.datatypes import RolloutGroup, RolloutRecord
+from marin.rl.datatypes import RolloutGroup, RolloutRecord, Turn
 
 
 def _make_sample_groups() -> list[RolloutGroup]:
@@ -19,6 +19,22 @@ def _make_sample_groups() -> list[RolloutGroup]:
         rollout_uid="u1",
         replica_id="rep",
         reward=1.0,
+        turns=[
+            Turn(
+                message="hi",
+                logprobs=None,
+                role="user",
+                reward=None,
+                inference_metadata={},
+            ),
+            Turn(
+                message="there",
+                logprobs=None,
+                role="assistant",
+                reward=1.0,
+                inference_metadata={},
+            ),
+        ],
         metadata={"text": "Hi there!"},
         created_ts=ts,
     )
@@ -59,6 +75,10 @@ def _groups_equal(a: RolloutGroup, b: RolloutGroup) -> bool:
     if abs(da["sealed_ts"] - db["sealed_ts"]) > 1e-9:
         return False
     da["sealed_ts"] = db["sealed_ts"] = 0
+    for ra, rb in zip(da["rollouts"], db["rollouts"], strict=False):
+        if abs(ra["created_ts"] - rb["created_ts"]) > 1e-9:
+            return False
+        ra["created_ts"] = rb["created_ts"] = 0
     return da == db
 
 

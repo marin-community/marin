@@ -19,6 +19,7 @@ from ..datatypes import (
     RolloutGroup,
     RolloutRecord,
     RolloutSink,
+    Turn,
 )
 from ..env import SimpleEnv
 
@@ -42,7 +43,24 @@ class HelloWorldEnv(SimpleEnv):
             rollout_uid=f"hello-{self._counter}",
             replica_id="hello",
             reward=0.0,
+            turns=[
+                Turn(
+                    message="Hello, world",
+                    logprobs=None,
+                    role="user",
+                    reward=None,
+                    inference_metadata={},
+                ),
+                Turn(
+                    message=response_text,
+                    logprobs=None,
+                    role="assistant",
+                    reward=0.0,
+                    inference_metadata={},
+                ),
+            ],
             metadata={"response": response_text},
+            created_ts=time.time(),
         )
         group = RolloutGroup(
             id=f"hello-{self._counter}",

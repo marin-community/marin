@@ -14,7 +14,7 @@ import ray
 from levanter.utils.ray_utils import RayResources
 
 from ..config import AbstractEnvConfig
-from ..datatypes import InferenceEndpoint, RolloutGroup, RolloutRecord, RolloutSink
+from ..datatypes import InferenceEndpoint, RolloutGroup, RolloutRecord, RolloutSink, Turn
 from ..env import AbstractMarinEnv
 
 
@@ -65,7 +65,31 @@ class ChatEchoEnv(AbstractMarinEnv):
                 rollout_uid=f"chat-{counter}",
                 replica_id="chat",
                 reward=0.0,
+                turns=[
+                    Turn(
+                        message=self._system_prompt,
+                        logprobs=None,
+                        role="system",
+                        reward=None,
+                        inference_metadata={},
+                    ),
+                    Turn(
+                        message=self._prompt,
+                        logprobs=None,
+                        role="user",
+                        reward=None,
+                        inference_metadata={},
+                    ),
+                    Turn(
+                        message=assistant_msg,
+                        logprobs=None,
+                        role="assistant",
+                        reward=0.0,
+                        inference_metadata={},
+                    ),
+                ],
                 metadata={"response": assistant_msg},
+                created_ts=time.time(),
             )
             group = RolloutGroup(
                 id=f"chat-{counter}",

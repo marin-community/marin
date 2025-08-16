@@ -6,12 +6,13 @@ import json
 import uuid
 from collections.abc import Iterator
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 
-from .datatypes import RolloutGroup, RolloutRecord
+from .datatypes import RolloutGroup, RolloutRecord, Turn
 
 
 def _groups_to_table(groups: list[RolloutGroup]) -> pa.Table:
@@ -30,10 +31,20 @@ def _groups_to_table(groups: list[RolloutGroup]) -> pa.Table:
                     "group_metadata_json": g_meta,
                     "replica_id": r.replica_id,
                     "rollout_uid": r.rollout_uid,
-                    "token_count": r.token_count,
                     "reward": r.reward,
-                    "logprobs": r.logprobs,
-                    "output_tokens": r.output_tokens,
+                    "turns_json": json.dumps(
+                        [
+                            {
+                                "message": t.message,
+                                "logprobs": t.logprobs.tolist() if t.logprobs is not None else None,
+                                "role": t.role,
+                                "reward": t.reward,
+                                "inference_metadata": t.inference_metadata,
+                            }
+                            for t in r.turns
+                        ],
+                        separators=(",", ":"),
+                    ),
                     "is_last_segment": r.is_last_segment,
                     "rr_metadata_json": json.dumps(r.metadata or {}, separators=(",", ":")),
                     "created_ts": r.created_ts,
@@ -81,10 +92,17 @@ def iter_rollout_groups(root_path: str) -> Iterator[RolloutGroup]:
                 is_last_segment=record["is_last_segment"],
                 replica_id=record["replica_id"],
                 rollout_uid=record["rollout_uid"],
-                token_count=int(record["token_count"]),
                 reward=record["reward"],
-                logprobs=record["logprobs"],
-                output_tokens=record["output_tokens"],
+                turns=[
+                    Turn(
+                        message=t["message"],
+                        logprobs=np.array(t["logprobs"], dtype=float) if t["logprobs"] is not None else None,
+                        role=t["role"],
+                        reward=t["reward"],
+                        inference_metadata=t["inference_metadata"],
+                    )
+                    for t in json.loads(record["turns_json"])
+                ],
                 metadata=json.loads(record["rr_metadata_json"]),
                 created_ts=record["created_ts"],
             )
