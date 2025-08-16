@@ -4,7 +4,10 @@ import time
 import pytest
 import ray
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
+try:  # pragma: no cover - optional dependency for RL tests
+    from marin.evaluation.evaluators.evaluator import ModelConfig
+except Exception:  # pragma: no cover - evaluation extras may be missing
+    ModelConfig = None  # type: ignore[assignment]
 
 default_engine_kwargs = {"enforce_eager": True, "max_model_len": 1024}
 
@@ -18,6 +21,8 @@ DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 
 @pytest.fixture(scope="module")
 def model_config():
+    if ModelConfig is None:
+        pytest.skip("ModelConfig not available")
     config = ModelConfig(
         name="test-llama-200m",
         path="gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",
