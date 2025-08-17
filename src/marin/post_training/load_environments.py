@@ -10,6 +10,7 @@ from .environments.numina_math_env import NuminaMathEnv
 from .environments.olym_math_env import OlymMathEnv
 from .environments.olympiad_bench_env import OlympiadBenchEnv
 from .environments.open_math_reasoning_env import OpenMathReasoningEnv
+from .environments.orz_env import ORZEnv
 from .environments.svamp_env import SVAMPEnv
 from .environments.swe_bench_env import SWEBenchEnv
 
@@ -21,6 +22,7 @@ ENVIRONMENT_NAME_TO_CLASS = {
     "olym_math": OlymMathEnv,
     "olympiad_bench": OlympiadBenchEnv,
     "open_math_reasoning": OpenMathReasoningEnv,
+    "orz": ORZEnv,
     "svamp": SVAMPEnv,
     "swe_bench": SWEBenchEnv,
 }
