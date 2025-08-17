@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+
+def unimax_weights(
+    corpus_tokens: dict[str, float],
+    steps: int,
+    tokens_per_step: int,
+    max_epochs: float = 1.0,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Compute UniMax sampling weights and token allocations.
+
+    Args:
+        corpus_tokens: Mapping from subset name to its token count.
+        steps: Total number of training steps.
+        tokens_per_step: Tokens consumed per step.
+        max_epochs: Epoch cap ``E``. If the total budget exceeds
+            ``E * sum(corpus_tokens)``, ``E`` is automatically bumped so that the
+            full budget can be allocated.
+
+    Returns:
+        A tuple ``(weights, alloc)`` where ``weights`` is a mapping from subset
+        name to its sampling probability and ``alloc`` is the total number of
+        tokens allocated to the subset.
+    """
+
+    if steps < 0 or tokens_per_step < 0:
+        raise ValueError("steps and tokens_per_step must be non-negative")
+
+    budget = float(steps) * float(tokens_per_step)
+
+    # Handle empty corpora early
+    total_tokens = float(sum(corpus_tokens.values()))
+    if total_tokens == 0:
+        return {k: 0.0 for k in corpus_tokens}, {k: 0.0 for k in corpus_tokens}
+
+    # If the requested budget is larger than the allowed max_epochs, bump it so
+    # that we can allocate the entire budget.
+    effective_epochs = max(max_epochs, budget / total_tokens)
+    caps = {k: effective_epochs * v for k, v in corpus_tokens.items()}
+
+    remaining_budget = budget
+    remaining_caps = {k: c for k, c in caps.items()}
+    alloc = {k: 0.0 for k in caps}
+
+    while remaining_caps and remaining_budget > 0:
+        share = remaining_budget / len(remaining_caps)
+        # Saturate any subset whose cap is below the equal share
+        saturated = [k for k, cap in remaining_caps.items() if cap <= share]
+        if saturated:
+            for k in saturated:
+                cap = remaining_caps.pop(k)
+                alloc[k] = cap
+                remaining_budget -= cap
+        else:
+            for k in list(remaining_caps.keys()):
+                alloc[k] = share
+            remaining_budget = 0
+
+    # ---- epsilon repair: sum(alloc) == budget within tiny tol ----
+    EPS = 1e-9
+    total = sum(alloc.values())
+    err = budget - total  # could be +/- a few ulps
+
+    if abs(err) > EPS and budget > 0:
+        if err > 0:
+            # Add to the item with most slack (cap - alloc)
+            k_sel = max(alloc, key=lambda k: caps[k] - alloc[k])
+            slack = caps[k_sel] - alloc[k_sel]
+            delta = min(err, max(0.0, slack))
+            alloc[k_sel] += delta
+        else:
+            # Remove from largest alloc
+            k_sel = max(alloc, key=lambda k: alloc[k])
+            delta = min(-err, alloc[k_sel])
+            alloc[k_sel] -= delta
+
+    # Normalise allocations to probabilities
+    weights = {k: alloc[k] / budget if budget > 0 else 0.0 for k in alloc}
+
+    return weights, alloc
+
+
+def main() -> None:  # pragma: no cover - CLI helper
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sizes", required=True, help="JSON file: {subset: tokens}")
+    parser.add_argument("--steps", type=int, required=True)
+    parser.add_argument("--tokens_per_step", type=int, required=True)
+    parser.add_argument("--max_epochs", type=float, default=1.0)
+    args = parser.parse_args()
+
+    with open(args.sizes) as f:
+        sizes = json.load(f)
+    weights, alloc = unimax_weights(sizes, args.steps, args.tokens_per_step, args.max_epochs)
+    print(json.dumps({"weights": weights, "alloc": alloc}, indent=2))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
