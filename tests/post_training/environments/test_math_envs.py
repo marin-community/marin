@@ -344,7 +344,7 @@ def test_grade_answer_with_orz_env_loaded():
 
     answer = env.train_examples[300]["answer"]
     assert grade_answer(given_answer="8\\pi", ground_truth=answer) is True
-    assert grade_answer(given_answer="8 \pi", ground_truth=answer) is True
-    assert grade_answer(given_answer="8 * \pi", ground_truth=answer) is True
-    assert grade_answer(given_answer="9 * \pi", ground_truth=answer) is False
+    assert grade_answer(given_answer=r"8 \pi", ground_truth=answer) is True
+    assert grade_answer(given_answer=r"8 * \pi", ground_truth=answer) is True
+    assert grade_answer(given_answer=r"9 * \pi", ground_truth=answer) is False
     assert grade_answer(given_answer="9\\pi", ground_truth=answer) is False
