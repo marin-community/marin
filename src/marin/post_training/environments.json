@@ -9,6 +9,7 @@
         {"environment": "olympiad_bench:language=en,subject=maths"},
         {"environment": "olympiad_bench:language=en,subject=physics"},
         {"environment": "open_math_reasoning"},
+        {"environment": "orz"},
         {"environment": "svamp"},
         {"environment": "swe_bench"}
     ]
