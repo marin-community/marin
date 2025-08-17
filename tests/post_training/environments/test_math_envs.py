@@ -183,6 +183,26 @@ def test_olympiad_bench_env_physics_loaded():
 
 
 @pytest.mark.skip(reason="Need to fix environment import.")
+def test_orz_env_loaded():
+    from marin.post_training.environments.orz_env import ORZEnv
+
+    env = ORZEnv(tokenizer=None)
+    assert len(env.train_examples) == 71444
+    assert len(env.eval_examples) == ORZEnv.DEV_SET_SIZE
+
+    # Ensure we get the same examples every time we load the environment
+    assert env.train_examples[0]["prompt"].startswith(
+        "10. A. Given positive real numbers $a$, $b$, $c$ satisfy $9a + 4b = abc$. Then the "
+        "minimum value of $a + b + c$ is $\\qquad$"
+    )
+    assert env.eval_examples[16]["prompt"].startswith(
+        "19. Suppose $x, y, z$ and $\\lambda$ are positive real numbers such that\n$$\n\\begin{aligned}\ny "
+        "z & =6 \\lambda x \\\\\nx z & =6 \\lambda y \\\\\nx y & =6 \\lambda z "
+        "\\\\\nx^{2}+y^{2}+z^{2} & =1\n\\end{aligned}\n$$\n\nFind the value of $(x y z \\lambda)^{-1}$."
+    )
+
+
+@pytest.mark.skip(reason="Need to fix environment import.")
 def test_grade_answer_with_olym_math_env():
     """
     Test whether `grade_answer` works correctly with OlymMathEnv
@@ -314,3 +334,17 @@ def test_grade_answer_with_olympiad_bench_env_loaded():
     assert grade_answer(given_answer="6m", ground_truth=answer) is True
     assert grade_answer(given_answer="$ 6m $", ground_truth=answer) is True
     assert grade_answer(given_answer="16m", ground_truth=answer) is False
+
+
+@pytest.mark.skip(reason="Need to fix environment import.")
+def test_grade_answer_with_orz_env_loaded():
+    from marin.post_training.environments.orz_env import ORZEnv
+
+    env = ORZEnv(tokenizer=None)
+
+    answer = env.train_examples[300]["answer"]
+    assert grade_answer(given_answer="8\\pi", ground_truth=answer) is True
+    assert grade_answer(given_answer="8 \pi", ground_truth=answer) is True
+    assert grade_answer(given_answer="8 * \pi", ground_truth=answer) is True
+    assert grade_answer(given_answer="9 * \pi", ground_truth=answer) is False
+    assert grade_answer(given_answer="9\\pi", ground_truth=answer) is False
