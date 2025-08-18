@@ -280,6 +280,7 @@ post_training = [
     "ipython",
     "datasets",
     "scalax@git+https://github.com/Sea-Snell/scalax.git",
+    "swebench",
 ]
 
 data_browser = [
