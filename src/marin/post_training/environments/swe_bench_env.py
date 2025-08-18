@@ -10,7 +10,7 @@ from typing import Any
 import datasets
 import jax
 import numpy as np
-from post_training.inference import batch_inference
+from marin.post_training.inference import batch_inference
 from swebench.inference.make_datasets.utils import extract_diff
 from tqdm.auto import tqdm
 
