@@ -33,8 +33,7 @@ class HelloWorldEnv(SimpleEnv):
         if not hasattr(self, "_counter"):
             self._counter = 0
 
-        # Simulate calling the inference server (here we just echo text)
-        response_text = f"Hello #{self._counter} from {self._inference.address}"
+        response_text = f"Hello #{self._counter}!"
 
         record = RolloutRecord(
             environment="hello_env",
@@ -42,7 +41,6 @@ class HelloWorldEnv(SimpleEnv):
             policy_version="v0",
             rollout_uid=f"hello-{self._counter}",
             replica_id="hello",
-            reward=0.0,
             turns=[
                 Turn(
                     message="Hello, world",
@@ -55,11 +53,11 @@ class HelloWorldEnv(SimpleEnv):
                     message=response_text,
                     logprobs=None,
                     role="assistant",
-                    reward=0.0,
+                    reward=1 if self._counter % 2 == 0 else 0,
                     inference_metadata={},
                 ),
             ],
-            metadata={"response": response_text},
+            metadata={},
             created_ts=time.time(),
         )
         group = RolloutGroup(
@@ -67,7 +65,6 @@ class HelloWorldEnv(SimpleEnv):
             environment="hello_env",
             example_id=f"hello-{self._counter}",
             policy_version="v0",
-            segment_idx=0,
             rollouts=[record],
             sealed_ts=time.time(),
             metadata={},

@@ -9,12 +9,13 @@
 We need a **Ray Actor** that acts as a distributed replay buffer for async RL (GRPO/AIPO-style). It must:
 
 * Persist rollouts to a blob store or filesystem (**GCS/S3/local**) using **Parquet**.
-* Support **grouped rollouts** where a group is K rollouts for the **same (environment, example\_id, policy\_version, segment\_idx)**.
+* Support **grouped rollouts** where a group is K rollouts for the **same (environment, example\_id, policy\_version)**.
 * Allow **multiple environment replicas** to contribute rollouts for the same group key.
-* Support **partial rollouts** (segmented completions).
 * Provide **deterministic sampling** for reproducibility.
 * Enable **strict** or **mixed-policy** grouping.
 * Recover cleanly after preemptions.
+* Long Term: Support **partial rollouts** (segmented completions). p4
+
 
 ---
 
@@ -30,8 +31,6 @@ class RolloutRecord:
     environment: str
     example_id: str
     policy_version: str
-    segment_idx: int = 0
-    is_last_segment: bool = True
     replica_id: str = "unknown"
     rollout_uid: str = ""
     token_count: int = 0
@@ -47,7 +46,6 @@ class RolloutGroup:
     environment: str
     example_id: str
     policy_version: str
-    segment_idx: int
     rollouts: list[RolloutRecord]
     sealed_ts: float
     metadata: dict
@@ -57,7 +55,6 @@ class GroupKey:
     environment: str
     example_id: str
     policy_version: str
-    segment_idx: int
 
 @dataclass(frozen=True)
 class SampledBatch:
@@ -93,7 +90,7 @@ class ReplayBuffer:
         self.rr_keys_mixed = collections.deque()
 
     def add_rollout(self, r: RolloutRecord):
-        key = GroupKey(r.environment, r.example_id, r.policy_version, r.segment_idx)
+        key = GroupKey(r.environment, r.example_id, r.policy_version)
         if self.accept_policy_versions and key.policy_version not in self.accept_policy_versions:
             return
         agg = self.pending.setdefault(key, {"uids": set(), "rollouts": [], "by_replica": collections.Counter(),
@@ -115,7 +112,7 @@ class ReplayBuffer:
             return
         gid = self._stable_group_id(key, agg["uids"])
         group = RolloutGroup(id=gid, environment=key.environment, example_id=key.example_id,
-                             policy_version=key.policy_version, segment_idx=key.segment_idx,
+                             policy_version=key.policy_version,
                              rollouts=list(agg["rollouts"]), sealed_ts=time.time(),
                              metadata={"num_rollouts": len(agg["rollouts"]), "uids": sorted(agg["uids"]),
                                        "replicas": sorted(agg["by_replica"])} )
@@ -125,13 +122,13 @@ class ReplayBuffer:
                              "created_ts": time.time(), "last_update_ts": time.time()}
 
     def _stable_group_id(self, key: GroupKey, uids: set) -> str:
-        base = f"{key.environment}|{key.example_id}|{key.policy_version}|seg={key.segment_idx}|{'/'.join(sorted(uids))}"
+        base = f"{key.environment}|{key.example_id}|{key.policy_version}|{'/'.join(sorted(uids))}"
         return "g-" + hashlib.blake2b(base.encode(), digest_size=12).hexdigest()
 
     def _index_group(self, key: GroupKey, gid: str):
         self.strict.setdefault(key, collections.deque()).append(gid)
         self.rr_keys_strict.append(key)
-        mk = (key.environment, key.example_id, key.segment_idx)
+        mk = (key.environment, key.example_id)
         self.mixed.setdefault(mk, collections.deque()).append(gid)
         self.rr_keys_mixed.append(mk)
 ```
@@ -139,7 +136,7 @@ class ReplayBuffer:
 # Prioritized TODO Checklist (single list)
 
 - [ ] Core data model #P1
-  - [ ] Include `policy_version`, `segment_idx`, `is_last_segment`, and deterministic `group_id` at seal time.
+  - [ ] Include `policy_version`, and deterministic `group_id` at seal time.
   - [ ] Dedupe semantics: rollout-level (`rollout_uid`) within aggregators and group-level (`group_id`) across the dataset.
   - [ ] Finalize Parquet schema and partitioning: `env/pv/seg`.
 - [ ] Ray Actor interface #P1
@@ -173,6 +170,8 @@ class ReplayBuffer:
   - [ ] Retention policy: TTL or per-\(env,pv\) caps \(do not evict groups in un-acked batches\).
 - [ ] Tests #P4
   - [ ] Idempotent writes, dedupe, timeout sealing, strict vs mixed sampling, seed+offset replay, recovery from restart.
+- [ ] Add `append_to_group()` prior to sealing if using multi-stage ingestion.
+- [ ] Add `segment_idx` and `is_last_segment` to `RolloutRecord` and `RolloutGroup` to support partial rollouts. p4
 
 ---
 
@@ -199,8 +198,6 @@ def _rows_from_group(group: dict) -> List[Dict]:
             "environment": group["environment"],
             "example_id": group["example_id"],
             "policy_version": group["policy_version"],
-            "segment_idx": int(group["segment_idx"]),
-            "is_last_segment": bool(r.get("is_last_segment", True)),
             "group_id": group["id"],
             "rollout_uid": r["rollout_uid"],
             "replica_id": r.get("replica_id", "unknown"),
@@ -294,28 +291,28 @@ def rebuild_indexes(self) -> None:
     # Minimal scan over dataset headers to rebuild ready indexes
     import pyarrow.dataset as ds
     dataset = ds.dataset(self.root_path, format="parquet", partitioning="hive")
-    cols = ["group_id", "environment", "example_id", "policy_version", "segment_idx", "sealed_ts"]
+    cols = ["group_id", "environment", "example_id", "policy_version", "sealed_ts"]
     scanner = dataset.scanner(columns=cols)
     batches = scanner.to_batches()
     seen = set()
     for batch in batches:
         tbl = batch.to_pydict()
-        for gid, env, ex, pv, seg in zip(tbl["group_id"], tbl["environment"], tbl["example_id"], tbl["policy_version"], tbl["segment_idx"]):
+        for gid, env, ex, pv in zip(tbl["group_id"], tbl["environment"], tbl["example_id"], tbl["policy_version"]):
             if gid in seen:
                 continue
             seen.add(gid)
             # We index by group_id only; actual rollouts are fetched lazily via get_groups if you wire that to storage
             meta = {
-                "id": gid, "environment": env, "example_id": ex, "policy_version": pv, "segment_idx": int(seg)
+                "id": gid, "environment": env, "example_id": ex, "policy_version": pv
             }
             self._index_header(meta)
 
 def _index_header(self, header: dict) -> None:
     gid = header["id"]
     self.groups.setdefault(gid, header)  # header-only until fetched/expanded
-    k = GroupKey(header["environment"], header["example_id"], header["policy_version"], header["segment_idx"])
+    k = GroupKey(header["environment"], header["example_id"], header["policy_version"])
     self.strict.setdefault(k, collections.deque()).append(gid)
-    mk = (k.environment, k.example_id, k.segment_idx)
+    mk = (k.environment, k.example_id)
     self.mixed.setdefault(mk, collections.deque()).append(gid)
 ```
 

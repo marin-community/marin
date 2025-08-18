@@ -96,7 +96,6 @@ class ChatEchoEnv(AbstractMarinEnv):
                 environment="chat_echo_env",
                 example_id=f"chat-{counter}",
                 policy_version="v0",
-                segment_idx=0,
                 rollouts=[record],
                 sealed_ts=time.time(),
                 metadata={},

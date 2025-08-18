@@ -21,22 +21,23 @@
 
 ## Coordination
 - [ ] parameterize and initialize environments (via `AbstractEnvConfig`) p1
-- [ ] central runner that: 
+- [ ] central runner that:
   - [ ] starts Ray, weight transfer server, and a named `WeightTransferCoordinator` p1
   - [x] instantiates env actors per `MarinRlConfig.envs` with varying seeds p1
   - [x] wires a `RolloutSink` to Parquet (see Parquet section) and/or ReplayBuffer p1
   - [ ] exposes health/metrics endpoint and graceful shutdown
 - [ ] gather and log rollouts (counts, eps, per-env throughput)
-- [ ] allow multiple coordinators (one per training node) and envs selecting nearest coordinator
 
 
 
 ## ReplayBuffer
 
+see also /.agents/projects/replay_buffer.md for more details and tasks.
+
 - [x] Make ReplayBuffer skeleton p0
-  - [ ] Ray actor: concurrent append; sampling by group for GRPO; capacity/eviction p1
+  - [x]  Ray actor: concurrent append; sampling by group for GRPO;  p1
+  - [ ] capacity/eviction p1
   - [ ] Support persistence: optional Parquet append on a background thread p1
-  - [ ] API: `add(groups: list[RolloutGroup])`, `sample(num_groups: int, strategy="by_group")` p1
   - [ ] Metrics: occupancy, enqueue/dequeue rate, drop count
 
 

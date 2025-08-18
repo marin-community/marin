@@ -7,19 +7,19 @@ introducing heavy dependencies at import time.
 """
 
 from collections.abc import Callable
-from collections.abc import Callable
 from dataclasses import dataclass
 import numpy as np
-from typing import Any, Optional
+from typing import Any
 
 __all__ = [
-    "InferenceEndpoint",
-    "Rollout",
-    "RolloutRecord",
-    "RolloutGroup",
     "GroupKey",
-    "SampledBatch",
+    "InferenceEndpoint",
+    "RLExample",
+    "Rollout",
+    "RolloutGroup",
+    "RolloutRecord",
     "RolloutSink",
+    "SampledBatch",
     "Turn",
 ]
 
@@ -118,16 +118,10 @@ class RolloutRecord:
         Identifier for the dataset example or task instance.
     policy_version:
         Version of the policy used to generate the rollout.
-    segment_idx:
-        Index of the segment within a multi-part rollout (default ``0``).
-    is_last_segment:
-        ``True`` if this is the final segment of the rollout.
     replica_id:
         Identifier for the environment replica that produced the rollout.
     rollout_uid:
         Unique identifier for deduplicating rollouts.
-    reward:
-        Scalar reward for the rollout (if available).
     turns:
         Ordered list of :class:`Turn` objects comprising the rollout.
     metadata:
@@ -139,14 +133,11 @@ class RolloutRecord:
     environment: str
     example_id: str
     policy_version: str
+    rollout_uid: str
     turns: list[Turn]
     created_ts: float
-    segment_idx: int = 0
-    is_last_segment: bool = True
+    metadata: dict[str, Any]
     replica_id: str = "unknown"
-    rollout_uid: str = ""
-    reward: Optional[float] = None
-    metadata: Optional[dict[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -163,8 +154,6 @@ class RolloutGroup:
         Identifier of the dataset example shared by all rollouts in the group.
     policy_version:
         Policy version associated with the rollouts.
-    segment_idx:
-        Segment index for multi-part rollouts.
     rollouts:
         List of :class:`RolloutRecord` objects belonging to the group.
     sealed_ts:
@@ -177,10 +166,9 @@ class RolloutGroup:
     environment: str
     example_id: str
     policy_version: str
-    segment_idx: int
     rollouts: list[RolloutRecord]
     sealed_ts: float
-    metadata: dict
+    metadata: dict[str, Any] = None
 
 
 @dataclass(frozen=True)
@@ -190,7 +178,6 @@ class GroupKey:
     environment: str
     example_id: str
     policy_version: str
-    segment_idx: int
 
 
 @dataclass(frozen=True)
@@ -200,3 +187,20 @@ class SampledBatch:
     batch_id: str
     group_ids: list[str]
     ts: float
+
+
+@dataclass(frozen=True)
+class RLExample:
+    """A single RL training example.
+
+    Attributes:
+        tokens: Token sequence for the example
+        loss_mask: Boolean mask indicating which positions to compute loss on
+        advantage: Advantage values for each position
+        generator_log_probs: Log probabilities from the generator model
+    """
+
+    tokens: np.ndarray  # i32["pos"]
+    loss_mask: np.ndarray  # bool["pos"]
+    advantage: np.ndarray  # float["pos"]
+    generator_log_probs: np.ndarray  # float["pos"]

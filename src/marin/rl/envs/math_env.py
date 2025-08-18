@@ -185,7 +185,6 @@ class MathEnv(AbstractMarinEnv):
                 environment="math_env",
                 example_id=f"math-{iteration}",
                 policy_version="v0",
-                segment_idx=0,
                 rollouts=[record],
                 sealed_ts=time.time(),
                 metadata={"valid_format": is_valid, "correct": is_correct},
