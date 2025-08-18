@@ -1,5 +1,4 @@
 import math
-from functools import partial
 
 import flax.linen as nn
 import jax
@@ -11,7 +10,6 @@ from flax.linen import partitioning as nn_partitioning
 from flax.linen.attention import dot_product_attention_weights
 from flax.traverse_util import flatten_dict, unflatten_dict
 from jax import lax
-from jax.experimental.shard_map import shard_map
 from jax.sharding import PartitionSpec as PS
 from scalax.sharding import MeshShardingHelper, with_sharding_annotation
 from transformers.configuration_utils import PretrainedConfig
