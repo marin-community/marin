@@ -16,6 +16,7 @@ from optax import softmax_cross_entropy_with_integer_labels
 from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
+from pathlib import Path
 
 from .environments.marin_env import MarinEnv
 from .inference import GenerationConfig, batch_inference, build_sampler
@@ -224,7 +225,7 @@ class Trainer:
             self.mesh.sjit,
             in_shardings=(self.train_params_sharding_rules, PS(), PS()),
             out_shardings=(self.train_params_sharding_rules, PS()),
-            args_sharding_constraint=(self.train_params_sharding_rules, None, PS(("replica", "fsdp"))),
+            args_sharding_constraint=(self.train_params_sharding_rules, PS(), PS(("replica", "fsdp"))),
             donate_argnums=(0,),
             annotation_shardings=self.train_intermediate_sharding_rules,
         )
@@ -598,7 +599,7 @@ def main(
             os.remove(model_paths["tokenizer"])
 
         # Initialize environment with tokenization parameters
-        environment = load_environments_from_config(environments_path, tokenizer)
+        environment = load_environments_from_config(Path(__file__).resolve().parent / environments_path, tokenizer)
 
         # Initialize logger
         if "enable" not in logger_config:
