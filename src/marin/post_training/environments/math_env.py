@@ -4,8 +4,8 @@ from typing import Any
 import datasets
 import jax
 import numpy as np
-from post_training.inference import batch_inference
-from post_training.utils import validate_format
+from marin.post_training.inference import batch_inference
+from marin.post_training.utils import validate_format
 from tqdm.auto import tqdm
 
 from .marin_env import EnvStep, MarinEnv
