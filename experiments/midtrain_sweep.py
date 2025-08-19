@@ -28,12 +28,6 @@ class DecayConfig:
 _STEP_DIR_RE = re.compile(r"^step-(\d+)$")
 
 
-def _parse_step_from_path(path: str) -> int | None:
-    """Extract the last `step-<n>` occurrence from a path string, if present."""
-    m = re.search(r"step-(\d+)", path)
-    return int(m.group(1)) if m else None
-
-
 def get_latest_checkpoint_before_decay(checkpoint_path: str, num_train_steps: int, decay: float) -> str | None:
     """
     For a GCS checkpoint directory, list immediate subdirectories named `step-<n>` and
@@ -66,8 +60,14 @@ def get_latest_checkpoint_before_decay(checkpoint_path: str, num_train_steps: in
     return chosen_step_path
 
 
-# Executed outside the Executor Context because we need to use the function step_to_lm_mixture_component
-# which requires it
+def get_train_job_name(sweep_step: ExecutorStep, decay_data_name: str) -> str:
+    sweep_step_name_without_checkpoint_prefix = sweep_step.name.split("/")[-1]
+    return f"{sweep_step_name_without_checkpoint_prefix}-decay-{decay_data_name}"
+
+
+# NOTE(chris): Executed outside the Executor Context because we need to use the function step_to_lm_mixture_component
+# which requires the input to be a Step instead of a string. In the executor context, the ExecutorStep or InputName
+# gets converted to a string.
 def generate_tokenized_dataset_config(
     num_train_steps: int,
     decay: float,
@@ -125,8 +125,9 @@ def generate_tokenized_dataset_config(
     return dataset_config
 
 
-# Must be created outside of the ExecutorStep Context for some reason. If not, it will think that
-# paloma/4chan is in marin-us-central2?
+# NOTE(chris): Default train config must be created outside of the ExecutorStep Context for some reason.
+# If not, it will think that paloma/4chan is in marin-us-central2 and lead to error about model/train region
+# mismatch.
 def generate_train_config(dataset_config, model_config, train_config, experiment_name) -> TrainLmOnPodConfig:
     train_config = default_train(
         name=f"{experiment_name}",
@@ -166,35 +167,41 @@ def generate_midtrain_step(config: DecayConfig):
 
 
 # Test
+decay_data_name = "flan"
+decay_data_tokenized = get_dolmino_step_llama3("flan")
 isoflop_steps, isoflop_model_configs, isoflop_train_configs = generate_isoflop_sweep(
     nemotron_mix, experiment_name="nemo-wider-depth-adapt"
 )
-sweep_step = isoflop_steps[1]
 
-decay_data_tokenized = get_dolmino_step_llama3("flan")
+steps = []
+for sweep_step, model_config, train_config in zip(
+    isoflop_steps, isoflop_model_configs, isoflop_train_configs, strict=False
+):
+    experiment_name = get_train_job_name(sweep_step, decay_data_name)
 
-decay_dataset_config = generate_tokenized_dataset_config(
-    num_train_steps=isoflop_train_configs[1].num_train_steps,
-    decay=isoflop_train_configs[1].decay,
-    train_batch_size=isoflop_train_configs[1].train_batch_size,
-    stable_data_mix=nemotron_mix,
-    decay_data_mix=decay_data_tokenized,
-)
-decay_train_config = generate_train_config(
-    dataset_config=decay_dataset_config,
-    model_config=isoflop_model_configs[1],
-    train_config=isoflop_train_configs[1],
-    experiment_name="nemo-wider-depth-adapt-flan-test",
-)
-decay_step = ExecutorStep(
-    name="checkpoints/nemo-wider-depth-adapt-flan-test",
-    fn=generate_midtrain_step,
-    config=DecayConfig(
-        train_lm_on_pod_config=decay_train_config,
-        checkpoint_path=output_path_of(sweep_step, "checkpoints"),
-        train_config=isoflop_train_configs[1],
-    ),
-)
+    decay_dataset_config = generate_tokenized_dataset_config(
+        num_train_steps=train_config.num_train_steps,
+        decay=train_config.decay,
+        train_batch_size=train_config.train_batch_size,
+        stable_data_mix=nemotron_mix,
+        decay_data_mix=decay_data_tokenized,
+    )
+    decay_train_config = generate_train_config(
+        dataset_config=decay_dataset_config,
+        model_config=model_config,
+        train_config=train_config,
+        experiment_name=experiment_name,
+    )
+    decay_step = ExecutorStep(
+        name=f"checkpoints/{experiment_name}",
+        fn=generate_midtrain_step,
+        config=DecayConfig(
+            train_lm_on_pod_config=decay_train_config,
+            checkpoint_path=output_path_of(sweep_step, "checkpoints"),
+            train_config=train_config,
+        ),
+    )
+    steps.append(decay_step)
 
 if __name__ == "__main__":
-    executor_main(steps=[decay_step])
+    executor_main(steps=steps)
