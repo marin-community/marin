@@ -249,6 +249,8 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
     """Generate executor steps for an ISOFlop sweep."""
 
     steps: list[ExecutorStep] = []
+    model_configs = []
+    train_configs = []
     vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
 
     for budget in config.budgets:
@@ -306,8 +308,10 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
                 ),
             )
             steps.append(step)
+            train_configs.append(train_cfg)
+            model_configs.append(model_cfg)
 
-    return steps
+    return steps, model_configs, train_configs
 
 
 def generate_isoflop_sweep(
@@ -316,11 +320,12 @@ def generate_isoflop_sweep(
     **kwargs,
 ) -> list[ExecutorStep]:
     sweep_cfg = IsoFlopSweepConfig(tokenized_dataset=tokenized, **kwargs)
-    steps = generate_isoflop_steps(sweep_cfg, experiment_name)
+    steps, model_configs, train_configs = generate_isoflop_steps(sweep_cfg, experiment_name)
 
-    return steps
+    return steps, model_configs, train_configs
 
+
+steps, _, _ = generate_isoflop_sweep(nemotron_mix, experiment_name="nemo-wider-depth-adapt")
 
 if __name__ == "__main__":
-    steps = generate_isoflop_sweep(nemotron_mix, experiment_name="nemo-wider-depth-adapt")
     executor_main(steps=steps)
