@@ -352,9 +352,7 @@ class Trainer:
         if self.logger.can_save():
             checkpoint_dir = os.path.join(self.logger.output_dir, "checkpoints")
             if os.path.exists(checkpoint_dir):
-                checkpoint_steps = [
-                    int(d.split("_")[1]) for d in os.listdir(checkpoint_dir) if d.startswith("step_")
-                ]
+                checkpoint_steps = [int(d.split("_")[1]) for d in os.listdir(checkpoint_dir) if d.startswith("step_")]
                 if checkpoint_steps:
                     latest_checkpoint_step = max(checkpoint_steps)
 
@@ -406,9 +404,9 @@ class Trainer:
         # Training loop
         rng = jax.random.PRNGKey(0)
 
-        for step in tqdm(range(max(0, latest_checkpoint_step),
-                               self.config["num_train_steps"]),
-                         total=self.config["num_train_steps"]):
+        for step in tqdm(
+            range(max(0, latest_checkpoint_step), self.config["num_train_steps"]), total=self.config["num_train_steps"]
+        ):
             rng, subrng = jax.random.split(rng)
 
             inference_params = self.reshard_params(train_state.params)
