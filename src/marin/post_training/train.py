@@ -348,7 +348,32 @@ class Trainer:
         )
 
         # Initialize training state
-        if "params" in self.config["model_paths"]:
+        latest_checkpoint_step = -1
+        if self.logger.can_save():
+            checkpoint_dir = os.path.join(self.logger.output_dir, "checkpoints")
+            if os.path.exists(checkpoint_dir):
+                checkpoint_steps = [
+                    int(d.split("_")[1]) for d in os.listdir(checkpoint_dir) if d.startswith("step_")
+                ]
+                if checkpoint_steps:
+                    latest_checkpoint_step = max(checkpoint_steps)
+
+        if latest_checkpoint_step > 0:
+            print(f"Resuming training from checkpoint at step {latest_checkpoint_step}...")
+            checkpoint_path = os.path.join(
+                self.logger.output_dir, "checkpoints", f"step_{latest_checkpoint_step}", "params.msgpack"
+            )
+            train_state = self.create_train_state_from_params(
+                load_checkpoint(
+                    checkpoint_path,
+                    shard_fns=self.train_state_shard_fns.params,
+                    remove_dict_prefix=self.config["model_paths"]["remove_dict_prefix"],
+                    convert_to_dtypes=jax.tree_util.tree_map(
+                        lambda x: self.config["training_param_dtype"], train_state_shape.params
+                    ),
+                )
+            )
+        elif "params" in self.config["model_paths"]:
             train_state = self.create_train_state_from_params(
                 load_checkpoint(
                     self.config["model_paths"]["params"],
@@ -381,7 +406,9 @@ class Trainer:
         # Training loop
         rng = jax.random.PRNGKey(0)
 
-        for step in tqdm(range(self.config["num_train_steps"]), total=self.config["num_train_steps"]):
+        for step in tqdm(range(max(0, latest_checkpoint_step),
+                               self.config["num_train_steps"]),
+                         total=self.config["num_train_steps"]):
             rng, subrng = jax.random.split(rng)
 
             inference_params = self.reshard_params(train_state.params)
