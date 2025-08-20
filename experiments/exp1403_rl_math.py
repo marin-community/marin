@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+import dataclasses
 
 import ray
 
@@ -119,7 +120,7 @@ def run_rl_training_on_pod(config: RlTrainOnPodConfig):
 
     hw_config = config.resources.with_env_vars(env)
 
-    @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1)
+    @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1, max_retries=10)
     def rl_train_task():
 
         training_kwargs = {
@@ -228,6 +229,7 @@ def default_rl_train(
         "online": True,
         "prefix": name,
         "prefix_to_id": True,
+        "experiment_id": name,
     }
 
     resources = TpuPodConfig(tpu_type=tpu_type)
@@ -267,8 +269,8 @@ def main():
         default_rl_train(
             name="math_test",
             model_paths=model_paths,
-            tpu_type="v5p-64",
-            train_bsize=8,
+            tpu_type="v4-64",
+            train_bsize=64,
             kl_coef=1e-3,
             learning_rate=5e-7,
             num_train_steps=2048,
