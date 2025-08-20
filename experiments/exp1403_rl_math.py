@@ -6,7 +6,6 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-import dataclasses
 
 import ray
 
