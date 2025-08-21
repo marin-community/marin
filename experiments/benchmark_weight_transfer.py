@@ -26,7 +26,7 @@ from jax.experimental.mesh_utils import create_device_mesh
 from levanter.infra import ray_tpu
 from ray.actor import ActorHandle
 
-from marin.rl.coordinator import (
+from marin.rl.weight_transfer import (
     instantiate_coordinator,
     num_bytes,
     process_weight_transfers,
