@@ -72,3 +72,5 @@ This script ensure that:
 - The working directory is set appropriately.
 - Any subpaths under submodules are appended to PYTHONPATH, which is useful
   when [co-developing with another submodule](../tutorials/co-develop.md) (e.g., levanter).
+
+> **New:** Agent-friendly recipes are now available in `docs/recipes/`. See [add_dataset.md](../recipes/add_dataset.md) for a guide to dataset schema inspection and addition.
