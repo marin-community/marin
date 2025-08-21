@@ -24,7 +24,7 @@ from experiments.datashop.default_configs import (
 from experiments.exp939_finemath import FINEMATH_DATA_FILTER_PROMPT
 from experiments.models import get_model_local_path, llama_3_3_70b_instruct
 from marin.classifiers.utils import CreateDatasetConfig, create_dataset
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
+from thalas.execution.executor import ExecutorStep, output_path_of, this_output_path
 
 # From the SmolLM2 paper: https://arxiv.org/pdf/2502.02737
 FINEMATH_3_POINT_DATA_FILTER_PROMPT = """

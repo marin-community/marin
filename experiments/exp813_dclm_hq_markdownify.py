@@ -23,7 +23,7 @@ Reference Issue: https://github.com/stanford-crfm/marin/issues/813
 """
 
 from marin.download.dclm_hq.download_dclm_hq_html import DCLMHQDownloadConfig, extract_dclm_hq_dump
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from thalas.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
 html_extracted_dclm_hq = ExecutorStep(
     name="raw/dolmino-dclm-hq-html-extracted",

@@ -20,7 +20,7 @@ from experiments.datashop.datashop_datasets import datashop_dclm_annotation_subs
 from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
 from experiments.eval_datasets import mmlu_subject_eval
 from marin.datashop.pipeline import CorpusContent
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 
 # Humanities
 humanities = [

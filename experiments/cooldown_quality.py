@@ -29,7 +29,7 @@ from experiments.anneal_config import AnnealConfig
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
-from marin.execution.executor import ExecutorStep
+from thalas.execution.executor import ExecutorStep
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
 from marin.resources import TpuPodConfig
 

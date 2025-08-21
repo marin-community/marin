@@ -26,7 +26,7 @@ from experiments.cooldown_quality import QualityAblationConfig, default_quality_
 from experiments.defaults import default_tokenize
 from experiments.exp575_wikipedia_markdownify import wikipedia_resiliparse_custom_fork
 from experiments.llama import llama3_tokenizer
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 
 # Tokenize the Wikipedia dataset

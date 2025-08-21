@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from marin.classifiers.hf.train_classifier import HFTrainingConfig
-from marin.execution.executor import this_output_path
+from thalas.execution.executor import this_output_path
 from marin.processing.classification.config.inference_config import RuntimeConfig, TaskConfig
 
 default_engine_kwargs = {

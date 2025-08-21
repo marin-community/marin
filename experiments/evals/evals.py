@@ -34,7 +34,7 @@ from experiments.evals.task_configs import (
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
-from marin.execution.executor import (
+from thalas.execution.executor import (
     ExecutorStep,
     InputName,
     get_executor_step,

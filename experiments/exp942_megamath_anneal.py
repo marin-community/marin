@@ -26,7 +26,7 @@ from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import MMLU_TASKS
 from experiments.midtraining_datasets import megamath_mixture, megamath_real_only
 from experiments.tootsie.exp600_tootsie import phoenix_phase4_checkpoint_for_phase5
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import interpolate_mixture_configs, lm_mixture_data_config
 
 dolmino_dclm = get_dolmino_step_llama3("dclm")

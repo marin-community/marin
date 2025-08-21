@@ -27,7 +27,7 @@ from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_nano
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 from marin.resources import GpuConfig
 
 wikitext_hf_id = "dlwh/wikitext_2_detokenized"

@@ -30,7 +30,7 @@ from experiments.exp164_quality_classifiers import dclm_eli5_100k_oh_100k_rw_200
 from experiments.exp274_mmlu_quality_classifier import marin_mmlu_100k_rw_100k
 from experiments.llama import llama3_tokenizer
 from marin.core.runtime import TaskConfig
-from marin.execution.executor import (
+from thalas.execution.executor import (
     ExecutorStep,
     executor_main,
     output_path_of,

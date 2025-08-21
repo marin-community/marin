@@ -20,7 +20,7 @@ import fsspec
 import ray
 
 from marin.core.runtime import TaskConfig, cached_or_construct_output, map_files_in_directory
-from marin.execution.executor import THIS_OUTPUT_PATH
+from thalas.execution.executor import THIS_OUTPUT_PATH
 
 
 @dataclasses.dataclass

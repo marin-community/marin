@@ -20,7 +20,7 @@ https://github.com/marin-community/marin/issues/718
 from experiments.defaults import default_train, simulated_epoching_train
 from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
 from experiments.llama import llama_150m, llama_150m_train_config
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 EXPERIMENT_TAG = ["718_simulated_epoching"]

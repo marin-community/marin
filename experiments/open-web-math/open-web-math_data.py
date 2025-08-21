@@ -19,7 +19,7 @@ Downloads the open-web-math dataset
 """
 
 from marin.download.huggingface.download import DownloadConfig, download
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from thalas.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
 ############################################################
 # download open-web-math dataset

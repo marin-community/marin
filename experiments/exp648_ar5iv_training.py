@@ -35,7 +35,7 @@ from experiments.exp579_ar5iv_markdownify import (
     ar5iv_no_problem_resiliparse_with_references_no_links,
     ar5iv_no_problem_resiliparse_with_references_with_links,
 )
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")

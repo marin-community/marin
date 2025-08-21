@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.core.runtime import TaskConfig
-from marin.execution.executor import (
+from thalas.execution.executor import (
     ExecutorStep,
     output_path_of,
     this_output_path,

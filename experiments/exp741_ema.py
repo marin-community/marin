@@ -18,7 +18,7 @@ from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3_wrong
 from experiments.defaults import default_train
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 
 llama_1_4b_train_config = SimpleTrainConfig(

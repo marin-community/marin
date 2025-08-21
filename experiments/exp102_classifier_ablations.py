@@ -22,7 +22,7 @@ from experiments.exp164_quality_classifiers import (
     teknium_oh_200k_rw_200k,
 )
 from experiments.quality_classifier_experiment_utils import ExperimentConfig, create_steps
-from marin.execution.executor import (
+from thalas.execution.executor import (
     executor_main,
 )
 

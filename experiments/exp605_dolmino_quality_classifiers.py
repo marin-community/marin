@@ -28,7 +28,7 @@ from experiments.exp164_quality_classifiers import dclm_negative_examples_in_dol
 from experiments.pretraining_datasets import dolmino
 from experiments.quality_classifier_experiment_utils import ExperimentConfig, create_steps
 from marin.classifiers.utils import DatasetConfig
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from thalas.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,

@@ -27,7 +27,7 @@ Reference Issue: https://github.com/marin-community/marin/issues/575
 """
 
 from marin.download.wikipedia.download import DownloadConfig, download
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from thalas.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
 from marin.transform.wikipedia.transform_wikipedia import WikiExtractionConfig, process_wiki_dump
 

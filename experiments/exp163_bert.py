@@ -35,7 +35,7 @@ from experiments.exp274_mmlu_quality_classifier import (
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.classifiers.utils import DatasetConfig
 from marin.core.runtime import TaskConfig
-from marin.execution.executor import (
+from thalas.execution.executor import (
     ExecutorStep,
     executor_main,
     output_path_of,

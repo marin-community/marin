@@ -25,7 +25,7 @@ import re
 from experiments.crawl.default import default_crawl
 from marin.crawl.common.schemas import HtmlExtractionConfig
 from marin.crawl.get_fineweb_edu_crawl_yield import filter_and_yield
-from marin.execution.executor import executor_main, this_output_path
+from thalas.execution.executor import executor_main, this_output_path
 from marin.utils import fsspec_glob
 
 

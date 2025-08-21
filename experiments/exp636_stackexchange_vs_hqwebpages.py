@@ -26,7 +26,7 @@ from experiments.exp596_stackexchange_classifier import stackexchange_experiment
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from experiments.pretraining_datasets import dolmino
 from experiments.quality_classifier_experiment_utils import create_steps
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from thalas.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.transform.dolmino.filter_dolmino import FilterDolminoConfig, filter_dolmino
 
 dolmino_stackexchange_jsonl = ExecutorStep(

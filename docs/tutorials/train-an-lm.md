@@ -26,7 +26,7 @@ from experiments.defaults import SimpleTrainConfig, default_train
 from levanter.models.llama import LlamaConfig
 
 # Import the executor framework for running experiments
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 
 # Import logging utilities
 import logging
@@ -36,7 +36,7 @@ import logging
 - [`SimpleTrainConfig`][experiments.simple_train_config.SimpleTrainConfig]
 - [`default_train`][experiments.defaults.default_train]: A utility function that creates a training pipeline
 - [`LlamaConfig`][levanter.models.llama.LlamaConfig]: A dataclass that defines the model architecture from [Levanter](https://github.com/stanford-crfm/levanter)
-- [`executor_main`][marin.execution.executor.executor_main]: The main entry point for the Marin executor framework
+- `executor_main` from `thalas.execution.executor`: The main entry point for the Marin executor framework (now part of the [Thalas](https://github.com/marin-community/thalas) package)
 
 ## Setting Up the Model Configuration
 

@@ -31,7 +31,7 @@ from experiments.defaults import default_validation_sets
 from experiments.llama import llama_8b_old_rotary
 from experiments.tootsie.exp600_tootsie import llama3_tokenizer, llama_8b
 from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs
-from marin.execution.executor import ExecutorStep, executor_main, versioned
+from thalas.execution.executor import ExecutorStep, executor_main, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 
 COMPARISON_MODEL = "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase2/checkpoints/step-730000/"

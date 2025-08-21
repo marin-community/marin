@@ -41,7 +41,7 @@ from levanter.store import SerialCacheWriter, TreeCache
 from tqdm_loggable.auto import tqdm
 from transformers import AutoTokenizer
 
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName
+from thalas.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
 logger = logging.getLogger(__name__)

@@ -26,8 +26,8 @@ from experiments.evals.task_configs import (
 
 # Hardware / executor
 from experiments.evals.resource_configs import SINGLE_TPU_V4_8, SINGLE_TPU_V6E_8
-from marin.execution.executor import executor_main
-from marin.execution.executor import ExecutorMainConfig  # for retry logic
+from thalas.execution.executor import executor_main
+from thalas.execution.executor import ExecutorMainConfig  # for retry logic
 ```
 
 ## 1. Multiple‐Choice Eval: CORE_TASKS
@@ -38,7 +38,7 @@ Run the canonical CORE_TASKS (subset of DCLM tasks) via LM Evaluation Harness:
 # run_mcqa_eval.py
 from experiments.evals.evals import default_eval
 from experiments.evals.resource_configs import SINGLE_TPU_V4_8
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 
 # Example: evaluate a standalone checkpoint
 model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
@@ -67,7 +67,7 @@ Use `default_key_evals` to run a collection of generation tasks (`KEY_GENERATION
 # run_key_evals.py  (see 1:18:experiments/evals/run_key_evals.py)
 from experiments.evals.evals import default_key_evals
 from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 
 # Point to your checkpoint or a training ExecutorStep
 model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
@@ -120,7 +120,7 @@ If you want fine‐grained control over which tasks to run:
 from experiments.evals.evals import evaluate_lm_evaluation_harness
 from experiments.evals.resource_configs import SINGLE_TPU_V4_8
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 
 # Define a custom list of EvalTaskConfig
 custom_tasks = [

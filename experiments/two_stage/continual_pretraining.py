@@ -19,7 +19,7 @@ Simply load a pretrained model and do a single stage of training with choice of 
 
 from experiments.two_stage.two_stage_config import TwoStageConfig, two_stage_train_step
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 
 BASQUE_TASKS = (EvalTaskConfig("xcopa_eu", num_fewshot=0, task_alias="xcopa_eu"),)
 

@@ -28,7 +28,7 @@ import os
 from marin.core.runtime import cached_or_construct_output
 from marin.download import HfDownloadConfig, download_hf_gated_manual
 from experiments.llama import llama3_tokenizer
-from marin.execution.executor import (
+from thalas.execution.executor import (
     ExecutorStep,
     executor_main,
     this_output_path,

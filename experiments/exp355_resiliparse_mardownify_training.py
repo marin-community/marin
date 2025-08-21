@@ -22,7 +22,7 @@ import logging
 from experiments.defaults import default_tokenize, default_train
 from experiments.evals.evals import default_eval
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 
 logger = logging.getLogger("ray")
 step_name = "fineweb-small-resiliparse-custom-fork"

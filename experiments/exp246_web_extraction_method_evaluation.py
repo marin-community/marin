@@ -20,7 +20,7 @@ from experiments.exp246_web_extraction_method_training import (
     fineweb_trafilatura_favor_precision_1_4b_model,
     transform_resiliparse_default,
 )
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 
 readability_eval = default_eval(fineweb_readability_1_4b_model)
 

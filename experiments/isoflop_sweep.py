@@ -35,7 +35,7 @@ from experiments.llama import compute_num_parameters
 from experiments.metrics.wandb_related import get_vocab_size_for_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
-from marin.execution.executor import ExecutorStep, InputName, executor_main
+from thalas.execution.executor import ExecutorStep, InputName, executor_main
 from marin.resources import TpuPodConfig
 
 DEFAULT_BUDGETS = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]

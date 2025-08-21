@@ -34,7 +34,7 @@ Tags: <tags>
 Reference Issue: https://github.com/marin-community/marin/issues/822
 """
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from thalas.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
 from marin.transform.stackexchange.transform_stackexchange import (
     StackExchangeExtractionConfig,

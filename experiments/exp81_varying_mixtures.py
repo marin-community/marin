@@ -21,7 +21,7 @@ import dataclasses
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_150m, llama_150m_train_config
 from experiments.pretraining_datasets import slimpajama_6b, starcoderdata
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 # Tokenize the datasets

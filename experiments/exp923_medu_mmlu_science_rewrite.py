@@ -28,7 +28,7 @@ from experiments.defaults import default_tokenize
 from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
 from experiments.exp923_medu_mmlu import mmlu_science_pipeline
 from experiments.llama import llama3_tokenizer
-from marin.execution.executor import executor_main, output_path_of
+from thalas.execution.executor import executor_main, output_path_of
 from marin.resources import TpuPodConfig
 
 REPHRASE_THE_WEB_QA_TEMPLATE = """

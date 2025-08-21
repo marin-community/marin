@@ -43,7 +43,7 @@ from marin.crawl.minhash.deduplicate_against_index import (
     minhash_deduplicate_against_index_driver,
 )
 from marin.crawl.sample_from_unique_outlinks import OutlinksSamplingConfig, sample_outlinks
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
+from thalas.execution.executor import ExecutorStep, output_path_of, this_output_path
 
 # path to bloom filter for links. The year range corresponds to time period designations for CC
 BLOOM_FILTER_2013_2018 = (

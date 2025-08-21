@@ -14,7 +14,7 @@
 
 from experiments.evals.evals import evaluate_helm
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 
 steps = [
     evaluate_helm(

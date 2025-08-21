@@ -43,7 +43,7 @@ Before you get started, you will need the following:
 
         from experiments.llama import llama_nano
         from experiments.simple_train_config import SimpleTrainConfig
-        from marin.execution.executor import executor_main
+        from thalas.execution.executor import executor_main
         from marin.resources import GpuConfig
         from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
@@ -83,7 +83,7 @@ Before you get started, you will need the following:
 
         from experiments.llama import llama_nano
         from experiments.simple_train_config import SimpleTrainConfig
-        from marin.execution.executor import executor_main
+        from thalas.execution.executor import executor_main
         from marin.resources import TpuPodConfig
         from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 

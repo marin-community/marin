@@ -25,7 +25,7 @@ from levanter.models.llama import LlamaConfig
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3_wrong
 from experiments.defaults import default_train
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, executor_main, unwrap_versioned_value, versioned
+from thalas.execution.executor import ExecutorStep, executor_main, unwrap_versioned_value, versioned
 from marin.resources import TpuPodConfig
 
 logger = logging.getLogger("ray")

@@ -42,7 +42,7 @@ from experiments.evals.evals import default_eval
 from experiments.evals.resource_configs import SINGLE_TPU_V6E_8, TPU_V6E_8_STRICT_PACK, ResourceConfig
 from experiments.evals.task_configs import MMLU_5_SHOT
 from marin.datashop.pipeline import CorpusContent
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 
 
 @dataclass

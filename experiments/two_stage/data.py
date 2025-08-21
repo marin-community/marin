@@ -18,7 +18,7 @@ from experiments.llama import llama3_tokenizer
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.pretraining_datasets import slimpajama_6b
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, this_output_path
+from thalas.execution.executor import ExecutorStep, this_output_path
 
 dolma_components = tokenize_dolma_steps()
 

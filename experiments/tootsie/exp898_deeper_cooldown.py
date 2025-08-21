@@ -35,7 +35,7 @@ from experiments.tootsie.exp600_tootsie import (
     llama_8b_train_config_phase3,
     phase_3_data_mixture,
 )
-from marin.execution.executor import executor_main, output_path_of
+from thalas.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.resources import TpuPodConfig
 

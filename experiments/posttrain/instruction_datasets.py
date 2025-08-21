@@ -51,7 +51,7 @@ from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from marin.download.huggingface.download import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf
-from marin.execution.executor import (
+from thalas.execution.executor import (
     ExecutorStep,
     executor_main,
     output_path_of,

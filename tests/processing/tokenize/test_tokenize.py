@@ -14,7 +14,7 @@
 
 import pytest
 
-from marin.execution import InputName
+from thalas.execution import InputName
 from marin.processing.tokenize.tokenize import TokenizeConfig
 
 # Dummy values for other required TokenizeConfig fields

@@ -29,7 +29,7 @@ from levanter.models.mixtral import MixtralConfig
 from experiments.defaults import default_train
 from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.resources import TpuPodConfig
 

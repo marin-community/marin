@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from marin.download.huggingface.download import DownloadConfig, download
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from thalas.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """

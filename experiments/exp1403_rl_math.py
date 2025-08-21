@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 import ray
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from thalas.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.resources import ResourceConfig, TpuPodConfig
 from marin.training.training import (
     _add_default_env_variables,

@@ -21,7 +21,7 @@ When we increase the replay ratio, the second stage has more steps so we decreas
 """
 
 from experiments.two_stage.two_stage_config import TwoStageConfig, two_stage_train_step
-from marin.execution.executor import executor_main, output_path_of
+from thalas.execution.executor import executor_main, output_path_of
 
 
 def pretraining_for_fixed_steps(steps: int):

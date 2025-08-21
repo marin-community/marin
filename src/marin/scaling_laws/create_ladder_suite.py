@@ -27,7 +27,7 @@ from experiments.defaults import default_train
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, InputName
+from thalas.execution.executor import ExecutorStep, InputName
 from marin.resources import TpuPodConfig
 
 DEFAULT_MODEL_CONFIG = LlamaConfig(

@@ -55,7 +55,7 @@ from experiments.simple_train_config import SimpleTrainConfig
 from marin.download.huggingface.download import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import (
+from thalas.execution.executor import (
     ExecutorStep,
     InputName,
     ensure_versioned,

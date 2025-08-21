@@ -27,7 +27,7 @@ from experiments.llama import llama3_tokenizer
 from experiments.multilingual_fineweb2_hq.constants import FINEWEB2_DATASETS
 from marin.download.huggingface.download import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from thalas.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 

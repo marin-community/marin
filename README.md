@@ -56,7 +56,7 @@ You can check out the [full script](https://github.com/marin-community/marin/blo
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_nano
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 from marin.resources import CpuOnlyConfig
 
 # 1. Choose a dataset

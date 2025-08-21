@@ -43,7 +43,7 @@ from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 from marin.resources import TpuPodConfig
 

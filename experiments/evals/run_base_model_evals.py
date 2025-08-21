@@ -22,7 +22,7 @@ as dedicated MMLU 0-shot and 5-shot configurations.
 
 from experiments.evals.evals import default_base_eval
 from experiments.models import amber_base_7b, llama_3_1_8b, map_neo_7b, olmo_2_base_8b
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 
 if __name__ == "__main__":
     # Model path for deeper starling

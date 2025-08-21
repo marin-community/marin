@@ -30,7 +30,7 @@ from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import MMLU_TASKS
 from experiments.llama import llama3_tokenizer
-from marin.execution.executor import InputName, executor_main
+from thalas.execution.executor import InputName, executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.resources import TpuPodConfig
 

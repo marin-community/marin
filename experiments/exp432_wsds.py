@@ -21,7 +21,7 @@ from experiments.defaults import default_train
 from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 
 llama_1_4b_wsds_train_config = SimpleTrainConfig(

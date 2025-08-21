@@ -35,7 +35,7 @@ from experiments.midtraining_datasets import (
     pile_pubmed_central_validation_tokenized,
 )
 from experiments.tootsie.exp600_tootsie import phoenix_phase4_checkpoint_for_phase5
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.resources import TpuPodConfig
 

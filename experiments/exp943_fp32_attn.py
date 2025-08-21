@@ -21,7 +21,7 @@ import dataclasses
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.defaults import default_train
 from experiments.llama import llama_1_4b, llama_1_4b_train_config, llama_8b, llama_8b_train_config
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 
 # Default upcast_attn is False in LlamaConfig

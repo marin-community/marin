@@ -27,7 +27,7 @@ from fsspec.implementations.local import LocalFileSystem
 from huggingface_hub import create_commit, upload_folder
 from tqdm_loggable.auto import tqdm
 
-from marin.execution import ExecutorStep, InputName
+from thalas.execution import ExecutorStep, InputName
 from marin.utilities.fn_utils import with_retries
 from marin.utils import fsspec_glob
 

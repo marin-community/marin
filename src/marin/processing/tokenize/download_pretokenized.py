@@ -33,7 +33,7 @@ from marin.download.huggingface.download import DownloadConfig as HfDownloadConf
 from marin.download.huggingface.download_hf import (
     download_hf as hf_download_logic,
 )
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName, ensure_versioned
+from thalas.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName, ensure_versioned
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
 logger = logging.getLogger(__name__)

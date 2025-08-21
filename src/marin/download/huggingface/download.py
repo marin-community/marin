@@ -33,7 +33,7 @@ from dataclasses import dataclass
 import draccus
 import ray
 
-from marin.execution.executor import THIS_OUTPUT_PATH
+from thalas.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.huggingface_hub_utils import download_hf_dataset
 from marin.utilities.storage_transfer_utils import wait_for_transfer_job
 

@@ -42,6 +42,7 @@ dependencies = [
     "fasteners>=0.19",
     # Using a fork of dolma that updates transformers dependency to work with newer versions
     "dolma @ git+https://github.com/marin-community/dolma.git",
+    "thalas",
 ]
 
 [dependency-groups]
@@ -146,6 +147,7 @@ sentencepiece = { git = "https://github.com/google/sentencepiece/", subdirectory
 
 
 resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
+thalas = { git = "https://github.com/Open-Athena/thalas.git", rev = "rw/ps2.3" }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

@@ -22,7 +22,7 @@ from experiments.exp1342_gemstones_scaling_law import (
     roughly_equals,
 )
 from experiments.models import ModelConfig, download_model_step
-from marin.execution.executor import executor_main, output_path_of
+from thalas.execution.executor import executor_main, output_path_of
 
 
 def create_eval_steps() -> list:

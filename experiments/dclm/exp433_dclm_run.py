@@ -20,7 +20,7 @@ from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import LlamaConfig
 from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.resources import TpuPodConfig
 

@@ -26,7 +26,7 @@ Usage:
 Example:
 ```
 from gemstones import gemstone_768x45
-from marin.execution.executor import executor_main
+from thalas.execution.executor import executor_main
 from experiments.models import get_model_local_path
 
 executor_main([gemstone_768x45])
@@ -47,7 +47,7 @@ from experiments.defaults import default_tokenize, default_validation_sets
 from experiments.models import ModelConfig, download_model_step
 from marin.download.huggingface.download import DownloadConfig, download
 from marin.evaluation.log_probs import default_lm_log_probs
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from thalas.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
