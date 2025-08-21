@@ -140,4 +140,4 @@ These will be detailed in expanded recipes or subsequent PRs.
 ## See Also
 - [get_hf_dataset_schema.py on GitHub](https://github.com/marin-community/marin/blob/main/marin/tools/get_hf_dataset_schema.py)
 - [Hugging Face datasets documentation](https://huggingface.co/docs/datasets/)
-- Marin's [data processing tutorials](../tutorials/data.md) for context.
+- Marin's [data processing tutorials](../tutorials/filtering-data.md) for context.
