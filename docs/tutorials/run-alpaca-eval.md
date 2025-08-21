@@ -12,20 +12,22 @@ This tutorial shows how to configure and launch the Alpaca evaluation pipeline i
 The default evaluation script for alpaca is `experiments/evals/run_alpaca_eval.py`), if for some reason you want to make your own script import:
 
 ```python
-from experiments.evals.engine_configs import DEFAULT_VLLM_ENGINE_KWARGS
+from thalas import ExecutorMainConfig, executor_main
+
+from experiments.evals.engine_configs   import DEFAULT_VLLM_ENGINE_KWARGS
+from experiments.evals.evals            import evaluate_alpaca_eval
 from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
-from experiments.evals.evals          import evaluate_alpaca_eval
-from marin.execution.executor         import ExecutorMainConfig, executor_main
 ```
 
 ## Example Eval Script
 
 ```python
 # nodryrun
-from experiments.evals.engine_configs import DEFAULT_VLLM_ENGINE_KWARGS
-from experiments.evals.evals          import evaluate_alpaca_eval
+from thalas import ExecutorMainConfig, executor_main
+
+from experiments.evals.engine_configs   import DEFAULT_VLLM_ENGINE_KWARGS
+from experiments.evals.evals            import evaluate_alpaca_eval
 from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
-from marin.execution.executor         import ExecutorMainConfig, executor_main
 
 # Retry any failed steps by default
 executor_main_config = ExecutorMainConfig(force_run_failed=True)

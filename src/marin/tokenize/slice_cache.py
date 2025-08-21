@@ -38,10 +38,10 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
 )
 from levanter.store import SerialCacheWriter, TreeCache
+from thalas import THIS_OUTPUT_PATH, ExecutorStep, InputName
 from tqdm_loggable.auto import tqdm
 from transformers import AutoTokenizer
 
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
 logger = logging.getLogger(__name__)

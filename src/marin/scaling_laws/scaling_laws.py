@@ -33,8 +33,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import wandb
+from thalas import ExecutorStep
 
-from marin.execution.executor import ExecutorStep
 from marin.scaling_laws.utils import (
     ProjectionPoint,
     get_default_projection_points,

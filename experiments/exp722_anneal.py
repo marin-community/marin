@@ -17,13 +17,14 @@
 Evaluates the quality of finemath: shows boost in GSM8K and MMLU mathematics.
 """
 
+from thalas import executor_main
+
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import MMLU_TASKS
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
-from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 dolmino_dclm = get_dolmino_step_llama3("dclm")

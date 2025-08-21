@@ -41,11 +41,12 @@ Author: Will Held
 
 import dataclasses
 
+from thalas import executor_main, output_path_of
+
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.defaults import default_sft, default_train
 from experiments.exp606_sft import tulu3_llama_tokenize_step, tulu_sft_config
 from experiments.llama import llama_1_4b, llama_1_4b_train_config
-from marin.execution.executor import executor_main, output_path_of
 
 llama_1_4b_wsd_high_lr_train_config = dataclasses.replace(
     llama_1_4b_train_config,

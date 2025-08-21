@@ -13,8 +13,8 @@
 # limitations under the License.
 
 import pytest
+from thalas import InputName
 
-from marin.execution import InputName
 from marin.processing.tokenize.tokenize import TokenizeConfig
 
 # Dummy values for other required TokenizeConfig fields

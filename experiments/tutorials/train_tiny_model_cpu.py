@@ -23,11 +23,12 @@ This script demonstrates how to:
 For GPU training, see train_tiny_model_gpu.py
 """
 
+from thalas import executor_main
+
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_nano
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
 from marin.resources import CpuOnlyConfig
 
 # 1. Choose a dataset

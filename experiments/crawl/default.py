@@ -27,6 +27,8 @@ and then fetching the outlinks. The complete pipeline is as follows:
 
 from collections.abc import Callable
 
+from thalas import ExecutorStep, output_path_of, this_output_path
+
 from marin.crawl.common.convert_to_html import process_parquet
 from marin.crawl.common.schemas import HtmlExtractionConfig
 from marin.crawl.convert_responses_parquet_to_warc import ConvertResponsesToWARCConfig, convert_shards_to_warc
@@ -43,7 +45,6 @@ from marin.crawl.minhash.deduplicate_against_index import (
     minhash_deduplicate_against_index_driver,
 )
 from marin.crawl.sample_from_unique_outlinks import OutlinksSamplingConfig, sample_outlinks
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
 
 # path to bloom filter for links. The year range corresponds to time period designations for CC
 BLOOM_FILTER_2013_2018 = (

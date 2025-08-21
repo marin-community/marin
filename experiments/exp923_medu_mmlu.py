@@ -16,11 +16,12 @@
 import os
 from dataclasses import dataclass
 
+from thalas import executor_main
+
 from experiments.datashop.datashop_datasets import datashop_dclm_annotation_subset, datashop_dclm_pretraining_subset
 from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
 from experiments.eval_datasets import mmlu_subject_eval
 from marin.datashop.pipeline import CorpusContent
-from marin.execution.executor import executor_main
 
 # Humanities
 humanities = [

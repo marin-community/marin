@@ -20,8 +20,9 @@ For a fair comparison, we keep the total number of training steps fixed across r
 When we increase the replay ratio, the second stage has more steps so we decrease the length of pre-training.
 """
 
+from thalas import executor_main, output_path_of
+
 from experiments.two_stage.two_stage_config import TwoStageConfig, two_stage_train_step
-from marin.execution.executor import executor_main, output_path_of
 
 
 def pretraining_for_fixed_steps(steps: int):

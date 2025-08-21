@@ -14,6 +14,8 @@
 
 """Run CORE evaluations on Gemstone models."""
 
+from thalas import executor_main, output_path_of
+
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
 from experiments.evals.resource_configs import SINGLE_TPU_V5p_8
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU, MMLU_PRO_5_SHOT, EvalTaskConfig
@@ -22,7 +24,6 @@ from experiments.exp1342_gemstones_scaling_law import (
     roughly_equals,
 )
 from experiments.models import ModelConfig, download_model_step
-from marin.execution.executor import executor_main, output_path_of
 
 
 def create_eval_steps() -> list:

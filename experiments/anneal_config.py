@@ -14,7 +14,8 @@
 
 from dataclasses import dataclass
 
-from marin.execution import InputName
+from thalas import InputName
+
 from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig
 from marin.resources import ResourceConfig, TpuPodConfig
 
