@@ -17,11 +17,12 @@ Train 1.4B models on standard datasets (e.g., SlimPajama) using multislice.
 https://github.com/marin-community/marin/issues/146
 """
 
+from thalas import executor_main
+
 from experiments.defaults import default_train
 from experiments.exp72_baselines import slimpajama_tokenized
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 
 llama_1_4b_multislice_train_config = SimpleTrainConfig(

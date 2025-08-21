@@ -24,19 +24,14 @@ See https://github.com/marin-community/marin/issues/615 for more details.
 import os
 from dataclasses import dataclass, field
 
+from thalas import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+
 from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
 from experiments.defaults import default_tokenize
 from experiments.exp164_quality_classifiers import dclm_eli5_100k_oh_100k_rw_200k
 from experiments.exp274_mmlu_quality_classifier import marin_mmlu_100k_rw_100k
 from experiments.llama import llama3_tokenizer
 from marin.core.runtime import TaskConfig
-from marin.execution.executor import (
-    ExecutorStep,
-    executor_main,
-    output_path_of,
-    this_output_path,
-    versioned,
-)
 from marin.processing.classification.config.inference_config import RuntimeConfig
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.custom.custom_attribute import CustomAttributeConfig, create_custom_attribute

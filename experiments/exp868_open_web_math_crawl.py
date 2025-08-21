@@ -22,10 +22,11 @@ Link to issue: https://github.com/marin-community/marin/issues/868
 
 import json
 
+from thalas import executor_main, this_output_path
+
 from experiments.crawl.default import default_crawl
 from marin.crawl.common.schemas import HtmlExtractionConfig
 from marin.crawl.get_open_web_math_crawl_yield import filter_and_yield
-from marin.execution.executor import executor_main, this_output_path
 
 open_web_math_crawling_steps = default_crawl(
     config=HtmlExtractionConfig(

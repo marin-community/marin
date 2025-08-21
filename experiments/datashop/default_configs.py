@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from thalas import this_output_path
+
 from marin.classifiers.hf.train_classifier import HFTrainingConfig
-from marin.execution.executor import this_output_path
 from marin.processing.classification.config.inference_config import RuntimeConfig, TaskConfig
 
 default_engine_kwargs = {

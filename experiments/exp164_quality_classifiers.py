@@ -20,9 +20,10 @@ TODO: apply these quality classifiers on FineWeb (or DCLM, but that's larger), t
 
 import dataclasses
 
+from thalas import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+
 from experiments.posttrain.instruction_datasets import get_directory_friendly_dataset_name, get_instruction_dataset
 from marin.classifiers.utils import DatasetConfig
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,

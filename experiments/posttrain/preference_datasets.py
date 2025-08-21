@@ -33,15 +33,10 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from thalas import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+
 from marin.download.huggingface.download import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf
-from marin.execution.executor import (
-    ExecutorStep,
-    executor_main,
-    output_path_of,
-    this_output_path,
-    versioned,
-)
 from marin.transform.conversation.transform_preference_data import (
     TransformPreferenceDatasetConfig,
     transform_hf_preference_dataset,

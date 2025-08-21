@@ -18,6 +18,7 @@ import os
 import tempfile
 from collections import deque
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 import jax
@@ -30,7 +31,6 @@ from optax import softmax_cross_entropy_with_integer_labels
 from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
-from pathlib import Path
 
 from .environments.marin_env import MarinEnv
 from .inference import GenerationConfig, batch_inference, build_sampler

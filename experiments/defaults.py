@@ -40,6 +40,7 @@ from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils import fsspec_utils
+from thalas import ExecutorStep, InputName, ensure_versioned, get_executor_step, this_output_path, unwrap_versioned_value
 
 from experiments.anneal_config import AnnealConfig
 from experiments.evals.task_configs import (
@@ -55,14 +56,6 @@ from experiments.simple_train_config import SimpleTrainConfig
 from marin.download.huggingface.download import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import (
-    ExecutorStep,
-    InputName,
-    ensure_versioned,
-    get_executor_step,
-    this_output_path,
-    unwrap_versioned_value,
-)
 from marin.processing.tokenize import (
     TokenizeConfig,
     TokenizerStep,

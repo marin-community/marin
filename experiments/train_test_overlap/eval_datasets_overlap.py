@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from thalas import ExecutorStep, executor_main, this_output_path, versioned
+
 from experiments.eval_datasets import (
     arc_raw as ai2_arc_raw,
 )
@@ -37,7 +39,6 @@ from experiments.eval_datasets import (
 )
 from marin.download.huggingface.download import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """

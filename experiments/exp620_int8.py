@@ -18,11 +18,12 @@ import dataclasses
 import logging
 import math
 
+from thalas import executor_main, versioned
+
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.defaults import default_train
 from experiments.llama import llama_1_4b, llama_8b
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main, versioned
 from marin.resources import TpuPodConfig
 
 logger = logging.getLogger("ray")

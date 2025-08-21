@@ -22,15 +22,14 @@ import os
 from dataclasses import dataclass
 
 import ray
+from thalas import ExecutorStep, executor_main, this_output_path
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.resources import ResourceConfig, TpuPodConfig
 from marin.training.training import (
     _add_default_env_variables,
     _add_run_env_variables,
     _check_for_wandb_key,
 )
-
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)

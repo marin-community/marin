@@ -20,10 +20,11 @@ MAP-NEO 7B, and Amber Base 7B models on CORE_TASKS (augmented with OLMo Eval Tas
 as dedicated MMLU 0-shot and 5-shot configurations.
 """
 
+from thalas import executor_main
+
 from experiments.evals.evals import default_sft_eval
 from experiments.models import llama_3_1_8b_instruct, tulu_3_1_8b_instruct
 from experiments.tootsie.exp1237_starling_sft import mixture_sft_deeper_starling
-from marin.execution.executor import executor_main
 
 if __name__ == "__main__":
     # Run all evaluations on all models

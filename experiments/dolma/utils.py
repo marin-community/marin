@@ -22,11 +22,12 @@ dataset is added with custom processed data. The main workflow includes:
 4. Evaluating the resulting models
 """
 
+from thalas import ExecutorStep
+
 from experiments.defaults import default_tokenize, default_train
 from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
 from experiments.evals.evals import default_eval
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
-from marin.execution.executor import ExecutorStep
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 

@@ -23,13 +23,13 @@ from levanter.callbacks.watch import WatchConfig
 from levanter.optim import AdamConfig
 from levanter.optim.clip_update_norm import ClipUpdateNormConfig
 from levanter.schedule import ScheduleStep
+from thalas import executor_main
 
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_train
 from experiments.llama import llama_32b
 from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 from marin.resources import TpuPodConfig
 

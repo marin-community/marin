@@ -15,6 +15,8 @@
 import os
 from dataclasses import replace
 
+from thalas import ExecutorStep, InputName, output_path_of, this_output_path
+
 from experiments.anneal_config import AnnealConfig
 from experiments.datashop.default_configs import (
     default_consolidate_config_kwargs,
@@ -41,7 +43,6 @@ from marin.datashop.pipeline import (
     run_medu_dataset_sampling_pipeline,
 )
 from marin.download.filesystem.transfer import TransferConfig, transfer_files
-from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
 from marin.generation.inference import TextGenerationInferenceConfig
 from marin.generation.inference import run_inference as run_generation_inference
 from marin.processing.classification.config.inference_config import InferenceConfig

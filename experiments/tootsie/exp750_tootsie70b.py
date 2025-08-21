@@ -26,13 +26,13 @@ Mix is still DCLM+Math+Code
 import dataclasses
 
 from levanter.schedule import ScheduleStep
+from thalas import executor_main
 
 from experiments.defaults import default_train
 from experiments.llama import llama_70b
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp600_tootsie import dclm_mixture_config_llama3
 from experiments.tootsie.exp859_big_tootsies import dclm_mixture_config_llama3_zoned
-from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 
 llama_70b_train_config_mk6 = SimpleTrainConfig(

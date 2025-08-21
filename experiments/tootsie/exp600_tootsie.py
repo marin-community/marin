@@ -30,6 +30,7 @@ For now, we're training on DCLM's best mix, but that will change.
 import dataclasses
 
 from levanter.schedule import ScheduleStep
+from thalas import executor_main
 
 from experiments.cooldown_anneal import dolmino_dclm
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3
@@ -43,7 +44,6 @@ from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 from marin.resources import TpuPodConfig
 

@@ -23,13 +23,14 @@ GitHub Issue: https://github.com/marin-community/marin/issues/1237
 
 import dataclasses
 
+from thalas import executor_main
+
 from experiments.defaults import default_sft
 from experiments.evals.evals import default_sft_eval
 from experiments.exp808_sft_mixture import mixture_config as sft_mixture_llama3
 from experiments.llama import llama_8b
 from experiments.tootsie.exp600_tootsie import tootsie_8b_deeper_starling
 from experiments.tootsie.exp916_tootsie_spoonbill_cooldown import spoonbill_zloss_tulu3_sft_config
-from marin.execution.executor import executor_main
 
 sft_experiments = []
 deeper_sft_config = dataclasses.replace(

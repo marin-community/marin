@@ -20,8 +20,8 @@ from functools import lru_cache
 import numpy
 import transformers
 from levanter.data.text import LMDatasetSourceConfig, LMMixtureDatasetConfig
+from thalas import ExecutorStep, InputName, output_path_of
 
-from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfig
 
 TokenizerStep = ExecutorStep[TokenizeConfig]

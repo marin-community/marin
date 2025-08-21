@@ -41,6 +41,7 @@ dependencies = [
     "openai",
     "fasteners>=0.19",
     "dolma>=1.2.0",
+    "thalas",
 ]
 
 [dependency-groups]
@@ -148,6 +149,7 @@ sentencepiece = { git = "https://github.com/google/sentencepiece/", subdirectory
 
 
 resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
+thalas = { git = "https://github.com/Open-Athena/thalas.git", rev = "rw/ps2.3" }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
@@ -310,10 +312,13 @@ extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
-ignore = ["F722", "B008", "UP015", "A005", "I001"]
+ignore = ["F722", "B008", "UP015", "A005"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["experiments", "marin", "src"]
 
 [tool.mypy]
 python_version = "3.10"
