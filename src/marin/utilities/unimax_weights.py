@@ -24,9 +24,17 @@ def unimax_weights(
     if budget < 0:
         raise ValueError("budget must be non-negative")
 
+    if max_epochs <= 0:
+        raise ValueError("max_epochs must be positive")
+
+    if any(v < 0 for v in corpus_tokens.values()):
+        raise ValueError("corpus sizes must be non-negative")
+
     # Handle empty corpora early
     total_tokens = float(sum(corpus_tokens.values()))
     if total_tokens == 0:
+        if budget > 0:
+            raise ValueError("budget must be zero when corpus is empty")
         return {k: 0.0 for k in corpus_tokens}, {k: 0.0 for k in corpus_tokens}
 
     # If the requested budget is larger than the allowed max_epochs, bump it so
