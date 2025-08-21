@@ -29,10 +29,10 @@ from levanter.main.eval_lm import main as eval_lm_main
 from levanter.models.lm_model import LmConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from thalas import ExecutorStep, InputName, this_output_path
+from thalas.utilities.executor_utils import ckpt_path_to_step_name
 
-from marin.evaluation.utils import download_from_gcs, is_remote_path, discover_levanter_checkpoints
-from marin.execution.executor import ExecutorStep, InputName, this_output_path
-from marin.utilities.executor_utils import ckpt_path_to_step_name
+from marin.evaluation.utils import discover_levanter_checkpoints, download_from_gcs, is_remote_path
 from marin.resources import ResourceConfig
 
 HUGGINGFACE_CACHE_PATH = "/tmp/huggingface-cache"

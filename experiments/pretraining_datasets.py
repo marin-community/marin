@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from thalas import ExecutorStep, this_output_path
+
 from marin.download.huggingface.download import DownloadConfig, download
 from marin.download.huggingface.download_gated_manual import download_and_upload_to_store
 from marin.download.huggingface.download_hf import download_hf
 from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
-from marin.execution.executor import ExecutorStep, this_output_path
 
 # TODO: remove download and download_and_upload_to_store. Instead use default_download instead
 fineweb = ExecutorStep(

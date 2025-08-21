@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from thalas import executor_main
+
 from experiments.defaults import default_tokenize
 from experiments.exp964_custom_chat_tokenizer import llama3_instruct_chat_format
 from experiments.llama import llama3_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
-from marin.execution.executor import executor_main
 
 # Get instruction dataset
 

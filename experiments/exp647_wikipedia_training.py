@@ -28,10 +28,11 @@ Reference Issue: https://github.com/marin-community/marin/issues/647
 
 import logging
 
+from thalas import executor_main
+
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from experiments.dolma.utils import dolma_pipeline_with_modified_dataset
 from experiments.exp575_wikipedia_markdownify import wikipedia_readability, wikipedia_resiliparse_with_pf
-from marin.execution.executor import executor_main
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")

@@ -18,11 +18,11 @@ from collections.abc import Sequence
 
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.llama import LlamaConfig
+from thalas import ExecutorStep, InputName
 
 from experiments.defaults import default_train
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, InputName
 from marin.resources import TpuPodConfig
 
 DEFAULT_MODEL_CONFIG = LlamaConfig(

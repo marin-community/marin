@@ -27,8 +27,8 @@ from levanter.main.viz_logprobs import VizLmConfig as LevanterVizLmConfig
 from levanter.main.viz_logprobs import main as viz_lm_main
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
+from thalas import this_output_path
 
-from marin.execution.executor import this_output_path
 from marin.utils import remove_tpu_lockfile_on_exit
 
 

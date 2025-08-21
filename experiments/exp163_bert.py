@@ -26,6 +26,8 @@ See https://github.com/stanford-crfm/marin/issues/163 for more details.
 import os
 from dataclasses import dataclass, field
 
+from thalas import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+
 from experiments.defaults import default_tokenize, default_train
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
 from experiments.exp274_mmlu_quality_classifier import (
@@ -35,13 +37,6 @@ from experiments.exp274_mmlu_quality_classifier import (
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.classifiers.utils import DatasetConfig
 from marin.core.runtime import TaskConfig
-from marin.execution.executor import (
-    ExecutorStep,
-    executor_main,
-    output_path_of,
-    this_output_path,
-    versioned,
-)
 from marin.processing.classification.bert.train_bert import (
     TrainBertClassifierConfig,
 )

@@ -15,15 +15,11 @@
 import os
 from dataclasses import dataclass, field
 
+from thalas import ExecutorStep, output_path_of, this_output_path, versioned
+
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.core.runtime import TaskConfig
-from marin.execution.executor import (
-    ExecutorStep,
-    output_path_of,
-    this_output_path,
-    versioned,
-)
 from marin.processing.classification.config.inference_config import RuntimeConfig
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import InferenceConfig, run_inference

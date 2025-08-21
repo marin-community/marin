@@ -18,9 +18,9 @@ import json
 import draccus
 import fsspec
 import ray
+from thalas import THIS_OUTPUT_PATH
 
 from marin.core.runtime import TaskConfig, cached_or_construct_output, map_files_in_directory
-from marin.execution.executor import THIS_OUTPUT_PATH
 
 
 @dataclasses.dataclass

@@ -13,10 +13,11 @@
 # limitations under the License.
 
 # nodryrun
+from thalas import ExecutorMainConfig, executor_main
+
 from experiments.evals.engine_configs import DEFAULT_VLLM_ENGINE_KWARGS
 from experiments.evals.evals import evaluate_alpaca_eval
 from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
-from marin.execution.executor import ExecutorMainConfig, executor_main
 
 executor_main_config = ExecutorMainConfig(force_run_failed=True)
 steps = [

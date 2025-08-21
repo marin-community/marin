@@ -18,9 +18,10 @@ Speedrun code for a 30M parameter model based on the Llama architecture.
 
 import logging
 
+from thalas import executor_main
+
 from experiments.llama import llama_30m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 

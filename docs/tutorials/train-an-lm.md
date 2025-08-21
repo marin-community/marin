@@ -16,27 +16,27 @@ This guide explains how to train a language model using Marin, with our examples
 Start by importing the necessary modules:
 
 ```python
-# Import a tokenized dataset configuration from options available in Marin
-from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
-
-# Import training utilities and configuration classes
-from experiments.defaults import SimpleTrainConfig, default_train
+# Import logging utilities
+import logging
 
 # Import model architecture definitions
 from levanter.models.llama import LlamaConfig
 
 # Import the executor framework for running experiments
-from marin.execution.executor import executor_main
+from thalas import executor_main
 
-# Import logging utilities
-import logging
+# Import training utilities and configuration classes
+from experiments.defaults import SimpleTrainConfig, default_train
+
+# Import a tokenized dataset configuration from options available in Marin
+from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 ```
 
 - [`dclm_mixture_config_llama3`](https://github.com/marin-community/marin/blob/25c0f04438d0875e36a4627a5742b8b5a94c5ada/experiments/dclm/tokenize_dclm.py#L50): A predefined dataset configuration for the DCLM mixture, this can be replaced with any tokenized dataset in Marin of the `lm_mixture_data_config` type (e.g. [Dolma](https://github.com/marin-community/marin/blob/main/experiments/dolma/exp442_dolma.py) or [Nemotron](https://github.com/marin-community/marin/blob/main/experiments/exp934_hq_vs_pt.py))
 - [`SimpleTrainConfig`][experiments.simple_train_config.SimpleTrainConfig]
 - [`default_train`][experiments.defaults.default_train]: A utility function that creates a training pipeline
 - [`LlamaConfig`][levanter.models.llama.LlamaConfig]: A dataclass that defines the model architecture from [Levanter](https://github.com/stanford-crfm/levanter)
-- [`executor_main`][marin.execution.executor.executor_main]: The main entry point for the Marin executor framework
+- `executor_main` from `thalas`: The main entry point for the Marin executor framework (now part of the [Thalas](https://github.com/marin-community/thalas) package)
 
 ## Setting Up the Model Configuration
 

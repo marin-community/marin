@@ -26,10 +26,10 @@ Example usage:
 """
 
 from levanter.models.llama import LlamaConfig
+from thalas import executor_main
 
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.defaults import SimpleTrainConfig, default_train
-from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 
 # Define the LlamaConfig for a 7B parameter model

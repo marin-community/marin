@@ -18,11 +18,12 @@ We cooldown a 8B model on a 30/70 mixture of some high quality Dolma split and D
 Link to issue: https://github.com/marin-community/marin/issues/820
 """
 
+from thalas import executor_main
+
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
-from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 dolmino_dclm = get_dolmino_step_llama3("dclm")

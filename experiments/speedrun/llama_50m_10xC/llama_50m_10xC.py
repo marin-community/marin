@@ -19,9 +19,10 @@ It is trained for 10 times the Chinchilla-optimal number of tokens, i.e 10B toke
 
 import logging
 
+from thalas import executor_main
+
 from experiments.llama import llama_50m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 

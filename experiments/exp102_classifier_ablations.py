@@ -14,6 +14,8 @@
 
 import logging
 
+from thalas import executor_main
+
 from experiments.exp164_quality_classifiers import (
     dclm_eli5_100k_oh_100k_rw_200k,
     dclm_eli5_100k_oh_100k_rw_200k_seed_1,
@@ -22,9 +24,6 @@ from experiments.exp164_quality_classifiers import (
     teknium_oh_200k_rw_200k,
 )
 from experiments.quality_classifier_experiment_utils import ExperimentConfig, create_steps
-from marin.execution.executor import (
-    executor_main,
-)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)

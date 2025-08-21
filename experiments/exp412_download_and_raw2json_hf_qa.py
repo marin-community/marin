@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from thalas import ExecutorStep, executor_main, this_output_path, versioned
+
 from marin.download.huggingface.download import DownloadConfig, download
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """

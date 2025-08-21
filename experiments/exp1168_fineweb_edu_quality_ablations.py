@@ -22,10 +22,11 @@ which fine-tunes an 8B model on a mixture of:
 Reference Issue: https://github.com/stanford-crfm/marin/issues/1168
 """
 
+from thalas import InputName, executor_main
+
 from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
-from marin.execution.executor import InputName, executor_main
 from marin.resources import TpuPodConfig
 
 # Tokenize the fineweb-edu dataset

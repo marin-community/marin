@@ -34,10 +34,10 @@ from dataclasses import dataclass
 
 import fsspec
 import ray
+from thalas import ExecutorStep, executor_main, this_output_path
 
 from experiments.train_test_overlap.utils import EVAL_DATASET_STEPS
 from marin.core.runtime import simple_backpressure
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)

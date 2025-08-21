@@ -21,6 +21,8 @@ checkpoints that have been cooled down. We re-use the Gemstone utilities from
 cooldown checkpoints at the 10% mark.
 """
 
+from thalas import executor_main, output_path_of
+
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
 from experiments.evals.resource_configs import SINGLE_TPU_V4_8
 from experiments.exp1342_gemstones_scaling_law import (
@@ -28,7 +30,6 @@ from experiments.exp1342_gemstones_scaling_law import (
     roughly_equals,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import executor_main, output_path_of
 
 
 def create_eval_steps() -> list:

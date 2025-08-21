@@ -19,13 +19,13 @@ configs mirroring those in marin/experiments/speedrun/muon_llama_scaling/muon_sw
 
 import logging
 
-from levanter.models.qwen import Qwen3Config
 from levanter.models.llama import LlamaConfig
+from levanter.models.qwen import Qwen3Config
 from levanter.optim import MuonConfig
+from thalas import executor_main
 
 from experiments.llama import llama_1_4b, llama_150m, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 

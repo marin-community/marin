@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from thalas import executor_main
+
 from experiments.evals.evals import evaluate_helm
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import executor_main
 
 steps = [
     evaluate_helm(

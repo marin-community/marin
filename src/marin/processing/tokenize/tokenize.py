@@ -53,8 +53,8 @@ from levanter.data.text import (
 )
 from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
+from thalas import ExecutorStep, InputName, VersionedValue
 
-from marin.execution.executor import ExecutorStep, InputName, VersionedValue
 from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size
 
 logger = logging.getLogger(__name__)

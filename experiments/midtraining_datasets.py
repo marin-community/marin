@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from thalas import ExecutorStep, this_output_path, versioned
+
 from experiments.defaults import default_download, default_tokenize
 from experiments.llama import llama3_tokenizer
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution import versioned
-from marin.execution.executor import ExecutorStep, this_output_path
 from marin.processing.tokenize import lm_mixture_data_config
 from marin.transform.medical.lavita_to_dolma import LavitaToDolmaConfig, convert_lavita_split_to_dolma
 

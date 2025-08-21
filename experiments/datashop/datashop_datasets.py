@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from thalas import ExecutorStep, executor_main, this_output_path
+
 from experiments.pretraining_datasets import dclm_baseline
 from marin.classifiers.utils import CreateDatasetConfig, create_dataset
 from marin.download.filesystem.transfer import TransferConfig, transfer_files
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 
 # Serves as the default pretraining dataset used for Datashop experiments. We want roughly 400B tokens
 # that we can use for training because we know that the quality filter will filter about 10% of the top

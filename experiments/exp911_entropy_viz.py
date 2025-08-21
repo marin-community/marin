@@ -18,13 +18,13 @@ This script evaluates log probabilities of the Tootsie 8b model and Llama 3.1 8B
 Our goal is to see if there are any structural differences in the log probabilities of the two models.
 """
 
+from thalas import executor_main, output_path_of, versioned
+
 from experiments.defaults import default_tokenize, default_validation_sets
 from experiments.tootsie.exp600_tootsie import llama3_tokenizer, llama_8b, llama_8b_tootsie_phase3
 from experiments.tootsie.exp883_viz_compare_tootsie_llama import tulu_3_in_dolma
 from marin.evaluation.log_probs import default_lm_log_probs
-from marin.execution.executor import executor_main, output_path_of, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
-
 from marin.resources import TpuPodConfig
 
 # We compare the models in CHECKPOINTS to Meta's Llama 3.1 8B  base model.

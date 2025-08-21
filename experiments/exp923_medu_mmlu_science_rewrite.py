@@ -21,6 +21,8 @@ to generate a high quality dataset. We observe that this dataset gives us +4 poi
 Issue: https://github.com/marin-community/marin/issues/923
 """
 
+from thalas import executor_main, output_path_of
+
 from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
 from experiments.datashop.default_configs import default_engine_kwargs
 from experiments.datashop.defaults import default_consolidate, default_synthetic_data_generation
@@ -28,7 +30,6 @@ from experiments.defaults import default_tokenize
 from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
 from experiments.exp923_medu_mmlu import mmlu_science_pipeline
 from experiments.llama import llama3_tokenizer
-from marin.execution.executor import executor_main, output_path_of
 from marin.resources import TpuPodConfig
 
 REPHRASE_THE_WEB_QA_TEMPLATE = """

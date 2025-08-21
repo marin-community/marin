@@ -19,12 +19,13 @@ a Llama-3.1-8B-Instruct model. To try a different model or dataset,
 you can change the `model_name` or `huggingface_dataset_id` variables, respectively.
 """
 
+from thalas import ExecutorStep, executor_main, this_output_path, versioned
+
 from experiments.datashop.defaults import default_synthetic_data_generation
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK
 from experiments.models import get_model_local_path, llama_3_1_8b_instruct
 from marin.download.huggingface.download import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.utils import get_directory_friendly_name
 
 huggingface_dataset_id = "HuggingFaceH4/MATH-500"

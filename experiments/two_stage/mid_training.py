@@ -18,8 +18,9 @@ Mid-training setup where we have a single learning rate schedule and a different
 Hyperparameters are tuned for the baseline of all data at the end of training.
 """
 
+from thalas import executor_main
+
 from experiments.two_stage.two_stage_config import TwoStageConfig, two_stage_train_step
-from marin.execution.executor import executor_main
 
 if __name__ == "__main__":
     train_steps = [

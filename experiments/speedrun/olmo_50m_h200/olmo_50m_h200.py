@@ -20,9 +20,9 @@ Speedrun code for a 50M parameter model based on the OLMo architecture. The mode
 import logging
 
 from levanter.models.olmo import Olmo2Config
+from thalas import executor_main
 
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
 from marin.resources import GpuConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 

@@ -21,8 +21,8 @@ import os
 from dataclasses import dataclass
 
 import ray
+from thalas import ExecutorStep, executor_main, this_output_path
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.post_training.flax.training_config import (
     CheckpointerConfigData,
     DistributedConfig,

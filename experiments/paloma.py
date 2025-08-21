@@ -20,11 +20,11 @@ https://huggingface.co/datasets/allenai/paloma
 
 import os.path
 
-from marin.download import HfDownloadConfig, download_hf_gated_manual
-
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from thalas import ExecutorStep, executor_main, this_output_path, versioned
+
+from marin.download import HfDownloadConfig, download_hf_gated_manual
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
 

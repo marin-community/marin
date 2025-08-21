@@ -23,8 +23,9 @@ same mix as exp934_hq_vs_pt's best mix's full mix
 We also add z-loss, since in spoonbill we found that to be very helpful
 """
 
+from thalas import executor_main
+
 from experiments.tootsie.exp600_tootsie import tootsie_8b_sensible_starling
-from marin.execution.executor import executor_main
 
 if __name__ == "__main__":
     executor_main(

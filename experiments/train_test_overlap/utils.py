@@ -18,6 +18,7 @@ import os
 from dataclasses import dataclass
 
 import ray
+from thalas import ExecutorStep
 
 # Import evaluation dataset conversion steps so executor can resolve paths
 from experiments.train_test_overlap.eval_datasets_overlap import (
@@ -41,7 +42,6 @@ from experiments.train_test_overlap.eval_datasets_overlap import (
     winograd_wsc_convert_dolma,
 )
 from marin.core.runtime import simple_backpressure
-from marin.execution.executor import ExecutorStep
 from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe_with_config_resources
 from marin.utils import fsspec_glob
 

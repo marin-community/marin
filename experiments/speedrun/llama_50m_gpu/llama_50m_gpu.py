@@ -19,9 +19,10 @@ Speedrun code for a 50M parameter model based on the Llama architecture. The mod
 
 import logging
 
+from thalas import executor_main
+
 from experiments.llama import llama_50m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
 from marin.resources import GpuConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 

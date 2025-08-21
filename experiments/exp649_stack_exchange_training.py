@@ -31,11 +31,12 @@ Reference Issue: https://github.com/marin-community/marin/issues/649
 
 import logging
 
+from thalas import executor_main
+
 from experiments.defaults import default_tokenize, default_train
 from experiments.evals.evals import default_eval
 from experiments.exp822_stackexchange_markdownify import stackexchange_text_resiliparse_custom_fork
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
-from marin.execution.executor import executor_main
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")

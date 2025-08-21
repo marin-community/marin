@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from thalas import executor_main
+
 from experiments.pretraining_datasets import nemotron_cc
-from marin.execution.executor import executor_main
 
 if __name__ == "__main__":
     executor_main(

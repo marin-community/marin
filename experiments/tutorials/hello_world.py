@@ -24,8 +24,7 @@ import os
 from dataclasses import dataclass
 
 import fsspec
-
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
+from thalas import ExecutorStep, executor_main, output_path_of, this_output_path
 
 logger = logging.getLogger("ray")
 

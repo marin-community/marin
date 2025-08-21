@@ -18,10 +18,11 @@ Experiment 934: See if we should make zloss be default on
 
 import dataclasses
 
+from thalas import executor_main
+
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.defaults import default_train
 from experiments.llama import llama_1_4b, llama_1_4b_train_config
-from marin.execution.executor import executor_main
 
 llama_1_4b_train_config_wsd = dataclasses.replace(
     llama_1_4b_train_config,

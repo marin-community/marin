@@ -28,12 +28,12 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
 )
 from levanter.store.cache import CacheOptions
+from thalas import THIS_OUTPUT_PATH, ExecutorStep, InputName, ensure_versioned
 
 from marin.download.huggingface.download import DownloadConfig as HfDownloadConfig
 from marin.download.huggingface.download_hf import (
     download_hf as hf_download_logic,
 )
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName, ensure_versioned
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
 logger = logging.getLogger(__name__)

@@ -40,6 +40,8 @@ dependencies = [
     "tqdm",
     "tqdm-loggable",
     "wandb",
+    "dolma @ git+https://github.com/marin-community/dolma",
+    "thalas",
 ]
 
 [dependency-groups]
@@ -141,6 +143,7 @@ torch = [
     { index = "pytorch-cu128", extra = "cuda12" },
 ]
 
+thalas = { git = "https://github.com/Open-Athena/thalas.git", rev = "c2c4de7" }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
@@ -291,10 +294,13 @@ extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
-ignore = ["F722", "B008", "UP015", "A005", "I001"]
+ignore = ["F722", "B008", "UP015", "A005"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["experiments", "marin", "src"]
 
 [tool.mypy]
 python_version = "3.10"

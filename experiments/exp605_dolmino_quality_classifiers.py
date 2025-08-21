@@ -24,11 +24,12 @@ We use DCLM's negative examples which are 200k Refined Web examples from
 this issue: https://github.com/marin-community/marin/issues/164
 """
 
+from thalas import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+
 from experiments.exp164_quality_classifiers import dclm_negative_examples_in_dolma_format
 from experiments.pretraining_datasets import dolmino
 from experiments.quality_classifier_experiment_utils import ExperimentConfig, create_steps
 from marin.classifiers.utils import DatasetConfig
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,

@@ -15,10 +15,9 @@
 """Unified cluster management utilities."""
 
 # Core configuration
-from .config import RayClusterConfig, update_cluster_configs
-
 # Main modules (submodules can be imported directly if needed)
 from . import cleanup, gcp, monitoring, ray
+from .config import RayClusterConfig, update_cluster_configs
 
 __all__ = [
     "RayClusterConfig",

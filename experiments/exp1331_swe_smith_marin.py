@@ -22,12 +22,12 @@ import dataclasses
 
 from levanter.data.text import ChatLmDatasetFormat
 from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
+from thalas import ExecutorStep, executor_main, this_output_path, versioned
 
 from experiments.defaults import default_sft, default_tokenize
 from experiments.llama import llama_8b
 from experiments.tootsie.exp916_tootsie_spoonbill_cooldown import spoonbill_zloss_tulu3_sft_config
 from marin.download.huggingface.download import DownloadConfig, download
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.resources import TpuPodConfig
 
 sft_experiments = []
