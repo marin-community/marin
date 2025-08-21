@@ -17,6 +17,46 @@ We need a **Ray Actor** that acts as a distributed replay buffer for async RL (G
 * Long Term: Support **partial rollouts** (segmented completions). p4
 
 
+## Basic Flow
+
+- env replicas write rollouts to a known location. notify replaybuffer of new data/pointers
+- Typically there is one replay buffer per env type?
+- ReplayBuffer reads rollouts from parquet.
+- ReplayBuffer feeds them to BatchMaker
+- Trainer asks BatchMaker for a batch. It reads from the replay buffer.
+
+
+
+### What does trainer want?
+Trainer wants a batch of size K consisting of packed sequences of S tokens. Will settle for padding if necessery.
+Trainer can ask a BatchMaker for this batch. It does so via an intermediary.
+
+### BatchMakers:
+
+- RlooBatchMaker -> standard
+- StableMixtureBatchMaker -> asks subbatchmakers?
+
+
+## Stupidest thing that can work:
+
+ReplayBuffer receives rollouts. Groups them by (env, problemid). Tries to main the best batch for each one.
+
+- [ ] in memory "working set"
+- [ ] append rollouts
+- [ ] supports purge
+- [ ] supports sample
+- [ ] hardcodes grpo or similar
+
+Smarter:
+
+- [ ] stores replays to parquet. periodic flush of working set. data loss is possible but nothing major.
+- [ ] support flush
+- [ ] on restore, loads working set.
+- [ ] when a batch is sampled, writes it disk. When a batch is requested, it first checks if that step is already available.
+- [ ] batchMaker
+
+
+
 ---
 
 ## Data Types
@@ -35,8 +75,8 @@ class RolloutRecord:
     rollout_uid: str = ""
     token_count: int = 0
     reward: Optional[float] = None
-    logprobs: Optional[bytes] = None
-    output_tokens: Optional[bytes] = None
+    logprobs: Optional[np.ndarray] = None
+    output_tokens: Optional[np.ndarray] = None
     metadata: Optional[dict] = None
     created_ts: float = field(default_factory=lambda: time.time())
 

@@ -4,17 +4,67 @@ import time
 import uuid
 from collections.abc import Iterable
 
+import jax
 import ray
 import pyarrow as pa
 import pyarrow.parquet as pq
+from jaxtyping import PRNGKeyArray
 from pathlib import Path
 
 from .datatypes import GroupKey, RolloutGroup, RolloutRecord, RLExample
-from .batch_maker import BatchMaker
+from .batch_maker import BatchMaker, _compute_advantages
+
+
+class ReplayBuffer:
+    def __init__(
+        self,
+        root_path: str,
+        *,
+        prng_key: PRNGKeyArray,
+        compression: str = "zstd",
+    ):
+
+        self.root_path = root_path
+        self.compression = compression
+        self.prng_key = self.prng_key
+
+        self.rollout_groups: dict[GroupKey, list[RolloutRecord]] = {}
+
+    def extend(self, rollouts: list[RolloutRecord]):
+        for rollout in rollouts:
+            key = GroupKey(rollout.environment, rollout.example_id)
+            group = self.rollout_groups.get(key)
+            if group is None:
+                self.rollout_groups[key] = [rollout]
+            else:
+                group.append(rollout)
+
+    def purge(self):
+        self.rollout_groups = {}
+
+    def sample(self, *, bsize: int, step: int):
+        # TODO: packing?
+        # TODO: should we track advantage stats online
+        # TODO: log reward and advantage stats
+        # find useful rollout groups (those with some non-zero advantage entry)
+        useful_rollouts = []
+        for _key, group in self.rollout_groups.items():
+            if len(group) <= 1:
+                continue
+            advantages = _compute_advantages(group)
+
+            for rollout, advantage in zip(group, advantages, strict=False):
+                if advantage != 0:
+                    useful_rollouts.append(rollout)
+
+        this_prng = jax.random.fold_in(self.prng_key, step)
+        shuffled = jax.random.permutation(this_prng, useful_rollouts)
+        # TODO: remove selected from pool
+        return shuffled[:bsize]
 
 
 @ray.remote(max_concurrency=1)
-class ReplayBuffer:
+class OldReplayBuffer:
     """Minimal Ray actor implementing a grouped rollout replay buffer.
 
     This buffer accumulates experiences and can forward them to a BatchMaker
@@ -206,7 +256,7 @@ class ReplayBuffer:
         self.rr_keys_strict.append(gid)
 
     def _maybe_seal(self, key: GroupKey, agg: dict, force: bool = False) -> None:
-        """Seal a group of rollouts when it's ready for training.
+        """Seal a group of rollouts when it's ready for training."
 
         Sealing happens when:
         1. We have enough rollouts to form a meaningful training batch (target_size)
@@ -218,6 +268,7 @@ class ReplayBuffer:
         - Written to disk as a complete unit
         - Used for advantage computation across rollouts in the same group
         """
+
         ready = len(agg["rollouts"]) >= self.target_size
         timed_out = time.time() - agg["created_ts"] >= self.seal_timeout_s and len(agg["rollouts"]) >= self.min_size
         if not (ready or timed_out or force):

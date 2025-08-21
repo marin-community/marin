@@ -73,6 +73,10 @@ class Turn:
 class Rollout:
     """A sequence of :class:`Turn` objects plus auxiliary metadata."""
 
+    environment: str
+    problem_id: str
+    rollout_uid: str
+
     turns: list[Turn]
     metadata: dict[str, Any]
 
@@ -139,6 +143,10 @@ class RolloutRecord:
     metadata: dict[str, Any]
     replica_id: str = "unknown"
 
+    @property
+    def total_reward(self):
+        return sum(turn.reward for turn in self.turns if turn.reward is not None)
+
 
 @dataclass(frozen=True)
 class RolloutGroup:
@@ -177,7 +185,6 @@ class GroupKey:
 
     environment: str
     example_id: str
-    policy_version: str
 
 
 @dataclass(frozen=True)

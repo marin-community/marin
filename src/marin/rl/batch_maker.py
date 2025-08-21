@@ -40,8 +40,8 @@ class BatchMaker(ABC):
         pass
 
 
-class GrpoBatchMaker(BatchMaker):
-    """GRPO-style batch maker that groups rollouts and computes advantages.
+class RlooBatchMaker(BatchMaker):
+    """RLOO-style batch maker that groups rollouts and computes advantages.
 
     This implementation:
     - Groups rollouts by (env, problem_id), keeping older rollouts according to policy
@@ -50,14 +50,12 @@ class GrpoBatchMaker(BatchMaker):
     """
 
     def __init__(self, rng_seed: int | None = None):
-        """Initialize GRPO batch maker."""
         # Reservoir of rollouts with non-zero advantage
         self.advantage_reservoir: list[dict[str, Any]] = []
 
         # Group rollouts by (env, problem_id, policy_version)
         self.rollout_groups: dict[tuple[str, str, str], list[RolloutRecord]] = {}
 
-        # Set random seed for reproducible sampling
         if rng_seed is not None:
             self.np_rng = np.random.Generator(np.random.PCG64(rng_seed))
         else:
@@ -110,7 +108,7 @@ class GrpoBatchMaker(BatchMaker):
         rollouts = self.rollout_groups[key]
 
         # Compute advantages for the group
-        advantages = self._compute_advantages(rollouts)
+        advantages = _compute_advantages(rollouts)
 
         # Add rollouts with non-zero advantage to reservoir
         for rollout, advantage in zip(rollouts, advantages, strict=False):
@@ -126,43 +124,6 @@ class GrpoBatchMaker(BatchMaker):
                         "rollout": rollout,  # Keep reference to original rollout
                     }
                 )
-
-    def _compute_advantages(self, rollouts: list[RolloutRecord]) -> list[np.ndarray]:
-        """Compute advantages for a group of rollouts.
-
-        Args:
-            rollouts: List of rollouts in the group
-
-        Returns:
-            List of advantage arrays for each rollout
-        """
-        # Extract rewards from turns
-        rewards = []
-        for rollout in rollouts:
-            # Sum rewards across all turns in the rollout
-            rollout_reward = sum(turn.reward or 0.0 for turn in rollout.turns)
-            rewards.append(rollout_reward)
-
-        # Compute advantages using RLOO method
-        advantages = []
-        for i in range(len(rollouts)):
-            # RLOO: compute advantage relative to other rollouts in the group
-            other_rewards = np.concatenate([rewards[:i], rewards[i + 1 :]])
-            if len(other_rewards) > 0:
-                advantage = rewards[i] - np.mean(other_rewards)
-                # Normalize
-                if np.std(other_rewards) > 1e-8:
-                    advantage = advantage / np.std(other_rewards)
-            else:
-                advantage = 0.0
-
-            # Create advantage array for each token position
-            # For now, we'll use the same advantage for all positions in a rollout
-            # In practice, you might want more sophisticated token-level advantage computation
-            total_tokens = sum(len(turn.message.split()) for turn in rollouts[i].turns)
-            advantages.append(np.full(total_tokens, advantage, dtype=np.float32))
-
-        return advantages
 
     def _create_rl_example(self, rollout: RolloutRecord, advantage: np.ndarray) -> RLExample:
         """Create an RLExample from rollout data and advantage.
@@ -220,13 +181,10 @@ class GrpoBatchMaker(BatchMaker):
         if len(self.advantage_reservoir) < batch_size:
             return None
 
-        # Shuffle the reservoir for random sampling using our numpy generator
         self.np_rng.shuffle(self.advantage_reservoir)
 
-        # Take the first batch_size examples from the shuffled reservoir
         batch_examples = [item["example"] for item in self.advantage_reservoir[:batch_size]]
 
-        # Remove used examples from reservoir
         self.advantage_reservoir = self.advantage_reservoir[batch_size:]
 
         return batch_examples
@@ -250,3 +208,41 @@ class GrpoBatchMaker(BatchMaker):
                 "min": float(np.min([np.min(ex.advantage) for ex in batch])),
             },
         }
+
+
+def _compute_advantages(rollouts: list[RolloutRecord]) -> list[np.ndarray]:
+    """Compute advantages for a group of rollouts.
+
+    Args:
+        rollouts: List of rollouts in the group
+
+    Returns:
+        List of advantage arrays for each rollout
+    """
+    # Extract rewards from turns
+    rewards = []
+    for rollout in rollouts:
+        # Sum rewards across all turns in the rollout
+        rollout_reward = sum(turn.reward or 0.0 for turn in rollout.turns)
+        rewards.append(rollout_reward)
+
+    # Compute advantages using RLOO method
+    advantages = []
+    for i in range(len(rollouts)):
+        # RLOO: compute advantage relative to other rollouts in the group
+        other_rewards = np.concatenate([rewards[:i], rewards[i + 1 :]])
+        if len(other_rewards) > 0:
+            advantage = rewards[i] - np.mean(other_rewards)
+            # Normalize
+            if np.std(other_rewards) > 1e-8:
+                advantage = advantage / np.std(other_rewards)
+        else:
+            advantage = 0.0
+
+        # Create advantage array for each token position
+        # For now, we'll use the same advantage for all positions in a rollout
+        # In practice, you might want more sophisticated token-level advantage computation
+        total_tokens = sum(len(turn.message.split()) for turn in rollouts[i].turns)
+        advantages.append(np.full(total_tokens, advantage, dtype=np.float32))
+
+    return advantages
