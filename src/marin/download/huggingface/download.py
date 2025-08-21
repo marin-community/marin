@@ -46,7 +46,7 @@ class DownloadConfig:
 
     # Additional GCS Parameters
     public_gcs_path: str = (                                # Path to Publicly Readable Bucket (for Storage Transfer)
-        "gs://hf_dataset_transfer_bucket"
+        "gs://jyc_hf_dataset_transfer_bucket"
     )
 
     # Job Control Parameters, used only for non-gated dataset transfers done via STS

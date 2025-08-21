@@ -1,0 +1,391 @@
+name: Marin Bot
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+  actions: write
+  id-token: write
+
+jobs:
+  stop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: contains(github.event.comment.body, '@marinbot stop')
+    steps:
+      - name: Validate maintainer, parse command, and get PR metadata
+        id: meta
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // Must be on a PR
+            if (!context.payload.issue || !context.payload.issue.pull_request) {
+              core.setFailed('This command only works on pull request comments.');
+              return;
+            }
+
+            // Load maintainers from marinbot.json on default branch
+            const repoInfo = await github.rest.repos.get({ owner, repo });
+            const defBranch = repoInfo.data.default_branch;
+            let maintainers = [];
+            try {
+              const cfg = await github.rest.repos.getContent({ owner, repo, path: 'marinbot.json', ref: defBranch });
+              const content = Buffer.from(cfg.data.content, cfg.data.encoding).toString('utf8');
+              const config = JSON.parse(content);
+              maintainers = config.maintainers || [];
+            } catch (e) {
+              // Fallback to allowing dlwh for now
+              console.log('Could not read maintainer config marinbot.json, falling back to dlwh');
+              maintainers = ['dlwh'];
+            }
+
+            const actor = context.payload.comment.user.login;
+            if (!maintainers.includes(actor)) {
+              core.setFailed(`User @${actor} is not a maintainer.`);
+              return;
+            }
+
+            // Parse command line for --cluster
+            const body = context.payload.comment.body || '';
+            const line = body.split(/\r?\n/).map(s => s.trim()).find(s => s.startsWith('@marinbot stop'));
+            if (!line) {
+              core.setFailed('No valid @marinbot stop command found on its own line');
+              return;
+            }
+            const tokens = line.split(/\s+/).slice(2); // after '@marinbot stop'
+            let clusterPath = '';
+            for (let i = 0; i < tokens.length; i++) {
+              if (tokens[i] === '--cluster' || tokens[i] === '-c') {
+                if (i + 1 < tokens.length) clusterPath = tokens[i + 1];
+              }
+            }
+            if (!clusterPath) {
+              core.setFailed('Missing required --cluster <path> for @marinbot stop');
+              return;
+            }
+
+            const prNumber = context.payload.issue.number;
+            const pr = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+            core.setOutput('pr_number', String(prNumber));
+            core.setOutput('head_ref', pr.data.head.ref);
+            core.setOutput('cluster_path', clusterPath);
+
+      - name: Cancel running Marin Bot workflows for this PR branch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const headRef = '${{ steps.meta.outputs.head_ref }}';
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: 'marinbot.yaml',
+              branch: headRef,
+              status: 'in_progress'
+            });
+            for (const run of runs.data.workflow_runs) {
+              if (run.id !== context.runId) {
+                await github.rest.actions.cancelWorkflowRun({ owner, repo, run_id: run.id });
+              }
+            }
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Ray CLI
+        run: |
+          python -m pip install --upgrade pip
+          pip install 'ray[default]'
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCLOUD_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Start Ray dashboard for stop
+        run: |
+          set -e
+          echo "Starting ray dashboard for ${{ steps.meta.outputs.cluster_path }}"
+          ray dashboard '${{ steps.meta.outputs.cluster_path }}' &
+          echo $! > dashboard_pid.txt
+          echo "Waiting for Ray dashboard to become available..."
+          for i in $(seq 1 120); do
+            if curl -sSf http://127.0.0.1:8265 >/dev/null 2>&1; then
+              echo "Dashboard is up"; break;
+            fi
+            sleep 2
+          done
+
+      - name: Collect Ray job IDs from PR comments
+        id: collect
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const prNumber = Number('${{ steps.meta.outputs.pr_number }}');
+            const comments = await github.rest.issues.listComments({ owner, repo, issue_number: prNumber, per_page: 100 });
+            const ids = [];
+            for (const c of comments.data) {
+              const lines = (c.body || '').split(/\r?\n/);
+              for (const line of lines) {
+                const m = line.match(/^MARINBOT_JOB_ID:\s*(\S+)/);
+                if (m) ids.push(m[1]);
+              }
+            }
+            const unique = Array.from(new Set(ids));
+            core.setOutput('job_ids', JSON.stringify(unique));
+            console.log('Job IDs found:', unique);
+
+      - name: Stop Ray jobs for this PR
+        env:
+          JOB_IDS_JSON: ${{ steps.collect.outputs.job_ids }}
+        run: |
+          set -e
+          echo "Stopping jobs: ${JOB_IDS_JSON}"
+          ids=$(python - <<'PY'
+          import os, json
+          data = os.environ.get('JOB_IDS_JSON') or '[]'
+          for i in json.loads(data):
+              print(i)
+          PY
+          )
+          export RAY_ADDRESS="http://127.0.0.1:8265"
+          for id in $ids; do
+            echo "Stopping Ray job $id"
+            ray job stop "$id" || true
+          done
+
+      - name: Stop Ray dashboard
+        if: always()
+        run: |
+          if [ -f dashboard_pid.txt ]; then kill $(cat dashboard_pid.txt) || true; fi
+
+      - name: Comment acknowledgement
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(${{ steps.meta.outputs.pr_number }}),
+              body: '🛑 Stopped all running Marin Bot jobs for this PR.'
+            });
+
+  ray_run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    if: contains(github.event.comment.body, '@marinbot ray_run')
+    steps:
+      - name: Validate maintainer, parse command, and get PR metadata
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const body = context.payload.comment.body || '';
+
+            // Must be on a PR
+            if (!context.payload.issue || !context.payload.issue.pull_request) {
+              core.setFailed('This command only works on pull request comments.');
+              return;
+            }
+
+            // Load maintainers
+            const repoInfo = await github.rest.repos.get({ owner, repo });
+            const defBranch = repoInfo.data.default_branch;
+            let maintainers = [];
+            try {
+              const cfg = await github.rest.repos.getContent({ owner, repo, path: 'marinbot.json', ref: defBranch });
+              const content = Buffer.from(cfg.data.content, cfg.data.encoding).toString('utf8');
+              const config = JSON.parse(content);
+              maintainers = config.maintainers || [];
+            } catch (e) {
+              // Fallback to allowing dlwh for now
+              console.log('Could not read maintainer config marinbot.json, falling back to dlwh');
+              maintainers = ['dlwh'];
+            }
+
+            const actor = context.payload.comment.user.login;
+            if (!maintainers.includes(actor)) {
+              core.setFailed(`User @${actor} is not a maintainer.`);
+              return;
+            }
+
+            // Extract the line with the command
+            const line = body.split(/\r?\n/).map(s => s.trim()).find(s => s.startsWith('@marinbot ray_run '));
+            if (!line) {
+              core.setFailed('No valid @marinbot ray_run command found on its own line');
+              return;
+            }
+            const rest = line.substring('@marinbot ray_run '.length).trim();
+            const tokens = rest.split(/\s+/).filter(Boolean);
+            if (tokens.length < 2) {
+              core.setFailed('Expected syntax: @marinbot ray_run <ray_run_args> --cluster <path> <module>');
+              return;
+            }
+            const moduleName = tokens[tokens.length - 1];
+            const rayArgsTokens = tokens.slice(0, -1);
+
+            // Find cluster file
+            let clusterPath = '';
+            for (let i = 0; i < rayArgsTokens.length; i++) {
+              if (rayArgsTokens[i] === '--cluster' || rayArgsTokens[i] === '-c') {
+                if (i + 1 < rayArgsTokens.length) clusterPath = rayArgsTokens[i + 1];
+              }
+            }
+            if (!clusterPath) {
+              core.setFailed('Missing --cluster <path> in ray_run args');
+              return;
+            }
+
+            const prNumber = context.payload.issue.number;
+            const pr = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+
+            core.setOutput('pr_number', String(prNumber));
+            core.setOutput('head_ref', pr.data.head.ref);
+            core.setOutput('sha', pr.data.head.sha);
+            core.setOutput('module', moduleName);
+            core.setOutput('cluster_path', clusterPath);
+            core.setOutput('ray_args', rayArgsTokens.join(' '));
+            core.setOutput('full_command', line);
+
+      - name: Post starting comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(${{ steps.parse.outputs.pr_number }}),
+              body: `🚀 Starting execution: \`${'${{ steps.parse.outputs.full_command }}'}\`\n\nRun ID: ${context.runId}. You can stop with \`@marinbot stop\`.`
+            });
+
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.parse.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache pip and uv
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/uv
+          key: ${{ runner.os }}-3.12-marinbot-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-3.12-marinbot-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+          # Ray CLI is needed for `ray dashboard`
+          pip install 'ray[default]'
+          uv pip install --system -e . --torch-backend=cpu
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCLOUD_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Start Ray dashboard and wait for readiness
+        run: |
+          set -e
+          echo "Starting ray dashboard for ${{ steps.parse.outputs.cluster_path }}"
+          ray dashboard '${{ steps.parse.outputs.cluster_path }}' &
+          echo $! > dashboard_pid.txt
+          echo "Waiting for Ray dashboard to become available..."
+          for i in $(seq 1 120); do
+            if curl -sSf http://127.0.0.1:8265 >/dev/null 2>&1; then
+              echo "Dashboard is up"; break;
+            fi
+            sleep 2
+          done
+
+      - name: Execute ray_run
+        id: execute
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          PYTHONPATH: .:src:experiments
+        run: |
+          set -e
+          echo "Executing: python -m marin.run.ray_run ${{ steps.parse.outputs.ray_args }} -- python -m ${{ steps.parse.outputs.module }} --force_run_failed True"
+          # Run and tee output so we can capture the submission ID
+          python -m marin.run.ray_run ${{ steps.parse.outputs.ray_args }} \
+            -e WANDB_API_KEY "${WANDB_API_KEY}" \
+            -- python -m ${{ steps.parse.outputs.module }} --force_run_failed True 2>&1 | tee ray_output.log
+
+      - name: Extract Ray submission ID
+        id: jobid
+        run: |
+          set -e
+          id=$(grep -oE 'Job submitted with ID: [^ ]+' ray_output.log | awk '{print $5}' | tail -n1 || true)
+          echo "Detected submission ID: $id"
+          echo "job_id=$id" >> $GITHUB_OUTPUT
+
+      - name: Post job id comment
+        if: steps.jobid.outputs.job_id != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(${{ steps.parse.outputs.pr_number }}),
+              body: `MARINBOT_JOB_ID: ${{ steps.jobid.outputs.job_id }}`
+            });
+
+      - name: Stop Ray dashboard
+        if: always()
+        run: |
+          if [ -f dashboard_pid.txt ]; then kill $(cat dashboard_pid.txt) || true; fi
+
+      - name: Post success comment
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(${{ steps.parse.outputs.pr_number }}),
+              body: `✅ Command executed successfully: \`${'${{ steps.parse.outputs.full_command }}'}\`\n\nRun ID: ${context.runId}`
+            });
+
+      - name: Post failure comment
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(${{ steps.parse.outputs.pr_number }}),
+              body: `❌ Command failed: \`${'${{ steps.parse.outputs.full_command }}'}\`\n\nRun ID: ${context.runId}. Check logs: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });
+
+

@@ -14,6 +14,8 @@ import fsspec
 from google.api_core import operations_v1
 from google.cloud import storage_transfer, storage_transfer_v1
 
+from marin.utilities.constants import GCP_PROJECT_ID
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,7 +43,7 @@ def create_gcs_transfer_job_from_tsv(
     gcs_output_path: Path,
     gcs_bucket: str,
     description: str,
-    gcp_project_id: str = "hai-gcp-models",
+    gcp_project_id: str = GCP_PROJECT_ID,
     return_job_url: bool = False,
 ) -> str:
     """
@@ -93,7 +95,7 @@ def create_gcs_transfer_job_from_tsv(
         return creation_request.name, job_url
 
 
-def wait_for_transfer_job(job_name: str, timeout: int, poll_interval: int, gcp_project_id: str = "hai-gcp-models"):
+def wait_for_transfer_job(job_name: str, timeout: int, poll_interval: int, gcp_project_id: str = GCP_PROJECT_ID):
     """
     Waits for a Transfer Job to complete by polling the job status every 10 seconds. Raises a `TimeoutError` if the
     job does not complete within the specified `timeout` (default: 30 minutes).
