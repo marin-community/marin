@@ -1,6 +1,11 @@
 name: Build Docker images
 
 on:
+  # TODO: Add a weekly schedule.
+  # For now, this is manually triggered.
+  # Do not trigger this too often becuase it can cause
+  # images that are still in use to get evicted due to the
+  # "last N most recent images" retention policy.
   workflow_dispatch:
 
 jobs:
@@ -105,7 +110,7 @@ jobs:
         run: pip install pyyaml jinja2
 
       - name: Update Docker image tag in cluster config script
-        run: sed -i 's/LATEST = "[a-z0-9]\{8\}"/LATEST = "${{ steps.set-tags.outputs.HASH_TAG }}"/' infra/update-cluster-configs.py
+        run: sed -i -E 's/LATEST = "[a-z0-9]+"/LATEST = "${{ steps.set-tags.outputs.HASH_TAG }}"/' infra/update-cluster-configs.py
 
       - name: Generate cluster configs
         run: python infra/update-cluster-configs.py
