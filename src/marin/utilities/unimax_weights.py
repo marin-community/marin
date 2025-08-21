@@ -3,16 +3,14 @@ from __future__ import annotations
 
 def unimax_weights(
     corpus_tokens: dict[str, float],
-    steps: int,
-    tokens_per_step: int,
+    budget: float,
     max_epochs: float = 1.0,
 ) -> tuple[dict[str, float], dict[str, float]]:
     """Compute UniMax sampling weights and token allocations.
 
     Args:
         corpus_tokens: Mapping from subset name to its token count.
-        steps: Total number of training steps.
-        tokens_per_step: Tokens consumed per step.
+        budget: Total token budget available for training.
         max_epochs: Epoch cap ``E``. If the total budget exceeds
             ``E * sum(corpus_tokens)``, ``E`` is automatically bumped so that the
             full budget can be allocated.
@@ -23,10 +21,8 @@ def unimax_weights(
         tokens allocated to the subset.
     """
 
-    if steps < 0 or tokens_per_step < 0:
-        raise ValueError("steps and tokens_per_step must be non-negative")
-
-    budget = float(steps) * float(tokens_per_step)
+    if budget < 0:
+        raise ValueError("budget must be non-negative")
 
     # Handle empty corpora early
     total_tokens = float(sum(corpus_tokens.values()))
@@ -86,14 +82,13 @@ def main() -> None:  # pragma: no cover - CLI helper
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--sizes", required=True, help="JSON file: {subset: tokens}")
-    parser.add_argument("--steps", type=int, required=True)
-    parser.add_argument("--tokens_per_step", type=int, required=True)
+    parser.add_argument("--budget", type=float, required=True, help="Total token budget")
     parser.add_argument("--max_epochs", type=float, default=1.0)
     args = parser.parse_args()
 
     with open(args.sizes) as f:
         sizes = json.load(f)
-    weights, alloc = unimax_weights(sizes, args.steps, args.tokens_per_step, args.max_epochs)
+    weights, alloc = unimax_weights(sizes, args.budget, args.max_epochs)
     print(json.dumps({"weights": weights, "alloc": alloc}, indent=2))
 
 
