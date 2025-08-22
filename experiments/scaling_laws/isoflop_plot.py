@@ -44,7 +44,7 @@ MARKERS = [
     "bowtie",
 ]
 DASHES = ["solid", "dot", "dash", "longdash", "dashdot", "longdashdot"]
-DEFAULT_METRIC_KEY = "eval/paloma/dolma_100_subreddits/bpb"
+DEFAULT_METRIC_KEY = "eval/paloma/c4_en/bpb"
 SEQ_LEN = 4096
 
 _MIN_MARKER = dict(symbol="diamond", size=10, color="#000000")
@@ -355,5 +355,6 @@ if __name__ == "__main__":
         ("stanford-mercury/marin", "nemo-wider-depth-adapt-decay"),
         ("stanford-mercury/marin", "nemo-wider-depth-adapt-mt-flan-80-20"),
         ("stanford-mercury/marin", "nemo-wider-depth-adapt-mt-flan-70-30"),
+        ("stanford-mercury/marin", "dolmino-dclm-sweep"),
     ]
     main(SOURCES)
