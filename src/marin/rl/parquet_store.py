@@ -30,7 +30,6 @@ def _groups_to_table(groups: list[RolloutGroup]) -> pa.Table:
                     "group_metadata_json": g_meta,
                     "replica_id": r.replica_id,
                     "rollout_uid": r.rollout_uid,
-                    "reward": r.reward,
                     "turns_json": json.dumps(
                         [
                             {
@@ -87,7 +86,6 @@ def iter_rollout_groups(root_path: str) -> Iterator[RolloutGroup]:
                 policy_version=record["policy_version"],
                 replica_id=record["replica_id"],
                 rollout_uid=record["rollout_uid"],
-                reward=record["reward"],
                 turns=[
                     Turn(
                         message=t["message"],

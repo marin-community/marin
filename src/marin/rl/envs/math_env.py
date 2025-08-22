@@ -109,7 +109,9 @@ class MathEnv(AbstractMarinEnv):
 
     async def run(self) -> None:
         iteration = 0
-        while not await self._should_stop():
+        while True:
+            if not await self._wait_ready():
+                break
             if self._max_iters is not None and iteration >= self._max_iters:
                 break
 
@@ -155,7 +157,6 @@ class MathEnv(AbstractMarinEnv):
                 policy_version="v0",
                 rollout_uid=f"math-{iteration}",
                 replica_id="math",
-                reward=reward,
                 turns=[
                     Turn(
                         message=user_prompt,
@@ -199,7 +200,7 @@ class MathEnv(AbstractMarinEnv):
     # Optional cleanup
     # ------------------------------------------------------------------
 
-    async def shutdown(self) -> None:  # pragma: no cover
+    async def on_shutdown(self) -> None:  # pragma: no cover
         pass
 
 

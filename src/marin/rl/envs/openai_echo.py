@@ -44,7 +44,9 @@ class ChatEchoEnv(AbstractMarinEnv):
 
     async def run(self) -> None:
         counter = 0
-        while not await self._should_stop():
+        while True:
+            if not await self._wait_ready():
+                break
             if self._max_iters is not None and counter >= self._max_iters:
                 break
 
@@ -64,7 +66,6 @@ class ChatEchoEnv(AbstractMarinEnv):
                 policy_version="v0",
                 rollout_uid=f"chat-{counter}",
                 replica_id="chat",
-                reward=0.0,
                 turns=[
                     Turn(
                         message=self._system_prompt,
@@ -105,7 +106,7 @@ class ChatEchoEnv(AbstractMarinEnv):
             counter += 1
             await asyncio.sleep(0)  # yield control
 
-    async def shutdown(self) -> None:
+    async def on_shutdown(self) -> None:
         pass
 
 

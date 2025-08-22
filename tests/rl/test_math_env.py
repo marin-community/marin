@@ -87,13 +87,10 @@ def test_math_env_rollout(openai_mock, monkeypatch):  # type: ignore[valid-type]
 
     asyncio.run(env.run())
 
-    # ------------------------------------------------------------------
-    # Assertions
-    # ------------------------------------------------------------------
     assert len(collected) == 1
     group = collected.pop()
     assert group.metadata["correct"] is True
-    assert group.rollouts[0].reward == 1.0
+    assert group.rollouts[0].total_reward == 1.0
 
     # The mocked endpoint should have been called exactly once
     assert openai_mock.chat.completions.create.route.call_count == 1

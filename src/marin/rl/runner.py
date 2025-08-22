@@ -79,7 +79,7 @@ def run_envs_to_parquet(
             for a in actors:
                 # no strict interface yet; best-effort stop if available
                 try:
-                    a.stop.remote()  # type: ignore[attr-defined]
+                    a.shutdown.remote()  # type: ignore[attr-defined]
                 except Exception:
                     pass
 

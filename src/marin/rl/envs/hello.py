@@ -74,7 +74,7 @@ class HelloWorldEnv(SimpleEnv):
         time.sleep(1.0)  # pace output without async knowledge
         return [group]
 
-    async def shutdown(self) -> None:
+    async def on_shutdown(self) -> None:
         # Example clean-up
         logger.info("HelloWorldEnv closed")
 
