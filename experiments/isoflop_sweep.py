@@ -7,6 +7,7 @@ as a lightweight scaffold for ISOFlop scaling law experiments.
 
 import dataclasses
 import math
+from typing import Literal
 from dataclasses import dataclass, replace
 
 from levanter.data.text import LMMixtureDatasetConfig
@@ -27,11 +28,16 @@ from marin.resources import TpuPodConfig
 DEFAULT_BUDGETS = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
 MLP_RATIO = 4
 
-# TPU v5p hardware constants for memory estimation
-# Constants for TPU v5p
-HBM_PER_CHIP_GIB = 95
-CORES_PER_CHIP = 2
+# TPU hardware constants for memory estimation
+# v5p
+HBM_PER_CHIP_GIB_V5P = 95
+CORES_PER_CHIP_V5P = 2
 V5P_CORE_OPTIONS = [8, 16, 32, 128, 256, 512]  # TPU slices
+
+# v4
+HBM_PER_CHIP_GIB_V4 = 32
+CORES_PER_CHIP_V4 = 2
+V4_CORE_OPTIONS = [8, 32, 128, 256, 512]
 
 
 def estimate_bytes(
@@ -70,7 +76,8 @@ def estimate_bytes(
     return int(total_bytes) * fudge_factor
 
 
-def pick_v5p_type(
+def pick_tpu_type(
+    family: Literal["v5p", "v4"],
     config: Qwen3Config,
     hidden: int,
     layers: int,
@@ -79,22 +86,57 @@ def pick_v5p_type(
     vocab: int,
 ) -> str:
     """
-    Select the smallest TPU v5p slice that fits the model in float32.
+    Select the smallest TPU slice (v5p or v4) that fits the model in float32.
 
     Returns:
-    - TPU slice name, e.g., "v5p-8" or "v5p-32"
+    - TPU slice name, e.g., "v5p-8" or "v4-32"
     """
     param_count = compute_num_parameters(config, vocab)
     need_bytes = estimate_bytes(param_count, hidden, layers, batch, seq_len, vocab)
-    chip_bytes = HBM_PER_CHIP_GIB * 1024**3
+
+    if family == "v5p":
+        chip_bytes = HBM_PER_CHIP_GIB_V5P * 1024**3
+        cores_per_chip = CORES_PER_CHIP_V5P
+        options = V5P_CORE_OPTIONS
+    elif family == "v4":
+        chip_bytes = HBM_PER_CHIP_GIB_V4 * 1024**3
+        cores_per_chip = CORES_PER_CHIP_V4
+        options = V4_CORE_OPTIONS
+    else:
+        raise ValueError(f"Unknown TPU family: {family}")
+
     chips = math.ceil(need_bytes / chip_bytes)
-    cores_req = chips * CORES_PER_CHIP
+    cores_req = chips * cores_per_chip
 
-    valid = [c for c in V5P_CORE_OPTIONS if c >= cores_req]
+    valid = [c for c in options if c >= cores_req]
     if not valid:
-        raise ValueError(f"Model too large for available v5p slices (need {cores_req} cores).")
+        raise ValueError(f"Model too large for available {family} slices (need {cores_req} cores).")
 
-    return f"v5p-{min(valid)}"
+    return f"{family}-{min(valid)}"
+
+
+def pick_v5p_type(
+    config: Qwen3Config,
+    hidden: int,
+    layers: int,
+    batch: int,
+    seq_len: int,
+    vocab: int,
+) -> str:
+    """Backward-compatible wrapper that picks a v5p slice."""
+    return pick_tpu_type("v5p", config, hidden, layers, batch, seq_len, vocab)
+
+
+def pick_v4_type(
+    config: Qwen3Config,
+    hidden: int,
+    layers: int,
+    batch: int,
+    seq_len: int,
+    vocab: int,
+) -> str:
+    """Convenience wrapper that picks a v4 slice."""
+    return pick_tpu_type("v4", config, hidden, layers, batch, seq_len, vocab)
 
 
 @dataclass
@@ -251,6 +293,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
     steps: list[ExecutorStep] = []
     model_configs = []
     train_configs = []
+    budgets = []
     vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
 
     for budget in config.budgets:
@@ -310,8 +353,9 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
             steps.append(step)
             train_configs.append(train_cfg)
             model_configs.append(model_cfg)
+            budgets.append(budget)
 
-    return steps, model_configs, train_configs
+    return steps, model_configs, train_configs, budgets
 
 
 def generate_isoflop_sweep(
@@ -320,12 +364,12 @@ def generate_isoflop_sweep(
     **kwargs,
 ) -> list[ExecutorStep]:
     sweep_cfg = IsoFlopSweepConfig(tokenized_dataset=tokenized, **kwargs)
-    steps, model_configs, train_configs = generate_isoflop_steps(sweep_cfg, experiment_name)
+    steps, model_configs, train_configs, budgets = generate_isoflop_steps(sweep_cfg, experiment_name)
 
-    return steps, model_configs, train_configs
+    return steps, model_configs, train_configs, budgets
 
 
-steps, _, _ = generate_isoflop_sweep(nemotron_mix, experiment_name="nemo-wider-depth-adapt")
+steps, _, _, _ = generate_isoflop_sweep(nemotron_mix, experiment_name="nemo-wider-depth-adapt")
 
 if __name__ == "__main__":
     executor_main(steps=steps)

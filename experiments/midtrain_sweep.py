@@ -16,6 +16,11 @@ from marin.training.training import (
     run_levanter_train_lm,
 )
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
+from experiments.isoflop_sweep import pick_v4_type, pick_v5p_type, get_vocab_size_for_tokenizer
+from marin.resources import TpuPodConfig
+from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
+from experiments.evals.task_configs import EvalTaskConfig, MMLU_5_SHOT
+from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
 
 
 @dataclass
@@ -26,6 +31,11 @@ class DecayConfig:
 
 
 _STEP_DIR_RE = re.compile(r"^step-(\d+)$")
+CHECKPOINT_BASE_REGION = "marin-us-central1"
+REGION_TO_TPU_TYPE = {
+    "marin-us-central1": "v5p",
+    "marin-us-central2": "v4",
+}
 
 
 def get_latest_checkpoint_before_decay(checkpoint_path: str, num_train_steps: int, decay: float) -> str | None:
@@ -60,9 +70,9 @@ def get_latest_checkpoint_before_decay(checkpoint_path: str, num_train_steps: in
     return chosen_step_path
 
 
-def get_train_job_name(sweep_step: ExecutorStep, decay_data_name: str) -> str:
+def get_train_job_name(sweep_step: ExecutorStep, decay_data_name: str, pt_to_mt_split: str) -> str:
     sweep_step_name_without_checkpoint_prefix = sweep_step.name.split("/")[-1]
-    return f"{sweep_step_name_without_checkpoint_prefix}-decay-{decay_data_name}"
+    return f"{sweep_step_name_without_checkpoint_prefix}-mt-{decay_data_name}-{pt_to_mt_split}"
 
 
 # NOTE(chris): Executed outside the Executor Context because we need to use the function step_to_lm_mixture_component
@@ -74,6 +84,8 @@ def generate_tokenized_dataset_config(
     train_batch_size: int,
     stable_data_mix: InputName | ExecutorStep | LMMixtureDatasetConfig,
     decay_data_mix: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    pt_weight: float,
+    mt_weight: float,
 ) -> LMMixtureDatasetConfig:
     # Determine the stage change in training steps, aligned to mixture block boundaries.
     target_stable_steps = int(num_train_steps * (1.0 - decay))
@@ -115,9 +127,26 @@ def generate_tokenized_dataset_config(
 
     # TODO(chris): Support non tokenized step and inputname
 
+    # Build 70/30 mixture for the decay stage (normalized over the union of dataset keys)
+    union_keys = set((stable_data_mix_configs or {}).keys()) | set((decay_data_mix_configs or {}).keys())
+
+    def _normalize_to_union(weights_dict: dict[str, float], keys: set[str]) -> dict[str, float]:
+        total = sum(weights_dict.get(k, 0.0) for k in keys)
+        if total <= 0:
+            return {k: 0.0 for k in keys}
+        return {k: weights_dict.get(k, 0.0) / total for k in keys}
+
+    stable_norm = _normalize_to_union(stable_data_mix_weights, union_keys)
+    decay_norm = _normalize_to_union(decay_data_mix_weights, union_keys)
+
+    mixed_decay = {k: pt_weight * stable_norm[k] + mt_weight * decay_norm[k] for k in union_keys}
+    mixed_total = sum(mixed_decay.values())
+    if mixed_total > 0:
+        mixed_decay = {k: v / mixed_total for k, v in mixed_decay.items()}
+
     weights_list = [
         (0, {name: weight for name, weight in stable_data_mix_weights.items()}),
-        (num_stable_train_steps, {name: weight for name, weight in decay_data_mix_weights.items()}),
+        (num_stable_train_steps, mixed_decay),
     ]
     data_mix_configs = stable_data_mix_configs | decay_data_mix_configs
     dataset_config = replace(stable_data_mix, configs=data_mix_configs, train_weights=weights_list)
@@ -128,7 +157,30 @@ def generate_tokenized_dataset_config(
 # NOTE(chris): Default train config must be created outside of the ExecutorStep Context for some reason.
 # If not, it will think that paloma/4chan is in marin-us-central2 and lead to error about model/train region
 # mismatch.
-def generate_train_config(dataset_config, model_config, train_config, experiment_name) -> TrainLmOnPodConfig:
+def generate_train_config(dataset_config, model_config, train_config, experiment_name, budget) -> TrainLmOnPodConfig:
+    vocab_size = get_vocab_size_for_tokenizer("stanford-crfm/marin-tokenizer")
+    if os.getenv("BUCKET") != CHECKPOINT_BASE_REGION:
+        tpu_type = pick_v4_type(
+            model_config,
+            model_config.hidden_dim,
+            model_config.num_layers,
+            train_config.train_batch_size,
+            model_config.seq_len,
+            vocab_size,
+        )
+        tpu_config = TpuPodConfig(tpu_type=tpu_type)
+        train_config = replace(train_config, resources=tpu_config)
+    else:
+        tpu_type = pick_v5p_type(
+            model_config,
+            model_config.hidden_dim,
+            model_config.num_layers,
+            train_config.train_batch_size,
+            model_config.seq_len,
+            vocab_size,
+        )
+
+    # NOTE(chris): how to check experiment is done in a different region?
     train_config = default_train(
         name=f"{experiment_name}",
         tokenized=dataset_config,
@@ -136,12 +188,12 @@ def generate_train_config(dataset_config, model_config, train_config, experiment
         train_config=train_config,
         eval_harness_tasks=[],
         tags=(
-            # f"FLOPs={config.train_config.flops:.1e}",
+            f"FLOPs={budget:.1e}",
             f"d={model_config.hidden_dim}",
             f"L={model_config.num_layers}",
             f"B={train_config.train_batch_size}",
             f"steps={train_config.num_train_steps}",
-            # f"tpu={tpu_type}",
+            f"tpu={tpu_type}",
         ),
         only_return_config=True,
     )
@@ -169,39 +221,66 @@ def generate_midtrain_step(config: DecayConfig):
 # Test
 decay_data_name = "flan"
 decay_data_tokenized = get_dolmino_step_llama3("flan")
-isoflop_steps, isoflop_model_configs, isoflop_train_configs = generate_isoflop_sweep(
-    nemotron_mix, experiment_name="nemo-wider-depth-adapt"
+# NOTE(chris): Working on the low isoflop budgets for now.
+isoflop_steps, isoflop_model_configs, isoflop_train_configs, isoflop_budgets = generate_isoflop_sweep(
+    nemotron_mix,
+    experiment_name="nemo-wider-depth-adapt",
+    budgets=[1e18, 3e18, 6e18],
 )
 
+eval_tasks = (
+    MMLU_5_SHOT,
+    # MMLU_PRO_5_SHOT,
+    # EvalTaskConfig("commonsense_qa_sl", num_fewshot=10),
+    EvalTaskConfig("mmlu_sl", num_fewshot=0, task_alias="mmlu_sl_0_shot"),
+    EvalTaskConfig("mmlu_sl", num_fewshot=5, task_alias="mmlu_sl_5_shot"),
+    EvalTaskConfig("mmlu_sl_verb", num_fewshot=0, task_alias="mmlu_sl_verb_0_shot"),
+    EvalTaskConfig("mmlu_sl_verb", num_fewshot=5, task_alias="mmlu_sl_verb_5_shot"),
+)
 steps = []
-for sweep_step, model_config, train_config in zip(
-    isoflop_steps, isoflop_model_configs, isoflop_train_configs, strict=False
-):
-    experiment_name = get_train_job_name(sweep_step, decay_data_name)
+# pt_to_mt_splits = [(60, 40), (70, 30), (80, 20)]
+pt_to_mt_splits = [(70, 30), (80, 20)]
 
-    decay_dataset_config = generate_tokenized_dataset_config(
-        num_train_steps=train_config.num_train_steps,
-        decay=train_config.decay,
-        train_batch_size=train_config.train_batch_size,
-        stable_data_mix=nemotron_mix,
-        decay_data_mix=decay_data_tokenized,
-    )
-    decay_train_config = generate_train_config(
-        dataset_config=decay_dataset_config,
-        model_config=model_config,
-        train_config=train_config,
-        experiment_name=experiment_name,
-    )
-    decay_step = ExecutorStep(
-        name=f"checkpoints/{experiment_name}",
-        fn=generate_midtrain_step,
-        config=DecayConfig(
-            train_lm_on_pod_config=decay_train_config,
-            checkpoint_path=output_path_of(sweep_step, "checkpoints"),
+for pt_weight, mt_weight in pt_to_mt_splits:
+    for sweep_step, model_config, train_config, budget in zip(
+        isoflop_steps, isoflop_model_configs, isoflop_train_configs, isoflop_budgets, strict=False
+    ):
+        experiment_name = get_train_job_name(sweep_step, decay_data_name, f"{pt_weight}-{mt_weight}")
+
+        decay_dataset_config = generate_tokenized_dataset_config(
+            num_train_steps=train_config.num_train_steps,
+            decay=train_config.decay,
+            train_batch_size=train_config.train_batch_size,
+            stable_data_mix=nemotron_mix,
+            decay_data_mix=decay_data_tokenized,
+            pt_weight=pt_weight,
+            mt_weight=mt_weight,
+        )
+        decay_train_config = generate_train_config(
+            dataset_config=decay_dataset_config,
+            model_config=model_config,
             train_config=train_config,
-        ),
-    )
-    steps.append(decay_step)
+            experiment_name=experiment_name,
+            budget=budget,
+        )
+        decay_step = ExecutorStep(
+            name=f"checkpoints/{experiment_name}",
+            fn=generate_midtrain_step,
+            config=DecayConfig(
+                train_lm_on_pod_config=decay_train_config,
+                checkpoint_path=output_path_of(sweep_step, "checkpoints"),
+                train_config=train_config,
+            ),
+        )
+
+        eval_step = evaluate_levanter_lm_evaluation_harness(
+            model_name=experiment_name,
+            model_path=output_path_of(decay_step),
+            evals=eval_tasks,
+            resource_config=SINGLE_TPU_V5p_8_FULL,
+        )
+        steps.append(eval_step)
+        # steps.append(decay_step)
 
 if __name__ == "__main__":
     executor_main(steps=steps)
