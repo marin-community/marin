@@ -1,16 +1,12 @@
-import dataclasses
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any
 
 import equinox as eqx
 import haliax as hax
 import haliax.haxtyping as ht
-import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-import numpy as np
 import levanter
 from haliax import NamedArray
 from haliax.jax_utils import maybe_rng_split
@@ -51,37 +47,12 @@ class TrainRlConfig:
     environments_path: str = "environments.json"
 
     # training params
-    max_input_length: int = 512
-    max_output_length: int = 512
-
-    decode_bsize: int = 32
-    prefill_bsize: int = 32
-    reference_logprobs_bsize: int = 32
-    n_prompts_per_step: int = 128
-
     num_eval_examples: int = 0
-
     kl_coef: float = 0.0
 
     pad_token_id: int = 128002
-
-    # dtypes
-    inference_param_dtype: str = "bf16"
-    training_param_dtype: str = "bf16"
-
-    inference_activation_dtype: str = "bf16"
-    training_activation_dtype: str = "bf16"
-
-    # attention kernels
-    train_attention_kernel_config: str = "splash: {}"
-    prefill_attention_kernel_config: str = "splash: {}"
-    generate_attention_kernel_config: str = "paged: {}"
-
-    # configs that were json strings
-    generation_config: dict[str, Any] = dataclasses.field(default_factory=lambda: {"n_generations": 4})
-    test_generation_config: dict[str, Any] = field(default_factory=dict)
-    model_config_override: dict[str, Any] = field(default_factory=dict)
-    tokenizer_override: dict[str, Any] = field(default_factory=dict)
+    steps_per_weight_transfer: int = 8
+    steps_per_replay_buffer_flush: int = 8
 
 
 class RlExample(eqx.Module):
@@ -100,7 +71,7 @@ class RlExample(eqx.Module):
         return hax.vmap(LmExample.causal, "batch")(
             tokens=self.input_ids,
             loss_mask=self.loss_mask,
-            # segment_ids=self.segment_ids,
+            segment_ids=self.segment_ids,
         )
 
 
@@ -175,7 +146,8 @@ def main(config: TrainRlConfig):
         token_loss = next_token_loss(
             "position", Vocab, logits, example.tokens, loss_mask=example.loss_mask, reduction=None
         )
-        log_ratio = hax.exp(-token_loss)  # - jax.lax.stop_gradient(-token_loss)))
+
+        log_ratio = hax.exp(-token_loss + batch.policy_logprobs)
         weighted_log_ratio = log_ratio * batch.loss_weights
         reinforce_loss = hax.mean(hax.negative(weighted_log_ratio), where=batch.loss_mask)
         ref_log_ratio = batch.reference_logprobs + token_loss
@@ -235,14 +207,26 @@ def main(config: TrainRlConfig):
         sampler = None
 
         def get_reference_logprobs(
-            params,
-            prompt_tokens: np.ndarray,
-            prompt_attention_mask: np.ndarray,
-            answer_tokens: np.ndarray,
-            answer_attention_mask: np.ndarray,
-        ) -> np.ndarray:
-            # Minimal stub: return zeros to wire through pipeline without model dependency
-            return np.zeros_like(answer_tokens, dtype=np.float32)
+            model,
+            batch: RlExample,
+        ) -> ht.Float[NamedArray, "batch position"]:
+            return next_token_loss(
+                "position",
+                Vocab,
+                model(input_ids=batch.input_ids, attn_mask=batch.loss_mask),
+                batch.input_ids,
+                reduction=None,
+            )
+
+        while int(state.step) < config.trainer.num_train_steps:
+            batch = next(train_loader)
+            step_info = trainer.train_step(state, batch)
+            state = step_info.state
+
+            # see if it's time to do a weight transfer
+            # TODO: implement weight transfer
+            # if int(state.step) % config.steps_per_weight_transfer == 0:
+            # weight_transfer_coordinator.schedule_weight_transfer()
 
         # Evaluation Hook
         # def eval_hook(step_info: StepInfo):
@@ -306,9 +290,7 @@ def main(config: TrainRlConfig):
                 )
                 # Policy logprobs are optional; use zeros if not provided
                 if "policy_logprobs" in batch:
-                    policy_logprobs = hax.named(
-                        jnp.asarray(batch["policy_logprobs"]).astype(jnp.float32), (Batch, Pos)
-                    )
+                    policy_logprobs = hax.named(jnp.asarray(batch["policy_logprobs"]).astype(jnp.float32), (Batch, Pos))
                 else:
                     policy_logprobs = hax.named(jnp.zeros_like(reference_logprobs.array), (Batch, Pos))
 
