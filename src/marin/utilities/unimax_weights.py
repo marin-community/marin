@@ -60,24 +60,6 @@ def unimax_weights(
                 alloc[k] = share
             remaining_budget = 0
 
-    # ---- epsilon repair: sum(alloc) == budget within tiny tol ----
-    EPS = 1e-9
-    total = sum(alloc.values())
-    err = budget - total  # could be +/- a few ulps
-
-    if abs(err) > EPS and budget > 0:
-        if err > 0:
-            # Add to the item with most slack (cap - alloc)
-            k_sel = max(alloc, key=lambda k: caps[k] - alloc[k])
-            slack = caps[k_sel] - alloc[k_sel]
-            delta = min(err, max(0.0, slack))
-            alloc[k_sel] += delta
-        else:
-            # Remove from largest alloc
-            k_sel = max(alloc, key=lambda k: alloc[k])
-            delta = min(-err, alloc[k_sel])
-            alloc[k_sel] -= delta
-
     # Normalise allocations to probabilities
     weights = {k: alloc[k] / budget if budget > 0 else 0.0 for k in alloc}
 
