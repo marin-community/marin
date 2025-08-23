@@ -16,6 +16,13 @@ from marin.utils import fsspec_glob, remove_tpu_lockfile_on_exit
 
 
 class ChunkStrategy(StrEnum):
+    # ``chunk_strategy`` determines how a document should be split into
+    # smaller pieces before inference. Options are:
+    #   - ``ChunkStrategy.CHAR``: split into fixed-size character windows
+    #     determined by ``chunk_size``.
+    #   - ``ChunkStrategy.PARAGRAPH``: split on newlines (``"\n"``) and treat
+    #     each line-separated paragraph as a separate example.
+    # If ``chunk_strategy`` is ``None`` no chunking is applied.
     CHAR = "char"
     PARAGRAPH = "paragraph"
 
@@ -37,15 +44,6 @@ class TextGenerationInferenceConfig:
     apply_chat_template: bool = True
     save_templated_prompt: bool = False
     max_doc_tokens: int = 7000
-
-    # Chunking specific
-    # ``chunk_strategy`` determines how a document should be split into
-    # smaller pieces before inference. Options are:
-    #   - ``ChunkStrategy.CHAR``: split into fixed-size character windows
-    #     determined by ``chunk_size``.
-    #   - ``ChunkStrategy.PARAGRAPH``: split on newlines (``"\n"``) and treat
-    #     each line-separated paragraph as a separate example.
-    # If ``chunk_strategy`` is ``None`` no chunking is applied.
     chunk_strategy: ChunkStrategy | None = None
     chunk_size: int | None = None
 
@@ -124,16 +122,22 @@ def chunk_text(
         for idx in range(0, len(text), chunk_size):
             chunk = text[idx : idx + chunk_size]
             new_example = example.copy()
+            new_example_metadata = new_example.get("metadata", {})
             new_example["text"] = chunk
             if example_id is not None:
                 new_example["id"] = f"{example_id}_{idx // chunk_size}"
+                new_example_metadata["source_document_id"] = example_id
+                new_example["metadata"] = new_example_metadata
             results.append(new_example)
     elif strategy is ChunkStrategy.PARAGRAPH:
         for idx, para in enumerate(filter(None, text.split("\n"))):
             new_example = example.copy()
+            new_example_metadata = new_example.get("metadata", {})
             new_example["text"] = para
             if example_id is not None:
                 new_example["id"] = f"{example_id}_{idx}"
+                new_example_metadata["source_document_id"] = example_id
+                new_example["metadata"] = new_example_metadata
             results.append(new_example)
     else:
         raise ValueError(f"Unknown chunking strategy: {strategy}")

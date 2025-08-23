@@ -8,6 +8,7 @@ def test_chunk_text_char_strategy():
     chunks = chunk_text(example, ChunkStrategy.CHAR, chunk_size=10)
     assert [c["text"] for c in chunks] == ["abcdefghij", "klmnopqrst", "uvwxyz"]
     assert [c["id"] for c in chunks] == ["doc_0", "doc_1", "doc_2"]
+    assert [c["metadata"]["source_document_id"] for c in chunks] == ["doc", "doc", "doc"]
 
 
 def test_chunk_text_paragraph_strategy():
@@ -15,6 +16,7 @@ def test_chunk_text_paragraph_strategy():
     chunks = chunk_text(example, ChunkStrategy.PARAGRAPH)
     assert [c["text"] for c in chunks] == ["para1", "para2", "para3"]
     assert [c["id"] for c in chunks] == ["doc_0", "doc_1", "doc_2"]
+    assert [c["metadata"]["source_document_id"] for c in chunks] == ["doc", "doc", "doc"]
 
 
 @pytest.mark.parametrize("strategy", [ChunkStrategy.CHAR, ChunkStrategy.PARAGRAPH])
