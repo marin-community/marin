@@ -100,7 +100,7 @@ def test_multiple_files_processing():
 
         # Verify all outputs
         total_rows = 0
-        for i, (output_file, expected_data) in enumerate(zip(output_files, file_data, strict=False)):
+        for _i, (output_file, expected_data) in enumerate(zip(output_files, file_data, strict=False)):
             assert os.path.exists(output_file)
 
             # Read results

@@ -1,6 +1,25 @@
-# FROM anyscale/ray:2.46.0-slim-py311-cpu
-FROM rayproject/ray:2.44.1-py311-cpu
-ARG VLLM_VERSION=v0.9.0
+FROM rayproject/ray:2.45.0-py311-cpu
+ARG VLLM_VERSION=0.6.6.post1
+
+# For some reason, ray destroys the apt sources list, so we need to restore it
+RUN sudo rm -rf /var/lib/apt/lists/* \
+ && sudo apt-get update \
+ && sudo apt-get install -y --no-install-recommends \
+      apt-transport-https \
+      ca-certificates \
+      gnupg \
+      ubuntu-keyring \
+ && sudo apt-get update \
+ && sudo apt-get install -y --no-install-recommends \
+      clang \
+      curl \
+      g++ \
+      vim \
+      libpython3.11 \
+      libpython3.11-dev \
+      docker.io \
+      cmake \
+ && sudo rm -rf /var/lib/apt/lists/*
 
 # Install general dependencies
 RUN sudo apt-get update && sudo apt-get install -y clang curl g++ vim libpython3.11 libpython3.11-dev docker.io cmake gnupg
@@ -29,9 +48,6 @@ RUN set && curl -Lf https://github.com/lexbor/lexbor/archive/refs/tags/v2.3.0.ta
         && sudo cmake --build build -j$(nproc) --target install) \
     && rm -rf lexbor*
 
-# install rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH=$HOME/.cargo/bin:$PATH
 
 RUN sudo mkdir -p /opt/marin/
 RUN sudo chown -R $(whoami) /opt/marin/
@@ -44,33 +60,16 @@ RUN gcloud components install alpha
 
 RUN conda install -c conda-forge ncurses -y
 
-# Install Jax for TPU usage, fsspec for GCS access, and transformers for OLMO
+# install rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH=$HOME/.cargo/bin:$PATH
 
-# Installing all the core dependencies
-# ['draccus>=0.8.0', 'google-api-python-client~=2.0', 'ray', 'gcsfs', 'google-cloud-storage',
-# 'google-cloud-storage-transfer', 's3fs', 'regex', 'requests', 'numpy', 'torch', 'braceexpand', 'deepdiff', 'tqdm',
-# 'tqdm-loggable', 'toml', 'pandas', 'pyarrow', 'jax==0.4.35', 'multiprocess==0.70.16', 'levanter>=1.2.dev1163']
-# RUN pip install --no-cache-dir -U draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests numpy braceexpand deepdiff tqdm tqdm-loggable toml pandas pyarrow "levanter>=1.2.dev1361" "haliax>=1.4dev348"
-
-# Install vLLM to try
-RUN sudo apt update && \
-    sudo mkdir -p /opt/vllm && \
-    sudo chown -R $(whoami) /opt/vllm && \
-    cd /opt/vllm && \
-    git clone https://github.com/vllm-project/vllm.git && \
-    cd vllm && \
-    git checkout ${VLLM_VERSION} && \
-    pip uninstall torch torch-xla -y && \
-    pip install --no-cache-dir -r requirements/tpu.txt && \
-    sudo apt-get install libopenblas-base libopenmpi-dev libomp-dev -y && \
-    VLLM_TARGET_DEVICE="tpu" python3 -m pip install -e .
-
-# RUN pip install --no-cache-dir -U pip && \
-#     pip install --no-cache-dir fsspec>=2024.9.0 draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer regex requests numpy braceexpand deepdiff tqdm tqdm-loggable toml pandas pyarrow "levanter>=1.2.dev1361" "haliax>=1.4dev348"
-
-# Supress TPU XLA logs
-RUN echo "export TF_CPP_MIN_LOG_LEVEL=1" >> /home/ray/.bashrc
-# NOTE: Try to keep as much "heavy" stuff as possible before this line to avoid re-installing
+WORKDIR /tmp/marin
+COPY pyproject.toml /tmp/marin
+RUN mkdir -p src/marin && touch src/marin/__init__.py && touch README.md && touch LICENSE
+RUN uv pip install -e .[dev,tpu,gcp] --system --torch-backend=cpu
+WORKDIR /opt/marin
+RUN rm -rf /tmp/marin
 
 # (not installing pyproject.toml because it interferes with Ray's RuntimeEnv deps)
 #WORKDIR /tmp/
@@ -97,6 +96,11 @@ RUN echo "export TF_CPP_MIN_LOG_LEVEL=1" >> /home/ray/.bashrc
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/x86_64-linux-gnu/
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
 ENV PATH=$PATH:/home/ray/anaconda3/bin
+
+COPY docker/marin/preemptible-fix.patch .
+# apply the patch to fix preemptible GCP in Ray in the installed ray package
+RUN patch -d /home/ray/anaconda3/lib/python3.11/site-packages/ -p2 < preemptible-fix.patch
+
 
 # to run docker containers, we need to be in the docker group
 RUN sudo usermod -aG docker $(whoami)

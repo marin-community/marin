@@ -159,7 +159,9 @@ def _evaluate_classifier(config: EvaluateClassifierConfig):
         # Log CPU and memory usage before classifier call
         # cpu_percent = psutil.cpu_percent(interval=1)
         # memory = psutil.virtual_memory()
-        # print(f"Batch {i//config.batch_size + 1}: CPU usage: {cpu_percent:.1f}%, Memory usage: {memory.percent:.1f}% ({memory.used/1024**3:.2f}GB used / {memory.total/1024**3:.2f}GB total)")
+        # print(
+        #     f"Batch {i//config.batch_size + 1}: CPU {cpu_percent:.1f}%, Mem {memory.percent:.1f}%"
+        # )
 
         # The classifier updates the batch dictionary with an 'attributes' key
         classifier({"text": texts, "attributes": []})

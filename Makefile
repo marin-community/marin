@@ -20,7 +20,7 @@ init:
 	conda install -c conda-forge pandoc
 	npm install -g pandiff
 	pre-commit install
-	pip install -e ".[dev,download_transform]"
+	uv sync
 	huggingface-cli login
 
 clean:
@@ -95,6 +95,15 @@ cluster_docker_ghcr_push: cluster_docker_build
 cluster_docker: cluster_docker_build cluster_docker_push
 	@echo "Docker image build and push complete."
 
+
+# Target to configure GCP registry cleanup policy for all standard regions
+default_registry_name = marin
+configure_gcp_registry_all:
+	@echo "Configuring GCP registry cleanup policy for all standard regions..."
+	$(foreach region,$(CLUSTER_REPOS), \
+		python infra/configure_gcp_registry.py $(default_registry_name) --region=$(region) ; \
+	)
+	@echo "Cleanup policy configured for all regions."
 
 
 # stuff for setting up locally

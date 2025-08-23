@@ -24,7 +24,8 @@ def sample_data():
         {
             "id": "doc1",
             "text": (
-                "This is a high quality document with excellent content and comprehensive information that would be very useful for educational purposes."
+                "This is a high quality document with excellent content and comprehensive information "
+                "that would be very useful for educational purposes."
             ),
         },
         {"id": "doc2", "text": "This is an average document with some useful information but lacks depth and detail."},
@@ -35,7 +36,8 @@ def sample_data():
         {
             "id": "doc4",
             "text": (
-                "Another excellent document with comprehensive details, well-structured content, and high educational value."
+                "Another excellent document with comprehensive details, well-structured content, "
+                "and high educational value."
             ),
         },
         {"id": "doc5", "text": "A mediocre document that could be improved with more detail and better organization."},
@@ -124,7 +126,7 @@ class TestVLLMClassifierDirect:
         assert len(result["attributes"]) == len(sample_data)
 
         # Check that each document has quality attributes
-        for i, attr in enumerate(result["attributes"]):
+        for _i, attr in enumerate(result["attributes"]):
             assert "quality" in attr
             assert "score" in attr["quality"]
             score = attr["quality"]["score"]
@@ -188,7 +190,7 @@ class TestVLLMSingleFileProcessing:
         assert len(results) == len(sample_data)
 
         # Check that attributes were added correctly
-        for i, result in enumerate(results):
+        for _i, result in enumerate(results):
             # Check that original generation is saved
             assert "generated_text" in result
 
@@ -302,7 +304,7 @@ class TestVLLMFullInferencePipeline:
             assert len(results) == len(file_data[i])
 
             # Check that attributes were added correctly
-            for j, result in enumerate(results):
+            for _j, result in enumerate(results):
                 assert "id" in result
                 assert "attributes" in result
                 assert "quality" in result["attributes"]
@@ -394,7 +396,7 @@ class TestVLLMErrorHandling:
 
     def test_invalid_model_path(self, quality_classification_template):
         """Test handling of invalid model paths"""
-        with pytest.raises(Exception):  # Should raise an exception when trying to load invalid model
+        with pytest.raises((FileNotFoundError, OSError, ValueError, RuntimeError)):
             classifier = vLLMClassifier(
                 model_name="invalid/model/path",
                 attribute_name="quality",
