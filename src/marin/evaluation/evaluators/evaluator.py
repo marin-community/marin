@@ -80,7 +80,12 @@ class Evaluator(ABC):
         if resource_config is None:
             fn = None
         else:
-            fn = scheduling_strategy_fn(resource_config.num_tpu, resource_config.strategy)
+            fn = scheduling_strategy_fn(
+                resource_config.num_tpu,
+                resource_config.strategy,
+                resource_config.tpu_type,
+                resource_config.include_head_in_scheduling_strategy,
+            )
 
         return fn
 
