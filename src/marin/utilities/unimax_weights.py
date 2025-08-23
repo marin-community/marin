@@ -12,8 +12,7 @@ def unimax_weights(
         corpus_tokens: Mapping from subset name to its token count.
         budget: Total token budget available for training.
         max_epochs: Epoch cap ``E``. If the total budget exceeds
-            ``E * sum(corpus_tokens)``, ``E`` is automatically bumped so that the
-            full budget can be allocated.
+            ``E * sum(corpus_tokens)``, a :class:`ValueError` is raised.
 
     Returns:
         A tuple ``(weights, alloc)`` where ``weights`` is a mapping from subset
@@ -37,9 +36,12 @@ def unimax_weights(
             raise ValueError("budget must be zero when corpus is empty")
         return {k: 0.0 for k in corpus_tokens}, {k: 0.0 for k in corpus_tokens}
 
-    # If the requested budget is larger than the allowed max_epochs, bump it so
-    # that we can allocate the entire budget.
-    effective_epochs = max(max_epochs, budget / total_tokens)
+    # If the requested budget is larger than the allowed max_epochs, fail fast.
+    if max_epochs < budget / total_tokens:
+        raise ValueError(
+            "Impossible constraints: budget requires more epochs than max_epochs allows"
+        )
+    effective_epochs = max_epochs
     caps = {k: effective_epochs * v for k, v in corpus_tokens.items()}
 
     remaining_budget = budget
