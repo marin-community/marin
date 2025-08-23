@@ -24,3 +24,8 @@ def test_negative_corpus_size():
 def test_empty_corpus_nonzero_budget():
     with pytest.raises(ValueError):
         unimax_weights({"a": 0, "b": 0}, budget=1)
+
+
+def test_budget_exceeds_max_epochs_raises():
+    with pytest.raises(ValueError):
+        unimax_weights({"a": 1}, budget=2, max_epochs=1)
