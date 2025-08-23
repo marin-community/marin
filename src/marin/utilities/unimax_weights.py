@@ -66,23 +66,3 @@ def unimax_weights(
     weights = {k: alloc[k] / budget if budget > 0 else 0.0 for k in alloc}
 
     return weights, alloc
-
-
-def main() -> None:  # pragma: no cover - CLI helper
-    import argparse
-    import json
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--sizes", required=True, help="JSON file: {subset: tokens}")
-    parser.add_argument("--budget", type=float, required=True, help="Total token budget")
-    parser.add_argument("--max_epochs", type=float, default=1.0)
-    args = parser.parse_args()
-
-    with open(args.sizes) as f:
-        sizes = json.load(f)
-    weights, alloc = unimax_weights(sizes, args.budget, args.max_epochs)
-    print(json.dumps({"weights": weights, "alloc": alloc}, indent=2))
-
-
-if __name__ == "__main__":  # pragma: no cover
-    main()
