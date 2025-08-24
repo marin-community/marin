@@ -451,7 +451,8 @@ class SliceActor(ResourcePoolManager[TPUHostInfo]):
         if tpe.startswith("v4") or tpe.startswith("v5"):
             num_cores = int(tpe.split("-")[1])
             num_tpus_per_host = 4
-            num_hosts = num_cores // 8
+            # "v5litepod-4" should still create 1 host, not 0
+            num_hosts = max(1, num_cores // 8)
         ip_address = socket.gethostbyname(socket.gethostname())
         self._slice_info = SliceInfo(
             slice_name=pod_name,
@@ -654,6 +655,13 @@ def run_on_pod_ray(
                 for future in futures_for_slice:
                     future_to_index[future] = global_index
                     global_index += 1
+
+            if not futures:
+                error = "Failed to schedule any futures"
+                exception = RuntimeError(error)
+                logger.exception(error, exc_info=exception)
+                problems.append(exception)
+                break
 
             tpu_results: list[_TpuRunResult | None] = [None] * len(futures)
 
