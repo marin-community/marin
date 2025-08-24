@@ -128,7 +128,7 @@ plugins:
       default_handler: python
       handlers:
         python:
-          paths: ["."]
+          paths: [".", "src"]
           inventories:
             - https://docs.python.org/3/objects.inv
             - https://jax.readthedocs.io/en/latest/objects.inv

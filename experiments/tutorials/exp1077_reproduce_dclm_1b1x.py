@@ -32,7 +32,6 @@ llama_1_4b_dclm = LlamaConfig(
     num_heads=16,  # Number of attention heads
     num_kv_heads=16,  # Number of key/value heads (equal to num_heads = no grouped-query attention)
     num_layers=24,  # Number of transformer layers
-    use_flash_attention=True,
 )
 
 NUM_TRAIN_TOKENS = int(28.8e9)  # 28.8 billion tokens

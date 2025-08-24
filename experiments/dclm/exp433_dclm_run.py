@@ -71,7 +71,6 @@ llama_1_4b_dclm = LlamaConfig(
     num_heads=16,
     num_kv_heads=16,
     num_layers=24,
-    use_flash_attention=True,
 )
 
 NUM_TRAIN_TOKENS = int(28.8e9)  # 28.8 billion tokens

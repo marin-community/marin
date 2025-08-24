@@ -6,8 +6,8 @@ In this tutorial, you will install Marin on your local machine.
 
 Before you begin, ensure you have the following installed:
 
-- Python 3.10 or higher
-- pip (Python package manager)
+- Python 3.11 or higher
+- uv (Python package manager)
 - Git
 - A [Weights & Biases](https://wandb.ai) account for experiment tracking (optional but recommended)
 
@@ -25,19 +25,19 @@ If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
 
 2. Create and activate a virtual environment:
    ```bash
-   virtualenv venv           # Alternative: python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   uv venv --python 3.11
+   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
    ```
 
    or with conda:
    ```bash
-   conda create --name marin python=3.10 pip
+   conda create --name marin python=3.11 pip
    conda activate marin
    ```
 
 3. Install the package (this might take a while, which is something we should fix):
    ```bash
-   pip install -e .
+   uv pip install -e .
    ```
 
 4. Setup [Weights and Biases (WandB)](https://wandb.ai) so you can monitor your runs:
@@ -60,7 +60,7 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
 
     === "CPU"
         ```bash
-        pip install -e "."
+        uv pip install -e "."
         ```
 
     === "GPU"
@@ -85,18 +85,19 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
          Finally we'll install the correct libraries for GPU setup:
 
          ```bash
-         pip install -e ".[cuda12]"
+         uv pip install -e ".[cuda12]"
          ```
 
     === "TPU"
 
         ```bash
-        pip install -e ".[tpu]"
+        uv pip install -e ".[tpu]"
         ```
 
 - **CPU**: Works out of the box, suitable for small experiments
 - **GPU**: See [Local GPU Setup](local-gpu.md) for CUDA configuration and multi-GPU support
 - **TPU**: See [TPU Setup](../tutorials/tpu-cluster-setup.md) for Google Cloud TPU configuration
+
 
 ## Trying it Out
 

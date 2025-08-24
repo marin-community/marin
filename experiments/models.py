@@ -41,8 +41,9 @@ GCS_FUSE_MOUNT_PATH = "gcsfuse_mount/models"
 
 def download_model_step(model_config: ModelConfig) -> ExecutorStep:
     model_name = get_directory_friendly_name(model_config.hf_repo_id)
+    model_revision = get_directory_friendly_name(model_config.hf_revision)
     download_step = ExecutorStep(
-        name=f"{GCS_FUSE_MOUNT_PATH}/{model_name}",
+        name=f"{GCS_FUSE_MOUNT_PATH}/{model_name}--{model_revision}",
         fn=download_hf,
         config=DownloadConfig(
             hf_dataset_id=model_config.hf_repo_id,
@@ -53,7 +54,7 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
         ),
         # must override because it because if we don't then it will end in a hash
         # if it ends in a hash, then we cannot determine the local path
-        override_output_path=f"{GCS_FUSE_MOUNT_PATH}/{model_name}",
+        override_output_path=f"{GCS_FUSE_MOUNT_PATH}/{model_name}--{model_revision}",
     )
 
     return download_step
@@ -111,6 +112,13 @@ tulu_3_1_8b_sft = download_model_step(
     ModelConfig(
         hf_repo_id="allenai/Llama-3.1-Tulu-3-8B-SFT",
         hf_revision="f2a0b46",
+    )
+)
+
+tulu_3_1_8b_instruct = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/Llama-3.1-Tulu-3.1-8B",
+        hf_revision="46239c2",
     )
 )
 
