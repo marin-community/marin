@@ -27,7 +27,7 @@ config (at least the part of it that's explicitly versioned) and all its depende
 In the [hello world example](../tutorials/executor-101.md), we have two steps,
 generating data and compute statistics.
 
-See the documentation in [`executor.py`](https://github.com/marin-community/marin/blob/main/marin/execution/executor.py) for more details.
+See the documentation in [`executor.py`](https://github.com/marin-community/marin/blob/main/src/marin/execution/executor.py) for more details.
 
 ## Ray
 
@@ -48,7 +48,7 @@ The environment will have the following packages installed:
   not interfere with other steps.
 
 For example, to install the dependencies specified in the
-`quality_dedup_consolidate` groups and also pip install `google-cloud-logging`,
+`quality_dedup_consolidate` groups and also uv pip install `google-cloud-logging`,
 one can do:
 
 ```python
@@ -60,7 +60,7 @@ number_of_restarts = ExecutorStep(
 )
 ```
 
-Finally, to launch an experiment, use [`ray_run.py`](https://github.com/marin-community/marin/blob/main/marin/run/ray_run.py), which
+Finally, to launch an experiment, use [`ray_run.py`](https://github.com/marin-community/marin/blob/main/src/marin/run/ray_run.py), which
 launches jobs to the Ray cluster:
 
 ```bash
@@ -72,3 +72,5 @@ This script ensure that:
 - The working directory is set appropriately.
 - Any subpaths under submodules are appended to PYTHONPATH, which is useful
   when [co-developing with another submodule](../tutorials/co-develop.md) (e.g., levanter).
+
+> **New:** Agent-friendly recipes are now available in `docs/recipes/`. See [add_dataset.md](../recipes/add_dataset.md) for a guide to dataset schema inspection and addition.

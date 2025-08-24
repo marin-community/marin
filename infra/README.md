@@ -372,4 +372,33 @@ python infra/manual_ray_worker_launch.py --cluster_yaml infra/marin-us-central2.
        --reserved --tpu_type v4-128 --head $IP --zone us-central2-b --name ray-manual-worker-deadbeef
 ```
 
-If there are a lot of nodes you need to reconnect, you can use the `gcloud` command and a for loop:
+## Artifact Registry Cleanup Policy Management
+
+To keep our Docker artifact registries tidy, we provide a script and Makefile target to automatically configure a cleanup policy for all our standard GCP regions. This policy deletes images older than 30 days from the registry,
+except we keep the most recent 16 tags.
+
+### Script: `infra/configure_gcp_registry.py`
+- This script sets a cleanup policy on a GCP Artifact Registry repository to delete images older than 30 days.
+- Usage:
+  ```bash
+  python infra/configure_gcp_registry.py <repository-name> --region=<region> [--project=<gcp-project>]
+  ```
+  - `repository-name`: Name of the Artifact Registry repository (default is usually `marin`).
+  - `--region`: GCP region (e.g., `us-central2`).
+  - `--project`: (Optional) GCP project ID. If omitted, uses the current gcloud project.
+
+### Makefile Target: `configure_gcp_registry_all`
+- To apply the 30-day cleanup policy to all standard regions (as defined in the `CLUSTER_REPOS` variable in the Makefile), run:
+  ```bash
+  make configure_gcp_registry_all
+  ```
+- This will call the script for each region, setting the policy for the `marin` repository in each.
+- To use a different repository name, edit the `default_registry_name` variable in the Makefile.
+- To specify a project, you can modify the Makefile target or call the script directly with `--project`.
+
+**When to use:**
+- After creating new Artifact Registry repositories in new regions.
+- Periodically, to ensure all regions have the correct cleanup policy applied.
+- After onboarding a new GCP project or changing repository names.
+
+```
