@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Marin Speedrun - Leaderboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js" defer></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'marin-blue': '#1a73e8',
+                        'marin-dark': '#1e293b'
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-50">
+    <div class="min-h-screen">
+        <header class="bg-marin-dark text-white shadow-lg">
+            <div class="container mx-auto px-4 py-6">
+                <h1 class="text-3xl font-bold">Marin Speedrun - Leaderboard</h1>
+                <p class="mt-2 text-gray-300">Community-driven model training leaderboard</p>
+            </div>
+        </header>
+        <main class="container mx-auto px-4 py-8">
+            <div class="mb-8">
+                <button id="clear-selection" class="px-4 py-2 rounded-md text-sm font-medium bg-gray-200 hover:bg-gray-300" style="display: none;">Clear Selection</button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-medium mb-4">Total Number of Runs</h3>
+                    <div id="total-runs" class="text-2xl font-bold">-</div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-medium mb-4">Best C4-EN BPB</h3>
+                    <div id="best-bpb" class="text-2xl font-bold">-</div>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6 mb-8 relative h-96 flex flex-col">
+                <h2 class="text-xl font-semibold text-gray-900 mb-4 flex-shrink-0">Pareto Frontier: FLOPs vs. C4-EN BPB</h2>
+                <div class="relative flex-grow">
+                    <canvas id="pareto-chart" style="position: absolute; top: 0; left: 0; height: 100%; width: 100%;"></canvas>
+                    <canvas id="overlay-canvas" style="position: absolute; top: 0; left: 0; height: 100%; width: 100%; pointer-events: none;"></canvas>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow overflow-hidden">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rank</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort="run_name">Run Name ↕</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort="run_timestamp">Timestamp (UTC) ↕</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort="model_size">Model Size ↕</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort="total_training_time">Training Time ↕</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort="total_training_flops">Total FLOPs ↕</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort="eval_paloma_c4_en_bpb">C4-EN BPB ↕</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">W&B Run</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200" id="leaderboard-body"></tbody>
+                </table>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        async function fetchLeaderboard() {
+            try {
+                const response = await fetch('./data/runs.json');
+                const data = await response.json();
+                console.log('Loaded data:', data);
+
+                return data.map(entry => ({
+                    ...entry,
+                    timestamp: entry.run_timestamp,
+                    model_size: parseFloat(entry.model_size) || 0,
+                    total_training_flops: parseFloat(entry.total_training_flops) || 0,
+                    total_training_time: parseFloat(entry.total_training_time) || 0,
+                    submitted_by: entry.submitted_by || "unknown",
+                    wandb_link: entry.wandb_link || "N/A",
+                    eval_paloma_c4_en_bpb: parseFloat(entry.eval_paloma_c4_en_bpb) || null
+                }));
+            } catch (error) {
+                console.error("Error fetching leaderboard data:", error);
+                return [];
+            }
+        }
+
+        function formatModelSize(size) {
+            if (!size) return "N/A";
+            return size < 1e9 ? `${(size / 1e6).toFixed(1)}M` : `${(size / 1e9).toFixed(1)}B`;
+        }
+
+        function formatFlops(flops) {
+            if (!flops) return "N/A";
+            return flops.toExponential(2).replace('e+', 'E');
+        }
+
+        function formatMetric(value) {
+            return value === null || isNaN(value) ? 'N/A' : value.toFixed(3);
+        }
+
+        function updateStats(entries) {
+            // Update total runs count
+            document.getElementById('total-runs').textContent = entries.length;
+
+            if (entries.length === 0) {
+                document.getElementById('best-bpb').textContent = '-';
+                return;
+            }
+
+            // Find best C4-EN BPB
+            const bestBpb = entries.reduce((min, entry) =>
+                (entry.eval_paloma_c4_en_bpb && entry.eval_paloma_c4_en_bpb < min) ? entry.eval_paloma_c4_en_bpb : min,
+                entries.find(e => e.eval_paloma_c4_en_bpb)?.eval_paloma_c4_en_bpb || Infinity);
+
+            // Update stats display
+            document.getElementById('best-bpb').textContent = bestBpb !== Infinity ? bestBpb.toFixed(3) : '-';
+        }
+
+        function computeParetoFrontier(entries) {
+            if (!entries.length) return [];
+            const validEntries = entries.filter(e =>
+                e.total_training_flops > 0 &&
+                Number.isFinite(e.eval_paloma_c4_en_bpb) &&
+                e.eval_paloma_c4_en_bpb > 0
+            );
+            if (!validEntries.length) return [];
+            const sorted = [...validEntries].sort((a, b) => a.total_training_flops - b.total_training_flops);
+            const frontier = [];
+            let minBPB = Infinity;
+            for (const entry of sorted) {
+                if (entry.eval_paloma_c4_en_bpb <= minBPB) {
+                    frontier.push(entry);
+                    minBPB = entry.eval_paloma_c4_en_bpb;
+                }
+            }
+            return frontier;
+        }
+
+        let paretoChart = null;
+        let selectedRuns = new Set();
+        let allEntries = [];
+        let currentSort = { field: 'eval_paloma_c4_en_bpb', direction: 'asc' };
+
+        let updateTimeout = null;
+
+        function updateParetoChart(entries) {
+            if (updateTimeout) clearTimeout(updateTimeout);
+            updateTimeout = setTimeout(() => {
+                const validEntries = entries.filter(
+                    e => Number.isFinite(e.total_training_flops) && e.total_training_flops > 0 &&
+                         Number.isFinite(e.eval_paloma_c4_en_bpb) && e.eval_paloma_c4_en_bpb > 0
+                );
+                if (!validEntries.length) {
+                    if (paretoChart) {
+                        paretoChart.destroy();
+                        paretoChart = null;
+                    }
+                    const ctx = document.getElementById('pareto-chart').getContext('2d');
+                    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+                    return;
+                }
+
+                const chartData = validEntries.map(entry => ({
+                    x: entry.total_training_flops / 1e18,
+                    y: entry.eval_paloma_c4_en_bpb,
+                    run_name: entry.run_name
+                }));
+
+                const paretoEntries = computeParetoFrontier(validEntries);
+                const paretoData = paretoEntries.map(entry => ({
+                    x: entry.total_training_flops / 1e18,
+                    y: entry.eval_paloma_c4_en_bpb
+                }));
+
+                // Calculate data ranges for axis scaling
+                const flopsValues = validEntries.map(e => e.total_training_flops / 1e18);
+                const bpbValues = validEntries.map(e => e.eval_paloma_c4_en_bpb);
+                const minFlops = flopsValues.length ? Math.min(...flopsValues) : 0.1;
+                const maxFlops = flopsValues.length ? Math.max(...flopsValues) : 1;
+                const minBPB = bpbValues.length ? Math.min(...bpbValues) : 0.1;
+                const maxBPB = bpbValues.length ? Math.max(...bpbValues) : 2;
+
+        // Calculate more optimal axis limits with adaptive padding
+        const bpbRange = maxBPB - minBPB;
+        const flopsRange = maxFlops - minFlops;
+
+        // Use smaller padding for y-axis (BPB) to reduce vertical whitespace
+        const yPadding = Math.max(bpbRange * 0.05, 0.001);
+        const xPadding = Math.max(flopsRange * 0.1, 0.01);
+
+        const xMin = Math.max(minFlops - xPadding, 0.01);
+        const xMax = maxFlops + xPadding;
+        const yMin = Math.max(minBPB - yPadding, 0.01);
+        const yMax = maxBPB + yPadding;
+
+        if (paretoChart) {
+            paretoChart.destroy();
+            paretoChart = null;
+        }
+
+        const ctx = document.getElementById('pareto-chart').getContext('2d');
+        paretoChart = new Chart(ctx, {
+                    type: 'scatter',
+                    data: {
+                        datasets: [
+                            {
+                                label: 'Runs',
+                                data: chartData,
+                                backgroundColor: validEntries.map(entry =>
+                                    selectedRuns.size > 0 && !selectedRuns.has(entry.run_name) ?
+                                        'rgba(200, 200, 200, 0.3)' : 'rgba(75, 192, 192, 0.6)'
+                                ),
+                                borderColor: validEntries.map(entry =>
+                                    selectedRuns.size > 0 && !selectedRuns.has(entry.run_name) ?
+                                        'rgba(200, 200, 200, 0.3)' : 'rgba(75, 192, 192, 1)'
+                                ),
+                                pointRadius: 6,
+                                pointHoverRadius: 8
+                            },
+                            {
+                                label: 'Pareto Frontier',
+                                data: paretoData,
+                                type: 'line',
+                                borderColor: 'rgba(255, 99, 132, 1)',
+                                backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                                fill: false,
+                                pointRadius: 8,
+                                pointHoverRadius: 10,
+                                showLine: true,
+                                tension: 0.1
+                            }
+                        ]
+                    },
+                    options: {
+                        animation: false,
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: {
+                                title: { display: true, text: 'FLOPs Used (ExaFLOPs)' },
+                                type: 'logarithmic',
+                                position: 'bottom',
+                                min: xMin,
+                                max: xMax,
+                                ticks: { callback: function(value) { return Number(value).toFixed(2); } }
+                            },
+                            y: {
+                                title: { display: true, text: 'C4-EN BPB (lower is better)' },
+                                type: 'linear',
+                                min: yMin,
+                                max: yMax,
+                                ticks: { callback: function(value) { return Number(value).toFixed(3); } }
+                            }
+                        },
+                        plugins: {
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        const entry = context.raw;
+                                        if (context.dataset.label === 'Pareto Frontier') {
+                                            return `Pareto Point: ${entry.x.toFixed(2)} EFLOPs, ${entry.y.toFixed(3)} BPB`;
+                                        }
+                                        return `${entry.run_name}: ${entry.x.toFixed(2)} EFLOPs, ${entry.y.toFixed(3)} BPB`;
+                                    }
+                                }
+                            },
+                            legend: { display: true }
+                        }
+                    }
+                });
+            }, 100);
+        }
+
+        function sortEntries(entries, field, direction) {
+            return [...entries].sort((a, b) => {
+                let aVal = a[field];
+                let bVal = b[field];
+                if (field === 'model_size' || field === 'total_training_flops' || field === 'total_training_time' || field === 'eval_paloma_c4_en_bpb') {
+                    aVal = parseFloat(aVal) || Infinity;
+                    bVal = parseFloat(bVal) || Infinity;
+                }
+                if (direction === 'asc') {
+                    return aVal > bVal ? 1 : -1;
+                } else {
+                    return aVal < bVal ? 1 : -1;
+                }
+            });
+        }
+
+        function updateLeaderboard(entries) {
+            allEntries = entries;
+            const sortedEntries = sortEntries(entries, currentSort.field, currentSort.direction);
+            updateStats(entries);
+            updateParetoChart(entries);
+            const tbody = document.getElementById('leaderboard-body');
+            tbody.innerHTML = '';
+            sortedEntries.forEach((entry, index) => {
+                const row = document.createElement('tr');
+                if (selectedRuns.size > 0 && selectedRuns.has(entry.run_name)) {
+                    row.className = 'bg-yellow-100';
+                } else {
+                    row.className = index % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                }
+                row.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${index + 1}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-blue-600 hover:text-blue-800 cursor-pointer">
+                        <a href="https://github.com/stanford-crfm/marin/tree/main/experiments/speedrun/${entry.run_name}" target="_blank">${entry.run_name}</a>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.run_timestamp || 'N/A'}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatModelSize(entry.model_size)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.total_training_time.toFixed(1)}m</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatFlops(entry.total_training_flops)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatMetric(entry.eval_paloma_c4_en_bpb)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        ${entry.wandb_link ? `<a href="${entry.wandb_link}" target="_blank" class="text-blue-600 hover:text-blue-800">View Run</a>` : 'N/A'}
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+
+
+        document.getElementById('clear-selection').addEventListener('click', () => {
+            selectedRuns.clear();
+            document.getElementById('clear-selection').style.display = 'none';
+            updateParetoChart(allEntries);
+            updateLeaderboard(allEntries);
+        });
+
+        document.querySelectorAll('th[data-sort]').forEach(th => {
+            th.addEventListener('click', () => {
+                const field = th.dataset.sort;
+                if (currentSort.field === field) {
+                    currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+                } else {
+                    currentSort.field = field;
+                    currentSort.direction = 'asc';
+                }
+                // Update sort indicators
+                document.querySelectorAll('th[data-sort]').forEach(header => {
+                    if (header === th) {
+                        header.textContent = header.textContent.replace(' ↕', currentSort.direction === 'asc' ? ' ↓' : ' ↑');
+                    } else {
+                        header.textContent = header.textContent.replace(/ [↑↓]/, ' ↕');
+                    }
+                });
+                updateLeaderboard(allEntries);
+            });
+        });
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            const mainCanvas = document.getElementById('pareto-chart');
+            const overlayCanvas = document.getElementById('overlay-canvas');
+            mainCanvas.parentElement.style.position = 'relative';
+            const resizeOverlay = () => {
+                overlayCanvas.width = mainCanvas.width;
+                overlayCanvas.height = mainCanvas.height;
+                overlayCanvas.style.left = `${mainCanvas.offsetLeft}px`;
+                overlayCanvas.style.top = `${mainCanvas.offsetTop}px`;
+            };
+            resizeOverlay();
+            window.addEventListener('resize', resizeOverlay);
+
+            let startX, startY, endX, endY;
+            let isDragging = false;
+
+            mainCanvas.onmousedown = (e) => {
+                const rect = mainCanvas.getBoundingClientRect();
+                startX = e.clientX - rect.left;
+                startY = e.clientY - rect.top;
+                isDragging = true;
+            };
+
+            mainCanvas.onmousemove = (e) => {
+                if (!isDragging) return;
+                const rect = mainCanvas.getBoundingClientRect();
+                endX = e.clientX - rect.left;
+                endY = e.clientY - rect.top;
+                const ctx = overlayCanvas.getContext('2d');
+                ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+                ctx.strokeStyle = 'rgba(0, 0, 255, 0.5)';
+                ctx.strokeRect(startX, startY, endX - startX, endY - startY);
+            };
+
+            mainCanvas.onmouseup = (e) => {
+                if (!isDragging) return;
+                isDragging = false;
+                const rect = mainCanvas.getBoundingClientRect();
+                endX = e.clientX - rect.left;
+                endY = e.clientY - rect.top;
+                const ctx = overlayCanvas.getContext('2d');
+                ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+                const xAxis = paretoChart.scales['x'];
+                const yAxis = paretoChart.scales['y'];
+                const chartStartX = xAxis.getValueForPixel(startX);
+                const chartEndX = xAxis.getValueForPixel(endX);
+                const chartStartY = yAxis.getValueForPixel(startY);
+                const chartEndY = yAxis.getValueForPixel(endY);
+
+                const selectionMinX = Math.min(chartStartX, chartEndX);
+                const selectionMaxX = Math.max(chartStartX, chartEndX);
+                const selectionMinY = Math.min(chartStartY, chartEndY);
+                const selectionMaxY = Math.max(chartStartY, chartEndY);
+
+                selectedRuns.clear();
+                const chartData = allEntries
+                    .filter(e => Number.isFinite(e.total_training_flops) && e.total_training_flops > 0 && Number.isFinite(e.eval_paloma_c4_en_bpb) && e.eval_paloma_c4_en_bpb > 0)
+                    .map(entry => ({
+                        x: entry.total_training_flops / 1e18,
+                        y: entry.eval_paloma_c4_en_bpb,
+                        run_name: entry.run_name
+                    }));
+                chartData.forEach((point) => {
+                    const x = point.x;
+                    const y = point.y;
+                    if (x >= selectionMinX && x <= selectionMaxX && y >= selectionMinY && y <= selectionMaxY) {
+                        selectedRuns.add(point.run_name);
+                    }
+                });
+
+                updateParetoChart(allEntries);
+                updateLeaderboard(allEntries);
+                document.getElementById('clear-selection').style.display = selectedRuns.size > 0 ? 'inline-block' : 'none';
+            };
+
+            const data = await fetchLeaderboard();
+            if (typeof Chart === 'undefined') {
+                await new Promise(resolve => {
+                    const checkChart = setInterval(() => {
+                        if (typeof Chart !== 'undefined') {
+                            clearInterval(checkChart);
+                            resolve();
+                        }
+                    }, 100);
+                });
+            }
+            updateLeaderboard(data);
+            updateParetoChart(data);
+        });
+    </script>
+
+    <style>
+        .track-btn { transition: all 0.2s; }
+        .track-btn:hover { background-color: #e5e7eb; }
+        .track-btn.active { background-color: #1a73e8; color: white; }
+
+    </style>
+</body>
+</html>

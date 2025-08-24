@@ -1,4 +1,4 @@
-# https://github.com/stanford-crfm/marin/issues/725
+# https://github.com/marin-community/marin/issues/725
 # Sweep to determine optimal hyperparameters for Adam on small scale
 import dataclasses
 import itertools
@@ -8,10 +8,11 @@ from collections.abc import Sequence
 import ray
 from levanter.models.llama import LlamaConfig
 
+from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3_wrong
 from experiments.defaults import default_train
-from experiments.exp600_tootsie import dclm_mixture_config_llama3_wrong
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, executor_main, unwrap_versioned_value, versioned
+from marin.resources import TpuPodConfig
 
 logger = logging.getLogger("ray")
 
@@ -165,7 +166,7 @@ for model_scale in ["100m", "500m"]:
 
         train_configs.append(
             SimpleTrainConfig(
-                tpu_type=versioned(TPU_TYPE),
+                resources=TpuPodConfig(versioned(TPU_TYPE)),
                 train_batch_size=BATCH_SIZE,
                 steps_per_eval=1000,
                 num_train_steps=step,
@@ -179,7 +180,7 @@ for model_scale in ["100m", "500m"]:
                     new_config[key] = value
                     train_configs.append(
                         SimpleTrainConfig(
-                            tpu_type=versioned(TPU_TYPE),
+                            resources=TpuPodConfig(tpu_type=versioned(TPU_TYPE)),
                             train_batch_size=BATCH_SIZE,
                             steps_per_eval=1000,
                             num_train_steps=step,

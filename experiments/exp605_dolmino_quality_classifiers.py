@@ -7,7 +7,7 @@ math synthetic data, and many more. In this file, we experiment with training an
 from the Wikipedia and Pes2o splits of the dataset.
 
 We use DCLM's negative examples which are 200k Refined Web examples from
-this issue: https://github.com/stanford-crfm/marin/issues/164
+this issue: https://github.com/marin-community/marin/issues/164
 """
 
 from experiments.exp164_quality_classifiers import dclm_negative_examples_in_dolma_format
@@ -19,7 +19,7 @@ from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,
 )
-from operations.transform.dolmino.filter_dolmino import FilterDolminoConfig, filter_dolmino
+from marin.transform.dolmino.filter_dolmino import FilterDolminoConfig, filter_dolmino
 
 wiki_longer_than_256_chars = ExecutorStep(
     name="documents/wiki-longer-than-256-chars",
