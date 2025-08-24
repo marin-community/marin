@@ -31,6 +31,7 @@ default_text_generation_config_kwargs = {
     "prompt_column": "text",
     "filetype": "jsonl.zst",
     "output_filetype_override": "jsonl.gz",
+    "generated_text_column_name": "generated_text",
 }
 
 default_dataset_output_processor_config_kwargs = {

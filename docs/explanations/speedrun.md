@@ -14,7 +14,7 @@ We fix the dataset to be the [FineWeb-Edu dataset](https://huggingface.co/datase
 
 We track the following metrics in Marin Speedrun:
 - **C4-EN BPB (Bits per Byte)** (quality): Bits-per-byte on the validation portion of the `c4-en` (English portion of the C4) dataset; lower values are better.
-- **FLOPs Used** (compute): Floating point operations used to train the model; lower values are better.
+- **Hardware FLOP Cost** (compute): Floating point operations the hardware used to train the model could have performed in the time the model was trained; lower values are better. See [the explainer on how we calculate FLOPs](../explanations/speedrun-flops-accounting.md) for more details.
 
 We also track the **Pareto frontier**, the set of submissions that are not
 outperformed in both metrics by any other submission. In other words, a

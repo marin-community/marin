@@ -16,11 +16,11 @@ from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_sft, default_train
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
 from experiments.exp606_sft import tulu3_llama_tokenize_step, tulu_sft_config
-from experiments.instruction_datasets import (
+from experiments.llama import llama_8b
+from experiments.posttrain.instruction_datasets import (
     tulu3_flat_llama_tokenized_as_train,
     tulu3_flat_llama_tokenized_as_validation,
 )
-from experiments.llama import llama_8b
 from experiments.tootsie.exp600_tootsie import (
     PHASE_3_END,
     PHASE_3_START,

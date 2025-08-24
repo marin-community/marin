@@ -21,6 +21,7 @@ from marin.classifiers.hf.launch_ray_training import LaunchConfig, launch_traini
 from marin.datashop.dataset_processor import DatasetOutputProcessorConfig
 from marin.datashop.pipeline import (
     MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME,
+    CorpusContent,
     MEDUPipelineConfig,
     run_data_filter_prompt_generation_pipeline,
     run_medu_dataset_sampling_pipeline,
@@ -38,19 +39,21 @@ from marin.resources import TpuPodConfig
 
 def default_label(
     documents_to_be_labeled: str | ExecutorStep,
-    targeted_documents: list[list[str] | str],
+    targeted_documents: list[CorpusContent],
     experiment_name: str,
     resource_config: ResourceConfig,
     annotator_model_name_or_path: str = "meta-llama/Llama-3.3-70B-Instruct",
     data_filter_prompt: str | None = None,
     medu_pipeline_config_kwargs: dict | None = None,
-    text_generation_inference_config: dict | None = None,
+    text_generation_inference_config_kwargs: dict | None = None,
 ):
     """Label a set of documents with an LLM given some targeted documents.
 
     Inputs:
         documents_to_be_labeled: Input path to documents to be labeled.
-        targeted_documents: A list of strings or filepaths of documents that is being targeted for labeling.
+        targeted_documents: A list of CorpusContent objects that define the corpus content to use for
+            generating the data filter prompt. It can either point to a filepath or a list of strings that
+            represent the text corpus.
         experiment_name: The name of the experiment.
         data_filter_prompt: The user's prompt for the annotator model.
         medu_pipeline_config_kwargs: Keyword arguments for the MEDU pipeline which is used to generate
@@ -102,7 +105,7 @@ def default_label(
         data_filter_prompt_path = None
 
     # NOTE(chris): Assuming we are filtering from a jsonl.zst file such as DCLM.
-    if text_generation_inference_config is None:
+    if text_generation_inference_config_kwargs is None:
         text_generation_inference_config_kwargs = default_text_generation_config_kwargs
     else:
         text_generation_inference_config_kwargs = {
@@ -264,8 +267,8 @@ def default_quality_filter(
             "fasttext",
             "datasets",
             "filelock",
-            "torch~=2.6.0",
-            "torch_xla[tpu]~=2.6.0",
+            "torch~=2.7.0",
+            "torch_xla[tpu]~=2.7.0",
         ],
     )
 
@@ -334,7 +337,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
             dataset_config=lm_mixture_data_config(
                 components={"dclm": dclm_components_llama3["dclm_baseline"]}, weights={"dclm": 1.0}
             ),
-            resources=TpuPodConfig(tpu_type=tpu_type),
+            resources=TpuPodConfig(tpu_type=tpu_type, slice_count=2),
             use_default_validation=True,
         )
     else:
@@ -343,7 +346,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
                 components={"dclm": dclm_components_llama3["dclm_baseline"], "candidate": candidate_tokenized},
                 weights={"dclm": 0.70, "candidate": 0.30},
             ),
-            resources=TpuPodConfig(tpu_type=tpu_type),
+            resources=TpuPodConfig(tpu_type=tpu_type, slice_count=2),
             use_default_validation=True,
         )
 
@@ -389,6 +392,7 @@ def default_candidate_anneal(documents: ExecutorStep | None, tpu_type: str, expe
 
 def default_synthetic_data_generation(
     input_path: ExecutorStep | InputName,
+    output_path: str,
     model_name_or_path: str,
     data_generation_template: str,
     input_filetype: str,
@@ -397,7 +401,6 @@ def default_synthetic_data_generation(
     generated_text_column_name: str = "generated_text",
     engine_kwargs: dict = default_engine_kwargs,
     generation_kwargs: dict = default_generation_kwargs,
-    output_path: str | None = None,
 ) -> ExecutorStep:
     """
     Generates synthetic data using a specified model and prompt template.
@@ -440,5 +443,6 @@ def default_synthetic_data_generation(
             one_to_one_input_output_mapping=False,
             generated_text_column_name=generated_text_column_name,
             resource_config=resource_config,
+            batch_size=512,
         ),
     )

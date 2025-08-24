@@ -4,6 +4,7 @@ from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution import versioned
 from marin.execution.executor import ExecutorStep, this_output_path
 from marin.processing.tokenize import lm_mixture_data_config
+from marin.transform.medical.lavita_to_dolma import LavitaToDolmaConfig, convert_lavita_split_to_dolma
 
 finemath_commit_hash = "8f233cf"
 finemath = ExecutorStep(
@@ -80,4 +81,118 @@ megamath_real_only = lm_mixture_data_config(
         "megamath/web": megamath_token_counts["megamath/web"],
         "megamath/web_pro": megamath_token_counts["megamath/web_pro"],
     },
+)
+
+pile_pubmed_abstracts_validation = default_download(
+    name="raw/pile_pubmed_abstracts",
+    hf_dataset_id="suolyer/pile_pubmed-abstracts",
+    revision="139fdbf",
+    override_output_path="raw/pile_pubmed_abstracts",
+    hf_urls_glob=["val.json"],
+)
+
+pile_pubmed_central_validation = default_download(
+    name="raw/pile_pubmed_central",
+    hf_dataset_id="suolyer/pile_pubmed-central",
+    revision="783dc95",
+    override_output_path="raw/pile_pubmed_central",
+    hf_urls_glob=["val.json"],
+)
+
+pile_pubmed_central_validation_tokenized = default_tokenize(
+    name="pile_pubmed_central",
+    dataset=pile_pubmed_central_validation,
+    tokenizer=llama3_tokenizer,
+    is_validation=True,
+)
+
+pile_pubmed_abstracts_validation_tokenized = default_tokenize(
+    name="pile_pubmed_abstracts",
+    dataset=pile_pubmed_abstracts_validation,
+    tokenizer=llama3_tokenizer,
+    is_validation=True,
+)
+
+
+# Medical QA datasets
+lavita_medical_qa_datasets = default_download(
+    name="raw/lavita_medical_qa",
+    hf_dataset_id="lavita/medical-qa-datasets",
+    revision="59d48e2",
+    override_output_path="raw/lavita_medical_qa",
+)
+
+lavita_pubmed = ExecutorStep(
+    name="documents/lavita_pubmed",
+    fn=convert_lavita_split_to_dolma,
+    config=LavitaToDolmaConfig(
+        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="pubmed-qa", split="train"
+    ),
+)
+
+lavita_medmcqa = ExecutorStep(
+    name="documents/lavita_medmcqa",
+    fn=convert_lavita_split_to_dolma,
+    config=LavitaToDolmaConfig(
+        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="medmcqa", split="train"
+    ),
+)
+
+lavita_allprocessed = ExecutorStep(
+    name="documents/lavita_allprocessed",
+    fn=convert_lavita_split_to_dolma,
+    config=LavitaToDolmaConfig(
+        input_path=lavita_medical_qa_datasets,
+        output_path=this_output_path(),
+        subset="all-processed",
+        split="train",
+    ),
+)
+
+lavita_pubmed_validation = ExecutorStep(
+    name="documents/lavita_pubmed_validation",
+    fn=convert_lavita_split_to_dolma,
+    config=LavitaToDolmaConfig(
+        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="pubmed-qa", split="validation"
+    ),
+)
+
+lavita_medmcqa_validation = ExecutorStep(
+    name="documents/lavita_medmcqa_validation",
+    fn=convert_lavita_split_to_dolma,
+    config=LavitaToDolmaConfig(
+        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="medmcqa", split="validation"
+    ),
+)
+
+lavita_allprocessed_tokenized = default_tokenize(
+    "tokenized/lavita_allprocessed",
+    lavita_allprocessed,
+    tokenizer=llama3_tokenizer,
+)
+
+lavita_medmcqa_tokenized = default_tokenize(
+    "tokenized/lavita_medmcqa",
+    lavita_medmcqa,
+    tokenizer=llama3_tokenizer,
+)
+
+lavita_pubmedqa_tokenized = default_tokenize(
+    "tokenized/lavita_pubmedqa",
+    lavita_pubmed,
+    tokenizer=llama3_tokenizer,
+)
+
+lavita_pubmedqa_validation_tokenized = default_tokenize(
+    "tokenized/lavita_pubmedqa_validation",
+    lavita_pubmed_validation,
+    tokenizer=llama3_tokenizer,
+    is_validation=True,
+)
+
+lavita_medmcqa_validation_tokenized = default_tokenize(
+    "tokenized/lavita_medmcqa_validation",
+    lavita_medmcqa_validation,
+    tokenizer=llama3_tokenizer,
+    is_validation=True,
 )

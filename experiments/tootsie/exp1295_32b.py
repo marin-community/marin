@@ -36,12 +36,20 @@ llama_32b_train_config = SimpleTrainConfig(
         ScheduleStep(start=21010, value=8192),
     ],
     num_train_steps=1_000_000,
+    weight_decay=0.05,
+    decay=0.4,
     ema_beta=0.995,
+    lr_schedule="linear",
+    cycle_length=None,
     steps_per_eval=1000,
     steps_per_task_eval=10000,
     z_loss_weight=1e-4,
-    learning_rate=7e-4, ## ignored and overridden by the optimizer config
+    # width is a little smaller than the 24B and we're using a much larger batch size
+    # 4.2e-4 * sqrt(8192/3072) ≈ 7e-4
+    learning_rate=7e-4,  ## ignored and overridden by the optimizer config
     watch=WatchConfig(watch_targets=["grads", "params", "updates", "opt_state"], interval=1),
+    skip_bad_steps=True,
+    max_grad_norm=0.2,  # we're almost always < .2 except during spikes
     allow_partial_checkpoint=True,
     optimizer_config=AdamConfig(
         beta1=0.9,
@@ -58,6 +66,7 @@ llama_32b_train_config = SimpleTrainConfig(
         warmup=0.01,
         decay=0.4,
         cycle_length=None,
+        # this was inadvertently off from about 74k to 80k
         clip_update_norm=ClipUpdateNormConfig(rolling_interval_length=128, sigma_factor=2.0),
     ),
 )

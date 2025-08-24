@@ -158,7 +158,7 @@ if __name__ == "__main__":
 ```
 
 🎉 That’s it! You can now define new optimizers in this manner and train models using them, all within Marin. For optimizers that are widely useful or “standard,” consider submitting a pull request to Levanter.
-See a full working example [in this GitHub link](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_fineweb_edu_adamax/llama_75m_fineweb_edu_adamax.py).
+See a full working example [in this GitHub link](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_adamax/llama_75m_adamax.py).
 
 Further reading:
 
