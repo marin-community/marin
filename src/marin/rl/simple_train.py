@@ -10,6 +10,7 @@ import jax.random as jrandom
 import levanter
 from haliax import NamedArray
 from haliax.jax_utils import maybe_rng_split
+from haliax.nn.loss import maybe_reduce_loss
 from levanter.compat.hf_checkpoints import HFCompatConfig, load_tokenizer
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample
@@ -149,10 +150,13 @@ def main(config: TrainRlConfig):
 
         log_ratio = hax.exp(-token_loss + batch.policy_logprobs)
         weighted_log_ratio = log_ratio * batch.loss_weights
-        reinforce_loss = hax.mean(hax.negative(weighted_log_ratio), where=batch.loss_mask)
+        reinforce_loss = maybe_reduce_loss(weighted_log_ratio, reduction, reduction_axis, batch.loss_mask)
+
         ref_log_ratio = batch.reference_logprobs + token_loss
         kl_loss = hax.exp(ref_log_ratio) - 1 - ref_log_ratio
         kl_loss = hax.mean(kl_loss, where=batch.loss_mask)
+        kl_loss = maybe_reduce_loss(kl_loss, reduction, reduction_axis, batch.loss_mask)
+
         loss = reinforce_loss + config.kl_coef * kl_loss
         #
         levanter.tracker.jit_log(
