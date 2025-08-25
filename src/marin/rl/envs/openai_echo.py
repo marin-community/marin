@@ -67,15 +67,7 @@ class ChatEchoEnv(AbstractMarinEnv):
                 rollout_uid=f"chat-{counter}",
                 replica_id="chat",
                 turns=[
-                    Turn(
-                        message=self._system_prompt,
-                        tokens=None,
-                        logprobs=None,
-                        role="system",
-                        reward=None,
-                        inference_metadata=None,
-                        timestamp=None,
-                    ),
+                    Turn.system_text(self._system_prompt),
                     Turn.from_prompt(self._prompt, input_seed=None),
                     Turn.from_openai_response(completion, reward=0.0, input_seed=None),
                 ],

@@ -43,14 +43,10 @@ class HelloWorldEnv(SimpleEnv):
             replica_id="hello",
             turns=[
                 Turn.from_prompt("Hello, world", input_seed=None),
-                Turn(
-                    message=response_text,
-                    tokens=None,
-                    logprobs=None,
-                    role="assistant",
+                Turn.assistant_text(
+                    response_text,
                     reward=1.0 if self._counter % 2 == 0 else 0.0,
-                    inference_metadata=None,
-                    timestamp=None,
+                    input_seed=None,
                 ),
             ],
             metadata={},

@@ -175,6 +175,20 @@ class Turn:
             timestamp=timestamp,
         )
 
+    @staticmethod
+    def system_text(text: str) -> "Turn":
+        """Helper to create a system turn from plain text."""
+        return Turn(message=text, role="system")
+
+    @staticmethod
+    def assistant_text(text: str, *, reward: float | None = None, input_seed: int | None = None) -> "Turn":
+        """Helper to create an assistant turn from plain text.
+
+        Includes minimal inference metadata if an input_seed is provided.
+        """
+        meta = InferenceMetadata(input_seed=input_seed) if input_seed is not None else None
+        return Turn(message=text, role="assistant", reward=reward, inference_metadata=meta)
+
 
 @dataclass(slots=True, frozen=True)
 class Rollout:
