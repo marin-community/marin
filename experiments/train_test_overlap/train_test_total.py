@@ -39,7 +39,13 @@ from experiments.pretraining_datasets import (
     proofpile_2,
     starcoderdata,
 )
-from experiments.train_test_overlap.utils import EVAL_DATASET_STEPS, DatasetConfig, ShardedDedupeConfig, run_all_shards
+from experiments.train_test_overlap.utils import (
+    EVAL_DATASET_STEPS,
+    DatasetConfig,
+    ShardedDedupeConfig,
+    UnifiedResources,
+    run_all_shards,
+)
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 
 # Configure logging
@@ -57,6 +63,16 @@ TEMP_DIR = "/dev/shm"
 
 # starcoder is parquet with 'content' as text key
 # finemath is parquet with 'text' as text key
+#
+# TPU resource note:
+# - Only the following TPU types are supported for gating concurrency via the
+#   head resource key: "v4-8", "v5p-8", "v6e-8".
+#   See experiments/evals/resource_configs.py for the same canonical IDs.
+# - We do not require a TPU device for dedupe itself; we use the
+#   "TPU-<type>-head" fractional resource solely to control scheduling
+#   on clusters
+ALLOWED_TPU_TYPES = ("v4-8", "v5p-8", "v6e-8")
+TPU_TYPE = "v4-8"  # choose from ALLOWED_TPU_TYPES
 DATASET_CONFIGS = [
     DatasetConfig(name="finemath", path=finemath_3_plus, max_in_flight=MAX_IN_FLIGHT, text_field="text"),
     DatasetConfig(name="dclm", path=dclm_baseline, max_in_flight=MAX_IN_FLIGHT),
@@ -77,9 +93,12 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
         temp_dir=TEMP_DIR,
         # internal Dolma parallelism for each shard task
         processes=15,
-        # limit parallel jobs per v4-8 worker since ray doesn't enforce task resource limits
-        num_cpus=15,
-        resources={"TPU-v4-8-head": 1 / MAX_PER_WORKER},
+        # Unified resource specification: schedule against v4 fleet with fractional head resource
+        unified_resources=UnifiedResources(
+            tpu_type=TPU_TYPE,
+            tpu_head_fraction=1 / MAX_PER_WORKER,
+            num_cpus=15,
+        ),
     )
     return ExecutorStep(
         name=f"train_test_overlap/dolma/total/{dataset_config.name}",

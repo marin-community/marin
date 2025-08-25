@@ -57,6 +57,7 @@ SUPPORTED_JSONL_EXTENSIONS: list[str] = [
 
 def _normalise_to_gz(path: str) -> str:
     """Return *path* with its extension rewritten to ``.jsonl.gz``.
+        Necessary because Dolma requires the input files to be in .jsonl.gz format.
 
     The input path must end with one of ``SUPPORTED_JSONL_EXTENSIONS``.
     If the extension is already ``.jsonl.gz`` it is returned unchanged.
@@ -258,7 +259,7 @@ def copy_files_in(input_path, local_base_dir, text_field: str = "text", debug: b
     input_path = input_path.rstrip("/")
 
     # Auto-convert Parquet inputs into .jsonl.gz under documents/
-    parquet_pattern = f"{input_path}/**/*.parquet"
+    parquet_pattern = os.path.join(input_path, "**", "*.parquet")
     if input_path.endswith(".parquet") or fsspec_glob(parquet_pattern):
         docs_dir = os.path.join(local_base_dir, "documents")
         parquet_to_jsonl_gz(input_path, docs_dir, text_field)
@@ -289,7 +290,7 @@ def copy_files_in(input_path, local_base_dir, text_field: str = "text", debug: b
 
     # Create a single pattern that matches all supported extensions recursively
     extensions_pattern = "{" + ",".join(SUPPORTED_JSONL_EXTENSIONS) + "}"
-    recursive_pattern = f"{input_path}/**/*{extensions_pattern}"
+    recursive_pattern = os.path.join(input_path, "**", f"*{extensions_pattern}")
     input_files = fsspec_glob(recursive_pattern)
 
     # ------------------------------------------------------------------
@@ -322,7 +323,7 @@ def copy_files_out(local_base_dir, output_path, attribute_name, debug: bool = Fa
     local_attribute_dir = os.path.join(local_base_dir, "attributes", attribute_name)
 
     # Get all .jsonl.gz files in the local attribute directory (recursive)
-    glob_path = f"{local_attribute_dir}/**/*.jsonl.gz"
+    glob_path = os.path.join(local_attribute_dir, "**", "*.jsonl.gz")
     local_files = fsspec_glob(glob_path)
 
     files_uploaded = 0
@@ -374,7 +375,7 @@ def delete_jsonl_files(dir_path, debug: bool = False):
     # Ensure dir_path doesn't end with a slash
     dir_path = dir_path.rstrip("/")
 
-    glob_path = f"{dir_path}/**/*.jsonl{{,.gz}}"
+    glob_path = os.path.join(dir_path, "**", "*.jsonl{,.gz}")
     files_to_delete = fsspec_glob(glob_path)
 
     files_deleted = 0
@@ -502,7 +503,7 @@ def do_dedup(
         "dolma",
         "dedupe",
         "--documents",
-        f"{local_base_dir}/documents/**/*.jsonl.gz",
+        os.path.join(local_base_dir, "documents", "**", "*.jsonl.gz"),
         "--dedupe.paragraphs.attribute_name",
         attribute_name,
         "--dedupe.skip_empty",
@@ -570,7 +571,7 @@ def do_dedup(
     process.wait()
 
     # Rename temporary files
-    attr_dir = os.path.join(local_base_dir, "attributes/duplicate_documents")
+    attr_dir = os.path.join(local_base_dir, "attributes", "duplicate_documents")
     if debug:
         print(f"Checking for temporary files in: {attr_dir}", flush=True)
     for root, _, files in os.walk(attr_dir):

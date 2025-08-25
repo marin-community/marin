@@ -68,6 +68,59 @@ EVAL_DATASET_STEPS: list[ExecutorStep] = [
 ]
 
 
+ALLOWED_TPU_TYPES: tuple[str, ...] = ("v4-8", "v5p-8", "v6e-8")
+
+
+@dataclass(frozen=True)
+class UnifiedResources:
+    """Unified resource configuration for Ray tasks.
+
+    This provides a single place to describe CPU/memory and TPU-related resource tags
+    in a consistent way across tasks.
+
+    Fields:
+        tpu_type: TPU type string (e.g., "v4-8", "v6e-8"). If provided and
+            `tpu_head_fraction` is set, we add a custom resource key
+            f"TPU-{tpu_type}-head": tpu_head_fraction.
+        tpu_head_fraction: Fractional amount to reserve against the TPU head resource
+            (used as a global concurrency limiter for tasks on a particular TPU fleet).
+        tpus: Number of TPU chips to require on a worker (adds {"TPU": tpus}).
+            Most non-TPU tasks can leave this as None.
+        num_cpus: Number of CPUs for the Ray task options.
+        memory: Memory in bytes for the Ray task options.
+        extra: Additional custom resource requirements to merge into the resources dict.
+    """
+
+    tpu_type: str | None = None
+    tpu_head_fraction: float | None = None
+    tpus: int | None = None
+    num_cpus: int | None = None
+    memory: int | None = None
+    extra: dict[str, float] | None = None
+
+    def to_ray_overrides(self) -> dict:
+        overrides: dict = {}
+        resources: dict[str, float] = {}
+
+        if self.num_cpus is not None:
+            overrides["num_cpus"] = self.num_cpus
+        if self.memory is not None:
+            overrides["memory"] = self.memory
+
+        if self.tpu_type and self.tpu_head_fraction is not None:
+            if self.tpu_type not in ALLOWED_TPU_TYPES:
+                raise ValueError(f"Unsupported tpu_type '{self.tpu_type}'. Allowed: {', '.join(ALLOWED_TPU_TYPES)}")
+            resources[f"TPU-{self.tpu_type}-head"] = self.tpu_head_fraction
+        if self.tpus is not None:
+            resources["TPU"] = float(self.tpus)
+        if self.extra:
+            resources.update(self.extra)
+
+        if resources:
+            overrides["resources"] = resources
+        return overrides
+
+
 @dataclass(frozen=True)
 class DatasetConfig:
     """Configuration for a single dataset to process for train-test overlap detection."""
@@ -100,6 +153,9 @@ class ShardedDedupeConfig:
     num_cpus: int | None = None
     memory: int | None = None  # in bytes
     resources: dict[str, float] | None = None
+    # Unified resources alternative to num_cpus/memory/resources above. If provided,
+    # takes precedence over individual fields when constructing Ray options.
+    unified_resources: UnifiedResources | None = None
     # Directory for temporary files (defaults to /dev/shm for performance)
     temp_dir: str | None = None
     # Debug flag to control verbose print statements
@@ -201,19 +257,30 @@ def run_all_shards(config: ShardedDedupeConfig) -> str:
     # Allow customizing internal Dolma processes
     if config.processes is not None:
         overrides["processes"] = config.processes
-    # Allow customizing Ray resources for the remote task
-    if config.num_cpus is not None:
-        overrides["num_cpus"] = config.num_cpus
-    if config.memory is not None:
-        overrides["memory"] = config.memory
-    if config.resources is not None:
-        overrides["resources"] = config.resources
+
+    # Prefer unified resources if provided; otherwise use individual fields
+    if config.unified_resources is not None:
+        ur_overrides = config.unified_resources.to_ray_overrides()
+        overrides.update(ur_overrides)
+    else:
+        # Allow customizing Ray resources for the remote task
+        if config.num_cpus is not None:
+            overrides["num_cpus"] = config.num_cpus
+        if config.memory is not None:
+            overrides["memory"] = config.memory
+        if config.resources is not None:
+            overrides["resources"] = config.resources
 
     if overrides:
         base_config = dataclasses.replace(BASE_DEDUPE_CONFIG, **overrides)
 
     # Choose remote function: only need a custom one if Ray resource overrides are present
-    if (config.num_cpus is not None) or (config.memory is not None) or (config.resources is not None):
+    if (
+        config.unified_resources is not None
+        or (config.num_cpus is not None)
+        or (config.memory is not None)
+        or (config.resources is not None)
+    ):
         remote_func = dedupe_with_config_resources(base_config)
     else:
         # Use default remote function
