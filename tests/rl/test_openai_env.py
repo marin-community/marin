@@ -5,6 +5,8 @@ from collections import deque
 
 import pytest
 
+pytest.importorskip("levanter")
+
 try:
     import openai_responses
 except ImportError:  # pragma: no cover
@@ -13,7 +15,7 @@ except ImportError:  # pragma: no cover
 
 
 from marin.rl.envs.openai_echo import ChatEchoEnv
-from marin.rl.types import InferenceEndpoint, RolloutGroup
+from marin.rl.datatypes import InferenceEndpoint, RolloutGroup
 
 
 @pytest.mark.skipif(openai_responses is None, reason="openai_responses not installed")
@@ -49,6 +51,6 @@ def test_chat_echo_env(openai_mock):  # type: ignore[valid-type]
     # Ensure sink received one rollout group with expected content
     assert len(collected) == 1
     rg = collected.pop()
-    assert rg.rollouts[0].turns[0].message == "Hello! How can I help?"
+    assert rg.rollouts[0].metadata["response"] == "Hello! How can I help?"
     # Mock should have been hit exactly once
     assert openai_mock.chat.completions.create.route.call_count == 1

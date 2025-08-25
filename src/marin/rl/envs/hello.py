@@ -14,14 +14,14 @@ from levanter.utils.ray_utils import RayResources
 from ray.actor import ActorHandle
 
 from ..config import AbstractEnvConfig
-from ..env import SimpleEnv
-from ..types import (
+from ..datatypes import (
     InferenceEndpoint,
-    Rollout,
     RolloutGroup,
+    RolloutRecord,
     RolloutSink,
     Turn,
 )
+from ..env import SimpleEnv
 
 logger = logging.getLogger(__name__)
 
@@ -33,22 +33,32 @@ class HelloWorldEnv(SimpleEnv):
         if not hasattr(self, "_counter"):
             self._counter = 0
 
-        # Simulate calling the inference server (here we just echo text)
-        response_text = f"Hello #{self._counter} from {self._inference.address}"
+        response_text = f"Hello #{self._counter}!"
 
-        turn = Turn(
-            message=response_text,
-            role="assistant",
-            logprobs=None,
-            reward=0.0,
-            inference_metadata={"model": "dummy"},
+        record = RolloutRecord(
+            environment="hello_env",
+            example_id=f"hello-{self._counter}",
+            policy_version="v0",
+            rollout_uid=f"hello-{self._counter}",
+            replica_id="hello",
+            turns=[
+                Turn.from_prompt("Hello, world", input_seed=None),
+                Turn.assistant_text(
+                    response_text,
+                    reward=1.0 if self._counter % 2 == 0 else 0.0,
+                    input_seed=None,
+                ),
+            ],
+            metadata={},
+            created_ts=time.time(),
         )
-        rollout = Rollout(turns=[turn], metadata={"iteration": self._counter})
         group = RolloutGroup(
             id=f"hello-{self._counter}",
-            source="hello_env",
-            created=time.time(),
-            rollouts=[rollout],
+            environment="hello_env",
+            example_id=f"hello-{self._counter}",
+            policy_version="v0",
+            rollouts=[record],
+            sealed_ts=time.time(),
             metadata={},
         )
 
@@ -56,7 +66,7 @@ class HelloWorldEnv(SimpleEnv):
         time.sleep(1.0)  # pace output without async knowledge
         return [group]
 
-    async def shutdown(self) -> None:
+    async def on_shutdown(self) -> None:
         # Example clean-up
         logger.info("HelloWorldEnv closed")
 

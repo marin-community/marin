@@ -5,6 +5,8 @@ from collections import deque
 
 import pytest
 
+pytest.importorskip("levanter")
+
 try:
     import openai_responses  # type: ignore
 except ImportError:  # pragma: no cover
@@ -13,7 +15,7 @@ except ImportError:  # pragma: no cover
 import datasets
 
 from marin.rl.envs.math_env import MathEnv
-from marin.rl.types import InferenceEndpoint, RolloutGroup
+from marin.rl.datatypes import InferenceEndpoint, RolloutGroup
 
 
 @pytest.mark.skipif(openai_responses is None, reason="openai_responses not installed")
@@ -74,24 +76,20 @@ def test_math_env_rollout(openai_mock, monkeypatch):  # type: ignore[valid-type]
         collected.extend(groups)
 
     env = MathEnv(
-        inference=InferenceEndpoint("https://api.openai.com/v1"),
+        inference=InferenceEndpoint("https://api.openai.com/v1", model="gpt-3.5-turbo"),
         rollout_sink=sink,  # type: ignore[arg-type]
         data_source="mock",
         split="train",
-        max_iters=1,
         api_key="sk-fake",
         seed=123,
     )
 
     asyncio.run(env.run())
 
-    # ------------------------------------------------------------------
-    # Assertions
-    # ------------------------------------------------------------------
     assert len(collected) == 1
     group = collected.pop()
     assert group.metadata["correct"] is True
-    assert group.rollouts[0].turns[1].reward == 1.0
+    assert group.rollouts[0].total_reward == 1.0
 
     # The mocked endpoint should have been called exactly once
     assert openai_mock.chat.completions.create.route.call_count == 1
