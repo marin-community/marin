@@ -22,10 +22,10 @@ class MathEnv(MarinEnv):
         self.tokenizer = tokenizer
 
         # Initialize datasets
-        data_source = "DigitalLearningGmbH/MATH-lighteval"
-        dataset = datasets.load_dataset(data_source, trust_remote_code=True)
-        train_dataset = dataset["train"]
-        test_dataset = dataset["test"]
+        train_data_source = "di-zhang-fdu/MATH12000"
+        test_data_source = "HuggingFaceH4/MATH-500"
+        train_dataset = datasets.load_dataset(train_data_source, trust_remote_code=True)["train"]
+        test_dataset = datasets.load_dataset(test_data_source, trust_remote_code=True)["test"]
 
         # Convert to the format expected by the training code and pre-tokenize
         self.train_examples = []

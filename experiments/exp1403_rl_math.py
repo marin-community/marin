@@ -36,9 +36,9 @@ class RlTrainOnPodConfig:
     prefill_bsize: int = 16
     reference_logprobs_bsize: int = 256
     n_prompts_per_step: int = 16
-    log_freq: int = 8
+    log_freq: int = 10
     num_eval_examples: int = 1024
-    save_model_freq: int = 0
+    save_model_freq: int = 10
     wandb_project: str = "marin_post_training"
 
     inference_param_dtype: str = "bf16"
@@ -266,10 +266,10 @@ def main():
 
     experiments = [
         default_rl_train(
-            name="math_test",
+            name="all-env-no-omr",
             model_paths=model_paths,
-            tpu_type="v4-64",
-            train_bsize=64,
+            tpu_type="v5p-16",
+            train_bsize=16,
             kl_coef=1e-3,
             learning_rate=5e-7,
             num_train_steps=2048,

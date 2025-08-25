@@ -62,11 +62,12 @@ def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer) -> MarinEnv:
     return env_cls(tokenizer=tokenizer, **kwargs)
 
 
-def load_environments_from_config(json_path: str, tokenizer: AutoTokenizer) -> MarinEnv:
+def load_environments_from_config(json_path: str, tokenizer: AutoTokenizer) -> list[tuple[str, MarinEnv]]:
     """
-    Load first environment entry from a JSON config file.
+    Load environment entries from a JSON config file.
 
-    # TODO: support multiple environments. For now, we only load the first one.
+    Returns:
+        List of (environment_name, environment) tuples
     """
     with open(json_path, "r", encoding="utf-8") as f:
         conf = json.load(f)
@@ -74,7 +75,9 @@ def load_environments_from_config(json_path: str, tokenizer: AutoTokenizer) -> M
     if not entries:
         raise ValueError("'entries' list is empty in environment config.")
 
-    first_entry = entries[0]
-    if "environment" not in first_entry:
-        raise ValueError("Each entry must have an 'environment' field.")
-    return load_environment_from_spec(first_entry["environment"], tokenizer)
+    envs = []
+    for entry in entries:
+        if "environment" not in entry:
+            raise ValueError("Each entry must have an 'environment' field.")
+        envs.append((entry["environment"], load_environment_from_spec(entry["environment"], tokenizer)))
+    return envs
