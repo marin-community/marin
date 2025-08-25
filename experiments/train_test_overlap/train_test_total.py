@@ -46,11 +46,14 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-MAX_IN_FLIGHT = 32
+MAX_IN_FLIGHT = 64
+MAX_PER_WORKER = 8
 
 # Custom temporary directory for deduplication processing
 # default uses ram, but let's use gcsfuse for speed
 TEMP_DIR = "/dev/shm"
+# TODO: debug open file descriptor limit on gcsfuse mount
+# TEMP_DIR = "/opt/gcsfuse_mount/dedupe/"
 
 # starcoder is parquet with 'content' as text key
 # finemath is parquet with 'text' as text key
@@ -72,6 +75,11 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
         eval_dataset_steps=EVAL_DATASET_STEPS,
         text_field=dataset_config.text_field,
         temp_dir=TEMP_DIR,
+        # internal Dolma parallelism for each shard task
+        processes=15,
+        # limit parallel jobs per v4-8 worker since ray doesn't enforce task resource limits
+        num_cpus=15,
+        resources={"TPU-v4-8-head": 1 / MAX_PER_WORKER},
     )
     return ExecutorStep(
         name=f"train_test_overlap/dolma/total/{dataset_config.name}",

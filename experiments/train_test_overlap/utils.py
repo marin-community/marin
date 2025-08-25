@@ -94,6 +94,8 @@ class ShardedDedupeConfig:
     max_in_flight: int = 16
     eval_dataset_steps: list[ExecutorStep] = None  # Evaluation dataset steps for path resolution
     text_field: str = "text"
+    # Dedupe parallelism inside Dolma (number of processes in DedupeConfig)
+    processes: int | None = None
     # Ray resource overrides - if provided, will override BASE_DEDUPE_CONFIG defaults
     num_cpus: int | None = None
     memory: int | None = None  # in bytes
@@ -115,11 +117,11 @@ BASE_DEDUPE_CONFIG = DedupeConfig(
         overlap_threshold=1e-6,
         stride=0,
     ),
-    processes=16,  # Modify this to change number of processes
+    processes=15,  # Modify this to change number of processes
     mode=DedupMode.TRAIN_TEST_OVERLAP,
     decontaminate_source="",  # Will be replaced per shard
     # Ray resource configuration - modify these defaults as needed
-    num_cpus=16,
+    num_cpus=15,
     memory=16 * 1024 * 1024 * 1024,  # 16GB
     resources=None,
     # Debug flag - set to True to enable verbose print statements
@@ -194,18 +196,24 @@ def run_all_shards(config: ShardedDedupeConfig) -> str:
 
     # Apply resource overrides to base config if specified
     base_config = BASE_DEDUPE_CONFIG
-    if config.num_cpus is not None or config.memory is not None or config.resources is not None:
-        # Override resource settings in base config
-        resource_overrides = {}
-        if config.num_cpus is not None:
-            resource_overrides["num_cpus"] = config.num_cpus
-        if config.memory is not None:
-            resource_overrides["memory"] = config.memory
-        if config.resources is not None:
-            resource_overrides["resources"] = config.resources
+    # Collect overrides for the underlying DedupeConfig
+    overrides: dict = {}
+    # Allow customizing internal Dolma processes
+    if config.processes is not None:
+        overrides["processes"] = config.processes
+    # Allow customizing Ray resources for the remote task
+    if config.num_cpus is not None:
+        overrides["num_cpus"] = config.num_cpus
+    if config.memory is not None:
+        overrides["memory"] = config.memory
+    if config.resources is not None:
+        overrides["resources"] = config.resources
 
-        base_config = dataclasses.replace(BASE_DEDUPE_CONFIG, **resource_overrides)
-        # Create a custom remote function with the specified resources
+    if overrides:
+        base_config = dataclasses.replace(BASE_DEDUPE_CONFIG, **overrides)
+
+    # Choose remote function: only need a custom one if Ray resource overrides are present
+    if (config.num_cpus is not None) or (config.memory is not None) or (config.resources is not None):
         remote_func = dedupe_with_config_resources(base_config)
     else:
         # Use default remote function
