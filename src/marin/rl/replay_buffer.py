@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Iterable
 
 import jax
+import numpy as np
 import ray
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -16,17 +17,25 @@ from .batch_maker import BatchMaker, _compute_advantages
 
 
 class ReplayBuffer:
+    """
+
+    Basic replay buffer that stores rollouts in memory. This class is deliberately not a Ray actor
+    (though it can be decorated with @ray.remote just-in-time or wrapped)
+
+    We'll add support for writing to disk later.
+    """
+
     def __init__(
         self,
-        root_path: str,
         *,
         prng_key: PRNGKeyArray,
-        compression: str = "zstd",
-    ):
+        min_group_size: int = 4,
+    ) -> None:
 
-        self.root_path = root_path
-        self.compression = compression
-        self.prng_key = self.prng_key
+        self.prng_key = prng_key
+        self.min_group_size = min_group_size
+        if min_group_size < 2:
+            raise ValueError("min_group_size must be at least 2")
 
         self.rollout_groups: dict[GroupKey, list[RolloutRecord]] = {}
 
@@ -47,20 +56,28 @@ class ReplayBuffer:
         # TODO: should we track advantage stats online
         # TODO: log reward and advantage stats
         # find useful rollout groups (those with some non-zero advantage entry)
-        useful_rollouts = []
+        useful_rollouts: list[RolloutRecord] = []
         for _key, group in self.rollout_groups.items():
             if len(group) <= 1:
                 continue
             advantages = _compute_advantages(group)
 
             for rollout, advantage in zip(group, advantages, strict=False):
-                if advantage != 0:
+                if not np.allclose(advantage, 0.0):
                     useful_rollouts.append(rollout)
 
         this_prng = jax.random.fold_in(self.prng_key, step)
-        shuffled = jax.random.permutation(this_prng, useful_rollouts)
+        n = len(useful_rollouts)
+        if n == 0:
+            return []
+        # Permute indices to avoid object array issues
+        perm = jax.random.permutation(this_prng, n)
+        # Convert to Python ints
+        import numpy as _np
+
+        idx = list(map(int, _np.array(perm[:bsize])))
         # TODO: remove selected from pool
-        return shuffled[:bsize]
+        return [useful_rollouts[i] for i in idx]
 
 
 @ray.remote(max_concurrency=1)
