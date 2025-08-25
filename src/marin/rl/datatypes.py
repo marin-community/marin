@@ -222,7 +222,7 @@ class InferenceEndpoint:
     """
 
     address: str
-    model: str
+    model: str | None = None
 
 
 # ---------------------------------------------------------------------------

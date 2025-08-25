@@ -9,7 +9,7 @@ as a :class:`~marin.rl.datatypes.RolloutGroup`.
 Both the dataset loading and answer checking logic are largely ported
 from `marin.post_training.environments.math_env.MathEnv` but translated
 to the new async push-based API defined in
-:pyclass:`marin.rl.env.AbstractMarinEnv`.
+:pyclass:`marin.rl.env.SimpleEnv`.
 """
 
 import asyncio
@@ -39,7 +39,7 @@ from ..datatypes import (
     RolloutSink,
     Turn,
 )
-from ..env import AbstractMarinEnv
+from ..env import SimpleEnv
 
 __all__ = [
     "MathEnv",
@@ -47,7 +47,7 @@ __all__ = [
 ]
 
 
-class MathEnv(AbstractMarinEnv):
+class MathEnv(SimpleEnv):
     """Environment that plays MATH problems and evaluates correctness.
 
     Each iteration samples a single problem (uniformly without
@@ -70,6 +70,8 @@ class MathEnv(AbstractMarinEnv):
         *,
         data_source: str,
         split: str = "train",  # "train" or "test"
+        model: str = "gpt-3.5-turbo",
+        num_generations: int = 1,
         max_iters: int | None = None,
         api_key: str | None = None,
         seed: int = 0,
@@ -78,6 +80,8 @@ class MathEnv(AbstractMarinEnv):
 
         self._data_source = data_source
         self._split = split
+        self._model = model
+        self._num_generations = max(1, int(num_generations))
         self._max_iters = max_iters
 
         # Load dataset: this can take a couple seconds on first run.
@@ -101,86 +105,102 @@ class MathEnv(AbstractMarinEnv):
         # Prepare OpenAI client for the target inference server.
         self._client = openai.Client(api_key=api_key, base_url=inference.address)
 
-    # ------------------------------------------------------------------
-    # Main loop
-    # ------------------------------------------------------------------
-
-    async def run(self) -> None:
+    async def run(self) -> None:  # pragma: no cover - exercised by tests
         iteration = 0
         while True:
             if not await self._wait_ready():
                 break
             if self._max_iters is not None and iteration >= self._max_iters:
                 break
+            groups = await asyncio.to_thread(self.do_rollout)
+            if groups:
+                self._rollout_sink(groups)
+            iteration += 1
+            await asyncio.sleep(0)
 
-            # ------------------------------------------------------------------
-            # Sample a problem (reuse the dataset when exhausted).
-            # ------------------------------------------------------------------
-            if self._example_idx >= len(self._examples):
-                self._rng.shuffle(self._examples)
-                self._example_idx = 0
-            example = self._examples[self._example_idx]
-            self._example_idx += 1
+    def do_rollout(self) -> list[RolloutGroup]:
+        # Sample a problem (reuse the dataset when exhausted).
+        if self._example_idx >= len(self._examples):
+            self._rng.shuffle(self._examples)
+            self._example_idx = 0
+        example = self._examples[self._example_idx]
+        self._example_idx += 1
 
-            user_prompt: str = example["prompt"]
-            gt_answer: str = example["answer"]
+        user_prompt: str = example["prompt"]
+        gt_answer: str = example["answer"]
 
-            # ------------------------------------------------------------------
-            # Call inference server.
-            # ------------------------------------------------------------------
-            completion = self._client.chat.completions.create(
-                model=self._inference.model,
-                messages=[
-                    {"role": "user", "content": user_prompt},
-                ],
-            )
+        # Call inference server for N generations (one request with n when possible).
+        completion = self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "user", "content": user_prompt},
+            ],
+            n=self._num_generations,
+            seed=self._rng.randint(0, 2**31 - 1),
+        )
 
-            assistant_msg: str = completion.choices[0].message.content
+        # Build multiple rollouts (one per generation) and a single group per prompt.
+        iteration = self._example_idx - 1
+        rollouts: list[RolloutRecord] = []
+        valid_list: list[bool] = []
+        correct_list: list[bool] = []
 
-            # ------------------------------------------------------------------
-            # Reward calculation.
-            # ------------------------------------------------------------------
-            parsed = validate_format(assistant_msg + ">")  # util expects trailing >
-            is_valid = parsed["is_valid"]
+        class _SingleChoiceResponse:
+            def __init__(self, base, choice):
+                self.choices = [choice]
+                self.created = getattr(base, "created", None)
+                self.model = getattr(base, "model", None)
+                self.usage = getattr(base, "usage", None)
+
+        for j, choice in enumerate(completion.choices):
+            assistant_msg: str = choice.message.content
+            parsed = validate_format(assistant_msg + ">")
+            is_valid = bool(parsed["is_valid"])  # type: ignore[index]
             extracted_answer = parsed["answer"]
             is_correct = grade_answer(extracted_answer, gt_answer) if is_valid else False
             reward = float(is_correct)
 
-            # ------------------------------------------------------------------
-            # Build rollout & emit.
-            # ------------------------------------------------------------------
+            single_resp = _SingleChoiceResponse(completion, choice)
+
             record = RolloutRecord(
                 environment="math_env",
                 example_id=f"math-{iteration}",
                 policy_version="v0",
-                rollout_uid=f"math-{iteration}",
+                rollout_uid=f"math-{iteration}-g{j}",
                 replica_id="math",
                 turns=[
                     Turn.from_prompt(user_prompt, input_seed=None),
-                    Turn.from_openai_response(completion, reward=reward, input_seed=None),
+                    Turn.from_openai_response(single_resp, reward=reward, input_seed=None),
                 ],
                 metadata={
                     "prompt": user_prompt,
                     "response": assistant_msg,
                     "valid_format": is_valid,
                     "correct": is_correct,
+                    "generation_index": j,
                 },
                 created_ts=time.time(),
             )
-            group = RolloutGroup(
-                id=f"math-{iteration}",
-                environment="math_env",
-                example_id=f"math-{iteration}",
-                policy_version="v0",
-                rollouts=[record],
-                sealed_ts=time.time(),
-                metadata={"valid_format": is_valid, "correct": is_correct},
-            )
+            rollouts.append(record)
+            valid_list.append(is_valid)
+            correct_list.append(is_correct)
 
-            self._rollout_sink([group])
+        if self._num_generations == 1:
+            md = {"valid_format": valid_list[0], "correct": correct_list[0]}
+        else:
+            md = {"valid_format": valid_list, "correct": correct_list, "n": self._num_generations}
 
-            iteration += 1
-            await asyncio.sleep(0)  # yield control to Ray scheduler
+        group = RolloutGroup(
+            id=f"math-{iteration}",
+            environment="math_env",
+            example_id=f"math-{iteration}",
+            policy_version="v0",
+            rollouts=rollouts,
+            sealed_ts=time.time(),
+            metadata=md,
+        )
+
+        return [group]
 
     # ------------------------------------------------------------------
     # Optional cleanup
@@ -201,6 +221,8 @@ class MathEnvConfig(AbstractEnvConfig):
 
     data_source: str = "DigitalLearningGmbH/MATH-lighteval"
     split: str = "train"
+    model: str = "gpt-3.5-turbo"
+    num_generations: int = 1
     max_iters: int | None = None
     seed: int = 0
 
@@ -214,6 +236,8 @@ class MathEnvConfig(AbstractEnvConfig):
             rollout_sink,
             data_source=self.data_source,
             split=self.split,
+            model=self.model,
+            num_generations=self.num_generations,
             max_iters=self.max_iters,
             seed=self.seed + seed,
         )
