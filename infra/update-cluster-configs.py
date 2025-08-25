@@ -9,7 +9,7 @@ this_path = os.path.dirname(os.path.abspath(__file__))
 cluster_template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 vllm_template_path = os.path.join(this_path, "marin-vllm-template.yaml")
 
-LATEST = "20250721"  # The latest docker tag used for the clusters, update this when you update the docker image.
+LATEST = "20250821"  # The latest docker tag used for the clusters, update this when you update the docker image.
 
 configs = {
     "marin-us-central2": {
