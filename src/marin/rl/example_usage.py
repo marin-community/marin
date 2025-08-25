@@ -1,91 +1,65 @@
 #!/usr/bin/env python3
-"""Example usage of the new in-memory ReplayBuffer + BatchMaker system.
+"""Generate K rollouts using a MarinEnvConfig (MathEnv) and an inference endpoint.
 
-This script demonstrates how to:
-1. Create a ReplayBuffer (in-memory) and extend it with rollouts
-2. Create a BatchMaker and add rollouts to it
-3. Sample from the ReplayBuffer and create a training batch from the BatchMaker
+This example shows how to instantiate a concrete Marin environment (MathEnv)
+without Ray by constructing it directly with the same parameters as the
+config, and running its async loop to produce K rollouts.
 """
 
+import argparse
+import asyncio
 import time
-import uuid
+from collections import deque
 
-import jax
-import numpy as np
-
-from .datatypes import InferenceMetadata, RolloutRecord, Turn
-from .batch_maker import RlooBatchMaker
-from .replay_buffer import ReplayBuffer
+from .datatypes import InferenceEndpoint, RolloutGroup
+from .envs.math_env import MathEnv, MathEnvConfig
 
 
-def create_mock_rollout(
-    environment: str, example_id: str, policy_version: str, message: str, reward: float
-) -> RolloutRecord:
-    """Create a mock rollout for demonstration purposes."""
-    # Assistant turn with dummy logprobs and minimal metadata
-    turn = Turn(
-        message=message,
-        role="assistant",
-        logprobs=np.array([-0.1, -0.2, -0.3], dtype=np.float32),
-        reward=reward,
-        inference_metadata=InferenceMetadata(model_version="test_model", usage={}),
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Generate K rollouts with MathEnv")
+    p.add_argument(
+        "--inference", type=str, required=True, help="OpenAI-compatible base URL (e.g., https://api.openai.com/v1)"
+    )
+    p.add_argument("--k", type=int, default=1, help="Number of iterations/rollouts to generate")
+    p.add_argument(
+        "--data-source", type=str, default=MathEnvConfig.data_source, help="HF dataset name for MATH examples"
+    )
+    p.add_argument("--split", type=str, default=MathEnvConfig.split, help="Dataset split (train/test)")
+    p.add_argument("--model", type=str, default=MathEnvConfig.model, help="Model name for completions")
+    p.add_argument("--seed", type=int, default=MathEnvConfig.seed, help="Random seed for sampling")
+    return p.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+
+    # Build the rollout sink that collects groups and prints a brief summary
+    collected: deque[RolloutGroup] = deque()
+
+    def sink(groups: list[RolloutGroup]) -> None:
+        for g in groups:
+            collected.append(g)
+            print(
+                f"[group] id={g.id} env={g.environment} example={g.example_id} "
+                f"rollouts={len(g.rollouts)} ts={g.sealed_ts:.0f}"
+            )
+
+    # Use the same parameters a MathEnvConfig would use; we construct MathEnv directly
+    env = MathEnv(
+        inference=InferenceEndpoint(args.inference, model=args.model),
+        rollout_sink=sink,  # type: ignore[arg-type]
+        data_source=args.data_source,
+        split=args.split,
+        max_iters=args.k,
+        api_key=None,
+        seed=args.seed,
     )
 
-    # Create rollout record
-    rollout = RolloutRecord(
-        environment=environment,
-        example_id=example_id,
-        policy_version=policy_version,
-        rollout_uid=str(uuid.uuid4()),
-        turns=[turn],
-        created_ts=time.time(),
-        metadata={"test": True},
-        replica_id="test_replica",
-    )
+    t0 = time.time()
+    asyncio.run(env.run())
+    dt = time.time() - t0
 
-    return rollout
-
-
-def main():
-    print("Starting RL Dataset System Demo (in-memory)")
-
-    # 1. Create RlooBatchMaker (pure in-memory)
-    print("\nCreating RlooBatchMaker...")
-    batch_maker = RlooBatchMaker(rng_seed=42)
-
-    # 2. Create in-memory ReplayBuffer
-    print("Creating ReplayBuffer (in-memory)...")
-    rb = ReplayBuffer(prng_key=jax.random.PRNGKey(0), min_group_size=2)
-
-    # 3. Add mock rollouts
-    print("\nAdding rollouts to ReplayBuffer and BatchMaker...")
-    rollouts = [
-        create_mock_rollout("math_problems", "problem_1", "v1", "The answer is 4", 0.5),
-        create_mock_rollout("math_problems", "problem_1", "v2", "The answer is 4", 1.0),  # Better version
-        create_mock_rollout("math_problems", "problem_2", "v1", "The answer is 9", 0.8),
-    ]
-
-    # Extend replay buffer and feed batch maker
-    rb.extend(rollouts)
-    for r in rollouts:
-        batch_maker.add_rollout(r)
-
-    # 4. Sample from replay buffer
-    print("\nSampling from ReplayBuffer...")
-    sampled = rb.sample(bsize=2, step=0)
-    print(f"  Sampled {len(sampled)} rollouts with non-zero advantage candidates")
-
-    # 5. Create a batch using BatchMaker
-    print("\nCreating a training batch...")
-    batch = batch_maker.create_batch(batch_size=2)
-    if batch:
-        metadata = batch_maker.get_batch_metadata(batch)
-        print(f"  Batch size: {len(batch)}")
-        print(f"  Batch metadata: {metadata}")
-    else:
-        print("  No batch created - insufficient data")
-
-    print("\nDemo completed successfully!")
+    print(f"\nGenerated {len(collected)} rollout group(s) in {dt:.2f}s")
 
 
 if __name__ == "__main__":

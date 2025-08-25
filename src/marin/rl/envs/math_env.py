@@ -70,7 +70,6 @@ class MathEnv(AbstractMarinEnv):
         *,
         data_source: str,
         split: str = "train",  # "train" or "test"
-        model: str = "gpt-3.5-turbo",
         max_iters: int | None = None,
         api_key: str | None = None,
         seed: int = 0,
@@ -79,7 +78,6 @@ class MathEnv(AbstractMarinEnv):
 
         self._data_source = data_source
         self._split = split
-        self._model = model
         self._max_iters = max_iters
 
         # Load dataset: this can take a couple seconds on first run.
@@ -131,7 +129,7 @@ class MathEnv(AbstractMarinEnv):
             # Call inference server.
             # ------------------------------------------------------------------
             completion = self._client.chat.completions.create(
-                model=self._model,
+                model=self._inference.model,
                 messages=[
                     {"role": "user", "content": user_prompt},
                 ],
@@ -203,7 +201,6 @@ class MathEnvConfig(AbstractEnvConfig):
 
     data_source: str = "DigitalLearningGmbH/MATH-lighteval"
     split: str = "train"
-    model: str = "gpt-3.5-turbo"
     max_iters: int | None = None
     seed: int = 0
 
@@ -217,7 +214,6 @@ class MathEnvConfig(AbstractEnvConfig):
             rollout_sink,
             data_source=self.data_source,
             split=self.split,
-            model=self.model,
             max_iters=self.max_iters,
             seed=self.seed + seed,
         )

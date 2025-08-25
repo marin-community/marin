@@ -22,6 +22,7 @@ __all__ = [
 ]
 
 
+@dataclass(frozen=True)
 class AbstractEnvConfig(abc.ABC):
     """Every environment must expose resource requirements and a build method."""
 

@@ -214,16 +214,15 @@ RolloutSink = Callable[[list["RolloutGroup"]], None]
 # ---------------------------------------------------------------------------
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class InferenceEndpoint:
     """Location of an OAI-compatible inference server.
 
-    For now this is just a plain address string (e.g. "http://host:8000" or a
-    Ray actor name).  Additional connection metadata can be added later without
-    affecting existing code because the dataclass is frozen and explicit.
+    For now this is just a plain address string (e.g. "http://host:8000").
     """
 
     address: str
+    model: str
 
 
 # ---------------------------------------------------------------------------
