@@ -53,14 +53,16 @@ class Trainer:
         mesh: MeshShardingHelper,
         models: dict[str, FlaxLLaMAForCausalLM],
         tokenizer: AutoTokenizer,
-        environment: MarinEnv,
+        train_environments: list[tuple[str, MarinEnv]],
+        test_environments: list[tuple[str, MarinEnv]],
         logger: WandbLogger,
     ):
         self.config = config
         self.mesh = mesh
         self.models = models
         self.tokenizer = tokenizer
-        self.environment = environment
+        self.train_environments = train_environments
+        self.test_environments = test_environments
         self.logger = logger
 
         # Extract frequently used config values
@@ -277,27 +279,26 @@ class Trainer:
         """Evaluate model using environment."""
         inference_params = self.reshard_params(params)
 
-        # Get evaluation examples from environment
-        eval_examples = self.environment.get_eval_examples(self.config["num_eval_examples"])
-
-        # Generate samples for evaluation
-        samples = batch_inference(
-            self.test_sampler,
-            inference_params,
-            [example["prompt"] for example in eval_examples],
-            prng_key,
-            self.config["test_generation_config"]["n_generations"],
-            verbose=True,
-        )
-        del inference_params
-
-        # Compute rewards using environment's reward computation
-        _, metrics = self.environment._compute_rewards(eval_examples, samples)
-
-        # Rename metrics for evaluation
         eval_metrics = {}
-        for k, v in metrics.items():
-            eval_metrics[k.replace("train_", "test_")] = v
+        for env_name, environment in self.test_environments:
+            # Get evaluation examples from environment
+            eval_examples = environment.get_eval_examples(self.config["num_eval_examples"])
+            # Generate samples for evaluation
+            samples = batch_inference(
+                self.test_sampler,
+                inference_params,
+                [example["prompt"] for example in eval_examples],
+                prng_key,
+                self.config["test_generation_config"]["n_generations"],
+                verbose=True,
+            )
+            del inference_params
+
+            # Compute rewards using environment's reward computation
+            _, metrics = environment._compute_rewards(eval_examples, samples)
+
+            for k, v in metrics.items():
+                eval_metrics[k.replace("train_", f"test_{env_name}")] = v
         return eval_metrics
 
     def save_checkpoint(self, train_state, step):
@@ -408,10 +409,12 @@ class Trainer:
             range(max(0, latest_checkpoint_step), self.config["num_train_steps"]), total=self.config["num_train_steps"]
         ):
             rng, subrng = jax.random.split(rng)
+            env_name, environment = jax.random.choice(rng, self.train_environments)
 
+            rng, subrng = jax.random.split(subrng)
             inference_params = self.reshard_params(train_state.params)
             rl_dataset, dataset_metrics = create_dataset_from_environment(
-                environment=self.environment,
+                environment=environment,
                 sampler=self.sampler,
                 params=inference_params,
                 reference_params=self.reference_params,
@@ -468,7 +471,8 @@ def main(
     num_eval_examples: int,
     save_model_freq: int,
     wandb_project: str,
-    environments_path: str = "environments.json",
+    train_environments_path: str = "environments_train.json",
+    test_environments_path: str = "environments_test.json",
     inference_param_dtype: str = "bf16",
     inference_activation_dtype: str = "bf16",
     training_param_dtype: str = "fp32",
@@ -624,7 +628,12 @@ def main(
             os.remove(model_paths["tokenizer"])
 
         # Initialize environment with tokenization parameters
-        environment = load_environments_from_config(Path(__file__).resolve().parent / environments_path, tokenizer)
+        train_environments = load_environments_from_config(
+            Path(__file__).resolve().parent / train_environments_path, tokenizer
+        )
+        test_environments = load_environments_from_config(
+            Path(__file__).resolve().parent / test_environments_path, tokenizer
+        )
 
         # Initialize logger
         if "enable" not in logger_config:
@@ -650,7 +659,7 @@ def main(
         }
 
         # Initialize and run trainer
-        trainer = Trainer(trainer_config, mesh, models, tokenizer, environment, logger)
+        trainer = Trainer(trainer_config, mesh, models, tokenizer, train_environments, test_environments, logger)
         trainer.train()
 
         jax_distributed_barrier()
