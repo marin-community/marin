@@ -79,19 +79,14 @@ lima_text = ExecutorStep(
 ).with_output_path("raw/lima_text-68958e9/68958e9")
 
 
-def lima_tokenized(
-    *,
-    base_path: str = "tokenized/",
-    tokenizer: str = llama3_tokenizer,
-    lima_raw: ExecutorStep = lima_text,
-) -> dict[str, TokenizerStep]:
+def lima_tokenized(tokenizer: str = llama3_tokenizer, is_validation: bool = True) -> dict[str, TokenizerStep]:
     """Return steps to tokenize the LIMA validation set using both train and test splits."""
 
     return default_tokenize(
         name="lima_text",
-        dataset=lima_raw.cd("train.jsonl"),
+        dataset=lima_text.cd("train.jsonl"),
         tokenizer=tokenizer,
-        is_validation=True,
+        is_validation=is_validation,
     )
 
 
