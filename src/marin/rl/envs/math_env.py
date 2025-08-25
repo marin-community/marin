@@ -159,8 +159,6 @@ class MathEnv(SimpleEnv):
                     Turn.from_openai_response(single_resp, reward=reward, input_seed=seed),
                 ],
                 metadata={
-                    "prompt": user_prompt,
-                    "response": assistant_msg,
                     "valid_format": is_valid,
                     "correct": is_correct,
                     "generation_index": j,
