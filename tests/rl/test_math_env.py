@@ -76,11 +76,10 @@ def test_math_env_rollout(openai_mock, monkeypatch):  # type: ignore[valid-type]
         collected.extend(groups)
 
     env = MathEnv(
-        inference=InferenceEndpoint("https://api.openai.com/v1"),
+        inference=InferenceEndpoint("https://api.openai.com/v1", model="gpt-3.5-turbo"),
         rollout_sink=sink,  # type: ignore[arg-type]
         data_source="mock",
         split="train",
-        max_iters=1,
         api_key="sk-fake",
         seed=123,
     )

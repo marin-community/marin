@@ -14,6 +14,7 @@ to the new async push-based API defined in
 
 import asyncio
 import random
+import uuid
 import time
 from dataclasses import dataclass
 
@@ -70,9 +71,7 @@ class MathEnv(SimpleEnv):
         *,
         data_source: str,
         split: str = "train",  # "train" or "test"
-        model: str = "gpt-3.5-turbo",
         num_generations: int = 1,
-        max_iters: int | None = None,
         api_key: str | None = None,
         seed: int = 0,
     ):
@@ -80,9 +79,7 @@ class MathEnv(SimpleEnv):
 
         self._data_source = data_source
         self._split = split
-        self._model = model
         self._num_generations = max(1, int(num_generations))
-        self._max_iters = max_iters
 
         # Load dataset: this can take a couple seconds on first run.
         dataset = datasets.load_dataset(self._data_source, trust_remote_code=True)[split]
@@ -90,10 +87,11 @@ class MathEnv(SimpleEnv):
         # Pre-process into a list of dicts {prompt, answer} so that the async
         # event loop isn't doing heavy work every iteration.
         self._examples: list[dict[str, str]] = []
-        for item in dataset:
+        for i, item in enumerate(dataset):
             prompt = f"{item['problem']} {self._INSTRUCTION}"
             answer = remove_boxed(last_boxed_only_string(item["solution"]))
-            self._examples.append({"prompt": prompt, "answer": answer})
+            # Keep the original (unshuffled) index as the stable example_id
+            self._examples.append({"prompt": prompt, "answer": answer, "example_id": str(i)})
 
         # Deterministic RNG (per-actor) so runs are reproducible.
         self._rng: random.Random = random.Random(seed)
@@ -105,19 +103,6 @@ class MathEnv(SimpleEnv):
         # Prepare OpenAI client for the target inference server.
         self._client = openai.Client(api_key=api_key, base_url=inference.address)
 
-    async def run(self) -> None:  # pragma: no cover - exercised by tests
-        iteration = 0
-        while True:
-            if not await self._wait_ready():
-                break
-            if self._max_iters is not None and iteration >= self._max_iters:
-                break
-            groups = await asyncio.to_thread(self.do_rollout)
-            if groups:
-                self._rollout_sink(groups)
-            iteration += 1
-            await asyncio.sleep(0)
-
     def do_rollout(self) -> list[RolloutGroup]:
         # Sample a problem (reuse the dataset when exhausted).
         if self._example_idx >= len(self._examples):
@@ -128,19 +113,20 @@ class MathEnv(SimpleEnv):
 
         user_prompt: str = example["prompt"]
         gt_answer: str = example["answer"]
+        example_id: str = example["example_id"]
+        seed = self._rng.randint(0, 2**31 - 1)
 
         # Call inference server for N generations (one request with n when possible).
         completion = self._client.chat.completions.create(
-            model=self._model,
+            model=self._inference.model,
             messages=[
                 {"role": "user", "content": user_prompt},
             ],
             n=self._num_generations,
-            seed=self._rng.randint(0, 2**31 - 1),
+            seed=seed,
         )
 
         # Build multiple rollouts (one per generation) and a single group per prompt.
-        iteration = self._example_idx - 1
         rollouts: list[RolloutRecord] = []
         valid_list: list[bool] = []
         correct_list: list[bool] = []
@@ -164,13 +150,13 @@ class MathEnv(SimpleEnv):
 
             record = RolloutRecord(
                 environment="math_env",
-                example_id=f"math-{iteration}",
+                example_id=example_id,
                 policy_version="v0",
-                rollout_uid=f"math-{iteration}-g{j}",
+                rollout_uid=f"math-{example_id}-g{j}-{uuid.uuid4().hex}",
                 replica_id="math",
                 turns=[
-                    Turn.from_prompt(user_prompt, input_seed=None),
-                    Turn.from_openai_response(single_resp, reward=reward, input_seed=None),
+                    Turn.from_prompt(user_prompt, input_seed=seed),
+                    Turn.from_openai_response(single_resp, reward=reward, input_seed=seed),
                 ],
                 metadata={
                     "prompt": user_prompt,
@@ -178,6 +164,7 @@ class MathEnv(SimpleEnv):
                     "valid_format": is_valid,
                     "correct": is_correct,
                     "generation_index": j,
+                    "seed": seed,
                 },
                 created_ts=time.time(),
             )
@@ -191,9 +178,9 @@ class MathEnv(SimpleEnv):
             md = {"valid_format": valid_list, "correct": correct_list, "n": self._num_generations}
 
         group = RolloutGroup(
-            id=f"math-{iteration}",
-            environment="math_env",
-            example_id=f"math-{iteration}",
+            id=f"math-{example_id}-{uuid.uuid4().hex}",
+            environment=f"math_env(data_source={self._data_source},split={self._split})",
+            example_id=example_id,
             policy_version="v0",
             rollouts=rollouts,
             sealed_ts=time.time(),
@@ -202,18 +189,6 @@ class MathEnv(SimpleEnv):
 
         return [group]
 
-    # ------------------------------------------------------------------
-    # Optional cleanup
-    # ------------------------------------------------------------------
-
-    async def on_shutdown(self) -> None:  # pragma: no cover
-        pass
-
-
-# ---------------------------------------------------------------------------
-# Config dataclass
-# ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class MathEnvConfig(AbstractEnvConfig):
@@ -221,9 +196,7 @@ class MathEnvConfig(AbstractEnvConfig):
 
     data_source: str = "DigitalLearningGmbH/MATH-lighteval"
     split: str = "train"
-    model: str = "gpt-3.5-turbo"
     num_generations: int = 1
-    max_iters: int | None = None
     seed: int = 0
 
     def resources(self) -> RayResources:
@@ -236,9 +209,7 @@ class MathEnvConfig(AbstractEnvConfig):
             rollout_sink,
             data_source=self.data_source,
             split=self.split,
-            model=self.model,
             num_generations=self.num_generations,
-            max_iters=self.max_iters,
             seed=self.seed + seed,
         )
         actor.run.remote()
