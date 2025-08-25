@@ -223,6 +223,7 @@ def default_train(
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     override_output_path: str | None = None,
+    only_return_config: bool = False,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -235,6 +236,7 @@ def default_train(
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
+        only_return_config: If True, only return the TrainLmOnPodConfig, not the ExecutorStep.
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
@@ -370,6 +372,9 @@ def default_train(
         resources=pod_config,
         output_path=this_output_path(),
     )
+
+    if only_return_config:
+        return config
 
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
