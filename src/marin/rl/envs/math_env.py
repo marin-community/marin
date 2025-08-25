@@ -158,20 +158,8 @@ class MathEnv(AbstractMarinEnv):
                 rollout_uid=f"math-{iteration}",
                 replica_id="math",
                 turns=[
-                    Turn(
-                        message=user_prompt,
-                        logprobs=None,
-                        role="user",
-                        reward=None,
-                        inference_metadata={},
-                    ),
-                    Turn(
-                        message=assistant_msg,
-                        logprobs=None,
-                        role="assistant",
-                        reward=reward,
-                        inference_metadata={},
-                    ),
+                    Turn.from_prompt(user_prompt, input_seed=None),
+                    Turn.from_openai_response(completion, reward=reward, input_seed=None),
                 ],
                 metadata={
                     "prompt": user_prompt,

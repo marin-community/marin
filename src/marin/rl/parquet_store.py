@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import uuid
 from collections.abc import Iterator
@@ -12,7 +13,21 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 
-from .datatypes import RolloutGroup, RolloutRecord, Turn
+from .datatypes import InferenceMetadata, RolloutGroup, RolloutRecord, Turn
+
+
+def _maybe_meta_to_dict(meta: InferenceMetadata | dict | None) -> dict | None:
+    if meta is None:
+        return None
+    if isinstance(meta, InferenceMetadata):
+        return dataclasses.asdict(meta)
+    if isinstance(meta, dict):
+        return meta
+    # Fallback: try to JSON-ify unknown object via __dict__
+    try:
+        return dict(meta)  # type: ignore[arg-type]
+    except Exception:
+        return None
 
 
 def _groups_to_table(groups: list[RolloutGroup]) -> pa.Table:
@@ -30,14 +45,17 @@ def _groups_to_table(groups: list[RolloutGroup]) -> pa.Table:
                     "group_metadata_json": g_meta,
                     "replica_id": r.replica_id,
                     "rollout_uid": r.rollout_uid,
+                    "rollout_reward": r.reward,
                     "turns_json": json.dumps(
                         [
                             {
                                 "message": t.message,
+                                "tokens": t.tokens,
                                 "logprobs": t.logprobs.tolist() if t.logprobs is not None else None,
                                 "role": t.role,
                                 "reward": t.reward,
-                                "inference_metadata": t.inference_metadata,
+                                "inference_metadata": _maybe_meta_to_dict(t.inference_metadata),
+                                "timestamp": t.timestamp,
                             }
                             for t in r.turns
                         ],
@@ -59,6 +77,23 @@ def write_rollout_groups(groups: list[RolloutGroup], root_path: str, *, compress
     table = _groups_to_table(groups)
     filename = f"{dataset_root.rstrip('/')}/part-{uuid.uuid4().hex}.parquet"
     pq.write_table(table, filename, compression=compression, filesystem=fs)
+
+
+def _meta_from_obj(obj: dict | None) -> dict | None:
+    """Return a JSON-serializable dict for inference metadata.
+
+    - If the stored value was a dict, return it as-is.
+    - If it was None, return None.
+    - If it was an InferenceMetadata, convert to dict.
+    This keeps backward-compatibility for round-tripping tests that expect dicts.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj
+    if isinstance(obj, InferenceMetadata):
+        return dataclasses.asdict(obj)
+    return None
 
 
 def iter_rollout_groups(root_path: str) -> Iterator[RolloutGroup]:
@@ -86,13 +121,16 @@ def iter_rollout_groups(root_path: str) -> Iterator[RolloutGroup]:
                 policy_version=record["policy_version"],
                 replica_id=record["replica_id"],
                 rollout_uid=record["rollout_uid"],
+                reward=record.get("rollout_reward"),
                 turns=[
                     Turn(
-                        message=t["message"],
-                        logprobs=np.array(t["logprobs"], dtype=float) if t["logprobs"] is not None else None,
-                        role=t["role"],
-                        reward=t["reward"],
-                        inference_metadata=t["inference_metadata"],
+                        message=t.get("message", ""),
+                        tokens=t.get("tokens"),
+                        logprobs=(np.array(t.get("logprobs"), dtype=float) if t.get("logprobs") is not None else None),
+                        role=t.get("role", "assistant"),
+                        reward=t.get("reward"),
+                        inference_metadata=_meta_from_obj(t.get("inference_metadata")),
+                        timestamp=t.get("timestamp"),
                     )
                     for t in json.loads(record["turns_json"])
                 ],

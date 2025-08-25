@@ -8,8 +8,17 @@ introducing heavy dependencies at import time.
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import dataclasses
+import warnings
 import numpy as np
 from typing import Any
+
+try:
+    from openai.types.chat import ChatCompletion, Choice
+except ImportError:
+    ChatCompletion = Any
+    Choice = Any
+
 
 __all__ = [
     "GroupKey",
@@ -29,44 +38,142 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, frozen=True)
 class InferenceMetadata:
     """Metadata about the inference of a turn."""
 
-    model_version: str
-    sampling_params: dict[str, Any]
-    inference_time: float
+    model_version: str | None = None
+    finish_reason: str | None = None
+    usage: dict[str, int] = dataclasses.field(default_factory=dict)
+    input_seed: int | None = None
 
 
 @dataclass(slots=True, frozen=True)
 class Turn:
-    """A single message-level interaction within a rollout.
-
-    Attributes
-    ----------
-    message:
-        The textual contents of the turn (usually a single chat message).
-    logprobs:
-        Token-level log probabilities corresponding to *message* stored as a
-        :class:`numpy.ndarray`. The array length should match the number of
-        generated tokens. ``None`` indicates that log probabilities were not
-        recorded.
-    role:
-        The role that produced the message (e.g. "user", "assistant",
-        "system", "tool").
-    reward:
-        Scalar reward obtained *after* the turn.  Can be ``None`` if the reward
-        is computed later or not applicable.
-    inference_metadata:
-        Arbitrary key/value pairs describing how the message was generated
-        (model version, sampling parameters, etc.).
-    """
+    """A single message-level interaction within a rollout."""
 
     message: str
-    logprobs: np.ndarray | None
     role: str
-    reward: float | None
-    inference_metadata: dict[str, Any] | InferenceMetadata
+    tokens: list[str] | None = None
+    logprobs: np.ndarray | None = None
+    reward: float | None = None
+    inference_metadata: InferenceMetadata | dict | None = None
+    timestamp: int | None = None
+
+    @staticmethod
+    def from_prompt(prompt: str, input_seed: int | None) -> "Turn":
+        """
+        Build a Turn from a prompt.
+        """
+        return Turn(message=prompt, role="user")
+
+    @staticmethod
+    def from_openai_response(response: ChatCompletion, reward: float | None, input_seed: int | None) -> "Turn":
+        """
+        Build a Turn from an OpenAI ChatCompletion-like response object.
+
+        (ChatGPT decided to code this in a very defensive way... Gonna go with it.)
+
+        Notes
+        -----
+        - Supports both the modern `choice.logprobs.content` shape
+          (list of {token, logprob, top_logprobs, bytes}) and a simpler
+          `choice.logprobs.logprobs` vector if present.
+        - Token *IDs* are generally not exposed by Chat Completions; we store token
+          *strings* if available, else leave None.  # TODO: fill with token IDs if/when exposed.
+        """
+        # Choose first choice (warn if multiple)
+        try:
+            choices = response.choices
+        except AttributeError as e:
+            raise ValueError("Response object missing 'choices'.") from e
+
+        if not choices:
+            raise ValueError("Response has no choices.")
+
+        if len(choices) > 1:
+            warnings.warn(f"Multiple choices in response; using the first. Count={len(choices)}", stacklevel=2)
+
+        choice = choices[0]
+
+        # Extract role and content (handle tool messages gracefully)
+        msg = getattr(choice, "message", None)
+        if msg is None:
+            raise ValueError("Choice missing 'message'.")
+
+        role = getattr(msg, "role", None) or "assistant"
+        content = getattr(msg, "content", None)
+        if content is None:
+            # Tool/function messages sometimes have no textual content.
+            content = ""
+
+        # Extract timestamp if present (OpenAI returns a UNIX epoch 'created' on the root)
+        timestamp = getattr(response, "created", None)
+
+        # make sure no tool calls are present (not implemented yet)
+        if getattr(choice, "tool_calls", None) is not None and len(getattr(choice, "tool_calls", [])) > 0:
+            raise NotImplementedError("Tool calls are not supported yet")
+
+        # Extract logprobs/tokens in a flexible way
+        tokens_list: list[str] = []
+        lps_list: list[float] = []
+
+        lp_obj = getattr(choice, "logprobs", None)
+        if lp_obj is not None:
+            # Preferred: new-style per-token entries at logprobs.content
+            content_lps = getattr(lp_obj, "content", None)
+            if content_lps:
+                for entry in content_lps:
+                    # entry typically has .token (str) and .logprob (float)
+                    tok = getattr(entry, "token", None)
+                    lp = getattr(entry, "logprob", None)
+                    if tok is not None and lp is not None:
+                        tokens_list.append(tok)
+                        lps_list.append(lp)
+            else:
+                # Fallback: a flat vector at logprobs.logprobs (rare)
+                flat_lps = getattr(lp_obj, "logprobs", None)
+                if flat_lps is not None:
+                    try:
+                        lps_list = list(flat_lps)
+                        # No tokens exposed in this shape
+                    except Exception:
+                        pass
+
+        # Finalize arrays; if nothing available, honor the dataclass contract: None => not recorded
+        logprobs_arr = np.array(lps_list, dtype=float) if lps_list else None
+
+        # Build inference metadata
+        model_version = getattr(response, "model", "unknown")
+        finish_reason = getattr(choice, "finish_reason", None)
+
+        # usage may include prompt_tokens, completion_tokens, total_tokens
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            usage_dict = {
+                "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                "completion_tokens": getattr(usage, "completion_tokens", None),
+                "total_tokens": getattr(usage, "total_tokens", None),
+            }
+        else:
+            usage_dict = {}
+
+        meta = InferenceMetadata(
+            model_version=model_version,
+            finish_reason=finish_reason,
+            usage=usage_dict,
+            input_seed=input_seed,
+        )
+
+        return Turn(
+            message=content,
+            role=role,
+            tokens=tokens_list or None,
+            logprobs=logprobs_arr,
+            reward=reward,
+            inference_metadata=meta,
+            timestamp=timestamp,
+        )
 
 
 @dataclass(slots=True, frozen=True)
@@ -141,6 +248,7 @@ class RolloutRecord:
     turns: list[Turn]
     created_ts: float
     metadata: dict[str, Any]
+    reward: float | None = None
     replica_id: str = "unknown"
 
     @property
