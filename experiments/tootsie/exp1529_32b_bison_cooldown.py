@@ -1,0 +1,117 @@
+"""
+https://github.com/marin-community/marin/issues/1529
+
+Cooldown run for 32B Qwen model using Bison mixture.
+"""
+
+import dataclasses
+
+from levanter.optim import AdamConfig
+from levanter.optim.clip_update_norm import ClipUpdateNormConfig
+
+from experiments.defaults import default_train
+from experiments.tootsie.exp1395_qwen3_32b import (
+    marin_32b_qwen,
+    qwen3_32b_remat,
+    qwen_32b_warmstart_train,
+)
+from experiments.nemotron_cc.tokenize_nemotron import (
+    NEMOTRON_WEIGHTS,
+    tokenize_nemotron_steps,
+)
+from experiments.dclm.tokenize_dclm import dclm_components_llama3
+from experiments.exp934_hq_vs_pt import pt_vs_hq_components
+from experiments.tootsie.exp600_tootsie import phase_3_tokenized, starling_components
+from marin.execution import executor_main
+from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
+
+PHASE_3_START = 160_000
+PHASE_3_END = 200_000
+
+nemotron_steps = tokenize_nemotron_steps()
+proofpile_2 = dclm_components_llama3["proofpile_2"]
+starcoderdata = dclm_components_llama3["starcoderdata"]
+
+NEMOTRON_PT_MIX_WEIGHTS = {
+    **NEMOTRON_WEIGHTS,
+    "starcoderdata": 0.25,
+    "proofpile_2": 0.055,
+}
+
+HQ_COOLDOWN_WEIGHTS = {
+    "dolmino/flan": 0.017 * 2,  # Double Weight in Starling
+    "dolmino/pes2o": 0.0581,
+    "dolmino/stackexchange": 0.0171,
+    "dolmino/wiki": 0.00365,
+    "all_math": 0.00422 * 2,  # Double Weight in Starling
+    "arxiv_markdownified": 0.0581,
+    "stackexchange_custom": 0.0171,
+    "wikipedia_markdown": 0.00365,
+    "medu_science_qa": 0.0012,
+    "finemath-3-plus": 0.034,
+}
+
+nemotron_total = sum(NEMOTRON_PT_MIX_WEIGHTS.values())
+total_hq_weight = sum(HQ_COOLDOWN_WEIGHTS.values())
+
+bison_cooldown_weights = {
+    **{k: v * 0.7 / nemotron_total for k, v in NEMOTRON_PT_MIX_WEIGHTS.items()},
+    **{k: v * 0.3 / total_hq_weight for k, v in HQ_COOLDOWN_WEIGHTS.items()},
+}
+
+bison_cooldown_mixture = lm_varying_mixture_data_config(
+    components={
+        **nemotron_steps,
+        "starcoderdata": starcoderdata,
+        "proofpile_2": proofpile_2,
+        **phase_3_tokenized,
+        **pt_vs_hq_components,
+        **starling_components,
+    },
+    weights_list=[
+        (0, NEMOTRON_PT_MIX_WEIGHTS),
+        (PHASE_3_START, bison_cooldown_weights),
+    ],
+)
+
+DECAY_FRACTION = (PHASE_3_END - PHASE_3_START) / PHASE_3_END
+
+qwen_phase2_checkpoint_for_phase3 = marin_32b_qwen.cd(f"checkpoints/step-{PHASE_3_START}").nonblocking()
+
+bison_train_config = dataclasses.replace(
+    qwen_32b_warmstart_train,
+    initialize_from_checkpoint_path=qwen_phase2_checkpoint_for_phase3,
+    decay=DECAY_FRACTION,
+    optimizer_config=AdamConfig(
+        beta1=0.9,
+        beta2=0.95,
+        epsilon=1e-8,
+        max_grad_norm=0.2,  # we're almost always < .2 except during spikes
+        # width is a little smaller than the 24B and we're using a much larger batch size
+        # 4.2e-4 * sqrt(8192/3072) ≈ 7e-4
+        learning_rate=7e-4,
+        weight_decay=0.05,
+        skip_bad_steps=True,
+        # update_rms_clipping=1.0,  # added at 67522, removed at 72233
+        lr_schedule="linear",
+        warmup=0.00,
+        decay=DECAY_FRACTION,
+        # this was inadvertently off from about 74k to 80k
+        clip_update_norm=ClipUpdateNormConfig(rolling_interval_length=128, sigma_factor=2.0),
+    ),
+)
+
+tootsie_32b_cooldown_bison = default_train(
+    name="tootsie-32b-cooldown-bison",
+    tokenized=bison_cooldown_mixture,
+    model_config=qwen3_32b_remat,
+    train_config=bison_train_config,
+    tags=["qwen", "32b", "ema", "exp1529", "tootsie", "cooldown"],
+    eval_harness_tasks=[],
+).with_output_path("checkpoints/tootsie-32b-cooldown-bison")
+
+if __name__ == "__main__":
+    executor_main(
+        [tootsie_32b_cooldown_bison],
+        description="Cooldown the 32B Qwen model on bison mixture",
+    )
