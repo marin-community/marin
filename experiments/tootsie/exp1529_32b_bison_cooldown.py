@@ -1,7 +1,7 @@
 """
 https://github.com/marin-community/marin/issues/1529
 
-Cooldown run for 32B Qwen model using Bison mixture.
+Cooldown run for 32B Tootsie Model using the same data mixture as in Starling for 8B
 """
 
 import dataclasses
@@ -69,7 +69,7 @@ bison_cooldown_mixture = lm_varying_mixture_data_config(
         **starling_components,
     },
     weights_list=[
-        (0, NEMOTRON_PT_MIX_WEIGHTS),
+        (0, NEMOTRON_PT_MIX_WEIGHTS),  # Phase 1 and 2 used the same data mixture and just changed the model arch
         (PHASE_3_START, bison_cooldown_weights),
     ],
 )
@@ -83,6 +83,10 @@ bison_train_config = dataclasses.replace(
     initialize_from_checkpoint_path=qwen_phase2_checkpoint_for_phase3,
     decay=DECAY_FRACTION,
     optimizer_config=AdamConfig(
+        # Modulate Decay And Warmup to Just Cool This Model Down
+        decay=DECAY_FRACTION,
+        warmup=0.00,
+        # From here out, this is a copy of the Optimizer hparams from in exp1395_qwen3_32b
         beta1=0.9,
         beta2=0.95,
         epsilon=1e-8,
@@ -94,8 +98,6 @@ bison_train_config = dataclasses.replace(
         skip_bad_steps=True,
         # update_rms_clipping=1.0,  # added at 67522, removed at 72233
         lr_schedule="linear",
-        warmup=0.00,
-        decay=DECAY_FRACTION,
         # this was inadvertently off from about 74k to 80k
         clip_update_norm=ClipUpdateNormConfig(rolling_interval_length=128, sigma_factor=2.0),
     ),
