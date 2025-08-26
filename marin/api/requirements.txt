@@ -1,0 +1,10 @@
+# Chat UI dependencies
+gradio>=4.0.0
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+requests>=2.25.0
+pydantic>=2.0.0
+
+# Core dependencies (if not already installed)
+torch>=2.0.0
+transformers>=4.30.0
