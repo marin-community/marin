@@ -122,7 +122,7 @@ tootsie_32b_cooldown_bison = default_train(
     train_config=bison_train_config,
     tags=["qwen", "32b", "ema", "exp1529", "tootsie", "cooldown"],
     eval_harness_tasks=[],
-).with_output_path("checkpoints/tootsie-32b-cooldown-bison")
+).with_output_path("checkpoints/tootsie-32b-cooldown-bison-adamc")
 
 if __name__ == "__main__":
     executor_main(
