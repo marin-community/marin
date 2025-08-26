@@ -8,6 +8,7 @@ import dataclasses
 
 from levanter.optim import AdamConfig
 from levanter.optim.clip_update_norm import ClipUpdateNormConfig
+from levanter.schedule import ScheduleStep
 
 from experiments.defaults import default_train
 from experiments.tootsie.exp1395_qwen3_32b import (
@@ -26,7 +27,7 @@ from marin.execution import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 PHASE_3_START = 160_000
-PHASE_3_END = 200_000
+PHASE_3_END = 192_000  # 20% of Training for Cooldown
 
 nemotron_steps = tokenize_nemotron_steps()
 proofpile_2 = dclm_components_llama3["proofpile_2"]
@@ -82,6 +83,15 @@ bison_train_config = dataclasses.replace(
     qwen_32b_warmstart_train,
     initialize_from_checkpoint_path=qwen_phase2_checkpoint_for_phase3,
     decay=DECAY_FRACTION,
+    train_batch_size=[
+        ScheduleStep(start=0, value=8192),
+        ScheduleStep(start=18500, value=7680),
+        ScheduleStep(start=21010, value=8192),
+        ScheduleStep(
+            start=159_999, value=1024
+        ),  # Hack to make the block size change a power of 2048, which was otherwise messed up by the 7680 phase.
+        ScheduleStep(start=160_000, value=8192),
+    ],
     optimizer_config=AdamConfig(
         # Modulate Decay And Warmup to Just Cool This Model Down
         decay=DECAY_FRACTION,
