@@ -83,6 +83,7 @@ bison_train_config = dataclasses.replace(
     qwen_32b_warmstart_train,
     initialize_from_checkpoint_path=qwen_phase2_checkpoint_for_phase3,
     decay=DECAY_FRACTION,
+    num_train_steps=PHASE_3_END,
     train_batch_size=[
         ScheduleStep(start=0, value=8192),
         ScheduleStep(start=18500, value=7680),
@@ -96,6 +97,7 @@ bison_train_config = dataclasses.replace(
         # Modulate Decay And Warmup to Just Cool This Model Down
         decay=DECAY_FRACTION,
         warmup=0.00,
+        adamc_weight_decay=True,
         # From here out, this is a copy of the Optimizer hparams from in exp1395_qwen3_32b
         beta1=0.9,
         beta2=0.95,
@@ -114,7 +116,7 @@ bison_train_config = dataclasses.replace(
 )
 
 tootsie_32b_cooldown_bison = default_train(
-    name="tootsie-32b-cooldown-bison",
+    name="tootsie-32b-cooldown-bison-adamc",
     tokenized=bison_cooldown_mixture,
     model_config=qwen3_32b_remat,
     train_config=bison_train_config,
