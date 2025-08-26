@@ -1,0 +1,227 @@
+# USAGE
+#
+# @marinbot ray_run [ray_run_args] --cluster <path> <module>
+# @marinbot stop --cluster <path> <job_id>
+#
+# SECRETS
+#
+# - GCLOUD_SERVICE_ACCOUNT_KEY
+# - CLUSTER_KEY
+#
+# SEE ALSO
+#
+# - marinbot.json
+# - scripts/marinbot.py
+
+name: marinbot
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  # If pull-requests: read, we get a 403 when trying to write to PR comments.
+  pull-requests: write
+  issues: write
+  actions: write
+  id-token: write
+
+jobs:
+  marinbot:
+    runs-on: ubuntu-latest
+    if: contains(github.event.comment.body, '@marinbot')
+
+    defaults:
+      run:
+        working-directory: marin
+
+        # /home/
+        #   runner/
+        #     work/
+        #       marin/
+        #         marin/      # GitHub makes us put everything under marin/marin
+        #           marin/
+        #           marinbot/
+
+    steps:
+      # Checkout from main; this action only runs on main, so using
+      # marinbot.json from main should keep people from giving themselves
+      # permission in a branch.
+      - name: Sparse checkout marinbot scripts
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            scripts/marinbot.py
+            marinbot.json
+          sparse-checkout-cone-mode: false
+          path: marinbot
+
+      - name: Parse command and validate
+        id: meta
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: marinbot
+        run: |
+          python scripts/marinbot.py
+
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.meta.outputs.sha }}
+          path: marin
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip and uv
+        if: steps.meta.outputs.command == 'ray_run'
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/uv
+          key: ${{ runner.os }}-3.11-marinbot-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-3.11-marinbot-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+          uv pip install --system -e . --torch-backend=cpu
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCLOUD_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Write cluster SSH key
+        run: |
+          set -e
+          mkdir -p ~/.ssh
+          printf "%s" "${{ secrets.CLUSTER_KEY }}" > ~/.ssh/marin_ray_cluster.pem
+          chmod 600 ~/.ssh/marin_ray_cluster.pem
+          ls -l ~/.ssh/marin_ray_cluster.pem
+
+      - name: Start Ray dashboard
+        run: |
+          set -e
+          echo "Starting ray dashboard for ${{ steps.meta.outputs.cluster_path }}"
+          ray dashboard '${{ steps.meta.outputs.cluster_path }}' &
+          echo $! > dashboard.pid
+          echo "Waiting for Ray dashboard to become available..."
+          for i in $(seq 1 30); do
+            if curl -sSf http://127.0.0.1:8265 >/dev/null 2>&1; then
+              echo "Dashboard is up"; break;
+            fi
+            sleep 2
+          done
+
+          if ! curl -sSf http://127.0.0.1:8265 >/dev/null 2>&1; then
+            echo "Dashboard failed to start within timeout"
+            exit 1
+          fi
+
+      - name: Stop Ray job
+        if: steps.meta.outputs.command == 'stop'
+        run: |
+          set -e
+          export RAY_ADDRESS="http://127.0.0.1:8265"
+          job_id="${{ steps.meta.outputs.job_id }}"
+          echo "Stopping Ray job: $job_id"
+          if ray job stop "$job_id"; then
+            echo "Successfully stopped job $job_id"
+          else
+            echo "Warning: Failed to stop job $job_id (it may have already completed or does not exist)"
+            # Don't fail the workflow, but log the warning
+          fi
+
+      - name: Execute ray_run
+        if: steps.meta.outputs.command == 'ray_run'
+        id: execute
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          PYTHONPATH: .:src:experiments
+        run: |
+          set -e
+
+          # Run ray_run in background and capture output
+          python -m marin.run.ray_run --no_wait ${{ steps.meta.outputs.ray_args }} \
+            -e WANDB_API_KEY "${WANDB_API_KEY}" \
+            -- python -m ${{ steps.meta.outputs.module }} --force_run_failed True 2>&1 | tee ray_output.log &
+
+          # Wait for job ID to appear in the output
+          echo "Waiting for Ray job submission ID..."
+          JOB_ID=""
+          TIMEOUT=30
+          ELAPSED=0
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            # Look for job ID in output
+            JOB_ID=$(grep -oP 'Job submitted with ID: \K[a-zA-Z0-9_-]+' ray_output.log 2>/dev/null | head -1)
+
+            if [ -n "$JOB_ID" ]; then
+              echo "Found job ID: $JOB_ID"
+              break
+            fi
+
+            sleep 2
+            ELAPSED=$((ELAPSED + 2))
+          done
+
+          if [ -z "$JOB_ID" ]; then
+            echo "Warning: Could not extract job ID from ray_run output after ${TIMEOUT} seconds"
+            # Fallback to a generated ID if extraction fails
+            JOB_ID="pr${{ steps.meta.outputs.pr_number }}-run${{ github.run_number }}-${{ github.run_attempt }}"
+            echo "Using fallback ID: $JOB_ID"
+          fi
+
+          echo "submission_id=$JOB_ID" >> $GITHUB_OUTPUT
+          echo "Ray job submitted with ID: $JOB_ID"
+
+      - name: Stop Ray dashboard
+        if: always()
+        run: |
+          if [ -f dashboard.pid ]; then kill $(cat dashboard.pid) || true; fi
+
+      - name: Post stop success comment
+        if: steps.meta.outputs.command == 'stop' && success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(${{ steps.meta.outputs.pr_number }}),
+              body: `🛑 Stopped Ray job: \`${{ steps.meta.outputs.job_id }}\`\n\n[View run](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`
+            });
+
+      - name: Post ray_run success comment
+        if: steps.meta.outputs.command == 'ray_run' && success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(${{ steps.meta.outputs.pr_number }}),
+              body: `✅ Submitted: \`${{ steps.meta.outputs.full_command }}\`\n\nJob ID: \`${{ steps.execute.outputs.submission_id }}\`\n\nTo stop: \`@marinbot stop --cluster ${{ steps.meta.outputs.cluster_path }} ${{ steps.execute.outputs.submission_id }}\`\n\n[View run](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`
+            });
+
+      - name: Post failure comment
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(${{ steps.meta.outputs.pr_number }}),
+              body: `❌ Failed: \`${{ steps.meta.outputs.full_command }}\`\n\n[View logs](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`
+            });
