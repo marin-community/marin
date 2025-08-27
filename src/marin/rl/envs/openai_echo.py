@@ -14,8 +14,8 @@ import ray
 from levanter.utils.ray_utils import RayResources
 
 from ..config import AbstractEnvConfig
+from ..datatypes import InferenceEndpoint, RolloutGroup, RolloutRecord, RolloutSink, Turn
 from ..env import AbstractMarinEnv
-from ..types import InferenceEndpoint, Rollout, RolloutGroup, RolloutSink, Turn
 
 
 class ChatEchoEnv(AbstractMarinEnv):
@@ -44,7 +44,9 @@ class ChatEchoEnv(AbstractMarinEnv):
 
     async def run(self) -> None:
         counter = 0
-        while not await self._should_stop():
+        while True:
+            if not await self._wait_ready():
+                break
             if self._max_iters is not None and counter >= self._max_iters:
                 break
 
@@ -58,19 +60,25 @@ class ChatEchoEnv(AbstractMarinEnv):
 
             assistant_msg = completion.choices[0].message.content
 
-            turn = Turn(
-                message=assistant_msg,
-                role="assistant",
-                logprobs=None,
-                reward=0.0,
-                inference_metadata={"model": self._model},
+            record = RolloutRecord(
+                environment="chat_echo_env",
+                example_id=f"chat-{counter}",
+                rollout_uid=f"chat-{counter}",
+                replica_id="chat",
+                turns=[
+                    Turn.system_text(self._system_prompt),
+                    Turn.from_prompt(self._prompt, input_seed=None),
+                    Turn.from_openai_response(completion, reward=0.0, input_seed=None),
+                ],
+                metadata={"response": assistant_msg},
+                created_ts=time.time(),
             )
-            rollout = Rollout(turns=[turn], metadata={"iteration": counter})
             group = RolloutGroup(
                 id=f"chat-{counter}",
-                source="chat_echo_env",
-                created=time.time(),
-                rollouts=[rollout],
+                environment="chat_echo_env",
+                example_id=f"chat-{counter}",
+                rollouts=[record],
+                sealed_ts=time.time(),
                 metadata={},
             )
             self._rollout_sink([group])
@@ -78,7 +86,7 @@ class ChatEchoEnv(AbstractMarinEnv):
             counter += 1
             await asyncio.sleep(0)  # yield control
 
-    async def shutdown(self) -> None:
+    async def on_shutdown(self) -> None:
         pass
 
 
