@@ -6,7 +6,7 @@ from dataclasses import asdict
 import pyarrow as pa  # noqa: F401  # ensures pyarrow import works in CI
 
 from marin.rl.parquet_store import iter_rollout_groups, write_rollout_groups
-from marin.rl.datatypes import RolloutGroup, RolloutRecord, Turn
+from marin.rl.datatypes import RolloutGroup, RolloutRecord, Turn, InferenceMetadata
 
 
 def _make_sample_groups() -> list[RolloutGroup]:
@@ -15,7 +15,6 @@ def _make_sample_groups() -> list[RolloutGroup]:
     r = RolloutRecord(
         environment="dummy_env",
         example_id="ex1",
-        policy_version="v0",
         rollout_uid="u1",
         replica_id="rep",
         reward=1.0,
@@ -25,14 +24,14 @@ def _make_sample_groups() -> list[RolloutGroup]:
                 logprobs=None,
                 role="user",
                 reward=None,
-                inference_metadata={},
+                inference_metadata=InferenceMetadata(),
             ),
             Turn(
                 message="there",
                 logprobs=None,
                 role="assistant",
                 reward=1.0,
-                inference_metadata={},
+                inference_metadata=InferenceMetadata(),
             ),
         ],
         metadata={"text": "Hi there!"},
@@ -43,7 +42,6 @@ def _make_sample_groups() -> list[RolloutGroup]:
         id="g1",
         environment="dummy_env",
         example_id="ex1",
-        policy_version="v0",
         rollouts=[r],
         sealed_ts=ts,
         metadata={"env": "dummy_env"},
@@ -53,7 +51,6 @@ def _make_sample_groups() -> list[RolloutGroup]:
         id="g2",
         environment="dummy_env",
         example_id="ex1",
-        policy_version="v0",
         rollouts=[r],
         sealed_ts=ts + 1,
         metadata={"env": "dummy_env", "difficulty": "hard"},

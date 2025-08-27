@@ -7,7 +7,7 @@
 
 - [x] understand charlie's code
 - [ ] do we want to do disaggegrated inference?
-- [ ] unify naming: prefer `datatypes.py` and remove/alias `types.py`
+- [x] unify naming: prefer `datatypes.py` and remove/alias `types.py`
 - [ ] fix minor typing nits (e.g., `Turn.reward: float | None | None` -> `float | None`)
 - [ ] README in `marin.rl/` describing the new async push-based design and how it maps to `post_training`
 

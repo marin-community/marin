@@ -16,18 +16,7 @@ import pyarrow.parquet as pq
 from .datatypes import InferenceMetadata, RolloutGroup, RolloutRecord, Turn
 
 
-def _maybe_meta_to_dict(meta: InferenceMetadata | dict | None) -> dict | None:
-    if meta is None:
-        return None
-    if isinstance(meta, InferenceMetadata):
-        return dataclasses.asdict(meta)
-    if isinstance(meta, dict):
-        return meta
-    # Fallback: try to JSON-ify unknown object via __dict__
-    try:
-        return dict(meta)  # type: ignore[arg-type]
-    except Exception:
-        return None
+
 
 
 def _groups_to_table(groups: list[RolloutGroup]) -> pa.Table:
@@ -40,7 +29,6 @@ def _groups_to_table(groups: list[RolloutGroup]) -> pa.Table:
                     "group_id": g.id,
                     "environment": g.environment,
                     "example_id": g.example_id,
-                    "policy_version": g.policy_version,
                     "sealed_ts": g.sealed_ts,
                     "group_metadata_json": g_meta,
                     "replica_id": r.replica_id,
@@ -54,7 +42,7 @@ def _groups_to_table(groups: list[RolloutGroup]) -> pa.Table:
                                 "logprobs": t.logprobs.tolist() if t.logprobs is not None else None,
                                 "role": t.role,
                                 "reward": t.reward,
-                                "inference_metadata": _maybe_meta_to_dict(t.inference_metadata),
+                                "inference_metadata": dataclasses.asdict(t.inference_metadata) if t.inference_metadata else None,
                                 "timestamp": t.timestamp,
                             }
                             for t in r.turns
@@ -79,20 +67,16 @@ def write_rollout_groups(groups: list[RolloutGroup], root_path: str, *, compress
     pq.write_table(table, filename, compression=compression, filesystem=fs)
 
 
-def _meta_from_obj(obj: dict | None) -> dict | None:
-    """Return a JSON-serializable dict for inference metadata.
+def _meta_from_obj(obj: dict | None) -> InferenceMetadata | None:
+    """Return an InferenceMetadata object for inference metadata.
 
-    - If the stored value was a dict, return it as-is.
+    - If the stored value was a dict, convert it to InferenceMetadata.
     - If it was None, return None.
-    - If it was an InferenceMetadata, convert to dict.
-    This keeps backward-compatibility for round-tripping tests that expect dicts.
     """
     if obj is None:
         return None
     if isinstance(obj, dict):
-        return obj
-    if isinstance(obj, InferenceMetadata):
-        return dataclasses.asdict(obj)
+        return InferenceMetadata(**obj)
     return None
 
 
@@ -110,7 +94,6 @@ def iter_rollout_groups(root_path: str) -> Iterator[RolloutGroup]:
                     id=gid,
                     environment=record["environment"],
                     example_id=record["example_id"],
-                    policy_version=record["policy_version"],
                     rollouts=[],
                     sealed_ts=record["sealed_ts"],
                     metadata=json.loads(record["group_metadata_json"]),
@@ -118,7 +101,6 @@ def iter_rollout_groups(root_path: str) -> Iterator[RolloutGroup]:
             r = RolloutRecord(
                 environment=record["environment"],
                 example_id=record["example_id"],
-                policy_version=record["policy_version"],
                 replica_id=record["replica_id"],
                 rollout_uid=record["rollout_uid"],
                 reward=record.get("rollout_reward"),
@@ -129,6 +111,7 @@ def iter_rollout_groups(root_path: str) -> Iterator[RolloutGroup]:
                         logprobs=(np.array(t.get("logprobs"), dtype=float) if t.get("logprobs") is not None else None),
                         role=t.get("role", "assistant"),
                         reward=t.get("reward"),
+                        # TODO: inference_metadata should be a data class...
                         inference_metadata=_meta_from_obj(t.get("inference_metadata")),
                         timestamp=t.get("timestamp"),
                     )

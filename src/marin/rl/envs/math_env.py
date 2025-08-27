@@ -151,7 +151,6 @@ class MathEnv(SimpleEnv):
             record = RolloutRecord(
                 environment="math_env",
                 example_id=example_id,
-                policy_version="v0",
                 rollout_uid=f"math-{example_id}-g{j}-{uuid.uuid4().hex}",
                 replica_id="math",
                 turns=[
@@ -179,7 +178,6 @@ class MathEnv(SimpleEnv):
             id=f"math-{example_id}-{uuid.uuid4().hex}",
             environment=f"math_env(data_source={self._data_source},split={self._split})",
             example_id=example_id,
-            policy_version="v0",
             rollouts=rollouts,
             sealed_ts=time.time(),
             metadata=md,

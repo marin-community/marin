@@ -42,7 +42,8 @@ __all__ = [
 class InferenceMetadata:
     """Metadata about the inference of a turn."""
 
-    model_version: str | None = None
+    model: str | None = None
+    policy_version: str | None = None
     finish_reason: str | None = None
     usage: dict[str, int] = dataclasses.field(default_factory=dict)
     input_seed: int | None = None
@@ -57,7 +58,7 @@ class Turn:
     tokens: list[str] | None = None
     logprobs: np.ndarray | None = None
     reward: float | None = None
-    inference_metadata: InferenceMetadata | dict | None = None
+    inference_metadata: InferenceMetadata | None = None
     timestamp: int | None = None
 
     @staticmethod
@@ -146,6 +147,7 @@ class Turn:
         # Build inference metadata
         model_version = getattr(response, "model", "unknown")
         finish_reason = getattr(choice, "finish_reason", None)
+        policy_version = getattr(response, "policy_version", None)
 
         # usage may include prompt_tokens, completion_tokens, total_tokens
         usage = getattr(response, "usage", None)
@@ -159,7 +161,8 @@ class Turn:
             usage_dict = {}
 
         meta = InferenceMetadata(
-            model_version=model_version,
+            model=model_version,
+            policy_version=policy_version,
             finish_reason=finish_reason,
             usage=usage_dict,
             input_seed=input_seed,
@@ -181,12 +184,12 @@ class Turn:
         return Turn(message=text, role="system")
 
     @staticmethod
-    def assistant_text(text: str, *, reward: float | None = None, input_seed: int | None = None) -> "Turn":
+    def assistant_text(text: str, *, reward: float | None = None, input_seed: int | None = None, policy_version: str | None = None) -> "Turn":
         """Helper to create an assistant turn from plain text.
 
         Includes minimal inference metadata if an input_seed is provided.
         """
-        meta = InferenceMetadata(input_seed=input_seed) if input_seed is not None else None
+        meta = InferenceMetadata(input_seed=input_seed or 0, policy_version=policy_version or "v0")
         return Turn(message=text, role="assistant", reward=reward, inference_metadata=meta)
 
 
@@ -240,8 +243,6 @@ class RolloutRecord:
         Name of the environment that produced the rollout.
     example_id:
         Identifier for the dataset example or task instance.
-    policy_version:
-        Version of the policy used to generate the rollout.
     replica_id:
         Identifier for the environment replica that produced the rollout.
     rollout_uid:
@@ -256,7 +257,6 @@ class RolloutRecord:
 
     environment: str
     example_id: str
-    policy_version: str
     rollout_uid: str
     turns: list[Turn]
     created_ts: float
@@ -281,8 +281,6 @@ class RolloutGroup:
         Name of the environment that produced the rollouts.
     example_id:
         Identifier of the dataset example shared by all rollouts in the group.
-    policy_version:
-        Policy version associated with the rollouts.
     rollouts:
         List of :class:`RolloutRecord` objects belonging to the group.
     sealed_ts:
@@ -294,7 +292,6 @@ class RolloutGroup:
     id: str
     environment: str
     example_id: str
-    policy_version: str
     rollouts: list[RolloutRecord]
     sealed_ts: float
     metadata: dict[str, Any] = None

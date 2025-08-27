@@ -41,11 +41,11 @@ Trainer can ask a BatchMaker for this batch. It does so via an intermediary.
 
 ReplayBuffer receives rollouts. Groups them by (env, problemid). Tries to main the best batch for each one.
 
-- [ ] in memory "working set"
-- [ ] append rollouts
-- [ ] supports purge
-- [ ] supports sample
-- [ ] hardcodes grpo or similar
+- [x] in memory "working set"
+- [x] append rollouts
+- [x] supports purge
+- [x] supports sample
+- [x] hardcodes grpo or similar
 
 Smarter:
 

@@ -332,3 +332,6 @@ exclude = [
 
 [tool.uv_build]
 package-dir = "src"
+
+[tool.uv.extra-build-dependencies]
+htmlmin = ["legacy-cgi"]

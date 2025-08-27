@@ -10,7 +10,6 @@ def _make_rollout(uid: str, *, reward: float) -> RolloutRecord:
     return RolloutRecord(
         environment="env",
         example_id="ex",
-        policy_version="v1",
         rollout_uid=uid,
         turns=[
             Turn.from_prompt("m", input_seed=None),

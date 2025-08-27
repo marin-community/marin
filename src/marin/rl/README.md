@@ -1,16 +1,83 @@
-# RL Dataset System
+# Marin RL Overview
 
-This module implements a new design for RL training data management that separates concerns between experience accumulation and batch creation.
 
 ## Architecture Overview
 
-The system consists of three main components:
 
-1. **ReplayBuffer** - Accumulates experiences, writes them to disk, and handles all I/O operations
-2. **BatchMaker** - Abstract interface for creating batches of RL examples (purely in-memory)
-3. **RLExample** - Data structure for individual training examples
+```
+              +-------------------+
+              |  Weight           |
+     +------> |  Broadcaster      | --------------------------+
+     |        +-------------------+                           |
+     |                        |                               |
+     |  New Weights           |  Metrics                      |
+     |  + Generation          |                               |
+     |                        v                               v
++-----------+          +-------------------+         +------------------------+
+| Learner   |----+---> |    Overseer       | <------ | OAI Inference Server(s)|
++-----------+ Metrics  +-------------------+ Metrics +------------------------+ 
+     ^                    ^         ^                          ^
+     |        Metrics     |         |        Metrics           |
+     |    +---------------+         +---------------------+    | Turns
+     |    |                                               |    |
+     |    |                                               V    v
++----------+                                             +------------+
+|  Replay  |            <---------------                 |   Env(s)   |
+|  Buffer  |                 Rollouts                    |            |
++----------+                                             +------------+ 
+```
 
 ## Components
+
+Probably this diagram is upside down relative to how one should think about it.
+
+### Overseer
+
+At the center is the Overseer. It is responsible for:
+
+- Spinning up the other components, including the number of replicas for each env.
+- Coordinating the training process and rollout generation
+- Receiving and logging metrics from the other components
+
+### Envs (Environments)
+
+Envs are responsible for:
+
+- Generating rollouts and sending them to the ReplayBuffer
+
+Envs operate asynchronously and continously, similar to how Magistral works.
+Envs can range from the fairly simple (e.g. multiple choice problems) to the complex (e.g. multiturn coding problems with tool use).
+
+Envs typically will have:
+
+- a set of prompts/problems (often with a solution)
+- a verifier (e.g. a )
+
+### ReplayBuffer
+
+The ReplayBuffer is responsible for:
+
+- Receiving rollouts from the Envs
+- Writing rollouts to disk
+- Creating and saving batches of RlExamples and giving them to the Learner
+
+### Learner
+
+The Learner receives batches of processed rollouts and updates the weights of the model. It then sends the new weights to the Weight Broadcaster along with a new policy version.
+
+### Weight Broadcaster
+
+The Weight Broadcaster is responsible for broadcasting the new weights to the OAI Inference Server(s).
+
+### OAI Inference Server(s)
+
+The OAI Inference Server(s) are responsible for:
+
+- Receiving new weights from the Weight Broadcaster
+- Generating responses
+
+
+
 
 ### ReplayBuffer
 

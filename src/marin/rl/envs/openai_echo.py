@@ -63,7 +63,6 @@ class ChatEchoEnv(AbstractMarinEnv):
             record = RolloutRecord(
                 environment="chat_echo_env",
                 example_id=f"chat-{counter}",
-                policy_version="v0",
                 rollout_uid=f"chat-{counter}",
                 replica_id="chat",
                 turns=[
@@ -78,7 +77,6 @@ class ChatEchoEnv(AbstractMarinEnv):
                 id=f"chat-{counter}",
                 environment="chat_echo_env",
                 example_id=f"chat-{counter}",
-                policy_version="v0",
                 rollouts=[record],
                 sealed_ts=time.time(),
                 metadata={},

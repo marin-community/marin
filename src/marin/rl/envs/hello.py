@@ -38,7 +38,6 @@ class HelloWorldEnv(SimpleEnv):
         record = RolloutRecord(
             environment="hello_env",
             example_id=f"hello-{self._counter}",
-            policy_version="v0",
             rollout_uid=f"hello-{self._counter}",
             replica_id="hello",
             turns=[
@@ -56,7 +55,6 @@ class HelloWorldEnv(SimpleEnv):
             id=f"hello-{self._counter}",
             environment="hello_env",
             example_id=f"hello-{self._counter}",
-            policy_version="v0",
             rollouts=[record],
             sealed_ts=time.time(),
             metadata={},

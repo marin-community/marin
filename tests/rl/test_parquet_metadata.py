@@ -12,12 +12,11 @@ from marin.rl.parquet_store import iter_rollout_groups, write_rollout_groups
 def test_parquet_inference_metadata_and_tokens_roundtrip(tmp_path):
     ts = time.time()
 
-    meta = InferenceMetadata(model_version="m1", finish_reason="stop", usage={"prompt_tokens": 5}, input_seed=7)
+    meta = InferenceMetadata(model="m1", finish_reason="stop", usage={"prompt_tokens": 5}, input_seed=7, policy_version="v1")
 
     r = RolloutRecord(
         environment="env",
         example_id="ex",
-        policy_version="v1",
         rollout_uid="uid",
         replica_id="rep",
         turns=[
@@ -51,8 +50,8 @@ def test_parquet_inference_metadata_and_tokens_roundtrip(tmp_path):
     g2 = read_back[0]
 
     t2 = g2.rollouts[0].turns[0]
-    # inference_metadata is read back as a dict
-    assert isinstance(t2.inference_metadata, dict)
-    assert t2.inference_metadata == dataclasses.asdict(meta)
+    # inference_metadata is read back as InferenceMetadata
+    assert isinstance(t2.inference_metadata, InferenceMetadata)
+    assert t2.inference_metadata == meta
     assert t2.tokens == ["he", "llo"]
     assert t2.timestamp == 123456789
