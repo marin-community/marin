@@ -248,6 +248,7 @@ quality_dedup_consolidate = [
     "huggingface_hub",
     "datasets",
     "transformers",
+    "fsspec>=2025.3.0",
 ]
 tokenize_train = [
     "multiprocess==0.70.16",
