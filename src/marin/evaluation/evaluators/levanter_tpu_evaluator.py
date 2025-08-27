@@ -87,7 +87,8 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         """
 
         @ray.remote(
-            scheduling_strategy=self._get_scheduling_strategy(resource_config),
+            # scheduling_strategy=self._get_scheduling_strategy(resource_config),
+            resources={"TPU": resource_config.num_tpu, f"{resource_config.tpu_type}-head": 1},
             runtime_env=self.get_runtime_env(),
             max_calls=1,
         )
