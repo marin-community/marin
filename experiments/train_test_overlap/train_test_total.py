@@ -32,13 +32,6 @@ Notes
 import logging
 
 from experiments.midtraining_datasets import finemath_3_plus
-from experiments.pretraining_datasets import (
-    dclm_baseline,
-    dolmino,
-    nemotron_cc,
-    proofpile_2,
-    starcoderdata,
-)
 from experiments.train_test_overlap.utils import (
     EVAL_DATASET_STEPS,
     DatasetConfig,
@@ -52,7 +45,7 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-MAX_IN_FLIGHT = 64
+MAX_IN_FLIGHT = 8
 MAX_PER_WORKER = 8
 
 # Custom temporary directory for deduplication processing
@@ -75,11 +68,11 @@ ALLOWED_TPU_TYPES = ("v4-8", "v5p-8", "v6e-8")
 TPU_TYPE = "v4-8"  # choose from ALLOWED_TPU_TYPES
 DATASET_CONFIGS = [
     DatasetConfig(name="finemath", path=finemath_3_plus, max_in_flight=MAX_IN_FLIGHT, text_field="text"),
-    DatasetConfig(name="dclm", path=dclm_baseline, max_in_flight=MAX_IN_FLIGHT),
-    DatasetConfig(name="starcoder", path=starcoderdata, max_in_flight=MAX_IN_FLIGHT, text_field="content"),
-    DatasetConfig(name="proofpile", path=proofpile_2, max_in_flight=MAX_IN_FLIGHT),
-    DatasetConfig(name="dolmino", path=dolmino, max_in_flight=MAX_IN_FLIGHT),
-    DatasetConfig(name="nemotron_cc", path=nemotron_cc, max_in_flight=MAX_IN_FLIGHT),
+    # DatasetConfig(name="dclm", path=dclm_baseline, max_in_flight=MAX_IN_FLIGHT),
+    # DatasetConfig(name="starcoder", path=starcoderdata, max_in_flight=MAX_IN_FLIGHT, text_field="content"),
+    # DatasetConfig(name="proofpile", path=proofpile_2, max_in_flight=MAX_IN_FLIGHT),
+    # DatasetConfig(name="dolmino", path=dolmino, max_in_flight=MAX_IN_FLIGHT),
+    # DatasetConfig(name="nemotron_cc", path=nemotron_cc, max_in_flight=MAX_IN_FLIGHT),
 ]
 
 
@@ -105,6 +98,7 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
         fn=run_all_shards,
         config=cfg,
         description=f"Run dedupe train-test overlap on {dataset_config.name} shards",
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
 
