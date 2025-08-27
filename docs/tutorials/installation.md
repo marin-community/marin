@@ -98,6 +98,7 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
 - **GPU**: See [Local GPU Setup](local-gpu.md) for CUDA configuration and multi-GPU support
 - **TPU**: See [TPU Setup](../tutorial/tpu-setup.md) for Google Cloud TPU configuration
 
+
 ## Trying it Out
 
 To check that your installation worked, you can go to the [First Experiment](first-experiment.md) tutorial, where

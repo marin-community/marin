@@ -147,7 +147,6 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
         config (EvalLmConfig): The configuration for visualizing log probabilities.
     """
     # _separate_process_fn(eval_lm_main, (config,), {})
-
     try:
         if config.hf_checkpoint and is_remote_path(config.hf_checkpoint):
             local_path = os.path.join("/dev/shm/levanter-lm-eval", ckpt_path_to_step_name(config.hf_checkpoint))

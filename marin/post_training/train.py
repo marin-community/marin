@@ -18,8 +18,6 @@ from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
 from .environments.marin_env import MarinEnv
-from .environments.math_env import MathEnv
-from .environments.swe_bench_env import SWEBenchEnv
 from .inference import GenerationConfig, batch_inference, build_sampler
 from .llama3 import (
     LLAMA_STANDARD_CONFIGS,
