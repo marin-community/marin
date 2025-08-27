@@ -9,6 +9,11 @@ Before you begin, ensure you have the following installed:
 - Python 3.11 or higher
 - uv (Python package manager)
 - Git
+- On macOS, install additional build tools for SentencePiece:
+
+    ```bash
+    brew install cmake pkg-config coreutils
+    ```
 - A [Weights & Biases](https://wandb.ai) account for experiment tracking (optional but recommended)
 
 This document focuses on basic setup and usage of Marin.
