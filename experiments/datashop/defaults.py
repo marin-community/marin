@@ -28,7 +28,7 @@ from marin.datashop.pipeline import (
 )
 from marin.download.filesystem.transfer import TransferConfig, transfer_files
 from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
-from marin.generation.inference import TextGenerationInferenceConfig
+from marin.generation.inference import ChunkStrategy, TextGenerationInferenceConfig
 from marin.generation.inference import run_inference as run_generation_inference
 from marin.processing.classification.config.inference_config import InferenceConfig
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
@@ -402,6 +402,8 @@ def default_synthetic_data_generation(
     generated_text_column_name: str = "generated_text",
     engine_kwargs: dict = default_engine_kwargs,
     generation_kwargs: dict = default_generation_kwargs,
+    chunk_size: int = 1024,
+    chunk_strategy: ChunkStrategy | None = None,
 ) -> ExecutorStep:
     """
     Generates synthetic data using a specified model and prompt template.
@@ -447,5 +449,7 @@ def default_synthetic_data_generation(
             checkpoint_id_column=checkpoint_id_column,
             batch_size=512,
             num_instances=(1, 256),
+            chunk_size=chunk_size,
+            chunk_strategy=chunk_strategy,
         ),
     )

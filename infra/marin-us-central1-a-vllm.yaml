@@ -3,7 +3,7 @@
 # Update the template or the script, not this file! #
 #####################################################
 # Unique Identifier for the Head Node + Workers
-cluster_name: marin-us-east5-b-vllm
+cluster_name: marin-us-central1-a-vllm
 
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
@@ -16,13 +16,12 @@ auth:
 # Configure GCP
 provider:
   type: gcp
-  region: us-east5
-  availability_zone: us-east5-b
+  region: us-central1
+  availability_zone: us-central1-a
   project_id: hai-gcp-models
 
 docker:
-    # image: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:6e804a10"
-    image: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:955de31f"
+    image: "us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:955de31f"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -39,7 +38,7 @@ docker:
 
 
 initialization_commands:
-  - yes | gcloud auth configure-docker us-east5-docker.pkg.dev
+  - yes | gcloud auth configure-docker us-central1-docker.pkg.dev
   - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
   # always run this because ray doesn't run with sudo
   - sudo usermod -aG docker $USER
@@ -52,14 +51,14 @@ setup_commands:
   # NOTE(Chris): Have to include /root/gcloud/google-cloud-sdk/bin prefix because
   # there is some bug with the PATH not propagating from the Dockerfile to Ray.
   - /root/gcloud/google-cloud-sdk/bin/gcloud config set project hai-gcp-models
-  - /root/gcloud/google-cloud-sdk/bin/gcloud config set compute/region us-east5
-  - /root/gcloud/google-cloud-sdk/bin/gcloud config set compute/zone us-east5-b
+  - /root/gcloud/google-cloud-sdk/bin/gcloud config set compute/region us-central1
+  - /root/gcloud/google-cloud-sdk/bin/gcloud config set compute/zone us-central1-a
   - mkdir $HOME/.cache/huggingface -p
   - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
   - mkdir $HOME/.cache/openai -p
   - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
-  - echo 'export MARIN_PREFIX="gs://marin-us-east5"' >> $HOME/.bashrc
-  - echo 'export BUCKET="marin-us-east5"' >> $HOME/.bashrc
+  - echo 'export MARIN_PREFIX="gs://marin-us-central1"' >> $HOME/.bashrc
+  - echo 'export BUCKET="marin-us-central1"' >> $HOME/.bashrc
   - gcsfuse --implicit-dirs --cache-dir /dev/shm --file-cache-max-size-mb 160000 --client-protocol grpc --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
   - mkdir -p ~/.ssh && /root/gcloud/google-cloud-sdk/bin/gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
   # Using /home/ray/.ssh/ since auth.ssh_user is set to 'ray' and we need to ensure the key is in the correct user's home directory else we get an error
@@ -96,10 +95,22 @@ available_node_types:
     max_workers: 1024
     min_workers: 2
     node_config:
-      acceleratorType: v6e-8
-      runtimeVersion: v2-alpha-tpuv6e
+      acceleratorType: v5p-8
+      runtimeVersion: v2-alpha-tpuv5
       schedulingConfig:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
+
+  tpu_slice_v5p_8_serve:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v5p-8
+      runtimeVersion: v2-alpha-tpuv5
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4

@@ -21,13 +21,13 @@ provider:
   project_id: hai-gcp-models
 
 docker:
-    image: "us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:155f5f9c"
+    image: "us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:955de31f"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
         - --privileged
         - --ulimit memlock=-1:-1  #
-        - --shm-size=200gb
+        - --shm-size=200gb # 160 for the gcsfuse mount and another 340 for object store even though object store capped at 200.
         - -v
         - "/tmp:/tmp"
         # this lets the worker run docker commands and have them run as sibling containers
@@ -63,11 +63,15 @@ setup_commands:
   - mkdir -p ~/.ssh && /root/gcloud/google-cloud-sdk/bin/gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
   # Using /home/ray/.ssh/ since auth.ssh_user is set to 'ray' and we need to ensure the key is in the correct user's home directory else we get an error
   - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
-  - echo 'export RAY_kill_child_processes_on_worker_exit_with_raylet_subreaper=true' >> $HOME/.bashrc
+  # - echo 'export RAY_kill_child_processes_on_worker_exit_with_raylet_subreaper=true' >> $HOME/.bashrc
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
 
+# 200 GB object store and spill to GCSFuse mount location
+# head_start_ray_commands:
+#   - ray stop || true
+#   - ray start --address=$RAY_HEAD_IP:6379 --system-config='{"object_spilling_config":"{\"type\":\"filesystem\",\"params\":{\"directory_path\":\"/opt/gcsfuse_mount/spilling\"},\"buffer_size\":268435456}"}'
 
 # List of Available Node Types
 available_node_types:

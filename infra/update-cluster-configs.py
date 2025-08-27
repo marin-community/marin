@@ -167,6 +167,16 @@ configs = {
         "min_workers": 2,
         "VLLM": True,
     },
+    "marin-us-central1-a-vllm": {
+        "NAME": "marin-us-central1-a-vllm",
+        "REGION": "us-central1",
+        "ZONE": "us-central1-a",
+        "BUCKET": "marin-us-central1",
+        "DOCKER_TAG": "955de31f",
+        "tpu_generation": "v5p-serve",
+        "min_workers": 2,
+        "VLLM": True,
+    },
 }
 
 
@@ -211,6 +221,14 @@ generation_configs = {
         "slices": [8, 16, 32, 64, 128, 256, 512, 1024, 2048],
         "num_tpus": 4,
         "tpus_worker": 8,
+    },
+    "v5p-serve": {
+        "runtime_version": "v2-alpha-tpuv5",
+        "base_worker": "8",
+        "slice_configs": [
+            SliceConfig(slice_count=8, num_tpus=4, override_slice_name="tpu_slice_v5p_8_serve"),
+        ],
+        "base_worker_num_tpus": 4,
     },
     "v6e": {
         "runtime_version": "v2-alpha-tpuv6e",

@@ -15,7 +15,7 @@ ENV_VARS = {
         "--xla_tpu_enable_ag_backward_pipelining=true"
     ),
     "TF_CPP_MIN_LOG_LEVEL": "3",
-    "TPU_MIN_LOG_LEVEL": "2",
+    "TPU_MIN_LOG_LEVEL": "4",
 }
 
 PIP_DEPS = []

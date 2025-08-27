@@ -1,7 +1,9 @@
 # vllm/vllm-tpu:9dbf7a2dc1448d6657adfb2daba36be270dcebcd - 0.7.4 has some issues
 # FROM vllm/vllm-tpu:e92694b6fe264a85371317295bca6643508034ef
-FROM vllm/vllm-tpu:nightly
 
+# 3c545 has some bad interactions with ray data that make it not work
+# FROM vllm/vllm-tpu:3c545c0c3b98ee642373a308197d750d0e449403 # newest one that is 0.9.2 thought it should work but some ray data issues
+FROM vllm/vllm-tpu:9dbf7a2dc1448d6657adfb2daba36be270dcebcd
 # Setup gcsfuse
 # cmake, build-essential, libssl-dev, protobuf-compiler for dolma
 RUN apt-get update && apt-get install lsb-release rsync docker.io cmake build-essential libssl-dev protobuf-compiler -y
@@ -23,7 +25,7 @@ RUN curl -sSL https://sdk.cloud.google.com > /tmp/gcl && \
     && chown -R $(whoami) /root/gcloud
 
 # Install core dependencies
-RUN pip install --no-cache-dir draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1359 haliax==1.4.dev348 lm-eval https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
+RUN pip install --no-cache-dir draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1500 haliax==1.4.dev381 lm-eval https://github.com/huggingface/accelerate/archive/refs/heads/main.zip ray==2.45.0
 
 # Need the latest accelerate due to some deprecations in the newest pytorch
 # RUN pip install --no-cache-dir https://github.com/huggingface/accelerate/archive/refs/heads/main.zip

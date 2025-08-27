@@ -13,7 +13,7 @@ except ImportError:
 from tests.conftest import large_model_engine_kwargs
 
 
-@ray.remote(resources={"TPU-v6e-8-head": 1})
+@ray.remote(resources={"TPU-v6e-8-head": 1, "TPU": 8})
 def _test_llm_func(model_path):
     return run_vllm_inference(model_path, **large_model_engine_kwargs)
 

@@ -149,3 +149,10 @@ map_neo_7b = download_model_step(
         hf_revision="81bad32",
     )
 )
+
+llama_3_2_3b_instruct = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Llama-3.2-3B-Instruct",
+        hf_revision="0cb88a4",
+    )
+)

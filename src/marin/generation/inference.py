@@ -1,31 +1,19 @@
 import os
 import uuid
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Any
 
 import fsspec
 import ray
 from ray.data import DataContext
 from ray.data.datasource import FilenameProvider
-from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
+
 
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
 from marin.generation.pipeline import vLLMTextGeneration
 from marin.generation.ray_utils import get_ray_remote_args_scheduling_strategy_fn
+from marin.generation.chunk_utils import ChunkStrategy
 from marin.utils import fsspec_glob
-
-
-class ChunkStrategy(StrEnum):
-    # ``chunk_strategy`` determines how a document should be split into
-    # smaller pieces before inference. Options are:
-    #   - ``ChunkStrategy.CHAR``: split into fixed-size character windows
-    #     determined by ``chunk_size``.
-    #   - ``ChunkStrategy.PARAGRAPH``: split on newlines (``"\n"``) and treat
-    #     each line-separated paragraph as a separate example.
-    # If ``chunk_strategy`` is ``None`` no chunking is applied.
-    CHAR = "char"
-    PARAGRAPH = "paragraph"
 
 
 @dataclass
@@ -87,66 +75,6 @@ class OverwriteOutputFiletypeFilenameProvider(FilenameProvider):
 
     def get_filename_for_block(self, block, task_index, block_index):
         return f"{self.dataset_id}_{task_index:06}_{block_index:06}" f".{self.file_format}"
-
-
-def chunk_text(
-    example: dict[str, Any],
-    strategy: ChunkStrategy,
-    chunk_size: int | None = None,
-) -> list[dict[str, Any]]:
-    """Split an example into multiple smaller examples.
-
-    Parameters
-    ----------
-    example:
-        A dictionary representing a single row in the dataset. Must contain a
-        ``"text"`` field and may optionally contain an ``"id"`` field.
-    strategy:
-        The chunking strategy to apply. ``ChunkStrategy.CHAR`` splits the
-        document into fixed-size windows based on ``chunk_size`` characters.
-        ``ChunkStrategy.PARAGRAPH`` splits on newlines (``"\n"``) and treats
-        each resulting segment as a separate chunk.
-    chunk_size:
-        Size of each chunk when ``strategy`` is ``ChunkStrategy.CHAR``. Ignored for other
-        strategies.
-
-    Returns
-    -------
-    list[dict[str, Any]]
-        A list of new examples with updated ``text`` (and ``id`` if provided).
-    """
-
-    text = example.get("text", "")
-    example_id = example.get("id")
-    results: list[dict[str, Any]] = []
-
-    if strategy is ChunkStrategy.CHAR:
-        if not chunk_size or chunk_size <= 0:
-            raise ValueError("chunk_size must be a positive integer for 'char' strategy")
-        for idx in range(0, len(text), chunk_size):
-            chunk = text[idx : idx + chunk_size]
-            new_example = example.copy()
-            new_example_metadata = new_example.get("metadata", {})
-            new_example["text"] = chunk
-            if example_id is not None:
-                new_example["id"] = f"{example_id}_{idx // chunk_size}"
-                new_example_metadata["source_document_id"] = example_id
-                new_example["metadata"] = new_example_metadata
-            results.append(new_example)
-    elif strategy is ChunkStrategy.PARAGRAPH:
-        for idx, para in enumerate(filter(None, text.split("\n"))):
-            new_example = example.copy()
-            new_example_metadata = new_example.get("metadata", {})
-            new_example["text"] = para
-            if example_id is not None:
-                new_example["id"] = f"{example_id}_{idx}"
-                new_example_metadata["source_document_id"] = example_id
-                new_example["metadata"] = new_example_metadata
-            results.append(new_example)
-    else:
-        raise ValueError(f"Unknown chunking strategy: {strategy}")
-
-    return results
 
 
 def set_ray_data_config(config: TextGenerationInferenceConfig):
@@ -318,19 +246,18 @@ def find_all_finished_ids(checkpoint_path: str, filetype: str, id_column: str | 
     # This makes sure that the inference itself is not preempted.
     # If it is preemptible, then we would have to
     # run this entire pipeline again.
-    scheduling_strategy=NodeAffinitySchedulingStrategy(
-        node_id=ray.get_runtime_context().get_node_id(),
-        soft=False,
-    )
+    # scheduling_strategy=NodeAffinitySchedulingStrategy(
+    #     node_id=ray.get_runtime_context().get_node_id(),
+    #     soft=False,
+    # )
+    num_cpus=0,
+    resources={"head_node": 0.001},
 )
 def run_inference(config: TextGenerationInferenceConfig):
     set_ray_data_config(config)
 
     ray_data_read_kwargs = get_ray_data_read_kwargs(config)
     ds = ray.data.read_json(config.input_path, **ray_data_read_kwargs)
-
-    if config.chunk_strategy:
-        ds = ds.flat_map(lambda row: chunk_text(row, config.chunk_strategy, config.chunk_size))
 
     assert (config.template_path or config.template) and not (
         config.template_path and config.template
