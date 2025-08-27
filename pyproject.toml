@@ -254,7 +254,9 @@ quality_dedup_consolidate = [
     "cattrs==24.1.3",
     # Using a fork of dolma that updates transformers dependency to work with newer versions
     "dolma @ git+https://github.com/ahmeda14960/dolma.git",
+    "fsspec>=2025.3.0",
 ]
+
 tokenize_train = [
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1359",
