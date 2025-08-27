@@ -51,7 +51,7 @@ Envs can range from the fairly simple (e.g. multiple choice problems) to the com
 Envs typically will have:
 
 - a set of prompts/problems (often with a solution)
-- a verifier (e.g. a )
+- a verifier (e.g. a reward function to compare against a solution)
 
 ### ReplayBuffer
 
@@ -63,7 +63,7 @@ The ReplayBuffer is responsible for:
 
 ### Learner
 
-The Learner receives batches of processed rollouts and updates the weights of the model. It then sends the new weights to the Weight Broadcaster along with a new policy version.
+The Learner receives batches of RlExamples and updates the weights of the model. It then sends the new weights to the Weight Broadcaster along with a new policy version.
 
 ### Weight Broadcaster
 
@@ -77,40 +77,22 @@ The OAI Inference Server(s) are responsible for:
 - Generating responses
 
 
+## Data Structures
 
 
-### ReplayBuffer
+### RlExample
 
-The `ReplayBuffer` class accumulates experiences from environment steps, writes them to disk, and handles all I/O operations including batch storage. Each buffer handles one environment type and can optionally forward rollouts to a `BatchMaker`.
+An RlExample is a single example of a rollout. It contains:
 
-```python
-from marin.rl.replay_buffer import ReplayBuffer
-from marin.rl.batch_maker import GrpoBatchMaker
+- `tokens`: `np.ndarray` of token IDs (i32["pos"])
+- `loss_mask`: `np.ndarray` of boolean values indicating which positions to compute loss on (bool["pos"])
+- `segment_ids`: `np.ndarray` of integer values indicating which segment each position belongs to (i32["pos"]). This is for sequence packing primarily.
+- `advantage`: `np.ndarray` of advantage values for each position (float["pos"])
+- `generator_log_probs`: `np.ndarray` of log probabilities from the generator model (float["pos"])
+- `reference_log_probs`: `np.ndarray` of log probabilities from the reference model (float["pos"]) (TODO: should we do this on the fly or precompute?)
 
-# Create a batch maker (no I/O responsibilities)
-batch_maker = GrpoBatchMaker(rng_seed=42)  # Optional seed for reproducible sampling
 
-# Create a replay buffer with batch maker
-replay_buffer = ReplayBuffer.remote(
-    root_path="/path/to/storage",
-    compression="zstd",
-    batch_maker=batch_maker
-)
 
-# Add rollouts (they'll be automatically forwarded to the batch maker)
-replay_buffer.add_rollout.remote(rollout_record)
-
-# Create and store batches
-batch_id = replay_buffer.create_and_store_batch.remote(batch_size=32)
-```
-
-**Features:**
-- Automatically flushes to disk when groups are sealed
-- Creates timestamped parquet files for each sealed group
-- Organizes storage by environment type
-- Faithfully preserves all inbound data
-- Can forward rollouts to a BatchMaker for processing
-- Handles all batch I/O operations (creation and storage)
 
 ### BatchMaker
 
