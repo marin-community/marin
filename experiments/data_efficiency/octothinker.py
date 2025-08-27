@@ -13,7 +13,7 @@ train_steps = [
         DataEfficiencyConfig(
             data_name="octo",
             epochs=epochs,
-            base_train_steps=base_train_steps,
+            base_train_steps=base_train_steps * (64 / batch_size),
             train_batch_size=batch_size,
             lr_schedule="cosine",
             lr=lr,
@@ -28,15 +28,15 @@ train_steps = [
             data_seed=seed if seed else 0,
         )
     )
-    for base_train_steps in [1600]
-    for weight_decay in [0.4]
+    for base_train_steps in [16000]
+    for weight_decay in [0.1]
     for initialize_from_hf in [
         "meta-llama/Llama-3.2-3B",
     ]
     for lr in [3e-5]
     for epochs in [4]
     for batch_size in [64]
-    for seed in [0, 1, 2, 3, 4, 5, 6, 7]
+    for seed in [1, 2, 3, 4]
 ]
 
 if __name__ == "__main__":

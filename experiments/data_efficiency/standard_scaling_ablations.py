@@ -37,16 +37,23 @@ train_steps = [
     # for batch_size in [64]
     # for model_name, lr in [("300m4k", 3e-3)]
     # for additional_tag in ["epoch-overfitting-8-4"]
-    ## Weight decay
+    # Epoch overfitting with weight decay
     for base_train_steps in [800]
+    for epochs in [1, 2, 4, 8, 16, 32, 64, 128]
+    for weight_decay in [1.6]
     for batch_size in [64]
-    for weight_decay in [0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4, 12.8]
-    for epochs, model_name, lr in [
-        (1, "300m4k", 3e-3),
-        (16, "300m4k", 3e-3),
-        (8, "1_4b4k", 1e-3),
-    ]
-    for additional_tag in ["weight-decay-8-4"]
+    for model_name, lr in [("300m4k", 3e-3)]
+    for additional_tag in ["epoch-with-wd-8-4"]
+    # ## Weight decay
+    # for base_train_steps in [800]
+    # for batch_size in [64]
+    # for weight_decay in [0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4, 12.8]
+    # for epochs, model_name, lr in [
+    #     (1, "300m4k", 3e-3),
+    #     (16, "300m4k", 3e-3),
+    #     (8, "1_4b4k", 1e-3),
+    # ]
+    # for additional_tag in ["weight-decay-8-4"]
 ]
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ from marin.resources import TpuPodConfig
 
 from data import dclm_tokenized
 
-DEFAULT_BUDGETS = [1e18, 3e18, 6e18]
+DEFAULT_BUDGETS = [1e19, 3e19, 6e19]
 MLP_RATIO = 4
 
 # TPU v5p hardware constants for memory estimation
@@ -187,46 +187,50 @@ def candidate_configs(cfg: IsoFlopSweepConfig, budget: float):
         step_size = 256
 
     for hidden_size in range(2**cfg.min_hidden_pow, (2**cfg.max_hidden_pow) + 1, step_size):
-        hs_pow = math.log2(hidden_size)
-        intermediate_dim = hidden_size * MLP_RATIO
-        num_layers = round(hidden_size / (cfg.base_hidden_layer_ratio + (hs_pow * 4) - cfg.min_hidden_pow))
-        n_heads = max(1, hidden_size // cfg.hidden_head_ratio)
-        n_kv_heads = n_heads
+        for lr in [1e-3]:
+            hs_pow = math.log2(hidden_size)
+            intermediate_dim = hidden_size * MLP_RATIO
+            num_layers = round(hidden_size / (cfg.base_hidden_layer_ratio + (hs_pow * 4) - cfg.min_hidden_pow))
+            n_heads = max(1, hidden_size // cfg.hidden_head_ratio)
+            n_kv_heads = n_heads
 
-        batch_size = cfg.batch_size
-        lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
-        assert lr < 0.01, f"lr is too high: {lr}"
-        # b2 = 0.98 ** (batch_size / 128)  # https://arxiv.org/pdf/2507.07101
+            batch_size = cfg.batch_size
+            # lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
+            # assert lr < 0.01, f"lr is too high: {lr}"
+            # b2 = 0.98 ** (batch_size / 128)  # https://arxiv.org/pdf/2507.07101
 
-        steps_exact = budget / compute_total_flops(
-            batch_size,
-            num_layers,
-            hidden_size,
-            intermediate_dim,
-            n_kv_heads,
-            n_heads,
-            1,
-            cfg.seq_len,
-            vocab_size,
-        )
-        train_steps = round(steps_exact)
+            steps_exact = budget / compute_total_flops(
+                batch_size,
+                num_layers,
+                hidden_size,
+                intermediate_dim,
+                n_kv_heads,
+                n_heads,
+                1,
+                cfg.seq_len,
+                vocab_size,
+            )
+            train_steps = round(steps_exact)
 
-        achieved_flops = compute_total_flops(
-            batch_size,
-            num_layers,
-            hidden_size,
-            intermediate_dim,
-            n_kv_heads,
-            n_heads,
-            train_steps,
-            cfg.seq_len,
-            vocab_size,
-        )
+            if train_steps < 1500:
+                continue
 
-        if abs(achieved_flops - budget) / budget > cfg.flop_tolerance:
-            continue
+            achieved_flops = compute_total_flops(
+                batch_size,
+                num_layers,
+                hidden_size,
+                intermediate_dim,
+                n_kv_heads,
+                n_heads,
+                train_steps,
+                cfg.seq_len,
+                vocab_size,
+            )
 
-        yield (hidden_size, intermediate_dim, num_layers, n_heads, n_kv_heads, batch_size, train_steps, lr)
+            if abs(achieved_flops - budget) / budget > cfg.flop_tolerance:
+                continue
+
+            yield (hidden_size, intermediate_dim, num_layers, n_heads, n_kv_heads, batch_size, train_steps, lr)
 
 
 def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> list[ExecutorStep]:
@@ -255,6 +259,13 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
                 num_kv_heads=n_kv_heads,
                 num_layers=num_layers,
             )
+            num_params = compute_num_parameters(model_cfg, vocab_size)
+            if num_params > 3_000_000_000:
+                continue
+            if num_params > 1_000_000_000:
+                lr = 3e-4
+            else:
+                lr = 1e-3
             tpu_type = pick_v5p_type(
                 config=model_cfg,
                 hidden=hidden_size,
@@ -274,13 +285,13 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
             )
 
             step = default_train(
-                name=f"isoflop-{budget:.0e}-d{hidden_size}-L{num_layers}-B{batch_size}-{experiment_name}",
+                name=f"isoflop-{budget:.0e}-d{hidden_size}-L{num_layers}-B{batch_size}-lr{lr:.4f}-{experiment_name}",
                 tokenized=config.tokenized_dataset,
                 model_config=model_cfg,
                 train_config=train_cfg,
                 eval_harness_tasks=[],
                 tags=(
-                    "suhas-dclm-chinchilla",
+                    "suhas-dclm-chinchilla-lr-tune",
                     f"FLOPs={budget:.1e}",
                     f"d={hidden_size}",
                     f"L={num_layers}",
@@ -315,7 +326,7 @@ dclm_mix = lm_mixture_data_config(
 if __name__ == "__main__":
     steps = generate_isoflop_sweep(
         dclm_mix,
-        experiment_name="dclm-llama-adamw",
+        experiment_name="dclm-64",
         base_optimizer_config=AdamConfig(
             learning_rate=1.0,
             weight_decay=0.1,
@@ -334,5 +345,5 @@ if __name__ == "__main__":
             decay=None,
         ),
     )
-
+    # print(len(steps))
     executor_main(steps=steps)

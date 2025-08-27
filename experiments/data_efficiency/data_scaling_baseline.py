@@ -21,14 +21,17 @@ train_steps = [
         )
     )
     for base_train_steps in [800]
-    for epochs in [1, 4, 8, 16]
-    for weight_decay in [0.0]
+    for epochs in [4, 8, 16]
+    for weight_decay in [0.1]
     for batch_size in [64]
     for model_name, lr in [
-        ("150m4k", 3e-3),
+        # ("150m4k", 3e-3),
         ("300m4k", 3e-3),
+        ("300m4k", 1e-3),
         ("600m4k", 1e-3),
+        ("600m4k", 3e-4),
         ("1_4b4k", 1e-3),
+        ("1_4b4k", 3e-4),
     ]
 ]
 

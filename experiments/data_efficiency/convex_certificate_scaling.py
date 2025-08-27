@@ -7,16 +7,16 @@ from marin.execution.executor import executor_main
 # 3200 steps ==> 800M tokens
 # 6400 steps ==> 1600M tokens
 
-valid_lrs = [1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2]
-valid_weight_decays = [0.0, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4, 12.8]
-valid_epochs = [1, 2, 4, 8, 16, 32, 64, 128, 256]
+valid_lrs = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2]
+valid_weight_decays = [0.0, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4]
+valid_epochs = [1, 2, 4, 8, 16, 32, 64]
 
 
 def extract_neighbors(value, valid_values):
     index = valid_values.index(value)
-    assert 0 < index < len(valid_values) - 1, f"{value} is not in the valid range"
-    lower_value = valid_values[index - 1]
-    upper_value = valid_values[index + 1]
+    assert 0 <= index < len(valid_values), f"{value} is not in the valid range"
+    lower_value = valid_values[index - 1] if index != 0 else value
+    upper_value = valid_values[index + 1] if index != len(valid_values) - 1 else value
     return lower_value, upper_value
 
 
@@ -59,7 +59,6 @@ train_steps = [
         # (800, 16, 3e-3, 1.6, "300m4k"),
         # (800, 8, 1e-3, 3.2, "600m4k"),
         # (800, 8, 1e-3, 3.2, "1_4b4k"),
-        # (800, 8, 1e-3, 3.2, "olmoe"),
         # (1600, 32, 3e-3, 0.8, "150m4k"),
         # (1600, 16, 3e-3, 0.8, "300m4k"),
         # (1600, 8, 1e-3, 1.6, "600m4k"),
@@ -68,10 +67,11 @@ train_steps = [
         # (3200, 16, 3e-3, 0.4, "300m4k"),
         # (3200, 16, 3e-3, 0.4, "600m4k"),
         # (3200, 8, 1e-3, 1.6, "1_4b4k"),
-        # (6400, 64, 3e-3, 0.1, "150m4k"),
+        (6400, 64, 3e-3, 0.1, "150m4k"),
         # (6400, 32, 1e-3, 0.4, "300m4k"),
         # (6400, 16, 1e-3, 0.8, "600m4k"),
         # (6400, 8, 1e-3, 0.8, "1_4b4k"),
+        # (800, 8, 1e-3, 3.2, "olmoe"),
     ]
 ]
 
