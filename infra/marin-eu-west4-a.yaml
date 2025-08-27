@@ -24,7 +24,7 @@ provider:
 
 
 docker:
-    image: "europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:89b461b3"
+    image: "europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20250821"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -40,6 +40,7 @@ docker:
       - --privileged
       - -v "/tmp:/tmp"
       - --ulimit nofile=1048576:1048576
+      - -e RAY_TPU_MAX_CONCURRENT_ACTIVE_CONNECTIONS=64
 
 
 initialization_commands:
@@ -160,7 +161,7 @@ available_node_types:
 
   tpu_slice_v6e_128:
     max_workers: 1024
-    min_workers: 8
+    min_workers: 2
     node_config:
       acceleratorType: v6e-128
       runtimeVersion: v2-alpha-tpuv6e
