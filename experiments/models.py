@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from marin.download.huggingface.download import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.utils import get_directory_friendly_name
 
 
@@ -156,3 +156,6 @@ llama_3_2_3b_instruct = download_model_step(
         hf_revision="0cb88a4",
     )
 )
+
+if __name__ == "__main__":
+    executor_main([llama_3_2_3b_instruct])

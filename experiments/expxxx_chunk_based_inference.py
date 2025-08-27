@@ -9,6 +9,7 @@ from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.generation.chunk_utils import ChunkStrategy, chunk_with_config, ChunkingConfig
 from marin.processing.classification.dedupe import DedupeConfig, NGramConfig, dedupe
+from marin.classifiers.utils import CreateDatasetConfig, create_dataset
 
 qa_rephrase_prompt = """
 A chat between a curious patient and an educated doctor.
@@ -24,18 +25,18 @@ engine_kwargs["tensor_parallel_size"] = 8
 generation_kwargs = copy.deepcopy(default_generation_kwargs)
 generation_kwargs["max_tokens"] = 1024
 
-# datashop_medical_qa_sampled = ExecutorStep(
-#     name="documents/datashop-datasets/datashop-medical-qa-sampled",
-#     fn=create_dataset,
-#     config=CreateDatasetConfig(
-#         input_doc_path=datashop_runner.filtered_documents,
-#         output_dataset_path=this_output_path(),
-#         max_sample_size=100_000,
-#         filetype="jsonl.zst",
-#         merge_dataset_shards=False,
-#         columns_to_keep=["text", "metadata"],
-#     ),
-# )
+datashop_medical_qa_sampled = ExecutorStep(
+    name="documents/datashop-datasets/datashop-medical-qa-sampled",
+    fn=create_dataset,
+    config=CreateDatasetConfig(
+        input_doc_path=datashop_runner.filtered_documents,
+        output_dataset_path=this_output_path(),
+        max_sample_size=100_000,
+        filetype="jsonl.zst",
+        merge_dataset_shards=False,
+        columns_to_keep=["text", "metadata"],
+    ),
+)
 
 medical_data_chunked = ExecutorStep(
     name="documents/datashop-medical-qa-whole-chunk-1024",

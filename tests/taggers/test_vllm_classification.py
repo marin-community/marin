@@ -82,65 +82,76 @@ def read_jsonl_gz_file(filepath: str) -> list[dict]:
     return results
 
 
+# Only run on the TPU
+# def get_classifier(gcsfuse_mount_model_path, quality_classification_template):
+#     return vLLMClassifier(
+#         model_name=gcsfuse_mount_model_path,
+#         attribute_name="quality",
+#         template=quality_classification_template,
+#         score_extractor_fn=FinalScoreZeroToFiveDatasetOutputProcessor.extract_score,
+#         engine_kwargs=default_engine_kwargs,
+#         generation_kwargs=default_generation_params,
+#         save_original_generation=True,
+#     )
+
+
+@ray.remote(resources={"TPU": 1, "TPU-v6e-8-head": 1})
+def run_initialization(gcsfuse_mount_model_path, quality_classification_template):
+    classifier = vLLMClassifier(
+        model_name=gcsfuse_mount_model_path,
+        attribute_name="quality",
+        template=quality_classification_template,
+        score_extractor_fn=FinalScoreZeroToFiveDatasetOutputProcessor.extract_score,
+        engine_kwargs=default_engine_kwargs,
+        generation_kwargs=default_generation_params,
+        save_original_generation=True,
+    )
+    assert classifier.model_name == gcsfuse_mount_model_path
+    assert classifier.attribute_name == "quality"
+    assert classifier.save_original_generation is True
+
+
+@ray.remote(resources={"TPU": 1, "TPU-v6e-8-head": 1})
+def run_batch_processing(gcsfuse_mount_model_path, quality_classification_template, sample_data):
+    classifier = vLLMClassifier(
+        model_name=gcsfuse_mount_model_path,
+        attribute_name="quality",
+        template=quality_classification_template,
+        score_extractor_fn=FinalScoreZeroToFiveDatasetOutputProcessor.extract_score,
+        engine_kwargs=default_engine_kwargs,
+        generation_kwargs=default_generation_params,
+        save_original_generation=True,
+    )
+    batch = {"id": [doc["id"] for doc in sample_data], "text": [doc["text"] for doc in sample_data]}
+    result = classifier(batch)
+    assert "attributes" in result
+    assert len(result["attributes"]) == len(sample_data)
+    for _i, attr in enumerate(result["attributes"]):
+        assert "quality" in attr
+        assert "score" in attr["quality"]
+        score = attr["quality"]["score"]
+        assert isinstance(score, int)
+        assert 0 <= score <= 5
+
+    assert "generated_text" in result
+    assert len(result["generated_text"]) == len(sample_data)
+    for generated_text in result["generated_text"]:
+        assert isinstance(generated_text, str)
+        assert len(generated_text) > 0
+
+
 class TestVLLMClassifierDirect:
     """Test vLLM classifier directly"""
 
     def test_vllm_classifier_initialization(self, gcsfuse_mount_model_path, quality_classification_template):
         """Test that vLLM classifier can be initialized"""
-        classifier = vLLMClassifier(
-            model_name=gcsfuse_mount_model_path,
-            attribute_name="quality",
-            template=quality_classification_template,
-            score_extractor_fn=FinalScoreZeroToFiveDatasetOutputProcessor.extract_score,
-            engine_kwargs=default_engine_kwargs,
-            generation_kwargs=default_generation_params,
-            save_original_generation=True,
-        )
-
-        assert classifier.model_name == gcsfuse_mount_model_path
-        assert classifier.attribute_name == "quality"
-        assert classifier.save_original_generation is True
+        ray.get(run_initialization.remote(gcsfuse_mount_model_path, quality_classification_template))
 
     def test_vllm_classifier_batch_processing(
         self, gcsfuse_mount_model_path, quality_classification_template, sample_data
     ):
         """Test vLLM classifier on a batch of documents"""
-        classifier = vLLMClassifier(
-            model_name=gcsfuse_mount_model_path,
-            attribute_name="quality",
-            template=quality_classification_template,
-            score_extractor_fn=FinalScoreZeroToFiveDatasetOutputProcessor.extract_score,
-            engine_kwargs=default_engine_kwargs,
-            generation_kwargs=default_generation_params,
-            save_original_generation=True,
-        )
-
-        # Prepare batch
-        batch = {"id": [doc["id"] for doc in sample_data], "text": [doc["text"] for doc in sample_data]}
-
-        # Process batch
-        result = classifier(batch)
-
-        # Verify results
-        assert "attributes" in result
-        assert len(result["attributes"]) == len(sample_data)
-
-        # Check that each document has quality attributes
-        for _i, attr in enumerate(result["attributes"]):
-            assert "quality" in attr
-            assert "score" in attr["quality"]
-            score = attr["quality"]["score"]
-            assert isinstance(score, int)
-            assert 0 <= score <= 5
-
-        # Check that original generations are saved
-        assert "generated_text" in result
-        assert len(result["generated_text"]) == len(sample_data)
-
-        # Verify that generated text contains score information
-        for generated_text in result["generated_text"]:
-            assert isinstance(generated_text, str)
-            assert len(generated_text) > 0
+        ray.get(run_batch_processing.remote(gcsfuse_mount_model_path, quality_classification_template, sample_data))
 
 
 class TestVLLMSingleFileProcessing:

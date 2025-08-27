@@ -14,7 +14,7 @@ ENV_VARS = {
         "--xla_enable_async_collective_permute=true "
         "--xla_tpu_enable_ag_backward_pipelining=true"
     ),
-    "TF_CPP_MIN_LOG_LEVEL": "3",
+    "TF_CPP_MIN_LOG_LEVEL": "4",
     "TPU_MIN_LOG_LEVEL": "4",
 }
 
