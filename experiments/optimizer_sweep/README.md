@@ -15,7 +15,7 @@ This directory contains the code and configs to reproduce the optimizer study de
 
 ### Directory layout
 
-- `baseline_config/` and `sweep_grids/`: per-optimizer JSONs that define the baseline configuration and the discrete sweep grids explored in the study.
+- `baseline_config/` and `sweep_grids/`: per-optimizer JSONs that define the baseline configuration and the discrete sweep grids explored in the study. The sweep grids chosen are based on the result of `experiments/optimizer_sweep/Analysis/find_stable_hyper.py` and  `experiments/optimizer_sweep/Analysis/hyper_scaling.py`.
 - `Analysis/Results/`: canonical results written by the collector as JSON under `{optimizer}/{model_size}/{chinchilla}/result.json`.
 - `Analysis/figs/`: figures produced by analysis scripts.
 - `Analysis/predicted_baseline_config/`: predicted configs emitted by the scaling script under `{optimizer}/{model_size}/{chinchilla}/config.json`.

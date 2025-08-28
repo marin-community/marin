@@ -1,6 +1,0 @@
-{
-  "model_size": "300m",
-  "optimizer_name": "nadamw",
-  "sweep_grids": {},
-  "target_chinchilla": 16
-}

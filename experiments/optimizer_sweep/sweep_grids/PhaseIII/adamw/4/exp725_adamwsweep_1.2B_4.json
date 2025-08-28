@@ -1,6 +1,0 @@
-{
-  "model_size": "1.2b",
-  "optimizer_name": "adamw",
-  "sweep_grids": {},
-  "target_chinchilla": 4
-}

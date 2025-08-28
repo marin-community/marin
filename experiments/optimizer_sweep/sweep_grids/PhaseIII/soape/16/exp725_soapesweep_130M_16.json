@@ -1,6 +1,0 @@
-{
-  "model_size": "130m",
-  "optimizer_name": "soape",
-  "sweep_grids": {},
-  "target_chinchilla": 16
-}
