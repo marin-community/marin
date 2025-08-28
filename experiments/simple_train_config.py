@@ -35,13 +35,9 @@ class SimpleTrainConfig:
     cycle_length: int | list[int] | None = None
     z_loss_weight: float | None = None
     ema_beta: float | None = None
-    nesterov: bool | None = None
     """exponential moving average beta"""
     skip_bad_steps: bool = False
     """If True, skips steps where the loss or grad is significantly higher than the historical mean."""
-
-    id: str | None = None
-    ckpt_path: str | None = None
 
     steps_per_eval: int | None = None
     """how often to run validation losses"""
