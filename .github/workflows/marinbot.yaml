@@ -1,12 +1,14 @@
 # USAGE
 #
-# @marinbot ray_run [ray_run_args] --cluster <path> <module>
+# @marinbot help
+# @marinbot ray_run [ray_run_args] [--dry-run] --cluster <path> <module>
 # @marinbot stop --cluster <path> <job_id>
 #
 # SECRETS
 #
-# - GCLOUD_SERVICE_ACCOUNT_KEY
 # - CLUSTER_KEY
+# - GCLOUD_SERVICE_ACCOUNT_KEY
+# - WANDB_API_KEY
 #
 # SEE ALSO
 #
@@ -28,9 +30,27 @@ permissions:
   id-token: write
 
 jobs:
+  marinbot-help:
+    runs-on: ubuntu-latest
+    if: contains(github.event.comment.body, '@marinbot help')
+    steps:
+      - name: Sparse checkout marinbot scripts
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            scripts/marinbot.py
+          sparse-checkout-cone-mode: false
+          path: marinbot
+      - name: Show help
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: marinbot
+        run: |
+          python scripts/marinbot.py help
+
   marinbot:
     runs-on: ubuntu-latest
-    if: contains(github.event.comment.body, '@marinbot')
+    if: contains(github.event.comment.body, '@marinbot') && !contains(github.event.comment.body, '@marinbot help')
 
     defaults:
       run:
@@ -45,9 +65,6 @@ jobs:
         #           marinbot/
 
     steps:
-      # Checkout from main; this action only runs on main, so using
-      # marinbot.json from main should keep people from giving themselves
-      # permission in a branch.
       - name: Sparse checkout marinbot scripts
         uses: actions/checkout@v4
         with:
@@ -56,6 +73,12 @@ jobs:
             marinbot.json
           sparse-checkout-cone-mode: false
           path: marinbot
+          # Even if we didn't write `ref: main`, ref would be main because
+          # workflows for the issue_comment event only run on main.
+          # But specify it explicitly anyways for clarity: we don't want to
+          # checkout marinbot.json from other branches because that would let
+          # people add themselves to marinbot.json!!
+          ref: main
 
       - name: Parse command and validate
         id: meta
@@ -138,8 +161,8 @@ jobs:
           if ray job stop "$job_id"; then
             echo "Successfully stopped job $job_id"
           else
-            echo "Warning: Failed to stop job $job_id (it may have already completed or does not exist)"
-            # Don't fail the workflow, but log the warning
+            echo "Warning: Failed to stop job $job_id (it may have already completed or may not exist)"
+            exit 1
           fi
 
       - name: Execute ray_run
@@ -150,11 +173,22 @@ jobs:
           PYTHONPATH: .:src:experiments
         run: |
           set -e
+          args=()
+          args+=(python -m marin.run.ray_run --no_wait)
+          args+=(${{ steps.meta.outputs.ray_run_args }})
+          args+=(-e WANDB_API_KEY "${WANDB_API_KEY}")
+          args+=(-- python -m "${{ steps.meta.outputs.module }}" --force_run_failed True)
+
+          if [ "${{ steps.meta.outputs.dry_run }}" = "1" ]; then
+            echo "Would have executed:"
+            for item in "${args[@]}"; do
+              printf "%s\n" "$item"
+            done
+            exit 0
+          fi
 
           # Run ray_run in background and capture output
-          python -m marin.run.ray_run --no_wait ${{ steps.meta.outputs.ray_args }} \
-            -e WANDB_API_KEY "${WANDB_API_KEY}" \
-            -- python -m ${{ steps.meta.outputs.module }} --force_run_failed True 2>&1 | tee ray_output.log &
+          "${args[@]}" 2>&1 | tee ray_output.log &
 
           # Wait for job ID to appear in the output
           echo "Waiting for Ray job submission ID..."
@@ -176,10 +210,8 @@ jobs:
           done
 
           if [ -z "$JOB_ID" ]; then
-            echo "Warning: Could not extract job ID from ray_run output after ${TIMEOUT} seconds"
-            # Fallback to a generated ID if extraction fails
-            JOB_ID="pr${{ steps.meta.outputs.pr_number }}-run${{ github.run_number }}-${{ github.run_attempt }}"
-            echo "Using fallback ID: $JOB_ID"
+            echo "Error: Failed to extract job ID after ${TIMEOUT} seconds"
+            exit 1
           fi
 
           echo "submission_id=$JOB_ID" >> $GITHUB_OUTPUT
@@ -203,7 +235,7 @@ jobs:
             });
 
       - name: Post ray_run success comment
-        if: steps.meta.outputs.command == 'ray_run' && success()
+        if: steps.meta.outputs.command == 'ray_run' && steps.meta.outputs.dry_run == '0' && success()
         uses: actions/github-script@v7
         with:
           script: |
