@@ -26,6 +26,7 @@ train_steps = [
             eval_harness_tasks=tasks,
             train_seed=seed if seed else 0,
             data_seed=seed if seed else 0,
+            tpu_type="v4-64",
         )
     )
     for base_train_steps in [16000]

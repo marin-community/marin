@@ -69,6 +69,22 @@ olmoe_8x_1_4b = MixtralConfig(
     num_experts_per_tok=8,
 )
 
+moe_8x_300m = MixtralConfig(
+    seq_len=4096,
+    hidden_dim=768,
+    intermediate_dim=768,
+    num_layers=12,
+    num_heads=12,
+    num_kv_heads=12,
+    # gradient_checkpointing=True,
+    scan_layers=True,
+    n_routed_experts=8,
+    num_experts_per_tok=2,
+    # Disable MoE auxiliary loss logging to prevent JAX tracer leaks
+    lbl_coef=None,  # Disables load balancing loss logging
+    rzl_coef=None,  # Disables router z-loss logging
+)
+
 model_dict = {
     "150m4k": llama_150m_4096_config,
     "300m4k": llama_300m_4096_config,
@@ -78,4 +94,5 @@ model_dict = {
     "l3b": llama_3b_config,
     "l8b": llama_8b_config,
     "olmoe": olmoe_8x_1_4b,
+    "300moe": moe_8x_300m,
 }

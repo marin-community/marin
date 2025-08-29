@@ -25,7 +25,7 @@ from marin.resources import TpuPodConfig
 
 from data import dclm_tokenized
 
-DEFAULT_BUDGETS = [1e19, 3e19, 6e19]
+DEFAULT_BUDGETS = [1e19, 3e19]
 MLP_RATIO = 4
 
 # TPU v5p hardware constants for memory estimation
@@ -182,7 +182,7 @@ def candidate_configs(cfg: IsoFlopSweepConfig, budget: float):
     vocab_size = get_vocab_size_for_tokenizer(cfg.tokenizer)
 
     if budget > 9e18:
-        step_size = 512
+        step_size = 256
     else:
         step_size = 256
 

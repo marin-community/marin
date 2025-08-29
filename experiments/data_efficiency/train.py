@@ -1,10 +1,8 @@
 import os
-import dataclasses
 from dataclasses import dataclass, field
 from datetime import timedelta
 
 import jmp
-import numpy as np
 from levanter.checkpoint import CheckpointerConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main.train_lm import TrainLmConfig
@@ -22,6 +20,7 @@ from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig, lm_mi
 from marin.training.training import TpuPodConfig, TrainLmOnPodConfig, run_levanter_train_lm
 
 from experiments.data_efficiency.data import data_dict
+
 
 @dataclass
 class DataEfficiencyConfig:
@@ -46,6 +45,7 @@ class DataEfficiencyConfig:
     ### Hardware
     tpu_type: str = "v4-128"
     slice_count: int = 1
+    per_device_parallelism: int = -1
 
     ### Optimizer config
     lr_schedule: str = "cosine"
@@ -68,9 +68,11 @@ class DataEfficiencyConfig:
 
         if self.teacher_data_name is not None:
             assert self.teacher_data_weight > 0.0, "Teacher data weight must be greater than 0.0"
-        
+
         if self.teacher_data_weight > 0.0:
-            assert self.teacher_data_name is not None, "Teacher data name must be specified if teacher data weight is greater than 0.0"
+            assert (
+                self.teacher_data_name is not None
+            ), "Teacher data name must be specified if teacher data weight is greater than 0.0"
 
         self.model_config = model_dict[self.model_name]
         self.total_train_steps = int(self.base_train_steps * self.epochs / (1.0 - self.teacher_data_weight))
@@ -167,6 +169,8 @@ class DataEfficiencyConfig:
                 ],
             ),
             replica_dcn_axis_size=-1,
+            per_device_parallelism=self.per_device_parallelism,
+            per_device_eval_parallelism=self.per_device_parallelism,
         )
 
     def build_optimizer_config(self) -> AdamConfig:
@@ -239,24 +243,36 @@ def data_efficiency_train_step(data_efficiency_config: DataEfficiencyConfig) -> 
         pip_dependency_groups=["tokenize_train"],
     )
 
+
 def data_efficiency_eval_model(data_efficiency_executor_step: ExecutorStep) -> ExecutorStep:
     data_efficiency_train_lm_on_pod_config = data_efficiency_executor_step.config
     data_efficiency_train_lm_config = data_efficiency_train_lm_on_pod_config.train_config
 
     return default_lm_log_probs(
-        checkpoint=output_path_of(data_efficiency_executor_step, f"hf/step-{int(data_efficiency_train_lm_config.trainer.num_train_steps-1)}"),
+        checkpoint=output_path_of(
+            data_efficiency_executor_step, f"hf/step-{int(data_efficiency_train_lm_config.trainer.num_train_steps-1)}"
+        ),
         model=data_efficiency_train_lm_config.model,
         data=data_efficiency_train_lm_config.data,
         checkpoint_is_hf=True,
     )
 
-def data_efficiency_eval_ensemble(data_efficiency_executor_steps: list[ExecutorStep], run_prefix: str = "ppl-eval", name_prefix: str = "ensemble-", key: str = None) -> ExecutorStep:
+
+def data_efficiency_eval_ensemble(
+    data_efficiency_executor_steps: list[ExecutorStep],
+    run_prefix: str = "ppl-eval",
+    name_prefix: str = "ensemble-",
+    key: str | None = None,
+) -> ExecutorStep:
     data_efficiency_train_lm_on_pod_config = data_efficiency_executor_steps[0].config
     data_efficiency_train_lm_config = data_efficiency_train_lm_on_pod_config.train_config
 
     return default_ensemble_log_probs(
         checkpoints=[
-            output_path_of(data_efficiency_executor_step, f"hf/step-{int(data_efficiency_executor_step.config.train_config.trainer.num_train_steps-1)}")
+            output_path_of(
+                data_efficiency_executor_step,
+                f"hf/step-{int(data_efficiency_executor_step.config.train_config.trainer.num_train_steps-1)}",
+            )
             for data_efficiency_executor_step in data_efficiency_executor_steps
         ],
         model=data_efficiency_train_lm_config.model,

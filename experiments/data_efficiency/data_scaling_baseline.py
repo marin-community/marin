@@ -17,21 +17,17 @@ train_steps = [
             # wandb_additional_tags=["weight-decay-test-6-22"],
             model_name=model_name,
             nametag=f"-bs{batch_size}",
-            # tpu_type="v4-256",
+            tpu_type="v4-64",
+            per_device_parallelism=2,
         )
     )
     for base_train_steps in [800]
-    for epochs in [4, 8, 16]
-    for weight_decay in [0.1]
+    for epochs in [16]
+    for weight_decay in [1.6]
     for batch_size in [64]
     for model_name, lr in [
-        # ("150m4k", 3e-3),
-        ("300m4k", 3e-3),
-        ("300m4k", 1e-3),
-        ("600m4k", 1e-3),
-        ("600m4k", 3e-4),
-        ("1_4b4k", 1e-3),
-        ("1_4b4k", 3e-4),
+        ("150m4k", 1e-2),
+        # ("300moe", 3e-3),
     ]
 ]
 

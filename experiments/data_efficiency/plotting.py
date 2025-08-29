@@ -7,7 +7,7 @@ import numpy as np
 import json
 from scipy.optimize import curve_fit
 import matplotlib.colors as mcolors
-from convex_certificate_scaling import get_bounding_box
+from experiments.data_efficiency.utils import get_bounding_box
 
 plt.rcParams.update({"font.family": "Palatino"})
 
@@ -59,7 +59,7 @@ param_str_marker_dict = {
 
 
 def parse_run(run):
-    if key == "dclm-default-sweep":
+    if key == "dclm-default-sweep" or key == "suhas-dclm-chinchilla-lr-tune":
         return parse_chinchilla_run(run)
 
     if key != "none" and key not in run.tags:
@@ -136,7 +136,7 @@ def parse_run(run):
     run_dict["weight_decay"] = float(run_id.split("-")[5][2:])
     run_dict["batch_size"] = batch_size
 
-    run_history_loss_keys = [f"eval/{run_dict['data_name']}/loss"]
+    run_history_loss_keys = [f"eval/{run_dict['data_name']}/loss", "train/loss"]
 
     history_loss = run.history(keys=run_history_loss_keys)
 
@@ -146,6 +146,7 @@ def parse_run(run):
 
     run_dict["loss_history"] = history_loss
     run_dict[f"final_{run_dict['data_name']}_loss"] = history_loss[f"eval/{run_dict['data_name']}/loss"].iloc[-1]
+    run_dict["final_train_loss"] = history_loss["train/loss"].iloc[-1]
 
     return run_dict
 
@@ -263,7 +264,7 @@ class PowerScalingLaw(ScalingLaw):
 
 
 class ChinchillaScalingLaw(ScalingLaw):
-    def __init__(self, var1_name="n", var2_name="d"):
+    def __init__(self, var1_name="N", var2_name="D"):
         super().__init__()
         self.var1_name = var1_name
         self.var2_name = var2_name
@@ -331,11 +332,11 @@ def create_heatmap(ax, all_fits, target_lr, use_asymptote=True, main_body=False)
     # Add labels
     ax.set_xlabel("Weight Decay")
     ax.set_ylabel("Epochs")
-    metric = "Member Asymptotic" if use_asymptote else "Single Member"
+    metric = "Infinite member asymptote" if use_asymptote else "Single member loss"
 
-    title = f"{metric} Loss\n(lr={target_lr})"
+    title = f"{metric}\n(lr={target_lr})"
     if main_body:
-        title = f"{metric} Loss"
+        title = f"{metric}"
     ax.set_title(title)
 
     # Add text annotations with values
@@ -368,7 +369,7 @@ def plot_ensemble_scaling(model_name, base_tokens):
         return epochs_valid and lr_valid and wd_valid
 
     # First figure: 1/x fits
-    plt.figure(figsize=(12, 7), dpi=600)
+    plt.figure(figsize=(6, 6), dpi=600)
 
     def valid_run(run):
         return run["model_name"] == model_name and run["base_tokens"] == base_tokens
@@ -419,24 +420,35 @@ def plot_ensemble_scaling(model_name, base_tokens):
     # Plot in order of asymptote
     for unique_key, x_data, y_data, power_law in all_fits:
         # Generate points for smooth curve
-        x_fit = np.linspace(min(x_data), max(x_data), 100)
+        x_fit = np.linspace(min(x_data), max(x_data) + 5, 100)
         y_fit = power_law.evaluate(x_fit)
 
-        plt.scatter(x_data, y_data)
+        if model_name == "300m4k" and base_tokens == 209715200:
+            if unique_key[1] != 3e-3:
+                continue
+
+        plt.scatter(x_data[:5], y_data[:5])
         plt.plot(
             x_fit,
             y_fit,
             "--",
-            label=f"Fit (epochs={unique_key[0]}, lr={unique_key[1]}, wd={unique_key[2]}): {power_law}",
+            label=f"{unique_key[0]} epochs, {unique_key[2]} WD (Fit: {power_law})",
         )
 
     plt.xlabel("Ensemble Member Count")
     plt.ylabel("DCLM Loss")
-    plt.title("Loss vs Ensemble Size with 1/x Fits")
-    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-    plt.grid(True)
+    plt.title("Loss vs member count")
+    plt.legend()
+    # plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.xscale("log")
+    plt.xticks([1, 2, 3, 4, 5], ["1", "2", "3", "4", "5"])
+    plt.yticks([], [], minor=True)
+    plt.xlim(right=5.5)
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(f"plots/ensemble_scaling_fits_{model_name}_{base_tokens}.png", bbox_inches="tight")
+    plt.savefig(
+        f"experiments/data_efficiency/plots/ensemble_scaling_fits_{model_name}_{base_tokens}.png", bbox_inches="tight"
+    )
     plt.close()
 
     unique_learning_rates = list(set([fit[0][1] for fit in all_fits]))
@@ -454,7 +466,10 @@ def plot_ensemble_scaling(model_name, base_tokens):
             create_heatmap(axs[i, 1], all_fits, lr, use_asymptote=True)
 
     plt.tight_layout()
-    plt.savefig(f"plots/ensemble_scaling_heatmaps_{model_name}_{base_tokens}.png", bbox_inches="tight")
+    plt.savefig(
+        f"experiments/data_efficiency/plots/ensemble_scaling_heatmaps_{model_name}_{base_tokens}.png",
+        bbox_inches="tight",
+    )
     plt.close()
 
     if model_name == "300m4k" and base_tokens == 209715200:
@@ -468,7 +483,7 @@ def plot_ensemble_scaling(model_name, base_tokens):
         create_heatmap(axs[1], all_fits, unique_learning_rates[0], use_asymptote=True, main_body=True)
 
         plt.tight_layout()
-        plt.savefig("plots/example_200M_varying_hparams.png", bbox_inches="tight")
+        plt.savefig("experiments/data_efficiency/plots/example_200M_varying_hparams.png", bbox_inches="tight")
         plt.close()
 
     best_fit = all_fits[0]
@@ -612,7 +627,7 @@ def plot_model_scaling(best_run_dict, fit_type="power_law"):
     # Automatic spacing adjustments
     plt.subplots_adjust(hspace=0.4)  # Reduced from fixed large spacing
     plt.tight_layout(rect=[0, 0.05, 1, 0.95])  # Leave space for tables at bottom
-    plt.savefig("plots/model_scaling.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/model_scaling.png", bbox_inches="tight")
     plt.close()
 
     return power_laws, run_losses
@@ -661,7 +676,7 @@ def plot_seed_science(train_seed_losses, data_seed_losses, both_seed_losses):
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig("plots/seed_science.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/seed_science.png", bbox_inches="tight")
     plt.close()
 
 
@@ -782,7 +797,7 @@ def plot_token_scaling(best_run_dict, fit_type="power_law"):
     # Automatic spacing adjustments
     plt.subplots_adjust(hspace=0.4)
     plt.tight_layout(rect=[0, 0.05, 1, 0.95])
-    plt.savefig("plots/token_scaling.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/token_scaling.png", bbox_inches="tight")
     plt.close()
 
     # Return asymptotes for reuse
@@ -809,7 +824,7 @@ def plot_asymptotes_vs_model_size(model_sizes, asymptotes):
 
     # Set labels and title
     plt.xscale("log")
-    plt.xlabel("Model Size (Billion Parameters)")
+    plt.xlabel("Parameter count (B)")
     plt.ylabel("Asymptotic Loss (Infinite Tokens)")
     plt.title("Asymptotic Loss vs Model Size")
     plt.grid(True, alpha=0.3)
@@ -823,7 +838,7 @@ def plot_asymptotes_vs_model_size(model_sizes, asymptotes):
         plt.text(x * 1.1, y, f"{y:.3f}", ha="center", va="bottom")
 
     plt.tight_layout()
-    plt.savefig("plots/asymptotes_vs_model_size.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/asymptotes_vs_model_size.png", bbox_inches="tight")
     plt.close()
 
 
@@ -980,7 +995,7 @@ def plot_standard_model_seed_scaling(best_run_dict, fit_type="power_law"):
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig("plots/standard_seed_scaling_model_size.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/standard_seed_scaling_model_size.png", bbox_inches="tight")
     plt.close()
 
     """Plot 2: Varying seed token count, infinite model size"""
@@ -1012,7 +1027,7 @@ def plot_standard_model_seed_scaling(best_run_dict, fit_type="power_law"):
     plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("plots/standard_seed_scaling_token_count.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/standard_seed_scaling_token_count.png", bbox_inches="tight")
     plt.close()
 
     return asymptotes, seed_token_power_law
@@ -1029,7 +1044,9 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     # Create plot
     plt.figure(figsize=figsize, dpi=300)
 
-    best_ensembles = pickle.load(open("cache/varying-hparams-experiment_best_ensembles.pkl", "rb"))
+    best_ensembles = pickle.load(
+        open("experiments/data_efficiency/cache/varying-hparams-experiment_best_ensembles.pkl", "rb")
+    )
     token_counts = list(best_ensembles[next(iter(best_ensembles.keys()))].keys())
 
     for param_str, token_count_losses in best_ensembles.items():
@@ -1061,7 +1078,7 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig("plots/ensemble_seed_scaling_member_count.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/ensemble_seed_scaling_member_count.png", bbox_inches="tight")
     plt.close()
 
     """1b: 200M tokens"""
@@ -1092,7 +1109,7 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig("plots/ensemble_seed_scaling_member_count_200M.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/ensemble_seed_scaling_member_count_200M.png", bbox_inches="tight")
     plt.close()
 
     """Plot 2: Varying model size, infinite ensemble member count, fixed token count"""
@@ -1140,7 +1157,7 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig("plots/ensemble_seed_scaling_model_size.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/ensemble_seed_scaling_model_size.png", bbox_inches="tight")
     plt.close()
 
     """2b: 200M tokens"""
@@ -1184,7 +1201,7 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig("plots/ensemble_seed_scaling_model_size_200M.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/ensemble_seed_scaling_model_size_200M.png", bbox_inches="tight")
     plt.close()
 
     """Plot 3: Varying seed token count, infinite model size and infinite ensemble member count"""
@@ -1220,7 +1237,7 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig("plots/ensemble_seed_scaling_token_count.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/ensemble_seed_scaling_token_count.png", bbox_inches="tight")
     plt.close()
 
 
@@ -1352,7 +1369,7 @@ def plot_token_scaling_simple(best_run_dict, fit_type="power_law"):
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig("plots/token_scaling_simple.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/token_scaling_simple.png", bbox_inches="tight")
     plt.close()
 
 
@@ -1392,7 +1409,7 @@ def plot_benchmark_results():
     plt.xlabel("Total parameter count (billions)")
     plt.ylabel("Average Error")
     plt.title("Scaling Models and Ensembles for 200M Tokens (Downstream Benchmarks)")
-    plt.savefig("plots/benchmark_results.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/benchmark_results.png", bbox_inches="tight")
     plt.close()
 
 
@@ -1485,7 +1502,7 @@ def plot_distillation(losses_for_200M):
     plt.xlabel("Total parameter count (billions)")
     plt.ylabel("DCLM Loss")
     plt.title("Distilling a 300M model (200M seed tokens)")
-    plt.savefig("plots/distillation.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/distillation.png", bbox_inches="tight")
     plt.close()
 
 
@@ -1521,11 +1538,11 @@ def plot_200M_sample(losses_for_200M, power_law_200M, run_losses_200M, best_sing
     plt.xlabel("Total parameter count (billions)")
     plt.ylabel("DCLM Loss")
     plt.title("Scaling models and ensembles for 200M tokens")
-    plt.savefig("plots/200M_sample.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/200M_sample.png", bbox_inches="tight")
     plt.close()
 
     # Figure 2: Comparing parameter count and single model hparams ensemble
-    plt.figure(figsize=(10, 5), dpi=300)
+    plt.figure(figsize=(6, 4), dpi=300)
     plt.scatter(param_counts, run_losses_200M, color=PURPLE, s=50)
     plt.plot(model_x_fit, model_y_fit, "--", color=PURPLE, label=f"Model scaling: (Fit: {power_law_200M})")
 
@@ -1541,13 +1558,13 @@ def plot_200M_sample(losses_for_200M, power_law_200M, run_losses_200M, best_sing
     plt.xlabel("Total parameter count (billions)")
     plt.ylabel("DCLM Loss")
     plt.title("Scaling parameter count or ensemble member count")
-    plt.savefig("plots/200M_ensemble_vs_parameter_scaling.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/200M_ensemble_vs_parameter_scaling.png", bbox_inches="tight")
     plt.close()
 
     # Figure 3 (new figure 1 (8/22))
     plt.figure(figsize=(5, 5), dpi=300)
     chinchilla_losses = [3.83752, 3.78538, 3.74974, 3.76432]
-    plt.scatter(param_counts, chinchilla_losses, color=LIGHT_BLUE, s=50, label="Epoched Chinchilla recipe")
+    plt.scatter(param_counts, chinchilla_losses, color=LIGHT_BLUE, s=50, label="Epoched recipe")
     plt.plot(param_counts, chinchilla_losses, color=LIGHT_BLUE)
 
     plt.scatter(param_counts, run_losses_200M, color=PURPLE, s=50)
@@ -1564,11 +1581,13 @@ def plot_200M_sample(losses_for_200M, power_law_200M, run_losses_200M, best_sing
 
     plt.legend(loc="center left", bbox_to_anchor=(1, 0.5))
     plt.xscale("log")
+    plt.xticks(param_counts, ["150M", "300M", "600M", "1.4B"])
+    plt.xticks([], [], minor=True)
     plt.xlim(right=10)
-    plt.xlabel("Total parameter count (billions)")
+    plt.xlabel("Total parameter count")
     plt.ylabel("DCLM Loss")
     plt.title("Comparing scaling recipes under infinite compute limits")
-    plt.savefig("plots/figure_1_8_22.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/figure_1_8_22.png", bbox_inches="tight")
     plt.close()
 
     # Figure 3: Marginal returns
@@ -1598,7 +1617,7 @@ def plot_200M_sample(losses_for_200M, power_law_200M, run_losses_200M, best_sing
     plt.xlabel("Total model parameters (billions)")
     plt.ylabel("Returns on excess log loss")
     plt.title("Returns on excess log loss for 200M tokens")
-    plt.savefig("plots/200M_sample_AB_A_Ce_Bx.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/200M_sample_AB_A_Ce_Bx.png", bbox_inches="tight")
     plt.close()
 
 
@@ -1614,7 +1633,7 @@ def plot_batch_size_ablation(run_list):
     plt.xticks(batch_sizes, [f"{x}" for x in batch_sizes])
     plt.xticks([], [], minor=True)
     plt.tight_layout()
-    plt.savefig("plots/ablation_batch_size.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/ablation_batch_size.png", bbox_inches="tight")
     plt.close()
 
 
@@ -1622,8 +1641,10 @@ def plot_epoch_overfitting_ablation(run_list):
     run_list = sorted(run_list, key=lambda x: x["epochs"])
     epochs = [run["epochs"] for run in run_list]
     losses = [run["final_dclm_loss"] for run in run_list]
+    train_losses = [run["final_train_loss"] for run in run_list]
     plt.figure(figsize=(4, 4), dpi=300)
-    plt.plot(epochs, losses, marker="o", color=LIGHT_BLUE)
+    plt.plot(epochs, losses, marker="o", color=LIGHT_BLUE, label="Validation loss")
+    plt.plot(epochs, train_losses, marker="o", color=PURPLE, label="Train loss")
     # plt.ylim(bottom=3.43)
     plt.xlabel("Epochs")
     plt.ylabel("Loss")
@@ -1631,15 +1652,17 @@ def plot_epoch_overfitting_ablation(run_list):
     plt.xticks(epochs, [f"{x}" for x in epochs])
     plt.xticks([], [], minor=True)
     plt.tight_layout()
-    plt.savefig("plots/ablation_epoch_overfitting.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/ablation_epoch_overfitting.png", bbox_inches="tight")
     plt.close()
 
 
 def plot_parameter_count_vs_loss(run_list):
     param_counts = [0.15, 0.3, 0.6, 1.4]
     losses = [3.83752, 3.78538, 3.74974, 3.76432]
+    train_losses = [3.3949, 3.05229, 3.30524, 3.10757]
     plt.figure(figsize=(4, 4), dpi=300)
-    plt.plot(param_counts, losses, marker="o", color=LIGHT_BLUE)
+    plt.plot(param_counts, losses, marker="o", color=LIGHT_BLUE, label="Validation loss")
+    plt.plot(param_counts, train_losses, marker="o", color=PURPLE, label="Train loss")
     # plt.ylim(bottom=3.43)
     plt.xscale("log")
     plt.xticks(param_counts, ["150M", "300M", "600M", "1.4B"])
@@ -1647,7 +1670,7 @@ def plot_parameter_count_vs_loss(run_list):
     plt.xlabel("Parameter count")
     plt.ylabel("Loss")
     plt.tight_layout()
-    plt.savefig("plots/parameter_count_vs_loss.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/parameter_count_vs_loss.png", bbox_inches="tight")
     plt.close()
 
 
@@ -1686,13 +1709,24 @@ def plot_weight_decay_ablation(run_list):
 
     plt.legend()
     plt.tight_layout()
-    plt.savefig("plots/ablation_weight_decay.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/plots/ablation_weight_decay.png", bbox_inches="tight")
     plt.close()
 
 
 def plot_chinchilla_scaling_law(run_list):
     valid_flops = [3e18, 6e18, 1e19, 3e19, 6e19]
-    run_list = [run for run in run_list if run["flops"] in valid_flops]
+    max_parameter_count = 10000_500_000_000
+    run_list = [run for run in run_list if run["flops"] in valid_flops and run["parameter_count"] <= max_parameter_count]
+    run_list = sorted(run_list, key=lambda x: x["final_dclm_loss"])
+
+    visited_parameter_token_pairs = set()
+    new_run_list = []
+    for run in run_list:
+        if (run["parameter_count"], run["token_count"]) not in visited_parameter_token_pairs:
+            visited_parameter_token_pairs.add((run["parameter_count"], run["token_count"]))
+            new_run_list.append(run)
+
+    run_list = new_run_list
 
     scaling_law = ChinchillaScalingLaw()
     parameter_counts = np.array([run["parameter_count"] / 10**9 for run in run_list])
@@ -1712,18 +1746,18 @@ def plot_chinchilla_scaling_law(run_list):
         flop_token_counts = np.array([run["token_count"] / 10**9 for run in flop_runs])
         flop_parameter_counts = np.array([run["parameter_count"] / 10**9 for run in flop_runs])
         flop_losses = np.array([run["final_dclm_loss"] for run in flop_runs])
-        plt.scatter(flop_token_counts, flop_losses, label=f"FLOPS: {flops}")
+        plt.scatter(flop_parameter_counts, flop_losses, label=f"FLOPS: {flops}")
 
         projected_losses = scaling_law.evaluate((flop_parameter_counts, flop_token_counts))
-        plt.plot(flop_token_counts, projected_losses, linestyle="--")
+        plt.plot(flop_parameter_counts, projected_losses, linestyle="--")
 
     plt.plot([], [], label=f"Chinchilla: {scaling_law}", color="black", linestyle="--")
     plt.legend()
-    plt.xlabel("Tokens (B)")
+    plt.xlabel("Parameter count (B)")
     plt.ylabel("Loss")
     plt.xscale("log")
     plt.tight_layout()
-    plt.savefig("plots/chinchilla_scaling_law.png")
+    plt.savefig(f"experiments/data_efficiency/plots/chinchilla_scaling_law_{key}.png")
     plt.close()
 
     return scaling_law
@@ -1746,7 +1780,7 @@ def plot_chinchilla_comparison_200M(run_list, chinchilla_scaling_law, power_law_
     # single_run_losses = [run["final_dclm_loss"] for run in run_list]
     # TODO: automate soon
     single_run_losses = [3.83752, 3.78538, 3.74974, 3.76432]
-    plt.scatter(param_counts, single_run_losses, color=LIGHT_BLUE, s=50, label="Epoched Chinchilla recipe")
+    plt.scatter(param_counts, single_run_losses, color=LIGHT_BLUE, s=50, label="Epoched recipe")
     # epoched_chinchilla_power_law = PowerScalingLaw()
     # epoched_chinchilla_power_law.fit(param_counts, single_run_losses, p0=[1, 1, 1], bounds=(0, np.inf))
     # print(epoched_chinchilla_power_law)
@@ -1764,10 +1798,10 @@ def plot_chinchilla_comparison_200M(run_list, chinchilla_scaling_law, power_law_
     plt.xticks([], [], minor=True)
     plt.ylim(bottom=3.43)
     plt.legend()
-    plt.xlabel("Parameter count (B)")
+    plt.xlabel("Parameter count")
     plt.ylabel("Loss")
     plt.tight_layout()
-    plt.savefig("plots/chinchilla_comparison_200M.png")
+    plt.savefig("experiments/data_efficiency/plots/chinchilla_comparison_200M.png")
     plt.close()
 
 
@@ -1790,6 +1824,7 @@ if __name__ == "__main__":
         "standard-epoch-overfitting": ("epoch-overfitting-8-4", "stanford-mercury/suhas-data-efficiency"),
         "standard-weight-decay": ("weight-decay-8-4", "stanford-mercury/suhas-data-efficiency"),
         "dclm-chinchilla": ("dclm-default-sweep", "stanford-mercury/marin"),
+        "dclm-chinchilla-lr-tune": ("suhas-dclm-chinchilla-lr-tune", "stanford-mercury/marin"),
         "chinchilla-comparison": ("chinchilla-single-runs", "stanford-mercury/suhas-data-efficiency"),
     }[mode]
 
@@ -1801,16 +1836,18 @@ if __name__ == "__main__":
             if run_dict is not None:
                 print(run_dict["run_id"])
                 run_list.append(run_dict)
-        pickle.dump(run_list, open(f"cache/{mode}_run_list.pkl", "wb"))
+        pickle.dump(run_list, open(f"experiments/data_efficiency/cache/{mode}_run_list.pkl", "wb"))
     else:
         if mode != "benchmark-results":
-            run_list = pickle.load(open(f"cache/{mode}_run_list.pkl", "rb"))
+            run_list = pickle.load(open(f"experiments/data_efficiency/cache/{mode}_run_list.pkl", "rb"))
 
     if mode == "varying-hparams-experiment":
         unique_models = sorted(list(set([run["model_name"] for run in run_list])), key=lambda x: param_str_to_count[x])
         unique_base_tokens = sorted(list(set([run["base_tokens"] for run in run_list])))
 
-        power_law_200M, run_losses_200M = pickle.load(open("cache/standard_asymptotes_200M.pkl", "rb"))
+        power_law_200M, run_losses_200M = pickle.load(
+            open("experiments/data_efficiency/cache/standard_asymptotes_200M.pkl", "rb")
+        )
 
         best_ensembles = {}
 
@@ -1837,7 +1874,7 @@ if __name__ == "__main__":
             )
         # plot_200M_sample(best_ensembles[min(unique_models)])
         print(best_ensembles)
-        pickle.dump(best_ensembles, open(f"cache/{mode}_best_ensembles.pkl", "wb"))
+        pickle.dump(best_ensembles, open(f"experiments/data_efficiency/cache/{mode}_best_ensembles.pkl", "wb"))
 
     elif mode == "infinite-model-scaling":
         base_token_counts = [209715200.0, 419430400.0, 838860800.0, 1677721600.0]
@@ -1912,7 +1949,9 @@ if __name__ == "__main__":
         plot_ensemble_model_seed_scaling(standard_seed_scaling_asymptotes, standard_seed_scaling_power_law)
         # plot_token_scaling_simple(best_run_dict, fit_type="power_law")
 
-        pickle.dump((power_laws[0], run_losses[0]), open("cache/standard_asymptotes_200M.pkl", "wb"))
+        pickle.dump(
+            (power_laws[0], run_losses[0]), open("experiments/data_efficiency/cache/standard_asymptotes_200M.pkl", "wb")
+        )
 
     elif mode == "seed-science":
         run_list = sorted(run_list, key=lambda x: x["ensemble_member_count"])
@@ -1952,13 +1991,15 @@ if __name__ == "__main__":
     elif mode == "standard-weight-decay":
         plot_weight_decay_ablation(run_list)
 
-    elif mode == "dclm-chinchilla":
+    elif mode == "dclm-chinchilla" or mode == "dclm-chinchilla-lr-tune":
         chinchilla_scaling_law = plot_chinchilla_scaling_law(run_list)
-        pickle.dump(chinchilla_scaling_law, open("cache/chinchilla_scaling_law.pkl", "wb"))
+        pickle.dump(chinchilla_scaling_law, open("experiments/data_efficiency/cache/chinchilla_scaling_law.pkl", "wb"))
 
     elif mode == "chinchilla-comparison":
-        chinchilla_scaling_law = pickle.load(open("cache/chinchilla_scaling_law.pkl", "rb"))
-        power_law_200M, run_losses_200M = pickle.load(open("cache/standard_asymptotes_200M.pkl", "rb"))
+        chinchilla_scaling_law = pickle.load(open("experiments/data_efficiency/cache/chinchilla_scaling_law.pkl", "rb"))
+        power_law_200M, run_losses_200M = pickle.load(
+            open("experiments/data_efficiency/cache/standard_asymptotes_200M.pkl", "rb")
+        )
         plot_chinchilla_comparison_200M(run_list, chinchilla_scaling_law, power_law_200M, run_losses_200M)
 
         plot_parameter_count_vs_loss(run_list)
