@@ -76,7 +76,7 @@ fineweb_total = sum(v for k, v in fineweb2_hq_weights.items())
 
 multilingual_transition_weights = {
     **{k: v * 0.7 / fineweb_total for k, v in FINEWEB2_HQ_MIXTURE_BYTES.items()},
-    **{k: v * 0.3 / total_hq_weight for k, v in starling_hq_cooldown_weights.items()},
+    **{k: v * 0.3 / sum(phase_4_steady_state_weights.values()) for k, v in phase_4_steady_state_weights.items()}
 }
 
 MULTILINGUAL_CPT_STEPS = 100_000
