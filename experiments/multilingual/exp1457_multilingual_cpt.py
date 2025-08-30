@@ -6,9 +6,6 @@ Fineweb2 HQ multilingual data (70%) and high-quality datasets from the starling 
 The training uses a linear LR decay from 1.7e-3 to 1.7e-5 over 80,000 steps (~1.34T tokens).
 """
 
-# You will see in many, many places in this file that I (dlwh) made many, many mistakes.
-# I'm leaving them in for posterity.
-
 import dataclasses
 
 from levanter.schedule import ScheduleStep
@@ -40,7 +37,7 @@ from marin.processing.tokenize.data_configs import lm_varying_mixture_data_confi
 # Phase 5: Starling second cooldown and Multilingual CPT Start
 ##############################################################
 
-# This is documented in https://github.com/marin-community/marin/issues/977
+# This is documented in https://github.com/marin-community/marin/issues/1457
 
 PHASE_4_END = 1_320_000
 
@@ -77,12 +74,12 @@ fineweb2_hq_weights = FINEWEB2_HQ_MIXTURE_BYTES
 fineweb_total = sum(v for k, v in fineweb2_hq_weights.items())
 
 
-multilingual_cpt_transition_weights = {
+multilingual_transition_weights = {
     **{k: v * 0.7 / fineweb_total for k, v in FINEWEB2_HQ_MIXTURE_BYTES.items()},
     **{k: v * 0.3 / total_hq_weight for k, v in starling_hq_cooldown_weights.items()},
 }
 
-MULTILINGUAL_CPT_STEPS = 800
+MULTILINGUAL_CPT_STEPS = 100_000
 MULTILINGUAL_CPT_START = PHASE_4_END
 MULTILINGUAL_CPT_TRANSITION_END = MULTILINGUAL_CPT_START + 1000 
 MULTILINGUAL_CPT_END = MULTILINGUAL_CPT_START + MULTILINGUAL_CPT_STEPS
@@ -95,9 +92,8 @@ fineweb2_hq_mixture = lm_varying_mixture_data_config(
         (PHASE_3_START, cooldown_mixture_weights_v1),
         (PHASE_4_START, phase_4_warmup_weights),
         (PHASE_4_START + PHASE_4_REWARMUP_DURATION, phase_4_steady_state_weights),
-        (PHASE_4_END, multilingual_cpt_transition_weights),
-        (MULTILINGUAL_CPT_START, multilingual_cpt_transition_weights),
-        (MULTILINGUAL_CPT_TRANSITION_END, multilingual_cpt_transition_weights)
+        (MULTILINGUAL_CPT_START, multilingual_transition_weights),
+        (MULTILINGUAL_CPT_TRANSITION_END, multilingual_transition_weights)
     ],
 )
 
@@ -112,7 +108,7 @@ multilingual_cpt_8b_fineweb2_hq = default_train(
 
 # print normalized weights for final phase
 # sanity checks:
-normalized = {k: v / sum(multilingual_cpt_transition_weights.values()) for k, v in multilingual_cpt_transition_weights.items()}
+normalized = {k: v / sum(multilingual_transition_weights.values()) for k, v in multilingual_transition_weights.items()}
 
 # sum up the fineweb2 hq ones:
 assert 0.69 < sum(v for k, v in normalized.items() if k.startswith("fineweb")) < 0.71
