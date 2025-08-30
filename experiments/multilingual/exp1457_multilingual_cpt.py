@@ -1,13 +1,9 @@
 """
-This is @dlwh's "YOLO"/vibes run described in https://github.com/marin-community/marin/issues/600.
+Multilingual continual pretraining experiment starting from Phoenix phase.
 
-The idea is/was to train a 8B model continuously updating the mixture, data, and anything else. With WSD-S,
-there's no "middle" or "end" of the run, there's just the run. So we'll just train for a long time, updating as we go.
-
-We call it "tootsie" because tootsie rolls are famously made by folding in the previous batch of tootsie roll into the
-next batch, so we're folding in the previous mixture into the next mixture.
-
-For now, we're training on DCLM's best mix, but that will change.
+This experiment continues training from the Phoenix phase checkpoint (step 1320000) using a mix of 
+Fineweb2 HQ multilingual data (70%) and high-quality datasets from the starling cooldown (30%).
+The training uses a linear LR decay from 1.7e-3 to 1.7e-5 over 80,000 steps (~1.34T tokens).
 """
 
 # You will see in many, many places in this file that I (dlwh) made many, many mistakes.
@@ -40,9 +36,9 @@ from experiments.tootsie.exp600_tootsie import (
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
-##################################################
-# Phase 5: Starling second cooldown and CPT Start
-##################################################
+##############################################################
+# Phase 5: Starling second cooldown and Multilingual CPT Start
+##############################################################
 
 # This is documented in https://github.com/marin-community/marin/issues/977
 
@@ -75,16 +71,21 @@ cooldown_train_config = dataclasses.replace(
     cycle_length=None,
 )
 
-fineweb_weights = FINEWEB2_HQ_MIXTURE_BYTES
+fineweb2_hq_weights = FINEWEB2_HQ_MIXTURE_BYTES
 
-# we want nemotron to be 0.7 of the total weight
-fineweb_total = sum(v for k, v in fineweb_weights.items())
+# we want fineweb2 hq to be 0.7 of the total weight
+fineweb_total = sum(v for k, v in fineweb2_hq_weights.items())
 
 
-starling_cooldown_weights = {
+multilingual_cpt_transition_weights = {
     **{k: v * 0.7 / fineweb_total for k, v in FINEWEB2_HQ_MIXTURE_BYTES.items()},
     **{k: v * 0.3 / total_hq_weight for k, v in starling_hq_cooldown_weights.items()},
 }
+
+MULTILINGUAL_CPT_STEPS = 800
+MULTILINGUAL_CPT_START = PHASE_4_END
+MULTILINGUAL_CPT_TRANSITION_END = MULTILINGUAL_CPT_START + 1000 
+MULTILINGUAL_CPT_END = MULTILINGUAL_CPT_START + MULTILINGUAL_CPT_STEPS
 
 
 fineweb2_hq_mixture = lm_varying_mixture_data_config(
@@ -94,63 +95,34 @@ fineweb2_hq_mixture = lm_varying_mixture_data_config(
         (PHASE_3_START, cooldown_mixture_weights_v1),
         (PHASE_4_START, phase_4_warmup_weights),
         (PHASE_4_START + PHASE_4_REWARMUP_DURATION, phase_4_steady_state_weights),
-        (PHASE_4_END, starling_cooldown_weights),
+        (PHASE_4_END, multilingual_cpt_transition_weights),
+        (MULTILINGUAL_CPT_START, multilingual_cpt_transition_weights),
+        (MULTILINGUAL_CPT_TRANSITION_END, multilingual_cpt_transition_weights)
     ],
 )
 
-tootsie_8b_multilingual_CPT_FW2_HQ = default_train(
-    name="tootsie-8b-CPT-Fineweb2-HQ",
+multilingual_cpt_8b_fineweb2_hq = default_train(
+    name="multilingual-cpt-8b-fineweb2-hq",
     tokenized=fineweb2_hq_mixture,
     model_config=llama_8b,
     train_config=cooldown_train_config,
-    tags=["llama", "8b", "ema", "exp1457", "tootsie", "cooldown"],
+    tags=["llama", "8b", "ema", "exp1457", "multilingual", "cpt"],
     eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
-).with_output_path("checkpoints/tootsie-8b-CPT-Fineweb2-HQ")
+).with_output_path("checkpoints/multilingual-cpt-8b-fineweb2-hq")
 
 # print normalized weights for final phase
 # sanity checks:
-normalized = {k: v / sum(fineweb_weights.values()) for k, v in fineweb_weights.items()}
+normalized = {k: v / sum(multilingual_cpt_transition_weights.values()) for k, v in multilingual_cpt_transition_weights.items()}
 
-# sum up the nemotron ones:
+# sum up the fineweb2 hq ones:
 assert 0.69 < sum(v for k, v in normalized.items() if k.startswith("fineweb")) < 0.71
 assert 0.29 < sum(v for k, v in normalized.items() if k not in FINEWEB2_HQ_MIXTURE_BYTES) < 0.31
-
-# ############################
-# # Phase 6: Deeper Starling (dessert-ish)
-# ############################
-# # things kept getting better, so we'll do a constant LR run for a bit longer
-
-# # starling_checkpoint = "gs://marin-us-central2/checkpoints/tootsie-8b-sensible-starling/checkpoints/step-1399923/"
-# starling_checkpoint = tootsie_8b_sensible_starling.cd("checkpoints/step-1399923").nonblocking()
-
-# EXTRA_COOLDOWN_LEN = 20000
-
-# tootsie_8b_deeper_starling_train_config = dataclasses.replace(
-#     cooldown_train_config,
-#     learning_rate=1.7e-5,
-#     min_lr_ratio=1.0,
-#     decay=0,
-#     num_train_steps=PHASE_4_END + COOLDOWN_LEN + EXTRA_COOLDOWN_LEN,
-#     initialize_from_checkpoint_path=starling_checkpoint,
-#     reset_data_loader_on_init=False,
-# )
-
-# tootsie_8b_deeper_starling = default_train(
-#     name="tootsie-8b-deeper-starling",
-#     tokenized=starling_cooldown_mixture,
-#     model_config=llama_8b,
-#     train_config=tootsie_8b_deeper_starling_train_config,
-#     tags=["llama", "8b", "ema", "exp977", "tootsie", "cooldown"],
-#     eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
-# ).with_output_path("checkpoints/tootsie-8b-deeper-starling")
 
 
 if __name__ == "__main__":
     executor_main(
         steps=[
-            tootsie_8b_multilingual_CPT_FW2_HQ,
-            # tootsie_8b_deeper_starling,
-            # *default_base_eval(tootsie_8b_deeper_starling),
+            multilingual_cpt_8b_fineweb2_hq,
         ],
         description="Continually Pretrain on Fineweb2 HQ from Phoenix Phase",
     )
