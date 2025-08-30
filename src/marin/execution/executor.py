@@ -654,8 +654,6 @@ class Executor:
         else:
             pip_dependencies = None
 
-        logger.info(f"  pip_dependencies = {pip_dependencies}")
-
         if not dry_run:
             step_name = f"{step.name}: {get_fn_name(step.fn)}"
 

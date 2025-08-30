@@ -194,6 +194,8 @@ def main():
         default=None,
         help="TPU type to reserve for the entrypoint (e.g. v4-8)",
     )
+    parser.add_argument("--uv", action="store_true", default=False, help="Prepend 'uv run' to python commands")
+    parser.add_argument("--no-uv", action="store_false", dest="uv", help="Don't prepend 'uv run' to python commands")
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
 
     args = parser.parse_args()
@@ -204,6 +206,10 @@ def main():
         logger.error("Command must start with '--'.")
         exit(1)
     full_cmd = full_cmd[2:]
+
+    # Prepend 'uv run' if the command starts with 'python'
+    if args.uv and full_cmd.strip().startswith("python"):
+        full_cmd = f"uv run {full_cmd}"
 
     # Load and merge environment variables from multiple -e options
     env_vars = {}
@@ -238,10 +244,23 @@ def main():
                 env_vars[item[0]] = item[1]
 
     # Now env_vars is a dictionary with the environment variables set using -e
+    user_env_vars = env_vars
+    env_vars = {**ENV_VARS, **user_env_vars}
 
-    env_vars = {**ENV_VARS, **env_vars}
+    # Build PYTHONPATH
+    python_path_parts = []
+    # Prepend 'src' to PYTHONPATH if it's not already set by the user.
+    if "PYTHONPATH" not in user_env_vars:
+        python_path_parts.append("src")
 
-    env_vars["PYTHONPATH"] = generate_pythonpath() + ":" + env_vars.get("PYTHONPATH", "")
+    submodule_paths = generate_pythonpath()
+    if submodule_paths:
+        python_path_parts.append(submodule_paths)
+
+    if "PYTHONPATH" in env_vars:
+        python_path_parts.append(env_vars["PYTHONPATH"])
+
+    env_vars["PYTHONPATH"] = ":".join(filter(None, python_path_parts))
 
     # Convert pyproject.toml to requirements.txt before submission
     pyproject_toml = "pyproject.toml"
