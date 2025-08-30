@@ -5,7 +5,6 @@ import json
 import os
 import re
 import sys
-import textwrap
 from typing import Dict, List, Optional, Tuple
 
 import requests
@@ -14,7 +13,6 @@ import shlex
 
 
 def extract_marinbot_command(body: str) -> Optional[Tuple[str, List[str]]]:
-    """Extract @marinbot command from comment body."""
     for raw in re.split(r"\r?\n", body):
         s = raw.strip()
         if s.startswith("@marinbot"):
@@ -36,14 +34,27 @@ def post_issue_comment(session: requests.Session, owner: str, repo: str, issue_n
 
 
 # https://docs.github.com/en/webhooks/webhook-events-and-payloads#issue_comment
-def parse_payload(payload: Dict[str, object]) -> int:
-    issue = payload.get("issue") if isinstance(payload, dict) else None
+def parse_payload(payload: Dict[str, object]) -> Tuple[int, str, str, str, str]:
+    issue = payload.get("issue")
     if not isinstance(issue, dict):
         raise RuntimeError("No issue in event payload")
     number_value = issue.get("number")
     if not isinstance(number_value, int):
         raise RuntimeError("Issue number missing or invalid in payload")
-    return number_value
+
+    body = str(payload["comment"]["body"])
+    repo = str(payload["repository"]["name"])
+    actor = str(payload["comment"]["user"]["login"])
+
+    try:
+        owner = str(payload["repository"]["owner"]["login"])
+    except KeyError:
+        try:
+            owner = str(payload["organization"]["login"])
+        except KeyError:
+            raise RuntimeError("Could not determine owner from event payload")
+
+    return number_value, body, repo, actor, owner
 
 
 def load_authorized(config_path: str = "marinbot.json") -> List[str]:
@@ -90,23 +101,16 @@ def handle_stop(
     issue_number: int,
     owner: str,
     repo: str,
-    actor: str,
     cluster_path: str,
     job_id: str,
 ) -> Dict[str, str]:
-
-    authorized = load_authorized()
-    validate_authorized(session, owner, repo, issue_number, actor, authorized)
-
-    pr_number = issue_number
-    pr = get_pr(session, owner, repo, pr_number)
+    pr = get_pr(session, owner, repo, issue_number)
 
     result = {
-        "pr_number": str(pr_number),
+        "pr_number": str(issue_number),
         "sha": str(pr["head"]["sha"]),
         "cluster_path": cluster_path,
         "job_id": job_id,
-        "actor": actor,
     }
 
     write_outputs(result)
@@ -118,28 +122,21 @@ def handle_ray_run(
     issue_number: int,
     owner: str,
     repo: str,
-    actor: str,
     cluster_path: str,
     module: Optional[str],
     is_dry_run: bool,
     ray_run_args: List[str],
     full_command: str,
 ) -> Dict[str, str]:
-
-    authorized = load_authorized()
-    validate_authorized(session, owner, repo, issue_number, actor, authorized)
-
-    pr_number = issue_number
-    pr = get_pr(session, owner, repo, pr_number)
+    pr = get_pr(session, owner, repo, issue_number)
 
     result = {
-        "pr_number": str(pr_number),
+        "pr_number": str(issue_number),
         "sha": str(pr["head"]["sha"]),
         "module": module,
         "cluster_path": cluster_path,
         "ray_run_args": shlex.join(ray_run_args),
         "full_command": full_command,
-        "actor": actor,
         "dry_run": "1" if is_dry_run else "0",
     }
 
@@ -173,57 +170,39 @@ def parse_command(tokens: List[str]) -> Tuple[Optional[argparse.Namespace], str,
     # Help subcommand
     subparsers.add_parser("help", help="Show help message")
 
-    # Special handling for ray_run to extract module and ray args
     if tokens[0] == "ray_run":
-        # Use parse_known_args to capture --cluster and leave the rest
-        try:
-            args, remaining = parser.parse_known_args(tokens)
-            if remaining:
-                # Last item is the module, everything else before it is ray args
-                args.module = remaining[-1]
-                ray_run_args = remaining[:-1]
-                return args, "ray_run", ray_run_args, parser
-            else:
-                # No module provided
-                args.module = None
-                return args, "ray_run", [], parser
-        except (SystemExit, argparse.ArgumentError):
-            return None, "ray_run", [], parser
+        # @marinbot ray_run [ray_run_args] [--dry-run] --cluster <path> <module>
+        args, remaining = parser.parse_known_args(tokens)
+        if remaining:
+            # Last item is the module, everything else before it is ray args
+            # Unfortunately we can't use add_argument("module") and then have
+            # ray_run_args be remaining because for this command line:
+            #   --env_vars foo "bar bazz" --cluster infra/jyc.yaml experiments.tutorials.train_tiny_model_cpu
+            # ... it will incorrectly grab "foo" as the module positional argument.
+            # TODO show [module] in the help message.
+            args.module = remaining[-1]
+            ray_run_args = remaining[:-1]
+            return args, "ray_run", ray_run_args, parser
+        else:
+            raise RuntimeError("expected module")
     elif tokens[0] == "help":
         # Just return command type; main() will print help
-        try:
-            args = parser.parse_args(["help"])  # produce a namespace with command
-        except (SystemExit, argparse.ArgumentError):
-            return None, "help", [], parser
+        args = parser.parse_args(["help"])  # produce a namespace with command
         return args, "help", [], parser
     else:
-        # For other commands, use regular parse_args
-        try:
-            args = parser.parse_args(tokens)
-            return args, args.command if args else "unknown", [], parser
-        except (SystemExit, argparse.ArgumentError):
-            return None, "unknown", [], parser
+        args = parser.parse_args(tokens)
+        return args, args.command if args else "unknown", [], parser
 
 
 def main() -> None:
     event_path = os.environ["GITHUB_EVENT_PATH"]
     with open(event_path, "r", encoding="utf-8") as f:
         payload = json.load(f)
-
-    body = str(payload["comment"]["body"])
+    issue_number, body, repo, actor, owner = parse_payload(payload)
     sys.stdout.write(f"body: {body}\n")
 
-    token = os.environ["GITHUB_TOKEN"]
-    try:
-        owner = str(payload["repository"]["owner"]["login"])
-    except KeyError:
-        try:
-            owner = str(payload["organization"]["login"])
-        except KeyError:
-            raise RuntimeError("Could not determine owner from event payload")
-    repo = str(payload["repository"]["name"])
-
     session = requests.Session()
+    token = os.environ["GITHUB_TOKEN"]
     session.headers.update(
         {
             "Authorization": f"Bearer {token}",
@@ -232,6 +211,9 @@ def main() -> None:
             "User-Agent": "marinbot-python",
         }
     )
+
+    authorized = load_authorized()
+    validate_authorized(session, owner, repo, issue_number, actor, authorized)
 
     extracted = extract_marinbot_command(body)
     if not extracted:
@@ -242,29 +224,23 @@ def main() -> None:
     args, command, ray_run_args, parser = parse_command(tokens)
     write_outputs({"command": command})
     validate_pull_request(session, owner, repo, payload)
-    actor = str(payload["comment"]["user"]["login"])
 
     if command == "stop" and args:
-        issue_number = parse_payload(payload)
-        handle_stop(session, issue_number, owner, repo, actor, args.cluster, args.job_id)
+        handle_stop(session, issue_number, owner, repo, args.cluster, args.job_id)
     elif command == "ray_run" and args:
-        issue_number = parse_payload(payload)
         handle_ray_run(
             session,
             issue_number,
             owner,
             repo,
-            actor,
             args.cluster,
-            getattr(args, "module", None),
+            args.module,
             bool(getattr(args, "dry_run", False)),
             ray_run_args,
             full_command,
         )
     else:
-        issue_number = parse_payload(payload)
         assert isinstance(parser, argparse.ArgumentParser)
-
         subparser_helps = []
         for action in parser._actions:
             if not isinstance(action, argparse._SubParsersAction):

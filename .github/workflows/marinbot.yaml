@@ -39,6 +39,7 @@ jobs:
         with:
           sparse-checkout: |
             scripts/marinbot.py
+            marinbot.json
           sparse-checkout-cone-mode: false
           path: marinbot
       - name: Show help
