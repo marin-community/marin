@@ -1,7 +1,6 @@
 """
 Multilingual continual pretraining experiment starting from Phoenix phase.
-
-This experiment continues training from the Phoenix phase checkpoint (step 1320000) using a mix of 
+This experiment continues training from the Phoenix phase checkpoint (step 1320000) using a mix of
 Fineweb2 HQ multilingual data (70%) and high-quality datasets from the starling cooldown (30%).
 The training uses a linear LR decay from 1.7e-3 to 1.7e-5 over 80,000 steps (~1.34T tokens).
 """
@@ -27,8 +26,6 @@ from experiments.tootsie.exp600_tootsie import (
     phase_3_tokenized,
     phase_4_steady_state_weights,
     phase_4_warmup_weights,
-    starling_hq_cooldown_weights,
-    total_hq_weight,
 )
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
@@ -76,12 +73,12 @@ fineweb_total = sum(v for k, v in fineweb2_hq_weights.items())
 
 multilingual_transition_weights = {
     **{k: v * 0.7 / fineweb_total for k, v in FINEWEB2_HQ_MIXTURE_BYTES.items()},
-    **{k: v * 0.3 / sum(phase_4_steady_state_weights.values()) for k, v in phase_4_steady_state_weights.items()}
+    **{k: v * 0.3 / sum(phase_4_steady_state_weights.values()) for k, v in phase_4_steady_state_weights.items()},
 }
 
 MULTILINGUAL_CPT_STEPS = 100_000
 MULTILINGUAL_CPT_START = PHASE_4_END
-MULTILINGUAL_CPT_TRANSITION_END = MULTILINGUAL_CPT_START + 1000 
+MULTILINGUAL_CPT_TRANSITION_END = MULTILINGUAL_CPT_START + 1000
 MULTILINGUAL_CPT_END = MULTILINGUAL_CPT_START + MULTILINGUAL_CPT_STEPS
 
 
@@ -93,7 +90,7 @@ fineweb2_hq_mixture = lm_varying_mixture_data_config(
         (PHASE_4_START, phase_4_warmup_weights),
         (PHASE_4_START + PHASE_4_REWARMUP_DURATION, phase_4_steady_state_weights),
         (MULTILINGUAL_CPT_START, multilingual_transition_weights),
-        (MULTILINGUAL_CPT_TRANSITION_END, multilingual_transition_weights)
+        (MULTILINGUAL_CPT_TRANSITION_END, multilingual_transition_weights),
     ],
 )
 
