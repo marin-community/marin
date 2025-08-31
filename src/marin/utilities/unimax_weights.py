@@ -38,9 +38,7 @@ def unimax_weights(
 
     # If the requested budget is larger than the allowed max_epochs, fail fast.
     if max_epochs < budget / total_tokens:
-        raise ValueError(
-            "Impossible constraints: budget requires more epochs than max_epochs allows"
-        )
+        raise ValueError("Impossible constraints: budget requires more epochs than max_epochs allows")
     effective_epochs = max_epochs
     caps = {k: effective_epochs * v for k, v in corpus_tokens.items()}
 
