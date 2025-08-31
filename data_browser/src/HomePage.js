@@ -36,7 +36,7 @@ function HomePage() {
   }
 
   const links = config.root_paths.map((path) => {
-    return <Link to={viewSingleUrl(path)}>{path}</Link>;
+    return <a href={viewSingleUrl(path)} target="_blank" rel="noreferrer">{path}</a>;
   });
 
   function goToExperiment() {

@@ -9,7 +9,7 @@ We then train 1.4B parameter models on these modified datasets to evaluate which
 approach produces better training data for language models. Idea is to see which main content
 extraction method improves the training for the models.
 
-Reference Issue: https://github.com/stanford-crfm/marin/issues/647
+Reference Issue: https://github.com/marin-community/marin/issues/647
 """
 
 import logging
@@ -49,11 +49,12 @@ wiki_readability_tokenized, wiki_readability_1_4b_model, wiki_readability_1_4b_e
 )
 
 if __name__ == "__main__":
-    tokenization_step = (
-        list(tokenized_dolma_steps.values())
-        + list(wiki_readability_tokenized.values())
-        + list(wiki_resiliparse_with_preserve_formatting_tokenized.values())
-    )
+
+    tokenization_step = [
+        *list(tokenized_dolma_steps.values()),
+        wiki_readability_tokenized,
+        wiki_resiliparse_with_preserve_formatting_tokenized,
+    ]
 
     executor_main(
         steps=[

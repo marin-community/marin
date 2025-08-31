@@ -81,15 +81,34 @@ def _remove_problematic_deps(dependencies: list[str]):
         else:
             logger.debug(f"Skipping dependency: {dep}")
     return out
-import glob
 
-async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: dict, no_wait: bool):
+
+def tpus_per_node(tpu_type: str) -> int:
+    """Return the number of TPU chips per node for a given TPU type."""
+    if tpu_type in {"v4-8", "v5p-8"}:
+        return 4
+    match = re.search(r"-(\d+)$", tpu_type)
+    if not match:
+        raise ValueError(f"Cannot parse TPU type: {tpu_type}")
+    chips = int(match.group(1))
+    if chips > 8:
+        raise ValueError("Only single tpu nodes are supported with the CLI")
+    return chips
+
+
+async def submit_and_track_job(
+    entrypoint: str,
+    dependencies: list,
+    env_vars: dict,
+    no_wait: bool,
+    *,
+    entrypoint_num_cpus: float | None = None,
+    entrypoint_num_gpus: float | None = None,
+    entrypoint_memory: int | None = None,
+    entrypoint_resources: dict | None = None,
+):
     """Submit a job to Ray and optionally track logs."""
-    # Define the pattern to match the desired files
-    pattern = "logs/*"
-    # Use glob to get a list of all files matching the pattern
-    file_list = glob.glob(pattern)
-    print(file_list)
+
     current_dir = os.getcwd()
     client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
     runtime_dict = {
@@ -97,7 +116,6 @@ async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: di
         "working_dir": current_dir,
         "env_vars": env_vars,
         "config": {"setup_timeout_seconds": 1800},
-        "excludes": file_list
     }
 
     if len(dependencies) == 0:
@@ -111,7 +129,14 @@ async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: di
         f"Terminal command: \n" f"ray job submit " f"--runtime-env-json '{json.dumps(runtime_dict)}'" f" -- {entrypoint}"
     )
     # Submit the job with runtime environment and entrypoint
-    submission_id = client.submit_job(entrypoint=entrypoint, runtime_env=runtime_dict)
+    submission_id = client.submit_job(
+        entrypoint=entrypoint,
+        runtime_env=runtime_dict,
+        entrypoint_num_cpus=entrypoint_num_cpus,
+        entrypoint_num_gpus=entrypoint_num_gpus,
+        entrypoint_memory=entrypoint_memory,
+        entrypoint_resources=entrypoint_resources,
+    )
     logger.info(f"Job submitted with ID: {submission_id}")
     logger.info(f"Job URL: http://localhost:8265/#/jobs/{submission_id}")
 
@@ -139,6 +164,36 @@ def main():
     parser.add_argument(
         "--pip_deps", type=parse_pip_requirements, help="List of pip dependencies to " "install before running."
     )
+    parser.add_argument(
+        "--entrypoint-num-cpus",
+        type=float,
+        default=None,
+        help="Number of CPUs to reserve for the entrypoint command.",
+    )
+    parser.add_argument(
+        "--entrypoint-num-gpus",
+        type=float,
+        default=None,
+        help="Number of GPUs to reserve for the entrypoint command.",
+    )
+    parser.add_argument(
+        "--entrypoint-memory",
+        type=int,
+        default=None,
+        help="Amount of memory to reserve for the entrypoint command.",
+    )
+    parser.add_argument(
+        "--entrypoint-resources",
+        type=json.loads,
+        default=None,
+        help="JSON dictionary describing resources to reserve for the entrypoint command.",
+    )
+    parser.add_argument(
+        "--tpu",
+        type=str,
+        default=None,
+        help="TPU type to reserve for the entrypoint (e.g. v4-8)",
+    )
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
 
     args = parser.parse_args()
@@ -152,6 +207,7 @@ def main():
 
     # Load and merge environment variables from multiple -e options
     env_vars = {}
+
     if args.env_vars:
         for item in args.env_vars:
             if len(item) > 2:
@@ -196,8 +252,29 @@ def main():
     dependencies += PIP_DEPS
     dependencies += args.pip_deps if args.pip_deps else []
 
+    entrypoint_resources = args.entrypoint_resources
+    if args.tpu:
+        try:
+            chips = tpus_per_node(args.tpu)
+        except ValueError as e:
+            logger.error(str(e))
+            exit(1)
+        tpu_res = {f"TPU-{args.tpu}-head": 1, "TPU": chips}
+        entrypoint_resources = (entrypoint_resources or {}) | tpu_res
+
     # Submit the job and track it asynchronously
-    asyncio.run(submit_and_track_job(full_cmd, dependencies, env_vars, args.no_wait))
+    asyncio.run(
+        submit_and_track_job(
+            full_cmd,
+            dependencies,
+            env_vars,
+            args.no_wait,
+            entrypoint_num_cpus=args.entrypoint_num_cpus,
+            entrypoint_num_gpus=args.entrypoint_num_gpus,
+            entrypoint_memory=args.entrypoint_memory,
+            entrypoint_resources=entrypoint_resources,
+        )
+    )
 
 
 if __name__ == "__main__":

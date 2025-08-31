@@ -1,0 +1,68 @@
+{
+  "result": {
+    "Baseline": 3.0386765003204346,
+    "learning_rate=0.008": 3.056812524795532,
+    "train_batch_size=256": 3.0366275310516357
+  },
+  "name": {
+    "Baseline": "sweep-300m-48B-scion0ebd9blr0.004-wd0.1-minlr0-warmup0-b10.98-gn-c7b0e6",
+    "learning_rate=0.008": "sweep-300m-48B-scion60ecb7lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-da458a",
+    "train_batch_size=256": "sweep-300m-48B-scione51587lr0.004-wd0.1-minlr0-warmup0-b10.98-gn-55b3ad"
+  },
+  "num_left": 0,
+  "best_config": {
+    "beta1": 0.98,
+    "decay": 0.8,
+    "learning_rate": 0.004,
+    "lr_schedule": "linear",
+    "max_grad_norm": 2,
+    "min_lr_ratio": 0,
+    "momentum": 0.95,
+    "scion_epsilon": 1e-05,
+    "scion_to_signum_lr": 0.1,
+    "train_batch_size": 128,
+    "warmup": 0,
+    "weight_decay": 0.1
+  },
+  "min_loss": 3.0366275310516357,
+  "approximate_best_config_list": [
+    {
+      "train_batch_size": 128,
+      "warmup": 0,
+      "learning_rate": 0.004
+    },
+    {
+      "train_batch_size": 256,
+      "warmup": 0,
+      "learning_rate": 0.008
+    },
+    {
+      "train_batch_size": 256,
+      "warmup": 0,
+      "learning_rate": 0.004
+    },
+    {
+      "train_batch_size": 128,
+      "warmup": 0,
+      "learning_rate": 0.004
+    }
+  ],
+  "baseline": {
+    "loss": 3.0386765003204346,
+    "wandb_id": "sweep-300m-48B-scion0ebd9blr0.004-wd0.1-minlr0-warmup0-b10.98-gn-c7b0e6"
+  },
+  "ablations": [
+    {
+      "param": "learning_rate",
+      "value": 0.008,
+      "loss": 3.056812524795532,
+      "wandb_id": "sweep-300m-48B-scion60ecb7lr0.008-wd0.1-minlr0-warmup0-b10.98-gn-da458a"
+    },
+    {
+      "param": "train_batch_size",
+      "value": 256,
+      "loss": 3.0366275310516357,
+      "wandb_id": "sweep-300m-48B-scione51587lr0.004-wd0.1-minlr0-warmup0-b10.98-gn-55b3ad"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "baseline_config": {
+    "learning_rate": 0.004,
+    "weight_decay": 0.1,
+    "min_lr_ratio": 0.0,
+    "warmup": 1000,
+    "beta1": 0.95,
+    "beta2": 0.99,
+    "shampoo_beta": 0.9,
+    "precondition_frequency": 10,
+    "block_size": 512,
+    "epsilon": 1e-10,
+    "max_grad_norm": 1,
+    "train_batch_size": 256
+  },
+  "model_size": "1.2b",
+  "optimizer_name": "soape",
+  "target_chinchilla": 1
+}

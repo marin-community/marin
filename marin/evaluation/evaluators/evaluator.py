@@ -7,6 +7,7 @@ from typing import ClassVar
 from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.utils import download_from_gcs, is_remote_path
+from marin.generation.ray_utils import scheduling_strategy_fn
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,16 @@ class ModelConfig:
     Additional keyword arguments to pass to the vLLM engine.
     """
 
+    generation_params: dict | None = None
+    """
+    Additional keyword arguments passed to the SamplingParams for the vLLM engine
+    """
+
+    apply_chat_template: bool = False
+    """
+    Whether or not this model was trained with a Chat Template in the tokenizer
+    """
+
     def ensure_downloaded(self, local_path: str | None = None) -> str | None:
         """
         Ensures that the model checkpoint is downloaded to `local_path` if necessary.
@@ -64,6 +75,14 @@ class Evaluator(ABC):
     _python_version: str
     _pip_packages: ClassVar[list[Dependency]]
     _py_modules: ClassVar[list[Dependency]]
+
+    def _get_scheduling_strategy(self, resource_config: ResourceConfig | None):
+        if resource_config is None:
+            fn = None
+        else:
+            fn = scheduling_strategy_fn(resource_config.num_tpu, resource_config.strategy)
+
+        return fn
 
     @abstractmethod
     def launch_evaluate_with_ray(

@@ -1,8 +1,7 @@
 from experiments.evals.evals import evaluate_helm
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorMainConfig, executor_main
+from marin.execution.executor import executor_main
 
-executor_main_config = ExecutorMainConfig()
 steps = [
     evaluate_helm(
         model_name="pf5pe4ut/step-600",
@@ -13,4 +12,4 @@ steps = [
 ]
 
 if __name__ == "__main__":
-    executor_main(executor_main_config, steps=steps)
+    executor_main(steps=steps)

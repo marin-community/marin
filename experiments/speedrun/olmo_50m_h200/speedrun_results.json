@@ -1,0 +1,99 @@
+{
+  "runs": [
+    {
+      "run_info": {
+        "author": {
+          "affiliation": "Georgia Institute of Technology",
+          "name": "Will Held",
+          "url": "https://WilliamHeld.com"
+        },
+        "description": "50M param model based on OLMo architecture.",
+        "eval/paloma/c4_en/bpb": 1.4019017219543457,
+        "model_config": {
+          "activation_function": "silu",
+          "attention_bias": false,
+          "attention_dropout": 0.0,
+          "attn_backend": null,
+          "cross_entropy_block_size": null,
+          "flash_attention_block_size": null,
+          "gradient_checkpointing": true,
+          "hidden_dim": 192,
+          "initializer_range": 0.02,
+          "intermediate_dim": 448,
+          "layer_norm_epsilon": 1e-06,
+          "num_heads": 2,
+          "num_kv_heads": 2,
+          "num_layers": 4,
+          "reference_checkpoint": "allenai/OLMo-2-1124-7B",
+          "rope": {
+            "factor": 1.0,
+            "theta": 10000
+          },
+          "scan_layers": true,
+          "seq_len": 1024,
+          "tie_word_embeddings": false,
+          "tokenizer": null,
+          "upcast_attn": false,
+          "use_bias": false,
+          "use_flash_attention": true,
+          "use_layer_norm_weight": true
+        },
+        "model_flops": 1.66350525825024e+17,
+        "model_size": 50875584,
+        "resources": {
+          "accelerator_type": "H200",
+          "device_flops_override": null,
+          "gpu_count": 1
+        },
+        "run_completion_timestamp": "2025-05-21 04:46:21 UTC",
+        "tokenized_dataset": "local_store/tokenized/subcache/fineweb-edu-10B-6fbcbb",
+        "total_tokens": 996147200,
+        "train_config": {
+          "allow_partial_checkpoint": false,
+          "beta1": null,
+          "beta2": null,
+          "cycle_length": null,
+          "data_seed": null,
+          "decay": null,
+          "ema_beta": null,
+          "epsilon": null,
+          "initialize_from_checkpoint_path": null,
+          "initialize_from_hf": null,
+          "int8": false,
+          "learning_rate": 0.003,
+          "lr_schedule": null,
+          "max_eval_batches": null,
+          "max_grad_norm": null,
+          "min_lr_ratio": null,
+          "num_train_steps": 7600,
+          "optimizer_config": null,
+          "per_device_eval_parallelism": null,
+          "reset_data_loader_on_init": true,
+          "rewarmup": null,
+          "steps_per_eval": 500,
+          "steps_per_export": 10000,
+          "steps_per_hf_export": null,
+          "steps_per_task_eval": null,
+          "train_batch_size": 128,
+          "warmup": null,
+          "watch": {
+            "include_histograms": false,
+            "include_norms": true,
+            "include_per_parameter_norms": true,
+            "interval": 10,
+            "split_scan_layers": true,
+            "watch_targets": [
+              "grads",
+              "params"
+            ]
+          },
+          "weight_decay": 0.1,
+          "z_loss_weight": null
+        },
+        "training_hardware_flops": 1.425986462869921e+18,
+        "training_time": 1441.1182040120475,
+        "wandb_run_link": "https://wandb.ai/held/marin/runs/olmo_50m_gpu_1xH200_run-65d630"
+      }
+    }
+  ]
+}

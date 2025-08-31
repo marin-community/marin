@@ -59,15 +59,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
 import trafilatura
-import w3lib.url
-from datatrove.data import Document
-from datatrove.pipeline.filters import (
-    C4QualityFilter,
-    GopherQualityFilter,
-    GopherRepetitionFilter,
-    LanguageFilter,
-    URLFilter,
-)
 from tqdm_loggable.auto import tqdm
 from trafilatura import extract
 from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
@@ -133,6 +124,8 @@ def extract_text_from_warc(
     data_source: str,
     extracted_text_output_path: str,
 ):
+    import w3lib.url
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger.info(f"Using trafilatura version {trafilatura.__version__}")
     success_path = extracted_text_output_path + ".SUCCESS"
@@ -260,6 +253,8 @@ def get_shard_url_filter_results(input_path: str, output_directory: str) -> list
     Given an input path to a parquet with fineweb-edu examples, run the
     fineweb URL filter on the examples.
     """
+    from datatrove.pipeline.filters import URLFilter
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     output_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.url_filter_results.json.gz")
     success_path = output_path + ".SUCCESS"
@@ -299,6 +294,8 @@ def get_shard_langid_filter_results(input_path: str, output_directory: str) -> l
     Given an input path to a parquet with fineweb-edu examples, run the
     fineweb language ID filter on the examples.
     """
+    from datatrove.pipeline.filters import LanguageFilter
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     output_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.langid_filter_results.json.gz")
     success_path = output_path + ".SUCCESS"
@@ -339,6 +336,8 @@ def get_shard_gopher_repetition_filter_results(input_path: str, output_directory
     Given an input path to a parquet with fineweb-edu examples, run the
     fineweb gopher repetition filter on the examples.
     """
+    from datatrove.pipeline.filters import GopherRepetitionFilter
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     output_path = os.path.join(
         output_directory, f"{os.path.basename(input_path)}.gopher_repetition_filter_results.json.gz"
@@ -381,6 +380,8 @@ def get_shard_gopher_quality_filter_results(input_path: str, output_directory: s
     Given an input path to a parquet with fineweb-edu examples, run the
     fineweb gopher quality filter on the examples.
     """
+    from datatrove.pipeline.filters import GopherQualityFilter
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     output_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.gopher_quality_filter_results.json.gz")
     success_path = output_path + ".SUCCESS"
@@ -422,6 +423,8 @@ def get_shard_c4_quality_filter_results(input_path: str, output_directory: str) 
     Given an input path to a parquet with fineweb-edu examples, run the
     fineweb C4 quality filter on the examples.
     """
+    from datatrove.pipeline.filters import C4QualityFilter
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     output_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.c4_quality_filter_results.json.gz")
     success_path = output_path + ".SUCCESS"
@@ -454,11 +457,13 @@ def get_shard_c4_quality_filter_results(input_path: str, output_directory: str) 
     return examples_c4_quality_filter_results
 
 
-def load_extracted_text_as_datatrove_documents(input_path: str) -> list[Document]:
+def load_extracted_text_as_datatrove_documents(input_path: str):
     """
     Given an input path to a parquet with fineweb-edu examples, convert them to
     documents for use with datatrove filters.
     """
+    from datatrove.data import Document
+
     logger.info("Reading input path with extracted text")
     with fsspec.open(input_path, block_size=1 * 1024 * 1024 * 1024) as f:
         examples = pd.read_parquet(f).to_dict("records")

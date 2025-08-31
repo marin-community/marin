@@ -1,6 +1,6 @@
 """
 Test different html->text transformation methods (on FineWeb, train 1.4B models).
-https://github.com/stanford-crfm/marin/issues/246
+https://github.com/marin-community/marin/issues/246
 """
 
 import logging
@@ -16,7 +16,7 @@ from marin.execution.executor import (
     versioned,
 )
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig, TrafilaturaConfig
-from scripts.fineweb.process_parquet_fw import ParquetFWConfig, process_fw_dump
+from marin.transform.fineweb.process_parquet_fw import ParquetFWConfig, process_fw_dump
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")

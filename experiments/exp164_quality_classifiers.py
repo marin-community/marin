@@ -1,21 +1,21 @@
 """
 Train quality classifiers on different subsets similar to DCLM's classifiers.
-https://github.com/stanford-crfm/marin/issues/164
+https://github.com/marin-community/marin/issues/164
 TODO: apply these quality classifiers on FineWeb (or DCLM, but that's larger), train models.
 """
 
 import dataclasses
 
-from experiments.instruction_datasets import get_directory_friendly_dataset_name, get_instruction_dataset
+from experiments.posttrain.instruction_datasets import get_directory_friendly_dataset_name, get_instruction_dataset
 from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,
 )
-from operations.transform.conversation.conversation_to_dolma import ConversationToDolmaConfig, process_dataset
-from operations.transform.fasttext.transform import TransformFasttextToDolmaConfig
-from operations.transform.fasttext.transform import main as fasttext_to_dolma_format
+from marin.transform.conversation.conversation_to_dolma import ConversationToDolmaConfig, process_dataset
+from marin.transform.fasttext.transform import TransformFasttextToDolmaConfig
+from marin.transform.fasttext.transform import main as fasttext_to_dolma_format
 
 openhermes_in_dolma_format = ExecutorStep(
     name=f"documents/{get_directory_friendly_dataset_name('teknium/OpenHermes-2.5')}",

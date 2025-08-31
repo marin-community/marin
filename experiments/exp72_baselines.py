@@ -1,6 +1,6 @@
 """
 Train 1.4B models on standard datasets (e.g., SlimPajama).
-https://github.com/stanford-crfm/marin/issues/72
+https://github.com/marin-community/marin/issues/72
 """
 
 import os

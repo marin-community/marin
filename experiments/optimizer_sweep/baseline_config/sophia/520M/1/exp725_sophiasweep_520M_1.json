@@ -1,0 +1,17 @@
+{
+  "baseline_config": {
+    "beta1": 0.95,
+    "beta2": 0.9,
+    "epsilon": 1e-07,
+    "gamma": 0.0125,
+    "learning_rate": 0.004,
+    "max_grad_norm": 1,
+    "min_lr_ratio": 0,
+    "train_batch_size": 128,
+    "warmup": 4000,
+    "weight_decay": 0
+  },
+  "model_size": "520m",
+  "optimizer_name": "sophia",
+  "target_chinchilla": 1
+}

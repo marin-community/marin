@@ -57,18 +57,53 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
     logger.info(f"Uploaded {local_path} to {gcs_path}.")
 
 
-def run_bash_command(command: list[str], check: bool = True) -> None:
+def run_bash_command(command: list[str], check: bool = True, verbose: bool = True) -> None:
     """Runs a bash command."""
     command_str: str = " ".join(command)
-    logger.info(f"RUNNING: {command_str}")
+    # TODO: logger doesn't print with ray, need to use print
+    print(f"Running command: {command_str}", flush=True)
     start_time: float = time.time()
 
     try:
-        result = subprocess.run(command, check=check, text=True, capture_output=True)
-        elapsed_time_seconds: float = time.time() - start_time
-        logger.info(f"COMPLETED: {command_str} ({elapsed_time_seconds}s)")
-        logger.info(f"STDOUT:\n{result.stdout}")
-        logger.info(f"STDERR:\n{result.stderr}")
+        if verbose:
+            # Use Popen for real-time output streaming when verbose is True
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                universal_newlines=True,
+            )
+
+            # Stream output in real-time
+            while True:
+                stdout_line = process.stdout.readline() if process.stdout else ""
+                stderr_line = process.stderr.readline() if process.stderr else ""
+
+                if stdout_line:
+                    print(f"STDOUT: {stdout_line.rstrip()}", flush=True)
+                if stderr_line:
+                    print(f"STDERR: {stderr_line.rstrip()}", flush=True)
+
+                # Break if process has finished and no more output
+                if process.poll() is not None and not stdout_line and not stderr_line:
+                    break
+
+            # Get return code and handle errors
+            return_code = process.poll()
+            elapsed_time_seconds: float = time.time() - start_time
+            print(f"COMPLETED: {command_str} ({elapsed_time_seconds}s)", flush=True)
+
+            if check and return_code != 0:
+                raise subprocess.CalledProcessError(return_code, command)
+        else:
+            # Original behavior when verbose is False
+            result = subprocess.run(command, check=check, text=True, capture_output=True)
+            elapsed_time_seconds: float = time.time() - start_time
+            logger.info(f"COMPLETED: {command_str} ({elapsed_time_seconds}s)")
+            logger.info(f"STDOUT:\n{result.stdout}")
+            logger.info(f"STDERR:\n{result.stderr}")
     except subprocess.CalledProcessError as e:
         logger.error(f"FAILED: {command_str}")
         logger.error(f"STDOUT:\n{e.stdout}")

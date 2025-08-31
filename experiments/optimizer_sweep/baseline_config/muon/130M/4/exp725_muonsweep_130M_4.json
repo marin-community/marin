@@ -1,0 +1,21 @@
+{
+  "baseline_config": {
+    "beta1": 0.8,
+    "beta2": 0.98,
+    "decay": 0.8,
+    "epsilon": 1e-15,
+    "learning_rate": 0.008,
+    "lr_schedule": "linear",
+    "max_grad_norm": 1,
+    "min_lr_ratio": 0,
+    "momentum": 0.98,
+    "muon_epsilon": 1e-05,
+    "muon_to_adam_lr": 0.3,
+    "train_batch_size": 128,
+    "warmup": 0,
+    "weight_decay": 0.1
+  },
+  "model_size": "130m",
+  "optimizer_name": "muon",
+  "target_chinchilla": 4
+}

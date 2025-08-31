@@ -1,11 +1,10 @@
 """
 This script runs a suite of scaling laws on the Dolma mix.
 
-Link to issue: https://github.com/stanford-crfm/marin/issues/780
+Link to issue: https://github.com/marin-community/marin/issues/780
 """
 
-from defaults import default_scaling_law_pred
-
+from experiments.defaults import default_scaling_law_pred
 from experiments.dolma.exp442_dolma import dolma_llama3_tokenized
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from marin.execution.executor import executor_main

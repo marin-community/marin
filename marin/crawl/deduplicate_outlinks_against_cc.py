@@ -116,6 +116,7 @@ def deduplicate_shard(
     shard_path_batch: str,
     shard_output_path_batch: str,
 ) -> list[tuple[int, int]]:
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     assert len(shard_path_batch) == len(shard_output_path_batch)
     logger.info(f"shard paths: {shard_path_batch}")
@@ -246,7 +247,9 @@ def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConf
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     # Sort for reproducibility
+    logger.info(f"Reading shard paths from {cfg.input_pattern}")
     shard_paths = sorted(list(fsspec_glob(cfg.input_pattern)))
+    logger.info(f"Found {len(shard_paths)} shards to process")
     # Generate shard output paths
     # The output files are always written to `output_path`,
     # but we take the minimal amount of the path necessary to ensure unique names.
@@ -256,7 +259,7 @@ def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConf
     # So, we'd take their parent as well. If that isn't enough, we take their parent, etc, until
     # we get a unique path.
     output_shard_paths = get_unique_output_paths(shard_paths, cfg.output_path)
-    logger.info(f"Found {len(shard_paths)} shards to process")
+    logger.info(f"Got {len(output_shard_paths)} unique output shard paths from {len(shard_paths)} input shard paths")
 
     batched_shard_paths = list(batched(shard_paths, cfg.shards_per_batch))
     batched_output_shard_paths = list(batched(output_shard_paths, cfg.shards_per_batch))
@@ -312,7 +315,7 @@ def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConf
 
     logger.info(
         f"In total, found {num_outlinks} total outlinks, {num_deduplicated_outlinks} of which "
-        f"do not occur in the CC ({num_deduplicated_outlinks/num_outlinks:.1%})"
+        f"do not occur in the CC ({num_deduplicated_outlinks/(num_outlinks + 1e-10):.1%})"
     )
 
 

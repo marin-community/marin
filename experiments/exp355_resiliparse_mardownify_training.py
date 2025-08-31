@@ -1,6 +1,6 @@
 """
 Test the Resiliparse custom fork on the fineweb-small dataset.
-https://github.com/stanford-crfm/marin/issues/355
+https://github.com/marin-community/marin/issues/355
 """
 
 import logging

@@ -6,7 +6,7 @@ from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,
 )
-from operations.transform.stackexchange.filter_stackexchange import FilterStackExchangeConfig, filter_stackexchange
+from marin.transform.stackexchange.filter_stackexchange import FilterStackExchangeConfig, filter_stackexchange
 
 stackexchange_qa_vote_geq_5_rm_duplicate = ExecutorStep(
     name="documents/stackexchange-qa-vote-geq-5-rm-duplicate",

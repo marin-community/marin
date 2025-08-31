@@ -5,7 +5,7 @@ import ButtonGroup from '@mui/material/ButtonGroup';
 import Chip from '@mui/material/Chip';
 import Paper from '@mui/material/Paper';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { apiViewUrl, experimentUrl, renderError, renderLink, renderText, navigateToUrl, isUrl } from './utils';
+import { apiViewUrl, experimentUrl, renderError, renderLink, renderText, navigateToUrl, isUrl, checkJsonResponse } from './utils';
 
 function ViewPage() {
   /**
@@ -90,6 +90,7 @@ function ViewPage() {
       const promises = paths.map(async (path) => {
         try {
           const response = await axios.get(apiViewUrl({path, offset, count}));
+          checkJsonResponse(response, setError);
           setPayloads((prevPayloads) => ({...prevPayloads, [path]: response.data}));
         } catch (error) {
           console.error(error);
@@ -483,7 +484,12 @@ function renderDirectory(args) {
  * - asc (to sort in ascending order)
  * - desc (to sort in descending order)
  */
-function onItemClick(itemKey, item, oldHighlights, updateUrlParams) {
+function onItemClick(itemKey, item, oldHighlights, updateUrlParams, e) {
+  // Require shift key to sort, otherwise it's too annoying
+  if (!e.shiftKey) {
+    return;
+  }
+
   const response = prompt("Enter filter (e.g., >5) or 'sort' or 'desc' or 'asc' or 'hi'/'highlight'");
   if (!response) {
     return;
@@ -581,17 +587,14 @@ function renderItem(args) {
     } else if (item.startsWith("gs://")) {
       return renderLink(item, updateUrlParams);
     } else {
-      // Small values we assume can sort by
-      const MAX_CLICKABLE_LENGTH = 10;
-      const clickable = item.length <= MAX_CLICKABLE_LENGTH ? "clickable" : "";
-      return (<div className={clickable} onClick={() => onItemClick(itemKey, item, highlights, updateUrlParams)}>
+      return (<div onClick={(e) => onItemClick(itemKey, item, highlights, updateUrlParams, e)}>
         {renderText(item)}
       </div>);
     }
   }
 
   if (typeof item === "number") {
-    return (<div className="clickable" onClick={() => onItemClick(itemKey, item, highlights, updateUrlParams)}>
+    return (<div onClick={(e) => onItemClick(itemKey, item, highlights, updateUrlParams, e)}>
       {item}
     </div>);
   }
@@ -797,6 +800,8 @@ function renderPayloads(args) {
         </div>);
       }
       rendered.push(item);
+    } else {
+      rendered.push(renderError("Unknown payload type"));
     }
   });
 
