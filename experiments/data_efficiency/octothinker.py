@@ -2,7 +2,8 @@ from experiments.data_efficiency.train import DataEfficiencyConfig, data_efficie
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import executor_main
 
-# 200 steps ==> 400M tokens
+# 4000 steps ==> 1B tokens
+# 280000 steps ==> 70B tokens
 
 tasks = [
     EvalTaskConfig(name="mathqa", num_fewshot=8),
@@ -27,17 +28,18 @@ train_steps = [
             train_seed=seed if seed else 0,
             data_seed=seed if seed else 0,
             tpu_type="v4-64",
+            per_device_parallelism=2,
         )
     )
-    for base_train_steps in [16000]
+    for base_train_steps in [140_000, 280_000]
     for weight_decay in [0.1]
     for initialize_from_hf in [
         "meta-llama/Llama-3.2-3B",
     ]
     for lr in [3e-5]
-    for epochs in [4]
-    for batch_size in [64]
-    for seed in [1, 2, 3, 4]
+    for epochs in [1]
+    for batch_size in [512]
+    for seed in [0]
 ]
 
 if __name__ == "__main__":

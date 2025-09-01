@@ -9,13 +9,26 @@ from scipy.optimize import curve_fit
 import matplotlib.colors as mcolors
 from experiments.data_efficiency.utils import get_bounding_box
 
-plt.rcParams.update({"font.family": "Palatino"})
+plt.rcParams.update(
+    {
+        "font.family": "Palatino",
+        "mathtext.fontset": "custom",
+        "mathtext.rm": "Palatino",
+        "mathtext.it": "Palatino:italic",
+        "mathtext.bf": "Palatino:bold",
+    }
+)
 
 # Custom color scheme
 LIGHT_BLUE = "#8CD9FF"
 PURPLE = "#7030A0"
-GREEN = "#2ECC71"
+GREEN = "#55A630"
 RED = "#e74c3c"
+OCEAN_BLUE = "#277DA1"
+TURQOISE = "#43AA8B"
+ORANGE = "#F8961E"
+GOLD = "#D4AF37"
+
 CUSTOM_CMAP = mcolors.LinearSegmentedColormap.from_list("custom", [LIGHT_BLUE, PURPLE])
 CUSTOM_CMAP.set_bad(color="white", alpha=0)
 
@@ -43,19 +56,37 @@ token_str_to_steps = {
     "1.7B": 6400,
 }
 
-token_count_color_dict = {
-    209715200.0: PURPLE,
-    419430400.0: LIGHT_BLUE,
-    838860800.0: GREEN,
-    1677721600.0: RED,
+# token_count_color_dict = {
+#     209715200.0: PURPLE,
+#     419430400.0: LIGHT_BLUE,
+#     838860800.0: GREEN,
+#     1677721600.0: RED,
+# }
+
+# param_str_marker_dict = {
+#     "150m4k": "o",
+#     "300m4k": "^",
+#     "600m4k": "s",
+#     "1_4b4k": "X",
+# }
+
+token_count_marker_dict = {
+    209715200.0: "o",
+    419430400.0: "^",
+    838860800.0: "s",
+    1677721600.0: "X",
 }
 
-param_str_marker_dict = {
-    "150m4k": "o",
-    "300m4k": "^",
-    "600m4k": "s",
-    "1_4b4k": "X",
+param_str_color_dict = {
+    "150m4k": OCEAN_BLUE,
+    "300m4k": TURQOISE,
+    "600m4k": GREEN,
+    "1_4b4k": ORANGE,
 }
+
+BASELINE_COLOR = "red"
+REGULARIZED_COLOR = PURPLE
+TIERED_COLOR = GOLD
 
 
 def parse_run(run):
@@ -315,7 +346,8 @@ def create_heatmap(ax, all_fits, target_lr, use_asymptote=True, main_body=False)
     i, j = min_idx[0][0], min_idx[1][0]
 
     # Draw rectangle around minimum value
-    rect = plt.Rectangle((j - 0.5, i - 0.5), 1, 1, fill=False, color=PURPLE, linewidth=2)
+    best_color = REGULARIZED_COLOR if not use_asymptote else param_str_color_dict["300m4k"]
+    rect = plt.Rectangle((j - 0.5, i - 0.5), 1, 1, fill=False, color=best_color, linewidth=2)
     ax.add_patch(rect)
     # Plot heatmap
     im = ax.imshow(heatmap_data, aspect="auto", cmap=CUSTOM_CMAP)
@@ -402,6 +434,12 @@ def plot_ensemble_scaling(model_name, base_tokens):
         if len(x_data) <= 2:
             continue
 
+        if model_name == "300m4k" and base_tokens == 209715200 and 2 not in x_data:
+            # insert x=2, y=3.45994 manually since marin name got corrupted by failed run
+            x_data = np.insert(x_data, 1, 2)
+            y_data = np.insert(y_data, 1, 3.45994)
+            print(x_data, y_data)
+
         # Fit 1/x curve
         power_law = PowerScalingLaw(var_name="K")
         power_law.fit(x_data, y_data)
@@ -423,21 +461,37 @@ def plot_ensemble_scaling(model_name, base_tokens):
         x_fit = np.linspace(min(x_data), max(x_data) + 5, 100)
         y_fit = power_law.evaluate(x_fit)
 
+        alpha = 1.0
+        additional_label = ""
+        color = None
+
         if model_name == "300m4k" and base_tokens == 209715200:
             if unique_key[1] != 3e-3:
                 continue
 
-        plt.scatter(x_data[:5], y_data[:5])
+            alpha = 0.15
+            if unique_key[0] == 32 and unique_key[2] == 0.8:
+                alpha = 1.0
+                additional_label = "Best asymptote\n"
+                color = param_str_color_dict[model_name]
+            elif unique_key[0] == 16 and unique_key[2] == 1.6:
+                alpha = 1.0
+                additional_label = "Best single model\n"
+                color = REGULARIZED_COLOR
+
+        plt.scatter(x_data[:5], y_data[:5], alpha=alpha, color=color)
         plt.plot(
             x_fit,
             y_fit,
             "--",
-            label=f"{unique_key[0]} epochs, {unique_key[2]} WD (Fit: {power_law})",
+            alpha=alpha,
+            color=color,
+            label=f"{additional_label}{unique_key[0]} epochs, {unique_key[2]} WD (Fit: {power_law})",
         )
 
     plt.xlabel("Ensemble Member Count")
     plt.ylabel("DCLM Loss")
-    plt.title("Loss vs member count")
+    plt.title("Loss vs member count for different hyper-parameters")
     plt.legend()
     # plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
     plt.xscale("log")
@@ -938,8 +992,8 @@ def plot_standard_model_seed_scaling(best_run_dict, fit_type="power_law"):
         x_values = np.array([param_str_to_count[model] for model in model_sizes])
         y_values = np.array([best_run_dict[token_count][model]["final_dclm_loss"] for model in model_sizes])
 
-        color = token_count_color_dict[token_count]
-        token_count_m = token_count / 1_000_000  # Convert to millions
+        marker = token_count_marker_dict[token_count]
+        token_counts_b = [token_count / 1_000_000_000 for token_count in token_counts]
 
         # Fit power law
         try:
@@ -959,19 +1013,30 @@ def plot_standard_model_seed_scaling(best_run_dict, fit_type="power_law"):
                 plt.scatter(
                     param_str_to_count[model_size],
                     loss,
-                    color=color,
+                    color=param_str_color_dict[model_size],
                     zorder=5,
                     s=60,
-                    marker=param_str_marker_dict[model_size],
+                    marker=marker,
                 )
             plt.plot(
                 x_fit,
                 y_fit,
                 "--",
-                color=color,
+                color="gray",
                 zorder=4,
                 alpha=0.8,
-                label=f"{int(token_count_m)}M tokens (fit: {scaling_law})",
+                # label=f"{int(token_count_m)}M tokens (fit: {scaling_law})",
+            )
+
+            plt.scatter(
+                [],
+                [],
+                s=100,
+                zorder=5,
+                color="gray",
+                alpha=0.8,
+                marker=marker,
+                label=f"{value_pretty_name_dict[token_count]} tokens (fit: {scaling_law})",
             )
 
             asymptotes.append(scaling_law.asymptote())
@@ -984,7 +1049,7 @@ def plot_standard_model_seed_scaling(best_run_dict, fit_type="power_law"):
     plt.xscale("log")
     plt.xlabel("Parameter count")
     plt.ylabel("Loss")
-    plt.title("Fixed token count, model size asymptote")
+    plt.title("Increasing parameter count ($N\\to\\infty$)")
     plt.ylim(y_lower, y_upper)
     # Set x-ticks to model sizes
     model_params_values = [param_str_to_count[model] for model in model_sizes]
@@ -1002,27 +1067,36 @@ def plot_standard_model_seed_scaling(best_run_dict, fit_type="power_law"):
 
     plt.figure(figsize=figsize, dpi=300)
     seed_token_power_law = PowerScalingLaw(var_name="D")
-    seed_token_power_law.fit(token_counts, asymptotes, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
-    x_fit = np.logspace(np.log10(min(token_counts)), np.log10(max(token_counts)), 100)
+    seed_token_power_law.fit(
+        token_counts_b, asymptotes, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf])
+    )
+    x_fit = np.logspace(np.log10(min(token_counts_b)), np.log10(max(token_counts_b)), 100)
     y_fit = seed_token_power_law.evaluate(x_fit)
-    for i, token_count in enumerate(token_counts):
-        plt.scatter(token_count, asymptotes[i], color=token_count_color_dict[token_count], s=100, zorder=5)
+    for i, token_count in enumerate(base_token_counts):
+        plt.scatter(
+            token_count / 1_000_000_000,
+            asymptotes[i],
+            marker=token_count_marker_dict[token_count],
+            s=100,
+            zorder=5,
+            color="gray",
+        )
     plt.plot(
         x_fit,
         y_fit,
         "--",
         color="gray",
         zorder=4,
-        label=f"Infinite parameter count, fit: {seed_token_power_law}",
+        label=f"Regularized asymptotes fit: {seed_token_power_law}",
         alpha=0.8,
     )
     plt.xscale("log")
     plt.xlabel("Seed token count")
     plt.ylabel("Loss")
-    plt.title("Loss of infinite parameter asymptote vs seed token count")
+    plt.title("Parameter asymptote vs seed token count ($D$)")
     plt.legend()
     plt.ylim(y_lower, y_upper)
-    plt.xticks(token_counts, [f"{int(x / 1_000_000)}M" for x in token_counts])
+    plt.xticks(token_counts_b, ["209M", "419M", "839M", "1.67B"])
     plt.xticks([], [], minor=True)
     plt.grid(True, alpha=0.3)
 
@@ -1048,30 +1122,38 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
         open("experiments/data_efficiency/cache/varying-hparams-experiment_best_ensembles.pkl", "rb")
     )
     token_counts = list(best_ensembles[next(iter(best_ensembles.keys()))].keys())
+    token_counts_b = [token_count / 1_000_000_000 for token_count in token_counts]
 
     for param_str, token_count_losses in best_ensembles.items():
         for token_count, (x_data, y_data, power_law) in token_count_losses.items():
-            color = token_count_color_dict[token_count]
-            marker = param_str_marker_dict[param_str]
+            color = param_str_color_dict[param_str]
+            marker = token_count_marker_dict[token_count]
             plt.scatter(x_data, y_data, s=100, color=color, marker=marker)
             x_fit = np.logspace(np.log10(min(x_data)), np.log10(max(x_data)), 100)
             y_fit = power_law.evaluate(x_fit)
             plt.plot(x_fit, y_fit, "--", color=color)
 
-    for param_str in best_ensembles.keys():
-        marker = param_str_marker_dict[param_str]
+    for token_count in token_counts:
+        marker = token_count_marker_dict[token_count]
         plt.scatter(
-            [], [], s=100, zorder=5, color="black", marker=marker, label=f"{value_pretty_name_dict[param_str]} params"
+            [],
+            [],
+            s=100,
+            zorder=5,
+            color="gray",
+            alpha=0.8,
+            marker=marker,
+            label=f"{value_pretty_name_dict[token_count]} tokens",
         )
 
-    for token_count in token_counts:
-        color = token_count_color_dict[token_count]
-        plt.scatter([], [], s=100, zorder=5, color=color, label=f"{value_pretty_name_dict[token_count]} tokens")
+    for param_str in best_ensembles.keys():
+        color = param_str_color_dict[param_str]
+        plt.scatter([], [], s=100, zorder=5, color=color, alpha=0.8, label=f"{value_pretty_name_dict[param_str]} params")
 
     plt.xscale("log")
     plt.xlabel("Ensemble member count")
     plt.ylabel("Loss")
-    plt.title("Loss for increasing ensemble member count")
+    plt.title("Increasing ensemble member count ($K\\to\\infty$)")
     plt.xticks([1, 2, 3, 4, 5], [1, 2, 3, 4, 5])
     plt.xticks([], [], minor=True)
     plt.ylim(y_lower, y_upper)
@@ -1085,24 +1167,26 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     plt.figure(figsize=figsize, dpi=300)
     for param_str, token_count_losses in best_ensembles.items():
         for token_count, (x_data, y_data, power_law) in token_count_losses.items():
-            color = token_count_color_dict[token_count]
-            marker = param_str_marker_dict[param_str]
-            plt.scatter(x_data, y_data, s=100, color=color, marker=marker)
+            color = param_str_color_dict[param_str]
+            marker = token_count_marker_dict[token_count]
+            plt.scatter(x_data, y_data, s=100, color=color, marker=marker, zorder=5)
             x_fit = np.logspace(np.log10(min(x_data)), np.log10(max(x_data)), 100)
             y_fit = power_law.evaluate(x_fit)
-            plt.plot(x_fit, y_fit, "--", color=color)
-            break
-
-    for param_str in best_ensembles.keys():
-        marker = param_str_marker_dict[param_str]
-        plt.scatter(
-            [], [], s=100, zorder=5, color="black", marker=marker, label=f"{value_pretty_name_dict[param_str]} params"
-        )
+            plt.plot(
+                x_fit,
+                y_fit,
+                "--",
+                color=color,
+                zorder=4,
+                alpha=0.8,
+                label=f"{value_pretty_name_dict[param_str]} params (fit: {power_law})",
+            )
+            break  # don't plot past 200M tokens
 
     plt.xscale("log")
     plt.xlabel("Ensemble member count")
     plt.ylabel("Loss")
-    plt.title("Loss for increasing ensemble member count (200M tokens)")
+    plt.title("Increasing ensemble member count ($K\\to\\infty$), 200M tokens")
     plt.xticks([1, 2, 3, 4, 5], [1, 2, 3, 4, 5])
     plt.xticks([], [], minor=True)
     plt.ylim(y_lower_200M, y_upper_200M)
@@ -1129,8 +1213,9 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
                 param_str_to_count[param_str],
                 asymptote,
                 s=100,
-                color=token_count_color_dict[token_count],
-                marker=param_str_marker_dict[param_str],
+                color=param_str_color_dict[param_str],
+                marker=token_count_marker_dict[token_count],
+                zorder=5,
             )
 
         power_law = PowerScalingLaw(var_name="N")
@@ -1141,8 +1226,21 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
             x_fit,
             y_fit,
             "--",
-            color=token_count_color_dict[token_count],
-            label=f"{value_pretty_name_dict[token_count]} tokens: {power_law}",
+            color="gray",
+            zorder=4,
+            alpha=0.8,
+            # label=f"{value_pretty_name_dict[token_count]} tokens: {power_law}",
+        )
+
+        plt.scatter(
+            [],
+            [],
+            s=100,
+            zorder=5,
+            color="gray",
+            alpha=0.8,
+            marker=token_count_marker_dict[token_count],
+            label=f"{value_pretty_name_dict[token_count]} tokens (fit: {power_law})",
         )
 
         tiered_asymptotes.append(power_law.asymptote())
@@ -1150,7 +1248,7 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     plt.xscale("log")
     plt.xlabel("Parameter count for $\\infty$ ensembles")
     plt.ylabel("Loss")
-    plt.title("Loss for increasing model size of $\\infty$ ensembles")
+    plt.title("Member asymptote vs parameter count ($N\\to\\infty$)")
     plt.xticks(param_counts, [value_pretty_name_dict[param_count] for param_count in param_counts])
     plt.xticks([], [], minor=True)
     plt.ylim(y_lower, y_upper)
@@ -1175,8 +1273,9 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
                 param_str_to_count[param_str],
                 asymptote,
                 s=100,
-                color=token_count_color_dict[token_count],
-                marker=param_str_marker_dict[param_str],
+                color=param_str_color_dict[param_str],
+                marker=token_count_marker_dict[token_count],
+                zorder=5,
             )
 
         power_law = PowerScalingLaw(var_name="N")
@@ -1187,14 +1286,27 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
             x_fit,
             y_fit,
             "--",
-            color=token_count_color_dict[token_count],
-            label=f"{value_pretty_name_dict[token_count]} tokens: {power_law}",
+            color="gray",
+            zorder=4,
+            alpha=0.8,
+            # label=f"{value_pretty_name_dict[token_count]} tokens: {power_law}",
+        )
+
+        plt.scatter(
+            [],
+            [],
+            s=100,
+            zorder=5,
+            color="gray",
+            alpha=0.8,
+            marker=token_count_marker_dict[token_count],
+            label=f"{value_pretty_name_dict[token_count]} tokens (fit: {power_law})",
         )
 
     plt.xscale("log")
     plt.xlabel("Parameter count for $\\infty$ ensembles")
     plt.ylabel("Loss")
-    plt.title("Loss for increasing model size of $\\infty$ ensembles (200M tokens)")
+    plt.title("Member asymptote vs parameter count ($N\\to\\infty$), 200M tokens")
     plt.xticks(param_counts, [value_pretty_name_dict[param_count] for param_count in param_counts])
     plt.xticks([], [], minor=True)
     plt.ylim(y_lower_200M, y_upper_200M)
@@ -1209,28 +1321,42 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     plt.figure(figsize=figsize, dpi=300)
 
     for token_count, standard_asymptote in zip(token_counts, standard_asymptotes, strict=False):
-        plt.scatter(token_count, standard_asymptote, s=100, color=token_count_color_dict[token_count], zorder=5)
+        plt.scatter(
+            token_count / 1_000_000_000,
+            standard_asymptote,
+            s=100,
+            marker=token_count_marker_dict[token_count],
+            zorder=5,
+            color="gray",
+        )
 
-    x_fit = np.logspace(np.log10(min(token_counts)), np.log10(max(token_counts)), 100)
+    x_fit = np.logspace(np.log10(min(token_counts_b)), np.log10(max(token_counts_b)), 100)
     y_fit = standard_power_law.evaluate(x_fit)
-    plt.plot(x_fit, y_fit, "--", color="gray", zorder=4, label=f"Standard fit: {standard_power_law}")
+    plt.plot(x_fit, y_fit, "--", color="gray", zorder=4, label=f"Regularized asymptotes fit: {standard_power_law}")
 
     for token_count, asymptote in zip(token_counts, tiered_asymptotes, strict=False):
-        plt.scatter(token_count, asymptote, s=100, color=token_count_color_dict[token_count], zorder=5)
+        plt.scatter(
+            token_count / 1_000_000_000,
+            asymptote,
+            s=100,
+            marker=token_count_marker_dict[token_count],
+            zorder=5,
+            color=TIERED_COLOR,
+        )
 
     tiered_power_law = PowerScalingLaw(var_name="D")
     tiered_power_law.fit(
-        token_counts, tiered_asymptotes, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf])
+        token_counts_b, tiered_asymptotes, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf])
     )
-    x_fit = np.logspace(np.log10(min(token_counts)), np.log10(max(token_counts)), 100)
+    x_fit = np.logspace(np.log10(min(token_counts_b)), np.log10(max(token_counts_b)), 100)
     y_fit = tiered_power_law.evaluate(x_fit)
-    plt.plot(x_fit, y_fit, "--", color="gray", zorder=4, label=f"Tiered fit: {tiered_power_law}")
+    plt.plot(x_fit, y_fit, "--", color=TIERED_COLOR, zorder=4, label=f"Ensemble asymptotes fit: {tiered_power_law}")
 
     plt.xscale("log")
     plt.xlabel("Seed token count")
     plt.ylabel("Loss")
-    plt.title("Loss for increasing seed token count")
-    plt.xticks(token_counts, [value_pretty_name_dict[token_count] for token_count in token_counts])
+    plt.title("Ensemble asymptote vs seed token count ($D$)")
+    plt.xticks(token_counts_b, ["209M", "419M", "839M", "1.67B"])
     plt.xticks([], [], minor=True)
     plt.ylim(y_lower, y_upper)
     plt.grid(True, alpha=0.3)
@@ -1413,9 +1539,10 @@ def plot_benchmark_results():
     plt.close()
 
 
-def plot_distillation(losses_for_200M):
+def plot_distillation(best_asymptote_ensemble_200M):
+    x_data, y_data, power_law = best_asymptote_ensemble_200M
     plt.figure(figsize=(8, 5), dpi=300)
-    max_x = max([max(x_data * param_str_to_count[model_size]) for model_size, (x_data, _, _) in losses_for_200M.items()])
+    max_x = max(x_data * param_str_to_count["300m4k"] * 2)
 
     # TODO: standardize this
     model_x_values = [0.15, 0.3, 0.6, 1.4]
@@ -1425,83 +1552,85 @@ def plot_distillation(losses_for_200M):
     # fit a power law to the model scaling
     base_power_law = PowerScalingLaw(var_name="N")
     base_power_law.fit(model_x_values, model_y_values, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
-    model_x_fit = np.linspace(min(model_x_values), max_x * 25, 5000)
+    model_x_fit = np.linspace(min(model_x_values), max_x, 5000)
     model_y_fit = base_power_law.evaluate(model_x_fit)
     plt.plot(model_x_fit, model_y_fit, "--", color=PURPLE, label=f"Model scaling: (Fit: {base_power_law})")
 
-    # add a shaded gray region for any y value above popt[2]
-    plt.fill_between(
-        model_x_fit,
-        3.1,
-        base_power_law.asymptote(),
-        color=PURPLE,
-        alpha=0.2,
-        label="Impossible with standard scaling, infinite compute",
+    # # add a shaded gray region for any y value above popt[2]
+    # plt.fill_between(
+    #     model_x_fit,
+    #     3.25,
+    #     base_power_law.asymptote(),
+    #     color=PURPLE,
+    #     alpha=0.2,
+    #     label="Impossible with standard scaling, infinite compute",
+    # )
+
+    model_size = "300m4k"
+
+    x_fit = np.linspace(min(x_data * param_str_to_count[model_size]), max_x, 5000)
+    y_fit = power_law.evaluate(x_fit / param_str_to_count[model_size])
+    plt.scatter(x_data * param_str_to_count[model_size], y_data, color=param_str_color_dict[model_size])
+    plt.plot(
+        x_fit,
+        y_fit,
+        "--",
+        color=param_str_color_dict[model_size],
+        label=f"{value_pretty_name_dict[model_size]} ensembles (Fit: {power_law})",
     )
 
-    for model_size, (x_data, y_data, power_law) in losses_for_200M.items():
-        if model_size == "300m4k":
-            x_fit = np.linspace(min(x_data * param_str_to_count[model_size]), max_x * 25, 5000)
-            y_fit = power_law.evaluate(x_fit / param_str_to_count[model_size])
-            plt.scatter(x_data * param_str_to_count[model_size], y_data, color="tab:orange")
-            plt.plot(
-                x_fit,
-                y_fit,
-                "--",
-                color="tab:orange",
-                label=f"{value_pretty_name_dict[model_size]} ensembles (Fit: {power_law})",
-            )
+    # Best 8-mixture distill run: 300m4k-209Mx16-dclm+ens8x0730^0.95-cos-lr0.0030-wd0.01-bs64 (3.3612)
+    plt.scatter(
+        0.3,
+        3.3612,
+        color=LIGHT_BLUE,
+        edgecolors="black",
+        linewidths=0.8,
+        marker="*",
+        s=120,
+        zorder=6,
+        label="8-Ensemble Distill: 3.36",
+    )
+    plt.annotate(
+        "",
+        xytext=(0.3 * x_data[-1], y_data[-1]),
+        xy=(0.3, 3.3612),
+        arrowprops=dict(
+            arrowstyle="->", color="black", linestyle="--", linewidth=1.5, alpha=0.8, connectionstyle="arc3,rad=0.0"
+        ),
+        zorder=0,
+    )
 
-            # Best self-distill run: 300m4k-209Mx16-dclm+sd0805^0.75-cos-lr0.0030-wd0.10-bs64 (3.43243)
-            plt.scatter(
-                0.3,
-                3.43243,
-                color="tab:red",
-                edgecolors="black",
-                linewidths=0.8,
-                marker="*",
-                s=120,
-                zorder=6,
-                label="Self-Distill: 3.43",
-            )
-            plt.annotate(
-                "",
-                xytext=(0.3 * x_data[0], y_data[0]),
-                xy=(0.3, 3.43243),
-                arrowprops=dict(
-                    arrowstyle="->", color="black", linestyle="--", alpha=0.5, connectionstyle="arc3,rad=0.25"
-                ),
-                zorder=0,
-            )
+    # Best self-distill run: 300m4k-209Mx16-dclm+sd0805^0.75-cos-lr0.0030-wd0.10-bs64 (3.43243)
+    plt.scatter(
+        0.3,
+        3.43243,
+        color="tab:red",
+        edgecolors="black",
+        linewidths=0.8,
+        marker="*",
+        s=120,
+        zorder=6,
+        label="Self-Distill: 3.43",
+    )
+    plt.annotate(
+        "",
+        xytext=(0.3 * x_data[0], y_data[0]),
+        xy=(0.3, 3.43243),
+        arrowprops=dict(
+            arrowstyle="->", color="black", linestyle="--", linewidth=1.5, alpha=0.8, connectionstyle="arc3,rad=0.15"
+        ),
+        zorder=0,
+    )
 
-            # Best 8-mixture distill run: 300m4k-209Mx16-dclm+ens8x0730^0.95-cos-lr0.0030-wd0.01-bs64 (3.3612)
-            plt.scatter(
-                0.3,
-                3.3612,
-                color=LIGHT_BLUE,
-                edgecolors="black",
-                linewidths=0.8,
-                marker="*",
-                s=120,
-                zorder=6,
-                label="8-Ensemble Distill: 3.36",
-            )
-            plt.annotate(
-                "",
-                xytext=(0.3 * x_data[-1], y_data[-1]),
-                xy=(0.3, 3.3612),
-                arrowprops=dict(
-                    arrowstyle="->", color="black", linestyle="--", alpha=0.5, connectionstyle="arc3,rad=-0.25"
-                ),
-                zorder=0,
-            )
-
-            plt.axvline(x=0.3, color="grey", linestyle="--", alpha=0.3, zorder=0)
+    plt.axvline(x=0.3, color="grey", linestyle="--", alpha=0.3, zorder=0)
     plt.legend()
     plt.xscale("log")
+    plt.xticks([0.15, 0.3, 0.6, 1.4], ["150M", "300M", "600M", "1.4B"])
+    plt.xticks([], [], minor=True)
     plt.xlabel("Total parameter count (billions)")
     plt.ylabel("DCLM Loss")
-    plt.title("Distilling a 300M model (200M seed tokens)")
+    plt.title("Distilling a 300M student (200M seed tokens)")
     plt.savefig("experiments/data_efficiency/plots/distillation.png", bbox_inches="tight")
     plt.close()
 
@@ -1543,20 +1672,44 @@ def plot_200M_sample(losses_for_200M, power_law_200M, run_losses_200M, best_sing
 
     # Figure 2: Comparing parameter count and single model hparams ensemble
     plt.figure(figsize=(6, 4), dpi=300)
-    plt.scatter(param_counts, run_losses_200M, color=PURPLE, s=50)
-    plt.plot(model_x_fit, model_y_fit, "--", color=PURPLE, label=f"Model scaling: (Fit: {power_law_200M})")
+    xmax_multiplier = 1
+    model_x_fit = np.linspace(min_x, max_x * xmax_multiplier, 5000)
+    model_y_fit = power_law_200M.evaluate(model_x_fit)
+    plt.scatter(param_counts, run_losses_200M, color=REGULARIZED_COLOR, s=50, zorder=5)
+    plt.plot(
+        model_x_fit,
+        model_y_fit,
+        "--",
+        color=REGULARIZED_COLOR,
+        label=f"Model scaling: (Fit: {power_law_200M})",
+        zorder=4,
+        alpha=0.8,
+    )
 
     for model_size, (x_data, y_data, power_law) in [("300m4k", best_single_model_hparams_ensemble_200M[1:])]:
-        x_fit = np.linspace(min(x_data * param_str_to_count[model_size]), max_x * 25, 5000)
+        x_fit = np.linspace(min(x_data * param_str_to_count[model_size]), max_x * xmax_multiplier, 5000)
         y_fit = power_law.evaluate(x_fit / param_str_to_count[model_size])
-        plt.scatter(x_data * param_str_to_count[model_size], y_data, s=50)
+        plt.scatter(
+            x_data * param_str_to_count[model_size], y_data, s=50, color=param_str_color_dict[model_size], zorder=5
+        )
         print(x_data, y_data)
-        plt.plot(x_fit, y_fit, "--", label=f"{value_pretty_name_dict[model_size]} ensembles (Fit: {power_law})")
+        plt.plot(
+            x_fit,
+            y_fit,
+            "--",
+            color=param_str_color_dict[model_size],
+            label=f"{value_pretty_name_dict[model_size]} ensembles (Fit: {power_law})",
+            zorder=4,
+            alpha=0.8,
+        )
 
     plt.legend()
+    # plt.grid(True, alpha=0.3)
     plt.xscale("log")
+    plt.xticks(param_counts, ["150M", "300M", "600M", "1.4B"])
+    plt.xticks([], [], minor=True)
     plt.xlabel("Total parameter count (billions)")
-    plt.ylabel("DCLM Loss")
+    plt.ylabel("Loss")
     plt.title("Scaling parameter count or ensemble member count")
     plt.savefig("experiments/data_efficiency/plots/200M_ensemble_vs_parameter_scaling.png", bbox_inches="tight")
     plt.close()
@@ -1564,20 +1717,38 @@ def plot_200M_sample(losses_for_200M, power_law_200M, run_losses_200M, best_sing
     # Figure 3 (new figure 1 (8/22))
     plt.figure(figsize=(5, 5), dpi=300)
     chinchilla_losses = [3.83752, 3.78538, 3.74974, 3.76432]
-    plt.scatter(param_counts, chinchilla_losses, color=LIGHT_BLUE, s=50, label="Epoched recipe")
-    plt.plot(param_counts, chinchilla_losses, color=LIGHT_BLUE)
+    plt.scatter(param_counts, chinchilla_losses, color=BASELINE_COLOR, s=50, label="Epoched recipe")
+    plt.plot(param_counts, chinchilla_losses, color=BASELINE_COLOR)
 
-    plt.scatter(param_counts, run_losses_200M, color=PURPLE, s=50)
-    plt.plot(model_x_fit, model_y_fit, "--", color=PURPLE, label=f"Regularized recipe\n(Fit: {power_law_200M})")
+    plt.scatter(param_counts, run_losses_200M, color=REGULARIZED_COLOR, s=50, zorder=5)
+    plt.plot(
+        model_x_fit,
+        model_y_fit,
+        "--",
+        color=REGULARIZED_COLOR,
+        label=f"Regularized recipe\n(Fit: {power_law_200M})",
+        zorder=4,
+        alpha=0.8,
+    )
 
     for model_size, (x_data, y_data, power_law) in [("300m4k", best_single_model_hparams_ensemble_200M[1:])]:
         x_fit = np.linspace(min(x_data * param_str_to_count[model_size]), max_x * 5, 5000)
         y_fit = power_law.evaluate(x_fit / param_str_to_count[model_size])
-        plt.scatter(x_data * param_str_to_count[model_size], y_data, s=50)
+        plt.scatter(
+            x_data * param_str_to_count[model_size], y_data, s=50, color=param_str_color_dict[model_size], zorder=5
+        )
         print(x_data, y_data)
-        plt.plot(x_fit, y_fit, "--", label=f"{value_pretty_name_dict[model_size]} ensemble recipe\n(Fit: {power_law})")
+        plt.plot(
+            x_fit,
+            y_fit,
+            "--",
+            color=param_str_color_dict[model_size],
+            label=f"{value_pretty_name_dict[model_size]} ensemble recipe\n(Fit: {power_law})",
+            zorder=4,
+            alpha=0.8,
+        )
 
-    plt.axhline(y=3.17, linestyle="--", label="Infinite compute ensemble asymptote", color=GREEN)
+    plt.axhline(y=3.17, linestyle="--", label="Infinite compute ensemble asymptote", color=TIERED_COLOR)
 
     plt.legend(loc="center left", bbox_to_anchor=(1, 0.5))
     plt.xscale("log")
@@ -1641,10 +1812,10 @@ def plot_epoch_overfitting_ablation(run_list):
     run_list = sorted(run_list, key=lambda x: x["epochs"])
     epochs = [run["epochs"] for run in run_list]
     losses = [run["final_dclm_loss"] for run in run_list]
-    train_losses = [run["final_train_loss"] for run in run_list]
+    # train_losses = [run["final_train_loss"] for run in run_list]
     plt.figure(figsize=(4, 4), dpi=300)
-    plt.plot(epochs, losses, marker="o", color=LIGHT_BLUE, label="Validation loss")
-    plt.plot(epochs, train_losses, marker="o", color=PURPLE, label="Train loss")
+    plt.plot(epochs, losses, marker="o", color=BASELINE_COLOR, label="Validation loss")
+    # plt.plot(epochs, train_losses, marker="o", color=PURPLE, label="Train loss")
     # plt.ylim(bottom=3.43)
     plt.xlabel("Epochs")
     plt.ylabel("Loss")
@@ -1656,13 +1827,45 @@ def plot_epoch_overfitting_ablation(run_list):
     plt.close()
 
 
+def plot_lr_tuned_epoch_ablation(run_list):
+    run_list = [
+        run
+        for run in run_list
+        if run["batch_size"] == 64
+        and "seed" not in run["run_id"]
+        and "-ts" not in run["run_id"]
+        and run["data_name"] == "dclm"
+        and run["weight_decay"] == 0.1
+        and run["model_name"] == "300m4k"
+        and run["base_tokens"] == 209715200
+    ]
+
+    unique_epochs = sorted(list(set([run["epochs"] for run in run_list])))
+    losses = []
+    for epoch in unique_epochs:
+        run_list_epoch = [run for run in run_list if run["epochs"] == epoch]
+        best_run = sorted(run_list_epoch, key=lambda x: x["final_dclm_loss"])[0]
+        print(best_run["run_id"])
+        losses.append(best_run["final_dclm_loss"])
+    plt.figure(figsize=(4, 4), dpi=300)
+    plt.plot(unique_epochs, losses, marker="o", color=BASELINE_COLOR, label="Validation loss")
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.xscale("log")
+    plt.xticks(unique_epochs, [f"{x}" for x in unique_epochs])
+    plt.xticks([], [], minor=True)
+    plt.tight_layout()
+    plt.savefig("experiments/data_efficiency/plots/ablation_lr_tuned_epoch.png", bbox_inches="tight")
+    plt.close()
+
+
 def plot_parameter_count_vs_loss(run_list):
     param_counts = [0.15, 0.3, 0.6, 1.4]
     losses = [3.83752, 3.78538, 3.74974, 3.76432]
-    train_losses = [3.3949, 3.05229, 3.30524, 3.10757]
+    # train_losses = [3.3949, 3.05229, 3.30524, 3.10757]
     plt.figure(figsize=(4, 4), dpi=300)
-    plt.plot(param_counts, losses, marker="o", color=LIGHT_BLUE, label="Validation loss")
-    plt.plot(param_counts, train_losses, marker="o", color=PURPLE, label="Train loss")
+    plt.plot(param_counts, losses, marker="o", color=BASELINE_COLOR, label="Validation loss")
+    # plt.plot(param_counts, train_losses, marker="o", color=PURPLE, label="Train loss")
     # plt.ylim(bottom=3.43)
     plt.xscale("log")
     plt.xticks(param_counts, ["150M", "300M", "600M", "1.4B"])
@@ -1714,8 +1917,8 @@ def plot_weight_decay_ablation(run_list):
 
 
 def plot_chinchilla_scaling_law(run_list):
-    valid_flops = [3e18, 6e18, 1e19, 3e19, 6e19]
-    max_parameter_count = 10000_500_000_000
+    valid_flops = [3e18, 6e18, 1e19, 3e19]
+    max_parameter_count = 3_000_000_000
     run_list = [run for run in run_list if run["flops"] in valid_flops and run["parameter_count"] <= max_parameter_count]
     run_list = sorted(run_list, key=lambda x: x["final_dclm_loss"])
 
@@ -1780,15 +1983,15 @@ def plot_chinchilla_comparison_200M(run_list, chinchilla_scaling_law, power_law_
     # single_run_losses = [run["final_dclm_loss"] for run in run_list]
     # TODO: automate soon
     single_run_losses = [3.83752, 3.78538, 3.74974, 3.76432]
-    plt.scatter(param_counts, single_run_losses, color=LIGHT_BLUE, s=50, label="Epoched recipe")
+    plt.scatter(param_counts, single_run_losses, color=BASELINE_COLOR, s=50, label="Epoched recipe")
     # epoched_chinchilla_power_law = PowerScalingLaw()
     # epoched_chinchilla_power_law.fit(param_counts, single_run_losses, p0=[1, 1, 1], bounds=(0, np.inf))
     # print(epoched_chinchilla_power_law)
-    plt.plot(param_counts, single_run_losses, color=LIGHT_BLUE)
+    plt.plot(param_counts, single_run_losses, color=BASELINE_COLOR)
 
     y_fit = power_law_200M.evaluate(x_fit)
-    plt.scatter(param_counts, run_losses_200M, color=PURPLE, s=50)
-    plt.plot(x_fit, y_fit, "--", color=PURPLE, label=f"Regularized recipe (Fit: {power_law_200M})")
+    plt.scatter(param_counts, run_losses_200M, color=REGULARIZED_COLOR, s=50)
+    plt.plot(x_fit, y_fit, "--", color=REGULARIZED_COLOR, label=f"Regularized recipe (Fit: {power_law_200M})")
 
     # projected_losses = chinchilla_scaling_law.evaluate((x_fit, 0.2))
     # plt.plot(x_fit, projected_losses, linestyle="--", label=f"Chinchilla: {chinchilla_scaling_law}")
@@ -1855,7 +2058,7 @@ if __name__ == "__main__":
 
         for model_size in unique_models:
             best_ensembles[model_size] = {}
-            for base_tokens in unique_base_tokens[:1]:
+            for base_tokens in unique_base_tokens:
                 ret, best_single_model_hparams_ensemble = plot_ensemble_scaling(model_size, base_tokens)
                 if ret is not None:
                     _, x_data, y_data, power_law = ret
@@ -1864,6 +2067,7 @@ if __name__ == "__main__":
 
                 if model_size == "300m4k" and base_tokens == 209715200:
                     best_single_model_hparams_ensemble_200M = best_single_model_hparams_ensemble
+                    best_asymptote_ensemble_200M = (x_data, y_data, power_law)
 
         for base_tokens in unique_base_tokens[:1]:
             plot_200M_sample(
@@ -1874,11 +2078,17 @@ if __name__ == "__main__":
             )
         # plot_200M_sample(best_ensembles[min(unique_models)])
         print(best_ensembles)
-        pickle.dump(best_ensembles, open(f"experiments/data_efficiency/cache/{mode}_best_ensembles.pkl", "wb"))
+        # pickle.dump(best_ensembles, open(f"experiments/data_efficiency/cache/{mode}_best_ensembles.pkl", "wb"))
+        pickle.dump(
+            best_asymptote_ensemble_200M,
+            open(f"experiments/data_efficiency/cache/{mode}_best_asymptote_ensemble_200M.pkl", "wb"),
+        )
 
     elif mode == "infinite-model-scaling":
         base_token_counts = [209715200.0, 419430400.0, 838860800.0, 1677721600.0]
         model_sizes = ["150m4k", "300m4k", "600m4k", "1_4b4k"]
+
+        plot_lr_tuned_epoch_ablation(run_list)
 
         epoch_ub = 64
         weight_decay_lb = 0.1
@@ -1965,22 +2175,29 @@ if __name__ == "__main__":
         plot_benchmark_results()
 
     elif mode == "distillation":
-        unique_models = sorted(list(set([run["model_name"] for run in run_list])), key=lambda x: param_str_to_count[x])
+        # unique_models = sorted(list(set([run["model_name"] for run in run_list])), key=lambda x: param_str_to_count[x])
+        unique_models = ["300m4k"]
         unique_base_tokens = sorted(list(set([run["base_tokens"] for run in run_list])))
 
-        best_ensembles = {}
+        # best_ensembles = {}
 
-        for model_size in unique_models:
-            best_ensembles[model_size] = {}
-            for base_tokens in unique_base_tokens:
-                ret = plot_ensemble_scaling(model_size, base_tokens)
-                if ret is not None:
-                    _, x_data, y_data, power_law = ret
-                    print(power_law.asymptote())
-                    best_ensembles[model_size][base_tokens] = (x_data, y_data, power_law)
+        # for model_size in unique_models:
+        #     best_ensembles[model_size] = {}
+        #     for base_tokens in unique_base_tokens:
+        #         ret = plot_ensemble_scaling(model_size, base_tokens)
+        #         if ret is not None:
+        #             _, x_data, y_data, power_law = ret
+        #             print(power_law.asymptote())
+        #             best_ensembles[model_size][base_tokens] = (x_data, y_data, power_law)
 
-        for base_tokens in unique_base_tokens[:1]:
-            plot_distillation({model_size: best_ensembles[model_size][base_tokens] for model_size in unique_models})
+        best_ensembles = pickle.load(
+            open("experiments/data_efficiency/cache/varying-hparams-experiment_best_ensembles.pkl", "rb")
+        )
+        best_asymptote_ensemble_200M = pickle.load(
+            open("experiments/data_efficiency/cache/varying-hparams-experiment_best_asymptote_ensemble_200M.pkl", "rb")
+        )
+
+        plot_distillation(best_asymptote_ensemble_200M)
 
     elif mode == "standard-batch-size":
         plot_batch_size_ablation(run_list)

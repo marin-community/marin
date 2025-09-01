@@ -11,10 +11,13 @@ def extract_neighbors(value, valid_values):
     return lower_value, upper_value
 
 
-def get_bounding_box(base_train_steps, epochs, lr, weight_decay, model_name):
+def get_bounding_box(base_train_steps, epochs, lr, weight_decay, model_name, use_wd=True):
     lower_epochs, upper_epochs = extract_neighbors(epochs, valid_epochs)
     lower_lr, upper_lr = extract_neighbors(lr, valid_lrs)
-    lower_weight_decay, upper_weight_decay = extract_neighbors(weight_decay, valid_weight_decays)
+    if use_wd:
+        lower_weight_decay, upper_weight_decay = extract_neighbors(weight_decay, valid_weight_decays)
+    else:
+        lower_weight_decay, upper_weight_decay = weight_decay, weight_decay
 
     return [
         (base_train_steps, epochs, lr, weight_decay, model_name),

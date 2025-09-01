@@ -23,11 +23,13 @@ train_steps = [
                 wandb_project_name="suhas-data-efficiency",
                 model_name=model_name,
                 nametag="-bs64",
+                tpu_type="v4-64",
             )
         )
         for base_train_steps, epochs, lr, weight_decay, model_name in get_bounding_box(*candidate_hparams)
     ]
     for candidate_hparams in [
+        # Regularized recipe certificate
         # (800, 16, 3e-3, 0.8, "150m4k"),
         # (800, 16, 3e-3, 6.4, "150m4k"),
         # (800, 16, 3e-3, 1.6, "300m4k"),
@@ -45,10 +47,24 @@ train_steps = [
         # (6400, 32, 1e-3, 0.4, "300m4k"),
         # (6400, 16, 1e-3, 0.8, "600m4k"),
         # (6400, 8, 1e-3, 0.8, "1_4b4k"),
-        # (800, 8, 3e-3, 0.1, "150m4k"),
-        # (800, 8, 1e-3, 0.1, "300m4k"),
-        # (800, 4, 1e-3, 0.1, "600m4k"),
-        # (800, 4, 3e-4, 0.1, "1_4b4k"),
+        # Epoch certificate
+        # (800, 8, 3e-3, 0.1, "150m4k", False),
+        # (800, 8, 1e-3, 0.1, "300m4k", False),
+        # (800, 4, 1e-3, 0.1, "600m4k", False),
+        # (800, 4, 3e-4, 0.1, "1_4b4k", False),
+        (1600, 16, 1e-2, 0.1, "150m4k", False),
+        (1600, 8, 3e-3, 0.1, "300m4k", False),
+        (1600, 4, 1e-3, 0.1, "600m4k", False),
+        (1600, 4, 3e-4, 0.1, "1_4b4k", False),
+        # (3200, 32, 3e-3, 0.1, "150m4k", False),
+        # (3200, 8, 3e-3, 0.1, "300m4k", False),
+        # (3200, 8, 3e-3, 0.1, "600m4k", False),
+        # (3200, 4, 1e-3, 0.1, "1_4b4k", False),
+        # (6400, 32, 3e-3, 0.1, "150m4k", False),
+        # (6400, 16, 1e-3, 0.1, "300m4k", False),
+        # (6400, 8, 1e-3, 0.1, "600m4k", False),
+        # (6400, 4, 1e-3, 0.1, "1_4b4k", False),
+        # MoE attempts
         # (800, 8, 1e-3, 3.2, "olmoe"),
         # (800, 16, 3e-3, 1.6, "300moe"),
     ]
