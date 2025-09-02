@@ -37,7 +37,7 @@ class HELMEvaluator(VllmTpuEvaluator):
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
-        Dependency(name="crfm-helm@git+https://github.com/stanford-crfm/helm.git@local_vllm"),
+        Dependency(name="crfm-helm@git+https://github.com/stanford-crfm/helm.git@chiheem/local_vllm_20250902"),
     ]
 
     @staticmethod

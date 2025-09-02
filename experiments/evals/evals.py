@@ -202,13 +202,26 @@ def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[s
     Extract the model name and path from a step.
     """
     if isinstance(step, ExecutorStep):
-        model_step_path = output_path_of(step, "hf")
-        name = step.name
+        # Check if this is a downloaded model step (starts with gcsfuse_mount/models/)
+        if step.name.startswith("gcsfuse_mount/models/"):
+            # For downloaded models, use the output path directly without adding "hf"
+            model_step_path = output_path_of(step)
+            name = step.name
+        else:
+            # For training steps, add "hf" subdirectory
+            model_step_path = output_path_of(step, "hf")
+            name = step.name
     elif isinstance(step, InputName):
-        model_step_path = output_path_of(step.step, "hf")
+        if step.step and step.step.name.startswith("gcsfuse_mount/models/"):
+            # For downloaded models, use the output path directly without adding "hf"
+            model_step_path = output_path_of(step.step)
+            name = step.step.name
+        else:
+            # For training steps, add "hf" subdirectory
+            model_step_path = output_path_of(step.step, "hf")
+            name = step.step.name
         if step.step is None:
             raise ValueError(f"Hardcoded path {step.name} is not part of the pipeline")
-        name = step.step.name
     elif isinstance(step, str):
         model_step_path = step
         name = _infer_model_name_for_path(step)
