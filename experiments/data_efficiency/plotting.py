@@ -167,7 +167,8 @@ def parse_run(run):
     run_dict["weight_decay"] = float(run_id.split("-")[5][2:])
     run_dict["batch_size"] = batch_size
 
-    run_history_loss_keys = [f"eval/{run_dict['data_name']}/loss", "train/loss"]
+    # run_history_loss_keys = [f"eval/{run_dict['data_name']}/loss", "train/loss"]
+    run_history_loss_keys = [f"eval/{run_dict['data_name']}/loss"]
 
     history_loss = run.history(keys=run_history_loss_keys)
 
@@ -177,7 +178,7 @@ def parse_run(run):
 
     run_dict["loss_history"] = history_loss
     run_dict[f"final_{run_dict['data_name']}_loss"] = history_loss[f"eval/{run_dict['data_name']}/loss"].iloc[-1]
-    run_dict["final_train_loss"] = history_loss["train/loss"].iloc[-1]
+    # run_dict["final_train_loss"] = history_loss["train/loss"].iloc[-1]
 
     return run_dict
 
@@ -1516,7 +1517,7 @@ def plot_benchmark_results():
     plt.figure(figsize=(8, 5), dpi=300)
     model_x_values = [param_str_to_count[model.model_size] for model in VANILLA_MODEL_SCALING]
     model_y_values = [1.0 - benchmark_results[get_base_name(model)]["1"]["avg_acc"] for model in VANILLA_MODEL_SCALING]
-    plt.plot(model_x_values, model_y_values, color=PURPLE, label="Model Scaling", marker="o")
+    plt.plot(model_x_values, model_y_values, color=PURPLE, label="Model scaling", marker="o")
     for model in ENSEMBLE_MODEL_SCALING:
         model_x_values = [param_str_to_count[model.model_size] * (seed + 1) for seed in range(model.num_seeds)]
         model_y_values = [
@@ -1525,8 +1526,9 @@ def plot_benchmark_results():
         plt.plot(
             model_x_values,
             model_y_values,
-            label=f"Ensemble {value_pretty_name_dict[model.model_size]} Scaling",
+            label=f"{value_pretty_name_dict[model.model_size]} ensembles",
             marker="o",
+            color=param_str_color_dict[model.model_size],
         )
 
     plt.legend()
@@ -1534,7 +1536,7 @@ def plot_benchmark_results():
     plt.xscale("log")
     plt.xlabel("Total parameter count (billions)")
     plt.ylabel("Average Error")
-    plt.title("Scaling Models and Ensembles for 200M Tokens (Downstream Benchmarks)")
+    plt.title("Scaling models and ensembles for 200M tokens (Downstream benchmarks)")
     plt.savefig("experiments/data_efficiency/plots/benchmark_results.png", bbox_inches="tight")
     plt.close()
 
@@ -1660,8 +1662,8 @@ def plot_200M_sample(losses_for_200M, power_law_200M, run_losses_200M, best_sing
     for model_size, (x_data, y_data, power_law) in losses_for_200M.items():
         x_fit = np.linspace(min(x_data * param_str_to_count[model_size]), max_x * 25, 5000)
         y_fit = power_law.evaluate(x_fit / param_str_to_count[model_size])
-        plt.scatter(x_data * param_str_to_count[model_size], y_data, s=50)
-        plt.plot(x_fit, y_fit, "--", label=f"{value_pretty_name_dict[model_size]} ensembles (Fit: {power_law})")
+        plt.scatter(x_data * param_str_to_count[model_size], y_data, s=50, color=param_str_color_dict[model_size])
+        plt.plot(x_fit, y_fit, "--", color=param_str_color_dict[model_size], label=f"{value_pretty_name_dict[model_size]} ensembles (Fit: {power_law})")
     plt.legend()
     plt.xscale("log")
     plt.xlabel("Total parameter count (billions)")
