@@ -58,11 +58,12 @@ def current_date_time():
 
 @pytest.fixture(scope="module")
 def ray_tpu_cluster():
+    print("Starting RAY", os.getenv("START_RAY_TPU_CLUSTER"), os.getenv("START_RAY_CPU_CLUSTER"))
     if os.getenv("START_RAY_TPU_CLUSTER") == "true":
         ray.init(resources={"TPU": 8, "TPU-v6e-8-head": 1}, num_cpus=120, ignore_reinit_error=True)
     elif os.getenv("START_RAY_CPU_CLUSTER") == "true":
-        ray.init(num_cpus=4, ignore_reinit_error=True)
+        ray.init(num_cpus=8, ignore_reinit_error=True)
     else:
-        ray.init("auto", ignore_reinit_error=True)
+        ray.init(num_cpus=8, ignore_reinit_error=True)
     yield
     ray.shutdown()
