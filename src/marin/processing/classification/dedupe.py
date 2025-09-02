@@ -308,9 +308,7 @@ def dolma_dedup(
             node_id=ray.get_runtime_context().get_node_id(),
             soft=False,
         ),
-        "runtime_env": {
-            "pip": ["dolma", "transformers==4.44.0"],
-        },
+        "runtime_env": {"uv": {"packages": ["dolma", "transformers==4.44.0"]}},
     }
     bloom_filter_file = "decontaminated_bloom_filter.bin"
     remote_bloom_filter_path = os.path.join(bloom_filter_path, bloom_filter_file)

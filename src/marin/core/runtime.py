@@ -11,7 +11,13 @@ import ray
 from ray import ObjectRef
 from ray.remote_function import RemoteFunction
 
-from marin.utils import fsspec_exists, fsspec_get_curr_subdirectories, fsspec_glob, fsspec_mkdirs, rebase_file_path
+from marin.utils import (
+    fsspec_exists,
+    fsspec_get_curr_subdirectories,
+    fsspec_glob,
+    fsspec_mkdirs,
+    rebase_file_path,
+)
 
 logger = logging.getLogger("ray")
 
@@ -19,9 +25,6 @@ logger = logging.getLogger("ray")
 @dataclass
 class RayConfig:
     address: str | None = None
-
-    def initialize(self):
-        ray.init(address=self.address)
 
 
 def cached_or_construct_output(success_suffix="success", verbose=True):
