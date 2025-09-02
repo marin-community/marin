@@ -35,10 +35,9 @@ from marin.post_training.utils import validate_format
 from ..config import AbstractEnvConfig
 from ..datatypes import (
     InferenceEndpoint,
-    RolloutGroup,
     RolloutRecord,
     RolloutSink,
-    Turn,
+    Turn, Rollout,
 )
 from ..env import SimpleEnv
 
@@ -103,7 +102,11 @@ class MathEnv(SimpleEnv):
         # Prepare OpenAI client for the target inference server.
         self._client = openai.Client(api_key=api_key, base_url=inference.address)
 
-    def do_rollout(self) -> list[RolloutGroup]:
+    @property
+    def env_name(self) -> str:
+        return f"math_env(data_source={self._data_source},split={self._split})"
+
+    def do_rollout(self) -> list[Rollout]:
         # Sample a problem (reuse the dataset when exhausted).
         if self._example_idx >= len(self._examples):
             self._rng.shuffle(self._examples)
@@ -149,7 +152,7 @@ class MathEnv(SimpleEnv):
             single_resp = _SingleChoiceResponse(completion, choice)
 
             record = RolloutRecord(
-                environment="math_env",
+                environment=self.env_name,
                 example_id=example_id,
                 rollout_uid=f"math-{example_id}-g{j}-{uuid.uuid4().hex}",
                 replica_id="math",
@@ -169,21 +172,10 @@ class MathEnv(SimpleEnv):
             valid_list.append(is_valid)
             correct_list.append(is_correct)
 
-        if self._num_generations == 1:
-            md = {"valid_format": valid_list[0], "correct": correct_list[0]}
-        else:
-            md = {"valid_format": valid_list, "correct": correct_list, "n": self._num_generations}
+        return [
 
-        group = RolloutGroup(
-            id=f"math-{example_id}-{uuid.uuid4().hex}",
-            environment=f"math_env(data_source={self._data_source},split={self._split})",
-            example_id=example_id,
-            rollouts=rollouts,
-            sealed_ts=time.time(),
-            metadata=md,
-        )
 
-        return [group]
+        ]
 
 
 @dataclass(frozen=True)

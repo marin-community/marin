@@ -13,6 +13,8 @@ import warnings
 import numpy as np
 from typing import Any
 
+from typing import TypeAlias
+
 try:
     from openai.types.chat import ChatCompletion, Choice
 except ImportError:
@@ -195,21 +197,28 @@ class Turn:
 
 @dataclass(slots=True, frozen=True)
 class Rollout:
-    """A sequence of :class:`Turn` objects plus auxiliary metadata."""
+    """
+    A sequence of :class:`Turn` objects plus auxiliary metadata.
+    This type is the "friendly type" we expect envs to produce.
+
+    """
 
     environment: str
-    problem_id: str
+    example_id: str
     rollout_uid: str
 
     turns: list[Turn]
     metadata: dict[str, Any]
 
+    created_ts: float
+    metadata: dict[str, Any]
+    replica_id: str = "unknown"
+
     def __iter__(self):
         return iter(self.turns)
 
 
-# A callable that accepts a *batch* of :class:`RolloutGroup` objects.
-RolloutSink = Callable[[list["RolloutGroup"]], None]
+RolloutSink: TypeAlias = Callable[[list[Rollout]], None]
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +267,7 @@ class RolloutRecord:
     environment: str
     example_id: str
     rollout_uid: str
+
     turns: list[Turn]
     created_ts: float
     metadata: dict[str, Any]
@@ -292,8 +302,7 @@ class RolloutGroup:
     id: str
     environment: str
     example_id: str
-    rollouts: list[RolloutRecord]
-    sealed_ts: float
+    rollouts: list[Rollout]
     metadata: dict[str, Any] = None
 
 

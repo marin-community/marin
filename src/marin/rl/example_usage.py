@@ -11,7 +11,7 @@ import asyncio
 import time
 from collections import deque
 
-from .datatypes import InferenceEndpoint, RolloutGroup
+from .datatypes import InferenceEndpoint, RolloutGroup, Rollout
 from .envs.math_env import MathEnv, MathEnvConfig
 
 
@@ -34,14 +34,13 @@ def main() -> None:
     args = parse_args()
 
     # Build the rollout sink that collects groups and prints a brief summary
-    collected: deque[RolloutGroup] = deque()
+    collected: deque[Rollout] = deque()
 
-    def sink(groups: list[RolloutGroup]) -> None:
-        for g in groups:
-            collected.append(g)
+    def sink(rollouts: list[Rollout]) -> None:
+        for r in rollouts:
+            collected.append(r)
             print(
-                f"[group] id={g.id} env={g.environment} example={g.example_id} "
-                f"rollouts={len(g.rollouts)} ts={g.sealed_ts:.0f}"
+                f"[group] id={r.rollout_uid} env={r.environment} example={r.example_id} "
             )
 
     # Use the same parameters a MathEnvConfig would use; we construct MathEnv directly
@@ -50,7 +49,6 @@ def main() -> None:
         rollout_sink=sink,  # type: ignore[arg-type]
         data_source=args.data_source,
         split=args.split,
-        max_iters=args.k,
         api_key=None,
         seed=args.seed,
     )

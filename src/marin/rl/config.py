@@ -9,6 +9,7 @@ import abc
 from dataclasses import dataclass
 from typing import Any
 
+from levanter.tracker import TrackerConfig
 from levanter.utils.ray_utils import RayResources
 from ray.actor import ActorHandle
 
@@ -56,17 +57,20 @@ class InferenceConfig:
     failover, etc.).
     """
 
-    endpoint: InferenceEndpoint
+    pass
 
 
 @dataclass(frozen=True)
 class MarinRlConfig:
     """Root config that ties together env, learner, and infra settings."""
-
-    name: str
-    envs: list[AbstractEnvConfig]
+    id: str
+    tracker: TrackerConfig
     inference: InferenceConfig
+
     learner: RlTrainingConfig
     learner_resources: ResourceConfig
-    # Any user-defined extra fields
-    extras: dict[str, Any] | None = None
+
+    envs: list[AbstractEnvConfig]
+    env_replica_counts: dict[str, int] | None = None
+    seed: int = 0
+

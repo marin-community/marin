@@ -13,7 +13,7 @@ import asyncio
 import logging
 from typing import Final
 
-from .datatypes import InferenceEndpoint, RolloutGroup, RolloutSink
+from .datatypes import InferenceEndpoint, RolloutGroup, RolloutSink, Rollout
 
 logger: Final = logging.getLogger(__name__)
 
@@ -142,7 +142,7 @@ class AbstractMarinEnv(abc.ABC):
 class SimpleEnv(AbstractMarinEnv):
     """Concrete base that hides ``async`` details from subclasses."""
 
-    def do_rollout(self) -> list[RolloutGroup]:  # pragma: no cover - abstract
+    def do_rollout(self) -> list[Rollout]:  # pragma: no cover - abstract
         """Produce one or more rollout groups.
 
         Subclasses implement their rollout logic here as a regular function
@@ -158,7 +158,7 @@ class SimpleEnv(AbstractMarinEnv):
             # Respect pause/shutdown signals
             if not await self._wait_ready():
                 break
-            groups = await asyncio.to_thread(self.do_rollout)
-            if groups:
-                self._rollout_sink(groups)
+            group = await asyncio.to_thread(self.do_rollout)
+            if group:
+                self._rollout_sink(group)
             await asyncio.sleep(0)  # yield to Ray scheduler

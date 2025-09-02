@@ -16,20 +16,18 @@ from ray.actor import ActorHandle
 from ..config import AbstractEnvConfig
 from ..datatypes import (
     InferenceEndpoint,
-    RolloutGroup,
     RolloutRecord,
     RolloutSink,
-    Turn,
+    Turn, Rollout,
 )
 from ..env import SimpleEnv
 
 logger = logging.getLogger(__name__)
 
-
 class HelloWorldEnv(SimpleEnv):
     """Simple environment that produces deterministic dummy rollouts."""
 
-    def do_rollout(self) -> list[RolloutGroup]:
+    def do_rollout(self) -> list[Rollout]:
         if not hasattr(self, "_counter"):
             self._counter = 0
 
@@ -51,18 +49,10 @@ class HelloWorldEnv(SimpleEnv):
             metadata={},
             created_ts=time.time(),
         )
-        group = RolloutGroup(
-            id=f"hello-{self._counter}",
-            environment="hello_env",
-            example_id=f"hello-{self._counter}",
-            rollouts=[record],
-            sealed_ts=time.time(),
-            metadata={},
-        )
 
         self._counter += 1
         time.sleep(1.0)  # pace output without async knowledge
-        return [group]
+        return [record]
 
     async def on_shutdown(self) -> None:
         # Example clean-up

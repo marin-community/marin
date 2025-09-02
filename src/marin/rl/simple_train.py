@@ -66,7 +66,6 @@ class RlExample(eqx.Module):
     """RLOO advantages or similar"""
     policy_logprobs: ht.Float[NamedArray, "batch position"]
     """policy logprobs"""
-    reference_logprobs: ht.Float[NamedArray, "batch position"]
 
     def to_lm_example(self) -> LmExample:
         return hax.vmap(LmExample.causal, "batch")(
@@ -133,7 +132,7 @@ def main(config: TrainRlConfig):
     )
 
     # Loss function
-    def loss_fn(model, batch: RlExample, reduction=hax.mean, reduction_axis=None, **kwargs):
+    def loss_fn(ref_model, model, batch: RlExample, reduction=hax.mean, reduction_axis=None, **kwargs):
         dropout_key, key = maybe_rng_split(training_key)
 
         example = batch.to_lm_example()
@@ -152,7 +151,11 @@ def main(config: TrainRlConfig):
         weighted_log_ratio = log_ratio * batch.loss_weights
         reinforce_loss = maybe_reduce_loss(weighted_log_ratio, reduction, reduction_axis, batch.loss_mask)
 
-        ref_log_ratio = batch.reference_logprobs + token_loss
+        reference_log_probs = -next_token_loss(
+            "position", Vocab, ref_model(input_ids=example.tokens, attn_mask=example.loss_mask), example.tokens, reduction=None
+        )
+
+        ref_log_ratio = reference_log_probs + token_loss
         kl_loss = hax.exp(ref_log_ratio) - 1 - ref_log_ratio
         kl_loss = hax.mean(kl_loss, where=batch.loss_mask)
         kl_loss = maybe_reduce_loss(kl_loss, reduction, reduction_axis, batch.loss_mask)

@@ -58,7 +58,7 @@ see also /.agents/projects/replay_buffer.md for more details and tasks.
 - [ ] scheduler hooks to `process_weight_transfers(...)`
 
 
-## Metrics
+### Metrics
 - cf https://huggingface.co/blog/putting_rl_back_in_rlhf_with_rloo
 - [ ] **eps**: Tracks the number of episodes per second.
 - [x] **objective/kl**: The mean Kullback-Leibler (KL) divergence between the current policy and reference policy.

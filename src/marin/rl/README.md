@@ -14,7 +14,7 @@
      |  + Generation          |                               |
      |                        v                               v
 +-----------+          +-------------------+         +------------------------+
-| Learner   |----+---> |    Overseer       | <------ | OAI Inference Server(s)|
+| Learner   |--------> |    Orchestrator   | <------ | OAI Inference Server(s)|
 +-----------+ Metrics  +-------------------+ Metrics +------------------------+ 
      ^                    ^         ^                          ^
      |        Metrics     |         |        Metrics           |
@@ -31,9 +31,9 @@
 
 Probably this diagram is upside down relative to how one should think about it.
 
-### Overseer
+### Orchestrator
 
-At the center is the Overseer. It is responsible for:
+At the center is the Orchestrator. It is responsible for:
 
 - Spinning up the other components, including the number of replicas for each env.
 - Coordinating the training process and rollout generation
@@ -77,138 +77,127 @@ The OAI Inference Server(s) are responsible for:
 - Generating responses
 
 
-## Data Structures
 
+### Rollout
 
-### RlExample
+A Rollout is a sequence of Turns.
 
-An RlExample is a single example of a rollout. It contains:
-
-- `tokens`: `np.ndarray` of token IDs (i32["pos"])
-- `loss_mask`: `np.ndarray` of boolean values indicating which positions to compute loss on (bool["pos"])
-- `segment_ids`: `np.ndarray` of integer values indicating which segment each position belongs to (i32["pos"]). This is for sequence packing primarily.
-- `advantage`: `np.ndarray` of advantage values for each position (float["pos"])
-- `generator_log_probs`: `np.ndarray` of log probabilities from the generator model (float["pos"])
-- `reference_log_probs`: `np.ndarray` of log probabilities from the reference model (float["pos"]) (TODO: should we do this on the fly or precompute?)
-
-
-
-
-### BatchMaker
-
-The `BatchMaker` is an abstract base class that defines the interface for creating batches of RL examples. This class is purely in-memory and does not handle I/O operations.
-
-#### GrpoBatchMaker
-
-The `GrpoBatchMaker` implements a GRPO-style batching strategy:
+# TODO: add multiple reward functions to Turn and then a linearized reward function
 
 ```python
-from marin.rl.batch_maker import GrpoBatchMaker
+@dataclass(slots=True, frozen=True)
+class Turn:
+    """A single message-level interaction within a rollout."""
 
-batch_maker = GrpoBatchMaker(
-    environment_name="math_problems"
-)
+    message: str
+    role: str
+    tokens: list[str] | None = None
+    logprobs: np.ndarray | None = None
+    reward: float | None = None
+    inference_metadata: InferenceMetadata | None = None
+    timestamp: int | None = None
 
-# Add rollouts to the batch maker
-batch_maker.add_rollout(rollout_record)
 
-# Create a batch of examples (in-memory only)
-batch = batch_maker.create_batch(batch_size=32)
+@dataclass(slots=True, frozen=True)
+class Rollout:
+    """A sequence of :class:`Turn` objects plus auxiliary metadata."""
 
-# Get batch metadata for storage purposes
-metadata = batch_maker.get_batch_metadata(batch)
+    environment: str
+    problem_id: str
+    rollout_uid: str
+
+    turns: list[Turn]
+    metadata: dict[str, Any]
+
+    def __iter__(self):
+        return iter(self.turns)
 ```
 
-**Features:**
-- Groups rollouts by `(environment, example_id, policy_version)`
-- Applies retention policy (keeps only latest policy version per problem)
-- Computes advantages using RLOO method
-- Maintains reservoir of rollouts with non-zero advantage (includes both positive and negative examples)
-- Randomly shuffles and samples from reservoir for diverse training batches
-- Optional RNG seed for reproducible sampling
-- Purely in-memory - no I/O operations
-- Provides metadata for batch storage
+## Creating `RlExample`s
 
-### RLExample
 
-Each `RLExample` contains:
+An RlExample is the packed representation of one or more rollouts. It is what the learner needs.
+Rollouts need to be flattened and packed into a set of RlExamples. 
 
-- `tokens`: `np.ndarray` of token IDs (i32["pos"])
-- `loss_mask`: `np.ndarray` of boolean values indicating which positions to compute loss on (bool["pos"])
-- `advantage`: `np.ndarray` of advantage values for each position (float["pos"])
-- `generator_log_probs`: `np.ndarray` of log probabilities from the generator model (float["pos"])
-
-## Data Flow
-
-1. **Experience Collection**: Rollouts are added to `ReplayBuffer` instances
-2. **Experience Storage**: Experiences are automatically written to disk as parquet files when groups are sealed
-3. **Rollout Processing**: Rollouts are automatically forwarded to `BatchMaker` instances
-4. **Batch Creation**: `BatchMaker` creates batches of `RLExample` objects (in-memory)
-5. **Batch Storage**: `ReplayBuffer` handles writing completed batches to disk as parquet files
-
-## File Organization
-
-The system creates the following directory structure:
-
-```
-root_path/
-├── part-uuid.parquet          # Sealed rollout groups (existing functionality)
-└── batches/                   # Training batches (new functionality)
-    └── batch_uuid_timestamp.parquet
-```
-
-## Usage Example
-
-See `example_usage.py` for a complete demonstration of the system.
-
-## Integration with Existing System
-
-The new system integrates seamlessly with existing `marin.rl` infrastructure:
-
-- Uses existing `RolloutRecord`, `Turn`, and other datatypes
-- Works with existing Ray-based `ReplayBuffer` actor
-- Maintains backward compatibility
-- No modifications to `post_training` module
-- Clean separation: BatchMaker handles logic, ReplayBuffer handles I/O
-
-## Configuration
-
-Key configuration options:
-
-- **Buffer Size**: Number of rollouts before sealing groups (default: 8)
-- **Compression**: Parquet compression format (default: "zstd")
-- **Retention Policy**: How to handle rollouts from different policy versions
-- **Advantage Computation**: Method for computing advantages (currently RLOO)
-
-## Extending the System
-
-To create new batching strategies:
-
-1. Inherit from `BatchMaker`
-2. Implement `create_batch()` and `get_batch_metadata()` methods
-3. Add any custom logic for grouping, filtering, or processing rollouts
-4. The ReplayBuffer will handle all I/O operations
-
-Example:
 
 ```python
-class CustomBatchMaker(BatchMaker):
-    def create_batch(self, batch_size: int) -> Optional[List[RLExample]]:
-        # Custom batching logic
-        pass
-
-    def get_batch_metadata(self, batch: List[RLExample]) -> Dict[str, Any]:
-        # Custom metadata logic
-        pass
+class RlExample(eqx.Module):
+    input_ids: ht.i32[NamedArray, "batch position"]  # type: ignore
+    loss_mask: ht.bool_[NamedArray, "batch position"]  # type: ignore
+    """indicates prompt vs not prompt"""
+    segment_ids: ht.i32[NamedArray, "batch position"]  # type: ignore
+    """mostly 1/0 for padding"""
+    advantages: ht.f32[NamedArray, "batch position"]  # type: ignore
+    """RLOO advantages or similar"""
+    policy_logprobs: ht.Float[NamedArray, "batch position"]
+    reference_logprobs: ht.Float[NamedArray, "batch position"] # TODO: should we do this on the fly or precompute?
 ```
 
-## Running the Example
 
-To run the example script:
+So how do we create `RlExample`s? We have a number of environments producing rollouts, at potentially very different rates.
+Also, rollouts may vary quite a lot in length (across env types and over the course of training with thinking).
+So we need to think about how to allocate our tokens to the rollouts from each env.
 
-```bash
-cd src/marin/rl
-python -m example_usage
-```
+We set a *budget* for each env type (we may let this vary over time). This is the fraction of the total budget that we want to allocate to that env type.
+The budget need only sum to less than 1. For any remaining budget, we'll follow some TBD strategy to add more tokens.
 
-This will demonstrate the complete workflow of adding rollouts, creating batches, and storing them to disk using the ReplayBuffer for all I/O operations.
+### ReplayBuffer
+
+The goal of `ReplayBuffer` is to hold for a particular env type and be able to select batches of rollouts to suit some budget.
+*ReplayBuffer is also responsible for computing advantages/baselines for each rollout*, though this is delegated to an *AdvantageFunction*.
+(This only works for policy-based RL of course.)
+
+We let each env type have its own ReplayBuffer (though we could do something more sophisticated and group some env types together).
+ReplayBuffers maintain a pool of rollouts that could be used for training.
+
+ReplayBuffers have:
+
+- a "max age" for rollouts. Rollouts older than this (in steps) are discarded. For now, we'll set it to 1.
+- min group size: the minimum number of rollouts for a group to be included in a batch.
+- an advantage estimation function. For now, RLOO
+
+#### Metrics
+
+ReplayBuffer publish the following metrics:
+
+- replays/${env_type}/rollouts_in_buffer
+- replays/${env_type}/tokens_in_buffer
+- replays/${env_type}/frac_on_policy
+
+- replays/${env_type}/new_rollouts
+- replays/${env_type}/new_tokens # includes prompt tokens and generated tokens
+- replays/${env_type}/new_generated_tokens # generated tokens only
+- replays/${env_type}/reward/mean
+- replays/${env_type}/reward/std
+- replays/${env_type}/frac_truncated
+
+- replays/${env_type}/rewards/${reward_name}/mean
+- replays/${env_type}/rewards/${reward_name}/std
+- replays/${env_type}/frac_used_in_batch
+
+It reports them when a batch is created.(?)
+
+### Batcher
+
+#### v0: simple round-robin
+
+- Inputs: total_token_budget, env_fractions, max_seq_len 
+- Algorithm: simple round-robin over envs by token deficit; newest groups first; no fancy priority.
+- Spillover: if an env can’t meet its share, block
+
+We pack rollouts into batches
+
+#### Metrics
+
+- batches/${env_type}/rollouts_used
+- batches/${env_type}/tokens_used
+- batches/${env_type}/frac_used
+
+
+### Learner
+
+Learner has a model and whatever opt state etc. It takes batches of RlExamples and updates the model.
+Using a standard PPO-ish loss function.
+
+
+### Weight Broadcaster

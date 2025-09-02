@@ -1,106 +1,168 @@
+from dataclasses import dataclass
+from typing import Dict, List, Tuple
 
 import jax
 import numpy as np
+import ray
 
-from .datatypes import GroupKey, RolloutRecord
+from .datatypes import GroupKey, RolloutGroup, RolloutRecord
+
+
+@dataclass(frozen=True)
+class SelectedBatch:
+    """A minimal packed batch for training.
+
+    For now, we return the selected rollouts and their token-level advantages.
+    Token lengths are approximated from text (word count) in the absence of a tokenizer.
+    """
+
+    rollouts: List[RolloutRecord]
+    advantages: List[np.ndarray]
+    total_tokens: int
+
 
 class ReplayBuffer:
+    """Unified replay buffer that aggregates groups across all envs.
+
+    Testable as a plain class. A `ReplayBufferActor` wrapper is provided below for Ray.
     """
 
-    Basic replay buffer that stores rollouts in memory. This class is deliberately not a Ray actor
-    (though it can be decorated with @ray.remote just-in-time or wrapped)
-
-    We'll add support for writing to disk later.
-    """
-
-    def __init__(
-        self,
-        *,
-        prng_key: PRNGKeyArray,
-        min_group_size: int = 4,
-    ) -> None:
-
-        self.prng_key = prng_key
-        self.min_group_size = min_group_size
+    def __init__(self, *, prng_key: jax.Array, min_group_size: int = 2) -> None:
         if min_group_size < 2:
             raise ValueError("min_group_size must be at least 2")
+        self.prng_key = prng_key
+        self.min_group_size = min_group_size
+        # Map GroupKey -> list of rollouts
+        self.rollout_groups: Dict[GroupKey, List[RolloutRecord]] = {}
 
-        self.rollout_groups: dict[GroupKey, list[RolloutRecord]] = {}
+    # -----------------------------
+    # Ingestion
+    # -----------------------------
+    def extend_rollouts(self, rollouts: List[RolloutRecord]) -> None:
+        for r in rollouts:
+            key = GroupKey(r.environment, r.example_id)
+            self.rollout_groups.setdefault(key, []).append(r)
 
-    def extend(self, rollouts: list[RolloutRecord]):
-        for rollout in rollouts:
-            key = GroupKey(rollout.environment, rollout.example_id)
-            group = self.rollout_groups.get(key)
-            if group is None:
-                self.rollout_groups[key] = [rollout]
-            else:
-                group.append(rollout)
+    def extend_groups(self, groups: List[RolloutGroup]) -> None:
+        for g in groups:
+            key = GroupKey(g.environment, g.example_id)
+            for r in g.rollouts:
+                self.rollout_groups.setdefault(key, []).append(r)
 
-    def purge(self):
-        self.rollout_groups = {}
+    def purge(self) -> None:
+        self.rollout_groups.clear()
 
-    def sample(self, *, bsize: int, step: int):
-        # TODO: packing?
-        # TODO: should we track advantage stats online
-        # TODO: log reward and advantage stats
-        # find useful rollout groups (those with some non-zero advantage entry)
-        useful_rollouts: list[RolloutRecord] = []
-        for _key, group in self.rollout_groups.items():
-            if len(group) <= 1:
+    # -----------------------------
+    # Sampling & packing
+    # -----------------------------
+    def sample_batch(
+        self,
+        *,
+        total_token_budget: int,
+        max_seq_len: int,
+        step: int,
+    ) -> SelectedBatch:
+        """Select a batch of rollouts under a token budget across all envs.
+
+        Strategy (v0):
+        - Consider only groups with at least ``min_group_size`` rollouts.
+        - Compute RLOO advantages per group.
+        - Flatten rollouts with non-zero advantages and permute deterministically by step.
+        - Accumulate rollouts until the token budget is exhausted (approximate tokens by word count).
+        - Return the selected rollouts and their per-token advantage arrays (length clipped to max_seq_len).
+        """
+        usable: List[Tuple[RolloutRecord, np.ndarray, int]] = []  # (rollout, adv, approx_len)
+        for group in self.rollout_groups.values():
+            if len(group) < self.min_group_size:
                 continue
-            advantages = _compute_advantages(group)
+            advs = _compute_advantages(group)
+            for r, adv in zip(group, advs, strict=False):
+                if not np.allclose(adv, 0.0):
+                    approx_len = max(1, _approx_generated_tokens(r))
+                    usable.append((r, adv, approx_len))
 
-            for rollout, advantage in zip(group, advantages, strict=False):
-                if not np.allclose(advantage, 0.0):
-                    useful_rollouts.append(rollout)
+        if not usable:
+            return SelectedBatch(rollouts=[], advantages=[], total_tokens=0)
 
-        this_prng = jax.random.fold_in(self.prng_key, step)
-        n = len(useful_rollouts)
-        if n == 0:
-            return []
-        # Permute indices to avoid object array issues
-        perm = jax.random.permutation(this_prng, n)
-        # Convert to Python ints
-        import numpy as _np
+        # Deterministic permutation by step
+        key = jax.random.fold_in(self.prng_key, int(step))
+        perm = list(map(int, np.array(jax.random.permutation(key, len(usable)))))
+        usable = [usable[i] for i in perm]
 
-        idx = list(map(int, _np.array(perm[:bsize])))
-        # TODO: remove selected from pool
-        return [useful_rollouts[i] for i in idx]
+        budget = int(total_token_budget)
+        selected_rollouts: List[RolloutRecord] = []
+        selected_advs: List[np.ndarray] = []
+        consumed = 0
+        for r, adv, approx_len in usable:
+            if consumed + min(approx_len, max_seq_len) > budget:
+                break
+            # Clip or pad advantage to max_seq_len
+            if len(adv) > max_seq_len:
+                adv_arr = adv[:max_seq_len]
+            else:
+                if len(adv) == 0:
+                    adv_arr = np.zeros((max_seq_len,), dtype=np.float32)
+                else:
+                    pad = max_seq_len - len(adv)
+                    adv_arr = np.pad(adv, (0, pad), mode="constant")
+            selected_rollouts.append(r)
+            selected_advs.append(adv_arr)
+            consumed += min(approx_len, max_seq_len)
+
+        return SelectedBatch(rollouts=selected_rollouts, advantages=selected_advs, total_tokens=consumed)
 
 
-def _compute_advantages(rollouts: list[RolloutRecord]) -> list[np.ndarray]:
-    """Compute advantages for a group of rollouts.
+@ray.remote
+class ReplayBufferActor:
+    """Ray actor wrapper over ``ReplayBuffer`` to keep core logic testable.
 
-    Args:
-        rollouts: List of rollouts in the group
-
-    Returns:
-        List of advantage arrays for each rollout
+    Methods mirror the plain class but are Ray-callable.
     """
-    # Extract rewards from turns
+
+    def __init__(self, *, seed: int = 0, min_group_size: int = 2):
+        key = jax.random.PRNGKey(seed)
+        self._inner = ReplayBuffer(prng_key=key, min_group_size=min_group_size)
+
+    def extend_groups(self, groups: List[RolloutGroup]) -> None:
+        self._inner.extend_groups(groups)
+
+    def extend_rollouts(self, rollouts: List[RolloutRecord]) -> None:
+        self._inner.extend_rollouts(rollouts)
+
+    def sample_batch(self, *, total_token_budget: int, max_seq_len: int, step: int) -> SelectedBatch:
+        return self._inner.sample_batch(total_token_budget=total_token_budget, max_seq_len=max_seq_len, step=step)
+
+
+def _approx_generated_tokens(rollout: RolloutRecord) -> int:
+    """Approximate generated token count from assistant turns by word count."""
+    count = 0
+    for t in rollout.turns:
+        if t.role == "assistant" and t.message:
+            count += max(1, len(t.message.split()))
+    return max(1, count)
+
+
+def _compute_advantages(rollouts: List[RolloutRecord]) -> List[np.ndarray]:
+    """Compute RLOO advantages for a group of rollouts.
+
+    Returns per-token advantages sized to the approximate generated length.
+    """
     rewards = []
-    for rollout in rollouts:
-        # Sum rewards across all turns in the rollout
-        rollout_reward = sum(turn.reward or 0.0 for turn in rollout.turns)
-        rewards.append(rollout_reward)
+    for r in rollouts:
+        rewards.append(sum((tr.reward or 0.0) for tr in r.turns))
 
-    # Compute advantages using RLOO method
-    advantages = []
-    for i in range(len(rollouts)):
-        # RLOO: compute advantage relative to other rollouts in the group
-        other_rewards = np.concatenate([rewards[:i], rewards[i + 1 :]])
-        if len(other_rewards) > 0:
-            advantage = rewards[i] - np.mean(other_rewards)
-            # Normalize
-            if np.std(other_rewards) > 1e-8:
-                advantage = advantage / np.std(other_rewards)
+    advantages: List[np.ndarray] = []
+    for i, r in enumerate(rollouts):
+        others = np.array(rewards[:i] + rewards[i + 1 :], dtype=np.float32)
+        if others.size > 0:
+            adv = float(rewards[i] - float(np.mean(others)))
+            std = float(np.std(others))
+            if std > 1e-8:
+                adv /= std
         else:
-            advantage = 0.0
+            adv = 0.0
 
-        # Create advantage array for each token position
-        # For now, we'll use the same advantage for all positions in a rollout
-        # In practice, you might want more sophisticated token-level advantage computation
-        total_tokens = sum(len(turn.message.split()) for turn in rollouts[i].turns)
-        advantages.append(np.full(total_tokens, advantage, dtype=np.float32))
+        length = _approx_generated_tokens(r)
+        advantages.append(np.full((length,), adv, dtype=np.float32))
 
     return advantages
