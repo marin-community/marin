@@ -85,6 +85,22 @@ moe_8x_300m = MixtralConfig(
     rzl_coef=None,  # Disables router z-loss logging
 )
 
+moe_debug = MixtralConfig(
+    seq_len=1024,
+    hidden_dim=128,
+    intermediate_dim=128,
+    num_layers=4,
+    num_heads=4,
+    num_kv_heads=4,
+    # gradient_checkpointing=True,
+    scan_layers=True,
+    n_routed_experts=8,
+    num_experts_per_tok=2,
+    # Disable MoE auxiliary loss logging to prevent JAX tracer leaks
+    lbl_coef=None,  # Disables load balancing loss logging
+    rzl_coef=None,  # Disables router z-loss logging
+)
+
 model_dict = {
     "150m4k": llama_150m_4096_config,
     "300m4k": llama_300m_4096_config,
@@ -95,4 +111,5 @@ model_dict = {
     "l8b": llama_8b_config,
     "olmoe": olmoe_8x_1_4b,
     "300moe": moe_8x_300m,
+    "moedebug": moe_debug,
 }

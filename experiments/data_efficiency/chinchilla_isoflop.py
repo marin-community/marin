@@ -25,7 +25,7 @@ from marin.resources import TpuPodConfig
 
 from data import dclm_tokenized
 
-DEFAULT_BUDGETS = [1e19, 3e19, 6e19]
+DEFAULT_BUDGETS = [3e19, 6e19]
 MLP_RATIO = 4
 
 # TPU v5p hardware constants for memory estimation
@@ -346,9 +346,4 @@ if __name__ == "__main__":
         ),
     )
 
-    def chunk(lst, n):
-        for i in range(0, len(lst), n):
-            yield lst[i : i + n]
-
-    for batch in chunk(steps, 10):
-        executor_main(steps=batch)
+    executor_main(steps=steps)
