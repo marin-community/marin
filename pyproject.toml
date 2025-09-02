@@ -102,7 +102,6 @@ dev = [
 #    {include-group="gcp"},
     {include-group="math"},
     {include-group="transform_test_deps"},
-    "marin[gcp]"
 ]
 
 [tool.uv]
@@ -119,6 +118,10 @@ conflicts = [
     [
         { extra = "crawl" },
         { group = "transform-test-deps" },
+    ],
+    [
+        { extra = "crawl" },
+        { group = "dev" },
     ],
     [
         { extra = "tpu" },
