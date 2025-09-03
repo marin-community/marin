@@ -409,7 +409,9 @@ class Trainer:
             range(max(0, latest_checkpoint_step), self.config["num_train_steps"]), total=self.config["num_train_steps"]
         ):
             rng, subrng = jax.random.split(rng)
-            env_name, environment = jax.random.choice(rng, self.train_environments)
+
+            idx = jax.random.randint(subrng, shape=(), minval=0, maxval=len(self.train_environments))
+            env_name, environment = self.train_environments[idx]
 
             rng, subrng = jax.random.split(subrng)
             inference_params = self.reshard_params(train_state.params)
