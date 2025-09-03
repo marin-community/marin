@@ -299,8 +299,8 @@ class MyMarkdownConverter(MarkdownConverter):
 
     def _compute_num_cols(self, el):
         length_of_cells = 0
-        prev_td = el.findAll("td", recursive=False)
-        prev_th = el.findAll("th", recursive=False)
+        prev_td = el.find_all("td", recursive=False)
+        prev_th = el.find_all("th", recursive=False)
         length = len(prev_td) + len(prev_th)
         for td in prev_td:
             if "colspan" in td.attrs:
@@ -314,8 +314,8 @@ class MyMarkdownConverter(MarkdownConverter):
             _count = 1
             while prev:
                 if prev.name == "tr":
-                    prev_td = prev.findAll("td", recursive=False)
-                    prev_th = prev.findAll("th", recursive=False)
+                    prev_td = prev.find_all("td", recursive=False)
+                    prev_th = prev.find_all("th", recursive=False)
                     length = len(prev_td) + len(prev_th)
                     for td in prev_td:
                         if "colspan" in td.attrs:
@@ -334,7 +334,7 @@ class MyMarkdownConverter(MarkdownConverter):
             count = 1
             while prev:
                 if prev.name == "tr":
-                    prev_td = prev.findAll("td", recursive=False)
+                    prev_td = prev.find_all("td", recursive=False)
                     i = 0
                     for td in prev_td:
                         if "rowspan" in td.attrs and _try_convert_int(td["rowspan"], 1) > count:
@@ -343,7 +343,7 @@ class MyMarkdownConverter(MarkdownConverter):
                             i += _try_convert_int(td["colspan"], 1)
                         else:
                             i += 1
-                    prev_th = prev.findAll("th", recursive=False)
+                    prev_th = prev.find_all("th", recursive=False)
                     i = 0
                     for th in prev_th:
                         if "rowspan" in th.attrs and _try_convert_int(th["rowspan"], 1) > count:

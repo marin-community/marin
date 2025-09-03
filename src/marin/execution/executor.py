@@ -1096,6 +1096,7 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     time_in = time.time()
+
     ray.init(
         namespace="marin",
         ignore_reinit_error=True,
