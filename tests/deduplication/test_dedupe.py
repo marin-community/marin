@@ -11,13 +11,6 @@ BASE_INPUT_DIR = "gs://marin-us-east1/documents/test-data/deduplication"
 BASE_ATTRIBUTE_OUTPUT_DIR = "gs://marin-us-east1/attributes/test-data/deduplication"
 
 
-@pytest.fixture(scope="module", autouse=True)
-def ray_start():
-    ray.init(namespace="marin", ignore_reinit_error=True, resources={"head_node": 1})
-    yield
-    ray.shutdown()  # teardown
-
-
 @pytest.fixture
 def sample_documents():
     """Create sample documents with duplicates for testing"""
