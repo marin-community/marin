@@ -1,6 +1,5 @@
 {
     "entries": [
-        {"environment": "aqua_rat"},
         {"environment": "math"},
         {"environment": "numina_math"},
         {"environment": "open_math_reasoning"},
@@ -11,6 +10,7 @@
         {"environment": "open_math_reasoning"},
         {"environment": "orz"},
         {"environment": "svamp"},
-        {"environment": "swe_bench"}
+        {"environment": "swe_bench"},
+        {"environment": "aqua_rat"}
     ]
 }
