@@ -209,3 +209,8 @@ marin/speedrun/static/data/runs.json
 gha-creds-*.json
 
 .aider*
+.git/*
+
+*.jsonl
+**/*.jsonl
+scr/*

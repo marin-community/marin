@@ -471,6 +471,160 @@ lingoly = ExecutorStep(
     ),
 )
 
+# gsm8k raw
+gsm8k_raw = ExecutorStep(
+    name="raw/gsm8k",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="openai/gsm8k",
+        revision=versioned("6e925c6"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="raw/gsm8k/mainhf",
+)
+
+# math dataset raw
+math_raw = ExecutorStep(
+    name="raw/hendrycks_math",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="EleutherAI/hendrycks_math",
+        revision=versioned("21a5633"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="raw/hendrycks/mathhf",
+)
+
+# truthful_qa raw
+truthful_qa_raw = ExecutorStep(
+    name="raw/truthful_qa",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="truthfulqa/truthful_qa",
+        revision=versioned("741b827"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="raw/truthful_qa/multiple_choicehf",
+)
+
+# bbh raw
+bbh_raw = ExecutorStep(
+    name="raw/bbh",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="SaylorTwift/bbh",
+        revision=versioned("b5306be"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="raw/SaylorTwift/bbhhf",
+)
+
+# gpqa raw
+gpqa_raw = ExecutorStep(
+    name="raw/gpqa",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="Idavidrein/gpqa",
+        revision=versioned("90b8e5b"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.csv", "*.csv"],
+    ),
+    override_output_path="raw/Idavidrein/gpqa",
+)
+
+# instruction-following raw
+instruction_following_raw = ExecutorStep(
+    name="raw/instruction_following_eval",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="wis-k/instruction-following-eval",
+        revision=versioned("5a5661c"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.jsonl", "*.jsonl"],
+    ),
+    override_output_path="raw/wis-k/instruction-following-evalhf",
+)
+
+# musr raw
+musr_raw = ExecutorStep(
+    name="raw/musr",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="WillHeld/MuSRDecontam",
+        revision=versioned("39b4f56"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.parquet"],
+    ),
+    override_output_path="raw/WillHeld/MuSRDecontamhf",
+)
+
+# winograd WSC raw
+winograd_wsc_raw = ExecutorStep(
+    name="raw/winograd_wsc",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="marcov/winograd_wsc_wsc273_promptsource",
+        revision=versioned("63befd8"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.parquet"],
+    ),
+    override_output_path="raw/marcov/winograd_wsc_wsc273_promptsourcehf",
+)
+
+# commonsense_qa raw
+commonsense_qa_raw = ExecutorStep(
+    name="raw/commonsense_qa",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="tau/commonsense_qa",
+        revision=versioned("94630fe"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.parquet"],
+    ),
+    override_output_path="raw/tau/commonsense_qahf",
+)
+
+# lambada_openai raw
+lambada_openai_raw = ExecutorStep(
+    name="raw/lambada_openai",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="EleutherAI/lambada_openai",
+        revision=versioned("879e19a"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.jsonl", "*.jsonl"],
+    ),
+    override_output_path="raw/EleutherAI/lambada_openaihf",
+)
+
+# Alternative PIQA variant used only for contamination analysis
+piqa_baber_raw = ExecutorStep(
+    name="raw/baber/piqa",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="baber/piqa",
+        revision=versioned("142f6d7"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.parquet"],
+    ),
+    override_output_path="raw/baber/piqahf",
+)
+
 ############################################################
 
 if __name__ == "__main__":
