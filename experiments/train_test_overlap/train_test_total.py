@@ -32,6 +32,7 @@ Notes
 import logging
 
 from experiments.midtraining_datasets import finemath_3_plus
+from experiments.pretraining_datasets import dclm_baseline, starcoderdata, proofpile_2, dolmino, nemotron_cc
 from experiments.train_test_overlap.utils import (
     EVAL_DATASET_STEPS,
     DatasetConfig,
@@ -59,20 +60,20 @@ TEMP_DIR = "/dev/shm"
 #
 # TPU resource note:
 # - Only the following TPU types are supported for gating concurrency via the
-#   head resource key: "v4-8", "v5p-8", "v6e-8".
+#   head resource key: "v4-8", "v5p-8", "v6e-4".
 #   See experiments/evals/resource_configs.py for the same canonical IDs.
 # - We do not require a TPU device for dedupe itself; we use the
 #   "TPU-<type>-head" fractional resource solely to control scheduling
 #   on clusters
-ALLOWED_TPU_TYPES = ("v4-8", "v5p-8", "v6e-8")
-TPU_TYPE = "v4-8"  # choose from ALLOWED_TPU_TYPES
+ALLOWED_TPU_TYPES = ("v4-8", "v5p-8", "v6e-4")
+TPU_TYPE = "v6e-4"  # choose from ALLOWED_TPU_TYPES
 DATASET_CONFIGS = [
     DatasetConfig(name="finemath", path=finemath_3_plus, max_in_flight=MAX_IN_FLIGHT, text_field="text"),
-    # DatasetConfig(name="dclm", path=dclm_baseline, max_in_flight=MAX_IN_FLIGHT),
-    # DatasetConfig(name="starcoder", path=starcoderdata, max_in_flight=MAX_IN_FLIGHT, text_field="content"),
-    # DatasetConfig(name="proofpile", path=proofpile_2, max_in_flight=MAX_IN_FLIGHT),
-    # DatasetConfig(name="dolmino", path=dolmino, max_in_flight=MAX_IN_FLIGHT),
-    # DatasetConfig(name="nemotron_cc", path=nemotron_cc, max_in_flight=MAX_IN_FLIGHT),
+    DatasetConfig(name="dclm", path=dclm_baseline, max_in_flight=MAX_IN_FLIGHT),
+    DatasetConfig(name="starcoder", path=starcoderdata, max_in_flight=MAX_IN_FLIGHT, text_field="content"),
+    DatasetConfig(name="proofpile", path=proofpile_2, max_in_flight=MAX_IN_FLIGHT),
+    DatasetConfig(name="dolmino", path=dolmino, max_in_flight=MAX_IN_FLIGHT),
+    DatasetConfig(name="nemotron_cc", path=nemotron_cc, max_in_flight=MAX_IN_FLIGHT),
 ]
 
 

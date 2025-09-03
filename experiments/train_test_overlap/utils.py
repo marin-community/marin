@@ -68,7 +68,7 @@ EVAL_DATASET_STEPS: list[ExecutorStep] = [
 ]
 
 
-ALLOWED_TPU_TYPES: tuple[str, ...] = ("v4-8", "v5p-8", "v6e-8")
+ALLOWED_TPU_TYPES: tuple[str, ...] = ("v4-8", "v5p-8", "v6e-4")
 
 
 @dataclass(frozen=True)
@@ -79,7 +79,7 @@ class UnifiedResources:
     in a consistent way across tasks.
 
     Fields:
-        tpu_type: TPU type string (e.g., "v4-8", "v6e-8"). If provided and
+        tpu_type: TPU type string (e.g., "v4-8", "v6e-4"). If provided and
             `tpu_head_fraction` is set, we add a custom resource key
             f"TPU-{tpu_type}-head": tpu_head_fraction.
         tpu_head_fraction: Fractional amount to reserve against the TPU head resource
