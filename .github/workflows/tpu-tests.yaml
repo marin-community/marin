@@ -7,7 +7,7 @@ jobs:
     if: |
       github.event.issue.pull_request && 
       contains(github.event.comment.body, '@tpubot go') &&
-      (github.event.comment.author_association == 'OWNER' || 
+      (github.event.comment.author_association == 'MEMBER' || 
        github.actor == github.repository_owner)
     runs-on: ubuntu-latest
     env:
