@@ -334,7 +334,6 @@ exclude = [
     "scripts/"
 ]
 
-
 [tool.uv_build]
 package-dir = "src"
 
