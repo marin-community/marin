@@ -5,18 +5,10 @@ import tempfile
 from pathlib import Path
 
 import pytest
-import ray
 
 from tests.test_utils import parameterize_with_configs
 
 logger = logging.getLogger(__name__)
-
-
-@pytest.fixture
-def ray_start():
-    ray.init(namespace="marin", ignore_reinit_error=True)
-    yield
-    ray.shutdown()  # teardown
 
 
 marin_root = Path(__file__).parent.parent
