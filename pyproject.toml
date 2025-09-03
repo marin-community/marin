@@ -40,8 +40,7 @@ dependencies = [
     "wandb<=0.19.9",
     "openai",
     "fasteners>=0.19",
-    # Using a fork of dolma that updates transformers dependency to work with newer versions
-    "dolma @ git+https://github.com/marin-community/dolma.git",
+    "dolma>=1.2.0",
 ]
 
 [dependency-groups]
@@ -102,6 +101,9 @@ dev = [
 ]
 
 [tool.uv]
+
+# override pinned dependencies from dolma
+override-dependencies = ["numpy>=2", "s3fs>=2024", "charset-normalizer>=3.2.0", "tokenizers>=0.21"]
 
 conflicts = [
     [
@@ -169,7 +171,7 @@ url = "https://download.pytorch.org/whl/torch_stable.html"
 gcp = [
     "google-api-python-client>=2.175.0", # ray GCP workaround
     "cryptography>=45",
-    "google-cloud-storage",
+    "google-cloud-storage>=3.3.1",
     "google-cloud-storage-transfer",
     "google-cloud-compute",
 ]
