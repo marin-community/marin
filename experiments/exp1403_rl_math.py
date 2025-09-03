@@ -17,6 +17,8 @@ from marin.training.training import (
     _check_for_wandb_key,
 )
 
+from marin.utils import remove_tpu_lockfile_on_exit
+
 logger = logging.getLogger(__name__)
 
 
@@ -86,6 +88,7 @@ class RlTrainOnPodConfig:
     output_path: str | None = None
 
 
+@remove_tpu_lockfile_on_exit
 def run_rl_training_on_pod(config: RlTrainOnPodConfig):
     """
     Run RL training on a Ray cluster, following marin's execution pattern.
@@ -266,10 +269,10 @@ def main():
 
     experiments = [
         default_rl_train(
-            name="all-env-no-omr",
+            name="all-math500-v4-64",
             model_paths=model_paths,
-            tpu_type="v5p-16",
-            train_bsize=16,
+            tpu_type="v4-64",
+            train_bsize=64,
             kl_coef=1e-3,
             learning_rate=5e-7,
             num_train_steps=2048,
