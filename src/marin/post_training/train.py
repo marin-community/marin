@@ -18,6 +18,7 @@ import os
 import tempfile
 from collections import deque
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 import jax
@@ -30,7 +31,6 @@ from optax import softmax_cross_entropy_with_integer_labels
 from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
-from pathlib import Path
 
 from .environments.marin_env import MarinEnv
 from .inference import GenerationConfig, batch_inference, build_sampler
@@ -487,8 +487,8 @@ def main(
     num_eval_examples: int,
     save_model_freq: int,
     wandb_project: str,
-    train_environments_path: str = "environments_train.json",
-    test_environments_path: str = "environments_test.json",
+    train_environments_path: str = "environments.json",
+    test_environments_path: str = "environments.json",
     inference_param_dtype: str = "bf16",
     inference_activation_dtype: str = "bf16",
     training_param_dtype: str = "fp32",
