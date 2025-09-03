@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import json
 import logging
 import os
@@ -450,8 +464,16 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                 # try to populate answer_text, answer_idx, answer_label based on initial retrieved values
                 if answer_idx is None:
                     if answer_label is not None and answer_labels:
-                        # infer answer_idx (e.g. 0) from answer_label and list of potential labels
-                        answer_idx = answer_labels.index(answer_label)
+                        # try to infer answer_idx from answer_label (label or numeric index)
+                        try:
+                            answer_idx = answer_labels.index(answer_label)
+                        except ValueError:
+                            try:
+                                # fallback if answer_label is a numeric string (1-based indexing)
+                                numeric = int(answer_label)
+                                answer_idx = numeric - 1
+                            except Exception:
+                                answer_idx = None
                     elif answer_text and options:
                         # infer answer_idx (e.g. 0) from answer_text and options list
                         answer_idx = options.index(answer_text)
@@ -464,7 +486,6 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                         answer_label = answer_labels[answer_idx]
                 if not answer_text:
                     if answer_idx is not None and isinstance(answer_idx, int) and options:
-                        # infer answer text (e.g. Paris) from answer_idx and options list
                         answer_text = options[answer_idx]
                     elif cfg.answer_text_ignore:
                         answer_text = ""
@@ -486,7 +507,7 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                     # answer text of correct answer
                     document.metadata.answer = answer_text
                 if answer_labels:
-                    # list of potential labels (e.g. ["A", "B", "C", 'D"])
+                    # list of potential labels (e.g. ["A", "B", "C", 'D'])
                     document.metadata.answer_labels = answer_labels
                 if cfg.output_format.value == "decontamination":
                     # decontamination output format is dolma with text as the key

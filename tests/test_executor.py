@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import json
 import os
 import random
@@ -29,11 +43,10 @@ from marin.execution.executor_step_status import (
 )
 
 
+# Re-use the shared Ray TPU cluster for tests
 @pytest.fixture(scope="module", autouse=True)
-def ray_start():
-    ray.init(namespace="marin", ignore_reinit_error=True, resources={"head_node": 1})
+def ray_start(ray_tpu_cluster):
     yield
-    ray.shutdown()  # teardown
 
 
 @dataclass(frozen=True)
@@ -211,89 +224,94 @@ def test_force_run_failed():
     cleanup_log(log)
 
 
-def test_status_actor():
-    """Test the status actor that keeps track of statuses."""
+@pytest.mark.skipif(
+    lambda: int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "0")) > 1,
+    reason="Ray can't handle multiple clusters.",
+)
+def test_status_actor_one_executor_waiting_for_another():
+    # Test when 2 experiments have a step in common and one waits for another to finish
+    with tempfile.NamedTemporaryFile() as file:
+        with open(file.name, "w") as f:
+            f.write("0")
 
-    def test_one_executor_waiting_for_another():
-        # Test when 2 experiments have a step in common and one waits for another to finish
-        with tempfile.NamedTemporaryFile() as file:
-            with open(file.name, "w") as f:
-                f.write("0")
+        @dataclass
+        class Config:
+            number: int
+            path: str
+            wait: int
+            input_path: str
 
-            @dataclass
-            class Config:
-                number: int
-                path: str
-                wait: int
-                input_path: str
+        def fn(config: Config):
+            time.sleep(config.wait)
+            with open(config.path, "r") as f:
+                number = int(f.read())
+            with open(config.path, "w") as f:
+                f.write(str(number + config.number))
 
-            def fn(config: Config):
-                time.sleep(config.wait)
-                with open(config.path, "r") as f:
-                    number = int(f.read())
-                with open(config.path, "w") as f:
-                    f.write(str(number + config.number))
+        a = ExecutorStep(name="a", fn=fn, config=Config(versioned(1), file.name, 2, ""))
+        b = ExecutorStep(name="b", fn=fn, config=Config(versioned(2), file.name, 0, output_path_of(a)))
 
-            a = ExecutorStep(name="a", fn=fn, config=Config(versioned(1), file.name, 2, ""))
-            b = ExecutorStep(name="b", fn=fn, config=Config(versioned(2), file.name, 0, output_path_of(a)))
+        @ray.remote
+        def run_fn(executor, steps):
+            executor.run(steps=steps)
 
-            @ray.remote
-            def run_fn(executor, steps):
-                executor.run(steps=steps)
+        with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+            executor1 = create_executor(temp_dir)
+            executor2 = create_executor(temp_dir)
 
-            with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
-                executor1 = create_executor(temp_dir)
-                executor2 = create_executor(temp_dir)
+            run1 = run_fn.remote(executor1, [a])
+            run2 = run_fn.remote(executor2, [a, b])
 
-                run1 = run_fn.remote(executor1, [a])
-                run2 = run_fn.remote(executor2, [a, b])
+            ray.get([run1, run2])
 
-                ray.get([run1, run2])
-
-                with open(file.name, "r") as f:
-                    assert int(f.read()) == 3
-
-    test_one_executor_waiting_for_another()
-
-    def test_multiple_steps_race_condition():
-        # Test when there are many steps trying to run simultaneously.
-        # Open a temp dir, make a step that write a random file in that temp dir. Make 10 of these steps and run them
-        # in parallel. Check that only one of them runs
-        with tempfile.TemporaryDirectory(prefix="output_path") as output_path:
-
-            @dataclass
-            class Config:
-                path: str
-
-            def fn(config: Config):
-                random_str = str(random.randint(0, 1000))
-                time.sleep(2)
-                with open(os.path.join(config.path, random_str), "w") as f:
-                    f.write("1")
-
-            @ray.remote
-            def run_fn(executor, steps):
-                executor.run(steps=steps)
-
-            with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
-
-                executor_refs = []
-                for _ in range(10):
-                    executor = create_executor(temp_dir)
-                    executor_refs.append(
-                        run_fn.remote(executor, [ExecutorStep(name="step", fn=fn, config=Config(output_path))])
-                    )
-
-                ray.get(executor_refs)
-
-                files = os.listdir(output_path)
-                print(files)
-                assert len(files) == 1
-                os.unlink(os.path.join(output_path, files[0]))
-
-    test_multiple_steps_race_condition()
+            with open(file.name, "r") as f:
+                assert int(f.read()) == 3
 
 
+@pytest.mark.skipif(
+    lambda: int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "0")) > 1,
+    reason="Ray can't handle multiple clusters.",
+)
+def test_status_actor_multiple_steps_race_condition():
+    # Test when there are many steps trying to run simultaneously.
+    # Open a temp dir, make a step that write a random file in that temp dir. Make 10 of these steps and run them
+    # in parallel. Check that only one of them runs
+    with tempfile.TemporaryDirectory(prefix="output_path") as output_path:
+
+        @dataclass
+        class Config:
+            path: str
+
+        def fn(config: Config):
+            random_str = str(random.randint(0, 1000))
+            time.sleep(2)
+            with open(os.path.join(config.path, random_str), "w") as f:
+                f.write("1")
+
+        @ray.remote
+        def run_fn(executor, steps):
+            executor.run(steps=steps)
+
+        with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+            executor_refs = []
+            for _ in range(10):
+                executor = create_executor(temp_dir)
+                executor_refs.append(
+                    run_fn.remote(executor, [ExecutorStep(name="step", fn=fn, config=Config(output_path))])
+                )
+
+            ray.get(executor_refs)
+
+            files = os.listdir(output_path)
+            print(files)
+            assert len(files) == 1
+            os.unlink(os.path.join(output_path, files[0]))
+
+
+@pytest.mark.skipif(
+    lambda: int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "0")) > 1,
+    reason="Overloaded cluster makes this test flaky.",
+)
 def test_parallelism():
     """Make sure things that parallel execution is possible."""
     log = create_log()

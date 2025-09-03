@@ -13,6 +13,7 @@ checkpoints
 # build stuff
 dist/
 build/
+*.egg-info/
 
 # Unit test / coverage reports
 htmlcov/
