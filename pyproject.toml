@@ -248,7 +248,6 @@ download_transform = [
 ]
 
 quality_dedup_consolidate = [
-    "dolma",
     "fasttext",
     "huggingface_hub",
     "datasets",
