@@ -582,6 +582,19 @@ def do_dedup(
                 new_path = old_path.rsplit(".tmp", 1)[0]
                 os.rename(old_path, new_path)
 
+    if process.returncode != 0:
+        # Common failure cases
+        error_messages = {
+            127: "Dolma command not found. Please install dolma: pip install dolma",
+            126: "Dolma command found but not executable. Check permissions.",
+            2: "Dolma command failed due to missing file or invalid arguments",
+            1: "Dolma command failed with general error",
+        }
+
+        error_msg = error_messages.get(
+            process.returncode, f"Dolma deduplication failed with return code {process.returncode}"
+        )
+        raise RuntimeError(error_msg)
     return process.returncode
 
 
