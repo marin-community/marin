@@ -39,6 +39,7 @@ dependencies = [
     "lz4",
     "wandb<=0.19.9",
     "openai",
+    "fasteners>=0.19",
 ]
 
 [dependency-groups]
@@ -47,6 +48,7 @@ test = [
     "pytest>=8.3.2",
     "pytest-asyncio",
     "pytest-xdist",
+    "pytest-timeout",
     "pytest-cov",
     # need this for integration tests
     "pip",
@@ -102,7 +104,6 @@ dev = [
 #    {include-group="gcp"},
     {include-group="math"},
     {include-group="transform_test_deps"},
-    "marin[gcp]"
 ]
 
 [tool.uv]
@@ -119,6 +120,10 @@ conflicts = [
     [
         { extra = "crawl" },
         { group = "transform-test-deps" },
+    ],
+    [
+        { extra = "crawl" },
+        { group = "dev" },
     ],
     [
         { extra = "tpu" },
@@ -339,3 +344,6 @@ exclude = [
 
 [tool.uv_build]
 package-dir = "src"
+
+[tool.pytest.ini_options]
+timeout = 300
