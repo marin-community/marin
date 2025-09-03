@@ -197,21 +197,32 @@ class Turn:
 
 @dataclass(slots=True, frozen=True)
 class Rollout:
-    """
-    A sequence of :class:`Turn` objects plus auxiliary metadata.
-    This type is the "friendly type" we expect envs to produce.
+    """A single rollout instance produced by an environment.
 
+    Attributes
+    ----------
+    environment:
+        Name of the environment that produced the rollout.
+    example_id:
+        Identifier for the dataset example or task instance.
+    rollout_uid:
+        Unique identifier for deduplicating rollouts.
+    turns:
+        Ordered list of :class:`Turn` objects comprising the rollout.
+    created_ts:
+        UNIX timestamp when the rollout was generated.
+    metadata:
+        Additional implementation-defined metadata.
+    replica_id:
+        Identifier for the environment replica that produced the rollout.
     """
 
     environment: str
     example_id: str
     rollout_uid: str
-
     turns: list[Turn]
-    metadata: dict[str, Any]
-
     created_ts: float
-    metadata: dict[str, Any]
+    metadata: dict[str, Any] = dataclasses.field(default_factory=dict)
     replica_id: str = "unknown"
 
     def __iter__(self):

@@ -16,9 +16,8 @@ from ray.actor import ActorHandle
 from ..config import AbstractEnvConfig
 from ..datatypes import (
     InferenceEndpoint,
-    RolloutRecord,
-    RolloutSink,
-    Turn, Rollout,
+    Turn,
+    Rollout,
 )
 from ..env import SimpleEnv
 
@@ -33,11 +32,10 @@ class HelloWorldEnv(SimpleEnv):
 
         response_text = f"Hello #{self._counter}!"
 
-        record = RolloutRecord(
+        record = Rollout(
             environment="hello_env",
             example_id=f"hello-{self._counter}",
             rollout_uid=f"hello-{self._counter}",
-            replica_id="hello",
             turns=[
                 Turn.from_prompt("Hello, world", input_seed=None),
                 Turn.assistant_text(
@@ -46,8 +44,9 @@ class HelloWorldEnv(SimpleEnv):
                     input_seed=None,
                 ),
             ],
-            metadata={},
             created_ts=time.time(),
+            metadata={},
+            replica_id="hello",
         )
 
         self._counter += 1
@@ -65,8 +64,7 @@ class HelloEnvConfig(AbstractEnvConfig):
     def resources(self) -> RayResources:
         return RayResources(cpu=1)
 
-    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, seed: int) -> ActorHandle:
+    def build(self, inference: InferenceEndpoint, seed: int) -> ActorHandle:
         ActorCls = ray.remote(num_cpus=1)(HelloWorldEnv)
-        actor = ActorCls.remote(inference, rollout_sink)
-        actor.run.remote()  # kick off event loop
+        actor = ActorCls.remote(inference)
         return actor

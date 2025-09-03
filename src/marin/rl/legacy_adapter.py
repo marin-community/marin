@@ -4,7 +4,7 @@ from typing import List
 import numpy as np
 import ray
 
-from .datatypes import RolloutGroup
+from .datatypes import Rollout
 from marin.post_training.environments.marin_env import EnvStep, MarinEnv  # old-style
 
 # ---------------------------------------------------------------------------
@@ -92,11 +92,8 @@ class NewStyleEnvWrapper(MarinEnv):
         self._batch_size = batch_size
         self._tokenizer = tokenizer
 
-        # Start buffer actor
-        self._buffer = _GroupBuffer.remote()
-
-        # Build the new-style environment actor
-        self._actor = env_cfg.build(inference, self._buffer.push.remote, replica_id)
+        # Build the new-style pull-based environment actor
+        self._actor = env_cfg.build(inference, replica_id)
 
     # --------------------------------------------------------------
     # MarinEnv interface
@@ -119,22 +116,22 @@ class NewStyleEnvWrapper(MarinEnv):
         from the async env, grouping them sequentially into ``n_examples`` each with
         ``n_generations`` responses when possible.
         """
-        # Fetch exactly n_examples groups; each group may contain multiple rollouts
+        # Fetch exactly n_examples batches; each batch may contain multiple rollouts
         need_groups = max(1, int(n_examples))
-        groups: List[RolloutGroup] = ray.get(self._buffer.fetch.remote(need_groups))
+        batches: List[list[Rollout]] = [ray.get(self._actor.step.remote()) for _ in range(need_groups)]
 
         gens = max(1, int(n_generations))
         examples: list[dict] = []
         responses: list[list[dict]] = []
         rewards: list[list[float]] = []
 
-        for g in groups:
-            rollouts = g.rollouts
+        for batch in batches:
+            rollouts = batch
             if not rollouts:
                 continue
 
-            prompt = g.metadata.get("prompt", "")
-            if not prompt and rollouts and rollouts[0].metadata:
+            prompt = ""
+            if rollouts and getattr(rollouts[0], "metadata", None):
                 prompt = rollouts[0].metadata.get("prompt", "")  # type: ignore[assignment]
             examples.append({"prompt": prompt, "answer": None})
 
@@ -160,8 +157,8 @@ class NewStyleEnvWrapper(MarinEnv):
 
         rewards_arr = np.asarray(rewards, dtype=float)
         metrics = {
-            "n_groups": len(groups),
-            "n_rollouts": sum(len(g.rollouts) for g in groups),
+            "n_groups": len(batches),
+            "n_rollouts": sum(len(b) for b in batches),
             "n_examples": len(examples),
             "n_generations": gens,
         }

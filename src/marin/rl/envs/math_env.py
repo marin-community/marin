@@ -3,12 +3,12 @@
 This environment samples problems from the MATH dataset (via the
 `DigitalLearningGmbH/MATH-lighteval` split), queries an
 OpenAI-compatible inference endpoint for answers, evaluates the answer
-against the dataset's ground-truth solution, and emits the interaction
-as a :class:`~marin.rl.datatypes.RolloutGroup`.
+against the dataset's ground-truth solution, and emits each interaction
+as a :class:`~marin.rl.datatypes.Rollout`.
 
 Both the dataset loading and answer checking logic are largely ported
 from `marin.post_training.environments.math_env.MathEnv` but translated
-to the new async push-based API defined in
+to the new async pull-based API defined in
 :pyclass:`marin.rl.env.SimpleEnv`.
 """
 
@@ -35,9 +35,8 @@ from marin.post_training.utils import validate_format
 from ..config import AbstractEnvConfig
 from ..datatypes import (
     InferenceEndpoint,
-    RolloutRecord,
-    RolloutSink,
-    Turn, Rollout,
+    Turn,
+    Rollout,
 )
 from ..env import SimpleEnv
 
@@ -66,7 +65,6 @@ class MathEnv(SimpleEnv):
     def __init__(
         self,
         inference: InferenceEndpoint,
-        rollout_sink: RolloutSink,
         *,
         data_source: str,
         split: str = "train",  # "train" or "test"
@@ -74,7 +72,7 @@ class MathEnv(SimpleEnv):
         api_key: str | None = None,
         seed: int = 0,
     ):
-        super().__init__(inference, rollout_sink)
+        super().__init__(inference)
 
         self._data_source = data_source
         self._split = split
@@ -129,10 +127,8 @@ class MathEnv(SimpleEnv):
             seed=seed,
         )
 
-        # Build multiple rollouts (one per generation) and a single group per prompt.
-        rollouts: list[RolloutRecord] = []
-        valid_list: list[bool] = []
-        correct_list: list[bool] = []
+        # Build multiple rollouts (one per generation).
+        rollouts: list[Rollout] = []
 
         class _SingleChoiceResponse:
             def __init__(self, base, choice):
@@ -151,31 +147,27 @@ class MathEnv(SimpleEnv):
 
             single_resp = _SingleChoiceResponse(completion, choice)
 
-            record = RolloutRecord(
+            record = Rollout(
                 environment=self.env_name,
                 example_id=example_id,
                 rollout_uid=f"math-{example_id}-g{j}-{uuid.uuid4().hex}",
-                replica_id="math",
                 turns=[
                     Turn.from_prompt(user_prompt, input_seed=seed),
                     Turn.from_openai_response(single_resp, reward=reward, input_seed=seed),
                 ],
+                created_ts=time.time(),
                 metadata={
                     "valid_format": is_valid,
                     "correct": is_correct,
                     "generation_index": j,
                     "seed": seed,
+                    "prompt": user_prompt,
+                    "response": assistant_msg,
                 },
-                created_ts=time.time(),
+                replica_id="math",
             )
             rollouts.append(record)
-            valid_list.append(is_valid)
-            correct_list.append(is_correct)
-
-        return [
-
-
-        ]
+        return rollouts
 
 
 @dataclass(frozen=True)
@@ -190,15 +182,13 @@ class MathEnvConfig(AbstractEnvConfig):
     def resources(self) -> RayResources:
         return RayResources(cpu=1)
 
-    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, seed: int) -> ray.actor.ActorHandle:
+    def build(self, inference: InferenceEndpoint, seed: int) -> ray.actor.ActorHandle:
         ActorCls = ray.remote(num_cpus=1)(MathEnv)
         actor = ActorCls.remote(
             inference,
-            rollout_sink,
             data_source=self.data_source,
             split=self.split,
             num_generations=self.num_generations,
             seed=self.seed + seed,
         )
-        actor.run.remote()
         return actor

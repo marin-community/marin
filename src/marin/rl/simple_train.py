@@ -123,6 +123,7 @@ def main(config: TrainRlConfig):
     # Initialize Ray and load Environment via wrapper (push-based RL env -> MarinEnv API)
     if not ray.is_initialized():
         ray.init(ignore_reinit_error=True)
+
     environment = NewStyleEnvWrapper(
         env_cfg=HelloEnvConfig(),
         inference=InferenceEndpoint("http://unused"),
@@ -212,18 +213,6 @@ def main(config: TrainRlConfig):
 
         # Sampler is unused by NewStyleEnvWrapper; pass None
         sampler = None
-
-        def get_reference_logprobs(
-            model,
-            batch: RlExample,
-        ) -> ht.Float[NamedArray, "batch position"]:
-            return next_token_loss(
-                "position",
-                Vocab,
-                model(input_ids=batch.input_ids, attn_mask=batch.loss_mask),
-                batch.input_ids,
-                reduction=None,
-            )
 
         while int(state.step) < config.trainer.num_train_steps:
             batch = next(train_loader)

@@ -14,7 +14,7 @@ from levanter.utils.ray_utils import RayResources
 from ray.actor import ActorHandle
 
 from ..resources import ResourceConfig
-from .datatypes import InferenceEndpoint, RolloutSink
+from .datatypes import InferenceEndpoint
 
 __all__ = [
     "AbstractEnvConfig",
@@ -32,10 +32,10 @@ class AbstractEnvConfig(abc.ABC):
         """Return Ray resource specs (CPU/GPU/TPU etc.) needed per replica."""
 
     @abc.abstractmethod
-    def build(self, inference: InferenceEndpoint, rollout_sink: RolloutSink, seed: int) -> ActorHandle:
-        """Instantiate the environment.
+    def build(self, inference: InferenceEndpoint, seed: int) -> ActorHandle:
+        """Instantiate the environment actor (pull-based API).
 
-        The *rollout_sink* should be called with :class:`~marin.rl.datatypes.RolloutGroup` batches.
+        Returns a Ray actor exposing at least ``step()`` and ``shutdown()``.
         """
 
 
@@ -73,4 +73,3 @@ class MarinRlConfig:
     envs: list[AbstractEnvConfig]
     env_replica_counts: dict[str, int] | None = None
     seed: int = 0
-

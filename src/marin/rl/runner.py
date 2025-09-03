@@ -57,16 +57,13 @@ def run_envs_to_parquet(
         List of Ray actor handles for the launched envs.
     """
 
-    # Initialize sink
-    rollout_sink = make_parquet_sink(parquet_root)
-
     # Build all env replicas
     actors: list[ray.actor.ActorHandle] = []
     seed = 0
     for env_cfg in config.envs:
         assert isinstance(env_cfg, AbstractEnvConfig)
         for _ in range(num_replicas):
-            actor = env_cfg.build(config.inference.endpoint, rollout_sink, seed=seed)
+            actor = env_cfg.build(config.inference.endpoint, seed=seed)
             actors.append(actor)
             seed += 1
 
