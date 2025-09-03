@@ -26,3 +26,14 @@ repos:
         args: [ --unsafe ]
       - id: end-of-file-fixer
       - id: trailing-whitespace
+
+
+  - repo: https://github.com/Lucas-C/pre-commit-hooks
+    rev: v1.5.5
+    hooks:
+      - id: insert-license  # Insert a short license disclaimer as a header comment in source files
+        files: \.py$
+        args:
+          - --license-filepath
+          - etc/license_header.txt
+          - --use-current-year
