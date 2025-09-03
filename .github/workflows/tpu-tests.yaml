@@ -1,18 +1,14 @@
 name: CI with GCP TPU
-
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, labeled]
-    paths:
-      - 'marin/evaluation/**'
-      - 'marin/generation/**'
-      - 'pyproject.toml'
-    branches:
-      - main
+on: 
+  issue_comment:
+    types: [created]
 jobs:
   tpu-tests:
-    if: github.event_name == 'pull_request' && 
-        (github.event.label.name == 'tpu' || github.event.action != 'labeled')
+    if: |
+      github.event.issue.pull_request && 
+      contains(github.event.comment.body, '@tpubot go') &&
+      (github.event.comment.author_association == 'OWNER' || 
+       github.actor == github.repository_owner)
     runs-on: ubuntu-latest
     env:
       TPU_ZONE: "us-east5-b"
@@ -118,46 +114,6 @@ jobs:
                                      && uv run pytest tests/evals -s -v \
                                      && echo RAY_DATA_TEST \
                                      && uv run pytest tests/ray-data -s -v"'
-
-      # - name: Configure Docker for Artifact Registry
-      #   run: |
-      #     gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ secrets.GCP_PROJECT_ID }} \
-      #       --command="sudo gcloud auth configure-docker us-east5-docker.pkg.dev --quiet"
-      # - name: Create VM
-      #   run: |
-      #     export TPU_NAME=ci-run-${{ github.run_id }}
-      #     eval "$(ssh-agent -s)"
-      #     TRUE_SHA=${{ github.event.pull_request.head.sha }}
-      #     bash infra/spin-up-vm.sh $TPU_NAME -z ${TPU_ZONE} -t v6e-8 --preemptible
-#          infra/babysit-tpu-vm.sh $TPU_NAME -z ${{ TPU_ZONE }} -t v4-8 --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${{ github.sha }} --retries 1 -- \
-#            PYTHONPATH=$PYTHONPATH:levanter/tests bash levanter/infra/run.sh pytest levanter/tests -m "not entry"
-
-      # - name: Install uv
-      #   uses: astral-sh/setup-uv@v5
-      #   with:
-      #     # Install a specific version of uv.
-      #     version: "0.6.14"
-      #     enable-cache: true
-      #     cache-local-path: "~/.cache/uv"
-
-      # - name: "Set up Python"
-      #   uses: actions/setup-python@v5
-      #   with:
-      #     python-version-file: "pyproject.toml"
-        
-      # - name: Install the project
-      #   run: uv sync --extra dev
-      # - name: Run most tests
-      #   run: |
-      #     export TPU_NAME=ci-run-${{ github.run_id }}
-      #     gcloud compute tpus tpu-vm ssh $TPU_NAME --zone ${TPU_ZONE} --command "JAX_TRACEBACK_FILTERING=off PYTHONPATH=$PYTHONPATH:levanter/tests CI=1 bash levanter/infra/run.sh pytest levanter/tests -m 'not entry and not ray'"
-# Something's wrong with these
-#
-#      - name: Run forked tests
-#        run: |
-#          export TPU_NAME=ci-run-${{ github.run_id }}
-#          gcloud compute tpus tpu-vm ssh $TPU_NAME --zone ${TPU_ZONE} --command "PYTHONPATH=$PYTHONPATH:levanter/tests bash levanter/infra/run.sh pytest --forked levanter/tests -m 'entry'"
-#
       - name: Cleanup
         if: ${{ always() }}
         run: |
