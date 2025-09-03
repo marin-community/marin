@@ -54,7 +54,7 @@ You can also find us in the #levanter channel on the unofficial [Jax LLM Discord
 ## Getting Started
 
 Here is a small set of examples to get you started. For more information about the various configuration options,
-please see the [Getting Started](./docs/Getting-Started-Training.md) guide or the [In-Depth Configuration Guide](doc./reference/Configuration.md).
+please see the [Getting Started](./docs/Getting-Started-Training.md) guide or the [In-Depth Configuration Guide](docs/reference/Configuration.md).
 You can also use `--help` or poke around other configs to see all the options available to you.
 
 
