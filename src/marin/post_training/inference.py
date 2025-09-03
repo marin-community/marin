@@ -441,8 +441,8 @@ class Sampler:
                 PS(self.replica_axis_name),
                 PS(self.replica_axis_name),
                 PS(self.replica_axis_name),
-                None,
-                None,
+                PS(),
+                PS(),
                 self.generation_state_sharding_rules,
             ),
             donate_argnums=(6,),
@@ -516,7 +516,7 @@ class Sampler:
             args_sharding_constraint=(
                 self.params_sharding_rules,
                 self.generation_state_sharding_rules,
-                None,
+                PS(),
             ),
             donate_argnums=(1,),
             annotation_shardings=self.intermediate_sharding_rules,
@@ -593,7 +593,7 @@ class Sampler:
             self.mesh.sjit,
             in_shardings=(self.generation_state_sharding_rules, PS(), PS(), PS()),
             out_shardings=self.generation_state_sharding_rules,
-            args_sharding_constraint=(self.generation_state_sharding_rules, None, None, None),
+            args_sharding_constraint=(self.generation_state_sharding_rules, PS(), PS(), PS()),
             donate_argnums=(0,),
         )
         def clear_indices_compiled(
@@ -623,9 +623,9 @@ class Sampler:
                 self.generation_state_sharding_rules,
                 PS(self.replica_axis_name),
                 PS(self.replica_axis_name),
-                None,
-                None,
-                None,
+                PS(),
+                PS(),
+                PS(),
             ),
             donate_argnums=(0,),
         )
