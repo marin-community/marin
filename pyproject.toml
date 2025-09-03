@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 name = "marin"
 version = "0.1.0"
 readme = "README.md"
-license = {file = "LICENSE"}
+license = { file = "LICENSE" }
 
 requires-python = ">=3.10"
 dependencies = [
@@ -29,8 +29,8 @@ dependencies = [
     "tqdm",
     "tqdm-loggable",
     "toml",
-    "pandas", # Only needed by Fileprovider in inference.py
-    "pyarrow", # # Only needed by Fileprovider in inference.py
+    "pandas",                            # Only needed by Fileprovider in inference.py
+    "pyarrow",                           # # Only needed by Fileprovider in inference.py
     # We have levanter deps for now. @TODO :: Remove them
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1500",
@@ -39,6 +39,9 @@ dependencies = [
     "lz4",
     "wandb<=0.19.9",
     "openai",
+    "fasteners>=0.19",
+    # Using a fork of dolma that updates transformers dependency to work with newer versions
+    "dolma @ git+https://github.com/marin-community/dolma.git",
 ]
 
 [dependency-groups]
@@ -47,6 +50,7 @@ test = [
     "pytest>=8.3.2",
     "pytest-asyncio",
     "pytest-xdist",
+    "pytest-timeout",
     "pytest-cov",
     # need this for integration tests
     "pip",
@@ -74,16 +78,9 @@ docs = [
 ]
 
 
-math = [
-  "pylatexenc",
-  "sympy",
-]
+math = ["pylatexenc", "sympy"]
 
-metrics = [
-  "google-cloud-logging",
-]
-
-
+metrics = ["google-cloud-logging"]
 
 
 transform_test_deps = [
@@ -96,13 +93,12 @@ transform_test_deps = [
 ]
 
 dev = [
-    {include-group="test"},
-    {include-group="lint"},
-    {include-group="docs"},
-#    {include-group="gcp"},
-    {include-group="math"},
-    {include-group="transform_test_deps"},
-    "marin[gcp]"
+    { include-group = "test" },
+    { include-group = "lint" },
+    { include-group = "docs" },
+    #    {include-group="gcp"},
+    { include-group = "math" },
+    { include-group = "transform_test_deps" },
 ]
 
 [tool.uv]
@@ -121,6 +117,10 @@ conflicts = [
         { group = "transform-test-deps" },
     ],
     [
+        { extra = "crawl" },
+        { group = "dev" },
+    ],
+    [
         { extra = "tpu" },
         { extra = "cuda12" },
     ],
@@ -131,16 +131,16 @@ conflicts = [
     [
         { extra = "tpu" },
         { extra = "cpu" },
-    ]
+    ],
 ]
 
 [tool.uv.sources]
 torch = [
-  { index = "pytorch-cpu",  extra = "cpu" },
-  # CUDA12 index only when --extra cuda12 *and* NOT --extra cpu
-  { index = "pytorch-cu128", extra = "cuda12" },
-#   Default index for all other cases
-#  { index = "pytorch-default", marker = "extra != 'cuda12' and extra != 'cpu'" },
+    { index = "pytorch-cpu", extra = "cpu" },
+    # CUDA12 index only when --extra cuda12 *and* NOT --extra cpu
+    { index = "pytorch-cu128", extra = "cuda12" },
+    #   Default index for all other cases
+    #  { index = "pytorch-default", marker = "extra != 'cuda12' and extra != 'cpu'" },
 ]
 sentencepiece = { git = "https://github.com/google/sentencepiece/", subdirectory = "python" }
 
@@ -167,27 +167,18 @@ url = "https://download.pytorch.org/whl/torch_stable.html"
 
 
 gcp = [
-    "google-api-python-client>=2.175.0",  # ray GCP workaround
+    "google-api-python-client>=2.175.0", # ray GCP workaround
     "cryptography>=45",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
     "google-cloud-compute",
 ]
 
-cuda12 = [
-    "jax[cuda12]>=0.6.2",
-    "torch",
-]
+cuda12 = ["jax[cuda12]>=0.6.2", "torch"]
 
-tpu = [
-    "jax[tpu]>=0.6.2",
-    "torch>=2.7.0",
-]
+tpu = ["jax[tpu]>=0.6.2", "torch>=2.7.0"]
 
-cpu = [
-    "torch>=2.7.0",
-    "jax>=0.6.2",
-]
+cpu = ["torch>=2.7.0", "jax>=0.6.2"]
 
 crawl = [
     "w3lib",
@@ -228,9 +219,9 @@ download_transform = [
     "datasets>=2.18.0",
     "fastparquet",
     "google-cloud-storage-transfer~=1.0",
-    "html2text==2024.2.26", # TODO :: Check pin?
-    "htmlmin==0.1.12", # TODO :: Check usage | pin?
-    "markdownify==0.12.1", # TODO :: Check usage | pin?
+    "html2text==2024.2.26",               # TODO :: Check pin?
+    "htmlmin==0.1.12",                    # TODO :: Check usage | pin?
+    "markdownify==0.12.1",                # TODO :: Check usage | pin?
     "py7zr",
     "readabilipy",
     "readability-lxml",
@@ -243,13 +234,17 @@ download_transform = [
 ]
 
 quality_dedup_consolidate = [
-    "dolma",
     "fasttext",
     "huggingface_hub",
     "datasets",
     "transformers",
+    "hyperloglog",
+    "zstandard>=0.23.0",
+    "nltk>=3.8.1",
+    "cattrs==24.1.3",
     "fsspec>=2025.3.0",
 ]
+
 tokenize_train = [
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1359",
@@ -267,7 +262,7 @@ post_training = [
     "flax==0.10.0",
     "sentencepiece>=0.1.99",
     "wget==3.2",
-    "jaxtyping",#==0.2.23",
+    "jaxtyping",                                          #==0.2.23",
     "tyro==0.8.11",
     "tqdm",
     "wandb",
@@ -281,12 +276,10 @@ post_training = [
     "ipython",
     "datasets",
     "scalax@git+https://github.com/Sea-Snell/scalax.git",
-    "swebench",
+    "swebench ; sys_platform != 'darwin'",
 ]
 
-data_browser = [
-    "zstandard==0.23.0",
-]
+data_browser = ["zstandard==0.23.0"]
 
 eval = [
     "levanter>=1.2.dev1359",
@@ -325,11 +318,10 @@ python_version = "3.10"
 
 # Note: Grow more strict over time!
 ignore_missing_imports = true
-exclude = [
-    "marin/",
-    "scripts/"
-]
-
+exclude = ["marin/", "scripts/"]
 
 [tool.uv_build]
 package-dir = "src"
+
+[tool.pytest.ini_options]
+timeout = 300

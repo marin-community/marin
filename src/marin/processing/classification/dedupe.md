@@ -48,4 +48,28 @@ ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- pyth
 ```bash
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_path gs://marin-us-central2/scratch/documents/dedupe_data/v1/testdedupe/ --output_path gs://marin-us-central2/scratch/attribute/dedupe_data/v1/testdedupe/
 ```
+
+## Decontamination Mode
+
+When you run with `--decontaminate` and specify `--decontaminate_path`, the script executes in two phases:
+1. It first builds a Bloom filter from the decontamination dataset.
+2. It then applies this Bloom filter in read-only mode to your main input path, tagging any spans or documents seen in the decontamination set.
+
+Under the hood, the script stages the decontamination data, runs the deduper to create `decontaminated_bloom_filter.bin`, deletes staged JSONL files, stages the target documents, and runs the deduper again with `--bloom_filter.read_only` enabled.
+
+For full details on the underlying flags, see the upstream Dolma docs: https://github.com/allenai/dolma/blob/main/docs/deduplication.md#bloom-filter-read-only
+
+### Example for this repo
+
+```bash
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
+  python marin/processing/classification/dedupe.py \
+  --input_path gs://marin-us-central2/scratch/documents/my_corpus/ \
+  --output_path gs://marin-us-central2/scratch/attributes/my_corpus/decontaminated_dup/ \
+  --decontaminate \
+  --decontaminate_path gs://marin-us-central2/dolma/mmlu_dev/ \
+  --processes 4 \
+  --estimated_doc_count 1000000 \
+  --false_positive_rate 0.001
+```
 ```
