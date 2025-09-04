@@ -21,6 +21,8 @@ import re
 import subprocess
 import time
 
+os.environ["RAY_DEDUP_LOGS"] = "0"
+
 import ray
 
 
@@ -54,21 +56,19 @@ class GangSchedulingActor:
             time.sleep(1)
 
 
-@ray.remote(resources={"TPU": 1})
+@ray.remote(resources={"TPU": 4})
 def cleanup_tpu_process(target_pid: int, worker_id: int, counter):
     """Check and kill a specific PID if it's holding TPU resources."""
     print(f"Worker {worker_id}: Checking if PID {target_pid} is holding TPU resources...")
 
     import glob
 
-    for device in glob.glob("/dev/accel*"):
-        print(f"Worker {worker_id}: Found device: {device}")
-
-    result = subprocess.run(
-        ["lsof", "/dev/accel*"], capture_output=True, text=True, timeout=10, shell=True
-    )
-
     hostname = os.uname().nodename
+
+    for device in glob.glob("/dev/accel*"):
+        print(f"Worker {hostname} ({worker_id}): Found device: {device}")
+
+    result = subprocess.run(["lsof", "/dev/accel*"], capture_output=True, text=True, timeout=10, shell=True)
 
     found_processes = 0
     if result.returncode == 0:
@@ -125,7 +125,7 @@ async def submit_cleanup_job(tpu_type: str, target_pid: int):
 
     runtime_dict = {
         "working_dir": "src/marin/run/",
-        "config": {"setup_timeout_seconds": 1800},
+        "config": {"setup_timeout_seconds": 60},
     }
 
     # Call this script with --internal-run flag
@@ -170,9 +170,7 @@ def main():
         help="TPU type to target (default: v4-8)",
     )
     parser.add_argument("--no-wait", action="store_true", help="Don't wait for job to complete")
-    parser.add_argument(
-        "--internal-run", action="store_true", help="Internal flag to run cleanup directly"
-    )
+    parser.add_argument("--internal-run", action="store_true", help="Internal flag to run cleanup directly")
 
     args = parser.parse_args()
     parse_tpu_type(args.tpu_type)  # Validate TPU type
