@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 
-from __future__ import annotations
 import json
 import os
 import re
 import sys
+import argparse
 from typing import Dict, List, Optional, Tuple
+from argparse import ArgumentParser
 
 import requests
 import argparse
@@ -26,7 +27,7 @@ def extract_marinbot_command(body: str) -> Optional[Tuple[str, List[str]]]:
 def post_issue_comment(session: requests.Session, owner: str, repo: str, issue_number: int, body: str) -> None:
     run_id = os.environ.get("GITHUB_RUN_ID")
     if run_id:
-        body = f"{body}\n\n[View run](https://github.com/{owner}/{repo}/actions/runs/{run_id})"
+        body = f"{body}\n\n[View logs](https://github.com/{owner}/{repo}/actions/runs/{run_id})"
     url = f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments"
     resp = session.post(url, json={"body": body})
     if resp.status_code >= 300:
@@ -42,15 +43,15 @@ def parse_payload(payload: Dict[str, object]) -> Tuple[int, str, str, str, str]:
     if not isinstance(number_value, int):
         raise RuntimeError("Issue number missing or invalid in payload")
 
-    body = str(payload["comment"]["body"])
-    repo = str(payload["repository"]["name"])
-    actor = str(payload["comment"]["user"]["login"])
+    body = str(payload["comment"]["body"])  # pyright: ignore[reportIndexIssue]
+    repo = str(payload["repository"]["name"])  # pyright: ignore[reportIndexIssue]
+    actor = str(payload["comment"]["user"]["login"])  # pyright: ignore[reportIndexIssue]
 
     try:
-        owner = str(payload["repository"]["owner"]["login"])
+        owner = str(payload["repository"]["owner"]["login"])  # pyright: ignore[reportIndexIssue]
     except KeyError:
         try:
-            owner = str(payload["organization"]["login"])
+            owner = str(payload["organization"]["login"])  # pyright: ignore[reportIndexIssue]
         except KeyError:
             raise RuntimeError("Could not determine owner from event payload")
 
@@ -83,12 +84,6 @@ def validate_authorized(
         raise RuntimeError(f"@{actor} is not authorized.")
 
 
-def get_pr(session: requests.Session, owner: str, repo: str, pr_number: int) -> Dict[str, object]:
-    resp = session.get(f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}")
-    resp.raise_for_status()
-    return resp.json()
-
-
 def write_outputs(mapping: Dict[str, object]) -> None:
     github_output = os.environ["GITHUB_OUTPUT"]
     lines = [f"{key}={value}" for key, value in mapping.items()]
@@ -97,24 +92,15 @@ def write_outputs(mapping: Dict[str, object]) -> None:
 
 
 def handle_stop(
-    session: requests.Session,
-    issue_number: int,
-    owner: str,
-    repo: str,
     cluster_path: str,
     job_id: str,
-) -> Dict[str, str]:
-    pr = get_pr(session, owner, repo, issue_number)
-
-    result = {
-        "pr_number": str(issue_number),
-        "sha": str(pr["head"]["sha"]),
-        "cluster_path": cluster_path,
-        "job_id": job_id,
-    }
-
-    write_outputs(result)
-    return result
+):
+    write_outputs(
+        {
+            "cluster_path": cluster_path,
+            "job_id": job_id,
+        }
+    )
 
 
 def handle_ray_run(
@@ -123,23 +109,11 @@ def handle_ray_run(
     owner: str,
     repo: str,
     cluster_path: str,
-    module: Optional[str],
+    commit: str,
+    module: str,
     is_dry_run: bool,
     ray_run_args: List[str],
-    full_command: str,
-) -> Dict[str, str]:
-    pr = get_pr(session, owner, repo, issue_number)
-
-    result = {
-        "pr_number": str(issue_number),
-        "sha": str(pr["head"]["sha"]),
-        "module": module,
-        "cluster_path": cluster_path,
-        "ray_run_args": shlex.join(ray_run_args),
-        "full_command": full_command,
-        "dry_run": "1" if is_dry_run else "0",
-    }
-
+):
     if is_dry_run:
         post_issue_comment(
             session,
@@ -149,49 +123,96 @@ def handle_ray_run(
             "🧪 Running a dry run. See the 'Execute ray_run' step for the command output.",
         )
 
-    write_outputs(result)
-    return result
+    write_outputs(
+        {
+            "sha": commit,
+            "module": module,
+            "cluster_path": cluster_path,
+            "ray_run_args": shlex.join(ray_run_args),
+            "dry_run": "1" if is_dry_run else "0",
+        }
+    )
 
 
-def parse_command(tokens: List[str]) -> Tuple[Optional[argparse.Namespace], str, List[str], argparse.ArgumentParser]:
-    parser = argparse.ArgumentParser(prog="marinbot", description="Marinbot PR command helper")
+def handle_help(session: requests.Session, owner: str, repo: str, issue_number: int, parser: ArgumentParser):
+    assert isinstance(parser, ArgumentParser)
+    subparser_helps = []
+    for action in parser._actions:
+        if not isinstance(action, argparse._SubParsersAction):
+            continue
+        for _choice, subparser in action.choices.items():
+            subparser_helps.append(subparser.format_help())
+
+    newline = "\n"
+    comment = f"""
+```text
+{parser.format_help()}
+subcommands:
+
+{newline.join(subparser_helps)}
+```
+"""
+    post_issue_comment(
+        session,
+        owner,
+        repo,
+        issue_number,
+        comment,
+    )
+
+
+def build_parser() -> ArgumentParser:
+    parser = ArgumentParser(prog="marinbot", description="Marinbot PR command helper")
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
-    # Stop subcommand
+    # stop
     stop_parser = subparsers.add_parser("stop", help="Stop a Ray job by ID")
     stop_parser.add_argument("--cluster", required=True, help="Cluster path")
     stop_parser.add_argument("job_id", help="Job ID to stop")
 
-    # Ray run subcommand - only parse --cluster and module, everything else is ray args
-    ray_run_parser = subparsers.add_parser("ray_run", help="Submit a Ray job using marin.run.ray_run")
+    # ray_run
+    ray_run_parser = subparsers.add_parser(
+        "ray_run",
+        help="Submit a Ray job using marin.run.ray_run",
+        usage="%(prog)s ray_run [ray_run_args] [--dry-run] --cluster <path> <commit> <module>",
+    )
     ray_run_parser.add_argument("--cluster", required=True, help="Cluster path")
     ray_run_parser.add_argument("--dry-run", action="store_true", help="Only print the command; do not execute")
 
-    # Help subcommand
+    # help
     subparsers.add_parser("help", help="Show help message")
 
+    return parser
+
+
+def parse_command(parser: ArgumentParser, tokens: List[str]) -> Tuple[Optional[argparse.Namespace], str, List[str]]:
     if tokens[0] == "ray_run":
-        # @marinbot ray_run [ray_run_args] [--dry-run] --cluster <path> <module>
+        # @marinbot ray_run [ray_run_args] [--dry-run] --cluster <path> <commit> <module>
         args, remaining = parser.parse_known_args(tokens)
-        if remaining:
-            # Last item is the module, everything else before it is ray args
-            # Unfortunately we can't use add_argument("module") and then have
-            # ray_run_args be remaining because for this command line:
+        if len(remaining) >= 2:
+            # Unfortunately we can't use `add_argument` for `commit` and `module` and
+            # then grab `ray_run_args` from `remaining` because argparse will
+            # grab the first arguments for the positionl parameters instead of
+            # the last. So this command line:
             #   --env_vars foo "bar bazz" --cluster infra/jyc.yaml experiments.tutorials.train_tiny_model_cpu
-            # ... it will incorrectly grab "foo" as the module positional argument.
-            # TODO show [module] in the help message.
+            # ... would assign "foo" to `commit` and "bar bazz" to `module`.
+            args.commit = remaining[-2]
+            if not re.fullmatch(r"[0-9a-fA-F]{40}", args.commit):
+                raise RuntimeError("expected full 40-character git commit hash")
             args.module = remaining[-1]
-            ray_run_args = remaining[:-1]
-            return args, "ray_run", ray_run_args, parser
+            ray_run_args = remaining[:-2]
+            return args, "ray_run", ray_run_args
         else:
-            raise RuntimeError("expected module")
+            raise RuntimeError("expected commit and module")
     elif tokens[0] == "help":
         # Just return command type; main() will print help
         args = parser.parse_args(["help"])  # produce a namespace with command
-        return args, "help", [], parser
+        return args, "help", []
     else:
         args = parser.parse_args(tokens)
-        return args, args.command if args else "unknown", [], parser
+        if not args.command:
+            raise RuntimeError("expected command")
+        return args, args.command, []
 
 
 def main() -> None:
@@ -217,16 +238,23 @@ def main() -> None:
 
     extracted = extract_marinbot_command(body)
     if not extracted:
-        write_outputs({"command": "unknown"})
-        raise RuntimeError("No @marinbot command found")
+        raise RuntimeError("no @marinbot command found")
 
     full_command, tokens = extracted
-    args, command, ray_run_args, parser = parse_command(tokens)
+    write_outputs({"pr_number": str(issue_number), "full_command": full_command})
+    parser = build_parser()
+
+    try:
+        args, command, ray_run_args = parse_command(parser, tokens)
+    except Exception as e:
+        handle_help(session, owner, repo, issue_number, parser)
+        raise e
+
     write_outputs({"command": command})
     validate_pull_request(session, owner, repo, payload)
 
     if command == "stop" and args:
-        handle_stop(session, issue_number, owner, repo, args.cluster, args.job_id)
+        handle_stop(args.cluster, args.job_id)
     elif command == "ray_run" and args:
         handle_ray_run(
             session,
@@ -234,36 +262,13 @@ def main() -> None:
             owner,
             repo,
             args.cluster,
+            args.commit,
             args.module,
             bool(getattr(args, "dry_run", False)),
             ray_run_args,
-            full_command,
         )
     else:
-        assert isinstance(parser, argparse.ArgumentParser)
-        subparser_helps = []
-        for action in parser._actions:
-            if not isinstance(action, argparse._SubParsersAction):
-                continue
-            for _choice, subparser in action.choices.items():
-                subparser_helps.append(subparser.format_help())
-
-        comment = f"""
-```text
-{parser.format_help()}
-subcommands:
-
-{"\n".join(subparser_helps)}
-```
-"""
-        post_issue_comment(
-            session,
-            owner,
-            repo,
-            issue_number,
-            comment,
-        )
-        return
+        handle_help(session, owner, repo, issue_number, parser)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # USAGE
 #
 # @marinbot help
-# @marinbot ray_run [ray_run_args] [--dry-run] --cluster <path> <module>
+# @marinbot ray_run [ray_run_args] [--dry-run] --cluster <path> <commit> <module>
 # @marinbot stop --cluster <path> <job_id>
 #
 # SECRETS
@@ -101,7 +101,6 @@ jobs:
           python-version: '3.11'
 
       - name: Cache pip and uv
-        if: steps.meta.outputs.command == 'ray_run'
         uses: actions/cache@v3
         with:
           path: |
