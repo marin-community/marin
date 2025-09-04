@@ -69,6 +69,14 @@ We use docker images to run the jobs inside the ray cluster. We provide a convie
 
 For running any meaningful job on the cluster, you will have to make a GCS bucket and also set the `MARIN_PREFIX` environment variable to the bucket name, e.g:- `gs://marin-us-central2`. We use this bucket to store all the checkpoints, datasets, and other artifacts.
 
+If you haven't setup your SSH keys yet, use
+
+```
+make dev_setup
+```
+
+to setup the required keys for accessing the Marin Ray clusters.
+
 ### Using Ray Submit
 
 1. Connect to the cluster using ray dashboard:
@@ -77,8 +85,11 @@ For running any meaningful job on the cluster, you will have to make a GCS bucke
    ```
 2. In another terminal, submit a job using ray submit:
    ```bash
+   export RAY_ADDRESS=http://localhost:8265
    ray job submit --working-dir . -- python experiments/tutorials/hello_world.py
    ```
+
+   Note that `RAY_ADDRESS` needs to use the `http://` URL specifier when connecting via the dashboard.
 
 ### Using Ray Run
 
