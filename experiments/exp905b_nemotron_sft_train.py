@@ -95,55 +95,55 @@ logger.info(f"Epochs: {EPOCHS}")
 logger.info(f"Number of new steps: {extra_steps}")
 logger.info(f"stop at step number: {num_steps}")
 
+sft_mixture_llama3 = lm_mixture_data_config(
+    tokenized_datasets,
+    mixture_weights,  # Edit in create_experiment_config_step, not here.
+    shuffle=True,
+    missing_weights_are_validation=True,
+)
+
+_sft_config = dataclasses.replace(
+    SFT_CONFIG,
+    num_train_steps=num_steps,  # Using the values in the config file
+    train_batch_size=BATCH_SIZE,  # Using the values in the config file
+    learning_rate=SFT_CONFIG.learning_rate * math.sqrt(BATCH_SIZE / 128),
+)
+
+# Create a custom SFT step with evaluations enabled
+# We need to modify the default_sft to enable evaluations
+# Since default_sft hardcodes eval_harness_tasks=[], we'll use default_train directly
+normal_train_config = SimpleTrainConfig(
+    resources=_sft_config.resources,
+    train_batch_size=_sft_config.train_batch_size,
+    num_train_steps=_sft_config.num_train_steps,
+    learning_rate=_sft_config.learning_rate,
+    lr_schedule=_sft_config.lr_schedule,
+    decay=_sft_config.cooldown,
+    weight_decay=_sft_config.weight_decay,
+    min_lr_ratio=_sft_config.min_lr_ratio,
+    max_grad_norm=_sft_config.max_grad_norm,
+    warmup=_sft_config.warmup,
+    steps_per_eval=_sft_config.steps_per_eval,
+    steps_per_export=_sft_config.steps_per_checkpoint,
+    int8=_sft_config.int8,
+    steps_per_hf_export=_sft_config.steps_per_hf_export,
+    initialize_from_checkpoint_path=_sft_config.initialize_from_checkpoint_path,
+    data_seed=_sft_config.seed,
+    z_loss_weight=_sft_config.z_loss_weight,
+)
+
+sft_step = default_train(
+    name=EXPERIMENT_NAME,
+    tokenized=sft_mixture_llama3,
+    model_config=MODEL_CONFIG,
+    train_config=normal_train_config,
+    tags=EXPERIMENT_TAGS,
+    eval_harness_tasks=OPEN_LM_LEADERBOARD_MCQ,  # Enable evaluations during training
+    use_default_validation=True,
+).with_output_path(f"gs://marin-{REGION}/checkpoints/{EXPERIMENT_NAME}")
+
+# Now run the SFT step
 if __name__ == "__main__":
-    sft_mixture_llama3 = lm_mixture_data_config(
-        tokenized_datasets,
-        mixture_weights,  # Edit in create_experiment_config_step, not here.
-        shuffle=True,
-        missing_weights_are_validation=True,
-    )
-
-    _sft_config = dataclasses.replace(
-        SFT_CONFIG,
-        num_train_steps=num_steps,  # Using the values in the config file
-        train_batch_size=BATCH_SIZE,  # Using the values in the config file
-        learning_rate=SFT_CONFIG.learning_rate * math.sqrt(BATCH_SIZE / 128),
-    )
-
-    # Create a custom SFT step with evaluations enabled
-    # We need to modify the default_sft to enable evaluations
-    # Since default_sft hardcodes eval_harness_tasks=[], we'll use default_train directly
-    normal_train_config = SimpleTrainConfig(
-        resources=_sft_config.resources,
-        train_batch_size=_sft_config.train_batch_size,
-        num_train_steps=_sft_config.num_train_steps,
-        learning_rate=_sft_config.learning_rate,
-        lr_schedule=_sft_config.lr_schedule,
-        decay=_sft_config.cooldown,
-        weight_decay=_sft_config.weight_decay,
-        min_lr_ratio=_sft_config.min_lr_ratio,
-        max_grad_norm=_sft_config.max_grad_norm,
-        warmup=_sft_config.warmup,
-        steps_per_eval=_sft_config.steps_per_eval,
-        steps_per_export=_sft_config.steps_per_checkpoint,
-        int8=_sft_config.int8,
-        steps_per_hf_export=_sft_config.steps_per_hf_export,
-        initialize_from_checkpoint_path=_sft_config.initialize_from_checkpoint_path,
-        data_seed=_sft_config.seed,
-        z_loss_weight=_sft_config.z_loss_weight,
-    )
-
-    sft_step = default_train(
-        name=EXPERIMENT_NAME,
-        tokenized=sft_mixture_llama3,
-        model_config=MODEL_CONFIG,
-        train_config=normal_train_config,
-        tags=EXPERIMENT_TAGS,
-        eval_harness_tasks=OPEN_LM_LEADERBOARD_MCQ,  # Enable evaluations during training
-        use_default_validation=True,
-    ).with_output_path(f"gs://marin-{REGION}/checkpoints/{EXPERIMENT_NAME}")
-
-    # Now run the SFT step
     executor_main(
         [
             sft_step,
