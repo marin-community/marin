@@ -273,6 +273,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         filetype="parquet",
         splits=["chat", "code", "math", "stem"],
         subsets=["SFT"],
+        metadata_columns=["category", "license", "generator", "reasoning"],
         adapter_name="nvidia/Nemotron-Post-Training-Dataset-v2-SFT",
         use_large_dataset_transform=False,
     ),
