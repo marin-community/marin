@@ -87,21 +87,21 @@ Configuration → Environment Setup → Model Loading → Training Loop → Chec
    for step in range(num_train_steps):
        # 1. Select random environment
        environment = random.choice(train_environments)
-       
+
        # 2. Generate rollouts using current policy
        inference_params = reshard_params(train_state.params)
        rl_dataset, metrics = create_dataset_from_environment(
            environment, sampler, inference_params, reference_params, ...)
-       
+
        # 3. Train on generated data
        for batch in rl_dataset.iterate_batches():
            train_state, train_metrics = train_step(train_state, batch)
-       
+
        # 4. Evaluation and logging
        if step % log_freq == 0:
            eval_metrics = evaluate_data_from_environment(params)
            logger.log({**train_metrics, **eval_metrics, **dataset_metrics})
-       
+
        # 5. Checkpoint saving
        if step % save_freq == 0:
            save_checkpoint(train_state, step)
@@ -162,10 +162,10 @@ Prompts → Tokenization → Prefill → Generation Loop → Output Processing
        if can_prefill():
            batch = build_prefill_batch()
            generation_state = prefill(params, batch, generation_state)
-       
+
        # Generate next tokens for active sequences
        generation_state = generate_step(params, generation_state, rng)
-       
+
        # Process completed generations
        for completed in extract_completed():
            yield completed

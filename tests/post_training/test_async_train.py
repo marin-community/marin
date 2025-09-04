@@ -21,10 +21,11 @@ import unittest.mock
 from pathlib import Path
 
 import jax
+import numpy as np
 import pytest
 
 from marin.post_training.inference_worker import InferenceWorker
-from marin.post_training.rollout_storage import InMemoryRolloutQueue
+from marin.post_training.rollout_storage import InMemoryRolloutQueue, RolloutBatch
 from marin.post_training.train_worker import TrainingWorker
 from marin.post_training.training_config import (
     CheckpointerConfigData,
@@ -96,9 +97,7 @@ def training_config():
         prefix_to_id=True,
     )
 
-    generation_config = GenerationConfig(
-        max_output_length=32, stop_tokens=[[128001]], n_generations=2
-    )
+    generation_config = GenerationConfig(max_output_length=32, stop_tokens=[[128001]], n_generations=2)
 
     test_generation_config = GenerationConfig(
         max_output_length=32, temperature=0.0, stop_tokens=[[128001]], n_generations=1
@@ -192,9 +191,7 @@ def worker_config():
 @pytest.fixture
 def mock_tokenizer():
     """Mock tokenizer fixture."""
-    with unittest.mock.patch(
-        "marin.post_training.inference_worker.load_tokenizer"
-    ) as mock_tokenizer:
+    with unittest.mock.patch("marin.post_training.inference_worker.load_tokenizer") as mock_tokenizer:
         mock_tokenizer.return_value = DummyTokenizer(vocab_size=1000, pad_token_id=0)
         yield mock_tokenizer
 
@@ -221,6 +218,7 @@ def test_inference_worker(training_config, inference_worker_config, mock_tokeniz
     def _run_worker():
         import sys
         import traceback
+
         try:
             worker.run()
         except Exception as e:
@@ -251,9 +249,7 @@ def test_inference_worker(training_config, inference_worker_config, mock_tokeniz
     print("✓ Inference worker generated rollout batch successfully")
 
 
-def test_workers_with_in_memory_queue(
-    training_config, inference_worker_config, worker_config, mock_tokenizer
-):
+def test_workers_with_in_memory_queue(training_config, inference_worker_config, worker_config, mock_tokenizer):
     """Test inference and training workers communicating through in-memory queue."""
     # Skip if not on CPU
     if jax.devices()[0].device_kind != "cpu":
@@ -279,9 +275,7 @@ def test_workers_with_in_memory_queue(
         """Run inference worker in thread."""
         nonlocal inference_error, rollouts_generated
         try:
-            worker = InferenceWorker(
-                training_config, inference_worker_config, rollout_writer=queue_writer
-            )
+            worker = InferenceWorker(training_config, inference_worker_config, rollout_writer=queue_writer)
 
             # Override the run method to count generated rollouts
             original_generate_batch = worker._generate_rollout_batch
@@ -372,11 +366,7 @@ def test_workers_with_in_memory_queue(
 
         print(f"Inference worker error: {inference_error}")
         print("Inference worker traceback:")
-        print(
-            traceback.format_exception(
-                type(inference_error), inference_error, inference_error.__traceback__
-            )
-        )
+        print(traceback.format_exception(type(inference_error), inference_error, inference_error.__traceback__))
         pytest.fail(f"Inference worker failed: {inference_error}")
 
     if training_error:
@@ -384,24 +374,98 @@ def test_workers_with_in_memory_queue(
 
         print(f"Training worker error: {training_error}")
         print("Training worker traceback:")
-        print(
-            traceback.format_exception(
-                type(training_error), training_error, training_error.__traceback__
-            )
-        )
+        print(traceback.format_exception(type(training_error), training_error, training_error.__traceback__))
         pytest.fail(f"Training worker failed: {training_error}")
 
     # Verify expected steps completed
     expected_rollouts = inference_worker_config.max_rollouts
     expected_training_steps = training_config.hyperparameters.num_train_steps
 
-    assert rollouts_generated >= expected_rollouts, (
-        f"Expected {expected_rollouts} rollouts, got {rollouts_generated}"
-    )
-    assert training_steps_completed >= expected_training_steps, (
-        f"Expected {expected_training_steps} training steps, got {training_steps_completed}"
-    )
+    assert rollouts_generated >= expected_rollouts, f"Expected {expected_rollouts} rollouts, got {rollouts_generated}"
+    assert (
+        training_steps_completed >= expected_training_steps
+    ), f"Expected {expected_training_steps} training steps, got {training_steps_completed}"
 
     print(f"✓ Generated {rollouts_generated} rollouts")
     print(f"✓ Completed {training_steps_completed} training steps")
     print("✓ Workers communicated successfully through in-memory queue")
+
+
+def test_train_worker(training_config, worker_config, mock_tokenizer):
+    """Test training worker processes rollout batch and creates checkpoint."""
+    # Skip if not on CPU
+    if jax.devices()[0].device_kind != "cpu":
+        pytest.skip("Test requires CPU device")
+
+    # Create in-memory queue
+    rollout_queue = InMemoryRolloutQueue()
+    queue_reader = rollout_queue.reader()
+    queue_writer = rollout_queue.writer()
+
+    # Create a sample rollout batch with correct data shapes
+    batch_size = training_config.hyperparameters.train_bsize
+    max_seq_len = training_config.hyperparameters.max_input_length + training_config.hyperparameters.max_output_length
+
+    # Create mock batch data with appropriate shapes
+    rng = np.random.default_rng(42)  # Use fixed seed for reproducibility
+    sample_batch = RolloutBatch(
+        input_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
+        attention_mask=np.ones((batch_size, max_seq_len), dtype=np.int32),
+        position_ids=np.arange(max_seq_len)[None, :].repeat(batch_size, axis=0).astype(np.int32),
+        target_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
+        loss_weights=np.ones((batch_size, max_seq_len), dtype=np.float32),
+        loss_masks=np.ones((batch_size, max_seq_len), dtype=np.float32),
+        reference_logprobs=rng.standard_normal((batch_size, max_seq_len)).astype(np.float32),
+        metadata={"batch_id": 0, "environment": "test"},
+    )
+
+    # Write batch to queue
+    queue_writer.write_batch(sample_batch)
+
+    # Configure training for single step
+    training_config.hyperparameters.num_train_steps = 1
+    training_config.logging.save_model_freq = 1
+    worker_config.checkpoint_sync_interval = 1
+
+    # Create training worker
+    worker = TrainingWorker(training_config, worker_config, rollout_reader=queue_reader)
+
+    # Track completion
+    training_completed = False
+    checkpoint_created = False
+
+    def run_training():
+        nonlocal training_completed, checkpoint_created
+        try:
+            worker.train()
+            training_completed = True
+
+            # Check if checkpoint was created in logger output directory
+            import os
+
+            logger_checkpoint_dir = os.path.join(worker.logger.output_dir, "checkpoints")
+            if os.path.exists(logger_checkpoint_dir):
+                logger_checkpoint_files = os.listdir(logger_checkpoint_dir)
+                checkpoint_created = len(logger_checkpoint_files) > 0
+
+        except Exception as e:
+            import traceback
+
+            print(f"Training worker error: {e}")
+            print("Training worker traceback:")
+            print(traceback.format_exc())
+
+    # Run training in thread
+    import threading
+
+    training_thread = threading.Thread(target=run_training)
+    training_thread.start()
+
+    # Wait for completion with timeout
+    training_thread.join(timeout=30)
+
+    # Verify results
+    assert training_completed, "Training worker should complete successfully"
+    assert checkpoint_created, "Training worker should create checkpoint after processing batch"
+
+    print("✓ Training worker processed batch and created checkpoint successfully")

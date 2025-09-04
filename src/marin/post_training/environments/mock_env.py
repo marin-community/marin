@@ -70,9 +70,7 @@ class MockEnv(MarinEnv):
         # Use JAX random for consistent sampling across all TPU workers
         with jax.default_device(jax.devices("cpu")[0]):
             n_to_sample = min(n_examples, len(available_examples))
-            indices = jax.random.choice(
-                prng_key, len(available_examples), shape=(n_to_sample,), replace=True
-            )
+            indices = jax.random.choice(prng_key, len(available_examples), shape=(n_to_sample,), replace=True)
             examples = [available_examples[int(idx)] for idx in indices]
 
         # Generate responses
@@ -92,9 +90,7 @@ class MockEnv(MarinEnv):
         """Add instruction to problem."""
         return self.INSTRUCTION + problem
 
-    def _compute_rewards(
-        self, examples: list[dict], responses: list[list[dict[str, Any]]]
-    ) -> tuple[np.ndarray, dict]:
+    def _compute_rewards(self, examples: list[dict], responses: list[list[dict[str, Any]]]) -> tuple[np.ndarray, dict]:
         """Compute rewards for generated responses."""
         n_examples = len(examples)
         n_generations = len(responses[0]) if responses else 1
@@ -105,16 +101,12 @@ class MockEnv(MarinEnv):
         correct_count = 0
         total_count = 0
 
-        for example_idx, (example, response_list) in enumerate(
-            zip(examples, responses, strict=False)
-        ):
+        for example_idx, (example, response_list) in enumerate(zip(examples, responses, strict=False)):
             correct_answer = example["answer"]
 
             for gen_idx, response in enumerate(response_list):
                 # Decode the generated tokens to text
-                decoded_response = self.tokenizer.decode(
-                    response["tokens"], skip_special_tokens=True
-                )
+                decoded_response = self.tokenizer.decode(response["tokens"], skip_special_tokens=True)
 
                 # Simple reward: 1 if generation contains the correct answer, 0 otherwise
                 reward = 1.0 if correct_answer in decoded_response else 0.0

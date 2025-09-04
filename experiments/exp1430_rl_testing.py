@@ -16,7 +16,6 @@
 Trying out RL training with separate trainer & rollout components.
 """
 
-import json
 import logging
 import os
 from dataclasses import dataclass
@@ -25,12 +24,21 @@ import ray
 
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.post_training.training_config import (
-    TrainingConfig, ModelConfig, TrainingHyperparameters, LoggingConfig,
-    EnvironmentConfig, DistributedConfig, GenerationConfig
+    TrainingConfig,
+    ModelConfig,
+    TrainingHyperparameters,
+    LoggingConfig,
+    EnvironmentConfig,
+    DistributedConfig,
+    GenerationConfig,
 )
 from marin.post_training.model_config import (
-    OptimizerConfig, GenerationConfigData, LoggerConfigData,
-    CheckpointerConfigData, ModelOverrideConfig, ModelPathsConfig
+    OptimizerConfig,
+    GenerationConfigData,
+    LoggerConfigData,
+    CheckpointerConfigData,
+    ModelOverrideConfig,
+    ModelPathsConfig,
 )
 from marin.resources import ResourceConfig, TpuPodConfig
 from marin.training.training import (
@@ -46,6 +54,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class RLTrainConfig:
     """Configuration for RL training on a pod, using draccus TrainingConfig."""
+
     resources: ResourceConfig
     training_config: TrainingConfig
 
@@ -162,19 +171,41 @@ def default_rl_train(
     generation_config = GenerationConfigData(
         max_output_length=1025,
         temperature=1.0,
-        stop_tokens=[[524, 9399], [694, 9399], [4005, 9399], [6199, 9399],
-                     [8217, 9399], [9169, 9399], [12817, 9399], [19203, 9399],
-                     [20264, 9399], [22246, 9399], [27147, 9399], [128001]],
-        n_generations=64
+        stop_tokens=[
+            [524, 9399],
+            [694, 9399],
+            [4005, 9399],
+            [6199, 9399],
+            [8217, 9399],
+            [9169, 9399],
+            [12817, 9399],
+            [19203, 9399],
+            [20264, 9399],
+            [22246, 9399],
+            [27147, 9399],
+            [128001],
+        ],
+        n_generations=64,
     )
 
     test_generation_config = GenerationConfigData(
         max_output_length=1025,
         temperature=0.0,
-        stop_tokens=[[524, 9399], [694, 9399], [4005, 9399], [6199, 9399],
-                     [8217, 9399], [9169, 9399], [12817, 9399], [19203, 9399],
-                     [20264, 9399], [22246, 9399], [27147, 9399], [128001]],
-        n_generations=1
+        stop_tokens=[
+            [524, 9399],
+            [694, 9399],
+            [4005, 9399],
+            [6199, 9399],
+            [8217, 9399],
+            [9169, 9399],
+            [12817, 9399],
+            [19203, 9399],
+            [20264, 9399],
+            [22246, 9399],
+            [27147, 9399],
+            [128001],
+        ],
+        n_generations=1,
     )
 
     model_config_override = ModelOverrideConfig(
@@ -185,13 +216,10 @@ def default_rl_train(
         remat_block="nothing_saveable",
         resid_pdrop=0.0,
         embd_pdrop=0.0,
-        attn_pdrop=0.0
+        attn_pdrop=0.0,
     )
 
-    checkpointer_config = CheckpointerConfigData(
-        save_optimizer_state=False,
-        save_float_dtype="bf16"
-    )
+    checkpointer_config = CheckpointerConfigData(save_optimizer_state=False, save_float_dtype="bf16")
 
     resources = TpuPodConfig(tpu_type=tpu_type)
 
@@ -207,9 +235,8 @@ def default_rl_train(
             train_attention_kernel_config='splash:{"block_size": 256}',
             prefill_attention_kernel_config='splash:{"block_size": 256}',
             generate_attention_kernel_config=(
-                'paged:{"page_size": 256, "pages_per_compute_block": 1, '
-                '"inline_seq_dim": true, "use_int8": false}'
-            )
+                'paged:{"page_size": 256, "pages_per_compute_block": 1, ' '"inline_seq_dim": true, "use_int8": false}'
+            ),
         ),
         hyperparameters=TrainingHyperparameters(
             num_train_steps=num_train_steps,
@@ -222,7 +249,7 @@ def default_rl_train(
             n_prompts_per_step=16,
             optim_config=optim_config,
             pad_token_id=128002,
-            kl_coef=kl_coef
+            kl_coef=kl_coef,
         ),
         logging=LoggingConfig(
             log_freq=8,
@@ -232,20 +259,15 @@ def default_rl_train(
             logger_config=logger_config,
             save_initial_checkpoint=False,
             log_initial_step=True,
-            max_checkpoints=None
+            max_checkpoints=None,
         ),
         environment=EnvironmentConfig(),
         distributed=DistributedConfig(
-            sharding=[1, 4, 1, -1],
-            physical_axis_splitting=False,
-            jax_distributed_initalize_config={}
+            sharding=[1, 4, 1, -1], physical_axis_splitting=False, jax_distributed_initalize_config={}
         ),
-        generation=GenerationConfig(
-            generation_config=generation_config,
-            test_generation_config=test_generation_config
-        ),
+        generation=GenerationConfig(generation_config=generation_config, test_generation_config=test_generation_config),
         output_dir=this_output_path(),
-        checkpointer_config=checkpointer_config
+        checkpointer_config=checkpointer_config,
     )
 
     config = RLTrainConfig(

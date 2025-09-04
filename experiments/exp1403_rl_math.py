@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class RlTrainOnPodConfig:
     """Configuration for RL training on a pod, using draccus TrainingConfig."""
+
     resources: ResourceConfig
     training_config: TrainingConfig
 
@@ -213,13 +214,10 @@ def default_rl_train(
         remat_block="nothing_saveable",
         resid_pdrop=0.0,
         embd_pdrop=0.0,
-        attn_pdrop=0.0
+        attn_pdrop=0.0,
     )
 
-    checkpointer_config = CheckpointerConfigData(
-        save_optimizer_state=False,
-        save_float_dtype="bf16"
-    )
+    checkpointer_config = CheckpointerConfigData(save_optimizer_state=False, save_float_dtype="bf16")
 
     resources = TpuPodConfig(tpu_type=tpu_type)
 
@@ -234,7 +232,9 @@ def default_rl_train(
             tokenizer_override={},
             train_attention_kernel_config='splash:{"block_size": 256}',
             prefill_attention_kernel_config='splash:{"block_size": 256}',
-            generate_attention_kernel_config='paged:{"page_size": 256, "pages_per_compute_block": 1, "inline_seq_dim": true, "use_int8": false}',
+            generate_attention_kernel_config=(
+                'paged:{"page_size": 256, "pages_per_compute_block": 1, "inline_seq_dim": true, "use_int8": false}'
+            ),
         ),
         hyperparameters=TrainingHyperparameters(
             num_train_steps=num_train_steps,

@@ -15,13 +15,11 @@
 """Helper functions for model management and setup."""
 
 import copy
-import json
 import os
 import tempfile
-from dataclasses import asdict, dataclass
-from typing import Any
+from dataclasses import asdict
 
-from scalax.sharding import MeshShardingHelper, TreePathShardingRule
+from scalax.sharding import MeshShardingHelper
 from transformers import AutoTokenizer
 
 from .llama3 import LLAMA_STANDARD_CONFIGS, FlaxLLaMAForCausalLM, LLaMAConfig
@@ -89,9 +87,7 @@ def llama_config_from_model_config(
     return config
 
 
-def build_training_model(
-    config: LLaMAConfig, training_config: TrainingConfig
-) -> FlaxLLaMAForCausalLM:
+def build_training_model(config: LLaMAConfig, training_config: TrainingConfig) -> FlaxLLaMAForCausalLM:
     """Build training model with proper configurations."""
     # Parse dtype configurations
     param_dtype = get_float_dtype_by_name(training_config.model.training_param_dtype)
@@ -122,15 +118,11 @@ def build_training_model(
     return training_model
 
 
-def build_prefill_model(
-    config: LLaMAConfig, training_config: TrainingConfig
-) -> FlaxLLaMAForCausalLM:
+def build_prefill_model(config: LLaMAConfig, training_config: TrainingConfig) -> FlaxLLaMAForCausalLM:
     """Build prefill model with proper configurations."""
     # Parse dtype configurations
     inference_param_dtype = get_float_dtype_by_name(training_config.model.inference_param_dtype)
-    inference_activation_dtype = get_float_dtype_by_name(
-        training_config.model.inference_activation_dtype
-    )
+    inference_activation_dtype = get_float_dtype_by_name(training_config.model.inference_activation_dtype)
 
     # Load attention kernel configurations
     prefill_attention_kernel, prefill_attention_kernel_config = load_attention_kernel_config(
@@ -157,15 +149,11 @@ def build_prefill_model(
     return prefill_model
 
 
-def build_generate_model(
-    config: LLaMAConfig, training_config: TrainingConfig
-) -> FlaxLLaMAForCausalLM:
+def build_generate_model(config: LLaMAConfig, training_config: TrainingConfig) -> FlaxLLaMAForCausalLM:
     """Build generate model with proper configurations."""
     # Parse dtype configurations
     inference_param_dtype = get_float_dtype_by_name(training_config.model.inference_param_dtype)
-    inference_activation_dtype = get_float_dtype_by_name(
-        training_config.model.inference_activation_dtype
-    )
+    inference_activation_dtype = get_float_dtype_by_name(training_config.model.inference_activation_dtype)
 
     # Load attention kernel configurations
     generate_attention_kernel, generate_attention_kernel_config = load_attention_kernel_config(
@@ -185,18 +173,14 @@ def build_generate_model(
         param_dtype=inference_param_dtype,
         input_shape=(
             training_config.hyperparameters.decode_bsize,
-            training_config.hyperparameters.max_input_length
-            + training_config.hyperparameters.max_output_length
-            - 1,
+            training_config.hyperparameters.max_input_length + training_config.hyperparameters.max_output_length - 1,
         ),
     )
 
     return generate_model
 
 
-def load_tokenizer(
-    model_paths: ModelPathsConfig, tokenizer_override: TokenizerOverrideConfig
-) -> AutoTokenizer:
+def load_tokenizer(model_paths: ModelPathsConfig, tokenizer_override: TokenizerOverrideConfig) -> AutoTokenizer:
     """Load and configure tokenizer."""
     tokenizer_is_temp = False
     if model_paths.tokenizer.startswith("gs://"):
@@ -219,5 +203,3 @@ def load_tokenizer(
         os.remove(model_paths.tokenizer)
 
     return tokenizer
-
-

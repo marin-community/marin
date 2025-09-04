@@ -86,9 +86,7 @@ def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer) -> MarinEnv:
     return env_cls(tokenizer=tokenizer, **kwargs)
 
 
-def load_environments_from_config(
-    json_path: PathLike, tokenizer: AutoTokenizer
-) -> list[tuple[str, MarinEnv]]:
+def load_environments_from_config(json_path: PathLike, tokenizer: AutoTokenizer) -> list[tuple[str, MarinEnv]]:
     """
     Load environment entries from a JSON config file.
 

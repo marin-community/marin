@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Training worker for RL/post-training tasks.
 
@@ -28,7 +42,7 @@ from .model_helpers import (
     setup_mesh,
 )
 from .optimizer import load_adamw_optimizer
-from .rollout_storage import FileRolloutReader, RolloutBatch, RolloutReader
+from .rollout_storage import RolloutBatch, RolloutReader
 from .training_config import TrainingConfig, TrainWorkerConfig
 from .utils import (
     WandbLogger,
@@ -83,9 +97,9 @@ class TrainingWorker:
     def _setup_components(self):
         """Setup training components (models, tokenizer, etc.)."""
         llama_config = llama_config_from_model_config(
-            self.config.model_paths, self.config.model.model_config_override
+            self.training_config.model.model_paths, self.training_config.model.model_config_override
         )
-        self.model = build_training_model(llama_config, self.config)
+        self.model = build_training_model(llama_config, self.training_config)
         config = self.model.config
         self.train_params_sharding_rules = TreePathShardingRule(
             *config.get_partition_rules(
@@ -97,7 +111,7 @@ class TrainingWorker:
             sequence_axis="sequence",
         )
         self.tokenizer = load_tokenizer(
-            self.config.model_paths, self.config.model.tokenizer_override
+            self.training_config.model.model_paths, self.training_config.model.tokenizer_override
         )
 
         # Extract frequently used config values
@@ -116,9 +130,7 @@ class TrainingWorker:
         optim_config = self.training_config.hyperparameters.optim_config
         weight_decay_mask = get_weight_decay_mask(optim_config.weight_decay_exclusions)
         self.grad_accum_steps = optim_config.grad_accum_steps
-        optimizer, self.optimizer_info = load_adamw_optimizer(
-            config=optim_config, weight_decay_mask=weight_decay_mask
-        )
+        optimizer, self.optimizer_info = load_adamw_optimizer(config=optim_config, weight_decay_mask=weight_decay_mask)
 
         if self.grad_accum_steps > 1:
             optimizer = optax.MultiSteps(optimizer, self.grad_accum_steps)
@@ -131,7 +143,9 @@ class TrainingWorker:
         if logger_config.enable is None:
             logger_config.enable = jax.process_index() == 0
         if logger_config.config_to_log is None:
-            logger_config.config_to_log = self.training_config.to_dict()
+            import dataclasses
+
+            logger_config.config_to_log = dataclasses.asdict(self.training_config)
 
         self.logger = WandbLogger(
             self.training_config.logging.wandb_project,
@@ -163,9 +177,7 @@ class TrainingWorker:
             annotation_shardings=self.train_intermediate_sharding_rules,
         )
         def init_fn(rng):
-            params = self.model.init_weights(
-                rng, (self.train_bsize, self.max_input_length + self.max_output_length - 1)
-            )
+            params = self.model.init_weights(rng, (self.train_bsize, self.max_input_length + self.max_output_length - 1))
             return create_train_state_from_params(params)
 
         @partial(
@@ -226,8 +238,8 @@ class TrainingWorker:
         """Initialize training state with proper checkpoint loading."""
         # Initialize training state shapes and sharding functions
         train_state_shape = jax.eval_shape(lambda: self.init_fn(jax.random.PRNGKey(0)))
-        self.train_state_shard_fns, self.train_state_gather_fns = (
-            self.mesh.make_shard_and_gather_fns(train_state_shape, self.train_params_sharding_rules)
+        self.train_state_shard_fns, self.train_state_gather_fns = self.mesh.make_shard_and_gather_fns(
+            train_state_shape, self.train_params_sharding_rules
         )
 
         # Initialize training state from checkpoint or params
@@ -235,11 +247,7 @@ class TrainingWorker:
         if self.logger.can_save():
             checkpoint_dir = os.path.join(self.logger.output_dir, "checkpoints")
             if os.path.exists(checkpoint_dir):
-                checkpoint_steps = [
-                    int(d.split("_")[1])
-                    for d in os.listdir(checkpoint_dir)
-                    if d.startswith("step_")
-                ]
+                checkpoint_steps = [int(d.split("_")[1]) for d in os.listdir(checkpoint_dir) if d.startswith("step_")]
                 if checkpoint_steps:
                     latest_checkpoint_step = max(checkpoint_steps)
 
@@ -255,30 +263,30 @@ class TrainingWorker:
                 load_checkpoint(
                     checkpoint_path,
                     shard_fns=self.train_state_shard_fns.params,
-                    remove_dict_prefix=self.model_paths["remove_dict_prefix"],
+                    remove_dict_prefix=self.training_config.model.model_paths.remove_dict_prefix,
                     convert_to_dtypes=jax.tree_util.tree_map(
                         lambda x: self.training_config.model.training_param_dtype,
                         train_state_shape.params,
                     ),
                 )
             )
-        elif "params" in self.model_paths:
+        elif self.training_config.model.model_paths.params:
             train_state = self.create_train_state_from_params(
                 load_checkpoint(
-                    self.model_paths["params"],
+                    self.training_config.model.model_paths.params,
                     shard_fns=self.train_state_shard_fns.params,
-                    remove_dict_prefix=self.model_paths["remove_dict_prefix"],
+                    remove_dict_prefix=self.training_config.model.model_paths.remove_dict_prefix,
                     convert_to_dtypes=jax.tree_util.tree_map(
                         lambda x: self.training_config.model.training_param_dtype,
                         train_state_shape.params,
                     ),
                 )
             )
-        elif "train_state" in self.model_paths:
+        elif self.training_config.model.model_paths.train_state:
             train_state = load_checkpoint(
-                self.model_paths["train_state"],
+                self.training_config.model.model_paths.train_state,
                 shard_fns=self.train_state_shard_fns,
-                remove_dict_prefix=self.model_paths["remove_dict_prefix"],
+                remove_dict_prefix=self.training_config.model.model_paths.remove_dict_prefix,
                 convert_to_dtypes=jax.tree_util.tree_map(
                     lambda x: self.training_config.model.training_param_dtype, train_state_shape
                 ),
@@ -322,10 +330,14 @@ class TrainingWorker:
         if self.logger.can_save():
             logger.info(f"Saving checkpoint at step {step}...")
 
+            import dataclasses
+
             metadata = dict(
                 step=step,
-                args_dict=self.training_config.to_dict(),
+                args_dict=dataclasses.asdict(self.training_config),
             )
+
+            import dataclasses
 
             checkpointer(
                 path=os.path.join(self.logger.output_dir, "checkpoints", f"step_{step}"),
@@ -334,26 +346,21 @@ class TrainingWorker:
                 gather_fns=self.train_state_gather_fns,
                 metadata=metadata,
                 active=self.logger.can_save(),
-                **self.training_config.checkpointer_config,
+                **dataclasses.asdict(self.training_config.checkpointer_config),
             )
 
             self.checkpoint_queue.append(step)
             logger.info("Checkpoint saved.")
 
             # Sync checkpoint to worker queue bucket if different
-            if (
-                self.worker_config.checkpoint_bucket
-                and self.worker_config.checkpoint_bucket != self.logger.output_dir
-            ):
+            if self.worker_config.checkpoint_bucket and self.worker_config.checkpoint_bucket != self.logger.output_dir:
                 self._sync_checkpoint_to_workers(step)
 
     def _sync_checkpoint_to_workers(self, step):
         """Sync checkpoint to worker bucket for rollout workers."""
         # This would copy the checkpoint to the rollout workers' accessible location
         # Implementation depends on specific GCS bucket setup
-        logger.info(
-            f"Syncing checkpoint {step} to worker bucket {self.worker_config.checkpoint_bucket}"
-        )
+        logger.info(f"Syncing checkpoint {step} to worker bucket {self.worker_config.checkpoint_bucket}")
 
     def train(self):
         """Main training loop reading from rollout queue."""
@@ -389,10 +396,7 @@ class TrainingWorker:
             step += 1
 
             # Log metrics
-            if (
-                self.training_config.logging.log_freq > 0
-                and step % self.training_config.logging.log_freq == 0
-            ):
+            if self.training_config.logging.log_freq > 0 and step % self.training_config.logging.log_freq == 0:
                 log_metrics = {"step": step}
                 log_metrics.update(jax.device_get(metrics))
                 log_metrics.update(batch.metadata)

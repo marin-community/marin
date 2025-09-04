@@ -12,7 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unified rollout storage system for training worker communication and persistence."""
+"""
+Queues for communicating rollout information between inference and training workers.
+
+A rollout is a set of ndarrays containing all of the information required for training a model.
+This include:
+
+* input_ids: The input token IDs.
+* attention_mask: The attention mask for the input.
+* position_ids: The position IDs for the input.
+* target_ids: The target token IDs for computing loss.
+* loss_weights: Weights for each token in the loss computation.
+* loss_masks: Masks indicating which tokens contribute to the loss.
+* reference_logprobs: Log probabilities from the reference model.
+* metadata: Additional metadata about the rollout.
+"""
 
 import json
 import logging
@@ -94,6 +108,15 @@ class RolloutWriter(ABC):
         pass
 
     @abstractmethod
+    def write_metadata(self, metadata: dict[str, Any]) -> None:
+        """Write metadata about the rollout generation.
+
+        Args:
+            metadata: Dictionary of metadata to write.
+        """
+        pass
+
+    @abstractmethod
     def get_queue_size(self) -> int:
         """Get current queue size.
 
@@ -111,7 +134,6 @@ class FileRolloutReader(RolloutReader):
         path: str,
         batch_prefix: str = "batch_",
         poll_interval: float = 1.0,
-        max_retries: int = 3,
     ):
         """Initialize file-based rollout reader.
 
@@ -119,12 +141,10 @@ class FileRolloutReader(RolloutReader):
             path: Storage path (supports local filesystem, GCS, S3, etc.).
             batch_prefix: Prefix for batch files.
             poll_interval: Interval in seconds between polls when waiting.
-            max_retries: Maximum retries for file operations.
         """
         self.path = path.rstrip("/")
         self.batch_prefix = batch_prefix
         self.poll_interval = poll_interval
-        self.max_retries = max_retries
 
         # Create filesystem instance
         self.fs = fsspec.filesystem(fsspec.utils.infer_storage_options(path)["protocol"] or "file")
@@ -165,7 +185,7 @@ class FileRolloutReader(RolloutReader):
                 try:
                     filename = file_path.split("/")[-1]
                     if filename.startswith(self.batch_prefix) and filename.endswith(".pkl"):
-                        index_str = filename[len(self.batch_prefix):-4]
+                        index_str = filename[len(self.batch_prefix) : -4]
                         indices.append(int(index_str))
                 except (ValueError, IndexError):
                     continue
@@ -193,30 +213,17 @@ class FileRolloutReader(RolloutReader):
         while True:
             batch_path = self._get_batch_path(self._read_index)
 
-            for attempt in range(self.max_retries):
-                try:
-                    if self.fs.exists(batch_path):
-                        with self.fs.open(batch_path, "rb") as f:
-                            batch = pickle.load(f)
+            if self.fs.exists(batch_path):
+                with self.fs.open(batch_path, "rb") as f:
+                    batch = pickle.load(f)
 
-                        self._read_index += 1
-                        self._save_read_index()
+                self._read_index += 1
+                self._save_read_index()
 
-                        logger.debug(f"Read batch {self._read_index - 1}")
-                        return batch
-                    else:
-                        break
-
-                except Exception as e:
-                    logger.warning(
-                        f"Attempt {attempt + 1} failed to read batch {self._read_index}: {e}"
-                    )
-                    if attempt == self.max_retries - 1:
-                        logger.error(
-                            f"Failed to read batch {self._read_index} after {self.max_retries} attempts"
-                        )
-                        return None
-                    time.sleep(0.1 * (2**attempt))
+                logger.debug(f"Read batch {self._read_index - 1}")
+                return batch
+            else:
+                break
 
             if timeout is not None and (time.time() - start_time) >= timeout:
                 logger.debug(f"Timeout reached while waiting for batch {self._read_index}")
@@ -247,18 +254,15 @@ class FileRolloutWriter(RolloutWriter):
         self,
         path: str,
         batch_prefix: str = "batch_",
-        max_retries: int = 3,
     ):
         """Initialize file-based rollout writer.
 
         Args:
             path: Storage path (supports local filesystem, GCS, S3, etc.).
             batch_prefix: Prefix for batch files.
-            max_retries: Maximum retries for file operations.
         """
         self.path = path.rstrip("/")
         self.batch_prefix = batch_prefix
-        self.max_retries = max_retries
 
         # Create filesystem instance
         self.fs = fsspec.filesystem(fsspec.utils.infer_storage_options(path)["protocol"] or "file")
@@ -273,10 +277,7 @@ class FileRolloutWriter(RolloutWriter):
 
     def _ensure_directories(self):
         """Ensure output directory structure exists."""
-        try:
-            self.fs.makedirs(self.path, exist_ok=True)
-        except Exception as e:
-            logger.warning(f"Could not create directories: {e}")
+        self.fs.makedirs(self.path, exist_ok=True)
 
     def _get_batch_path(self, index: int) -> str:
         """Get path for batch at given index."""
@@ -284,51 +285,29 @@ class FileRolloutWriter(RolloutWriter):
 
     def _get_latest_write_index(self) -> int:
         """Get the latest write index by scanning existing batch files."""
-        try:
-            pattern = f"{self.path}/{self.batch_prefix}*.pkl"
-            files = self.fs.glob(pattern)
+        pattern = f"{self.path}/{self.batch_prefix}*.pkl"
+        files = self.fs.glob(pattern)
 
-            if not files:
-                return 0
-
-            indices = []
-            for file_path in files:
-                try:
-                    filename = file_path.split("/")[-1]
-                    if filename.startswith(self.batch_prefix) and filename.endswith(".pkl"):
-                        index_str = filename[len(self.batch_prefix):-4]
-                        indices.append(int(index_str))
-                except (ValueError, IndexError):
-                    continue
-
-            return max(indices) + 1 if indices else 0
-
-        except Exception as e:
-            logger.warning(f"Failed to scan write indices: {e}")
+        if not files:
             return 0
+
+        indices = []
+        for file_path in files:
+            filename = file_path.split("/")[-1]
+            if filename.startswith(self.batch_prefix) and filename.endswith(".pkl"):
+                index_str = filename[len(self.batch_prefix) : -4]
+                indices.append(int(index_str))
+        return max(indices) + 1 if indices else 0
 
     def write_batch(self, batch: RolloutBatch) -> None:
         """Write batch to storage."""
         batch_path = self._get_batch_path(self._write_index)
+        with self.fs.open(batch_path, "wb") as f:
+            pickle.dump(batch, f)
 
-        for attempt in range(self.max_retries):
-            try:
-                with self.fs.open(batch_path, "wb") as f:
-                    pickle.dump(batch, f)
-
-                logger.debug(f"Wrote batch {self._write_index}")
-                self._write_index += 1
-                return
-
-            except Exception as e:
-                logger.warning(
-                    f"Attempt {attempt + 1} failed to write batch {self._write_index}: {e}"
-                )
-                if attempt == self.max_retries - 1:
-                    raise RuntimeError(
-                        f"Failed to write batch {self._write_index} after {self.max_retries} attempts"
-                    )
-                time.sleep(0.1 * (2**attempt))
+        logger.debug(f"Wrote batch {self._write_index}")
+        self._write_index += 1
+        return
 
     def get_queue_size(self) -> int:
         """Get current queue size (approximate)."""
@@ -340,14 +319,12 @@ class FileRolloutWriter(RolloutWriter):
 
     def _get_latest_read_index(self) -> int:
         """Get the latest read index from metadata or start from 0."""
-        try:
-            metadata_path = f"{self.path}/read_index.json"
-            if self.fs.exists(metadata_path):
-                with self.fs.open(metadata_path, "r") as f:
-                    metadata = json.load(f)
-                return metadata.get("read_index", 0)
-        except Exception as e:
-            logger.debug(f"No read index metadata found: {e}")
+        metadata_path = f"{self.path}/read_index.json"
+        if self.fs.exists(metadata_path):
+            with self.fs.open(metadata_path, "r") as f:
+                metadata = json.load(f)
+            return metadata.get("read_index", 0)
+        logger.debug("No read index metadata found.")
         return 0
 
     def write_metadata(self, metadata: dict[str, Any]) -> None:
@@ -366,20 +343,15 @@ class FileRolloutWriter(RolloutWriter):
 
     def clear_queue(self) -> None:
         """Clear all batches from the queue (for testing/debugging)."""
-        try:
-            pattern = f"{self.path}/*"
-            files = self.fs.glob(pattern)
+        pattern = f"{self.path}/*"
+        files = self.fs.glob(pattern)
 
-            for file_path in files:
-                self.fs.delete(file_path)
+        for file_path in files:
+            self.fs.delete(file_path)
 
-            self._write_index = 0
+        self._write_index = 0
 
-            logger.info(f"Cleared queue at {self.path}")
-
-        except Exception as e:
-            logger.error(f"Failed to clear queue: {e}")
-            raise
+        logger.info(f"Cleared queue at {self.path}")
 
 
 class InMemoryRolloutQueue:
@@ -412,20 +384,20 @@ class InMemoryRolloutReader(RolloutReader):
     def read_batch(self, timeout: float | None = None) -> RolloutBatch | None:
         """Read next batch from memory queue."""
         import time
-        
+
         start_time = time.time()
         poll_interval = 0.1  # Poll every 100ms
-        
+
         while True:
             if self._queue._read_index < len(self._queue._queue):
                 batch = self._queue._queue[self._queue._read_index]
                 self._queue._read_index += 1
                 return batch
-            
+
             # Check timeout
             if timeout is not None and (time.time() - start_time) >= timeout:
                 return None
-                
+
             # Sleep and try again
             time.sleep(poll_interval)
 

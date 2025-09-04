@@ -17,7 +17,6 @@ import unittest
 from pathlib import Path
 
 import jax
-import numpy as np
 import pytest
 
 from marin.post_training.train import main
@@ -88,21 +87,15 @@ def training_config():
         prefix_to_id=True,
     )
 
-    generation_config = GenerationConfig(
-        stop_tokens=[[128001]], n_generations=2
-    )
+    generation_config = GenerationConfig(stop_tokens=[[128001]], n_generations=2)
 
-    test_generation_config = GenerationConfig(
-        temperature=0.0, stop_tokens=[[128001]], n_generations=1
-    )
+    test_generation_config = GenerationConfig(temperature=0.0, stop_tokens=[[128001]], n_generations=1)
 
     model_config_override = ModelOverrideConfig(
         initializer_range=0.001,  # Use much smaller initialization for stability
     )
 
-    checkpointer_config = CheckpointerConfigData(
-        save_optimizer_state=False, save_float_dtype="bf16"
-    )
+    checkpointer_config = CheckpointerConfigData(save_optimizer_state=False, save_float_dtype="bf16")
 
     return TrainingConfig(
         model=ModelConfig(
@@ -213,13 +206,7 @@ def test_environment_loading():
     tokenizer = load_tokenizer(model_paths, tokenizer_override)
 
     # Load environments
-    env_config_path = (
-        Path(__file__).parent.parent.parent
-        / "src"
-        / "marin"
-        / "post_training"
-        / "environments_test.json"
-    )
+    env_config_path = Path(__file__).parent.parent.parent / "src" / "marin" / "post_training" / "environments_test.json"
     environments = load_environments_from_config(env_config_path, tokenizer)
 
     assert len(environments) == 1

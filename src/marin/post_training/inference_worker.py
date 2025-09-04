@@ -92,9 +92,7 @@ class InferenceWorker:
             self._setup_components()
 
         # Initialize storage
-        self.rollout_writer = rollout_writer or FileRolloutWriter(
-            inference_config.rollout_output_path
-        )
+        self.rollout_writer = rollout_writer or FileRolloutWriter(inference_config.rollout_output_path)
 
         # Track state
         self.current_step = 0
@@ -110,9 +108,7 @@ class InferenceWorker:
         model_config = self.training_config.model
 
         # Setup models
-        llama_config = llama_config_from_model_config(
-            model_config.model_paths, model_config.model_config_override
-        )
+        llama_config = llama_config_from_model_config(model_config.model_paths, model_config.model_config_override)
         self.prefill_model = build_prefill_model(llama_config, self.training_config)
         self.generate_model = build_generate_model(llama_config, self.training_config)
 
@@ -121,16 +117,12 @@ class InferenceWorker:
 
         # Load environment
         self.environment_name = self.inference_config.environment_spec
-        self.environment = load_environment_from_spec(
-            self.inference_config.environment_spec, self.tokenizer
-        )
+        self.environment = load_environment_from_spec(self.inference_config.environment_spec, self.tokenizer)
 
         # Extract frequently used config values
         self.max_input_length = self.training_config.hyperparameters.max_input_length
         self.max_output_length = self.training_config.hyperparameters.max_output_length
-        self.reference_logprobs_bsize = (
-            self.training_config.hyperparameters.reference_logprobs_bsize
-        )
+        self.reference_logprobs_bsize = self.training_config.hyperparameters.reference_logprobs_bsize
         self.pad_token_id = self.training_config.hyperparameters.pad_token_id
 
         self._setup_samplers()
@@ -220,9 +212,7 @@ class InferenceWorker:
             target_attention_mask,
         ):
             full_tokens = jnp.concatenate([input_tokens, target_tokens], axis=1)
-            full_attention_mask = jnp.concatenate(
-                [input_attention_mask, target_attention_mask], axis=1
-            )
+            full_attention_mask = jnp.concatenate([input_attention_mask, target_attention_mask], axis=1)
             full_position_ids = jnp.maximum(jnp.cumsum(full_attention_mask, axis=1) - 1, 0)
 
             logits = self.prefill_model(
@@ -287,9 +277,7 @@ class InferenceWorker:
         )
 
         # Create sharding functions
-        shard_fns, _ = self.mesh.make_shard_and_gather_fns(
-            params_shape, self.inference_params_sharding_rules
-        )
+        shard_fns, _ = self.mesh.make_shard_and_gather_fns(params_shape, self.inference_params_sharding_rules)
 
         # Load and convert parameters
         params = load_checkpoint(
@@ -385,10 +373,7 @@ class InferenceWorker:
         while self._running:
             # Check for new checkpoints periodically
             current_time = time.time()
-            if (
-                current_time - last_checkpoint_check
-                >= self.inference_config.checkpoint_poll_interval
-            ):
+            if current_time - last_checkpoint_check >= self.inference_config.checkpoint_poll_interval:
                 checkpoint_updated = self._check_for_new_checkpoint()
                 last_checkpoint_check = current_time
 
@@ -406,9 +391,7 @@ class InferenceWorker:
                 self.inference_config.max_rollouts is not None
                 and rollouts_generated >= self.inference_config.max_rollouts
             ):
-                logger.info(
-                    f"Reached max rollouts ({self.inference_config.max_rollouts}), stopping"
-                )
+                logger.info(f"Reached max rollouts ({self.inference_config.max_rollouts}), stopping")
                 break
 
             logger.info(f"Generating rollout batch {rollouts_generated}")

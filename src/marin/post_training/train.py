@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import dataclasses
-import os
 from collections import deque
 from functools import partial
 from pathlib import Path
@@ -106,9 +105,7 @@ class Trainer:
         optim_config = self.config.hyperparameters.optim_config
         weight_decay_mask = get_weight_decay_mask(optim_config.weight_decay_exclusions)
         self.grad_accum_steps = optim_config.grad_accum_steps
-        optimizer, self.optimizer_info = load_adamw_optimizer(
-            config=optim_config, weight_decay_mask=weight_decay_mask
-        )
+        optimizer, self.optimizer_info = load_adamw_optimizer(config=optim_config, weight_decay_mask=weight_decay_mask)
 
         if self.grad_accum_steps > 1:
             optimizer = optax.MultiSteps(optimizer, self.grad_accum_steps)
@@ -163,9 +160,7 @@ class Trainer:
         }
 
         self.sampler = build_sampler(generation_config=generation_config, **sampler_kwargs)
-        self.test_sampler = build_sampler(
-            generation_config=test_generation_config, **sampler_kwargs
-        )
+        self.test_sampler = build_sampler(generation_config=test_generation_config, **sampler_kwargs)
 
     def _compile_functions(self):
         """Compile JAX functions for training."""
@@ -227,9 +222,7 @@ class Trainer:
             target_attention_mask,
         ):
             full_tokens = jnp.concatenate([input_tokens, target_tokens], axis=1)
-            full_attention_mask = jnp.concatenate(
-                [input_attention_mask, target_attention_mask], axis=1
-            )
+            full_attention_mask = jnp.concatenate([input_attention_mask, target_attention_mask], axis=1)
             full_position_ids = jnp.maximum(jnp.cumsum(full_attention_mask, axis=1) - 1, 0)
             logits = self.train_model(
                 full_tokens[:, :-1],
@@ -242,9 +235,7 @@ class Trainer:
             logprobs = -softmax_cross_entropy_with_integer_labels(
                 logits.astype(jnp.float32), target_tokens.astype(jnp.int32)
             )
-            logprobs = MeshShardingHelper.with_sharding_constraint(
-                logprobs, PS(("replica", "fsdp"), None)
-            )
+            logprobs = MeshShardingHelper.with_sharding_constraint(logprobs, PS(("replica", "fsdp"), None))
             return logprobs
 
         @partial(
@@ -374,8 +365,8 @@ class Trainer:
                 ),
             )
         )
-        self.train_state_shard_fns, self.train_state_gather_fns = (
-            self.mesh.make_shard_and_gather_fns(train_state_shape, self.train_params_sharding_rules)
+        self.train_state_shard_fns, self.train_state_gather_fns = self.mesh.make_shard_and_gather_fns(
+            train_state_shape, self.train_params_sharding_rules
         )
         inference_param_shard_fns, inference_param_gather_fns = self.mesh.make_shard_and_gather_fns(
             inference_params_shape, self.inference_params_sharding_rules
@@ -387,9 +378,7 @@ class Trainer:
             checkpoint_dir = Path(self.config.output_dir) / "checkpoints"
             if checkpoint_dir.exists():
                 checkpoint_steps = [
-                    int(d.name.split("_")[1])
-                    for d in checkpoint_dir.iterdir()
-                    if d.name.startswith("step_")
+                    int(d.name.split("_")[1]) for d in checkpoint_dir.iterdir() if d.name.startswith("step_")
                 ]
                 if checkpoint_steps:
                     latest_checkpoint_step = max(checkpoint_steps)
@@ -397,10 +386,7 @@ class Trainer:
         if latest_checkpoint_step > 0:
             print(f"Resuming training from checkpoint at step {latest_checkpoint_step}...")
             checkpoint_path = (
-                Path(self.config.output_dir)
-                / "checkpoints"
-                / f"step_{latest_checkpoint_step}"
-                / "params.msgpack"
+                Path(self.config.output_dir) / "checkpoints" / f"step_{latest_checkpoint_step}" / "params.msgpack"
             )
             train_state = self.create_train_state_from_params(
                 load_checkpoint(
@@ -436,9 +422,7 @@ class Trainer:
             print("WARNING: no params path provided, initializing with random weights...")
             train_state: TrainState = self.init_fn(jax.random.PRNGKey(0))
 
-        self.reference_params = float_to_dtype(
-            train_state.params, self.config.model.inference_param_dtype
-        )
+        self.reference_params = float_to_dtype(train_state.params, self.config.model.inference_param_dtype)
         self.checkpoint_queue = deque()
 
         if self.config.logging.save_initial_checkpoint and latest_checkpoint_step < 0:
@@ -453,9 +437,7 @@ class Trainer:
         ):
             rng, subrng = jax.random.split(rng)
 
-            idx = jax.random.randint(
-                subrng, shape=(), minval=0, maxval=len(self.train_environments)
-            )
+            idx = jax.random.randint(subrng, shape=(), minval=0, maxval=len(self.train_environments))
             env_name, environment = self.train_environments[idx]
 
             rng, subrng = jax.random.split(subrng)
@@ -479,14 +461,11 @@ class Trainer:
             )
             del inference_params
 
-            for batch in tqdm(
-                rl_dataset.iterate_batches(batch_size=self.train_bsize, shuffle=True, loop=False)
-            ):
+            for batch in tqdm(rl_dataset.iterate_batches(batch_size=self.train_bsize, shuffle=True, loop=False)):
                 train_state, metrics = self.train_step(train_state, subrng, batch)
 
             if self.config.logging.log_freq > 0 and (
-                (step + 1) % self.config.logging.log_freq == 0
-                or (self.config.logging.log_initial_step and step == 0)
+                (step + 1) % self.config.logging.log_freq == 0 or (self.config.logging.log_initial_step and step == 0)
             ):
                 if self.config.logging.num_eval_examples > 0:
                     rng, subrng = jax.random.split(rng)
@@ -499,10 +478,7 @@ class Trainer:
                 self.logger.log(log_metrics)
                 print(log_metrics)
 
-            if (
-                self.config.logging.save_model_freq > 0
-                and (step + 1) % self.config.logging.save_model_freq == 0
-            ):
+            if self.config.logging.save_model_freq > 0 and (step + 1) % self.config.logging.save_model_freq == 0:
                 self.save_checkpoint(train_state, step + 1)
 
         if self.config.logging.save_model_freq > 0 and (
@@ -535,9 +511,7 @@ def main(config: TrainingConfig):
 
     with mesh.get_context():
         model_paths = config.model.model_paths
-        llama_config = llama_config_from_model_config(
-            model_paths, config.model.model_config_override
-        )
+        llama_config = llama_config_from_model_config(model_paths, config.model.model_config_override)
         training_model = build_training_model(llama_config, config)
         inference_model = build_generate_model(llama_config, config)
         prefill_model = build_prefill_model(llama_config, config)

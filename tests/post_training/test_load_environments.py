@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 def test_load_environment_from_spec():
     from marin.post_training.environments.olym_math_env import OlymMathEnv
     from marin.post_training.load_environments import load_environment_from_spec
