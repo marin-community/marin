@@ -67,7 +67,7 @@ from marin.resources import TpuPodConfig
 # but we have learned that WSD with a long cooldown is superior. Once we switch to WSD,
 # we use the exponential moving average (EMA) of the model weights to get a better model.
 
-tootise_phase1_config = SimpleTrainConfig(
+tootsie_phase1_config = SimpleTrainConfig(
     resources=TpuPodConfig(tpu_type="v5litepod-256", slice_count=2),
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
@@ -89,7 +89,7 @@ llama_8b_tootsie_phase1 = dataclasses.replace(
         tokenized=dclm_mixture_config_llama3,
         # I am a dummy and use old rotary config
         model_config=llama_8b_old_rotary,
-        train_config=tootise_phase1_config,
+        train_config=tootsie_phase1_config,
         tags=["llama", "8b", "wsd-s", "exp600"],
     ),
     override_output_path="checkpoints/llama-8b-tootsie-0.001-19ad63",
