@@ -252,6 +252,16 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         adapter_name="nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
         use_large_dataset_transform=True,
     ),
+    "nvidia/Nemotron-Post-Training-Dataset-v2-SFT": InstructionDatasetConfig(
+        hf_dataset_id="nvidia/Nemotron-Post-Training-Dataset-v2",
+        revision="5c89e01",
+        wait_for_completion=True,
+        filetype="parquet",
+        splits=["chat", "code", "math", "stem"],
+        subsets=["SFT"],
+        adapter_name="nvidia/Nemotron-Post-Training-Dataset-v2-SFT",
+        use_large_dataset_transform=False,
+    ),
 }
 
 
