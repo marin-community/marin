@@ -64,7 +64,11 @@ def cleanup_tpu_process(target_pid: int, worker_id: int, counter):
     for device in glob.glob("/dev/accel*"):
         print(f"Worker {worker_id}: Found device: {device}")
 
-    result = subprocess.run(["lsof", "/dev/accel*"], capture_output=True, text=True, timeout=10, shell=True)
+    result = subprocess.run(
+        ["lsof", "/dev/accel*"], capture_output=True, text=True, timeout=10, shell=True
+    )
+
+    hostname = os.uname().nodename
 
     found_processes = 0
     if result.returncode == 0:
@@ -74,12 +78,12 @@ def cleanup_tpu_process(target_pid: int, worker_id: int, counter):
             if len(parts) >= 2:
                 pid = int(parts[1])
                 if pid == target_pid:
-                    print(f"Worker {worker_id}: Found PID {target_pid} holding TPU, killing it...")
+                    print(f"Worker {hostname}: Found PID {target_pid} holding TPU, killing it...")
                     os.kill(target_pid, 9)  # SIGKILL
-                    print(f"Worker {worker_id}: Successfully killed process {target_pid}")
+                    print(f"Worker {hostname}: Successfully killed process {target_pid}")
                     found_processes += 1
 
-    print(f"Worker {worker_id}: Process {target_pid} not found holding TPU resources")
+    print(f"Worker {hostname}: Process {target_pid} not found holding TPU resources")
     counter.wait_for_everyone.remote()
     return found_processes
 
@@ -166,7 +170,9 @@ def main():
         help="TPU type to target (default: v4-8)",
     )
     parser.add_argument("--no-wait", action="store_true", help="Don't wait for job to complete")
-    parser.add_argument("--internal-run", action="store_true", help="Internal flag to run cleanup directly")
+    parser.add_argument(
+        "--internal-run", action="store_true", help="Internal flag to run cleanup directly"
+    )
 
     args = parser.parse_args()
     parse_tpu_type(args.tpu_type)  # Validate TPU type
