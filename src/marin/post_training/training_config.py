@@ -207,3 +207,19 @@ class WorkerConfig:
     max_idle_time: float = 300.0
     checkpoint_bucket: str | None = None
     checkpoint_path: str = "checkpoints"
+
+
+@dataclass
+class InferenceWorkerConfig:
+    """Inference worker specific configuration."""
+
+    environment_spec: str
+    checkpoint_source_path: str
+    rollout_output_path: str
+    checkpoint_poll_interval: float = 30.0
+    rollout_batch_size: int = 32
+    n_generations: int = 64
+    n_examples_per_batch: int = 16
+    use_gcs: bool = False
+    max_rollouts: int | None = None
+    checkpoint_timeout: float = 300.0

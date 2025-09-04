@@ -12,8 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import tempfile
+from pathlib import Path
+
+import jax
 import pytest
 
+from marin.post_training.train import main
 from marin.post_training.training_config import (
     CheckpointerConfigData,
     DistributedConfig,
@@ -25,6 +30,7 @@ from marin.post_training.training_config import (
     ModelOverrideConfig,
     ModelPathsConfig,
     OptimizerConfig,
+    TokenizerOverrideConfig,
     TrainingConfig,
     TrainingHyperparameters,
 )
@@ -32,10 +38,14 @@ from marin.post_training.training_config import (
 
 @pytest.fixture
 def training_config():
-    """Create a training configuration similar to exp1430_rl_testing.py"""
+    """Create a minimal training configuration for end-to-end testing."""
+    # Use temporary directory for outputs
+    temp_dir = tempfile.mkdtemp()
+
     model_paths_config = ModelPathsConfig(
-        params=None,  # Don't load params for test
+        params=None,  # Don't load params, will initialize randomly
         tokenizer="meta-llama/Meta-Llama-3-8B-Instruct",
+        default_config_name="test_1m",  # Use tiny test model
     )
 
     optim_config = OptimizerConfig(
@@ -52,7 +62,7 @@ def training_config():
         multiply_by_parameter_scale=False,
         weight_decay_exclusions=(),
         schedule="cos",
-        grad_accum_steps=16,
+        grad_accum_steps=1,  # No gradient accumulation for testing
     )
 
     logger_config = LoggerConfigData(
@@ -62,7 +72,7 @@ def training_config():
     )
 
     generation_config = GenerationConfig(
-        max_output_length=1025, temperature=1.0, stop_tokens=[[128001]], n_generations=64
+        max_output_length=1025, temperature=1.0, stop_tokens=[[128001]], n_generations=2
     )
 
     test_generation_config = GenerationConfig(
@@ -77,12 +87,11 @@ def training_config():
         remat_block="nothing_saveable",
         resid_pdrop=0.0,
         embd_pdrop=0.0,
-        attn_pdrop=0.0
+        attn_pdrop=0.0,
     )
 
     checkpointer_config = CheckpointerConfigData(
-        save_optimizer_state=False,
-        save_float_dtype="bf16"
+        save_optimizer_state=False, save_float_dtype="bf16"
     )
 
     return TrainingConfig(
@@ -90,51 +99,135 @@ def training_config():
             model_paths=model_paths_config,
             inference_param_dtype="bf16",
             inference_activation_dtype="bf16",
-            training_param_dtype="bf16",
-            training_activation_dtype="bf16",
+            training_param_dtype="fp32",  # Use fp32 for training to avoid optimizer dtype issues
+            training_activation_dtype="fp32",
             model_config_override=model_config_override,
-            tokenizer_override={},
-            train_attention_kernel_config='splash:{"block_size": 256}',
-            prefill_attention_kernel_config='splash:{"block_size": 256}',
+            tokenizer_override=TokenizerOverrideConfig(),
+            train_attention_kernel_config="default:{}",  # Use default for testing
+            prefill_attention_kernel_config="default:{}",
             generate_attention_kernel_config="default:{}",
         ),
         hyperparameters=TrainingHyperparameters(
-            num_train_steps=0,
-            max_input_length=128,
-            max_output_length=256,
-            train_bsize=32,
-            decode_bsize=8,
-            prefill_bsize=8,
-            reference_logprobs_bsize=8,
-            n_prompts_per_step=16,
+            num_train_steps=1,  # Run exactly 1 step
+            max_input_length=8,  # Smaller for test
+            max_output_length=8,
+            train_bsize=2,  # Very small batch size
+            decode_bsize=2,
+            prefill_bsize=2,
+            reference_logprobs_bsize=2,
+            n_prompts_per_step=2,  # Only 2 examples
             optim_config=optim_config,
             pad_token_id=128002,
             kl_coef=1e-3,
         ),
         logging=LoggingConfig(
-            log_freq=8,
-            num_eval_examples=1024,
-            save_model_freq=0,
+            log_freq=1,  # Log every step
+            num_eval_examples=1,  # Only 1 eval example
+            save_model_freq=0,  # Don't save during test
             wandb_project="test_project",
             logger_config=logger_config,
             save_initial_checkpoint=False,
             log_initial_step=True,
             max_checkpoints=None,
         ),
-        environment=EnvironmentConfig(),
+        environment=EnvironmentConfig(
+            train_environments_path="environments_test.json",  # Use test environment
+            test_environments_path="environments_test.json",
+        ),
         distributed=DistributedConfig(
-            sharding=[1, 1, 1, -1],
+            sharding=[1, 1, 1, -1],  # Single device sharding
             physical_axis_splitting=False,
             jax_distributed_initalize_config={},
         ),
         generation_config=generation_config,
         test_generation_config=test_generation_config,
-        output_dir="/tmp/test_output",
+        output_dir=temp_dir,
         checkpointer_config=checkpointer_config,
     )
 
 
-def test_training_main_setup(training_config):
-    """Test the main training setup process including environment loading"""
-    from marin.post_training.train import main
+def test_training_end_to_end(training_config):
+    """Test end-to-end training with 1 step including inference and training."""
+
+    # Ensure we're on CPU for testing (avoids TPU setup)
+    if jax.devices()[0].device_kind != "cpu":
+        pytest.skip("Test requires CPU device")
+
+    # Run the main training function
+    # This should:
+    # 1. Initialize JAX distributed (no-op for single device)
+    # 2. Load attention kernels
+    # 3. Setup mesh
+    # 4. Load model configs and build models
+    # 5. Load tokenizer
+    # 6. Load environments (mock environment)
+    # 7. Initialize trainer and run 1 training step
     main(training_config)
+
+    # If we get here without exceptions, the test passed
+    assert True
+
+
+def test_model_initialization(training_config):
+    """Test that models can be initialized with test config."""
+    from marin.post_training.model_helpers import (
+        build_generate_model,
+        build_prefill_model,
+        build_training_model,
+        llama_config_from_model_config,
+        setup_mesh,
+    )
+
+    # Test model config creation
+    llama_config = llama_config_from_model_config(
+        training_config.model.model_paths, training_config.model.model_config_override
+    )
+    assert llama_config is not None
+    assert llama_config.hidden_size == 256  # From test_1m config
+    assert llama_config.vocab_size == 1000
+
+    # Test mesh setup
+    mesh = setup_mesh(training_config.distributed.sharding)
+    assert mesh is not None
+
+    # Test model building
+    with mesh.get_context():
+        training_model = build_training_model(llama_config, training_config)
+        prefill_model = build_prefill_model(llama_config, training_config)
+        generate_model = build_generate_model(llama_config, training_config)
+
+        assert training_model is not None
+        assert prefill_model is not None
+        assert generate_model is not None
+
+
+def test_environment_loading():
+    """Test that mock environment can be loaded."""
+    from pathlib import Path
+
+    from transformers import AutoTokenizer
+
+    from marin.post_training.load_environments import load_environments_from_config
+    from marin.post_training.model_helpers import load_tokenizer
+    from marin.post_training.training_config import ModelPathsConfig, TokenizerOverrideConfig
+
+    # Load tokenizer for environment
+    model_paths = ModelPathsConfig(tokenizer="meta-llama/Meta-Llama-3-8B-Instruct")
+    tokenizer_override = TokenizerOverrideConfig()
+    tokenizer = load_tokenizer(model_paths, tokenizer_override)
+
+    # Load environments
+    env_config_path = (
+        Path(__file__).parent.parent.parent
+        / "src"
+        / "marin"
+        / "post_training"
+        / "environments_test.json"
+    )
+    environments = load_environments_from_config(env_config_path, tokenizer)
+
+    assert len(environments) == 1
+    env_name, env = environments[0]
+    assert env_name == "mock"
+    assert hasattr(env, "step")
+    assert hasattr(env, "get_eval_examples")

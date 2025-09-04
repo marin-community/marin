@@ -18,6 +18,7 @@ import jax.numpy as jnp
 import optax
 from flax.training.train_state import TrainState
 from jax.sharding import PartitionSpec as PS
+from jax.sharding import TreePathShardingRule
 from optax import softmax_cross_entropy_with_integer_labels
 
 from .model_helpers import (
@@ -25,10 +26,9 @@ from .model_helpers import (
     llama_config_from_model_config,
     load_tokenizer,
     setup_mesh,
-    setup_sharding_rules,
 )
 from .optimizer import load_adamw_optimizer
-from .rollout_queue import RolloutBatch, RolloutQueue
+from .rollout_storage import RolloutBatch, RolloutReader, FileRolloutReader
 from .training_config import TrainingConfig, WorkerConfig
 from .utils import (
     WandbLogger,
@@ -51,14 +51,14 @@ class TrainingWorker:
         self,
         training_config: TrainingConfig,
         worker_config: WorkerConfig,
-        rollout_queue: RolloutQueue | None = None,
+        rollout_reader: RolloutReader | None = None,
     ):
         """Initialize training worker.
 
         Args:
             training_config: Training configuration.
             worker_config: Worker-specific configuration.
-            rollout_queue: Queue to read rollout data from. If None, creates GCSRolloutQueue.
+            rollout_reader: Reader to read rollout data from. If None, creates FileRolloutReader.
         """
         self.training_config = training_config
         self.worker_config = worker_config
@@ -73,7 +73,7 @@ class TrainingWorker:
             training_config.distributed.physical_axis_splitting,
         )
 
-        self.rollout_queue = rollout_queue
+        self.rollout_reader = rollout_reader
 
         # Initialize components within mesh context
         with self.mesh.get_context():
@@ -85,17 +85,19 @@ class TrainingWorker:
             self.config.model_paths, self.config.model.model_config_override
         )
         self.model = build_training_model(llama_config, self.config)
-        self.sharding_rules = setup_sharding_rules(self.model)
+        config = self.model.config
+        self.train_params_sharding_rules = TreePathShardingRule(
+            *config.get_partition_rules(
+                model_all_gather_axis=("fsdp", "sequence"),
+            )
+        )
+        self.train_intermediate_sharding_rules = config.get_intermediate_sharding_rules(
+            data_axis=("replica", "fsdp"),
+            sequence_axis="sequence",
+        )
         self.tokenizer = load_tokenizer(
             self.config.model_paths, self.config.model.tokenizer_override
         )
-
-        (
-            self.train_params_sharding_rules,
-            _,  # inference_params_sharding_rules - not needed
-            self.train_intermediate_sharding_rules,
-            _,  # inference_intermediate_sharding_rules - not needed
-        ) = self.sharding_rules
 
         # Extract frequently used config values
         self.max_input_length = self.training_config.hyperparameters.max_input_length
@@ -360,12 +362,13 @@ class TrainingWorker:
         rng = jax.random.PRNGKey(0)
 
         logger.info(
-            f"Beginning training loop, target steps: {self.training_config.hyperparameters.num_train_steps}"
+            "Beginning training loop, target steps: %s",
+            self.training_config.hyperparameters.num_train_steps,
         )
 
         while step < self.training_config.hyperparameters.num_train_steps:
             # Read batch from queue
-            batch = self.rollout_queue.read_batch(timeout=self.worker_config.batch_timeout)
+            batch = self.rollout_reader.read_batch(timeout=self.worker_config.batch_timeout)
 
             if batch is None:
                 idle_time += self.worker_config.batch_timeout

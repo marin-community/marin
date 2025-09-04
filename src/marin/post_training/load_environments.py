@@ -21,6 +21,7 @@ from transformers import AutoTokenizer
 from .environments.aqua_rat_env import AquaRatEnv
 from .environments.marin_env import MarinEnv
 from .environments.math_env import MathEnv
+from .environments.mock_env import MockEnv
 from .environments.numina_math_env import NuminaMathEnv
 from .environments.olym_math_env import OlymMathEnv
 from .environments.olympiad_bench_env import OlympiadBenchEnv
@@ -38,6 +39,7 @@ except ImportError:
 ENVIRONMENT_NAME_TO_CLASS = {
     "aqua_rat": AquaRatEnv,
     "math": MathEnv,
+    "mock": MockEnv,
     "numina_math": NuminaMathEnv,
     "olym_math": OlymMathEnv,
     "olympiad_bench": OlympiadBenchEnv,

@@ -327,3 +327,6 @@ package-dir = "src"
 
 [tool.pytest.ini_options]
 timeout = 300
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

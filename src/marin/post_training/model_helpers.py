@@ -18,14 +18,14 @@ import copy
 import json
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 from transformers import AutoTokenizer
 
 from .llama3 import LLAMA_STANDARD_CONFIGS, FlaxLLaMAForCausalLM, LLaMAConfig
-from .training_config import ModelOverrideConfig, ModelPathsConfig, TrainingConfig
+from .training_config import ModelOverrideConfig, ModelPathsConfig, TokenizerOverrideConfig, TrainingConfig
 from .utils import (
     get_float_dtype_by_name,
     load_attention_kernel_config,
@@ -69,17 +69,23 @@ def llama_config_from_model_config(
             attn_pdrop=model_config_override.attn_pdrop,
         )
     elif model_paths.default_config_name:
-        config = LLaMAConfig(
-            **LLAMA_STANDARD_CONFIGS[model_paths.default_config_name],
-            bos_token_id=model_config_override.bos_token_id,
-            eos_token_id=model_config_override.eos_token_id,
-            pad_token_id=model_config_override.pad_token_id,
-            max_sequence_length=model_config_override.max_sequence_length,
-            remat_block=model_config_override.remat_block,
-            resid_pdrop=model_config_override.resid_pdrop,
-            embd_pdrop=model_config_override.embd_pdrop,
-            attn_pdrop=model_config_override.attn_pdrop,
-        )
+        # Get base config from standard configs
+        base_config = LLAMA_STANDARD_CONFIGS[model_paths.default_config_name].copy()
+        # Override with user-specified values, avoiding duplicates
+        override_dict = {
+            "bos_token_id": model_config_override.bos_token_id,
+            "eos_token_id": model_config_override.eos_token_id,
+            "pad_token_id": model_config_override.pad_token_id,
+            "remat_block": model_config_override.remat_block,
+            "resid_pdrop": model_config_override.resid_pdrop,
+            "embd_pdrop": model_config_override.embd_pdrop,
+            "attn_pdrop": model_config_override.attn_pdrop,
+        }
+        # Only override max_sequence_length if it's different from base config
+        if "max_sequence_length" not in base_config or base_config["max_sequence_length"] != model_config_override.max_sequence_length:
+            override_dict["max_sequence_length"] = model_config_override.max_sequence_length
+        base_config.update(override_dict)
+        config = LLaMAConfig(**base_config)
     else:
         config = LLaMAConfig(
             bos_token_id=model_config_override.bos_token_id,
@@ -203,41 +209,8 @@ def build_generate_model(
     return generate_model
 
 
-def setup_sharding_rules(
-    train_model: FlaxLLaMAForCausalLM,
-) -> tuple[TreePathShardingRule, TreePathShardingRule, Any, Any]:
-    """Setup sharding rules for training and inference."""
-    config = train_model.config
-
-    train_params_sharding_rules = TreePathShardingRule(
-        *config.get_partition_rules(
-            model_all_gather_axis=("fsdp", "sequence"),
-        )
-    )
-    inference_params_sharding_rules = TreePathShardingRule(
-        *config.get_partition_rules(
-            model_all_gather_axis=None,
-        )
-    )
-    train_intermediate_sharding_rules = config.get_intermediate_sharding_rules(
-        data_axis=("replica", "fsdp"),
-        sequence_axis="sequence",
-    )
-    inference_intermediate_sharding_rules = config.get_intermediate_sharding_rules(
-        data_axis=("replica", "fsdp"),
-        sequence_axis=None,
-    )
-
-    return (
-        train_params_sharding_rules,
-        inference_params_sharding_rules,
-        train_intermediate_sharding_rules,
-        inference_intermediate_sharding_rules,
-    )
-
-
 def load_tokenizer(
-    model_paths: ModelPathsConfig, tokenizer_override: dict[str, Any]
+    model_paths: ModelPathsConfig, tokenizer_override: TokenizerOverrideConfig
 ) -> AutoTokenizer:
     """Load and configure tokenizer."""
     tokenizer_is_temp = False
@@ -254,7 +227,7 @@ def load_tokenizer(
         padding_side="right",
         pad_token="<|reserved_special_token_0|>",
     )
-    tokenizer_kwargs.update(tokenizer_override)
+    tokenizer_kwargs.update(asdict(tokenizer_override))
     tokenizer = AutoTokenizer.from_pretrained(model_paths.tokenizer, **tokenizer_kwargs)
 
     if tokenizer_is_temp:

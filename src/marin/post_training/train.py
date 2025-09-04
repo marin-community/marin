@@ -40,7 +40,6 @@ from .model_helpers import (
     llama_config_from_model_config,
     load_tokenizer,
     setup_mesh,
-    setup_sharding_rules,
 )
 from .optimizer import load_adamw_optimizer
 from .rl_dataset import create_dataset_from_environment
@@ -50,7 +49,6 @@ from .utils import (
     checkpointer,
     delete_with_bucket,
     float_to_dtype,
-    get_float_dtype_by_name,
     get_weight_decay_mask,
     global_norm,
     jax_distributed_barrier,
@@ -544,7 +542,6 @@ def main(config: TrainingConfig):
         inference_model = build_generate_model(llama_config, config)
         prefill_model = build_prefill_model(llama_config, config)
 
-        _ = setup_sharding_rules(training_model)
         tokenizer = load_tokenizer(model_paths, config.model.tokenizer_override)
 
         # Initialize environment with tokenization parameters
