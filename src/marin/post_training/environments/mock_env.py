@@ -98,24 +98,28 @@ class MockEnv(MarinEnv):
         """Compute rewards for generated responses."""
         n_examples = len(examples)
         n_generations = len(responses[0]) if responses else 1
-        
+
         # Initialize rewards array
         rewards = np.zeros((n_examples, n_generations), dtype=np.float32)
-        
+
         correct_count = 0
         total_count = 0
 
-        for example_idx, (example, response_list) in enumerate(zip(examples, responses, strict=False)):
+        for example_idx, (example, response_list) in enumerate(
+            zip(examples, responses, strict=False)
+        ):
             correct_answer = example["answer"]
-            
+
             for gen_idx, response in enumerate(response_list):
                 # Decode the generated tokens to text
-                decoded_response = self.tokenizer.decode(response["tokens"], skip_special_tokens=True)
-                
+                decoded_response = self.tokenizer.decode(
+                    response["tokens"], skip_special_tokens=True
+                )
+
                 # Simple reward: 1 if generation contains the correct answer, 0 otherwise
                 reward = 1.0 if correct_answer in decoded_response else 0.0
                 rewards[example_idx, gen_idx] = reward
-                
+
                 if reward > 0:
                     correct_count += 1
                 total_count += 1

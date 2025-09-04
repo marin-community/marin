@@ -25,7 +25,12 @@ from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 from transformers import AutoTokenizer
 
 from .llama3 import LLAMA_STANDARD_CONFIGS, FlaxLLaMAForCausalLM, LLaMAConfig
-from .training_config import ModelOverrideConfig, ModelPathsConfig, TokenizerOverrideConfig, TrainingConfig
+from .training_config import (
+    ModelOverrideConfig,
+    ModelPathsConfig,
+    TokenizerOverrideConfig,
+    TrainingConfig,
+)
 from .utils import (
     get_float_dtype_by_name,
     load_attention_kernel_config,
@@ -56,47 +61,27 @@ def llama_config_from_model_config(
         model_paths.config = temp_file.name
         config_is_temp = True
 
+    model_args = {
+        "bos_token_id": model_config_override.bos_token_id,
+        "eos_token_id": model_config_override.eos_token_id,
+        "pad_token_id": model_config_override.pad_token_id,
+        "max_sequence_length": model_config_override.max_sequence_length,
+        "remat_block": model_config_override.remat_block,
+        "resid_pdrop": model_config_override.resid_pdrop,
+        "embd_pdrop": model_config_override.embd_pdrop,
+        "attn_pdrop": model_config_override.attn_pdrop,
+        "initializer_range": model_config_override.initializer_range,
+    }
+
     if model_paths.config:
-        config = LLaMAConfig.from_pretrained(
-            model_paths.config,
-            bos_token_id=model_config_override.bos_token_id,
-            eos_token_id=model_config_override.eos_token_id,
-            pad_token_id=model_config_override.pad_token_id,
-            max_sequence_length=model_config_override.max_sequence_length,
-            remat_block=model_config_override.remat_block,
-            resid_pdrop=model_config_override.resid_pdrop,
-            embd_pdrop=model_config_override.embd_pdrop,
-            attn_pdrop=model_config_override.attn_pdrop,
-        )
+        config = LLaMAConfig.from_pretrained(model_paths.config, **model_args)
     elif model_paths.default_config_name:
         # Get base config from standard configs
         base_config = LLAMA_STANDARD_CONFIGS[model_paths.default_config_name].copy()
-        # Override with user-specified values, avoiding duplicates
-        override_dict = {
-            "bos_token_id": model_config_override.bos_token_id,
-            "eos_token_id": model_config_override.eos_token_id,
-            "pad_token_id": model_config_override.pad_token_id,
-            "remat_block": model_config_override.remat_block,
-            "resid_pdrop": model_config_override.resid_pdrop,
-            "embd_pdrop": model_config_override.embd_pdrop,
-            "attn_pdrop": model_config_override.attn_pdrop,
-        }
-        # Only override max_sequence_length if it's different from base config
-        if "max_sequence_length" not in base_config or base_config["max_sequence_length"] != model_config_override.max_sequence_length:
-            override_dict["max_sequence_length"] = model_config_override.max_sequence_length
-        base_config.update(override_dict)
+        base_config.update(model_args)
         config = LLaMAConfig(**base_config)
     else:
-        config = LLaMAConfig(
-            bos_token_id=model_config_override.bos_token_id,
-            eos_token_id=model_config_override.eos_token_id,
-            pad_token_id=model_config_override.pad_token_id,
-            max_sequence_length=model_config_override.max_sequence_length,
-            remat_block=model_config_override.remat_block,
-            resid_pdrop=model_config_override.resid_pdrop,
-            embd_pdrop=model_config_override.embd_pdrop,
-            attn_pdrop=model_config_override.attn_pdrop,
-        )
+        config = LLaMAConfig(**model_args)
 
     if config_is_temp:
         os.remove(model_paths.config)

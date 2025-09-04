@@ -115,6 +115,7 @@ class ModelOverrideConfig:
     resid_pdrop: float = 0.0
     embd_pdrop: float = 0.0
     attn_pdrop: float = 0.0
+    initializer_range: float = 0.02
 
 
 @dataclass

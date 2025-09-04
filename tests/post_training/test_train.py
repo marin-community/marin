@@ -13,9 +13,11 @@
 # limitations under the License.
 
 import tempfile
+import unittest
 from pathlib import Path
 
 import jax
+import numpy as np
 import pytest
 
 from marin.post_training.train import main
@@ -34,6 +36,27 @@ from marin.post_training.training_config import (
     TrainingConfig,
     TrainingHyperparameters,
 )
+
+
+class DummyTokenizer:
+    """Dummy tokenizer that only produces token IDs in valid range [0, vocab_size-1]"""
+
+    def __init__(self, vocab_size=1000, pad_token_id=0):
+        self.vocab_size = vocab_size
+        self.pad_token_id = pad_token_id
+
+    def encode(self, text, add_special_tokens=True):
+        # Simple hash-based encoding that stays within vocab range
+        # This is deterministic but maps text to valid token IDs
+        text_hash = hash(text) % (self.vocab_size - 100)  # Leave room for special tokens
+        # Create a sequence of length proportional to text length
+        seq_len = min(len(text.split()) + 2, 10)  # Cap at reasonable length
+        tokens = [(text_hash + i) % (self.vocab_size - 100) + 50 for i in range(seq_len)]
+        return tokens[:8]  # Match max_input_length from test
+
+    def decode(self, token_ids, skip_special_tokens=True):
+        # Simple dummy decode - just return a placeholder
+        return f"decoded_{hash(tuple(token_ids)) % 1000}"
 
 
 @pytest.fixture
@@ -88,6 +111,7 @@ def training_config():
         resid_pdrop=0.0,
         embd_pdrop=0.0,
         attn_pdrop=0.0,
+        initializer_range=0.001,  # Use much smaller initialization for stability
     )
 
     checkpointer_config = CheckpointerConfigData(
@@ -97,9 +121,9 @@ def training_config():
     return TrainingConfig(
         model=ModelConfig(
             model_paths=model_paths_config,
-            inference_param_dtype="bf16",
-            inference_activation_dtype="bf16",
-            training_param_dtype="fp32",  # Use fp32 for training to avoid optimizer dtype issues
+            inference_param_dtype="fp32",  # Use fp32 for both inference and training for consistency
+            inference_activation_dtype="fp32",
+            training_param_dtype="fp32",
             training_activation_dtype="fp32",
             model_config_override=model_config_override,
             tokenizer_override=TokenizerOverrideConfig(),
@@ -153,16 +177,11 @@ def test_training_end_to_end(training_config):
     if jax.devices()[0].device_kind != "cpu":
         pytest.skip("Test requires CPU device")
 
-    # Run the main training function
-    # This should:
-    # 1. Initialize JAX distributed (no-op for single device)
-    # 2. Load attention kernels
-    # 3. Setup mesh
-    # 4. Load model configs and build models
-    # 5. Load tokenizer
-    # 6. Load environments (mock environment)
-    # 7. Initialize trainer and run 1 training step
-    main(training_config)
+    with unittest.mock.patch("marin.post_training.train.load_tokenizer") as mock_load:
+        mock_load.return_value = DummyTokenizer(
+            vocab_size=1000, pad_token_id=training_config.hyperparameters.pad_token_id
+        )
+        main(training_config)
 
     # If we get here without exceptions, the test passed
     assert True
@@ -203,9 +222,6 @@ def test_model_initialization(training_config):
 
 def test_environment_loading():
     """Test that mock environment can be loaded."""
-    from pathlib import Path
-
-    from transformers import AutoTokenizer
 
     from marin.post_training.load_environments import load_environments_from_config
     from marin.post_training.model_helpers import load_tokenizer

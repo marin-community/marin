@@ -20,7 +20,6 @@ and writes the rollout data to files for training workers to consume.
 """
 
 import logging
-import os
 import time
 from functools import partial
 from pathlib import Path
@@ -29,8 +28,6 @@ import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec as PS
 from optax import softmax_cross_entropy_with_integer_labels
-from tqdm.auto import tqdm
-from transformers import AutoTokenizer
 
 from .inference import build_sampler
 from .load_environments import load_environment_from_spec
@@ -42,7 +39,7 @@ from .model_helpers import (
     setup_mesh,
 )
 from .rl_dataset import create_dataset_from_environment
-from .rollout_storage import RolloutBatch, FileRolloutWriter
+from .rollout_storage import FileRolloutWriter, RolloutBatch
 from .training_config import InferenceWorkerConfig, TrainingConfig
 from .utils import (
     float_to_dtype,
