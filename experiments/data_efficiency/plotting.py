@@ -1633,10 +1633,10 @@ def plot_distillation(best_asymptote_ensemble_200M):
         label=f"{value_pretty_name_dict[model_size]} ensembles (Fit: {power_law})",
     )
 
-    # Best 8-mixture distill run: 300m4k-209Mx16-dclm+ens8x0730^0.95-cos-lr0.0030-wd0.01-bs64 (3.3612)
+    # Best 8-mixture distill run: 300m4k-209Mx16-dclm+ens8x0730^0.9-cos-lr0.0030-wd0.10-bs64 (3.3635)
     plt.scatter(
         0.3,
-        3.3612,
+        3.3635,
         color=LIGHT_BLUE,
         edgecolors="black",
         linewidths=0.8,
@@ -1648,7 +1648,7 @@ def plot_distillation(best_asymptote_ensemble_200M):
     plt.annotate(
         "",
         xytext=(0.3 * x_data[-1], y_data[-1]),
-        xy=(0.3, 3.3612),
+        xy=(0.3, 3.3635),
         arrowprops=dict(
             arrowstyle="->", color="black", linestyle="--", linewidth=1.5, alpha=0.8, connectionstyle="arc3,rad=0.0"
         ),
