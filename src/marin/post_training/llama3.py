@@ -1054,7 +1054,14 @@ class FlaxLLaMAPreTrainedModel(FlaxPreTrainedModel):
         if dropout_rng is not None:
             rngs["dropout"] = dropout_rng
 
-        inputs = {"params": params or self.params}
+        if params is not None:
+            inputs = {"params": params}
+        elif hasattr(self, "params"):
+            inputs = {"params": self.params}
+        else:
+            raise ValueError(
+                "Model parameters must be provided when model is created with _do_init=False"
+            )
 
         # if past_key_values are passed then cache is already initialized a
         # private flag init_cache has to be passed down to ensure cache is

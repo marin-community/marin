@@ -198,7 +198,7 @@ class TrainingConfig:
 
 
 @dataclass
-class WorkerConfig:
+class TrainWorkerConfig:
     """Training worker specific configuration."""
 
     rollout_queue_bucket: str

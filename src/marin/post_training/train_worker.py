@@ -18,8 +18,8 @@ import jax.numpy as jnp
 import optax
 from flax.training.train_state import TrainState
 from jax.sharding import PartitionSpec as PS
-from jax.sharding import TreePathShardingRule
 from optax import softmax_cross_entropy_with_integer_labels
+from scalax.sharding import TreePathShardingRule
 
 from .model_helpers import (
     build_training_model,
@@ -28,8 +28,8 @@ from .model_helpers import (
     setup_mesh,
 )
 from .optimizer import load_adamw_optimizer
-from .rollout_storage import RolloutBatch, RolloutReader, FileRolloutReader
-from .training_config import TrainingConfig, WorkerConfig
+from .rollout_storage import FileRolloutReader, RolloutBatch, RolloutReader
+from .training_config import TrainingConfig, TrainWorkerConfig
 from .utils import (
     WandbLogger,
     checkpointer,
@@ -50,7 +50,7 @@ class TrainingWorker:
     def __init__(
         self,
         training_config: TrainingConfig,
-        worker_config: WorkerConfig,
+        worker_config: TrainWorkerConfig,
         rollout_reader: RolloutReader | None = None,
     ):
         """Initialize training worker.
@@ -74,6 +74,7 @@ class TrainingWorker:
         )
 
         self.rollout_reader = rollout_reader
+        self._should_stop = False
 
         # Initialize components within mesh context
         with self.mesh.get_context():
@@ -292,6 +293,10 @@ class TrainingWorker:
 
         return train_state
 
+    def stop(self):
+        """Stop the training worker."""
+        self._should_stop = True
+
     def _convert_batch_to_jax(self, batch: RolloutBatch) -> dict[str, jnp.ndarray]:
         """Convert RolloutBatch to JAX arrays for training."""
         return {
@@ -358,7 +363,6 @@ class TrainingWorker:
         train_state = self._initialize_training_state()
 
         step = 0
-        idle_time = 0.0
         rng = jax.random.PRNGKey(0)
 
         logger.info(
@@ -366,21 +370,14 @@ class TrainingWorker:
             self.training_config.hyperparameters.num_train_steps,
         )
 
-        while step < self.training_config.hyperparameters.num_train_steps:
-            # Read batch from queue
-            batch = self.rollout_reader.read_batch(timeout=self.worker_config.batch_timeout)
+        while step < self.training_config.hyperparameters.num_train_steps and not self._should_stop:
+            # Read batch from queue (block until available)
+            batch = self.rollout_reader.read_batch(timeout=None)  # Block indefinitely
 
             if batch is None:
-                idle_time += self.worker_config.batch_timeout
-                logger.debug(f"No batch available, idle time: {idle_time:.1f}s")
-
-                if idle_time >= self.worker_config.max_idle_time:
-                    logger.warning(f"Worker idle for {idle_time:.1f}s, stopping")
-                    break
-                continue
-
-            # Reset idle time when we get data
-            idle_time = 0.0
+                # Only happens if reader is closed or stop is called
+                logger.debug("No batch available, reader may be closed")
+                break
 
             # Convert batch to JAX format
             jax_batch = self._convert_batch_to_jax(batch)

@@ -28,6 +28,7 @@ import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec as PS
 from optax import softmax_cross_entropy_with_integer_labels
+from scalax.sharding import TreePathShardingRule
 
 from .inference import build_sampler
 from .load_environments import load_environment_from_spec
@@ -39,7 +40,7 @@ from .model_helpers import (
     setup_mesh,
 )
 from .rl_dataset import create_dataset_from_environment
-from .rollout_storage import FileRolloutWriter, RolloutBatch
+from .rollout_storage import FileRolloutWriter, RolloutBatch, RolloutWriter
 from .training_config import InferenceWorkerConfig, TrainingConfig
 from .utils import (
     float_to_dtype,
@@ -55,16 +56,23 @@ logger = logging.getLogger(__name__)
 class InferenceWorker:
     """Inference worker that generates rollouts from a single environment."""
 
+    _running: bool = True
+    training_config: TrainingConfig
+    inference_config: InferenceWorkerConfig
+    rollout_writer: RolloutWriter
+
     def __init__(
         self,
         training_config: TrainingConfig,
         inference_config: InferenceWorkerConfig,
+        rollout_writer: RolloutWriter | None = None,
     ):
         """Initialize inference worker.
 
         Args:
             training_config: Training configuration (for model/generation settings).
             inference_config: Inference worker specific configuration.
+            rollout_writer: Optional rollout writer. If None, creates FileRolloutWriter.
         """
         self.training_config = training_config
         self.inference_config = inference_config
@@ -84,19 +92,27 @@ class InferenceWorker:
             self._setup_components()
 
         # Initialize storage
-        self.rollout_writer = FileRolloutWriter(inference_config.rollout_output_path)
+        self.rollout_writer = rollout_writer or FileRolloutWriter(
+            inference_config.rollout_output_path
+        )
 
         # Track state
         self.current_step = 0
         self.latest_checkpoint_path = None
         self.current_params = None
 
+    def stop(self):
+        """Stop the inference worker loop."""
+        self._running = False
+
     def _setup_components(self):
         """Setup models, tokenizer, and environment."""
         model_config = self.training_config.model
 
         # Setup models
-        llama_config = llama_config_from_model_config(model_config.model_paths, model_config.model_config_override)
+        llama_config = llama_config_from_model_config(
+            model_config.model_paths, model_config.model_config_override
+        )
         self.prefill_model = build_prefill_model(llama_config, self.training_config)
         self.generate_model = build_generate_model(llama_config, self.training_config)
 
@@ -105,12 +121,16 @@ class InferenceWorker:
 
         # Load environment
         self.environment_name = self.inference_config.environment_spec
-        self.environment = load_environment_from_spec(self.inference_config.environment_spec, self.tokenizer)
+        self.environment = load_environment_from_spec(
+            self.inference_config.environment_spec, self.tokenizer
+        )
 
         # Extract frequently used config values
         self.max_input_length = self.training_config.hyperparameters.max_input_length
         self.max_output_length = self.training_config.hyperparameters.max_output_length
-        self.reference_logprobs_bsize = self.training_config.hyperparameters.reference_logprobs_bsize
+        self.reference_logprobs_bsize = (
+            self.training_config.hyperparameters.reference_logprobs_bsize
+        )
         self.pad_token_id = self.training_config.hyperparameters.pad_token_id
 
         self._setup_samplers()
@@ -123,10 +143,11 @@ class InferenceWorker:
         # Override n_generations from inference config
         generation_config.n_generations = self.inference_config.n_generations
 
-        # Create inference sharding rules (simplified version from Trainer)
         config = self.prefill_model.config
-        self.inference_params_sharding_rules = config.get_partition_rules(
-            model_all_gather_axis=None,
+        self.inference_params_sharding_rules = TreePathShardingRule(
+            *config.get_partition_rules(
+                model_all_gather_axis=("fsdp", "sequence"),
+            )
         )
         self.inference_intermediate_sharding_rules = config.get_intermediate_sharding_rules(
             data_axis=("replica", "fsdp"),
@@ -155,6 +176,26 @@ class InferenceWorker:
 
         @partial(
             self.mesh.sjit,
+            in_shardings=(PS(),),
+            out_shardings=self.inference_params_sharding_rules,
+            annotation_shardings=self.inference_intermediate_sharding_rules,
+        )
+        def init_params(rng):
+            # Initialize with same pattern as Trainer - use training model for init
+            # then convert to inference format
+            params = self.prefill_model.init_weights(
+                rng,
+                (
+                    self.training_config.hyperparameters.decode_bsize,
+                    self.max_input_length + self.max_output_length - 1,
+                ),
+            )
+            # Convert to inference dtype
+            params = float_to_dtype(params, self.training_config.model.inference_param_dtype)
+            return params
+
+        @partial(
+            self.mesh.sjit,
             in_shardings=(
                 self.inference_params_sharding_rules,
                 PS(),
@@ -179,7 +220,9 @@ class InferenceWorker:
             target_attention_mask,
         ):
             full_tokens = jnp.concatenate([input_tokens, target_tokens], axis=1)
-            full_attention_mask = jnp.concatenate([input_attention_mask, target_attention_mask], axis=1)
+            full_attention_mask = jnp.concatenate(
+                [input_attention_mask, target_attention_mask], axis=1
+            )
             full_position_ids = jnp.maximum(jnp.cumsum(full_attention_mask, axis=1) - 1, 0)
 
             logits = self.prefill_model(
@@ -196,6 +239,7 @@ class InferenceWorker:
             )
             return logprobs
 
+        self.init_params = init_params
         self.get_logprobs = get_logprobs
 
     def _find_latest_checkpoint(self) -> str | None:
@@ -243,7 +287,9 @@ class InferenceWorker:
         )
 
         # Create sharding functions
-        shard_fns, _ = self.mesh.make_shard_and_gather_fns(params_shape, self.inference_params_sharding_rules)
+        shard_fns, _ = self.mesh.make_shard_and_gather_fns(
+            params_shape, self.inference_params_sharding_rules
+        )
 
         # Load and convert parameters
         params = load_checkpoint(
@@ -264,24 +310,17 @@ class InferenceWorker:
 
         logger.info(f"Successfully loaded checkpoint from {checkpoint_path}")
 
-    def _check_for_new_checkpoint(self) -> bool:
+    def _check_for_new_checkpoint(self):
         """Check if a new checkpoint is available and load it."""
         latest_checkpoint = self._find_latest_checkpoint()
 
         if latest_checkpoint is None:
             if self.current_params is None:
-                logger.warning("No checkpoints found")
-            return False
-
-        if latest_checkpoint != self.latest_checkpoint_path:
-            try:
-                self._load_checkpoint(latest_checkpoint)
-                return True
-            except Exception as e:
-                logger.error(f"Failed to load checkpoint {latest_checkpoint}: {e}")
-                return False
-
-        return False
+                logger.warning("No checkpoints found, initializing with random weights...")
+                self.current_params = self.init_params(jax.random.PRNGKey(0))
+                self.latest_checkpoint_path = "random_init"
+        elif latest_checkpoint != self.latest_checkpoint_path:
+            self._load_checkpoint(latest_checkpoint)
 
     def _generate_rollout_batch(self) -> tuple[dict, dict]:
         """Generate a single rollout batch from the environment."""
@@ -343,10 +382,13 @@ class InferenceWorker:
         # Initial checkpoint check
         self._check_for_new_checkpoint()
 
-        while True:
+        while self._running:
             # Check for new checkpoints periodically
             current_time = time.time()
-            if current_time - last_checkpoint_check >= self.inference_config.checkpoint_poll_interval:
+            if (
+                current_time - last_checkpoint_check
+                >= self.inference_config.checkpoint_poll_interval
+            ):
                 checkpoint_updated = self._check_for_new_checkpoint()
                 last_checkpoint_check = current_time
 
@@ -364,48 +406,43 @@ class InferenceWorker:
                 self.inference_config.max_rollouts is not None
                 and rollouts_generated >= self.inference_config.max_rollouts
             ):
-                logger.info(f"Reached max rollouts ({self.inference_config.max_rollouts}), stopping")
+                logger.info(
+                    f"Reached max rollouts ({self.inference_config.max_rollouts}), stopping"
+                )
                 break
 
-            try:
-                # Generate rollout batch
-                logger.info(f"Generating rollout batch {rollouts_generated}")
-                batch_data, metrics = self._generate_rollout_batch()
+            logger.info(f"Generating rollout batch {rollouts_generated}")
+            batch_data, metrics = self._generate_rollout_batch()
 
-                # Create RolloutBatch
-                rollout_batch = RolloutBatch(
-                    input_ids=batch_data["input_ids"],
-                    attention_mask=batch_data["attention_mask"],
-                    position_ids=batch_data["position_ids"],
-                    target_ids=batch_data["target_ids"],
-                    loss_weights=batch_data["loss_weights"],
-                    loss_masks=batch_data["loss_masks"],
-                    reference_logprobs=batch_data["reference_logprobs"],
-                    metadata=metrics,
-                )
+            # Create RolloutBatch
+            rollout_batch = RolloutBatch(
+                input_ids=batch_data["input_ids"],
+                attention_mask=batch_data["attention_mask"],
+                position_ids=batch_data["position_ids"],
+                target_ids=batch_data["target_ids"],
+                loss_weights=batch_data["loss_weights"],
+                loss_masks=batch_data["loss_masks"],
+                reference_logprobs=batch_data["reference_logprobs"],
+                metadata=metrics,
+            )
 
-                # Write rollout batch
-                self.rollout_writer.write_batch(rollout_batch)
+            # Write rollout batch
+            self.rollout_writer.write_batch(rollout_batch)
 
-                rollouts_generated += 1
-                logger.info(f"Generated rollout {rollouts_generated}")
+            rollouts_generated += 1
+            logger.info(f"Generated rollout {rollouts_generated}")
 
-                # Update metadata
-                self.rollout_writer.write_metadata(
-                    {
-                        "environment_spec": self.inference_config.environment_spec,
-                        "environment_name": self.environment_name,
-                        "inference_config": self.inference_config.__dict__,
-                        "start_time": time.time(),
-                        "rollouts_generated": rollouts_generated,
-                        "latest_checkpoint": self.latest_checkpoint_path,
-                    }
-                )
-
-            except Exception as e:
-                logger.error(f"Error generating rollout batch: {e}")
-                time.sleep(5)  # Wait before retrying
-                continue
+            # Update metadata
+            self.rollout_writer.write_metadata(
+                {
+                    "environment_spec": self.inference_config.environment_spec,
+                    "environment_name": self.environment_name,
+                    "inference_config": self.inference_config.__dict__,
+                    "start_time": time.time(),
+                    "rollouts_generated": rollouts_generated,
+                    "latest_checkpoint": self.latest_checkpoint_path,
+                }
+            )
 
         logger.info(f"Inference worker completed after generating {rollouts_generated} rollouts")
         jax_distributed_barrier()

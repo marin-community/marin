@@ -411,11 +411,23 @@ class InMemoryRolloutReader(RolloutReader):
 
     def read_batch(self, timeout: float | None = None) -> RolloutBatch | None:
         """Read next batch from memory queue."""
-        if self._queue._read_index < len(self._queue._queue):
-            batch = self._queue._queue[self._queue._read_index]
-            self._queue._read_index += 1
-            return batch
-        return None
+        import time
+        
+        start_time = time.time()
+        poll_interval = 0.1  # Poll every 100ms
+        
+        while True:
+            if self._queue._read_index < len(self._queue._queue):
+                batch = self._queue._queue[self._queue._read_index]
+                self._queue._read_index += 1
+                return batch
+            
+            # Check timeout
+            if timeout is not None and (time.time() - start_time) >= timeout:
+                return None
+                
+            # Sleep and try again
+            time.sleep(poll_interval)
 
     def read_batches(self, n_batches: int, timeout: float | None = None) -> Iterator[RolloutBatch]:
         """Read multiple batches from memory queue."""
@@ -435,6 +447,7 @@ class InMemoryRolloutWriter(RolloutWriter):
 
     def __init__(self, queue: InMemoryRolloutQueue):
         self._queue = queue
+        self._metadata = {}
 
     def write_batch(self, batch: RolloutBatch) -> None:
         """Write batch to memory queue."""
@@ -443,3 +456,11 @@ class InMemoryRolloutWriter(RolloutWriter):
     def get_queue_size(self) -> int:
         """Get current queue size."""
         return max(0, len(self._queue._queue) - self._queue._read_index)
+
+    def write_metadata(self, metadata: dict[str, Any]) -> None:
+        """Write metadata (stored in memory for testing)."""
+        self._metadata.update(metadata)
+
+    def get_metadata(self) -> dict[str, Any]:
+        """Get stored metadata."""
+        return self._metadata.copy()

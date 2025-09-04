@@ -77,15 +77,9 @@ def training_config():
         lr=5e-7,
         lr_warmup_steps=0,
         lr_decay_steps=16,
-        b1=0.9,
-        b2=0.95,
-        clip_gradient=1.0,
         weight_decay=0.0,
         bf16_momentum=False,
         multiply_by_parameter_scale=False,
-        weight_decay_exclusions=(),
-        schedule="cos",
-        grad_accum_steps=1,  # No gradient accumulation for testing
     )
 
     logger_config = LoggerConfigData(
@@ -95,22 +89,14 @@ def training_config():
     )
 
     generation_config = GenerationConfig(
-        max_output_length=1025, temperature=1.0, stop_tokens=[[128001]], n_generations=2
+        stop_tokens=[[128001]], n_generations=2
     )
 
     test_generation_config = GenerationConfig(
-        max_output_length=1025, temperature=0.0, stop_tokens=[[128001]], n_generations=1
+        temperature=0.0, stop_tokens=[[128001]], n_generations=1
     )
 
     model_config_override = ModelOverrideConfig(
-        bos_token_id=128000,
-        eos_token_id=128001,
-        pad_token_id=128002,
-        max_sequence_length=2048,
-        remat_block="nothing_saveable",
-        resid_pdrop=0.0,
-        embd_pdrop=0.0,
-        attn_pdrop=0.0,
         initializer_range=0.001,  # Use much smaller initialization for stability
     )
 
@@ -141,7 +127,6 @@ def training_config():
             reference_logprobs_bsize=2,
             n_prompts_per_step=2,  # Only 2 examples
             optim_config=optim_config,
-            pad_token_id=128002,
             kl_coef=1e-3,
         ),
         logging=LoggingConfig(
@@ -150,9 +135,6 @@ def training_config():
             save_model_freq=0,  # Don't save during test
             wandb_project="test_project",
             logger_config=logger_config,
-            save_initial_checkpoint=False,
-            log_initial_step=True,
-            max_checkpoints=None,
         ),
         environment=EnvironmentConfig(
             train_environments_path="environments_test.json",  # Use test environment
@@ -160,8 +142,6 @@ def training_config():
         ),
         distributed=DistributedConfig(
             sharding=[1, 1, 1, -1],  # Single device sharding
-            physical_axis_splitting=False,
-            jax_distributed_initalize_config={},
         ),
         generation_config=generation_config,
         test_generation_config=test_generation_config,
