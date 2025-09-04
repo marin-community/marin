@@ -683,7 +683,10 @@ class Executor:
 
             if isinstance(step.fn, ray.remote_function.RemoteFunction):
                 ref = step.fn.options(
-                    name=f"{get_fn_name(step.fn, short=True)}:{step.name}", runtime_env=runtime_env
+                    name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
+                    runtime_env=runtime_env,
+                    num_cpus=0,
+                    resources={"head_node": 0.001},
                 ).remote(config)
             else:
                 remote_fn = ray.remote(step.fn)

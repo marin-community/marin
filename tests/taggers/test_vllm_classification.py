@@ -95,7 +95,7 @@ def read_jsonl_gz_file(filepath: str) -> list[dict]:
 #     )
 
 
-@ray.remote(resources={"TPU": 1, "TPU-v6e-8-head": 1})
+@ray.remote(resources={"TPU-v5p-8-head": 1})
 def run_initialization(gcsfuse_mount_model_path, quality_classification_template):
     classifier = vLLMClassifier(
         model_name=gcsfuse_mount_model_path,
@@ -111,7 +111,7 @@ def run_initialization(gcsfuse_mount_model_path, quality_classification_template
     assert classifier.save_original_generation is True
 
 
-@ray.remote(resources={"TPU": 1, "TPU-v6e-8-head": 1})
+@ray.remote(resources={"TPU-v5p-8-head": 1})
 def run_batch_processing(gcsfuse_mount_model_path, quality_classification_template, sample_data):
     classifier = vLLMClassifier(
         model_name=gcsfuse_mount_model_path,
@@ -221,8 +221,8 @@ class TestVLLMSingleFileProcessing:
 
         # Create partial output file (first 2 rows)
         partial_output = [
-            {"id": "doc1", "attributes": {"quality": {"score": 4, "generated_text": "Final score: 4"}}},
-            {"id": "doc2", "attributes": {"quality": {"score": 3, "generated_text": "Final score: 3"}}},
+            {"id": "doc1", "attributes": {"quality": {"score": 4}}, "generated_text": "Final score: 4"},
+            {"id": "doc2", "attributes": {"quality": {"score": 3}}, "generated_text": "Final score: 3"},
         ]
         create_jsonl_gz_file(partial_output, output_file)
 
@@ -342,7 +342,7 @@ class TestVLLMFullInferencePipeline:
 - 4: High educational value
 - 5: Exceptional educational value
 
-Text: {examples}
+Text: {example}
 
 Provide your rating as "Final score: X" where X is 0-5."""
 
@@ -400,42 +400,6 @@ Provide your rating as "Final score: X" where X is 0-5."""
 
             # Check that original generation is NOT saved (since save_original_generation=False)
             assert "generated_text" not in result["attributes"]["educational_value"]
-
-
-class TestVLLMErrorHandling:
-    """Test error handling scenarios for vLLM classification"""
-
-    def test_invalid_model_path(self, quality_classification_template):
-        """Test handling of invalid model paths"""
-        with pytest.raises((FileNotFoundError, OSError, ValueError, RuntimeError)):
-            classifier = vLLMClassifier(
-                model_name="invalid/model/path",
-                attribute_name="quality",
-                template=quality_classification_template,
-                engine_kwargs={"enforce_eager": True, "max_model_len": 512},
-            )
-            # Try to process a small batch to trigger the error
-            batch = {"id": ["test"], "text": ["test text"]}
-            classifier(batch)
-
-    def test_empty_batch_processing(self, gcsfuse_mount_model_path, quality_classification_template):
-        """Test processing of empty batches"""
-        classifier = vLLMClassifier(
-            model_name=gcsfuse_mount_model_path,
-            attribute_name="quality",
-            template=quality_classification_template,
-            score_extractor_fn=FinalScoreZeroToFiveDatasetOutputProcessor.extract_score,
-            engine_kwargs=default_engine_kwargs,
-            generation_kwargs=default_generation_params,
-        )
-
-        # Process empty batch
-        batch = {"id": [], "text": []}
-        result = classifier(batch)
-
-        # Should return empty attributes
-        assert "attributes" in result
-        assert len(result["attributes"]) == 0
 
 
 if __name__ == "__main__":

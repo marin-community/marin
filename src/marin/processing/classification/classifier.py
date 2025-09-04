@@ -387,7 +387,7 @@ class vLLMClassifier(BaseClassifier):
             return int(numbers[0])
         else:
             # Default to middle score if no valid number found
-            return 2
+            return -1
 
     def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
         """Process a batch of documents."""
@@ -410,8 +410,8 @@ class vLLMClassifier(BaseClassifier):
         if self.save_original_generation:
             batch[self.generated_text_column_name] = generated_texts
 
-        print("Save original generation: ", self.save_original_generation)
-        print(batch)
+        # print("Save original generation: ", self.save_original_generation)
+        # print(batch)
 
         return batch
 

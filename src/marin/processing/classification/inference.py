@@ -13,6 +13,9 @@ import draccus
 import pandas as pd
 import ray
 
+import datetime
+import threading
+import queue
 from marin.core.runtime import cached_or_construct_output
 from marin.processing.classification.classifier import (
     AutoClassifier,
@@ -64,14 +67,17 @@ def read_dataset_streaming(input_filename: str, columns: list[str] | None = None
 
 
 def count_existing_rows(output_filename: str) -> int:
-    """Count the number of rows already processed in the output file"""
-    import os
+    """Count the number of rows already processed in the output file
 
+    Uses fsspec to support remote filesystems (e.g., gs://) instead of os.path.exists.
+    """
     import datasets
+    import fsspec
 
     try:
-        # Check if file exists
-        if not os.path.exists(output_filename):
+        # Check if file exists on local or remote filesystem
+        fs, _ = fsspec.core.url_to_fs(output_filename)
+        if not fs.exists(output_filename):
             return 0
 
         # Use datasets library to count rows efficiently
@@ -97,18 +103,63 @@ def count_existing_rows(output_filename: str) -> int:
         return 0
 
 
+def make_json_serializable(row: dict) -> dict:
+    """Make a row JSON serializable"""
+    for key, value in row.items():
+        if isinstance(value, dict):
+            row[key] = make_json_serializable(value)
+        if isinstance(value, datetime.datetime):
+            row[key] = value.isoformat()
+    return row
+
+
 def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = False):
-    """Writes rows to a file in streaming fashion"""
+    """Writes rows to a file in streaming fashion
+
+    JSONL behavior:
+      - For JSONL(.gz/.zst), write to a deterministic temp file under /tmp in append-mode,
+        then upload the full file to the destination (e.g., gs://...). This provides safe
+        append semantics for object stores.
+      - Checkpoint restoration should continue to read from the remote path.
+    """
     import json
+    import hashlib
+    import os
+    import shutil
 
     import fsspec
 
-    mode = "a" if append else "w"
+    mode = "ab" if append else "wb"
 
     if ".jsonl" in output_filename:
-        with fsspec.open(output_filename, mode, compression="infer") as f:
+        # Build deterministic temp path for this output file
+        file_hash = hashlib.md5(output_filename.encode("utf-8")).hexdigest()
+        if output_filename.endswith(".jsonl.gz"):
+            tmp_path = f"/tmp/marin_{file_hash}.jsonl.gz"
+        elif output_filename.endswith(".jsonl.zst"):
+            tmp_path = f"/tmp/marin_{file_hash}.jsonl.zst"
+        else:
+            tmp_path = f"/tmp/marin_{file_hash}.jsonl"
+
+        # If appending and local temp doesn't exist, hydrate it from remote (if present)
+        if append and not os.path.exists(tmp_path):
+            fs, _ = fsspec.core.url_to_fs(output_filename)
+            if fs.exists(output_filename):
+                with fsspec.open(output_filename, "rb") as src, open(tmp_path, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+            else:
+                # Ensure file exists for append
+                open(tmp_path, "wb").close()
+
+        # Write rows to temp with append semantics using fsspec with compression inference
+        with fsspec.open(tmp_path, mode, compression="infer") as f:
             for row in rows_iterator:
-                f.write(json.dumps(row) + "\n")
+                row = make_json_serializable(row)
+                f.write((json.dumps(row) + "\n").encode("utf-8"))
+
+        # Upload temp file to destination (overwrite remote with full content)
+        with fsspec.open(output_filename, "wb") as dst, open(tmp_path, "rb") as src:
+            shutil.copyfileobj(src, dst)
     elif output_filename.endswith(".parquet"):
         # For parquet, we need to collect rows and write in batches
         import pyarrow as pa
@@ -130,6 +181,91 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
                 pq.write_table(table, f)
     else:
         raise ValueError(f"Unsupported filetype: {output_filename}")
+
+
+class AsyncJSONLWriter:
+    """Asynchronous JSONL writer that writes to a deterministic local temp file and uploads on close.
+
+    This preserves the existing append semantics against remote object stores by writing locally
+    and then overwriting the remote object at the end of the job.
+    """
+
+    def __init__(self, output_filename: str, append: bool = False, max_queue_size: int = 4):
+        import hashlib
+        import fsspec
+
+        self.output_filename = output_filename
+        self.append = append
+        self.max_queue_size = max_queue_size
+        self._q: queue.Queue | None = queue.Queue(maxsize=max_queue_size)
+        self._exc: Exception | None = None
+        self._stop_sentinel = object()
+
+        file_hash = hashlib.md5(output_filename.encode("utf-8")).hexdigest()
+        if output_filename.endswith(".jsonl.gz"):
+            self.tmp_path = f"/tmp/marin_{file_hash}.jsonl.gz"
+        elif output_filename.endswith(".jsonl.zst"):
+            self.tmp_path = f"/tmp/marin_{file_hash}.jsonl.zst"
+        else:
+            self.tmp_path = f"/tmp/marin_{file_hash}.jsonl"
+
+        # Hydrate local temp if appending and temp doesn't exist
+        if append and not os.path.exists(self.tmp_path):
+            fs, _ = fsspec.core.url_to_fs(output_filename)
+            if fs.exists(output_filename):
+                with fsspec.open(output_filename, "rb") as src, open(self.tmp_path, "wb") as dst:
+                    import shutil as _shutil
+
+                    _shutil.copyfileobj(src, dst)
+            else:
+                open(self.tmp_path, "wb").close()
+
+        self._thread = threading.Thread(target=self._run_writer, daemon=True)
+        self._thread.start()
+
+    def submit_rows(self, rows: list[dict]) -> None:
+        if self._exc:
+            raise self._exc
+        assert self._q is not None
+        self._q.put(rows)
+
+    def close(self) -> None:
+        import fsspec
+
+        assert self._q is not None
+        self._q.put(self._stop_sentinel)
+        self._thread.join()
+        if self._exc:
+            raise self._exc
+        with fsspec.open(self.output_filename, "wb") as dst, open(self.tmp_path, "rb") as src:
+            import shutil as _shutil
+
+            _shutil.copyfileobj(src, dst)
+
+    def _run_writer(self) -> None:
+        import json
+        import fsspec
+
+        mode = "ab" if self.append else "wb"
+        try:
+            with fsspec.open(self.tmp_path, mode, compression="infer") as f:
+                while True:
+                    item = self._q.get()
+                    if item is self._stop_sentinel:
+                        break
+                    for row in item:
+                        row = make_json_serializable(row)
+                        f.write((json.dumps(row) + "\n").encode("utf-8"))
+                f.flush()
+        except Exception as e:
+            self._exc = e
+        finally:
+            try:
+                # Drain remaining items to unblock producers if any
+                while not self._q.empty():
+                    self._q.get_nowait()
+            except Exception:
+                pass
 
 
 def read_dataset(input_filename: str, columns: list[str] | None = None):
@@ -181,10 +317,11 @@ def get_output_dataset_column_names(input_filename: str) -> list[str]:
     if "fineweb" in input_filename.lower():
         return ["id", "attributes"]
     elif "dclm" in input_filename.lower():
-        return ["metadata", "attributes"]
+        # HACK(chris): Either standardize or make the user specify the output columns
+        return ["metadata", "attributes", "generated_text", "text"]
     else:
         logger.warning("We are assuming the output dataset has the following columns: id, attributes")
-        return ["id", "attributes", "generated_text"]
+        return ["id", "attributes", "generated_text", "text"]
 
 
 def process_file_with_quality_classifier_streaming(
@@ -222,9 +359,12 @@ def process_file_with_quality_classifier_streaming(
     # Initialize for batch processing
     append_mode = rows_to_skip > 0
 
-    # For parquet, collect batches; for JSONL, write immediately
+    # For parquet, collect batches; for JSONL, stream asynchronously
     if output_filename.endswith(".parquet"):
         parquet_batches = []
+        async_writer = None
+    else:
+        async_writer = AsyncJSONLWriter(output_filename, append=append_mode)
 
     batch = []
     total_processed = rows_to_skip
@@ -252,7 +392,7 @@ def process_file_with_quality_classifier_streaming(
                         output_row[col] = batch_dict[col][i]
                 output_rows.append(output_row)
 
-            # Write batch immediately
+            # Write batch
             if output_filename.endswith(".parquet"):
                 parquet_batches.extend(output_rows)
                 # Write parquet in larger chunks to be efficient
@@ -260,8 +400,8 @@ def process_file_with_quality_classifier_streaming(
                     _write_parquet_batch(parquet_batches, output_filename, append=append_mode or total_processed > 0)
                     parquet_batches = []
             else:
-                # Use existing streaming write function for JSONL files
-                write_dataset_streaming(iter(output_rows), output_filename, append=append_mode or total_processed > 0)
+                # Enqueue JSONL write to overlap with next compute batch
+                async_writer.submit_rows(output_rows)
 
             total_processed += len(batch)
             print(f"[*] Processed {total_processed} rows from {input_filename}")
@@ -289,14 +429,19 @@ def process_file_with_quality_classifier_streaming(
         if output_filename.endswith(".parquet"):
             parquet_batches.extend(output_rows)
         else:
-            # Use existing streaming write function for JSONL files
-            write_dataset_streaming(iter(output_rows), output_filename, append=append_mode or total_processed > 0)
+            # Enqueue final JSONL rows
+            async_writer.submit_rows(output_rows)
 
         total_processed += len(batch)
 
-    # Write any remaining parquet data
-    if output_filename.endswith(".parquet") and parquet_batches:
-        _write_parquet_batch(parquet_batches, output_filename, append_mode or total_processed > rows_to_skip)
+    # Flush remaining writes
+    if output_filename.endswith(".parquet"):
+        if parquet_batches:
+            _write_parquet_batch(parquet_batches, output_filename, append_mode or total_processed > rows_to_skip)
+    else:
+        # Finalize JSONL: join background writer and upload to destination
+        if async_writer is not None:
+            async_writer.close()
 
     print(f"[*] Completed processing {input_filename} - Total rows: {total_processed}")
 
@@ -406,8 +551,7 @@ def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
     return filepaths, process_filepath_func
 
 
-@ray.remote(num_cpus=3)
-@remove_tpu_lockfile_on_exit
+@ray.remote(num_cpus=0, resources={"head_node": 0.001})
 def run_inference(inference_config: InferenceConfig):
     logger.info(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
     filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
