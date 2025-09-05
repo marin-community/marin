@@ -40,15 +40,16 @@ from levanter.utils.ray_utils import ser_exc_info
 # CF: https://github.com/AI-Hypercomputer/ray-tpu/blob/main/src/ray_tpu.py
 
 # Basic flow:
-# 1. The controller creates a pool of SliceActors, each representing a slice of the TPU pod. SliceActor owns the
-#     tpu-XXX-head resource
-# 2. Each SliceActor creates a placement group with one bundle per host in the slice, each with 1 CPU and N
-#    TPUs (N=4 typically)
-# 3. Controller allocates tasks using the placement groups onto all slices
-# 4. If a slice fails, the controller gets a new slice
+# 1. The controller creates a pool of ``SliceActors``, each representing a slice of the TPU pod.
+#    A ``SliceActor`` owns the ``tpu-XXX-head`` resource for the head node of its slice.
+# 2. Each ``SliceActor`` tracks the TPU pod names in its slice and schedules work directly on those
+#    pods by name (e.g. ``tpu-0``, ``tpu-1``), without using placement groups.
+# 3. The controller allocates tasks by specifying the TPU pod name, ensuring the
+#    correct slice receives the work.
+# 4. If a slice fails, the controller obtains a new slice and continues scheduling.
 
 # Challenges:
-# * Ray doesn't free placement groups when actors are killed, so we need to manage them ourselves.
+# * When scheduling by TPU name, we must ensure tasks are bound to the right host and TPU.
 # * JAX doesn't always seem to crash when another slice dies(?!?)
 # * Ray actor method calls **cannot** be canceled, so they cannot be heavy-weight. They should return quickly by forking
 #   another ray process (or some other mechanism) to do the heavy lifting.
