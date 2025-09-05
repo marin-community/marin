@@ -118,7 +118,7 @@ class ModelOverrideConfig:
     initializer_range: float = 0.02
 
 
-@dataclass
+@dataclass(frozen=True, kw_only=True)
 class ModelConfig:
     """Model configuration parameters."""
 

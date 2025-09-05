@@ -160,12 +160,10 @@ def build_generate_model(config: LLaMAConfig, training_config: TrainingConfig) -
         training_config.model.generate_attention_kernel_config, ["paged", "default"]
     )
 
-    # Create model configuration
+    # Create model configuration (without attention kernel settings)
     generate_config = copy.deepcopy(config)
-    generate_config.attention_kernel = generate_attention_kernel
-    generate_config.attention_kernel_settings = generate_attention_kernel_config
 
-    # Initialize model
+    # Initialize model first
     generate_model = FlaxLLaMAForCausalLM(
         generate_config,
         dtype=inference_activation_dtype,
@@ -176,6 +174,10 @@ def build_generate_model(config: LLaMAConfig, training_config: TrainingConfig) -
             training_config.hyperparameters.max_input_length + training_config.hyperparameters.max_output_length - 1,
         ),
     )
+
+    # Set attention kernel after model creation (matches original train.py pattern)
+    generate_model.config.attention_kernel = generate_attention_kernel
+    generate_model.config.attention_kernel_settings = generate_attention_kernel_config
 
     return generate_model
 

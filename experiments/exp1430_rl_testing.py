@@ -21,6 +21,8 @@ import os
 from dataclasses import dataclass
 
 import ray
+from levanter.infra.ray_tpu import run_on_pod_ray
+from openai import max_retries
 
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.post_training.inference_worker import InferenceWorker
@@ -42,18 +44,14 @@ from marin.post_training.training_config import (
     TrainingHyperparameters,
     TrainWorkerConfig,
 )
-from marin.resources import ResourceConfig, TpuPodConfig
+from marin.resources import TpuPodConfig
 from marin.training.training import (
-    _add_default_env_variables,
     _add_run_env_variables,
-    _check_for_wandb_key,
 )
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
-NUM_INFERENCE_WORKERS = 1
-NUM_TRAIN_WORKERS = 1
 WANDB_PROJECT = "math_rloo_math_test_experiments"
 ENVIRONMENT_SPEC = "olym_math:difficulty=hard"
 
@@ -62,30 +60,18 @@ ENVIRONMENT_SPEC = "olym_math:difficulty=hard"
 class RLTrainConfig:
     """Configuration for RL training on a pod, using draccus TrainingConfig."""
 
-    resources: ResourceConfig
     training_config: TrainingConfig
+    tpu_type: str
+    num_inference_workers: int = 1
+    num_train_workers: int = 1
 
-
-@remove_tpu_lockfile_on_exit
+@ray.remote
 def run_rl_training_on_pod(config: RLTrainConfig):
     """
     Run RL training with both inference and training workers on a Ray cluster.
 
     This function launches both workers that communicate through a shared rollout queue.
     """
-
-    import levanter.infra.cli_helpers
-
-    default_launch_config = levanter.infra.cli_helpers.load_config()
-
-    env = _add_default_env_variables(
-        config.resources.runtime_env.get("env_vars", {}),
-        default_launch_config.env_for_accel(config.resources.accelerator_descriptor() or ""),
-    )
-
-    if isinstance(config.resources, TpuPodConfig):
-        _check_for_wandb_key(env)
-
     rollout_queue_path = config.training_config.output_dir + "/rollout_queue"
     checkpoint_dir = config.training_config.output_dir + "/checkpoints"
 
@@ -109,6 +95,7 @@ def run_rl_training_on_pod(config: RLTrainConfig):
         checkpoint_timeout=300.0,
     )
 
+    env = {}
     env = _add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
@@ -121,30 +108,50 @@ def run_rl_training_on_pod(config: RLTrainConfig):
                 "MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured."
             )
 
-    hw_config = config.resources.with_env_vars(env)
+    pod_config = TpuPodConfig(tpu_type=config.tpu_type)
+    hw_config = pod_config.with_env_vars(env)
 
-    # Split resources between workers
-    inference_hw_config = hw_config
-    train_hw_config = hw_config
-
-    @ray.remote(**train_hw_config.as_remote_kwargs(), max_calls=1, max_retries=0)
+    @ray.remote(runtime_env=hw_config.runtime_env, max_calls=1)
     def train_worker_task():
-        rollout_reader = FileRolloutReader(rollout_queue_path)
-        worker = TrainingWorker(config.training_config, train_worker_config, rollout_reader)
-        worker.train()
+        with remove_tpu_lockfile_on_exit():
+            rollout_reader = FileRolloutReader(rollout_queue_path)
+            worker = TrainingWorker(config.training_config, train_worker_config, rollout_reader)
+            worker.train()
 
-    @ray.remote(**inference_hw_config.as_remote_kwargs(), max_calls=1, max_retries=0)
+    @ray.remote(runtime_env=hw_config.runtime_env, max_calls=1)
     def inference_worker_task():
-        rollout_writer = FileRolloutWriter(rollout_queue_path)
-        worker = InferenceWorker(config.training_config, inference_worker_config, rollout_writer)
-        worker.run()
+        with remove_tpu_lockfile_on_exit():
+            rollout_writer = FileRolloutWriter(rollout_queue_path)
+            worker = InferenceWorker(
+                config.training_config, inference_worker_config, rollout_writer
+            )
+            worker.run()
 
-    # Launch both workers
-    inference_task = inference_worker_task.remote()
-    train_task = train_worker_task.remote()
+    inference_tasks = []
+    train_tasks = []
+    for _ in range(config.num_inference_workers):
+        inference_tasks.append(
+            run_on_pod_ray.remote(
+                inference_worker_task,
+                config.tpu_type,
+                num_slices=1,
+                max_retries_failure=1,
+                max_retries_preemption=1,
+            )
+        )
 
-    # Wait for both to complete
-    return ray.get([inference_task, train_task])
+    for _ in range(config.num_train_workers):
+        train_tasks.append(
+            run_on_pod_ray.remote(
+                train_worker_task,
+                config.tpu_type,
+                num_slices=1,
+                max_retries_failure=1,
+                max_retries_preemption=1,
+            )
+        )
+
+    return ray.get(inference_tasks + train_tasks)
 
 
 def default_rl_train(
@@ -251,14 +258,12 @@ def default_rl_train(
         attn_pdrop=0.0,
     )
 
-    checkpointer_config = CheckpointerConfigData(save_optimizer_state=False, save_float_dtype="bf16")
-
-    resources = TpuPodConfig(tpu_type=tpu_type, slices=NUM_INFERENCE_WORKERS + NUM_TRAIN_WORKERS)
+    checkpointer_config = CheckpointerConfigData(
+        save_optimizer_state=False, save_float_dtype="bf16"
+    )
 
     # Shared paths for worker coordination
     output_dir = this_output_path()
-    rollout_queue_path = os.path.join(output_dir, "rollout_queue")
-    checkpoint_dir = os.path.join(output_dir, "checkpoints")
 
     training_config = TrainingConfig(
         model=ModelConfig(
@@ -268,17 +273,15 @@ def default_rl_train(
             training_param_dtype="fp32",
             training_activation_dtype="bf16",
             model_config_override=model_config_override,
-            tokenizer_override={},
             train_attention_kernel_config='splash:{"block_size": 256}',
             prefill_attention_kernel_config='splash:{"block_size": 256}',
             generate_attention_kernel_config=(
-                'paged:{"page_size": 256, "pages_per_compute_block": 1, '
-                '"inline_seq_dim": true, "use_int8": false}'
+                'paged:{"page_size": 256, "pages_per_compute_block": 1, "inline_seq_dim": true, "use_int8": false}'
             ),
         ),
         hyperparameters=TrainingHyperparameters(
             num_train_steps=num_train_steps,
-            max_input_length=128,
+            max_input_length=256,
             max_output_length=256,
             train_bsize=train_bsize,
             decode_bsize=8,
@@ -311,10 +314,7 @@ def default_rl_train(
         test_generation_config=test_generation_config,
     )
 
-    config = RLTrainConfig(
-        resources=resources,
-        training_config=training_config,
-    )
+    config = RLTrainConfig(training_config=training_config, tpu_type=tpu_type)
 
     return ExecutorStep(
         name=os.path.join("rl_checkpoints", name),

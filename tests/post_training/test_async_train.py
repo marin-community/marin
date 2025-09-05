@@ -26,6 +26,7 @@ import numpy as np
 import pytest
 
 from marin.post_training.inference_worker import InferenceWorker
+from marin.post_training.model_helpers import load_tokenizer
 from marin.post_training.rollout_storage import (
     FileRolloutReader,
     FileRolloutWriter,
@@ -45,6 +46,7 @@ from marin.post_training.training_config import (
     ModelOverrideConfig,
     ModelPathsConfig,
     OptimizerConfig,
+    TokenizerOverrideConfig,
     TrainingConfig,
     TrainingHyperparameters,
     TrainWorkerConfig,
@@ -137,6 +139,10 @@ def training_config():
             train_attention_kernel_config="default:{}",
             prefill_attention_kernel_config="default:{}",
             generate_attention_kernel_config="default:{}",
+            # paged attention doesn't work on CPU
+            # generate_attention_kernel_config=(
+            #     'paged:{"page_size": 1, "pages_per_compute_block": 1, "inline_seq_dim": true, "use_int8": false}'
+            # ),
         ),
         hyperparameters=TrainingHyperparameters(
             num_train_steps=1,  # Small number for testing
@@ -460,6 +466,9 @@ class InferenceWorkerRunner:
         if self.worker:
             self.worker.stop()
 
+    def alive(self):
+        return self.thread.is_alive()
+
     def join(self, timeout=5):
         """Wait for thread completion."""
         if self.thread:
@@ -618,7 +627,7 @@ def test_inference_worker(training_config, inference_worker_config, mock_tokeniz
     with InferenceWorkerRunner(training_config, inference_worker_config, queue_writer) as runner:
         # Wait for batch to be generated with timeout
         start_time = time.time()
-        while time.time() - start_time < INTEGRATION_TEST_TIMEOUT:
+        while time.time() - start_time < INTEGRATION_TEST_TIMEOUT and runner.alive():
             if queue_reader.get_queue_size() > 0:
                 break
             time.sleep(0.1)
@@ -768,3 +777,33 @@ def test_inference_and_training_workers(
     print(f"  - Completed {training_runner.steps_completed} training steps")
     print(f"  - Created {len(training_runner.checkpoints_created)} checkpoints")
     print(f"  - Loaded {len(inference_runner.checkpoint_loads)} checkpoints in inference worker")
+
+
+def test_load_tokenizer():
+    """Test load_tokenizer function with standard configuration."""
+    model_paths = ModelPathsConfig(
+        params=None,
+        tokenizer="meta-llama/Meta-Llama-3-8B-Instruct",
+        config=None,
+    )
+
+    tokenizer_override = TokenizerOverrideConfig()
+
+    with unittest.mock.patch(
+        "marin.post_training.model_helpers.AutoTokenizer"
+    ) as mock_auto_tokenizer:
+        mock_tokenizer = unittest.mock.MagicMock()
+        mock_auto_tokenizer.from_pretrained.return_value = mock_tokenizer
+
+        tokenizer = load_tokenizer(model_paths, tokenizer_override)
+
+        mock_auto_tokenizer.from_pretrained.assert_called_once_with(
+            "meta-llama/Meta-Llama-3-8B-Instruct",
+            truncation_side="right",
+            padding_side="right",
+            pad_token="<|reserved_special_token_0|>",
+        )
+
+        assert tokenizer is mock_tokenizer
+
+    print("✓ load_tokenizer test passed")

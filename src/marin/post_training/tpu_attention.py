@@ -36,7 +36,10 @@ def _tpu_splash_attention(
     attention_dtype: jnp.dtype | None = None,
     block_size: int | None = None,
 ) -> jnp.ndarray | None:
-    from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
+    from jax.experimental.pallas.ops.tpu.splash_attention import (
+        splash_attention_kernel,
+        splash_attention_mask,
+    )
 
     # Splash attention requires BHSD format
     # We need to reshape the input to match this format
@@ -174,7 +177,9 @@ def _tpu_paged_attention(
         raise ValueError(f"Embedding axes must be the same for q, k, and v: {D} != {Dk}")
 
     if Sq != 1:
-        raise NotImplementedError("Paged attention only supports query sequence length 1")
+        raise NotImplementedError(
+            f"Paged attention only supports query sequence length 1, got {Sq}"
+        )
 
     assert Sk % page_size == 0, "Key sequence length must be a multiple of page size"
 
