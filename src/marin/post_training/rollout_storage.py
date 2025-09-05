@@ -222,14 +222,11 @@ class FileRolloutReader(RolloutReader):
 
                 logger.debug(f"Read batch {self._read_index - 1}")
                 return batch
-            else:
-                break
-
-            if timeout is not None and (time.time() - start_time) >= timeout:
-                logger.debug(f"Timeout reached while waiting for batch {self._read_index}")
-                return None
 
             time.sleep(self.poll_interval)
+
+            if timeout is not None and (time.time() - start_time) >= timeout:
+                return None
 
     def read_batches(self, n_batches: int, timeout: float | None = None) -> Iterator[RolloutBatch]:
         """Read multiple batches from storage."""

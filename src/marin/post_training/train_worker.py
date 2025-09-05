@@ -22,6 +22,7 @@ checkpoints are read by the rollout workers to update their models.
 For now we use GCS as a storage backend.
 """
 
+import dataclasses
 import logging
 import os
 from collections import deque
@@ -143,8 +144,6 @@ class TrainingWorker:
         if logger_config.enable is None:
             logger_config.enable = jax.process_index() == 0
         if logger_config.config_to_log is None:
-            import dataclasses
-
             logger_config.config_to_log = dataclasses.asdict(self.training_config)
 
         self.logger = WandbLogger(
@@ -254,7 +253,7 @@ class TrainingWorker:
         if latest_checkpoint_step > 0:
             logger.info(f"Resuming training from checkpoint at step {latest_checkpoint_step}...")
             checkpoint_path = os.path.join(
-                self.logger.output_dir,
+                self.training_config.output_dir,
                 "checkpoints",
                 f"step_{latest_checkpoint_step}",
                 "params.msgpack",
@@ -368,13 +367,12 @@ class TrainingWorker:
         )
 
         while step < self.training_config.hyperparameters.num_train_steps and not self._should_stop:
-            # Read batch from queue (block until available)
-            batch = self.rollout_reader.read_batch(timeout=None)  # Block indefinitely
+            print("Training loop!")
+            batch = self.rollout_reader.read_batch(timeout=5)
 
             if batch is None:
-                # Only happens if reader is closed or stop is called
-                logger.debug("No batch available, reader may be closed")
-                break
+                logger.info("No batch available, waiting for new data...")
+                continue
 
             # Convert batch to JAX format
             jax_batch = self._convert_batch_to_jax(batch)

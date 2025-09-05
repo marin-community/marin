@@ -21,24 +21,22 @@ import os
 from dataclasses import dataclass
 
 import ray
+from levanter.infra.ray_tpu import run_on_pod_multislice_resumable
 
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.post_training.training_config import (
-    TrainingConfig,
-    ModelConfig,
-    TrainingHyperparameters,
-    LoggingConfig,
-    EnvironmentConfig,
-    DistributedConfig,
-    GenerationConfig,
-)
-from marin.post_training.model_config import (
-    OptimizerConfig,
-    GenerationConfigData,
-    LoggerConfigData,
     CheckpointerConfigData,
+    DistributedConfig,
+    EnvironmentConfig,
+    GenerationConfig,
+    LoggerConfigData,
+    LoggingConfig,
+    ModelConfig,
     ModelOverrideConfig,
     ModelPathsConfig,
+    OptimizerConfig,
+    TrainingConfig,
+    TrainingHyperparameters,
 )
 from marin.resources import ResourceConfig, TpuPodConfig
 from marin.training.training import (
@@ -49,6 +47,9 @@ from marin.training.training import (
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
+
+NUM_INFERENCE_WORKERS = 1
+NUM_TRAIN_WORKERS = 1
 
 
 @dataclass(frozen=True)
@@ -97,20 +98,13 @@ def run_rl_training_on_pod(config: RLTrainConfig):
     def rl_train_task():
         rl_training_main(config.training_config)
 
-    if isinstance(hw_config, TpuPodConfig):
-        from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
-
-        if hw_config.slice_count == 1:
-            return run_on_pod_resumable(rl_train_task, config.resources.accelerator_descriptor(), max_retries_failure=10)
-        else:
-            return run_on_pod_multislice_resumable(
-                rl_train_task,
-                config.resources.accelerator_descriptor(),
-                hw_config.slice_count,
-                max_retries_failure=10,
-            )
-    else:
-        return ray.get(rl_train_task.remote())
+    return run_on_pod_multislice_resumable(
+        rl_train_task,
+        config.resources.accelerator_descriptor(),
+        hw_config.slice_count,
+        max_retries_failure=1,
+        max_retries_preemption=1,
+    )
 
 
 def default_rl_train(
@@ -168,7 +162,7 @@ def default_rl_train(
         prefix_to_id=True,
     )
 
-    generation_config = GenerationConfigData(
+    generation_config = GenerationConfig(
         max_output_length=1025,
         temperature=1.0,
         stop_tokens=[
@@ -188,7 +182,7 @@ def default_rl_train(
         n_generations=64,
     )
 
-    test_generation_config = GenerationConfigData(
+    test_generation_config = GenerationConfig(
         max_output_length=1025,
         temperature=0.0,
         stop_tokens=[
@@ -221,21 +215,22 @@ def default_rl_train(
 
     checkpointer_config = CheckpointerConfigData(save_optimizer_state=False, save_float_dtype="bf16")
 
-    resources = TpuPodConfig(tpu_type=tpu_type)
+    resources = TpuPodConfig(tpu_type=tpu_type, slices=NUM_INFERENCE_WORKERS + NUM_TRAIN_WORKERS)
 
     training_config = TrainingConfig(
         model=ModelConfig(
             model_paths=model_paths_config,
             inference_param_dtype="bf16",
             inference_activation_dtype="bf16",
-            training_param_dtype="bf16",
+            training_param_dtype="fp32",
             training_activation_dtype="bf16",
             model_config_override=model_config_override,
             tokenizer_override={},
             train_attention_kernel_config='splash:{"block_size": 256}',
             prefill_attention_kernel_config='splash:{"block_size": 256}',
             generate_attention_kernel_config=(
-                'paged:{"page_size": 256, "pages_per_compute_block": 1, ' '"inline_seq_dim": true, "use_int8": false}'
+                'paged:{"page_size": 256, "pages_per_compute_block": 1, '
+                '"inline_seq_dim": true, "use_int8": false}'
             ),
         ),
         hyperparameters=TrainingHyperparameters(
@@ -263,11 +258,14 @@ def default_rl_train(
         ),
         environment=EnvironmentConfig(),
         distributed=DistributedConfig(
-            sharding=[1, 4, 1, -1], physical_axis_splitting=False, jax_distributed_initalize_config={}
+            sharding=[1, 4, 1, -1],
+            physical_axis_splitting=False,
+            jax_distributed_initalize_config={},
         ),
-        generation=GenerationConfig(generation_config=generation_config, test_generation_config=test_generation_config),
         output_dir=this_output_path(),
         checkpointer_config=checkpointer_config,
+        generation_config=generation_config,
+        test_generation_config=test_generation_config,
     )
 
     config = RLTrainConfig(
