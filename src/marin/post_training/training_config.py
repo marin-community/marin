@@ -203,11 +203,8 @@ class TrainWorkerConfig:
 
     rollout_queue_bucket: str
     rollout_queue_path: str = "rollout_queue"
-    checkpoint_sync_interval: int = 100
     batch_timeout: float = 60.0
     max_idle_time: float = 300.0
-    checkpoint_bucket: str | None = None
-    checkpoint_path: str = "checkpoints"
 
 
 @dataclass

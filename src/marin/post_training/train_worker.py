@@ -130,7 +130,9 @@ class TrainingWorker:
         optim_config = self.training_config.hyperparameters.optim_config
         weight_decay_mask = get_weight_decay_mask(optim_config.weight_decay_exclusions)
         self.grad_accum_steps = optim_config.grad_accum_steps
-        optimizer, self.optimizer_info = load_adamw_optimizer(config=optim_config, weight_decay_mask=weight_decay_mask)
+        optimizer, self.optimizer_info = load_adamw_optimizer(
+            config=optim_config, weight_decay_mask=weight_decay_mask
+        )
 
         if self.grad_accum_steps > 1:
             optimizer = optax.MultiSteps(optimizer, self.grad_accum_steps)
@@ -177,7 +179,9 @@ class TrainingWorker:
             annotation_shardings=self.train_intermediate_sharding_rules,
         )
         def init_fn(rng):
-            params = self.model.init_weights(rng, (self.train_bsize, self.max_input_length + self.max_output_length - 1))
+            params = self.model.init_weights(
+                rng, (self.train_bsize, self.max_input_length + self.max_output_length - 1)
+            )
             return create_train_state_from_params(params)
 
         @partial(
@@ -238,16 +242,20 @@ class TrainingWorker:
         """Initialize training state with proper checkpoint loading."""
         # Initialize training state shapes and sharding functions
         train_state_shape = jax.eval_shape(lambda: self.init_fn(jax.random.PRNGKey(0)))
-        self.train_state_shard_fns, self.train_state_gather_fns = self.mesh.make_shard_and_gather_fns(
-            train_state_shape, self.train_params_sharding_rules
+        self.train_state_shard_fns, self.train_state_gather_fns = (
+            self.mesh.make_shard_and_gather_fns(train_state_shape, self.train_params_sharding_rules)
         )
 
         # Initialize training state from checkpoint or params
         latest_checkpoint_step = -1
         if self.logger.can_save():
-            checkpoint_dir = os.path.join(self.logger.output_dir, "checkpoints")
+            checkpoint_dir = os.path.join(self.training_config.output_dir, "checkpoints")
             if os.path.exists(checkpoint_dir):
-                checkpoint_steps = [int(d.split("_")[1]) for d in os.listdir(checkpoint_dir) if d.startswith("step_")]
+                checkpoint_steps = [
+                    int(d.split("_")[1])
+                    for d in os.listdir(checkpoint_dir)
+                    if d.startswith("step_")
+                ]
                 if checkpoint_steps:
                     latest_checkpoint_step = max(checkpoint_steps)
 
@@ -324,7 +332,9 @@ class TrainingWorker:
         ):
             old_step = self.checkpoint_queue.popleft()
             if self.logger.can_save():
-                old_path = os.path.join(self.logger.output_dir, "checkpoints", f"step_{old_step}")
+                old_path = os.path.join(
+                    self.training_config.output_dir, "checkpoints", f"step_{old_step}"
+                )
                 delete_with_bucket(old_path, recursive=True)
 
         if self.logger.can_save():
@@ -340,7 +350,7 @@ class TrainingWorker:
             import dataclasses
 
             checkpointer(
-                path=os.path.join(self.logger.output_dir, "checkpoints", f"step_{step}"),
+                path=os.path.join(self.training_config.output_dir, "checkpoints", f"step_{step}"),
                 train_state=train_state,
                 config=self.model.config.to_dict(),
                 gather_fns=self.train_state_gather_fns,
@@ -352,15 +362,6 @@ class TrainingWorker:
             self.checkpoint_queue.append(step)
             logger.info("Checkpoint saved.")
 
-            # Sync checkpoint to worker queue bucket if different
-            if self.worker_config.checkpoint_bucket and self.worker_config.checkpoint_bucket != self.logger.output_dir:
-                self._sync_checkpoint_to_workers(step)
-
-    def _sync_checkpoint_to_workers(self, step):
-        """Sync checkpoint to worker bucket for rollout workers."""
-        # This would copy the checkpoint to the rollout workers' accessible location
-        # Implementation depends on specific GCS bucket setup
-        logger.info(f"Syncing checkpoint {step} to worker bucket {self.worker_config.checkpoint_bucket}")
 
     def train(self):
         """Main training loop reading from rollout queue."""
@@ -396,7 +397,10 @@ class TrainingWorker:
             step += 1
 
             # Log metrics
-            if self.training_config.logging.log_freq > 0 and step % self.training_config.logging.log_freq == 0:
+            if (
+                self.training_config.logging.log_freq > 0
+                and step % self.training_config.logging.log_freq == 0
+            ):
                 log_metrics = {"step": step}
                 log_metrics.update(jax.device_get(metrics))
                 log_metrics.update(batch.metadata)
