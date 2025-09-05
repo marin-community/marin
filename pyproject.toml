@@ -40,7 +40,7 @@ dependencies = [
     "wandb<=0.19.9",
     "openai",
     "fasteners>=0.19",
-    "dolma>=1.2.0",
+    "dolma @ git+https://github.com/marin-community/dolma",
 ]
 
 [dependency-groups]
@@ -101,9 +101,6 @@ dev = [
 ]
 
 [tool.uv]
-
-# override pinned dependencies from dolma
-override-dependencies = ["numpy>=2", "s3fs>=2024", "charset-normalizer>=3.2.0", "tokenizers>=0.21"]
 
 conflicts = [
     [
