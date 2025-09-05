@@ -23,7 +23,6 @@ import traceback
 import unittest.mock
 from pathlib import Path
 
-import jax
 import numpy as np
 import pytest
 
@@ -306,7 +305,7 @@ class TrainingWorkerRunner:
         self.done = threading.Event()
 
         # Metrics
-        self.training_steps_completed = 0
+        self.steps_completed = 0
         self.checkpoints_created = []
 
     def _track_checkpoint_save(self, step):
@@ -315,14 +314,14 @@ class TrainingWorkerRunner:
             {
                 "step": step,
                 "time": time.time(),
-                "rollouts_consumed": self.training_steps_completed
+                "rollouts_consumed": self.steps_completed
                 + 1,  # +1 because we're about to increment
             }
         )
 
     def _track_training_step(self):
         """Called after each training step."""
-        self.training_steps_completed += 1
+        self.steps_completed += 1
 
     def _run(self):
         """Thread target - runs the training worker."""
@@ -375,11 +374,6 @@ class TrainingWorkerRunner:
 
 def test_inference_worker(training_config, inference_worker_config, mock_tokenizer):
     """Test inference worker generates rollouts to in-memory queue."""
-    # Skip if not on CPU
-    if jax.devices()[0].device_kind != "cpu":
-        pytest.skip("Test requires CPU device")
-
-    # Create in-memory queue
     rollout_queue = InMemoryRolloutQueue()
     queue_writer = rollout_queue.writer()
     queue_reader = rollout_queue.reader()
@@ -427,11 +421,6 @@ def test_inference_worker(training_config, inference_worker_config, mock_tokeniz
 
 def test_train_worker(training_config, worker_config, mock_tokenizer):
     """Test training worker processes rollout batch and creates checkpoint."""
-    # Skip if not on CPU
-    if jax.devices()[0].device_kind != "cpu":
-        pytest.skip("Test requires CPU device")
-
-    # Create in-memory queue
     rollout_queue = InMemoryRolloutQueue()
     queue_reader = rollout_queue.reader()
     queue_writer = rollout_queue.writer()
@@ -477,17 +466,12 @@ def test_train_worker(training_config, worker_config, mock_tokenizer):
             worker.train()
             training_completed = True
 
-            # Check if checkpoint was created in logger output directory
-            import os
-
-            logger_checkpoint_dir = os.path.join(worker.logger.output_dir, "checkpoints")
-            if os.path.exists(logger_checkpoint_dir):
-                logger_checkpoint_files = os.listdir(logger_checkpoint_dir)
-                checkpoint_created = len(logger_checkpoint_files) > 0
+            checkpoint_dir = os.path.join(training_config.output_dir, "checkpoints")
+            if os.path.exists(checkpoint_dir):
+                checkpoint_files = os.listdir(checkpoint_dir)
+                checkpoint_created = len(checkpoint_files) > 0
 
         except Exception as e:
-            import traceback
-
             print(f"Training worker error: {e}")
             print("Training worker traceback:")
             print(traceback.format_exc())
@@ -508,191 +492,144 @@ def test_train_worker(training_config, worker_config, mock_tokenizer):
     print("✓ Training worker processed batch and created checkpoint successfully")
 
 
-def test_full_cycle_with_checkpoint_updates(
-    training_config, inference_worker_config, worker_config, mock_tokenizer
+def test_inference_and_training_workers(
+    tmp_path, training_config, inference_worker_config, worker_config, mock_tokenizer
 ):
-    """Test full cycle: inference generates rollouts -> training creates checkpoints -> inference loads new checkpoints."""
-    # Skip if not on CPU
-    if jax.devices()[0].device_kind != "cpu":
-        pytest.skip("Test requires CPU device")
+    """Test inference & training workers running together with checkpoint updates."""
+    # Update configs to use shared checkpoint directory
+    training_config.output_dir = str(tmp_path)
+    checkpoint_dir = str(tmp_path / "checkpoints")
+    inference_worker_config.checkpoint_source_path = checkpoint_dir
 
-    # Create temporary checkpoint directory that both workers can access
-    with tempfile.TemporaryDirectory() as output_dir:
-        # Update configs to use shared checkpoint directory
-        training_config.output_dir = output_dir
-        checkpoint_dir = os.path.join(output_dir, "checkpoints")
-        inference_worker_config.checkpoint_source_path = checkpoint_dir
+    # Configure for multiple training steps and frequent checkpointing
+    training_config.hyperparameters.num_train_steps = 3
+    training_config.logging.save_model_freq = 1  # Save after every step
+    training_config.logging.save_initial_checkpoint = True
+    worker_config.checkpoint_sync_interval = 1
 
-        # Configure for multiple training steps and frequent checkpointing
-        training_config.hyperparameters.num_train_steps = 3
-        training_config.logging.save_model_freq = 1  # Save after every step
-        training_config.logging.save_initial_checkpoint = True
-        worker_config.checkpoint_sync_interval = 1
+    # Configure inference worker to poll frequently and generate multiple batches
+    inference_worker_config.checkpoint_poll_interval = 0.2  # Poll more frequently
+    inference_worker_config.max_rollouts = None  # Don't limit, let it run continuously
+    inference_worker_config.rollout_batch_size = 2
 
-        # Configure inference worker to poll frequently and generate multiple batches
-        inference_worker_config.checkpoint_poll_interval = 0.2  # Poll more frequently
-        inference_worker_config.max_rollouts = None  # Don't limit, let it run continuously
-        inference_worker_config.rollout_batch_size = 2
+    # Create in-memory queue
+    rollout_queue = InMemoryRolloutQueue()
+    queue_reader = rollout_queue.reader()
+    queue_writer = rollout_queue.writer()
 
-        # Create in-memory queue
-        rollout_queue = InMemoryRolloutQueue()
-        queue_reader = rollout_queue.reader()
-        queue_writer = rollout_queue.writer()
+    # Create worker runners
+    inference_runner = InferenceWorkerRunner(training_config, inference_worker_config, queue_writer)
+    training_runner = TrainingWorkerRunner(training_config, worker_config, queue_reader)
+    training_runner.start()
 
-        # Create worker runners
-        inference_runner = InferenceWorkerRunner(
-            training_config, inference_worker_config, queue_writer
-        )
-        training_runner = TrainingWorkerRunner(training_config, worker_config, queue_reader)
-        training_runner.start()
+    while glob.glob(os.path.join(checkpoint_dir, "*")) == []:
+        print("Waiting for initial checkpoint...")
+        time.sleep(1)
 
-        while glob.glob(os.path.join(checkpoint_dir, "*")) == []:
-            print("Waiting for initial checkpoint...")
-            time.sleep(1)
+    inference_runner.start()
 
-        inference_runner.start()
+    # Monitor progress with detailed logging
+    timeout = 30  # seconds
+    start_time = time.time()
 
-        # Monitor progress with detailed logging
-        timeout = 30  # seconds
-        start_time = time.time()
+    print("Starting full cycle monitoring...")
+    last_print_time = start_time
 
-        print("Starting full cycle monitoring...")
-        last_print_time = start_time
+    while time.time() - start_time < timeout:
+        elapsed = time.time() - start_time
+        queue_size = rollout_queue.reader().get_queue_size()
 
-        while time.time() - start_time < timeout:
-            elapsed = time.time() - start_time
-            queue_size = rollout_queue.reader().get_queue_size()
+        # Print detailed status every 2 seconds
+        if elapsed - (last_print_time - start_time) >= 2.0:
+            print(f"[{elapsed:.1f}s] Status:")
+            print(f"  Rollouts generated: {inference_runner.rollouts_generated}")
+            print(f"  Training steps: {training_runner.steps_completed}")
+            print(f"  Queue size: {queue_size}")
+            print(f"  Checkpoints created: {len(training_runner.checkpoints_created)}")
+            print(f"  Checkpoint loads: {len(inference_runner.checkpoint_loads)}")
+            print(f"  Inference done: {inference_runner.done.is_set()}")
+            print(f"  Training done: {training_runner.done.is_set()}")
+            last_print_time = time.time()
 
-            # Print detailed status every 2 seconds
-            if elapsed - (last_print_time - start_time) >= 2.0:
-                print(f"[{elapsed:.1f}s] Status:")
-                print(f"  Rollouts generated: {inference_runner.rollouts_generated}")
-                print(f"  Training steps: {training_runner.training_steps_completed}")
-                print(f"  Queue size: {queue_size}")
-                print(f"  Checkpoints created: {len(training_runner.checkpoints_created)}")
-                print(f"  Checkpoint loads: {len(inference_runner.checkpoint_loads)}")
-                print(f"  Inference done: {inference_runner.done.is_set()}")
-                print(f"  Training done: {training_runner.done.is_set()}")
-                last_print_time = time.time()
+        # Stop training worker when target steps reached
+        if (
+            training_runner.steps_completed >= training_config.hyperparameters.num_train_steps
+            and not training_runner.done.is_set()
+        ):
+            training_runner.stop()
 
-            # Stop training worker when target steps reached
-            if (
-                training_runner.training_steps_completed
-                >= training_config.hyperparameters.num_train_steps
-                and not training_runner.done.is_set()
-            ):
-                training_runner.stop()
+        # Stop inference worker after training is complete and we have sufficient data
+        if training_runner.done.is_set() and not inference_runner.done.is_set():
+            inference_runner.stop()
 
-            # Stop inference worker after training is complete and we have sufficient data
-            if training_runner.done.is_set() and not inference_runner.done.is_set():
-                inference_runner.stop()
+        # Check completion
+        if inference_runner.done.is_set() and training_runner.done.is_set():
+            break
 
-            # Check completion
-            if inference_runner.done.is_set() and training_runner.done.is_set():
-                break
+        time.sleep(0.5)
 
-            time.sleep(0.5)
+    # Wait for threads to complete
+    inference_runner.join()
+    training_runner.join()
 
-        # Wait for threads to complete
-        inference_runner.join()
-        training_runner.join()
-
-        # Check for errors
-        if inference_runner.error:
-            print(f"Inference worker error: {inference_runner.error}")
-            print(
-                "Traceback:",
-                "".join(
-                    traceback.format_exception(
-                        type(inference_runner.error),
-                        inference_runner.error,
-                        inference_runner.error.__traceback__,
-                    )
-                ),
-            )
-            pytest.fail(f"Inference worker failed: {inference_runner.error}")
-
-        if training_runner.error:
-            import traceback
-
-            print(f"Training worker error: {training_runner.error}")
-            print(
-                "Traceback:",
-                "".join(
-                    traceback.format_exception(
-                        type(training_runner.error),
-                        training_runner.error,
-                        training_runner.error.__traceback__,
-                    )
-                ),
-            )
-            pytest.fail(f"Training worker failed: {training_runner.error}")
-
-        # Comprehensive validation
-        print("\n=== VALIDATION RESULTS ===")
-        print(f"Rollouts generated: {inference_runner.rollouts_generated}")
-        print(f"Training steps completed: {training_runner.training_steps_completed}")
-        print(f"Checkpoints created: {training_runner.checkpoints_created}")
-        print(f"Checkpoint loads: {inference_runner.checkpoint_loads}")
-
-        # Validate basic requirements
-        assert inference_runner.rollouts_generated >= 3, (
-            f"Expected at least 3 rollouts, got {inference_runner.rollouts_generated}"
-        )
-        assert (
-            training_runner.training_steps_completed
-            >= training_config.hyperparameters.num_train_steps
-        ), (
-            f"Expected {training_config.hyperparameters.num_train_steps} training steps, got {training_runner.training_steps_completed}"
-        )
-
-        # Validate checkpoint creation - should have initial checkpoint + one per training step
-        expected_checkpoints = (
-            1 + training_config.hyperparameters.num_train_steps
-        )  # initial + training steps
-        assert len(training_runner.checkpoints_created) >= expected_checkpoints, (
-            f"Expected at least {expected_checkpoints} checkpoints, got {len(training_runner.checkpoints_created)}"
-        )
-
-        # Validate checkpoint loading - inference worker should detect the checkpoints created by training
-        print(f"Checkpoint loads detected: {len(inference_runner.checkpoint_loads)}")
-        for i, load in enumerate(inference_runner.checkpoint_loads):
-            print(f"  Load {i}: {load['old_path']} -> {load['new_path']}")
-
-        actual_checkpoint_loads = [
-            load for load in inference_runner.checkpoint_loads if "step_" in str(load["new_path"])
-        ]
-        assert actual_checkpoint_loads, (
-            "Inference worker should load at least one actual checkpoint"
-        )
-
-        # The key validation is that we have the full cycle working
-        # Even if checkpoint file detection isn't perfect, the pipeline is functional
-
-        # More lenient validation - just ensure we had checkpoint creation and rollout generation
-        # This validates the basic cycle works
-        assert len(training_runner.checkpoints_created) > 0, (
-            "Should have created at least one checkpoint"
-        )
-        assert inference_runner.rollouts_generated > 0, "Should have generated at least one rollout"
-
-        # Validate timeline: if we have both checkpoints and loads, timing should be reasonable
-        if training_runner.checkpoints_created and inference_runner.checkpoint_loads:
-            first_checkpoint_time = min(cp["time"] for cp in training_runner.checkpoints_created)
-            first_load_time = min(cp["time"] for cp in inference_runner.checkpoint_loads)
-            # Allow generous tolerance for timing issues in tests
-            time_diff = first_load_time - first_checkpoint_time
-            # Just ensure it's not wildly out of order (> 10 seconds would be suspicious)
-            assert time_diff >= -10.0, (
-                f"Checkpoint load timing seems suspicious: loaded {time_diff:.2f}s before creation"
-            )
-
-        print("✓ Full cycle test passed:")
-        print(f"  - Generated {inference_runner.rollouts_generated} rollouts")
-        print(f"  - Completed {training_runner.training_steps_completed} training steps")
-        print(f"  - Created {len(training_runner.checkpoints_created)} checkpoints")
+    # Check for errors
+    if inference_runner.error:
+        print(f"Inference worker error: {inference_runner.error}")
         print(
-            f"  - Loaded {len(inference_runner.checkpoint_loads)} checkpoints in inference worker"
+            "Traceback:",
+            "".join(
+                traceback.format_exception(
+                    type(inference_runner.error),
+                    inference_runner.error,
+                    inference_runner.error.__traceback__,
+                )
+            ),
         )
-        print("  - Validated bidirectional communication between workers")
-        print("  - Confirmed checkpoint detection and model updates")
+        pytest.fail(f"Inference worker failed: {inference_runner.error}")
+
+    if training_runner.error:
+        print(f"Training worker error: {training_runner.error}")
+        print(
+            "Traceback:",
+            "".join(
+                traceback.format_exception(
+                    type(training_runner.error),
+                    training_runner.error,
+                    training_runner.error.__traceback__,
+                )
+            ),
+        )
+        pytest.fail(f"Training worker failed: {training_runner.error}")
+
+    hyperparams = training_config.hyperparameters
+
+    assert inference_runner.rollouts_generated >= 3, (
+        f"Expected at least 3 rollouts, got {inference_runner.rollouts_generated}"
+    )
+    assert training_runner.steps_completed >= hyperparams.num_train_steps, (
+        f"Expected {hyperparams.num_train_steps} training steps, got {training_runner.steps_completed}"
+    )
+
+    expected_checkpoints = 1 + hyperparams.num_train_steps  # initial + training steps
+    assert len(training_runner.checkpoints_created) >= expected_checkpoints, (
+        f"Expected at least {expected_checkpoints} checkpoints, got {len(training_runner.checkpoints_created)}"
+    )
+
+    print(f"Checkpoint loads detected: {len(inference_runner.checkpoint_loads)}")
+    for i, load in enumerate(inference_runner.checkpoint_loads):
+        print(f"  Load {i}: {load['old_path']} -> {load['new_path']}")
+
+    actual_checkpoint_loads = [
+        load for load in inference_runner.checkpoint_loads if "step_" in str(load["new_path"])
+    ]
+    assert actual_checkpoint_loads, "Inference worker should load at least one actual checkpoint"
+
+    assert len(training_runner.checkpoints_created) > 0, (
+        "Should have created at least one checkpoint"
+    )
+    assert inference_runner.rollouts_generated > 0, "Should have generated at least one rollout"
+
+    print(f"  - Generated {inference_runner.rollouts_generated} rollouts")
+    print(f"  - Completed {training_runner.steps_completed} training steps")
+    print(f"  - Created {len(training_runner.checkpoints_created)} checkpoints")
+    print(f"  - Loaded {len(inference_runner.checkpoint_loads)} checkpoints in inference worker")
