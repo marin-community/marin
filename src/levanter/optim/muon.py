@@ -32,6 +32,7 @@ class MuonConfig(OptimizerConfig):
     nesterov: bool = True
     backend_steps: int = 5  # Number of steps for Newton-Schulz orthogonalization
     weight_decay: float = 0.0
+    adamm_weight_decay: float = 0.0
     beta1: float = 0.9
     beta2: float = 0.95
     epsilon: float = 1e-8
@@ -63,7 +64,9 @@ class MuonConfig(OptimizerConfig):
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
-                if self.weight_decay > 0:
+                if self.adamm_weight_decay > 0:
+                    components.append(optax.add_decayed_weights(self.adamm_weight_decay, self.build_weight_decay_mask()))
+                elif self.weight_decay > 0:
                     components.append(optax.add_decayed_weights(self.weight_decay, self.build_weight_decay_mask()))
                 components.append(optax.scale(-adam_lr))
                 optimizer = optax.chain(*components)
