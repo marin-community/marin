@@ -38,7 +38,6 @@ from .model_helpers import (
     build_training_model,
     llama_config_from_model_config,
     load_tokenizer,
-    setup_mesh,
 )
 from .optimizer import load_adamw_optimizer
 from .rl_dataset import create_dataset_from_environment
@@ -489,7 +488,7 @@ class Trainer:
 
 def main(config: TrainingConfig):
     """Main training script with environment."""
-    logger_config = config.logging.logger_config
+    logging_config = config.logging
 
     # Initialize JAX distributed
     jax_distributed_initalize(**config.distributed.jax_distributed_initalize_config)
@@ -506,8 +505,11 @@ def main(config: TrainingConfig):
         config.model.train_attention_kernel_config, ["splash", "default", "ring", "ring_jax"]
     )
 
-    # Setup mesh
-    mesh = setup_mesh(config.distributed.sharding, config.distributed.physical_axis_splitting)
+    mesh = MeshShardingHelper(
+        config.distributed.sharding,
+        ["replica", "fsdp", "sequence", "tensor"],
+        mesh_axis_splitting=config.distributed.physical_axis_splitting,
+    )
 
     with mesh.get_context():
         model_paths = config.model.model_paths
@@ -527,20 +529,20 @@ def main(config: TrainingConfig):
         )
 
         # Initialize logger
-        if logger_config.enable is None:
-            logger_config.enable = jax.process_index() == 0
-        if logger_config.config_to_log is None:
-            logger_config.config_to_log = {}
-        logger_config.config_to_log.update(dataclasses.asdict(config))
+        if logging_config.enable is None:
+            logging_config.enable = jax.process_index() == 0
+        if logging_config.config_to_log is None:
+            logging_config.config_to_log = {}
+        logging_config.config_to_log.update(dataclasses.asdict(config))
         logger = WandbLogger(
             config.logging.wandb_project,
             output_dir=config.output_dir,
-            online=logger_config.online,
-            prefix=logger_config.prefix,
-            prefix_to_id=logger_config.prefix_to_id,
-            experiment_id=logger_config.experiment_id,
-            enable=logger_config.enable,
-            config_to_log=logger_config.config_to_log,
+            online=logging_config.online,
+            prefix=logging_config.prefix,
+            prefix_to_id=logging_config.prefix_to_id,
+            experiment_id=logging_config.experiment_id,
+            enable=logging_config.enable,
+            config_to_log=logging_config.config_to_log,
         )
 
         # Initialize and run trainer

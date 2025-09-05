@@ -61,18 +61,6 @@ class AttentionKernelConfig:
 
 
 @dataclass
-class LoggerConfigData:
-    """Logger configuration parameters."""
-
-    online: bool = True
-    prefix: str | None = None
-    prefix_to_id: bool = True
-    experiment_id: str | None = None
-    enable: bool | None = None
-    config_to_log: dict[str, Any] | None = None
-
-
-@dataclass
 class CheckpointerConfigData:
     """Checkpointer configuration parameters."""
 
@@ -159,10 +147,17 @@ class LoggingConfig:
     num_eval_examples: int
     save_model_freq: int
     wandb_project: str
-    logger_config: LoggerConfigData = field(default_factory=LoggerConfigData)
     save_initial_checkpoint: bool = False
     log_initial_step: bool = True
     max_checkpoints: int | None = None
+    
+    # Former LoggerConfigData fields - now direct fields
+    online: bool = True
+    prefix: str | None = None
+    prefix_to_id: bool = True
+    experiment_id: str | None = None
+    enable: bool | None = None
+    config_to_log: dict[str, Any] | None = None
 
 
 @dataclass

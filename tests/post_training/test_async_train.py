@@ -40,7 +40,6 @@ from marin.post_training.training_config import (
     EnvironmentConfig,
     GenerationConfig,
     InferenceWorkerConfig,
-    LoggerConfigData,
     LoggingConfig,
     ModelConfig,
     ModelOverrideConfig,
@@ -105,11 +104,6 @@ def training_config():
         multiply_by_parameter_scale=False,
     )
 
-    logger_config = LoggerConfigData(
-        online=False,
-        prefix="test",
-        prefix_to_id=True,
-    )
 
     generation_config = GenerationConfig(
         max_output_length=32, stop_tokens=[[128001]], n_generations=2
@@ -161,7 +155,9 @@ def training_config():
             num_eval_examples=1,
             save_model_freq=0,
             wandb_project="test_project",
-            logger_config=logger_config,
+            online=False,
+            prefix="test",
+            prefix_to_id=True,
         ),
         environment=EnvironmentConfig(
             train_environments_path="environments_test.json",
@@ -197,7 +193,6 @@ def inference_worker_config(temp_checkpoint_dir):
 def worker_config():
     """Create worker configuration."""
     return TrainWorkerConfig(
-        rollout_queue_bucket="test_bucket",
         rollout_queue_path="test_queue",
         batch_timeout=2.0,  # Wait 2 seconds for each batch
         max_idle_time=25.0,  # Wait 25 seconds total before giving up

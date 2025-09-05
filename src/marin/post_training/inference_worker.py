@@ -28,7 +28,7 @@ import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec as PS
 from optax import softmax_cross_entropy_with_integer_labels
-from scalax.sharding import TreePathShardingRule
+from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 
 from .inference import build_sampler
 from .load_environments import load_environment_from_spec
@@ -37,7 +37,6 @@ from .model_helpers import (
     build_prefill_model,
     llama_config_from_model_config,
     load_tokenizer,
-    setup_mesh,
 )
 from .rl_dataset import create_dataset_from_environment
 from .rollout_storage import FileRolloutWriter, RolloutBatch, RolloutWriter
@@ -81,10 +80,10 @@ class InferenceWorker:
         jax_distributed_initalize(**training_config.distributed.jax_distributed_initalize_config)
         jax_distributed_barrier()
 
-        # Setup mesh
-        self.mesh = setup_mesh(
-            training_config.distributed.sharding,
-            training_config.distributed.physical_axis_splitting,
+        self.mesh = MeshShardingHelper(
+            self.training_config.distributed.sharding,
+            ["replica", "fsdp", "sequence", "tensor"],
+            mesh_axis_splitting=self.training_config.distributed.physical_axis_splitting,
         )
 
         # Initialize components within mesh context

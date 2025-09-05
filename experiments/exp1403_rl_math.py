@@ -28,7 +28,6 @@ from marin.post_training.training_config import (
     DistributedConfig,
     EnvironmentConfig,
     GenerationConfig,
-    LoggerConfigData,
     LoggingConfig,
     ModelConfig,
     ModelOverrideConfig,
@@ -159,12 +158,6 @@ def default_rl_train(
         grad_accum_steps=16,
     )
 
-    logger_config = LoggerConfigData(
-        online=True,
-        prefix=name,
-        prefix_to_id=True,
-        experiment_id=name,
-    )
 
     generation_config = GenerationConfig(
         max_output_length=1025,
@@ -251,13 +244,16 @@ def default_rl_train(
         ),
         logging=LoggingConfig(
             log_freq=10,
-            num_eval_examples=1024,
+            num_eval_examples=8,
             save_model_freq=10,
             wandb_project=wandb_project,
-            logger_config=logger_config,
             save_initial_checkpoint=False,
             log_initial_step=True,
             max_checkpoints=None,
+            online=True,
+            prefix=name,
+            prefix_to_id=True,
+            experiment_id=name,
         ),
         environment=EnvironmentConfig(),
         distributed=DistributedConfig(

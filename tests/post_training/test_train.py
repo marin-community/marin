@@ -18,6 +18,7 @@ from pathlib import Path
 
 import jax
 import pytest
+from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 
 from marin.post_training.train import main
 from marin.post_training.training_config import (
@@ -25,7 +26,6 @@ from marin.post_training.training_config import (
     DistributedConfig,
     EnvironmentConfig,
     GenerationConfig,
-    LoggerConfigData,
     LoggingConfig,
     ModelConfig,
     ModelOverrideConfig,
@@ -81,11 +81,6 @@ def training_config():
         multiply_by_parameter_scale=False,
     )
 
-    logger_config = LoggerConfigData(
-        online=False,
-        prefix="test",
-        prefix_to_id=True,
-    )
 
     generation_config = GenerationConfig(stop_tokens=[[128001]], n_generations=2)
 
@@ -127,7 +122,9 @@ def training_config():
             num_eval_examples=1,  # Only 1 eval example
             save_model_freq=0,  # Don't save during test
             wandb_project="test_project",
-            logger_config=logger_config,
+            online=False,
+            prefix="test",
+            prefix_to_id=True,
         ),
         environment=EnvironmentConfig(
             train_environments_path="environments_test.json",  # Use test environment
@@ -167,7 +164,6 @@ def test_model_initialization(training_config):
         build_prefill_model,
         build_training_model,
         llama_config_from_model_config,
-        setup_mesh,
     )
 
     # Test model config creation
@@ -179,8 +175,11 @@ def test_model_initialization(training_config):
     assert llama_config.vocab_size == 1000
 
     # Test mesh setup
-    mesh = setup_mesh(training_config.distributed.sharding)
-    assert mesh is not None
+    mesh = MeshShardingHelper(
+        training_config.distributed.sharding,
+        ["replica", "fsdp", "sequence", "tensor"],
+        mesh_axis_splitting=training_config.distributed.physical_axis_splitting,
+    )
 
     # Test model building
     with mesh.get_context():

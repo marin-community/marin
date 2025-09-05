@@ -36,15 +36,6 @@ from .utils import (
 )
 
 
-def setup_mesh(sharding: list[int], physical_axis_splitting: bool = False) -> MeshShardingHelper:
-    """Setup JAX mesh for distributed training."""
-    return MeshShardingHelper(
-        sharding,
-        ["replica", "fsdp", "sequence", "tensor"],
-        mesh_axis_splitting=physical_axis_splitting,
-    )
-
-
 def llama_config_from_model_config(
     model_paths: ModelPathsConfig, model_config_override: ModelOverrideConfig
 ) -> LLaMAConfig:

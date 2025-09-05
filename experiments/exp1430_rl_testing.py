@@ -34,7 +34,6 @@ from marin.post_training.training_config import (
     EnvironmentConfig,
     GenerationConfig,
     InferenceWorkerConfig,
-    LoggerConfigData,
     LoggingConfig,
     ModelConfig,
     ModelOverrideConfig,
@@ -52,7 +51,7 @@ from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
-WANDB_PROJECT = "math_rloo_math_test_experiments"
+WANDB_PROJECT = "async_rl_testing"
 ENVIRONMENT_SPEC = "olym_math:difficulty=hard"
 
 
@@ -201,11 +200,6 @@ def default_rl_train(
         grad_accum_steps=16,
     )
 
-    logger_config = LoggerConfigData(
-        online=True,
-        prefix=name,
-        prefix_to_id=True,
-    )
 
     generation_config = GenerationConfig(
         max_output_length=1025,
@@ -270,7 +264,7 @@ def default_rl_train(
             model_paths=model_paths_config,
             inference_param_dtype="bf16",
             inference_activation_dtype="bf16",
-            training_param_dtype="fp32",
+            training_param_dtype="bf16",
             training_activation_dtype="bf16",
             model_config_override=model_config_override,
             train_attention_kernel_config='splash:{"block_size": 256}',
@@ -282,7 +276,7 @@ def default_rl_train(
         hyperparameters=TrainingHyperparameters(
             num_train_steps=num_train_steps,
             max_input_length=256,
-            max_output_length=256,
+            max_output_length=1025,
             train_bsize=train_bsize,
             decode_bsize=8,
             prefill_bsize=8,
@@ -297,10 +291,12 @@ def default_rl_train(
             num_eval_examples=1024,
             save_model_freq=1,
             wandb_project=WANDB_PROJECT,
-            logger_config=logger_config,
             save_initial_checkpoint=True,
             log_initial_step=True,
             max_checkpoints=None,
+            online=True,
+            prefix=name,
+            prefix_to_id=True,
         ),
         environment=EnvironmentConfig(),
         distributed=DistributedConfig(
@@ -317,7 +313,7 @@ def default_rl_train(
     config = RLTrainConfig(training_config=training_config, tpu_type=tpu_type)
 
     return ExecutorStep(
-        name=os.path.join("rl_checkpoints", name),
+        name=name,
         description=f"RL training experiment: {name} for {num_train_steps} steps",
         fn=run_rl_training_on_pod,
         config=config,

@@ -34,13 +34,12 @@ import optax
 from flax.training.train_state import TrainState
 from jax.sharding import PartitionSpec as PS
 from optax import softmax_cross_entropy_with_integer_labels
-from scalax.sharding import TreePathShardingRule
+from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 
 from .model_helpers import (
     build_training_model,
     llama_config_from_model_config,
     load_tokenizer,
-    setup_mesh,
 )
 from .optimizer import load_adamw_optimizer
 from .rollout_storage import RolloutBatch, RolloutReader
@@ -82,11 +81,12 @@ class TrainingWorker:
         jax_distributed_initalize(**training_config.distributed.jax_distributed_initalize_config)
         jax_distributed_barrier()
 
-        # Setup mesh
-        self.mesh = setup_mesh(
-            training_config.distributed.sharding,
-            training_config.distributed.physical_axis_splitting,
+        self.mesh = MeshShardingHelper(
+            self.training_config.distributed.sharding,
+            ["replica", "fsdp", "sequence", "tensor"],
+            mesh_axis_splitting=self.training_config.distributed.physical_axis_splitting,
         )
+
 
         self.rollout_reader = rollout_reader
         self._should_stop = False
@@ -140,21 +140,21 @@ class TrainingWorker:
 
     def _setup_logger(self):
         """Setup logger for training metrics."""
-        logger_config = self.training_config.logging.logger_config
-        if logger_config.enable is None:
-            logger_config.enable = jax.process_index() == 0
-        if logger_config.config_to_log is None:
-            logger_config.config_to_log = dataclasses.asdict(self.training_config)
+        logging_config = self.training_config.logging
+        if logging_config.enable is None:
+            logging_config.enable = jax.process_index() == 0
+        if logging_config.config_to_log is None:
+            logging_config.config_to_log = dataclasses.asdict(self.training_config)
 
         self.logger = WandbLogger(
             self.training_config.logging.wandb_project,
             output_dir=self.training_config.output_dir,
-            online=logger_config.online,
-            prefix=logger_config.prefix,
-            prefix_to_id=logger_config.prefix_to_id,
-            experiment_id=logger_config.experiment_id,
-            enable=logger_config.enable,
-            config_to_log=logger_config.config_to_log,
+            online=logging_config.online,
+            prefix=logging_config.prefix,
+            prefix_to_id=logging_config.prefix_to_id,
+            experiment_id=logging_config.experiment_id,
+            enable=logging_config.enable,
+            config_to_log=logging_config.config_to_log,
         )
 
     def _compile_functions(self):
