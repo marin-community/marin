@@ -1121,6 +1121,8 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
                 f"specified prefix ({prefix})"
             )
 
+    os.environ["MARIN_PREFIX"] = prefix
+
     executor_info_base_path = config.executor_info_base_path
     if executor_info_base_path is None:
         # infer from prefix

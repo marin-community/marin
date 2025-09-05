@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-RL training experiment following marin patterns.
+Trying out RL training with separate trainer & rollout components.
 """
 
 import logging
@@ -21,6 +21,7 @@ import os
 from dataclasses import dataclass
 
 import ray
+from levanter.infra.ray_tpu import run_on_pod_multislice_resumable
 
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.post_training.training_config import (
@@ -47,9 +48,12 @@ from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
+NUM_INFERENCE_WORKERS = 1
+NUM_TRAIN_WORKERS = 1
+
 
 @dataclass(frozen=True)
-class RlTrainOnPodConfig:
+class RLTrainConfig:
     """Configuration for RL training on a pod, using draccus TrainingConfig."""
 
     resources: ResourceConfig
@@ -57,7 +61,7 @@ class RlTrainOnPodConfig:
 
 
 @remove_tpu_lockfile_on_exit
-def run_rl_training_on_pod(config: RlTrainOnPodConfig):
+def run_rl_training_on_pod(config: RLTrainConfig):
     """
     Run RL training on a Ray cluster, following marin's execution pattern.
 
@@ -90,35 +94,28 @@ def run_rl_training_on_pod(config: RlTrainOnPodConfig):
 
     hw_config = config.resources.with_env_vars(env)
 
-    @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1, max_retries=10)
+    @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1, max_retries=3)
     def rl_train_task():
         rl_training_main(config.training_config)
 
-    if isinstance(hw_config, TpuPodConfig):
-        from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
-
-        if hw_config.slice_count == 1:
-            return run_on_pod_resumable(rl_train_task, config.resources.accelerator_descriptor(), max_retries_failure=10)
-        else:
-            return run_on_pod_multislice_resumable(
-                rl_train_task,
-                config.resources.accelerator_descriptor(),
-                hw_config.slice_count,
-                max_retries_failure=10,
-            )
-    else:
-        return ray.get(rl_train_task.remote())
+    return run_on_pod_multislice_resumable(
+        rl_train_task,
+        config.resources.accelerator_descriptor(),
+        hw_config.slice_count,
+        max_retries_failure=1,
+        max_retries_preemption=1,
+    )
 
 
 def default_rl_train(
     name: str,
     model_paths: dict[str, str],
-    tpu_type: str = "v4-64",
-    train_bsize: int = 64,
+    tpu_type: str = "v4-8",
+    train_bsize: int = 32,
     kl_coef: float = 1e-3,
     learning_rate: float = 5e-7,
-    num_train_steps: int = 2048,
-    wandb_project: str = "marin_post_training",
+    num_train_steps: int = 16,
+    wandb_project: str = "math_rloo_math_test_experiments",
     **kwargs,
 ) -> ExecutorStep:
     """
@@ -154,7 +151,7 @@ def default_rl_train(
         weight_decay=0.0,
         bf16_momentum=False,
         multiply_by_parameter_scale=False,
-        weight_decay_exclusions=[],
+        weight_decay_exclusions=(),
         schedule="cos",
         grad_accum_steps=16,
     )
@@ -163,7 +160,6 @@ def default_rl_train(
         online=True,
         prefix=name,
         prefix_to_id=True,
-        experiment_id=name,
     )
 
     generation_config = GenerationConfig(
@@ -219,7 +215,7 @@ def default_rl_train(
 
     checkpointer_config = CheckpointerConfigData(save_optimizer_state=False, save_float_dtype="bf16")
 
-    resources = TpuPodConfig(tpu_type=tpu_type)
+    resources = TpuPodConfig(tpu_type=tpu_type, slices=NUM_INFERENCE_WORKERS + NUM_TRAIN_WORKERS)
 
     training_config = TrainingConfig(
         model=ModelConfig(
@@ -233,26 +229,27 @@ def default_rl_train(
             train_attention_kernel_config='splash:{"block_size": 256}',
             prefill_attention_kernel_config='splash:{"block_size": 256}',
             generate_attention_kernel_config=(
-                'paged:{"page_size": 256, "pages_per_compute_block": 1, "inline_seq_dim": true, "use_int8": false}'
+                'paged:{"page_size": 256, "pages_per_compute_block": 1, '
+                '"inline_seq_dim": true, "use_int8": false}'
             ),
         ),
         hyperparameters=TrainingHyperparameters(
             num_train_steps=num_train_steps,
-            max_input_length=256,
-            max_output_length=1025,
+            max_input_length=128,
+            max_output_length=256,
             train_bsize=train_bsize,
-            decode_bsize=1024,
-            prefill_bsize=16,
-            reference_logprobs_bsize=256,
+            decode_bsize=8,
+            prefill_bsize=8,
+            reference_logprobs_bsize=8,
             n_prompts_per_step=16,
             optim_config=optim_config,
             pad_token_id=128002,
             kl_coef=kl_coef,
         ),
         logging=LoggingConfig(
-            log_freq=10,
+            log_freq=8,
             num_eval_examples=1024,
-            save_model_freq=10,
+            save_model_freq=0,
             wandb_project=wandb_project,
             logger_config=logger_config,
             save_initial_checkpoint=False,
@@ -265,13 +262,13 @@ def default_rl_train(
             physical_axis_splitting=False,
             jax_distributed_initalize_config={},
         ),
-        generation_config=generation_config,
-        test_generation_config=test_generation_config,
         output_dir=this_output_path(),
         checkpointer_config=checkpointer_config,
+        generation_config=generation_config,
+        test_generation_config=test_generation_config,
     )
 
-    config = RlTrainOnPodConfig(
+    config = RLTrainConfig(
         resources=resources,
         training_config=training_config,
     )
@@ -296,13 +293,14 @@ def main():
 
     experiments = [
         default_rl_train(
-            name="all-math500-v4-64",
+            name="rl_training_rollout_experiment",
             model_paths=model_paths,
-            tpu_type="v4-64",
+            tpu_type="v4-8",
             train_bsize=64,
             kl_coef=1e-3,
             learning_rate=5e-7,
             num_train_steps=2048,
+            wandb_project="rl_training_rollout_experiment",
         ),
     ]
 

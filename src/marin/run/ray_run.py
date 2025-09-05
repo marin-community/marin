@@ -125,6 +125,13 @@ async def submit_and_track_job(
 
     current_dir = os.getcwd()
     client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
+
+    if "WANDB_API_KEY" not in env_vars:
+        if os.environ.get("WANDB_API_KEY"):
+            env_vars["WANDB_API_KEY"] = os.environ.get("WANDB_API_KEY")
+        else:
+            logging.warning("WANDB_API_KEY not set. Most jobs require this.")
+
     runtime_dict = {
         "pip": dependencies,
         "working_dir": current_dir,

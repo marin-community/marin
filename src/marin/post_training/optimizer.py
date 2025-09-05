@@ -19,6 +19,8 @@ import jax
 import jax.numpy as jnp
 import optax
 
+from .training_config import OptimizerConfig
+
 # Adapted from:
 # https://github.com/young-geng/EasyLM/blob/main/EasyLM/optimizers.py
 
@@ -57,59 +59,48 @@ schedule_by_name = dict(
 
 
 def load_adamw_optimizer(
-    init_lr: float = 0.0,
-    end_lr: float = 3e-5,
-    lr: float = 3e-4,
-    lr_warmup_steps: int = 3000,
-    lr_decay_steps: int = 300000,
-    b1: float = 0.9,
-    b2: float = 0.95,
-    clip_gradient: float = 1.0,
-    weight_decay: float = 0.1,
-    bf16_momentum: bool = False,
-    multiply_by_parameter_scale: bool = False,
+    config: OptimizerConfig,
     weight_decay_mask: Callable | None = None,
-    schedule: str = "cos",
 ) -> tuple[optax.GradientTransformation, dict[str, Any]]:
-    learning_rate_schedule = schedule_by_name[schedule](
-        init_value=init_lr,
-        peak_value=lr,
-        warmup_steps=lr_warmup_steps,
-        decay_steps=lr_decay_steps,
-        end_value=end_lr,
+    learning_rate_schedule = schedule_by_name[config.schedule](
+        init_value=config.init_lr,
+        peak_value=config.lr,
+        warmup_steps=config.lr_warmup_steps,
+        decay_steps=config.lr_decay_steps,
+        end_value=config.end_lr,
     )
 
     optimizer_info = dict(
         learning_rate_schedule=learning_rate_schedule,
     )
 
-    if multiply_by_parameter_scale:
+    if config.multiply_by_parameter_scale:
         optimizer = optax.chain(
-            optax.clip_by_global_norm(clip_gradient),
+            optax.clip_by_global_norm(config.clip_gradient),
             optax.adafactor(
                 learning_rate=learning_rate_schedule,
                 multiply_by_parameter_scale=True,
-                momentum=b1,
-                decay_rate=b2,
+                momentum=config.b1,
+                decay_rate=config.b2,
                 factored=False,
                 clipping_threshold=None,
-                dtype_momentum=jnp.bfloat16 if bf16_momentum else jnp.float32,
+                dtype_momentum=jnp.bfloat16 if config.bf16_momentum else jnp.float32,
             ),
             optax_add_scheduled_weight_decay(
-                lambda step: -learning_rate_schedule(step) * weight_decay,
+                lambda step: -learning_rate_schedule(step) * config.weight_decay,
                 weight_decay_mask,
             ),
         )
     else:
         optimizer = optax.chain(
-            optax.clip_by_global_norm(clip_gradient),
+            optax.clip_by_global_norm(config.clip_gradient),
             optax.adamw(
                 learning_rate=learning_rate_schedule,
-                weight_decay=weight_decay,
-                b1=b1,
-                b2=b2,
+                weight_decay=config.weight_decay,
+                b1=config.b1,
+                b2=config.b2,
                 mask=weight_decay_mask,
-                mu_dtype=jnp.bfloat16 if bf16_momentum else jnp.float32,
+                mu_dtype=jnp.bfloat16 if config.bf16_momentum else jnp.float32,
             ),
         )
 

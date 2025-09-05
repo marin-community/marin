@@ -23,6 +23,8 @@ from .math_env import MathEnv
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+SKIP_COUNT = 0
+
 
 class AquaRatEnv(MathEnv):
     """
@@ -59,6 +61,7 @@ class AquaRatEnv(MathEnv):
         )
 
     def _process_split(self, split) -> list[dict]:
+        global SKIP_COUNT
         examples: list[dict] = []
         for item in tqdm(split):
             question: str = item["question"]
@@ -74,7 +77,11 @@ class AquaRatEnv(MathEnv):
             # we skip any questions where the correct answer is "none" or similar,
             # which requires the choices to be provided.
             if answer.lower().startswith("none"):
-                logger.warning(f"Skipping question '{question}' with answer '{answer}'.")
+                SKIP_COUNT += 1
+                if SKIP_COUNT <= 10:
+                    logger.warning(f"Skipping question '{question}' with answer '{answer}'.")
+                elif SKIP_COUNT == 11:
+                    logger.warning("Too many warnings for skipped questions. Further warnings will be suppressed.")
                 continue
 
             prompt: str = self.add_instruction(question)
