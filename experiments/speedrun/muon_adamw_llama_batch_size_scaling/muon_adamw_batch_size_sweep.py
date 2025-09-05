@@ -178,10 +178,10 @@ def build_config(optimizer_name: str, size: str, batch_size: int, seq_len: int=4
 
     # Descriptions
     descriptions = {
-        "130m": "130M parameter model trained with the Muon optimizer.",
-        "300m": "300M parameter model trained with the Muon optimizer.",
-        "520m": "520M parameter model trained with the Muon optimizer.",
-        "1_2b": "1.2B parameter model trained with the Muon optimizer.",
+        "130m": f"130M parameter model trained with the {optimizer_name} optimizer with tokens-per-step={seq_len*batch_size}.",
+        "300m": f"300M parameter model trained with the {optimizer_name} optimizer with tokens-per-step={seq_len*batch_size}.",
+        "520m": f"520M parameter model trained with the {optimizer_name} optimizer with tokens-per-step={seq_len*batch_size}.",
+        "1_2b": f"1.2B parameter model trained with the {optimizer_name} optimizer with tokens-per-step={seq_len*batch_size}.",
     }
 
     # Names for the runs
