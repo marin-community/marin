@@ -40,7 +40,7 @@ dependencies = [
     "wandb<=0.19.9",
     "openai",
     "fasteners>=0.19",
-    "https://github.com/marin-community/dolma",
+    "dolma @ git+https://github.com/marin-community/dolma",
 ]
 
 [dependency-groups]
