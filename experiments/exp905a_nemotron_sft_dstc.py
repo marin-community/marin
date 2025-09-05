@@ -63,7 +63,7 @@ def create_tokenization_step(dataset_name: str) -> ExecutorStep:
 DATASETS = {
     **EXP808_DATASETS,
     "nemotron_sft": "nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
-    "nemotron_v2_sft": "nvidia/Nemotron-Post-Training-Dataset-v2-SFT",
+    # "nemotron_v2_sft": "nvidia/Nemotron-Post-Training-Dataset-v2-SFT",
     "openthoughts3": "open-thoughts/OpenThoughts3-1.2M",
 }
 
