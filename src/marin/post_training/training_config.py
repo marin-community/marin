@@ -201,10 +201,10 @@ class TrainingConfig:
 class TrainWorkerConfig:
     """Training worker specific configuration."""
 
-    rollout_queue_bucket: str
-    rollout_queue_path: str = "rollout_queue"
+    rollout_queue_path: str
     batch_timeout: float = 60.0
     max_idle_time: float = 300.0
+    checkpoint_sync_interval: int = 60
 
 
 @dataclass
@@ -218,6 +218,5 @@ class InferenceWorkerConfig:
     rollout_batch_size: int = 32
     n_generations: int = 64
     n_examples_per_batch: int = 16
-    use_gcs: bool = False
     max_rollouts: int | None = None
     checkpoint_timeout: float = 300.0

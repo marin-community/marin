@@ -21,14 +21,17 @@ import os
 from dataclasses import dataclass
 
 import ray
-from levanter.infra.ray_tpu import run_on_pod_multislice_resumable
 
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.post_training.inference_worker import InferenceWorker
+from marin.post_training.rollout_storage import FileRolloutReader, FileRolloutWriter
+from marin.post_training.train_worker import TrainingWorker
 from marin.post_training.training_config import (
     CheckpointerConfigData,
     DistributedConfig,
     EnvironmentConfig,
     GenerationConfig,
+    InferenceWorkerConfig,
     LoggerConfigData,
     LoggingConfig,
     ModelConfig,
@@ -37,6 +40,7 @@ from marin.post_training.training_config import (
     OptimizerConfig,
     TrainingConfig,
     TrainingHyperparameters,
+    TrainWorkerConfig,
 )
 from marin.resources import ResourceConfig, TpuPodConfig
 from marin.training.training import (
@@ -50,6 +54,8 @@ logger = logging.getLogger(__name__)
 
 NUM_INFERENCE_WORKERS = 1
 NUM_TRAIN_WORKERS = 1
+WANDB_PROJECT = "math_rloo_math_test_experiments"
+ENVIRONMENT_SPEC = "olym_math:difficulty=hard"
 
 
 @dataclass(frozen=True)
@@ -63,14 +69,12 @@ class RLTrainConfig:
 @remove_tpu_lockfile_on_exit
 def run_rl_training_on_pod(config: RLTrainConfig):
     """
-    Run RL training on a Ray cluster, following marin's execution pattern.
+    Run RL training with both inference and training workers on a Ray cluster.
 
-    This function follows the same pattern as run_levanter_train_lm but adapted for RL training.
+    This function launches both workers that communicate through a shared rollout queue.
     """
 
     import levanter.infra.cli_helpers
-
-    from marin.post_training.train import main as rl_training_main
 
     default_launch_config = levanter.infra.cli_helpers.load_config()
 
@@ -82,6 +86,29 @@ def run_rl_training_on_pod(config: RLTrainConfig):
     if isinstance(config.resources, TpuPodConfig):
         _check_for_wandb_key(env)
 
+    rollout_queue_path = config.training_config.output_dir + "/rollout_queue"
+    checkpoint_dir = config.training_config.output_dir + "/checkpoints"
+
+    train_worker_config = TrainWorkerConfig(
+        rollout_queue_path=rollout_queue_path,
+        batch_timeout=60.0,
+        max_idle_time=300.0,
+        checkpoint_sync_interval=60,  # Save checkpoint every 60 steps (~1 minute)
+    )
+
+    # Inference worker config - generates rollouts and watches for new checkpoints
+    inference_worker_config = InferenceWorkerConfig(
+        environment_spec=ENVIRONMENT_SPEC,
+        checkpoint_source_path=checkpoint_dir,
+        rollout_output_path=rollout_queue_path,
+        checkpoint_poll_interval=30.0,  # Check for new checkpoints every 30 seconds
+        rollout_batch_size=8,
+        n_generations=64,
+        n_examples_per_batch=16,
+        max_rollouts=None,  # Generate rollouts continuously
+        checkpoint_timeout=300.0,
+    )
+
     env = _add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
@@ -90,21 +117,34 @@ def run_rl_training_on_pod(config: RLTrainConfig):
             env["JAX_COMPILATION_CACHE_DIR"] = os.path.join(marin_prefix, "compilation-cache")
             logger.info(f"JAX compilation cache enabled at: {env['JAX_COMPILATION_CACHE_DIR']}")
         else:
-            logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
+            logger.warning(
+                "MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured."
+            )
 
     hw_config = config.resources.with_env_vars(env)
 
-    @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1, max_retries=3)
-    def rl_train_task():
-        rl_training_main(config.training_config)
+    # Split resources between workers
+    inference_hw_config = hw_config
+    train_hw_config = hw_config
 
-    return run_on_pod_multislice_resumable(
-        rl_train_task,
-        config.resources.accelerator_descriptor(),
-        hw_config.slice_count,
-        max_retries_failure=1,
-        max_retries_preemption=1,
-    )
+    @ray.remote(**train_hw_config.as_remote_kwargs(), max_calls=1, max_retries=0)
+    def train_worker_task():
+        rollout_reader = FileRolloutReader(rollout_queue_path)
+        worker = TrainingWorker(config.training_config, train_worker_config, rollout_reader)
+        worker.train()
+
+    @ray.remote(**inference_hw_config.as_remote_kwargs(), max_calls=1, max_retries=0)
+    def inference_worker_task():
+        rollout_writer = FileRolloutWriter(rollout_queue_path)
+        worker = InferenceWorker(config.training_config, inference_worker_config, rollout_writer)
+        worker.run()
+
+    # Launch both workers
+    inference_task = inference_worker_task.remote()
+    train_task = train_worker_task.remote()
+
+    # Wait for both to complete
+    return ray.get([inference_task, train_task])
 
 
 def default_rl_train(
@@ -115,7 +155,6 @@ def default_rl_train(
     kl_coef: float = 1e-3,
     learning_rate: float = 5e-7,
     num_train_steps: int = 16,
-    wandb_project: str = "math_rloo_math_test_experiments",
     **kwargs,
 ) -> ExecutorStep:
     """
@@ -129,7 +168,6 @@ def default_rl_train(
         kl_coef: KL coefficient
         learning_rate: Learning rate
         num_train_steps: Number of training steps
-        wandb_project: Wandb project name
         **kwargs: Additional arguments
     """
 
@@ -217,6 +255,11 @@ def default_rl_train(
 
     resources = TpuPodConfig(tpu_type=tpu_type, slices=NUM_INFERENCE_WORKERS + NUM_TRAIN_WORKERS)
 
+    # Shared paths for worker coordination
+    output_dir = this_output_path()
+    rollout_queue_path = os.path.join(output_dir, "rollout_queue")
+    checkpoint_dir = os.path.join(output_dir, "checkpoints")
+
     training_config = TrainingConfig(
         model=ModelConfig(
             model_paths=model_paths_config,
@@ -249,10 +292,10 @@ def default_rl_train(
         logging=LoggingConfig(
             log_freq=8,
             num_eval_examples=1024,
-            save_model_freq=0,
-            wandb_project=wandb_project,
+            save_model_freq=1,
+            wandb_project=WANDB_PROJECT,
             logger_config=logger_config,
-            save_initial_checkpoint=False,
+            save_initial_checkpoint=True,
             log_initial_step=True,
             max_checkpoints=None,
         ),
@@ -262,7 +305,7 @@ def default_rl_train(
             physical_axis_splitting=False,
             jax_distributed_initalize_config={},
         ),
-        output_dir=this_output_path(),
+        output_dir=output_dir,
         checkpointer_config=checkpointer_config,
         generation_config=generation_config,
         test_generation_config=test_generation_config,
@@ -300,7 +343,6 @@ def main():
             kl_coef=1e-3,
             learning_rate=5e-7,
             num_train_steps=2048,
-            wandb_project="rl_training_rollout_experiment",
         ),
     ]
 

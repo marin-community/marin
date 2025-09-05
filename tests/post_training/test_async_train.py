@@ -182,7 +182,6 @@ def inference_worker_config(temp_checkpoint_dir):
         rollout_batch_size=2,
         n_generations=2,
         n_examples_per_batch=2,
-        use_gcs=False,
         max_rollouts=2,  # Generate 2 rollout batches
         checkpoint_timeout=1.0,
     )
