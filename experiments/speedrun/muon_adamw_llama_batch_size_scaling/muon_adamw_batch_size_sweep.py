@@ -40,7 +40,7 @@ def get_num_train_steps(param_count, batch_size, seq_len):
     return total_tokens // tokens_per_step
 
 
-def build_config(optimizer_name: str, size: str, batch_size: int, seq_len: int=4096) -> tuple[str, SpeedrunConfig]:
+def build_config(optimizer_name: str, size: str, batch_size: int, seq_len: int = 4096) -> tuple[str, SpeedrunConfig]:
     # Parameter counts
     param_counts = {
         "130m": 130_000_000,
@@ -178,10 +178,18 @@ def build_config(optimizer_name: str, size: str, batch_size: int, seq_len: int=4
 
     # Descriptions
     descriptions = {
-        "130m": f"130M parameter model trained with the {optimizer_name} optimizer with tokens-per-step={seq_len*batch_size}.",
-        "300m": f"300M parameter model trained with the {optimizer_name} optimizer with tokens-per-step={seq_len*batch_size}.",
-        "520m": f"520M parameter model trained with the {optimizer_name} optimizer with tokens-per-step={seq_len*batch_size}.",
-        "1_2b": f"1.2B parameter model trained with the {optimizer_name} optimizer with tokens-per-step={seq_len*batch_size}.",
+        "130m": (
+            f"130M parameter model trained with the {optimizer_name} optimizer with tokens-per-step={seq_len*batch_size}."
+        ),
+        "300m": (
+            f"300M parameter model trained with the {optimizer_name} optimizer with tokens-per-step={seq_len*batch_size}."
+        ),
+        "520m": (
+            f"520M parameter model trained with the {optimizer_name} optimizer with tokens-per-step={seq_len*batch_size}."
+        ),
+        "1_2b": (
+            f"1.2B parameter model trained with the {optimizer_name} optimizer with tokens-per-step={seq_len*batch_size}."
+        ),
     }
 
     # Names for the runs
@@ -211,11 +219,14 @@ def build_config(optimizer_name: str, size: str, batch_size: int, seq_len: int=4
 
     num_train_steps = get_num_train_steps(param_count, batch_size, seq_len)
 
+    # Taken from Simo Ryu's observation that lr ~ sqrt(BS) also holds for Shampoo & Muon: https://x.com/cloneofsimo/status/1907731069878825400
+    baseline_batch_size = 128
+    learning_rate = optimizer_config.learning_rate * (batch_size / baseline_batch_size)**0.5
     train = SimpleTrainConfig(
         resource_config,
         train_batch_size=batch_size,
         num_train_steps=num_train_steps,
-        learning_rate=optimizer_config.learning_rate,
+        learning_rate=learning_rate,
         optimizer_config=optimizer_config,
     )
     cfg = SpeedrunConfig(
