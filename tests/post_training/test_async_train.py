@@ -118,7 +118,9 @@ def training_config():
         initializer_range=0.001,
     )
 
-    checkpointer_config = CheckpointerConfigData()
+    checkpointer_config = CheckpointerConfigData(
+        save_model_freq=0,
+    )
 
     temp_dir = tempfile.mkdtemp()
 
@@ -153,7 +155,6 @@ def training_config():
         logging=LoggingConfig(
             log_freq=1,
             num_eval_examples=1,
-            save_model_freq=0,
             wandb_project="test_project",
             online=False,
             prefix="test",
@@ -169,7 +170,7 @@ def training_config():
         generation_config=generation_config,
         test_generation_config=test_generation_config,
         output_dir=temp_dir,
-        checkpointer_config=checkpointer_config,
+        checkpoint=checkpointer_config,
     )
 
 
@@ -182,8 +183,6 @@ def inference_worker_config(temp_checkpoint_dir):
         rollout_output_path="/tmp/test_rollouts",  # Won't be used with in-memory queue
         checkpoint_poll_interval=0.1,
         rollout_batch_size=2,
-        n_generations=2,
-        n_examples_per_batch=2,
         max_rollouts=2,  # Generate 2 rollout batches
         checkpoint_timeout=1.0,
     )
@@ -194,8 +193,6 @@ def worker_config():
     """Create worker configuration."""
     return TrainWorkerConfig(
         rollout_queue_path="test_queue",
-        batch_timeout=2.0,  # Wait 2 seconds for each batch
-        max_idle_time=25.0,  # Wait 25 seconds total before giving up
     )
 
 
@@ -668,7 +665,7 @@ def test_train_worker(training_config, worker_config, mock_tokenizer):
 
     # Configure training for single step
     training_config.hyperparameters.num_train_steps = 1
-    training_config.logging.save_model_freq = 1
+    training_config.checkpoint.save_model_freq = 1
     worker_config.checkpoint_sync_interval = 1
 
     # Use context manager for cleaner test
@@ -701,7 +698,7 @@ def test_inference_and_training_workers(
     inference_worker_config.checkpoint_source_path = checkpoint_dir
 
     training_config.hyperparameters.num_train_steps = 3
-    training_config.logging.save_model_freq = 1  # Save after every step
+    training_config.checkpoint.save_model_freq = 1  # Save after every step
     training_config.logging.save_initial_checkpoint = True
     worker_config.checkpoint_sync_interval = 1
 

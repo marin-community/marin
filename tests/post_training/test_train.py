@@ -81,16 +81,19 @@ def training_config():
         multiply_by_parameter_scale=False,
     )
 
-
     generation_config = GenerationConfig(stop_tokens=[[128001]], n_generations=2)
 
-    test_generation_config = GenerationConfig(temperature=0.0, stop_tokens=[[128001]], n_generations=1)
+    test_generation_config = GenerationConfig(
+        temperature=0.0, stop_tokens=[[128001]], n_generations=1
+    )
 
     model_config_override = ModelOverrideConfig(
         initializer_range=0.001,  # Use much smaller initialization for stability
     )
 
-    checkpointer_config = CheckpointerConfigData(save_optimizer_state=False, save_float_dtype="bf16")
+    checkpointer_config = CheckpointerConfigData(
+        save_optimizer_state=False, save_float_dtype="bf16", save_model_freq=1
+    )
 
     return TrainingConfig(
         model=ModelConfig(
@@ -120,7 +123,6 @@ def training_config():
         logging=LoggingConfig(
             log_freq=1,  # Log every step
             num_eval_examples=1,  # Only 1 eval example
-            save_model_freq=0,  # Don't save during test
             wandb_project="test_project",
             online=False,
             prefix="test",
@@ -136,7 +138,7 @@ def training_config():
         generation_config=generation_config,
         test_generation_config=test_generation_config,
         output_dir=temp_dir,
-        checkpointer_config=checkpointer_config,
+        checkpoint=checkpointer_config,
     )
 
 
@@ -205,7 +207,13 @@ def test_environment_loading():
     tokenizer = load_tokenizer(model_paths, tokenizer_override)
 
     # Load environments
-    env_config_path = Path(__file__).parent.parent.parent / "src" / "marin" / "post_training" / "environments_test.json"
+    env_config_path = (
+        Path(__file__).parent.parent.parent
+        / "src"
+        / "marin"
+        / "post_training"
+        / "environments_test.json"
+    )
     environments = load_environments_from_config(env_config_path, tokenizer)
 
     assert len(environments) == 1

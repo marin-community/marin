@@ -131,9 +131,6 @@ class InferenceWorker:
         """Setup sampling configurations."""
         generation_config = self.training_config.generation_config
 
-        # Override n_generations from inference config
-        generation_config.n_generations = self.inference_config.n_generations
-
         config = self.prefill_model.config
         self.inference_params_sharding_rules = TreePathShardingRule(
             *config.get_partition_rules(
@@ -211,7 +208,9 @@ class InferenceWorker:
             target_attention_mask,
         ):
             full_tokens = jnp.concatenate([input_tokens, target_tokens], axis=1)
-            full_attention_mask = jnp.concatenate([input_attention_mask, target_attention_mask], axis=1)
+            full_attention_mask = jnp.concatenate(
+                [input_attention_mask, target_attention_mask], axis=1
+            )
             full_position_ids = jnp.maximum(jnp.cumsum(full_attention_mask, axis=1) - 1, 0)
 
             logits = self.prefill_model(
@@ -262,40 +261,45 @@ class InferenceWorker:
 
     def _load_checkpoint(self, checkpoint_path: str):
         """Load model parameters from checkpoint."""
-        logger.info(f"Loading checkpoint from {checkpoint_path}")
+        with self.mesh.get_context():
+            logger.info(f"Loading checkpoint from {checkpoint_path}")
 
-        # Get parameter shapes for sharding
-        params_shape = jax.eval_shape(
-            lambda: self.prefill_model.init_weights(
-                jax.random.PRNGKey(0),
-                (
-                    self.training_config.hyperparameters.decode_bsize,
-                    self.max_input_length + self.max_output_length - 1,
+            # Get parameter shapes for sharding
+            params_shape = jax.eval_shape(
+                lambda: self.prefill_model.init_weights(
+                    jax.random.PRNGKey(0),
+                    (
+                        self.training_config.hyperparameters.decode_bsize,
+                        self.max_input_length + self.max_output_length - 1,
+                    ),
+                )
+            )
+
+            # Create sharding functions
+            shard_fns, _ = self.mesh.make_shard_and_gather_fns(
+                params_shape, self.inference_params_sharding_rules
+            )
+
+            # Load and convert parameters
+            params = load_checkpoint(
+                checkpoint_path,
+                shard_fns=shard_fns,
+                remove_dict_prefix=self.training_config.model.model_paths.remove_dict_prefix,
+                convert_to_dtypes=jax.tree_util.tree_map(
+                    lambda x: get_float_dtype_by_name(
+                        self.training_config.model.inference_param_dtype
+                    ),
+                    params_shape,
                 ),
             )
-        )
 
-        # Create sharding functions
-        shard_fns, _ = self.mesh.make_shard_and_gather_fns(params_shape, self.inference_params_sharding_rules)
+            # Convert to inference dtype
+            params = float_to_dtype(params, self.training_config.model.inference_param_dtype)
 
-        # Load and convert parameters
-        params = load_checkpoint(
-            checkpoint_path,
-            shard_fns=shard_fns,
-            remove_dict_prefix=self.training_config.model.model_paths.remove_dict_prefix,
-            convert_to_dtypes=jax.tree_util.tree_map(
-                lambda x: get_float_dtype_by_name(self.training_config.model.inference_param_dtype),
-                params_shape,
-            ),
-        )
+            self.current_params = params
+            self.latest_checkpoint_path = checkpoint_path
 
-        # Convert to inference dtype
-        params = float_to_dtype(params, self.training_config.model.inference_param_dtype)
-
-        self.current_params = params
-        self.latest_checkpoint_path = checkpoint_path
-
-        logger.info(f"Successfully loaded checkpoint from {checkpoint_path}")
+            logger.info(f"Successfully loaded checkpoint from {checkpoint_path}")
 
     def _check_for_new_checkpoint(self):
         """Check if a new checkpoint is available and load it."""
@@ -303,9 +307,18 @@ class InferenceWorker:
 
         if latest_checkpoint is None:
             if self.current_params is None:
-                logger.warning("No checkpoints found, initializing with random weights...")
-                self.current_params = self.init_params(jax.random.PRNGKey(0))
-                self.latest_checkpoint_path = "random_init"
+                # Try to load from model_paths configuration as fallback
+                model_paths = self.training_config.model.model_paths
+                if model_paths.params:
+                    logger.info(f"Found checkpoint at {model_paths.params}")
+                    self._load_checkpoint(model_paths.params)
+                elif model_paths.train_state:
+                    logger.info(f"Found checkpoint at {model_paths.train_state}")
+                    self._load_checkpoint(model_paths.train_state)
+                else:
+                    logger.warning("No checkpoints found, initializing with random weights...")
+                    self.current_params = self.init_params(jax.random.PRNGKey(0))
+                    self.latest_checkpoint_path = "random_init"
         elif latest_checkpoint != self.latest_checkpoint_path:
             self._load_checkpoint(latest_checkpoint)
 
@@ -323,8 +336,8 @@ class InferenceWorker:
             params=self.current_params,
             reference_params=self.current_params,  # Use same params as reference for now
             get_logprobs_fn=self.get_logprobs,
-            n_examples=self.inference_config.n_examples_per_batch,
-            n_generations=self.inference_config.n_generations,
+            n_examples=self.training_config.hyperparameters.n_prompts_per_step,
+            n_generations=self.training_config.generation_config.n_generations,
             prng_key=rng,
             reference_logprobs_bsize=self.reference_logprobs_bsize,
             max_input_length=self.max_input_length,
@@ -334,19 +347,10 @@ class InferenceWorker:
             mode="train",
         )
 
-        # Convert to rollout batch format
-        batch_data = None
         for batch in rl_dataset.iterate_batches(
-            batch_size=self.inference_config.rollout_batch_size, shuffle=False, loop=False
+            batch_size=self.inference_config.rollout_batch_size, shuffle=True, loop=False
         ):
-            # Take the first (and likely only) batch
-            batch_data = batch
-            break
-
-        if batch_data is None:
-            raise RuntimeError("No batch data generated from environment")
-
-        return batch_data, dataset_metrics
+            return batch, dataset_metrics
 
     def run(self):
         """Main inference worker loop."""
@@ -372,12 +376,12 @@ class InferenceWorker:
         while self._running:
             # Check for new checkpoints periodically
             current_time = time.time()
-            if current_time - last_checkpoint_check >= self.inference_config.checkpoint_poll_interval:
-                checkpoint_updated = self._check_for_new_checkpoint()
+            if (
+                current_time - last_checkpoint_check
+                >= self.inference_config.checkpoint_poll_interval
+            ):
+                self._check_for_new_checkpoint()
                 last_checkpoint_check = current_time
-
-                if checkpoint_updated:
-                    logger.info("Loaded new checkpoint, continuing rollout generation")
 
             # Skip generation if no model loaded
             if self.current_params is None:

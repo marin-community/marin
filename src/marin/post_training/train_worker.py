@@ -304,6 +304,19 @@ class TrainingWorker:
         """Stop the training worker."""
         self._should_stop = True
 
+    def _slice_batch(self, batch: RolloutBatch, start_idx: int, end_idx: int) -> RolloutBatch:
+        """Slice a RolloutBatch to get a subset of samples."""
+        return RolloutBatch(
+            input_ids=batch.input_ids[start_idx:end_idx],
+            attention_mask=batch.attention_mask[start_idx:end_idx],
+            position_ids=batch.position_ids[start_idx:end_idx],
+            target_ids=batch.target_ids[start_idx:end_idx],
+            loss_weights=batch.loss_weights[start_idx:end_idx],
+            loss_masks=batch.loss_masks[start_idx:end_idx],
+            reference_logprobs=batch.reference_logprobs[start_idx:end_idx],
+            metadata=batch.metadata,
+        )
+
     def _convert_batch_to_jax(self, batch: RolloutBatch) -> dict[str, jnp.ndarray]:
         """Convert RolloutBatch to JAX arrays for training."""
         return {
@@ -336,7 +349,8 @@ class TrainingWorker:
                 args_dict=dataclasses.asdict(self.training_config),
             )
 
-            import dataclasses
+            checkpoint_config = dataclasses.asdict(self.training_config.checkpoint)
+            checkpoint_config.pop("save_model_freq", None)
 
             checkpointer(
                 path=os.path.join(self.training_config.output_dir, "checkpoints", f"step_{step}"),
@@ -345,7 +359,7 @@ class TrainingWorker:
                 gather_fns=self.train_state_gather_fns,
                 metadata=metadata,
                 active=self.logger.can_save(),
-                **dataclasses.asdict(self.training_config.checkpointer_config),
+                **checkpoint_config,
             )
 
             self.checkpoint_queue.append(step)
@@ -368,38 +382,55 @@ class TrainingWorker:
 
         while step < self.training_config.hyperparameters.num_train_steps and not self._should_stop:
             print("Training loop!")
+            # TODO(power) -- ensure we read disjoint batches from the rollouts.
             batch = self.rollout_reader.read_batch(timeout=5)
 
             if batch is None:
                 logger.info("No batch available, waiting for new data...")
                 continue
 
-            # Convert batch to JAX format
-            jax_batch = self._convert_batch_to_jax(batch)
+            # Get batch size and slice if necessary
+            batch_size = len(batch.input_ids)
 
-            # Perform training step
-            rng, subrng = jax.random.split(rng)
-            train_state, metrics = self.train_step(train_state, subrng, jax_batch)
+            # Process batch in chunks of train_bsize
+            for i in range(0, batch_size, self.train_bsize):
+                if (
+                    step >= self.training_config.hyperparameters.num_train_steps
+                    or self._should_stop
+                ):
+                    break
 
-            step += 1
+                end_idx = min(i + self.train_bsize, batch_size)
+                batch_slice = self._slice_batch(batch, i, end_idx)
+                logger.info(f"Training on batch of shape: {batch_slice.attention_mask.shape}")
+                jax_batch = self._convert_batch_to_jax(batch_slice)
 
-            # Log metrics
-            if self.training_config.logging.log_freq > 0 and step % self.training_config.logging.log_freq == 0:
-                log_metrics = {"step": step}
-                log_metrics.update(jax.device_get(metrics))
-                log_metrics.update(batch.metadata)
-                self.logger.log(log_metrics)
-                logger.info(f"Step {step}: {log_metrics}")
+                # Perform training step
+                rng, subrng = jax.random.split(rng)
+                train_state, metrics = self.train_step(train_state, subrng, jax_batch)
 
-            # Save checkpoint
-            if (
-                self.training_config.logging.save_model_freq > 0
-                and step % self.worker_config.checkpoint_sync_interval == 0
-            ):
-                self.save_checkpoint(train_state, step)
+                step += 1
+
+                # Log metrics
+                if (
+                    self.training_config.logging.log_freq > 0
+                    and step % self.training_config.logging.log_freq == 0
+                ):
+                    log_metrics = {"step": step}
+                    log_metrics.update(jax.device_get(metrics))
+                    log_metrics.update(batch_slice.metadata)
+                    self.logger.log(log_metrics)
+                    logger.info(f"Step {step}: {log_metrics}")
+
+                # Save checkpoint
+                if (
+                    self.training_config.checkpoint.save_model_freq > 0
+                    and step % self.worker_config.checkpoint_sync_interval == 0
+                ):
+                    self.save_checkpoint(train_state, step)
 
         # Final checkpoint
-        if self.training_config.logging.save_model_freq > 0:
+        if self.training_config.checkpoint.save_model_freq > 0:
             self.save_checkpoint(train_state, step)
 
         # Cleanup

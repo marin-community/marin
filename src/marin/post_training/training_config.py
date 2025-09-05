@@ -66,6 +66,7 @@ class CheckpointerConfigData:
 
     save_optimizer_state: bool = False
     save_float_dtype: str = "bf16"
+    save_model_freq: int = 1
 
 
 @dataclass
@@ -145,13 +146,11 @@ class LoggingConfig:
 
     log_freq: int
     num_eval_examples: int
-    save_model_freq: int
     wandb_project: str
     save_initial_checkpoint: bool = False
     log_initial_step: bool = True
     max_checkpoints: int | None = None
-    
-    # Former LoggerConfigData fields - now direct fields
+
     online: bool = True
     prefix: str | None = None
     prefix_to_id: bool = True
@@ -189,7 +188,7 @@ class TrainingConfig:
     distributed: DistributedConfig
     generation_config: GenerationConfig = field(default_factory=GenerationConfig)
     test_generation_config: GenerationConfig = field(default_factory=GenerationConfig)
-    checkpointer_config: CheckpointerConfigData = field(default_factory=CheckpointerConfigData)
+    checkpoint: CheckpointerConfigData = field(default_factory=CheckpointerConfigData)
 
 
 @dataclass
@@ -197,8 +196,6 @@ class TrainWorkerConfig:
     """Training worker specific configuration."""
 
     rollout_queue_path: str
-    batch_timeout: float = 60.0
-    max_idle_time: float = 300.0
     checkpoint_sync_interval: int = 60
 
 
@@ -211,7 +208,5 @@ class InferenceWorkerConfig:
     rollout_output_path: str
     checkpoint_poll_interval: float = 30.0
     rollout_batch_size: int = 32
-    n_generations: int = 64
-    n_examples_per_batch: int = 16
     max_rollouts: int | None = None
     checkpoint_timeout: float = 300.0

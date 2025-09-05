@@ -344,8 +344,8 @@ class Trainer:
                 gather_fns=self.train_state_gather_fns,
                 metadata=metadata,
                 active=self.logger.can_save(),
-                save_optimizer_state=self.config.checkpointer_config.save_optimizer_state,
-                save_float_dtype=self.config.checkpointer_config.save_float_dtype,
+                save_optimizer_state=self.config.checkpoint.save_optimizer_state,
+                save_float_dtype=self.config.checkpoint.save_float_dtype,
             )
 
             self.checkpoint_queue.append(step)
@@ -477,10 +477,13 @@ class Trainer:
                 self.logger.log(log_metrics)
                 print(log_metrics)
 
-            if self.config.logging.save_model_freq > 0 and (step + 1) % self.config.logging.save_model_freq == 0:
+            if (
+                self.config.checkpoint.save_model_freq > 0
+                and (step + 1) % self.config.checkpoint.save_model_freq == 0
+            ):
                 self.save_checkpoint(train_state, step + 1)
 
-        if self.config.logging.save_model_freq > 0 and (
+        if self.config.checkpoint.save_model_freq > 0 and (
             self.config.hyperparameters.num_train_steps not in self.checkpoint_queue
         ):
             self.save_checkpoint(train_state, self.config.hyperparameters.num_train_steps)

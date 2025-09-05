@@ -210,7 +210,11 @@ def default_rl_train(
         attn_pdrop=0.0,
     )
 
-    checkpointer_config = CheckpointerConfigData(save_optimizer_state=False, save_float_dtype="bf16")
+    checkpointer_config = CheckpointerConfigData(
+        save_optimizer_state=False,
+        save_float_dtype="bf16",
+        save_model_freq=10,
+    )
 
     resources = TpuPodConfig(tpu_type=tpu_type)
 
@@ -245,7 +249,6 @@ def default_rl_train(
         logging=LoggingConfig(
             log_freq=10,
             num_eval_examples=8,
-            save_model_freq=10,
             wandb_project=wandb_project,
             save_initial_checkpoint=False,
             log_initial_step=True,
@@ -264,7 +267,7 @@ def default_rl_train(
         generation_config=generation_config,
         test_generation_config=test_generation_config,
         output_dir=this_output_path(),
-        checkpointer_config=checkpointer_config,
+        checkpoint=checkpointer_config,
     )
 
     config = RlTrainOnPodConfig(

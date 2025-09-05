@@ -60,7 +60,8 @@ class RLTrainConfig:
     """Configuration for RL training on a pod, using draccus TrainingConfig."""
 
     training_config: TrainingConfig
-    tpu_type: str
+    inference_tpu_type: str
+    train_tpu_type: str
     num_inference_workers: int = 1
     num_train_workers: int = 1
 
@@ -76,20 +77,15 @@ def run_rl_training_on_pod(config: RLTrainConfig):
 
     train_worker_config = TrainWorkerConfig(
         rollout_queue_path=rollout_queue_path,
-        batch_timeout=60.0,
-        max_idle_time=300.0,
         checkpoint_sync_interval=60,  # Save checkpoint every 60 steps (~1 minute)
     )
 
-    # Inference worker config - generates rollouts and watches for new checkpoints
     inference_worker_config = InferenceWorkerConfig(
         environment_spec=ENVIRONMENT_SPEC,
         checkpoint_source_path=checkpoint_dir,
         rollout_output_path=rollout_queue_path,
         checkpoint_poll_interval=30.0,  # Check for new checkpoints every 30 seconds
         rollout_batch_size=8,
-        n_generations=64,
-        n_examples_per_batch=16,
         max_rollouts=None,  # Generate rollouts continuously
         checkpoint_timeout=300.0,
     )
@@ -107,17 +103,20 @@ def run_rl_training_on_pod(config: RLTrainConfig):
                 "MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured."
             )
 
-    pod_config = TpuPodConfig(tpu_type=config.tpu_type)
-    hw_config = pod_config.with_env_vars(env)
+    train_pod_config = TpuPodConfig(tpu_type=config.inference_tpu_type)
+    train_hw_config = train_pod_config.with_env_vars(env)
 
-    @ray.remote(runtime_env=hw_config.runtime_env, max_calls=1)
+    @ray.remote(runtime_env=train_hw_config.runtime_env, max_calls=1)
     def train_worker_task():
         with remove_tpu_lockfile_on_exit():
             rollout_reader = FileRolloutReader(rollout_queue_path)
             worker = TrainingWorker(config.training_config, train_worker_config, rollout_reader)
             worker.train()
 
-    @ray.remote(runtime_env=hw_config.runtime_env, max_calls=1)
+    inference_pod_config = TpuPodConfig(tpu_type=config.train_tpu_type)
+    inference_hw_config = inference_pod_config.with_env_vars(env)
+
+    @ray.remote(runtime_env=inference_hw_config.runtime_env, max_calls=1)
     def inference_worker_task():
         with remove_tpu_lockfile_on_exit():
             rollout_writer = FileRolloutWriter(rollout_queue_path)
@@ -132,7 +131,7 @@ def run_rl_training_on_pod(config: RLTrainConfig):
         inference_tasks.append(
             run_on_pod_ray.remote(
                 inference_worker_task,
-                config.tpu_type,
+                config.inference_tpu_type,
                 num_slices=1,
                 max_retries_failure=1,
                 max_retries_preemption=1,
@@ -143,7 +142,7 @@ def run_rl_training_on_pod(config: RLTrainConfig):
         train_tasks.append(
             run_on_pod_ray.remote(
                 train_worker_task,
-                config.tpu_type,
+                config.train_tpu_type,
                 num_slices=1,
                 max_retries_failure=1,
                 max_retries_preemption=1,
@@ -156,8 +155,9 @@ def run_rl_training_on_pod(config: RLTrainConfig):
 def default_rl_train(
     name: str,
     model_paths: dict[str, str],
-    tpu_type: str = "v4-8",
-    train_bsize: int = 32,
+    train_bsize: int,
+    inference_tpu_type: str,
+    train_tpu_type: str,
     kl_coef: float = 1e-3,
     learning_rate: float = 5e-7,
     num_train_steps: int = 16,
@@ -202,7 +202,7 @@ def default_rl_train(
 
 
     generation_config = GenerationConfig(
-        max_output_length=1025,
+        max_output_length=257,
         temperature=1.0,
         stop_tokens=[
             [524, 9399],
@@ -218,11 +218,11 @@ def default_rl_train(
             [27147, 9399],
             [128001],
         ],
-        n_generations=64,
+        n_generations=8,
     )
 
     test_generation_config = GenerationConfig(
-        max_output_length=1025,
+        max_output_length=257,
         temperature=0.0,
         stop_tokens=[
             [524, 9399],
@@ -253,7 +253,9 @@ def default_rl_train(
     )
 
     checkpointer_config = CheckpointerConfigData(
-        save_optimizer_state=False, save_float_dtype="bf16"
+        save_optimizer_state=False,
+        save_float_dtype="bf16",
+        save_model_freq=1,
     )
 
     # Shared paths for worker coordination
@@ -276,7 +278,7 @@ def default_rl_train(
         hyperparameters=TrainingHyperparameters(
             num_train_steps=num_train_steps,
             max_input_length=256,
-            max_output_length=1025,
+            max_output_length=257,
             train_bsize=train_bsize,
             decode_bsize=8,
             prefill_bsize=8,
@@ -287,9 +289,8 @@ def default_rl_train(
             kl_coef=kl_coef,
         ),
         logging=LoggingConfig(
-            log_freq=8,
-            num_eval_examples=1024,
-            save_model_freq=1,
+            log_freq=100,
+            num_eval_examples=0,
             wandb_project=WANDB_PROJECT,
             save_initial_checkpoint=True,
             log_initial_step=True,
@@ -305,12 +306,16 @@ def default_rl_train(
             jax_distributed_initalize_config={},
         ),
         output_dir=output_dir,
-        checkpointer_config=checkpointer_config,
+        checkpoint=checkpointer_config,
         generation_config=generation_config,
         test_generation_config=test_generation_config,
     )
 
-    config = RLTrainConfig(training_config=training_config, tpu_type=tpu_type)
+    config = RLTrainConfig(
+        training_config=training_config,
+        inference_tpu_type=inference_tpu_type,
+        train_tpu_type=train_tpu_type,
+    )
 
     return ExecutorStep(
         name=name,
@@ -334,11 +339,12 @@ def main():
         default_rl_train(
             name="rl_training_rollout_experiment",
             model_paths=model_paths,
-            tpu_type="v4-8",
-            train_bsize=64,
+            train_bsize=32,
             kl_coef=1e-3,
             learning_rate=5e-7,
-            num_train_steps=2048,
+            num_train_steps=10000,
+            inference_tpu_type="v4-8",
+            train_tpu_type="v4-64",
         ),
     ]
 

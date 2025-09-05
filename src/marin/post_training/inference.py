@@ -16,6 +16,7 @@
 # https://github.com/Sea-Snell/llama3_train/blob/fixed_fast_inference/llama3_even_faster_inference_clean_script.py
 import copy
 import json
+import logging
 import os
 import tempfile
 from collections import defaultdict
@@ -51,6 +52,8 @@ from .utils import (
     profile_fn,
     select_tokens,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @struct.dataclass
@@ -951,6 +954,8 @@ def batch_inference(
         create_batch_iterable(prompts),
         prng_key,
     )
+
+    logger.info(f"Sampling prompts={len(prompts)}, generations={n_generations}")
 
     for _, result in tqdm(
         enumerate(sampling_iter),
