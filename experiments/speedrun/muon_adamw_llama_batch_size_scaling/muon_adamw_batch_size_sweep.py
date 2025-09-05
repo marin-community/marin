@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Speedruns using the Muon optimizer for various Llama model sizes (Chinchilla optimal steps).
+"""Speedruns using the AdamW/Muon optimizer for various Llama model sizes (Chinchilla optimal steps) and batch size.
 
 Optimizer configs were searched & provided by Kaiyue Wen in https://wandb.ai/marin-community/marin/reports/Fantastic-Optimizers-and-Where-to-Find-Them--VmlldzoxMjgzMzQ2NQ
 """
@@ -231,7 +231,7 @@ if __name__ == "__main__":
     runs = []
     for optimizer_name in ["muon", "adamw"]:
         for model_size in ["130m", "300m"]:  # For future sweep, add "520m", "1_2b"
-            for batch_size in [128, 256, 512, 1024]:
+            for batch_size in [64, 128, 256, 512, 1024]:
                 runs.append(build_config(optimizer_name, model_size, batch_size))
 
     steps = []
