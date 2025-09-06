@@ -110,7 +110,6 @@ import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
 import ray
 import ray.remote_function
-from ray.runtime_env import RuntimeEnv
 from ray.util import state  # noqa
 
 from marin.execution.executor_step_status import (
@@ -126,7 +125,7 @@ from marin.execution.executor_step_status import (
     get_status_path,
 )
 from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
-from marin.utilities.executor_utils import get_pip_dependencies
+from marin.run.ray_deps import build_runtime_env_for_packages
 from marin.utilities.json_encoder import CustomJsonEncoder
 from marin.utilities.ray_utils import is_local_ray_cluster, schedule_on_head_node_strategy
 
@@ -175,6 +174,7 @@ class ExecutorStep(Generic[ConfigT]):
     doesn't match the automatically computed one."""
 
     pip_dependency_groups: list[str] | None = None
+    """List of `extra` dependencies from pyproject.toml to include with this step."""
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
@@ -663,11 +663,6 @@ class Executor:
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
 
-        if step.pip_dependency_groups is not None:
-            pip_dependencies = get_pip_dependencies(step.pip_dependency_groups)
-        else:
-            pip_dependencies = None
-
         if not dry_run:
             step_name = f"{step.name}: {get_fn_name(step.fn)}"
 
@@ -685,7 +680,7 @@ class Executor:
 
             append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
 
-            runtime_env = RuntimeEnv(pip=pip_dependencies)
+            runtime_env = build_runtime_env_for_packages(extra=step.pip_dependency_groups)
 
             # uv doesn't reuse dependencies and ends up installing CUDA-enabled
             # torch, which is huge and causes OOMs, so disable it for now.
