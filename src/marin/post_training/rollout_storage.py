@@ -31,6 +31,7 @@ This include:
 import json
 import logging
 import pickle
+import socket
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
@@ -146,81 +147,52 @@ class FileRolloutReader(RolloutReader):
         self.batch_prefix = batch_prefix
         self.poll_interval = poll_interval
 
-        # Create filesystem instance
-        self.fs = fsspec.filesystem(fsspec.utils.infer_storage_options(path)["protocol"] or "file")
-
-        self._read_index = self._get_latest_read_index()
-        self._write_index = self._get_latest_write_index()
+        # Create filesystem instance  
+        storage_options = fsspec.utils.infer_storage_options(path)  # type: ignore[attr-defined]
+        self.fs = fsspec.filesystem(storage_options["protocol"] or "file")
 
         logger.info(f"Initialized file rollout reader at {path}")
-        logger.info(f"Read index: {self._read_index}, Write index: {self._write_index}")
 
-    def _get_batch_path(self, index: int) -> str:
-        """Get path for batch at given index."""
-        return f"{self.path}/{self.batch_prefix}{index:010d}.pkl"
-
-    def _get_latest_read_index(self) -> int:
-        """Get the latest read index from metadata or start from 0."""
-        try:
-            metadata_path = f"{self.path}/read_index.json"
-            if self.fs.exists(metadata_path):
-                with self.fs.open(metadata_path, "r") as f:
-                    metadata = json.load(f)
-                return metadata.get("read_index", 0)
-        except Exception as e:
-            logger.warning(f"Failed to read read_index metadata: {e}")
-        return 0
-
-    def _get_latest_write_index(self) -> int:
-        """Get the latest write index by scanning existing batch files."""
-        try:
-            pattern = f"{self.path}/{self.batch_prefix}*.pkl"
-            files = self.fs.glob(pattern)
-
-            if not files:
-                return 0
-
-            indices = []
-            for file_path in files:
-                try:
-                    filename = file_path.split("/")[-1]
-                    if filename.startswith(self.batch_prefix) and filename.endswith(".pkl"):
-                        index_str = filename[len(self.batch_prefix) : -4]
-                        indices.append(int(index_str))
-                except (ValueError, IndexError):
-                    continue
-
-            return max(indices) + 1 if indices else 0
-
-        except Exception as e:
-            logger.warning(f"Failed to scan write indices: {e}")
-            return 0
-
-    def _save_read_index(self) -> None:
-        """Save current read index."""
-        try:
-            metadata_path = f"{self.path}/read_index.json"
-            metadata = {"read_index": self._read_index, "timestamp": time.time()}
-            with self.fs.open(metadata_path, "w") as f:
-                json.dump(metadata, f)
-        except Exception as e:
-            logger.warning(f"Failed to save read_index metadata: {e}")
+    def _get_available_files(self) -> list[str]:
+        """Get list of available batch files sorted by timestamp."""
+        pattern = f"{self.path}/{self.batch_prefix}*.pkl"
+        files = self.fs.glob(pattern)
+        
+        # Parse and sort files by timestamp
+        parsed_files = []
+        for file_path in files:
+            filename = file_path.split("/")[-1]
+            if filename.startswith(self.batch_prefix) and filename.endswith(".pkl"):
+                # Extract timestamp from filename: batch_TIMESTAMP_hostname_counter.pkl
+                parts = filename[len(self.batch_prefix):-4].split("_")
+                if len(parts) >= 3:
+                    timestamp_int = int(parts[0])
+                    timestamp = timestamp_int / 1000000.0  # Convert back from microseconds
+                    parsed_files.append((timestamp, file_path))
+        
+        # Sort by timestamp and return file paths
+        parsed_files.sort(key=lambda x: x[0])
+        return [file_path for _, file_path in parsed_files]
 
     def read_batch(self, timeout: float | None = None) -> RolloutBatch | None:
         """Read next batch from storage."""
         start_time = time.time()
 
         while True:
-            batch_path = self._get_batch_path(self._read_index)
-
-            if self.fs.exists(batch_path):
+            available_files = self._get_available_files()
+            
+            if available_files:
+                # Read and remove the earliest file
+                batch_path = available_files[0]
+                filename = batch_path.split("/")[-1]
+                
                 with self.fs.open(batch_path, "rb") as f:
                     batch = pickle.load(f)
 
-                self._read_index += 1
-                self._save_read_index()
+                # Delete the file after reading
+                self.fs.delete(batch_path)
 
-                logger.debug(f"Read batch {self._read_index - 1}")
+                logger.debug(f"Read and deleted batch {filename}")
                 return batch
 
             time.sleep(self.poll_interval)
@@ -238,10 +210,8 @@ class FileRolloutReader(RolloutReader):
 
     def get_queue_size(self) -> int:
         """Get current queue size (approximate)."""
-        try:
-            return max(0, self._write_index - self._read_index)
-        except Exception:
-            return 0
+        available_files = self._get_available_files()
+        return len(available_files)
 
 
 class FileRolloutWriter(RolloutWriter):
@@ -260,69 +230,44 @@ class FileRolloutWriter(RolloutWriter):
         """
         self.path = path.rstrip("/")
         self.batch_prefix = batch_prefix
+        self.hostname = socket.gethostname()
 
-        # Create filesystem instance
-        self.fs = fsspec.filesystem(fsspec.utils.infer_storage_options(path)["protocol"] or "file")
+        # Create filesystem instance  
+        storage_options = fsspec.utils.infer_storage_options(path)  # type: ignore[attr-defined]
+        self.fs = fsspec.filesystem(storage_options["protocol"] or "file")
 
         # Create output directory structure
         self._ensure_directories()
 
-        self._write_index = self._get_latest_write_index()
+        self._batch_counter = 0
 
-        logger.info(f"Initialized file rollout writer at {path}")
-        logger.info(f"Write index: {self._write_index}")
+        logger.info(f"Initialized file rollout writer at {path} (hostname: {self.hostname})")
 
     def _ensure_directories(self):
         """Ensure output directory structure exists."""
         self.fs.makedirs(self.path, exist_ok=True)
 
-    def _get_batch_path(self, index: int) -> str:
-        """Get path for batch at given index."""
-        return f"{self.path}/{self.batch_prefix}{index:010d}.pkl"
-
-    def _get_latest_write_index(self) -> int:
-        """Get the latest write index by scanning existing batch files."""
-        pattern = f"{self.path}/{self.batch_prefix}*.pkl"
-        files = self.fs.glob(pattern)
-
-        if not files:
-            return 0
-
-        indices = []
-        for file_path in files:
-            filename = file_path.split("/")[-1]
-            if filename.startswith(self.batch_prefix) and filename.endswith(".pkl"):
-                index_str = filename[len(self.batch_prefix) : -4]
-                indices.append(int(index_str))
-        return max(indices) + 1 if indices else 0
+    def _get_batch_path(self, timestamp: float, counter: int) -> str:
+        """Get path for batch with timestamp and hostname."""
+        timestamp_int = int(timestamp * 1000000)  # microseconds for ordering
+        return f"{self.path}/{self.batch_prefix}{timestamp_int:020d}_{self.hostname}_{counter:06d}.pkl"
 
     def write_batch(self, batch: RolloutBatch) -> None:
         """Write batch to storage."""
-        batch_path = self._get_batch_path(self._write_index)
+        timestamp = time.time()
+        batch_path = self._get_batch_path(timestamp, self._batch_counter)
         with self.fs.open(batch_path, "wb") as f:
             pickle.dump(batch, f)
 
-        logger.debug(f"Wrote batch {self._write_index}")
-        self._write_index += 1
+        logger.debug(f"Wrote batch {batch_path}")
+        self._batch_counter += 1
         return
 
     def get_queue_size(self) -> int:
-        """Get current queue size (approximate)."""
-        try:
-            read_index = self._get_latest_read_index()
-            return max(0, self._write_index - read_index)
-        except Exception:
-            return 0
-
-    def _get_latest_read_index(self) -> int:
-        """Get the latest read index from metadata or start from 0."""
-        metadata_path = f"{self.path}/read_index.json"
-        if self.fs.exists(metadata_path):
-            with self.fs.open(metadata_path, "r") as f:
-                metadata = json.load(f)
-            return metadata.get("read_index", 0)
-        logger.debug("No read index metadata found.")
-        return 0
+        """Get current queue size by counting available batch files."""
+        pattern = f"{self.path}/{self.batch_prefix}*.pkl"
+        files = self.fs.glob(pattern)
+        return len(files)
 
     def write_metadata(self, metadata: dict[str, Any]) -> None:
         """Write metadata about the rollout generation."""
@@ -346,7 +291,7 @@ class FileRolloutWriter(RolloutWriter):
         for file_path in files:
             self.fs.delete(file_path)
 
-        self._write_index = 0
+        self._batch_counter = 0
 
         logger.info(f"Cleared queue at {self.path}")
 

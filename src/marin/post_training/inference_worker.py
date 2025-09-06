@@ -91,7 +91,9 @@ class InferenceWorker:
             self._setup_components()
 
         # Initialize storage
-        self.rollout_writer = rollout_writer or FileRolloutWriter(inference_config.rollout_output_path)
+        self.rollout_writer = rollout_writer or FileRolloutWriter(
+            inference_config.rollout_output_path
+        )
 
         # Track state
         self.current_step = 0
@@ -107,7 +109,9 @@ class InferenceWorker:
         model_config = self.training_config.model
 
         # Setup models
-        llama_config = llama_config_from_model_config(model_config.model_paths, model_config.model_config_override)
+        llama_config = llama_config_from_model_config(
+            model_config.model_paths, model_config.model_config_override
+        )
         self.prefill_model = build_prefill_model(llama_config, self.training_config)
         self.generate_model = build_generate_model(llama_config, self.training_config)
 
@@ -116,12 +120,16 @@ class InferenceWorker:
 
         # Load environment
         self.environment_name = self.inference_config.environment_spec
-        self.environment = load_environment_from_spec(self.inference_config.environment_spec, self.tokenizer)
+        self.environment = load_environment_from_spec(
+            self.inference_config.environment_spec, self.tokenizer
+        )
 
         # Extract frequently used config values
         self.max_input_length = self.training_config.hyperparameters.max_input_length
         self.max_output_length = self.training_config.hyperparameters.max_output_length
-        self.reference_logprobs_bsize = self.training_config.hyperparameters.reference_logprobs_bsize
+        self.reference_logprobs_bsize = (
+            self.training_config.hyperparameters.reference_logprobs_bsize
+        )
         self.pad_token_id = self.training_config.hyperparameters.pad_token_id
 
         self._setup_samplers()
@@ -300,27 +308,37 @@ class InferenceWorker:
             self.latest_checkpoint_path = checkpoint_path
 
             logger.info(f"Successfully loaded checkpoint from {checkpoint_path}")
+            jax_distributed_barrier()
 
     def _check_for_new_checkpoint(self):
         """Check if a new checkpoint is available and load it."""
         latest_checkpoint = self._find_latest_checkpoint()
 
-        if latest_checkpoint is None:
-            if self.current_params is None:
-                # Try to load from model_paths configuration as fallback
-                model_paths = self.training_config.model.model_paths
-                if model_paths.params:
-                    logger.info(f"Found checkpoint at {model_paths.params}")
-                    self._load_checkpoint(model_paths.params)
-                elif model_paths.train_state:
-                    logger.info(f"Found checkpoint at {model_paths.train_state}")
-                    self._load_checkpoint(model_paths.train_state)
-                else:
-                    logger.warning("No checkpoints found, initializing with random weights...")
-                    self.current_params = self.init_params(jax.random.PRNGKey(0))
-                    self.latest_checkpoint_path = "random_init"
-        elif latest_checkpoint != self.latest_checkpoint_path:
+        if latest_checkpoint is not None and latest_checkpoint != self.latest_checkpoint_path:
             self._load_checkpoint(latest_checkpoint)
+
+    def _load_from_config(self):
+        """Initialize the model from a training checkpoint, initial checkpoint, or randomly."""
+        jax_distributed_barrier()
+        latest_checkpoint = self._find_latest_checkpoint()
+
+        if latest_checkpoint != self.latest_checkpoint_path:
+            self._load_checkpoint(latest_checkpoint)
+
+        model_paths = self.training_config.model.model_paths
+        if model_paths.params:
+            logger.info(f"Found checkpoint at {model_paths.params}")
+            self._load_checkpoint(model_paths.params)
+        elif model_paths.train_state:
+            logger.info(f"Found checkpoint at {model_paths.train_state}")
+            self._load_checkpoint(model_paths.train_state)
+        else:
+            logger.warning("No checkpoints found, initializing with random weights...")
+            self.current_params = self.init_params(jax.random.PRNGKey(0))
+            self.latest_checkpoint_path = "random_init"
+
+        logger.info("Inference model initialized.")
+        jax_distributed_barrier()
 
     def _generate_rollout_batch(self) -> tuple[dict, dict]:
         """Generate a single rollout batch from the environment."""
@@ -370,34 +388,32 @@ class InferenceWorker:
         rollouts_generated = 0
         last_checkpoint_check = 0
 
-        # Initial checkpoint check
-        self._check_for_new_checkpoint()
+        self._load_from_config()
 
         while self._running:
+            jax_distributed_barrier()
             # Check for new checkpoints periodically
             current_time = time.time()
             if (
                 current_time - last_checkpoint_check
                 >= self.inference_config.checkpoint_poll_interval
             ):
+                logger.info("Checking for new checkpoints.")
                 self._check_for_new_checkpoint()
+                jax_distributed_barrier()
                 last_checkpoint_check = current_time
 
-            # Skip generation if no model loaded
-            if self.current_params is None:
-                logger.warning("No model parameters available, waiting for checkpoint...")
-                time.sleep(self.inference_config.checkpoint_poll_interval)
-                continue
-
-            # Check if we've reached max rollouts
             if (
                 self.inference_config.max_rollouts is not None
                 and rollouts_generated >= self.inference_config.max_rollouts
             ):
-                logger.info(f"Reached max rollouts ({self.inference_config.max_rollouts}), stopping")
+                logger.info(
+                    f"Reached max rollouts ({self.inference_config.max_rollouts}), stopping"
+                )
                 break
 
             logger.info(f"Generating rollout batch {rollouts_generated}")
+            jax_distributed_barrier()
             batch_data, metrics = self._generate_rollout_batch()
 
             # Create RolloutBatch

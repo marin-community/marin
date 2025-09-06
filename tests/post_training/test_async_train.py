@@ -339,12 +339,9 @@ def test_file_rollout_queue(tmp_path):
 
     # Test writing
     writer.write_batch(batch1)
-    # File-based queue requires re-reading indices
-    reader._write_index = reader._get_latest_write_index()
     assert reader.get_queue_size() == 1
 
     writer.write_batch(batch2)
-    reader._write_index = reader._get_latest_write_index()
     assert reader.get_queue_size() == 2
 
     # Test reading (FIFO order)
@@ -362,13 +359,9 @@ def test_file_rollout_queue(tmp_path):
     empty_batch = reader.read_batch(timeout=0.1)
     assert empty_batch is None
 
-    # Verify files were created in tmp_path
+    # Verify files were consumed (deleted after reading)
     batch_files = list(tmp_path.glob("rollout_queue/batch_*.pkl"))
-    assert len(batch_files) == 2
-
-    # Verify metadata file exists
-    read_index_file = tmp_path / "rollout_queue" / "read_index.json"
-    assert read_index_file.exists()
+    assert len(batch_files) == 0, "Files should be deleted after reading"
 
     print("✓ File-based rollout queue test passed")
 

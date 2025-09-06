@@ -93,38 +93,38 @@ class TrainingWorker:
 
         # Initialize components within mesh context
         with self.mesh.get_context():
-            self._setup_components()
-
-    def _setup_components(self):
-        """Setup training components (models, tokenizer, etc.)."""
-        llama_config = llama_config_from_model_config(
-            self.training_config.model.model_paths, self.training_config.model.model_config_override
-        )
-        self.model = build_training_model(llama_config, self.training_config)
-        config = self.model.config
-        self.train_params_sharding_rules = TreePathShardingRule(
-            *config.get_partition_rules(
-                model_all_gather_axis=("fsdp", "sequence"),
+            llama_config = llama_config_from_model_config(
+                self.training_config.model.model_paths,
+                self.training_config.model.model_config_override,
             )
-        )
-        self.train_intermediate_sharding_rules = config.get_intermediate_sharding_rules(
-            data_axis=("replica", "fsdp"),
-            sequence_axis="sequence",
-        )
-        self.tokenizer = load_tokenizer(
-            self.training_config.model.model_paths, self.training_config.model.tokenizer_override
-        )
+            self.model = build_training_model(llama_config, self.training_config)
+            jax_distributed_barrier()
 
-        # Extract frequently used config values
-        self.max_input_length = self.training_config.hyperparameters.max_input_length
-        self.max_output_length = self.training_config.hyperparameters.max_output_length
-        self.train_bsize = self.training_config.hyperparameters.train_bsize
-        self.pad_token_id = self.training_config.hyperparameters.pad_token_id
-        self.kl_coef = self.training_config.hyperparameters.kl_coef
+            config = self.model.config
+            self.train_params_sharding_rules = TreePathShardingRule(
+                *config.get_partition_rules(
+                    model_all_gather_axis=("fsdp", "sequence"),
+                )
+            )
+            self.train_intermediate_sharding_rules = config.get_intermediate_sharding_rules(
+                data_axis=("replica", "fsdp"),
+                sequence_axis="sequence",
+            )
+            self.tokenizer = load_tokenizer(
+                self.training_config.model.model_paths,
+                self.training_config.model.tokenizer_override,
+            )
 
-        self._setup_optimizer()
-        self._compile_functions()
-        self._setup_logger()
+            # Extract frequently used config values
+            self.max_input_length = self.training_config.hyperparameters.max_input_length
+            self.max_output_length = self.training_config.hyperparameters.max_output_length
+            self.train_bsize = self.training_config.hyperparameters.train_bsize
+            self.pad_token_id = self.training_config.hyperparameters.pad_token_id
+            self.kl_coef = self.training_config.hyperparameters.kl_coef
+
+            self._setup_optimizer()
+            self._compile_functions()
+            self._setup_logger()
 
     def _setup_optimizer(self):
         """Setup optimizer configuration."""
@@ -145,6 +145,10 @@ class TrainingWorker:
             logging_config.enable = jax.process_index() == 0
         if logging_config.config_to_log is None:
             logging_config.config_to_log = dataclasses.asdict(self.training_config)
+
+        logger.info(
+            f"Initializing logger. Worker id: {jax.process_index}, enabled: {logging_config.enable}"
+        )
 
         self.logger = WandbLogger(
             self.training_config.logging.wandb_project,
@@ -235,7 +239,7 @@ class TrainingWorker:
 
     def _initialize_training_state(self):
         """Initialize training state with proper checkpoint loading."""
-        # Initialize training state shapes and sharding functions
+        jax_distributed_barrier()
         train_state_shape = jax.eval_shape(lambda: self.init_fn(jax.random.PRNGKey(0)))
         self.train_state_shard_fns, self.train_state_gather_fns = self.mesh.make_shard_and_gather_fns(
             train_state_shape, self.train_params_sharding_rules
@@ -294,10 +298,8 @@ class TrainingWorker:
             logger.warning("No params path provided, initializing with random weights...")
             train_state = self.init_fn(jax.random.PRNGKey(0))
 
+        jax_distributed_barrier()
         self.checkpoint_queue = deque()
-        if self.training_config.logging.save_initial_checkpoint:
-            self.save_checkpoint(train_state, 0)
-
         return train_state
 
     def stop(self):
@@ -331,6 +333,7 @@ class TrainingWorker:
 
     def save_checkpoint(self, train_state, step):
         """Save model checkpoint."""
+        jax_distributed_barrier()
         if (self.training_config.logging.max_checkpoints is not None) and (
             len(self.checkpoint_queue) >= self.training_config.logging.max_checkpoints
         ):
@@ -364,10 +367,12 @@ class TrainingWorker:
 
             self.checkpoint_queue.append(step)
             logger.info("Checkpoint saved.")
+        jax_distributed_barrier()
 
     def train(self):
         """Main training loop reading from rollout queue."""
         logger.info("Starting training worker...")
+        jax_distributed_barrier()
 
         # Initialize training state
         train_state = self._initialize_training_state()
@@ -379,6 +384,9 @@ class TrainingWorker:
             "Beginning training loop, target steps: %s",
             self.training_config.hyperparameters.num_train_steps,
         )
+
+        if self.training_config.logging.save_initial_checkpoint:
+            self.save_checkpoint(train_state, 0)
 
         while step < self.training_config.hyperparameters.num_train_steps and not self._should_stop:
             print("Training loop!")
@@ -400,6 +408,7 @@ class TrainingWorker:
                 ):
                     break
 
+                jax_distributed_barrier()
                 end_idx = min(i + self.train_bsize, batch_size)
                 batch_slice = self._slice_batch(batch, i, end_idx)
                 logger.info(f"Training on batch of shape: {batch_slice.attention_mask.shape}")
@@ -408,10 +417,10 @@ class TrainingWorker:
                 # Perform training step
                 rng, subrng = jax.random.split(rng)
                 train_state, metrics = self.train_step(train_state, subrng, jax_batch)
+                jax_distributed_barrier()
 
                 step += 1
 
-                # Log metrics
                 if (
                     self.training_config.logging.log_freq > 0
                     and step % self.training_config.logging.log_freq == 0
