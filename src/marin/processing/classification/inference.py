@@ -86,19 +86,35 @@ def count_existing_rows(output_filename: str) -> int:
 
         if output_filename.endswith((".jsonl.gz", ".jsonl.zst", ".jsonl")):
             # Load as JSON lines with streaming to count
-            dataset = datasets.load_dataset("json", data_files=output_filename, streaming=True, split="train")
+            # dataset = datasets.load_dataset("json", data_files=output_filename, streaming=True, split="train")
+            with fsspec.open(output_filename, "rt", compression="infer") as f:
+                count = 0
+                for _ in f:
+                    count += 1
+
+            return count
         elif output_filename.endswith(".parquet"):
             # Load parquet with streaming to count
-            dataset = datasets.load_dataset("parquet", data_files=output_filename, streaming=True, split="train")
+            import pyarrow.dataset as ds
+
+            def count_rows_dataset(path: str) -> int:
+                dataset = ds.dataset(path, format="parquet")  # local, s3://..., gs://..., etc.
+                # Arrow ≥12 has count_rows(); for older Arrow, fall back to sum of file metadata
+                try:
+                    return dataset.count_rows()  # uses metadata; very fast
+                except AttributeError:
+                    return sum(ds.parquet_dataset_factory(path).finish().count_rows())
+
+            return count_rows_dataset(output_filename)
         else:
             return 0
 
         # Count rows by iterating through the streaming dataset
-        count = 0
-        for _ in dataset:
-            count += 1
+        # count = 0
+        # for _ in dataset:
+        #     count += 1
 
-        return count
+        # return count
     except (FileNotFoundError, Exception):
         return 0
 
@@ -133,7 +149,7 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
 
     if ".jsonl" in output_filename:
         # Build deterministic temp path for this output file
-        file_hash = hashlib.md5(output_filename.encode("utf-8")).hexdigest()
+        file_hash = hashlib.sha256(output_filename.encode("utf-8")).hexdigest()
         if output_filename.endswith(".jsonl.gz"):
             tmp_path = f"/tmp/marin_{file_hash}.jsonl.gz"
         elif output_filename.endswith(".jsonl.zst"):
@@ -190,18 +206,26 @@ class AsyncJSONLWriter:
     and then overwriting the remote object at the end of the job.
     """
 
-    def __init__(self, output_filename: str, append: bool = False, max_queue_size: int = 4):
+    def __init__(
+        self,
+        output_filename: str,
+        append: bool = False,
+        max_queue_size: int = 128,
+        export_every_n_batches: int = 3,
+    ):
         import hashlib
         import fsspec
 
         self.output_filename = output_filename
         self.append = append
         self.max_queue_size = max_queue_size
+        self.export_every_n_batches = export_every_n_batches
         self._q: queue.Queue | None = queue.Queue(maxsize=max_queue_size)
         self._exc: Exception | None = None
         self._stop_sentinel = object()
+        self._batches_since_export: int = 0
 
-        file_hash = hashlib.md5(output_filename.encode("utf-8")).hexdigest()
+        file_hash = hashlib.sha256(output_filename.encode("utf-8")).hexdigest()
         if output_filename.endswith(".jsonl.gz"):
             self.tmp_path = f"/tmp/marin_{file_hash}.jsonl.gz"
         elif output_filename.endswith(".jsonl.zst"):
@@ -210,6 +234,9 @@ class AsyncJSONLWriter:
             self.tmp_path = f"/tmp/marin_{file_hash}.jsonl"
 
         # Hydrate local temp if appending and temp doesn't exist
+        # It is possible that the file exists at a lesser state of completion due to preemption.
+        # Imagine Node A completes 1 batch then preempted, Node B then completes 2 batches and gets preempted.
+        # Now, Node A should resume from the state that the file at global path states it is at.
         if append and not os.path.exists(self.tmp_path):
             fs, _ = fsspec.core.url_to_fs(output_filename)
             if fs.exists(output_filename):
@@ -237,6 +264,7 @@ class AsyncJSONLWriter:
         self._thread.join()
         if self._exc:
             raise self._exc
+        # Final snapshot upload
         with fsspec.open(self.output_filename, "wb") as dst, open(self.tmp_path, "rb") as src:
             import shutil as _shutil
 
@@ -256,6 +284,21 @@ class AsyncJSONLWriter:
                     for row in item:
                         row = make_json_serializable(row)
                         f.write((json.dumps(row) + "\n").encode("utf-8"))
+                    # Count one submitted batch and optionally export snapshot
+                    if self.export_every_n_batches and self.export_every_n_batches > 0:
+                        self._batches_since_export += 1
+                        if self._batches_since_export >= self.export_every_n_batches:
+                            # Flush current temp file and upload snapshot
+                            f.flush()
+                            try:
+                                import shutil as _shutil
+
+                                with fsspec.open(self.output_filename, "wb") as dst, open(self.tmp_path, "rb") as src:
+                                    _shutil.copyfileobj(src, dst)
+                            except Exception as e:
+                                # Non-fatal; next cycles or close will retry final upload
+                                print(f"Error uploading snapshot to {self.output_filename}: {e}")
+                            self._batches_since_export = 0
                 f.flush()
         except Exception as e:
             self._exc = e
@@ -340,6 +383,8 @@ def process_file_with_quality_classifier_streaming(
         rows_to_skip = count_existing_rows(output_filename)
         if rows_to_skip > 0:
             print(f"[*] Resuming from row {rows_to_skip}")
+        else:
+            print(f"[*] No existing rows found in {output_filename}")
 
     # Get column names
     input_column_names = get_input_dataset_column_names(input_filename)
@@ -362,9 +407,9 @@ def process_file_with_quality_classifier_streaming(
     # For parquet, collect batches; for JSONL, stream asynchronously
     if output_filename.endswith(".parquet"):
         parquet_batches = []
-        async_writer = None
-    else:
-        async_writer = AsyncJSONLWriter(output_filename, append=append_mode)
+        # async_writer = None
+    # else:
+    # async_writer = AsyncJSONLWriter(output_filename, append=append_mode)
 
     batch = []
     total_processed = rows_to_skip
@@ -401,7 +446,8 @@ def process_file_with_quality_classifier_streaming(
                     parquet_batches = []
             else:
                 # Enqueue JSONL write to overlap with next compute batch
-                async_writer.submit_rows(output_rows)
+                # async_writer.submit_rows(output_rows)
+                write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
 
             total_processed += len(batch)
             print(f"[*] Processed {total_processed} rows from {input_filename}")
@@ -430,18 +476,19 @@ def process_file_with_quality_classifier_streaming(
             parquet_batches.extend(output_rows)
         else:
             # Enqueue final JSONL rows
-            async_writer.submit_rows(output_rows)
+            # async_writer.submit_rows(output_rows)
+            write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
 
         total_processed += len(batch)
 
     # Flush remaining writes
-    if output_filename.endswith(".parquet"):
-        if parquet_batches:
-            _write_parquet_batch(parquet_batches, output_filename, append_mode or total_processed > rows_to_skip)
-    else:
-        # Finalize JSONL: join background writer and upload to destination
-        if async_writer is not None:
-            async_writer.close()
+    # if output_filename.endswith(".parquet"):
+    #     if parquet_batches:
+    #         _write_parquet_batch(parquet_batches, output_filename, append_mode or total_processed > rows_to_skip)
+    # else:
+    # Finalize JSONL: join background writer and upload to destination
+    # if async_writer is not None:
+    #     async_writer.close()
 
     print(f"[*] Completed processing {input_filename} - Total rows: {total_processed}")
 
@@ -562,21 +609,25 @@ def run_inference(inference_config: InferenceConfig):
 
     input_path = inference_config.input_path
     output_path = inference_config.output_path
-    responses = []
-    for input_filepath in filepaths:
-        if len(responses) > inference_config.task.max_in_flight:
-            ready_refs, responses = ray.wait(responses, num_returns=1)
-            ray.get(ready_refs)
 
-        output_filepath = rebase_file_path(input_path, input_filepath, output_path)
-        fsspec_mkdirs(os.path.dirname(output_filepath))
+    # Resilient wait/get with per-task retries to tolerate preemptions.
+    max_in_flight = inference_config.task.max_in_flight
+    max_retries_per_file = 100
 
-        result_ref = process_filepath_func.options(
-            memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
-            resources=inference_config.runtime.resources,
-        ).remote(
-            input_filepath,
-            output_filepath,
+    options_kwargs = {
+        "memory": inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
+        "resources": inference_config.runtime.resources,
+    }
+
+    pending_refs: dict = {}
+    attempt_count: dict[str, int] = {}
+
+    def submit(input_fp: str):
+        output_fp = rebase_file_path(input_path, input_fp, output_path)
+        fsspec_mkdirs(os.path.dirname(output_fp))
+        ref = process_filepath_func.options(**options_kwargs).remote(
+            input_fp,
+            output_fp,
             inference_config.model_name,
             inference_config.attribute_name,
             inference_config.model_type,
@@ -585,14 +636,45 @@ def run_inference(inference_config: InferenceConfig):
             inference_config.batch_size,
             inference_config.resume,
         )
+        pending_refs[ref] = input_fp
 
-        responses.append(result_ref)
+    for input_filepath in filepaths:
+        # Throttle submissions
+        while len(pending_refs) >= max_in_flight:
+            ready_refs, _ = ray.wait(list(pending_refs.keys()), num_returns=1)
+            ready_ref = ready_refs[0]
+            file_for_ref = pending_refs.pop(ready_ref)
+            try:
+                ray.get(ready_ref)
+                logger.info(f"Completed: {file_for_ref}")
+            except Exception as e:
+                # Log and resubmit up to max retries (tolerate spot preemptions)
+                count = attempt_count.get(file_for_ref, 0) + 1
+                attempt_count[file_for_ref] = count
+                logger.warning(f"Task failed for {file_for_ref} (attempt {count}): {e}")
+                if count < max_retries_per_file:
+                    submit(file_for_ref)
+                else:
+                    logger.error(f"Giving up after {count} attempts for {file_for_ref}")
 
-    try:
-        ray.get(responses)
-    except Exception as e:
-        print(f"Error processing: {e}")
-        raise e
+        submit(input_filepath)
+
+    # Drain remaining tasks
+    while len(pending_refs) > 0:
+        ready_refs, _ = ray.wait(list(pending_refs.keys()), num_returns=1)
+        ready_ref = ready_refs[0]
+        file_for_ref = pending_refs.pop(ready_ref)
+        try:
+            ray.get(ready_ref)
+            logger.info(f"Completed: {file_for_ref}")
+        except Exception as e:
+            count = attempt_count.get(file_for_ref, 0) + 1
+            attempt_count[file_for_ref] = count
+            logger.warning(f"Task failed for {file_for_ref} (attempt {count}): {e}")
+            if count < max_retries_per_file:
+                submit(file_for_ref)
+            else:
+                logger.error(f"Giving up after {count} attempts for {file_for_ref}")
 
 
 @draccus.wrap()

@@ -4,7 +4,7 @@
 # 3c545 has some bad interactions with ray data that make it not work
 # FROM vllm/vllm-tpu:3c545c0c3b98ee642373a308197d750d0e449403 # newest one that is 0.9.2 thought it should work but some ray data issues
 # ABSOLUTE NEWEST vLLM vllm/vllm-tpu:b395b3b0a3166d17c75e74f4eaf0ff4b15f2554f
-FROM vllm/vllm-tpu:b395b3b0a3166d17c75e74f4eaf0ff4b15f2554f
+FROM vllm/vllm-tpu:3c529fc9945964819dc17b9910ad6ccdbf231413
 # Setup gcsfuse
 # cmake, build-essential, libssl-dev, protobuf-compiler for dolma
 RUN apt-get update && apt-get install lsb-release rsync docker.io cmake build-essential libssl-dev protobuf-compiler -y
@@ -26,7 +26,7 @@ RUN curl -sSL https://sdk.cloud.google.com > /tmp/gcl && \
     && chown -R $(whoami) /root/gcloud
 
 # Install core dependencies
-RUN pip install --no-cache-dir draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1500 haliax==1.4.dev381 lm-eval https://github.com/huggingface/accelerate/archive/refs/heads/main.zip ray==2.45.0
+RUN pip install --no-cache-dir draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1500 haliax==1.4.dev381 lm-eval https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
 
 # Need the latest accelerate due to some deprecations in the newest pytorch
 # RUN pip install --no-cache-dir https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
@@ -40,5 +40,6 @@ ENV PATH=$PATH:/root/gcloud/google-cloud-sdk/bin
 ENV VLLM_USE_V1=1
 ENV TF_CPP_MIN_LOG_LEVEL=1
 ENV HF_HOME=/opt/gcsfuse_mount/huggingface-cache
+ENV TPU_MIN_LOG_LEVEL=3
 
 WORKDIR /opt/marin

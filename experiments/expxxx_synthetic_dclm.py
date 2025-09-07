@@ -128,6 +128,60 @@ synthetic_dclm_wrapmed = ExecutorStep(
     ),
 )
 
+DIVERSE_QA_PROMPT = """
+Task: Read the text, ask questions and answer them.
+Follow these instructions:
+1. Ask diverse questions that require different cognitive skills or cover different aspects of the
+text.
+2. Ask questions in various forms such as:
+- Yes/No questions that require determining whether a statement is true or false.
+- Open-ended questions that begin with words like what, how, when, where, why and who.
+- Multi-choice questions that offers two or more options to choose from. Include the options in the
+question.
+- Comparison questions that compare two quantities or objects and determine the relationship
+between them.
+- Reading comprehension questions that test the ability to understand and analyze the text.
+- Problem-solving questions that test the ability to solve mathematical, physical, or logical
+problems.
+3. Focus on asking questions about factual information, important knowledge, or concrete details in
+the text.
+4. Write questions and answers using clear and concise language.
+5. Use plain text. Do not use Markdown.
+6. Each question and answer pair should be on a separate line. Tag the question with "Question:" and
+the answer with "Answer:".
+Text:
+{example}
+Task:
+After reading the above text, ask up to 8 questions and provide the correct answers following the
+instructions. Give your response in this format:
+Here are the questions and answers based on the provided text:
+- Question: [first question] Answer: [first answer]
+- Question: [second question] Answer: [second answer]
+....
+"""
+
+synthetic_dclm_diverse_qa = ExecutorStep(
+    name="documents/synthetic-dclm-subset-chunk-qa-1024-nemo-qa",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=dclm_data_chunked,
+        output_path=this_output_path(),
+        model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-3B-Instruct--0cb88a4",
+        model_type="vllm",
+        attribute_name="diverse_qa",
+        filetype="jsonl.zst",
+        batch_size=2048,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+        classifier_kwargs={
+            "template": DIVERSE_QA_PROMPT,
+            "score_extractor_fn": None,
+            "engine_kwargs": engine_kwargs,
+            "generation_kwargs": generation_kwargs,
+            "save_original_generation": True,
+        },
+    ),
+)
 
 if __name__ == "__main__":
-    executor_main([synthetic_dclm_wrapmed])
+    executor_main([synthetic_dclm_diverse_qa, synthetic_dclm_wrapmed])
