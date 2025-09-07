@@ -1582,6 +1582,33 @@ def plot_benchmark_results():
             color=param_str_color_dict[model.model_size],
         )
 
+    with open("experiments/data_efficiency/distill_benchmarks.json", "r") as f:
+        distill_benchmarks = json.load(f)
+
+    key_to_pretty_map = {
+        "distill-8ens": "8-Ensemble Distill",
+        "self-distill": "Self-Distill",
+    }
+
+    key_to_color_map = {
+        "distill-8ens": GOLD,
+        "self-distill": RED,
+    }
+
+    for k in ["self-distill", "distill-8ens"]:
+        v = distill_benchmarks[k]
+        v['avg_acc'] = np.mean([v[task]["acc"] for task in v])
+        plt.scatter(
+            0.3,
+            1.0 - v["avg_acc"],
+            color=key_to_color_map[k],
+            marker="*",
+            s=120,
+            zorder=6,
+            label=f"{key_to_pretty_map[k]}",
+        )
+
+
     plt.legend()
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
     plt.xscale("log")
