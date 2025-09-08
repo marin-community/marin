@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 This is @dlwh's "YOLO"/vibes run described in https://github.com/marin-community/marin/issues/600.
 
@@ -53,7 +67,7 @@ from marin.resources import TpuPodConfig
 # but we have learned that WSD with a long cooldown is superior. Once we switch to WSD,
 # we use the exponential moving average (EMA) of the model weights to get a better model.
 
-tootise_phase1_config = SimpleTrainConfig(
+tootsie_phase1_config = SimpleTrainConfig(
     resources=TpuPodConfig(tpu_type="v5litepod-256", slice_count=2),
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
@@ -75,7 +89,7 @@ llama_8b_tootsie_phase1 = dataclasses.replace(
         tokenized=dclm_mixture_config_llama3,
         # I am a dummy and use old rotary config
         model_config=llama_8b_old_rotary,
-        train_config=tootise_phase1_config,
+        train_config=tootsie_phase1_config,
         tags=["llama", "8b", "wsd-s", "exp600"],
     ),
     override_output_path="checkpoints/llama-8b-tootsie-0.001-19ad63",

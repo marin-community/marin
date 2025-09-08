@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 RL training experiment following marin patterns.
 """
@@ -16,6 +30,8 @@ from marin.training.training import (
     _add_run_env_variables,
     _check_for_wandb_key,
 )
+
+from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +52,10 @@ class RlTrainOnPodConfig:
     prefill_bsize: int = 16
     reference_logprobs_bsize: int = 256
     n_prompts_per_step: int = 16
-    log_freq: int = 8
+    log_freq: int = 10
     num_eval_examples: int = 1024
-    save_model_freq: int = 0
-    wandb_project: str = "math_rloo_math_test_experiments"
+    save_model_freq: int = 10
+    wandb_project: str = "marin_post_training"
 
     inference_param_dtype: str = "bf16"
     inference_activation_dtype: str = "bf16"
@@ -86,7 +102,7 @@ class RlTrainOnPodConfig:
     output_path: str | None = None
 
 
-@ray.remote(num_cpus=0.1)
+@remove_tpu_lockfile_on_exit
 def run_rl_training_on_pod(config: RlTrainOnPodConfig):
     """
     Run RL training on a Ray cluster, following marin's execution pattern.
@@ -120,7 +136,7 @@ def run_rl_training_on_pod(config: RlTrainOnPodConfig):
 
     hw_config = config.resources.with_env_vars(env)
 
-    @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1)
+    @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1, max_retries=10)
     def rl_train_task():
 
         training_kwargs = {
@@ -183,12 +199,12 @@ def run_rl_training_on_pod(config: RlTrainOnPodConfig):
 def default_rl_train(
     name: str,
     model_paths: dict[str, str],
-    tpu_type: str = "v5litepod-8",
+    tpu_type: str = "v4-64",
     train_bsize: int = 64,
     kl_coef: float = 1e-3,
     learning_rate: float = 5e-7,
     num_train_steps: int = 2048,
-    wandb_project: str = "math_rloo_math_test_experiments",
+    wandb_project: str = "marin_post_training",
     **kwargs,
 ) -> ExecutorStep:
     """
@@ -229,6 +245,7 @@ def default_rl_train(
         "online": True,
         "prefix": name,
         "prefix_to_id": True,
+        "experiment_id": name,
     }
 
     resources = TpuPodConfig(tpu_type=tpu_type)
@@ -266,14 +283,13 @@ def main():
 
     experiments = [
         default_rl_train(
-            name="llama3_8b_math_test_experiment",
+            name="all-math500-v4-64",
             model_paths=model_paths,
-            tpu_type="v5litepod-8",
+            tpu_type="v4-64",
             train_bsize=64,
             kl_coef=1e-3,
             learning_rate=5e-7,
             num_train_steps=2048,
-            wandb_project="math_rloo_math_test_experiments",
         ),
     ]
 

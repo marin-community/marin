@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # adapted from:
 # https://github.com/Sea-Snell/llama3_train/blob/fixed_fast_inference/llama3_even_faster_inference_clean_script.py
 import copy
@@ -427,8 +441,8 @@ class Sampler:
                 PS(self.replica_axis_name),
                 PS(self.replica_axis_name),
                 PS(self.replica_axis_name),
-                None,
-                None,
+                PS(),
+                PS(),
                 self.generation_state_sharding_rules,
             ),
             donate_argnums=(6,),
@@ -502,7 +516,7 @@ class Sampler:
             args_sharding_constraint=(
                 self.params_sharding_rules,
                 self.generation_state_sharding_rules,
-                None,
+                PS(),
             ),
             donate_argnums=(1,),
             annotation_shardings=self.intermediate_sharding_rules,
@@ -579,7 +593,7 @@ class Sampler:
             self.mesh.sjit,
             in_shardings=(self.generation_state_sharding_rules, PS(), PS(), PS()),
             out_shardings=self.generation_state_sharding_rules,
-            args_sharding_constraint=(self.generation_state_sharding_rules, None, None, None),
+            args_sharding_constraint=(self.generation_state_sharding_rules, PS(), PS(), PS()),
             donate_argnums=(0,),
         )
         def clear_indices_compiled(
@@ -609,9 +623,9 @@ class Sampler:
                 self.generation_state_sharding_rules,
                 PS(self.replica_axis_name),
                 PS(self.replica_axis_name),
-                None,
-                None,
-                None,
+                PS(),
+                PS(),
+                PS(),
             ),
             donate_argnums=(0,),
         )

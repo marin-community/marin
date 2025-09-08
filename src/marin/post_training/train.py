@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import copy
 import json
 import os
@@ -16,6 +30,7 @@ from optax import softmax_cross_entropy_with_integer_labels
 from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
+from pathlib import Path
 
 from .environments.marin_env import MarinEnv
 from .inference import GenerationConfig, batch_inference, build_sampler
@@ -52,14 +67,16 @@ class Trainer:
         mesh: MeshShardingHelper,
         models: dict[str, FlaxLLaMAForCausalLM],
         tokenizer: AutoTokenizer,
-        environment: MarinEnv,
+        train_environments: list[tuple[str, MarinEnv]],
+        test_environments: list[tuple[str, MarinEnv]],
         logger: WandbLogger,
     ):
         self.config = config
         self.mesh = mesh
         self.models = models
         self.tokenizer = tokenizer
-        self.environment = environment
+        self.train_environments = train_environments
+        self.test_environments = test_environments
         self.logger = logger
 
         # Extract frequently used config values
@@ -224,7 +241,7 @@ class Trainer:
             self.mesh.sjit,
             in_shardings=(self.train_params_sharding_rules, PS(), PS()),
             out_shardings=(self.train_params_sharding_rules, PS()),
-            args_sharding_constraint=(self.train_params_sharding_rules, None, PS(("replica", "fsdp"))),
+            args_sharding_constraint=(self.train_params_sharding_rules, PS(), PS(("replica", "fsdp"))),
             donate_argnums=(0,),
             annotation_shardings=self.train_intermediate_sharding_rules,
         )
@@ -276,27 +293,26 @@ class Trainer:
         """Evaluate model using environment."""
         inference_params = self.reshard_params(params)
 
-        # Get evaluation examples from environment
-        eval_examples = self.environment.get_eval_examples(self.config["num_eval_examples"])
-
-        # Generate samples for evaluation
-        samples = batch_inference(
-            self.test_sampler,
-            inference_params,
-            [example["prompt"] for example in eval_examples],
-            prng_key,
-            self.config["test_generation_config"]["n_generations"],
-            verbose=True,
-        )
-        del inference_params
-
-        # Compute rewards using environment's reward computation
-        _, metrics = self.environment._compute_rewards(eval_examples, samples)
-
-        # Rename metrics for evaluation
         eval_metrics = {}
-        for k, v in metrics.items():
-            eval_metrics[k.replace("train_", "test_")] = v
+        for env_name, environment in self.test_environments:
+            # Get evaluation examples from environment
+            eval_examples = environment.get_eval_examples(self.config["num_eval_examples"])
+            # Generate samples for evaluation
+            samples = batch_inference(
+                self.test_sampler,
+                inference_params,
+                [example["prompt"] for example in eval_examples],
+                prng_key,
+                self.config["test_generation_config"]["n_generations"],
+                verbose=True,
+            )
+            del inference_params
+
+            # Compute rewards using environment's reward computation
+            _, metrics = environment._compute_rewards(eval_examples, samples)
+
+            for k, v in metrics.items():
+                eval_metrics[k.replace("train_", f"test_{env_name}")] = v
         return eval_metrics
 
     def save_checkpoint(self, train_state, step):
@@ -347,7 +363,30 @@ class Trainer:
         )
 
         # Initialize training state
-        if "params" in self.config["model_paths"]:
+        latest_checkpoint_step = -1
+        if self.logger.can_save():
+            checkpoint_dir = os.path.join(self.logger.output_dir, "checkpoints")
+            if os.path.exists(checkpoint_dir):
+                checkpoint_steps = [int(d.split("_")[1]) for d in os.listdir(checkpoint_dir) if d.startswith("step_")]
+                if checkpoint_steps:
+                    latest_checkpoint_step = max(checkpoint_steps)
+
+        if latest_checkpoint_step > 0:
+            print(f"Resuming training from checkpoint at step {latest_checkpoint_step}...")
+            checkpoint_path = os.path.join(
+                self.logger.output_dir, "checkpoints", f"step_{latest_checkpoint_step}", "params.msgpack"
+            )
+            train_state = self.create_train_state_from_params(
+                load_checkpoint(
+                    checkpoint_path,
+                    shard_fns=self.train_state_shard_fns.params,
+                    remove_dict_prefix=self.config["model_paths"]["remove_dict_prefix"],
+                    convert_to_dtypes=jax.tree_util.tree_map(
+                        lambda x: self.config["training_param_dtype"], train_state_shape.params
+                    ),
+                )
+            )
+        elif "params" in self.config["model_paths"]:
             train_state = self.create_train_state_from_params(
                 load_checkpoint(
                     self.config["model_paths"]["params"],
@@ -380,12 +419,18 @@ class Trainer:
         # Training loop
         rng = jax.random.PRNGKey(0)
 
-        for step in tqdm(range(self.config["num_train_steps"]), total=self.config["num_train_steps"]):
+        for step in tqdm(
+            range(max(0, latest_checkpoint_step), self.config["num_train_steps"]), total=self.config["num_train_steps"]
+        ):
             rng, subrng = jax.random.split(rng)
 
+            idx = jax.random.randint(subrng, shape=(), minval=0, maxval=len(self.train_environments))
+            env_name, environment = self.train_environments[idx]
+
+            rng, subrng = jax.random.split(subrng)
             inference_params = self.reshard_params(train_state.params)
             rl_dataset, dataset_metrics = create_dataset_from_environment(
-                environment=self.environment,
+                environment=environment,
                 sampler=self.sampler,
                 params=inference_params,
                 reference_params=self.reference_params,
@@ -442,7 +487,8 @@ def main(
     num_eval_examples: int,
     save_model_freq: int,
     wandb_project: str,
-    environments_path: str = "environments.json",
+    train_environments_path: str = "environments_train.json",
+    test_environments_path: str = "environments_test.json",
     inference_param_dtype: str = "bf16",
     inference_activation_dtype: str = "bf16",
     training_param_dtype: str = "fp32",
@@ -598,7 +644,12 @@ def main(
             os.remove(model_paths["tokenizer"])
 
         # Initialize environment with tokenization parameters
-        environment = load_environments_from_config(environments_path, tokenizer)
+        train_environments = load_environments_from_config(
+            Path(__file__).resolve().parent / train_environments_path, tokenizer
+        )
+        test_environments = load_environments_from_config(
+            Path(__file__).resolve().parent / test_environments_path, tokenizer
+        )
 
         # Initialize logger
         if "enable" not in logger_config:
@@ -624,7 +675,7 @@ def main(
         }
 
         # Initialize and run trainer
-        trainer = Trainer(trainer_config, mesh, models, tokenizer, environment, logger)
+        trainer = Trainer(trainer_config, mesh, models, tokenizer, train_environments, test_environments, logger)
         trainer.train()
 
         jax_distributed_barrier()
