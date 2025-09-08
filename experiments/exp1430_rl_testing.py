@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import ray
 from levanter.infra.ray_tpu import run_on_pod_ray
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path
 from marin.post_training.inference_worker import InferenceWorker
 from marin.post_training.rollout_storage import FileRolloutReader, FileRolloutWriter
 from marin.post_training.train_worker import TrainingWorker
@@ -53,6 +53,21 @@ logger = logging.getLogger(__name__)
 WANDB_PROJECT = "async_rl_testing"
 ENVIRONMENT_SPEC = "olym_math:difficulty=hard"
 
+STOP_TOKENS = [
+    [524, 9399],
+    [694, 9399],
+    [4005, 9399],
+    [6199, 9399],
+    [8217, 9399],
+    [9169, 9399],
+    [12817, 9399],
+    [19203, 9399],
+    [20264, 9399],
+    [22246, 9399],
+    [27147, 9399],
+    [128001],
+]
+
 
 @dataclass(frozen=True)
 class RLTrainConfig:
@@ -62,7 +77,7 @@ class RLTrainConfig:
     inference_tpu_type: str
     train_tpu_type: str
     num_inference_workers: int = 1
-    num_train_workers: int = 1
+    num_train_slices: int = 1
 
 
 @ray.remote
@@ -124,16 +139,15 @@ def run_rl_training_on_pod(config: RLTrainConfig):
             worker.run()
 
     train_tasks = []
-    for _ in range(config.num_train_workers):
-        train_tasks.append(
-            run_on_pod_ray.remote(
-                train_worker_task,
-                config.train_tpu_type,
-                num_slices=1,
-                max_retries_failure=1,
-                max_retries_preemption=1,
-            )
+    train_tasks.append(
+        run_on_pod_ray.remote(
+            train_worker_task,
+            config.train_tpu_type,
+            num_slices=config.num_train_slices,
+            max_retries_failure=1,
+            max_retries_preemption=1,
         )
+    )
     inference_tasks = []
     for _ in range(config.num_inference_workers):
         inference_tasks.append(
@@ -200,41 +214,25 @@ def default_rl_train(
     generation_config = GenerationConfig(
         max_output_length=513,
         temperature=1.0,
-        stop_tokens=[
-            [524, 9399],
-            [694, 9399],
-            [4005, 9399],
-            [6199, 9399],
-            [8217, 9399],
-            [9169, 9399],
-            [12817, 9399],
-            [19203, 9399],
-            [20264, 9399],
-            [22246, 9399],
-            [27147, 9399],
-            [128001],
-        ],
+        stop_tokens=STOP_TOKENS,
         n_generations=8,
     )
 
     test_generation_config = GenerationConfig(
         max_output_length=513,
         temperature=0.0,
-        stop_tokens=[
-            [524, 9399],
-            [694, 9399],
-            [4005, 9399],
-            [6199, 9399],
-            [8217, 9399],
-            [9169, 9399],
-            [12817, 9399],
-            [19203, 9399],
-            [20264, 9399],
-            [22246, 9399],
-            [27147, 9399],
-            [128001],
-        ],
+        stop_tokens=STOP_TOKENS,
         n_generations=1,
+    )
+
+    model_config_override = ModelOverrideConfig(
+        bos_token_id=128000,
+        eos_token_id=128001,
+        pad_token_id=128002,
+        max_sequence_length=2048,
+        remat_block="nothing_saveable",
+        resid_pdrop=0.0,
+        embd_pdrop=0.0,
     )
 
     model_config_override = ModelOverrideConfig(
@@ -326,9 +324,9 @@ def main():
     """Main function to run RL training experiments."""
 
     model_paths = {
-        "params": "gs://marin-us-central2/checkpoints/Llama-3.1-8B-Instruct-converted/params.msgpack",
+        "params": InputName.hardcoded("checkpoints/Llama-3.1-8B-Instruct-converted/params.msgpack"),
         "tokenizer": "meta-llama/Meta-Llama-3-8B-Instruct",
-        "config": "gs://marin-us-central2/checkpoints/Llama-3.1-8B-Instruct-converted/config.json",
+        "config": InputName.hardcoded("checkpoints/Llama-3.1-8B-Instruct-converted/config.json"),
     }
 
     experiments = [

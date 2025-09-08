@@ -335,6 +335,7 @@ class TrainingWorker:
             len(self.checkpoint_queue) >= self.training_config.logging.max_checkpoints
         ):
             old_step = self.checkpoint_queue.popleft()
+            # TODO(power): this is an ugly way to check for the coordinator
             if self.logger.can_save():
                 old_path = os.path.join(self.training_config.output_dir, "checkpoints", f"step_{old_step}")
                 delete_with_bucket(old_path, recursive=True)

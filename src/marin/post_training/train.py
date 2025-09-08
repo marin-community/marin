@@ -447,7 +447,7 @@ class Trainer:
                 params=inference_params,
                 reference_params=self.reference_params,
                 get_logprobs_fn=self.get_logprobs,
-                # RP: I don't know why this configuration goes here, but it does.
+                # n_prompts_per_step is the number of examples to sample from
                 n_examples=self.config.hyperparameters.n_prompts_per_step,
                 n_generations=self.config.generation_config.n_generations,
                 prng_key=subrng,

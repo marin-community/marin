@@ -16,7 +16,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import jax
 import pytest
 
 try:
@@ -145,11 +144,6 @@ def training_config():
 
 def test_training_end_to_end(training_config):
     """Test end-to-end training with 1 step including inference and training."""
-
-    # Ensure we're on CPU for testing (avoids TPU setup)
-    if jax.devices()[0].device_kind != "cpu":
-        pytest.skip("Test requires CPU device")
-
     with unittest.mock.patch("marin.post_training.train.load_tokenizer") as mock_load:
         mock_load.return_value = DummyTokenizer(
             vocab_size=1000, pad_token_id=training_config.hyperparameters.pad_token_id

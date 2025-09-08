@@ -33,6 +33,7 @@ from marin.post_training.training_config import (
     ModelOverrideConfig,
     ModelPathsConfig,
     OptimizerConfig,
+    TokenizerOverrideConfig,
     TrainingConfig,
     TrainingHyperparameters,
 )
@@ -225,7 +226,7 @@ def default_rl_train(
             training_param_dtype="fp32",
             training_activation_dtype="bf16",
             model_config_override=model_config_override,
-            tokenizer_override={},
+            tokenizer_override=TokenizerOverrideConfig(),
             train_attention_kernel_config='splash:{"block_size": 256}',
             prefill_attention_kernel_config='splash:{"block_size": 256}',
             generate_attention_kernel_config=(

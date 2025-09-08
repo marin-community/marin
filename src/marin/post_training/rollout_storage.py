@@ -28,7 +28,6 @@ This include:
 * metadata: Additional metadata about the rollout.
 """
 
-import json
 import logging
 import pickle
 import socket
@@ -82,15 +81,6 @@ class RolloutWriter(ABC):
 
         Args:
             batch: RolloutBatch to write.
-        """
-        pass
-
-    @abstractmethod
-    def write_metadata(self, metadata: dict[str, Any]) -> None:
-        """Write metadata about the rollout generation.
-
-        Args:
-            metadata: Dictionary of metadata to write.
         """
         pass
 
@@ -214,20 +204,6 @@ class FileRolloutWriter(RolloutWriter):
         self._batch_counter += 1
         return
 
-    def write_metadata(self, metadata: dict[str, Any]) -> None:
-        """Write metadata about the rollout generation."""
-        metadata_path = f"{self.path}/metadata.json"
-
-        metadata = {
-            **metadata,
-            "last_updated": time.time(),
-        }
-
-        with self.fs.open(metadata_path, "w") as f:
-            json.dump(metadata, f, indent=2)
-
-        logger.debug(f"Updated metadata at {metadata_path}")
-
     def clear_queue(self) -> None:
         """Clear all batches from the queue (for testing/debugging)."""
         pattern = f"{self.path}/*"
@@ -299,10 +275,6 @@ class InMemoryRolloutWriter(RolloutWriter):
     def write_batch(self, batch: RolloutBatch) -> None:
         """Write batch to memory queue."""
         self._queue._queue.append(batch)
-
-    def write_metadata(self, metadata: dict[str, Any]) -> None:
-        """Write metadata (stored in memory for testing)."""
-        self._metadata.update(metadata)
 
     def get_metadata(self) -> dict[str, Any]:
         """Get stored metadata."""

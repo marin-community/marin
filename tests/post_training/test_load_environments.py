@@ -20,6 +20,7 @@ try:
 except ImportError:
     pytest.skip("Post training dependencies not available in CI.", allow_module_level=True)
 
+
 def test_load_environment_from_spec():
     env = load_environment_from_spec("olym_math:difficulty=hard", tokenizer=None)
     assert isinstance(env, OlymMathEnv), "Loaded environment should be an instance of OlymMathEnv"
