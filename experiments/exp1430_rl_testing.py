@@ -24,9 +24,6 @@ import ray
 from levanter.infra.ray_tpu import run_on_pod_ray
 
 from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path
-from marin.post_training.inference_worker import InferenceWorker
-from marin.post_training.rollout_storage import FileRolloutReader, FileRolloutWriter
-from marin.post_training.train_worker import TrainingWorker
 from marin.post_training.training_config import (
     CheckpointerConfigData,
     DistributedConfig,
@@ -87,6 +84,10 @@ def run_rl_training_on_pod(config: RLTrainConfig):
 
     This function launches both workers that communicate through a shared rollout queue.
     """
+    from marin.post_training.inference_worker import InferenceWorker
+    from marin.post_training.rollout_storage import FileRolloutReader, FileRolloutWriter
+    from marin.post_training.train_worker import TrainingWorker
+
     rollout_queue_path = config.training_config.output_dir + "/rollout_queue"
     checkpoint_dir = config.training_config.output_dir + "/checkpoints"
 
