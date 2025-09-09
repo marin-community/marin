@@ -27,7 +27,6 @@ apt-get update -q \
     vim \
     wget \
     tmux \
-    redis-server \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

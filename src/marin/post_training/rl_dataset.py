@@ -386,7 +386,7 @@ def create_dataset_from_environment(
     max_output_length: int,
     pad_token_id: int,
     tokenizer: AutoTokenizer,
-    generation_config: dict[str, Any],
+    n_generations: int,
     mode: str = "train",
 ) -> tuple["RLDataset", dict[str, float]]:
     """Create RLDataset by stepping through the environment.
@@ -404,7 +404,6 @@ def create_dataset_from_environment(
         max_output_length: Maximum output sequence length
         pad_token_id: ID of the padding token
         tokenizer: Tokenizer for processing text
-        generation_config: Configuration for generation
         mode: Mode for environment stepping ("train" or "eval")
 
     Returns:
@@ -417,7 +416,7 @@ def create_dataset_from_environment(
         n_examples=n_examples,
         prng_key=prng_key,
         mode=mode,
-        n_generations=generation_config["n_generations"],
+        n_generations=n_generations,
     )
 
     # Create dataset from environment step
