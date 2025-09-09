@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+from os import PathLike
 from typing import Any
 
 from transformers import AutoTokenizer
@@ -20,26 +21,35 @@ from transformers import AutoTokenizer
 from .environments.aqua_rat_env import AquaRatEnv
 from .environments.marin_env import MarinEnv
 from .environments.math_env import MathEnv
+from .environments.mock_env import MockEnv
 from .environments.numina_math_env import NuminaMathEnv
 from .environments.olym_math_env import OlymMathEnv
 from .environments.olympiad_bench_env import OlympiadBenchEnv
 from .environments.open_math_reasoning_env import OpenMathReasoningEnv
 from .environments.orz_env import ORZEnv
 from .environments.svamp_env import SVAMPEnv
-from .environments.swe_bench_env import SWEBenchEnv
+
+try:
+    from .environments.swe_bench_env import SWEBenchEnv
+except ImportError:
+    # not available on mac, ignore for testing.
+    SWEBenchEnv = None  # type: ignore
 
 # Specify environments here
 ENVIRONMENT_NAME_TO_CLASS = {
     "aqua_rat": AquaRatEnv,
     "math": MathEnv,
+    "mock": MockEnv,
     "numina_math": NuminaMathEnv,
     "olym_math": OlymMathEnv,
     "olympiad_bench": OlympiadBenchEnv,
     "open_math_reasoning": OpenMathReasoningEnv,
     "orz": ORZEnv,
     "svamp": SVAMPEnv,
-    "swe_bench": SWEBenchEnv,
 }
+
+if SWEBenchEnv is not None:
+    ENVIRONMENT_NAME_TO_CLASS["swe_bench"] = SWEBenchEnv
 
 
 def str_to_val(v: str) -> Any:
@@ -76,7 +86,7 @@ def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer) -> MarinEnv:
     return env_cls(tokenizer=tokenizer, **kwargs)
 
 
-def load_environments_from_config(json_path: str, tokenizer: AutoTokenizer) -> list[tuple[str, MarinEnv]]:
+def load_environments_from_config(json_path: PathLike, tokenizer: AutoTokenizer) -> list[tuple[str, MarinEnv]]:
     """
     Load environment entries from a JSON config file.
 
