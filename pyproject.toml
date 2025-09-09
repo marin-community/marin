@@ -259,17 +259,12 @@ post_training = [
     "gcsfs",
     "transformers",
     "flax==0.10.0",
-    "sentencepiece>=0.1.99",
-    "wget==3.2",
-    "jaxtyping",                                          #==0.2.23",
+    "jaxtyping",
     "tyro==0.8.11",
     "tqdm",
     "wandb",
     "einops",
     "ringattention==0.1.2",
-    "redis==4.3.4",
-    "Flask==3.0.3",
-    "flask-cors==5.0.0",
     "sympy",
     "pylatexenc",
     "ipython",
@@ -324,3 +319,7 @@ package-dir = "src"
 
 [tool.pytest.ini_options]
 timeout = 300
+filterwarnings = ["ignore::DeprecationWarning"]
+log_format = "%(asctime)s %(levelname)s %(message)s"
+log_date_format = "%Y-%m-%d %H:%M:%S"
+log_cli_level = "INFO"
