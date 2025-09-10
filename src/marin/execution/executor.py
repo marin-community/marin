@@ -626,6 +626,7 @@ class Executor:
                 status_path = get_status_path(self.output_paths[finished_step])
                 ran = running[finished_step][1]
                 try:
+                    logger.info(f"Waiting for {ref} to finish for step {finished_step.name}")
                     ray.get(ref)
                 except Exception:
                     message = traceback.format_exc()

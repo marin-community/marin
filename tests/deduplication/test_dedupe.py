@@ -64,29 +64,6 @@ def sample_documents():
     ]
 
 
-def current_runtime_env_with_additional_pip_packages(pip_packages):
-    # Get the current runtime environment
-    current_runtime_env = ray.get_runtime_context().runtime_env or {}
-
-    # Get the current pip packages
-    current_pip_packages = []
-    if current_runtime_env.get("pip"):
-        if isinstance(current_runtime_env["pip"], dict):
-            current_pip_packages = current_runtime_env["pip"].get("packages", [])
-        else:
-            current_pip_packages = current_runtime_env["pip"]
-
-    all_packages = current_pip_packages + [str(package) for package in pip_packages]
-
-    return {"pip": all_packages}
-
-
-@ray.remote
-def _run_dedupe(dedupe_config):
-    remote_func = dedupe_with_config_resources(dedupe_config)
-    ray.get(remote_func.remote(dedupe_config))
-
-
 # @pytest.mark.skip("Seems broken locally, and I dont' want to copy files all the time.")
 def test_exact_deduplication_paragraph(ray_tpu_cluster, sample_documents):
     output_file_path = os.path.join(BASE_INPUT_DIR, "deduplication", "test_docs.jsonl.gz")
@@ -112,7 +89,8 @@ def test_exact_deduplication_paragraph(ray_tpu_cluster, sample_documents):
         memory=2 * 1024 * 1024 * 1024,
     )
 
-    ray.get(_run_dedupe.remote(dedupe_config))
+    remote_func = dedupe_with_config_resources(dedupe_config)
+    ray.get(remote_func.remote(dedupe_config))
 
     attribute_file_path = os.path.join(BASE_ATTRIBUTE_OUTPUT_DIR, "deduplication", "test_docs.jsonl.gz")
     with fsspec.open(attribute_file_path, "r", compression="gzip") as f:

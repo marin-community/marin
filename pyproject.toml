@@ -15,7 +15,6 @@ dependencies = [
     "cryptography>=45",
     "datasets",
     "deepdiff",
-    "dolma @ git+https://github.com/marin-community/dolma",
     "draccus>=0.11.5",
     "fasteners>=0.19",
     "gcsfs",
@@ -79,7 +78,6 @@ docs = [
 math = ["pylatexenc", "sympy"]
 
 metrics = ["google-cloud-logging"]
-
 
 transform_test_deps = [
     "trafilatura>=2.0",
@@ -321,7 +319,6 @@ packages = ["src/marin", "experiments"]
 
 [tool.hatch.build.targets.sdist]
 packages = ["src/marin", "experiments"]
-
 
 [tool.pytest.ini_options]
 timeout = 300

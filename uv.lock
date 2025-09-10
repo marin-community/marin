@@ -4236,6 +4236,7 @@ requires-dist = [
     { name = "datatrove", extras = ["processing"], marker = "extra == 'crawl'", git = "https://github.com/nelson-liu/datatrove?rev=ray_executor_dedup_logging" },
     { name = "deepdiff" },
 <<<<<<< HEAD
+<<<<<<< HEAD
     { name = "dolma", marker = "extra == 'deduplication'", git = "https://github.com/marin-community/dolma" },
     { name = "dolma", marker = "extra == 'quality-dedup-consolidate'", git = "https://github.com/marin-community/dolma" },
     { name = "dolma", marker = "extra == 'tokenize-train'", git = "https://github.com/marin-community/dolma" },
@@ -4243,6 +4244,11 @@ requires-dist = [
     { name = "dolma", git = "https://github.com/marin-community/dolma" },
 =======
     { name = "dolma", git = "https://github.com/marin-community/dolma" },
+||||||| parent of 929063e8 (Factor out dolma dependency.)
+    { name = "dolma", git = "https://github.com/marin-community/dolma" },
+=======
+    { name = "dolma", marker = "extra == 'deduplication'", git = "https://github.com/marin-community/dolma" },
+>>>>>>> 929063e8 (Factor out dolma dependency.)
     { name = "dolma", marker = "extra == 'tokenize-train'", git = "https://github.com/marin-community/dolma" },
 >>>>>>> bdf66678 (Unify runtime environment dependency management for Ray.)
     { name = "draccus", specifier = ">=0.11.5" },

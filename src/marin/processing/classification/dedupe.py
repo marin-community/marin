@@ -1004,6 +1004,7 @@ def dedupe_with_config_resources(config: DedupeConfig):
     remote_options = {
         "num_cpus": config.num_cpus,
         "memory": config.memory,
+        # "runtime_env": build_runtime_env_for_packages(extra=["deduplication"]),
     }
 
     if config.resources is not None:

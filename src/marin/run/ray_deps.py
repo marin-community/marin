@@ -23,13 +23,18 @@ from ray.runtime_env import RuntimeEnv
 
 logger = logging.getLogger(__name__)
 
-# Always include the "tpu" extra to ensure we get libtpu & disable nvidia libs.
-DEFAULT_EXTRAS = ["tpu"]
-
 
 def extra_flags(extra: list[str] | None = None) -> list[str]:
+    # always include either the cpu or tpu extra
+    if "tpu" in extra:
+        extra = list(set(extra) - {"cpu"})
+    else:
+        extra = extra or []
+        if "cpu" not in extra:
+            extra.append("cpu")
+
     extra = extra or []
-    extra = list(set(extra + DEFAULT_EXTRAS))
+    extra = list(set(extra))
     cmd = []
     for ex in extra:
         if ex.strip():
@@ -45,8 +50,6 @@ class PackageSpec:
 
 def compute_frozen_packages(extra: list[str] | None = None) -> PackageSpec:
     cmd = ["uv", "export", "--no-annotate", "--no-hashes", "--prune=ray", *extra_flags(extra)]
-    print("Running command:", " ".join(cmd))
-
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
 
     # Parse the requirements.txt format output
