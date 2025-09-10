@@ -13,10 +13,11 @@
 # limitations under the License.
 
 """
-Specifies a sequence of Llama 3 models from small to large.
+Specifies a sequence of Qwen 3 models from small to large.
 """
 
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+import dataclasses
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig, DefaultRotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
 
 # same as olmo 32b
@@ -29,3 +30,27 @@ qwen3_32b = Qwen3Config(
     num_layers=64,
     rope=Llama3RotaryEmbeddingsConfig(),
 )
+
+# match https://huggingface.co/Qwen/Qwen3-0.6B/blob/main/config.json
+qwen3_06b = Qwen3Config(
+    seq_len=4096,  # speedrun-friendly; HF uses 40960
+    hidden_dim=1024,
+    intermediate_dim=3072,
+    num_layers=28,
+    num_heads=16,
+    num_kv_heads=8,
+    head_dim=128,  # override otherwise 1024 // 16
+    rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000.0),
+    tie_word_embeddings=True,
+    layer_norm_epsilon=1e-6,
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class Qwen3NoQKNormConfig(Qwen3Config):
+    def attention_config(self):
+        cfg = super().attention_config()
+        return dataclasses.replace(cfg, qk_norm=None)
+
+
+qwen3_06b_no_qk_norm = Qwen3NoQKNormConfig(**dataclasses.asdict(qwen3_06b))
