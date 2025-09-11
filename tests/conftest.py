@@ -81,6 +81,23 @@ def current_date_time():
 
 @pytest.fixture(scope="session")
 def ray_tpu_cluster(tmp_path_factory, worker_id):
+    if os.getenv("PYTEST_XDIST_WORKER_COUNT") is None or "1":
+        # Single worker, start Ray locally
+        if os.getenv("START_RAY_TPU_CLUSTER") == "true":
+            ray.init(
+                namespace="marin",
+                resources={"TPU": 8, "TPU-v6e-8-head": 1, "head_node": 1},
+                num_cpus=120,
+                ignore_reinit_error=True,
+            )
+        elif os.getenv("START_RAY_CPU_CLUSTER") == "true":
+            ray.init(namespace="marin", num_cpus=8, resources={"head_node": 1}, ignore_reinit_error=True)
+        else:
+            ray.init(namespace="marin", num_cpus=8, resources={"head_node": 1}, ignore_reinit_error=True)
+        yield
+        ray.shutdown()
+        return
+
     root_tmp_dir = tmp_path_factory.getbasetemp().parent
     config_file = Path(root_tmp_dir) / "ray_cluster_config.json"
     lock_file = Path(root_tmp_dir) / "ray_cluster_config.lock"

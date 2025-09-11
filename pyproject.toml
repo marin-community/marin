@@ -40,7 +40,6 @@ dependencies = [
     "wandb<=0.19.9",
     "openai",
     "fasteners>=0.19",
-    "dolma @ git+https://github.com/marin-community/dolma",
 ]
 
 [dependency-groups]
@@ -164,6 +163,9 @@ url = "https://download.pytorch.org/whl/torch_stable.html"
 
 [project.optional-dependencies]
 
+deduplication = [
+    "dolma @ git+https://github.com/marin-community/dolma",
+]
 
 gcp = [
     "google-api-python-client>=2.175.0", # ray GCP workaround
@@ -242,6 +244,7 @@ quality_dedup_consolidate = [
     "nltk>=3.8.1",
     "cattrs==24.1.3",
     "fsspec>=2025.3.0",
+    "dolma @ git+https://github.com/marin-community/dolma",
 ]
 
 tokenize_train = [
@@ -252,6 +255,7 @@ tokenize_train = [
     "tblib",
     "sentencepiece",
     "tiktoken",
+    "dolma @ git+https://github.com/marin-community/dolma",
 ]
 
 

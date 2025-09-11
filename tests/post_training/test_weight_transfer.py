@@ -113,9 +113,7 @@ def create_test_weight_transfer_pair(weight_transfer_config, params_structure=No
 
         from marin.post_training.utils import load_checkpoint
 
-        client = create_weight_transfer_client(
-            config=weight_transfer_config, load_checkpoint_fn=load_checkpoint
-        )
+        client = create_weight_transfer_client(config=weight_transfer_config, load_checkpoint_fn=load_checkpoint)
     else:
         # Ray remoting mode
         server = create_weight_transfer_server(config=weight_transfer_config)
@@ -211,9 +209,7 @@ def test_ray_coordinator_no_weights_initially(ray_cluster):
 
 def test_basic_weight_transfer(ray_cluster, weight_transfer_config, sample_params):
     """Test basic weight transfer from server to client."""
-    server, client = create_test_weight_transfer_pair(
-        weight_transfer_config, params_structure=sample_params
-    )
+    server, client = create_test_weight_transfer_pair(weight_transfer_config, params_structure=sample_params)
 
     # Serve weights
     server.serve_weights(1, sample_params)
@@ -243,9 +239,7 @@ def test_basic_weight_transfer(ray_cluster, weight_transfer_config, sample_param
                 rtol=1e-2,
             )
         else:
-            np.testing.assert_array_equal(
-                received_params["embedding"]["weight"], sample_params["embedding"]["weight"]
-            )
+            np.testing.assert_array_equal(received_params["embedding"]["weight"], sample_params["embedding"]["weight"])
     finally:
         server.cleanup()
         client.cleanup()
@@ -253,9 +247,7 @@ def test_basic_weight_transfer(ray_cluster, weight_transfer_config, sample_param
 
 def test_multiple_weight_updates(ray_cluster, weight_transfer_config, sample_params):
     """Test multiple sequential weight updates."""
-    server, client = create_test_weight_transfer_pair(
-        weight_transfer_config, params_structure=sample_params
-    )
+    server, client = create_test_weight_transfer_pair(weight_transfer_config, params_structure=sample_params)
 
     # First weight transfer
     server.serve_weights(1, sample_params)
@@ -283,9 +275,7 @@ def test_multiple_weight_updates(ray_cluster, weight_transfer_config, sample_par
 
 def test_client_no_new_weights(ray_cluster, weight_transfer_config, sample_params):
     """Test client behavior when no new weights are available."""
-    server, client = create_test_weight_transfer_pair(
-        weight_transfer_config, params_structure=sample_params
-    )
+    server, client = create_test_weight_transfer_pair(weight_transfer_config, params_structure=sample_params)
 
     # Serve weights
     server.serve_weights(1, sample_params)
@@ -309,14 +299,10 @@ def test_concurrent_clients(ray_cluster, weight_transfer_config, sample_params):
     """Test multiple clients receiving weights concurrently (Ray remoting only)."""
 
     # Create server and first client
-    server, client_1 = create_test_weight_transfer_pair(
-        weight_transfer_config, params_structure=sample_params
-    )
+    server, client_1 = create_test_weight_transfer_pair(weight_transfer_config, params_structure=sample_params)
 
     # Create second client with same config
-    _, client_2 = create_test_weight_transfer_pair(
-        weight_transfer_config, params_structure=sample_params
-    )
+    _, client_2 = create_test_weight_transfer_pair(weight_transfer_config, params_structure=sample_params)
 
     try:
         # Serve weights
@@ -385,9 +371,7 @@ def test_jax_numpy_conversion(ray_cluster, weight_transfer_config):
         "bias": jnp.array([0.1, 0.2]),
     }
 
-    server, client = create_test_weight_transfer_pair(
-        weight_transfer_config, params_structure=jax_params
-    )
+    server, client = create_test_weight_transfer_pair(weight_transfer_config, params_structure=jax_params)
 
     try:
         # Transfer weights
@@ -413,9 +397,7 @@ def test_jax_numpy_conversion(ray_cluster, weight_transfer_config):
 
 def test_cleanup(ray_cluster, weight_transfer_config, sample_params):
     """Test proper cleanup of server and client resources."""
-    server, client = create_test_weight_transfer_pair(
-        weight_transfer_config, params_structure=sample_params
-    )
+    server, client = create_test_weight_transfer_pair(weight_transfer_config, params_structure=sample_params)
 
     # Do a basic transfer
     server.serve_weights(1, sample_params)
