@@ -48,7 +48,7 @@ initialization_commands:
   # socket. This isn't the best security practice, but it's the easiest way to get this working.
   - sudo chmod 666 /var/run/docker.sock
 
-setup_commands:
+head_setup_commands:
   # set the GCP project because it's not injected by default
   - gcloud config set project hai-gcp-models
   - gcloud config set compute/region {{REGION}}
@@ -67,9 +67,15 @@ setup_commands:
   - gcsfuse --implicit-dirs --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
   - mkdir -p /home/ray/.ssh && gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > /home/ray/.ssh/authorized_keys && chmod 600 /home/ray/.ssh/authorized_keys
   - gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
+  - nohup python -m src.marin.run.clean_ray_temp > /tmp/clean_ray_temp.log 2>&1 &
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
+
+worker_start_ray_commands:
+  - ray stop
+  - export HEAD_IP=$(gcloud compute instances list --filter="labels.ray-node-type=head AND labels.ray-cluster-name={{NAME}}" --zones={{ZONE}} --format="get(networkInterfaces[0].networkIP)")
+  - ray start --address=$HEAD_IP:6379
 
 
 # List of Available Node Types

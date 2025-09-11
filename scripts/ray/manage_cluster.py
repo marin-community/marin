@@ -1,31 +1,24 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """
-This script is used to download the working directories and commands for all running ray jobs, so that we can restart
-them after a cluster restart. Variables like `LOCAL_PATH` and `DASHBOARD_PORT` can be modified as needed.
-Typical workflow:
-1. python scripts/ray/cluster_restart.py --config infra/marin-us-central2.yaml --stage before
+This script provides a centralized entry point for managing Ray clusters.
+It simplifies the process of starting, stopping, and restarting clusters,
+and it includes functionality to automatically back up and restore jobs
+across cluster restarts.
+
+Usage:
+  python -m scripts.ray.manage_cluster start --config <path_to_config>
+  python -m scripts.ray.manage_cluster stop --config <path_to_config>
+  python -m scripts.ray.manage_cluster restart --config <path_to_config>
+  python -m scripts.ray.manage_cluster status --config <path_to_config>
 """
 
 import argparse
 import json
 import logging
 import os
+import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any
 
 import requests
 
@@ -56,7 +49,7 @@ def start_ray_dashboard(cluster_config: str, port: int = DASHBOARD_PORT) -> subp
     return dashboard_process
 
 
-def fetch_jobs(port: int = DASHBOARD_PORT) -> List[Any]:
+def fetch_jobs(port: int = DASHBOARD_PORT) -> list[Any]:
     """
     Fetch the list of jobs using the Ray Jobs API.
 
@@ -101,7 +94,7 @@ def download_working_directory(
     return dest_dir
 
 
-def save_runtime_env_entrypoint(job_details: Dict[str, Any], job_id: str, local_path: str) -> Dict[str, Any]:
+def save_runtime_env_entrypoint(job_details: dict[str, Any], job_id: str, local_path: str) -> dict[str, Any]:
     """
     Save the runtime environment and entrypoint for the job.
 
@@ -125,7 +118,7 @@ def save_runtime_env_entrypoint(job_details: Dict[str, Any], job_id: str, local_
 
 
 def resubmit_job(
-    job_id: str, entrypoint: str, working_dir: str, runtime_env: Optional[Dict[str, Any]], raise_errors: bool
+    job_id: str, entrypoint: str, working_dir: str, runtime_env: dict[str, Any] | None, raise_errors: bool
 ) -> None:
     """
     Resubmit the job using the working directory and runtime environment.
@@ -154,7 +147,7 @@ def resubmit_job(
             raise ValueError(f"Failed to resubmit job {job_id}")
 
 
-def before_cluster_restart(cluster_config: str, local_path: str, raise_errors: bool) -> None:
+def backup_jobs(cluster_config: str, local_path: str, raise_errors: bool) -> None:
     """
     Perform the 'before' stage actions: download job data.
 
@@ -164,6 +157,12 @@ def before_cluster_restart(cluster_config: str, local_path: str, raise_errors: b
         raise_errors (bool): Raise errors instead of just logging them.
     """
     logger.info("Fetching jobs from Ray Jobs API...")
+    # Clear the backup directory if it exists
+    backup_dir = Path(local_path)
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir)
+    backup_dir.mkdir(parents=True)
+
     jobs_data = fetch_jobs()
     if not jobs_data:
         logger.info("No jobs found.")
@@ -191,7 +190,7 @@ def before_cluster_restart(cluster_config: str, local_path: str, raise_errors: b
     logger.info("All jobs backed up.")
 
 
-def restart_jobs_after_restart(local_path: str, raise_errors: bool) -> None:
+def restore_jobs(local_path: str, raise_errors: bool) -> None:
     """
     Perform the 'after' stage actions: resubmit jobs.
 
@@ -203,60 +202,107 @@ def restart_jobs_after_restart(local_path: str, raise_errors: bool) -> None:
         logger.error("No backup data found. Run the script with `--stage before` first.")
         return
 
-    for job_id_dir in backup_dir.iterdir():
-        if not job_id_dir.is_dir():
-            continue
+    try:
+        for job_id_dir in backup_dir.iterdir():
+            if not job_id_dir.is_dir():
+                continue
 
-        files = list(job_id_dir.iterdir())
-        if len(files) != 2:
-            logger.warning(f"Incomplete backup for job {job_id_dir.name}. Skipping.")
-            continue
-        working_dir = next((f for f in files if f.is_dir()), None)
-        runtime_env_file = job_id_dir / "runtime_env.json"
+            files = list(job_id_dir.iterdir())
+            if len(files) != 2:
+                logger.warning(f"Incomplete backup for job {job_id_dir.name}. Skipping.")
+                continue
+            working_dir = next((f for f in files if f.is_dir()), None)
+            runtime_env_file = job_id_dir / "runtime_env.json"
 
-        if not working_dir or not runtime_env_file.exists():
-            logger.warning(f"Incomplete backup for job {job_id_dir.name}. Skipping.")
-            continue
+            if not working_dir or not runtime_env_file.exists():
+                logger.warning(f"Incomplete backup for job {job_id_dir.name}. Skipping.")
+                continue
 
-        with open(runtime_env_file, "r") as f:
-            runtime_env = json.load(f)
+            with open(runtime_env_file, "r") as f:
+                runtime_env = json.load(f)
 
-        entrypoint = runtime_env.pop("entrypoint", None)
-        if not entrypoint:
-            logger.error(f"No entrypoint found for job {job_id_dir.name}. Skipping.")
-            if raise_errors:
-                raise ValueError(f"No entrypoint found for job {job_id_dir.name}.")
-            continue
+            entrypoint = runtime_env.pop("entrypoint", None)
+            if not entrypoint:
+                logger.error(f"No entrypoint found for job {job_id_dir.name}. Skipping.")
+                if raise_errors:
+                    raise ValueError(f"No entrypoint found for job {job_id_dir.name}.")
+                continue
 
-        resubmit_job(job_id_dir.name, entrypoint, str(working_dir), runtime_env, raise_errors)
+            resubmit_job(job_id_dir.name, entrypoint, str(working_dir), runtime_env, raise_errors)
 
-    logger.info("All jobs resubmitted.")
+        logger.info("All jobs resubmitted.")
+    finally:
+        logger.info("Cleaning up backup directory...")
+        shutil.rmtree(backup_dir)
+
+
+def manage_cluster(args: argparse.Namespace) -> None:
+    """
+    Manage the cluster based on the given arguments.
+    """
+    if args.command == "start":
+        logger.info(f"Starting cluster with config {args.config}...")
+        subprocess.run(["ray", "up", "-y", args.config], check=True)
+        dashboard_process = start_ray_dashboard(args.config)
+        try:
+            restore_jobs(args.local_path, args.raise_errors)
+        finally:
+            logger.info("Terminating Ray Dashboard process...")
+            dashboard_process.terminate()
+            dashboard_process.wait()
+            logger.info("Ray Dashboard process terminated.")
+    elif args.command == "stop":
+        logger.info(f"Stopping cluster with config {args.config}...")
+        subprocess.run(["ray", "down", "-y", args.config], check=True)
+    elif args.command == "restart":
+        logger.info("Backing up jobs before restart...")
+        dashboard_process = start_ray_dashboard(args.config)
+        try:
+            backup_jobs(args.config, args.local_path, args.raise_errors)
+        finally:
+            logger.info("Terminating Ray Dashboard process...")
+            dashboard_process.terminate()
+            dashboard_process.wait()
+            logger.info("Ray Dashboard process terminated.")
+
+        logger.info(f"Restarting cluster with config {args.config}...")
+        # Restart the entire cluster
+        subprocess.run(["ray", "down", "-y", args.config], check=True)
+        subprocess.run(["ray", "up", "-y", "--no-config-cache", args.config], check=True)
+
+        logger.info("Restoring jobs after restart...")
+        restore_jobs(args.local_path, args.raise_errors)
+    elif args.command == "status":
+        logger.info(f"Getting status of cluster with config {args.config}...")
+        subprocess.run(["ray", "status", "--config", args.config], check=True)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Manage Ray jobs around cluster restarts.")
-    parser.add_argument("--config", required=True, help="Path to the Ray cluster configuration file.")
-    parser.add_argument("--local-path", default=LOCAL_PATH, help="Local path to store job data.")
-    parser.add_argument("--raise-errors", action="store_true", help="Raise errors instead of " "just logging them.")
-    parser.add_argument("--stage", required=True, choices=["before", "after"], help="Specify the stage.")
+    parser = argparse.ArgumentParser(description="Manage Ray clusters.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # Start command
+    parser_start = subparsers.add_parser("start", help="Start the Ray cluster.")
+    parser_start.add_argument("--config", required=True, help="Path to the Ray cluster configuration file.")
+    parser_start.add_argument("--local-path", default=LOCAL_PATH, help="Local path to restore job data from.")
+    parser_start.add_argument("--raise-errors", action="store_true", help="Raise errors instead of just logging them.")
+
+    # Stop command
+    parser_stop = subparsers.add_parser("stop", help="Stop the Ray cluster.")
+    parser_stop.add_argument("--config", required=True, help="Path to the Ray cluster configuration file.")
+
+    # Restart command
+    parser_restart = subparsers.add_parser("restart", help="Restart the Ray cluster.")
+    parser_restart.add_argument("--config", required=True, help="Path to the Ray cluster configuration file.")
+    parser_restart.add_argument("--local-path", default=LOCAL_PATH, help="Local path to store job data.")
+    parser_restart.add_argument("--raise-errors", action="store_true", help="Raise errors instead of just logging them.")
+
+    # Status command
+    parser_status = subparsers.add_parser("status", help="Get the status of the Ray cluster.")
+    parser_status.add_argument("--config", required=True, help="Path to the Ray cluster configuration file.")
+
     args = parser.parse_args()
-
-    dashboard_process = start_ray_dashboard(args.config)
-
-    try:
-        if args.stage == "before":
-            local_path = Path(args.local_path)
-            if local_path.exists():
-                logger.warning(f"Local path: {local_path} is not empty. Please clear it before running the script.")
-                return
-            before_cluster_restart(args.config, args.local_path, args.raise_errors)
-        elif args.stage == "after":
-            restart_jobs_after_restart(args.local_path, args.raise_errors)
-    finally:
-        logger.info("Terminating Ray Dashboard process...")
-        dashboard_process.terminate()
-        dashboard_process.wait()
-        logger.info("Ray Dashboard process terminated.")
+    manage_cluster(args)
 
 
 if __name__ == "__main__":
