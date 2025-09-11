@@ -20,8 +20,18 @@ import fsspec
 import pytest
 import ray
 
-from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe_with_config_resources
-from marin.utils import fsspec_exists
+try:
+    import dolma  # noqa: F401
+
+    from marin.processing.classification.dedupe import (
+        DedupeConfig,
+        DedupMode,
+        NGramConfig,
+        dedupe_with_config_resources,
+    )
+    from marin.utils import fsspec_exists
+except ImportError:
+    pytest.skip("dolma not installed", allow_module_level=True)
 
 
 @pytest.fixture

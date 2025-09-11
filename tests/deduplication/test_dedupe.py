@@ -19,7 +19,17 @@ import fsspec
 import pytest
 import ray
 
-from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe_with_config_resources
+try:
+    import dolma  # noqa: F401
+
+    from marin.processing.classification.dedupe import (
+        DedupeConfig,
+        DedupMode,
+        NGramConfig,
+        dedupe_with_config_resources,
+    )
+except ImportError:
+    pytest.skip("dolma not installed", allow_module_level=True)
 
 BASE_INPUT_DIR = "gs://marin-us-east1/documents/test-data/deduplication"
 BASE_ATTRIBUTE_OUTPUT_DIR = "gs://marin-us-east1/attributes/test-data/deduplication"
