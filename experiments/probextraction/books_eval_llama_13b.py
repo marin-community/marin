@@ -1,24 +1,30 @@
-import dataclasses
+import jmp
+import ray
 from pathlib import Path
 
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.resources import TpuPodConfig
 from marin.utils import fsspec_glob
-from experiments.models import get_model_local_path, llama_3_1_8b
+from experiments.models import get_model_local_path, llama_13b
 from levanter.infra.ray_tpu import run_on_pod_resumable
-
-from levanter.main.marin_eval_sliding_total import EvalSlidingTotalConfig, BookConfig, main as eval_sliding_main
 from levanter.trainer import TrainerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.distributed import RayConfig
-from experiments.llama import llama_8b
-import jmp
-import ray
+from levanter.models.llama import LlamaConfig
+
+from levanter.main.marin_eval_sliding_total import EvalSlidingTotalConfig, BookConfig, main as eval_sliding_main_original
+
+
+def eval_sliding_main(config: EvalSlidingTotalConfig):
+    return eval_sliding_main_original(config)
 
 
 def run_levanter_eval_sliding(config: EvalSlidingTotalConfig) -> None:
     """Run Levanter's eval_sliding_total with proper TPU infrastructure like training."""
-    hw_config = TpuPodConfig(tpu_type="v4-128", slice_count=1, runtime_env={"env_vars": {}})
+
+    hw_config = TpuPodConfig(
+        tpu_type="v4-128", slice_count=2, runtime_env={"env_vars": {}}
+    )  # Medium model needs moderate resources
 
     @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1)
     def eval_lm_task():
@@ -27,17 +33,18 @@ def run_levanter_eval_sliding(config: EvalSlidingTotalConfig) -> None:
     return run_on_pod_resumable(eval_lm_task, hw_config.accelerator_descriptor(), max_retries_failure=10)
 
 
-def create_books_from_gcp_directory(gcp_dir: str) -> dict[str, BookConfig]:
-    """Create BookConfig instances for all .txt files in a GCP directory.
+def create_books_from_gcp_directory(gcp_path: str) -> dict[str, BookConfig]:
+    """Create BookConfig instances for all .txt files in a GCP directory or a single book file.
 
     Args:
-        gcp_dir: GCP directory path like 'gs://marin-us-central2/books_evals/50_books/'
+        gcp_path: GCP directory path like 'gs://marin-us-central2/books_evals/50_books/'
+                 or single file path like 'gs://marin-us-central2/books_evals/50_books/twilight.txt'
 
     Returns:
         Dict mapping book IDs to BookConfig instances
     """
-    # Get all .txt files from the GCP directory
-    txt_files = fsspec_glob(f"{gcp_dir.rstrip('/')}/*.txt")
+    # Check if it's a single file or directory
+    txt_files = [gcp_path] if gcp_path.endswith(".txt") else fsspec_glob(f"{gcp_path.rstrip('/')}/*.txt")
 
     books = {}
     for txt_path in txt_files:
@@ -51,21 +58,38 @@ def create_books_from_gcp_directory(gcp_dir: str) -> dict[str, BookConfig]:
     return books
 
 
+# Create original Llama 13B config based on HF config parameters
+llama_13b_config = LlamaConfig(
+    seq_len=101,  # Override for evaluation sliding window
+    hidden_dim=5120,  # Between 7B (4096) and 65B (8192)
+    intermediate_dim=13824,  # Between 7B (11008) and 65B (22016)
+    num_heads=40,  # Between 7B (32) and 65B (64)
+    num_kv_heads=40,  # MHA for original Llama 1
+    num_layers=40,  # Between 7B (32) and 65B (80)
+    activation_function="silu",
+    initializer_range=0.02,
+    layer_norm_epsilon=1e-6,  # Original Llama 13B uses 1e-6 (same as 7B)
+    tie_word_embeddings=False,
+    use_bias=False,
+    use_layer_norm_weight=True,
+    reference_checkpoint="huggyllama/llama-13b",
+)
+
 # -----------------------------------------------------------------------------
-# Multi-book sliding-window likelihood evaluation (Llama-3.1-8B)
+# Multi-book sliding-window likelihood evaluation (Original Llama 13B)
 # -----------------------------------------------------------------------------
-# run with 2 books
+
 eval_sliding_step = ExecutorStep(
-    name="probextraction/llama3.1_8b_50_books",
+    name="probextraction/llama_13b_50_books_eval",
     fn=run_levanter_eval_sliding,
     config=EvalSlidingTotalConfig(
-        tokenizer_name="meta-llama/Llama-3.1-8B",
-        model=dataclasses.replace(llama_8b, seq_len=101),  # Use standard llama_8b config, override seq_len
+        tokenizer_name="huggyllama/llama-13b",
+        model=llama_13b_config,
         trainer=TrainerConfig(
             seed=0,
             tracker=WandbConfig(
                 project="marin",
-                name="llama_3.1_8b_50_books",
+                name="llama_13b_50_books_eval",
             ),
             mp=jmp.get_policy("p=f32,c=f32"),
             per_device_eval_parallelism=-1,
@@ -74,7 +98,7 @@ eval_sliding_step = ExecutorStep(
             batch_axis="batch",
             ray=RayConfig(auto_start_cluster=False, start_workers=False),
         ),
-        initialize_from_hf=get_model_local_path(llama_3_1_8b),
+        initialize_from_hf=get_model_local_path(llama_13b),
         use_hf_model_config=False,
         # if you change the below, make sure to update seq_len above!
         chunk_size=100,
@@ -83,7 +107,7 @@ eval_sliding_step = ExecutorStep(
         cursor_inc_chars=10,
         token_mode=True,
         cursor_inc_tokens=5,
-        eval_batch_size=512,  # max batch size is 512 for TPU v4-128
+        eval_batch_size=256,  # Medium batch size for medium model
         output_base_path=this_output_path(),
         gcp_log=True,  # Save plots and data to GCP instead of WandB artifacts
         # run with 50 books from open-weight copyright memorization paper

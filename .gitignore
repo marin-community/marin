@@ -206,3 +206,5 @@ wandb
 marin/speedrun/static/data/runs.json
 
 .aider*
+
+.git/*

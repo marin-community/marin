@@ -65,39 +65,59 @@ def get_model_local_path(step: ExecutorStep) -> str:
     return os.path.join(LOCAL_PREFIX, GCS_FUSE_MOUNT_PATH, model_repo_name)
 
 
-smollm2_1_7b_instruct = download_model_step(
+amber_base_7b = download_model_step(
     ModelConfig(
-        hf_repo_id="HuggingFaceTB/SmolLM2-1.7B-Instruct",
-        hf_revision="450ff1f",
+        hf_repo_id="LLM360/Amber",
+        hf_revision="83c188f",
     )
 )
 
-# Note(Will): I don't think we actually support Qwen models in Levanter?
-qwen2_5_7b_instruct = download_model_step(
+gemma_3_27b = download_model_step(
     ModelConfig(
-        hf_repo_id="Qwen/Qwen2.5-7B-Instruct",
-        hf_revision="a09a354",
+        hf_repo_id="google/gemma-3-27b-pt",
+        hf_revision="9fe3c4e",
     )
 )
 
-qwen2_5_72b_instruct = download_model_step(
+llama_7b = download_model_step(
     ModelConfig(
-        hf_repo_id="Qwen/Qwen2.5-72B-Instruct",
-        hf_revision="495f393",
+        hf_repo_id="huggyllama/llama-7b",
+        hf_revision="4782ad2",
     )
 )
 
-llama_3_3_70b_instruct = download_model_step(
+llama_13b = download_model_step(
     ModelConfig(
-        hf_repo_id="meta-llama/Llama-3.3-70B-Instruct",
-        hf_revision="6f6073b",
+        hf_repo_id="huggyllama/llama-13b",
+        hf_revision="bf57045",
     )
 )
 
-llama_3_1_8b_instruct = download_model_step(
+llama_30b = download_model_step(
     ModelConfig(
-        hf_repo_id="meta-llama/Llama-3.1-8B-Instruct",
-        hf_revision="0e9e39f",
+        hf_repo_id="huggyllama/llama-30b",
+        hf_revision="2b1edcd",
+    )
+)
+
+llama_65b = download_model_step(
+    ModelConfig(
+        hf_repo_id="huggyllama/llama-65b",
+        hf_revision="49707c5",
+    )
+)
+
+llama2_7b = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Llama-2-7b-hf",
+        hf_revision="01c7f73",
+    )
+)
+
+llama_3_70b = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Meta-Llama-3-70B",
+        hf_revision="c824948",
     )
 )
 
@@ -105,6 +125,13 @@ llama_3_1_8b = download_model_step(
     ModelConfig(
         hf_repo_id="meta-llama/Llama-3.1-8B",
         hf_revision="d04e592",
+    )
+)
+
+llama_3_1_8b_instruct = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Llama-3.1-8B-Instruct",
+        hf_revision="0e9e39f",
     )
 )
 
@@ -122,38 +149,10 @@ llama_3_1_405b = download_model_step(
     )
 )
 
-tulu_3_1_8b_sft = download_model_step(
+llama_3_3_70b_instruct = download_model_step(
     ModelConfig(
-        hf_repo_id="allenai/Llama-3.1-Tulu-3-8B-SFT",
-        hf_revision="f2a0b46",
-    )
-)
-
-tulu_3_1_8b_instruct = download_model_step(
-    ModelConfig(
-        hf_repo_id="allenai/Llama-3.1-Tulu-3.1-8B",
-        hf_revision="46239c2",
-    )
-)
-
-olmo_2_sft_8b = download_model_step(
-    ModelConfig(
-        hf_repo_id="allenai/OLMo-2-1124-7B-SFT",
-        hf_revision="1de02c0",
-    )
-)
-
-olmo_2_base_8b = download_model_step(
-    ModelConfig(
-        hf_repo_id="allenai/OLMo-2-1124-7B",
-        hf_revision="7df9a82",
-    )
-)
-
-amber_base_7b = download_model_step(
-    ModelConfig(
-        hf_repo_id="LLM360/Amber",
-        hf_revision="83c188f",
+        hf_repo_id="meta-llama/Llama-3.3-70B-Instruct",
+        hf_revision="6f6073b",
     )
 )
 
@@ -164,24 +163,115 @@ map_neo_7b = download_model_step(
     )
 )
 
+olmo_2_base_8b = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/OLMo-2-1124-7B",
+        hf_revision="7df9a82",
+    )
+)
+
+olmo_2_sft_8b = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/OLMo-2-1124-7B-SFT",
+        hf_revision="1de02c0",
+    )
+)
+
+# Note(Will): I don't think we actually support Qwen models in Levanter?
+qwen2_5_7b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-7B",
+        hf_revision="d149729",
+    )
+)
+
+qwen2_5_7b_instruct = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-7B-Instruct",
+        hf_revision="a09a354",
+    )
+)
+
+qwen2_5_72b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-72B",
+        hf_revision="efba10c",
+    )
+)
+
+qwen2_5_72b_instruct = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-72B-Instruct",
+        hf_revision="495f393",
+    )
+)
+
+qwen3_dense_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-32B",
+        hf_revision="9216db5",
+    )
+)
+
+# we use this bf16 variant to avoid weird errors with levanter
+gpt_oss_20b = download_model_step(
+    ModelConfig(
+        hf_repo_id="unsloth/gpt-oss-20b-BF16",
+        hf_revision="cc89b3e",
+    )
+)
+
+smollm2_1_7b_instruct = download_model_step(
+    ModelConfig(
+        hf_repo_id="HuggingFaceTB/SmolLM2-1.7B-Instruct",
+        hf_revision="450ff1f",
+    )
+)
+
+tulu_3_1_8b_instruct = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/Llama-3.1-Tulu-3.1-8B",
+        hf_revision="46239c2",
+    )
+)
+
+tulu_3_1_8b_sft = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/Llama-3.1-Tulu-3-8B-SFT",
+        hf_revision="f2a0b46",
+    )
+)
+
 
 if __name__ == "__main__":
     # Collect all model download steps
     all_models = [
-        smollm2_1_7b_instruct,
-        qwen2_5_7b_instruct,
-        qwen2_5_72b_instruct,
-        llama_3_3_70b_instruct,
-        llama_3_1_8b_instruct,
+        amber_base_7b,
+        gemma_3_27b,
+        llama_7b,
+        llama_13b,
+        llama_30b,
+        llama_65b,
+        llama2_7b,
+        llama_3_70b,
         llama_3_1_8b,
+        llama_3_1_8b_instruct,
         llama_3_1_70b,
-        llama_3_1_405b,
+        # 405b is a doozy so commented out by default
+        # llama_3_1_405b,
+        llama_3_3_70b_instruct,
+        map_neo_7b,
+        olmo_2_base_8b,
+        olmo_2_sft_8b,
+        qwen2_5_7b,
+        qwen2_5_7b_instruct,
+        qwen2_5_72b,
+        qwen2_5_72b_instruct,
+        qwen3_dense_32b,
+        gpt_oss_20b,
+        smollm2_1_7b_instruct,
         tulu_3_1_8b_instruct,
         tulu_3_1_8b_sft,
-        olmo_2_sft_8b,
-        olmo_2_base_8b,
-        amber_base_7b,
-        map_neo_7b,
     ]
 
     # Run all model downloads
