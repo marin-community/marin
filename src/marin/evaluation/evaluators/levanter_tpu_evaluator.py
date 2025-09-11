@@ -34,20 +34,32 @@ class LevanterTpuEvaluator(Evaluator, ABC):
     DEFAULT_PIP_PACKAGES: ClassVar[list[Dependency]] = [
         Dependency(name="levanter==1.2.dev1359"),
         Dependency(name=("lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git")),
+        Dependency(name="ray==2.45"),
     ]
 
     # Where to store checkpoints, cache inference results, etc.
-    CACHE_PATH: str = "/tmp/levanter-lm-eval"
+    # Prefer memory-backed tmpfs when available to avoid disk I/O and capacity limits.
+    CACHE_PATH: str = os.environ.get("MARIN_CACHE_PATH", "/dev/shm/levanter-lm-eval") if os.path.isdir("/dev/shm") else "/tmp/levanter-lm-eval"
 
     @staticmethod
     def download_model(model: ModelConfig) -> str:
         """
         Download the model if it's not already downloaded
         """
-        downloaded_path: str | None = model.ensure_downloaded(
-            local_path=os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
-        )
-        # Use the model name if a path is not specified (e.g., for Hugging Face models)
+        local_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
+        downloaded_path: str | None = model.ensure_downloaded(local_path=local_path)
+
+        # If prefer_in_memory_loading returned None for a GCS path, force a local download.
+        # Levanter cannot load directly from gs://, so we need a concrete filesystem path.
+        if downloaded_path is None and model.path is not None and model.path.startswith("gs://"):
+            original_flag = model.prefer_in_memory_loading
+            try:
+                model.prefer_in_memory_loading = False
+                downloaded_path = model.ensure_downloaded(local_path=local_path)
+            finally:
+                model.prefer_in_memory_loading = original_flag
+
+        # Use the local downloaded path if available; otherwise fall back to the model name (HF hub case)
         model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
         return model_name_or_path
 

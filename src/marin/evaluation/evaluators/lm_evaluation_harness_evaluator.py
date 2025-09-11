@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+import json
 import os
 import shutil
 import traceback
@@ -37,12 +38,58 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
-        "lm-eval",
+        "pandas",
     ]
     _env_vars: ClassVar[dict[str, str]] = {
         # Human eval tests code from the model which requires permission to run
         "HF_ALLOW_CODE_EVAL": "1",
     }
+
+    def _patch_rope_scaling_config_if_needed(self, model_local_dir: str) -> None:
+        """
+        Ensure rope_scaling in config.json is compatible with vLLM on TPU.
+
+        - Adds missing rope_scaling["type"] as "su" when absent
+        - Clamps rope_scaling["original_max_position_embeddings"] to be strictly
+          less than max_position_embeddings when necessary
+        """
+        if not os.path.isdir(model_local_dir):
+            return
+        config_json_path = os.path.join(model_local_dir, "config.json")
+        if not os.path.exists(config_json_path):
+            return
+
+        with open(config_json_path, "r") as f:
+            cfg = json.load(f)
+
+        rope_scaling = cfg.get("rope_scaling")
+        max_pos = cfg.get("max_position_embeddings")
+        updated = False
+        removed = False
+
+        if isinstance(rope_scaling, dict):
+            # If type is missing or set to an unsupported type like 'su',
+            # remove rope_scaling to avoid vLLM validation errors.
+            rope_type = rope_scaling.get("type")
+            if rope_type is None or rope_type == "su":
+                cfg.pop("rope_scaling", None)
+                updated = True
+                removed = True
+            else:
+                if (
+                    isinstance(max_pos, int)
+                    and "original_max_position_embeddings" in rope_scaling
+                    and isinstance(rope_scaling["original_max_position_embeddings"], int)
+                    and rope_scaling["original_max_position_embeddings"] >= max_pos
+                ):
+                    rope_scaling["original_max_position_embeddings"] = max_pos - 1
+                    updated = True
+
+        if updated:
+            if not removed:
+                cfg["rope_scaling"] = rope_scaling
+            with open(config_json_path, "w") as f:
+                json.dump(cfg, f)
 
     def evaluate(
         self,
@@ -68,6 +115,10 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
 
+            # Ensure model config is compatible with vLLM rope scaling on TPU
+            self._patch_rope_scaling_config_if_needed(model_name_or_path)
+
+            # Build model args string
             pretrained_args: str = f"pretrained={model_name_or_path}"
             if model.engine_kwargs:
                 for key, value in model.engine_kwargs.items():
@@ -88,10 +139,11 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 evaluation_tracker_args = simple_parse_args_string(f",output_path={result_filepath}")
                 evaluation_tracker = EvaluationTracker(**evaluation_tracker_args)
 
-                wandb_args_dict = simple_parse_args_string(f"project=marin,job_type=eval,name={model.name}")
-                wandb_config_args_dict = simple_parse_args_string("")
-                wandb_logger = WandbLogger(**wandb_args_dict, **wandb_config_args_dict)
-
+                # wandb_args_dict = simple_parse_args_string(f"project=marin,job_type=eval,name={model.name}")
+                # wandb_config_args_dict = simple_parse_args_string("")
+                # wandb_logger = WandbLogger(**wandb_args_dict, **wandb_config_args_dict)
+                wandb_logger = WandbLogger()
+                
                 results = simple_evaluate(
                     model="vllm",
                     tasks=[eval_task.name],

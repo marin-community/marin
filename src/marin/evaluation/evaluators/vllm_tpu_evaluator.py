@@ -31,7 +31,8 @@ from marin.utils import remove_tpu_lockfile_on_exit
 class VllmTpuEvaluator(Evaluator, ABC):
     """For `Evaluator`s that runs inference with VLLM on TPUs."""
 
-    DEFAULT_PIP_PACKAGES: ClassVar[list[Dependency]] = []
+    DEFAULT_PIP_PACKAGES: ClassVar[list[Dependency]] = [
+    ]
 
     # Where to store checkpoints, cache inference results, etc.
     CACHE_PATH: str = "/tmp"
@@ -41,10 +42,20 @@ class VllmTpuEvaluator(Evaluator, ABC):
         """
         Download the model if it's not already downloaded
         """
-        downloaded_path: str | None = model.ensure_downloaded(
-            local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
-        )
-        # Use the model name if a path is not specified (e.g., for Hugging Face models)
+        local_path = os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
+        downloaded_path: str | None = model.ensure_downloaded(local_path=local_path)
+
+        # If prefer_in_memory_loading returned None for a GCS path, force a local download for vLLM.
+        # vLLM cannot load directly from gs://, so we need a concrete filesystem path.
+        if downloaded_path is None and model.path is not None and model.path.startswith("gs://"):
+            original_flag = model.prefer_in_memory_loading
+            try:
+                model.prefer_in_memory_loading = False
+                downloaded_path = model.ensure_downloaded(local_path=local_path)
+            finally:
+                model.prefer_in_memory_loading = original_flag
+
+        # Use the local downloaded path if available; otherwise fall back to the model name (HF hub case)
         model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
         return model_name_or_path
 
@@ -141,9 +152,12 @@ class VllmTpuEvaluator(Evaluator, ABC):
                 current_pip_packages = current_runtime_env["pip"]
 
         all_packages = current_pip_packages + [str(package) for package in self._pip_packages]
+        all_packages.append("ray==2.45")
         runtime_env: dict = {
             "pip": {
                 "packages": all_packages,
+                "pip_check": False,
+                "pip_version": f"==23.0.1;python_version=='{self._python_version}'",
             },
             "env_vars": self._env_vars,
         }
