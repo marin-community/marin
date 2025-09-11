@@ -15,6 +15,7 @@
 """Configuration dataclasses for RL training."""
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 
@@ -152,6 +153,28 @@ class DistributedConfig:
     jax_distributed_initalize_config: dict[str, Any] = field(default_factory=dict)
 
 
+class WeightTransferMode(Enum):
+    GCS_CHECKPOINT = "gcs_checkpoint"
+    JAX_TRANSFER_SERVER = "jax_transfer_server"
+    RAY_REMOTING = "ray_remoting"
+
+
+@dataclass
+class WeightTransferConfig:
+    mode: WeightTransferMode = WeightTransferMode.GCS_CHECKPOINT
+    # Common settings
+    sync_interval_steps: int = 60
+    poll_interval_seconds: float = 30.0
+
+    # JAX Transfer Server specific
+    coordinator_name: str = "weight_transfer_coordinator"
+    transfer_timeout: float = 120.0
+
+    # GCS Checkpoint specific
+    checkpoint_dir: str = ""
+    max_checkpoints: int | None = 5
+
+
 @dataclass
 class TrainingConfig:
     output_dir: str
@@ -163,20 +186,19 @@ class TrainingConfig:
     generation_config: GenerationConfig = field(default_factory=GenerationConfig)
     test_generation_config: GenerationConfig = field(default_factory=GenerationConfig)
     checkpoint: CheckpointerConfigData = field(default_factory=CheckpointerConfigData)
+    weight_transfer: WeightTransferConfig = field(default_factory=WeightTransferConfig)
 
 
 @dataclass
 class TrainWorkerConfig:
+    training_config: "TrainingConfig"
     rollout_queue_path: str
-    checkpoint_sync_interval: int = 60
 
 
 @dataclass
 class InferenceWorkerConfig:
+    training_config: "TrainingConfig"
     environment_spec: str
-    checkpoint_source_path: str
     rollout_output_path: str
-    checkpoint_poll_interval: float = 30.0
     rollout_batch_size: int = 32
     max_rollouts: int | None = None
-    checkpoint_timeout: float = 300.0
