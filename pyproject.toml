@@ -156,10 +156,6 @@ explicit = true
 
 [project.optional-dependencies]
 
-deduplication = [
-    "dolma @ git+https://github.com/marin-community/dolma",
-]
-
 gcp = [
     "google-api-python-client>=2.175.0", # ray GCP workaround
     "cryptography>=45",
@@ -248,7 +244,6 @@ tokenize_train = [
     "tblib",
     "sentencepiece",
     "tiktoken",
-    "dolma @ git+https://github.com/marin-community/dolma",
 ]
 
 

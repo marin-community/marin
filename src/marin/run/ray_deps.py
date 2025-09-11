@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 
 
 def extra_flags(extra: list[str] | None = None) -> list[str]:
-    # always include either the cpu or tpu extra
+    # always include either the cpu or tpu extra.
+    # TODO, allow support for gpu in the future.
     if "tpu" in extra:
         extra = list(set(extra) - {"cpu"})
     else:
@@ -60,14 +61,12 @@ def compute_frozen_packages(extra: list[str] | None = None) -> PackageSpec:
         # Skip comments, empty lines, and editable installs
         if not line or line.startswith("#"):
             continue
-        if "ray=" in line or "ray[" in line:
+        if line.startswith("ray=") or line.startswith("ray["):
             # ray is provided by the runtime, so we skip it
             continue
         if line.startswith("-e"):
-            # convert to a py_module reference
+            # convert to a py_module. this isn't used for now, instead see `build_python_path`
             py_modules.append(line[3:].strip())
-            # this sadly doesn't work.
-            # package_specs.append(line)
         else:
             # strip +cpu references
             if "+cpu" in line:
@@ -125,8 +124,6 @@ def build_runtime_env_for_packages(
     package_spec = compute_frozen_packages(extra)
     return dict(
         env_vars=env_vars | {"PYTHONPATH": ":".join(python_path)},
-        # We can't even use this sadly, because Ray doesn't allow specifying it at task time.
-        # py_modules=package_spec.py_modules,
         pip={
             "packages": package_spec.package_specs + pip_packages,
         },
