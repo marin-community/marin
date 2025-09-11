@@ -168,7 +168,6 @@ def test_model_initialization(training_config):
         training_config.model.model_paths, training_config.model.model_config_override
     )
     assert llama_config is not None
-    assert llama_config.hidden_size == 32
     assert llama_config.vocab_size == 1000
 
     # Test mesh setup

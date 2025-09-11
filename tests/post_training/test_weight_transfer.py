@@ -95,6 +95,47 @@ def sample_params():
     return create_sample_pytree(seed=42)
 
 
+def create_test_weight_transfer_pair(weight_transfer_config, params_structure=None):
+    """Helper function to create server/client pairs for testing."""
+    if weight_transfer_config.mode == WeightTransferMode.GCS_CHECKPOINT:
+
+        class MockGatherFns:
+            def __init__(self):
+                self.params = None
+
+        class DummyConfig:
+            def to_dict(self):
+                return {}
+
+        server = create_weight_transfer_server(
+            config=weight_transfer_config, gather_fns=MockGatherFns(), model_config=DummyConfig()
+        )
+
+        from marin.post_training.utils import load_checkpoint
+
+        client = create_weight_transfer_client(
+            config=weight_transfer_config, load_checkpoint_fn=load_checkpoint
+        )
+    else:
+        # Ray remoting mode
+        server = create_weight_transfer_server(config=weight_transfer_config)
+
+        if params_structure is not None:
+            # Create shard functions for the given structure
+            def identity_shard(x):
+                return x
+
+            shard_fns = jax.tree.map(lambda x: identity_shard, params_structure)
+        else:
+            shard_fns = None
+
+        client = create_weight_transfer_client(
+            config=weight_transfer_config, shard_fns=shard_fns, load_checkpoint_fn=None
+        )
+
+    return server, client
+
+
 @pytest.fixture
 def weight_transfer_config(transfer_mode):
     """Create weight transfer config for the specified mode."""
@@ -106,51 +147,6 @@ def weight_transfer_config(transfer_mode):
             poll_interval_seconds=0.1,
             checkpoint_dir=temp_dir,
         )
-
-
-@pytest.fixture
-def weight_transfer_server_client(weight_transfer_config, sample_params):
-    """Create weight transfer server and client pair."""
-    # For GCS checkpoints, we need some additional setup
-    if weight_transfer_config.mode == WeightTransferMode.GCS_CHECKPOINT:
-        # we just need something with a to_dict() method
-        class DummyConfig:
-            def to_dict(self):
-                return {}
-
-        # Create mock gather_fns with params attribute
-        class MockGatherFns:
-            def __init__(self):
-                self.params = None
-
-        server = create_weight_transfer_server(
-            config=weight_transfer_config, gather_fns=MockGatherFns(), model_config=DummyConfig()
-        )
-
-        # For GCS checkpoints, we need to provide a load function
-        def mock_load_checkpoint_fn(path):
-            # Mock load function that returns the sample params
-            return sample_params
-
-        client = create_weight_transfer_client(config=weight_transfer_config, load_checkpoint_fn=mock_load_checkpoint_fn)
-    else:
-        # Ray remoting and JAX transfer modes
-        server = create_weight_transfer_server(config=weight_transfer_config)
-
-        # Create identity shard functions for testing
-        def identity_shard(x):
-            return x
-
-        shard_fns = jax.tree.map(lambda x: identity_shard, sample_params)
-        client = create_weight_transfer_client(
-            config=weight_transfer_config, shard_fns=shard_fns, load_checkpoint_fn=None
-        )
-
-    yield server, client
-
-    # Cleanup
-    server.cleanup()
-    client.cleanup()
 
 
 # Ray Weight Coordinator Tests (Ray remoting specific)
@@ -213,9 +209,11 @@ def test_ray_coordinator_no_weights_initially(ray_cluster):
     assert weight_id is None
 
 
-def test_basic_weight_transfer(ray_cluster, weight_transfer_server_client, sample_params, weight_transfer_config):
+def test_basic_weight_transfer(ray_cluster, weight_transfer_config, sample_params):
     """Test basic weight transfer from server to client."""
-    server, client = weight_transfer_server_client
+    server, client = create_test_weight_transfer_pair(
+        weight_transfer_config, params_structure=sample_params
+    )
 
     # Serve weights
     server.serve_weights(1, sample_params)
@@ -233,21 +231,31 @@ def test_basic_weight_transfer(ray_cluster, weight_transfer_server_client, sampl
     }
     assert metadata["source"] == expected_sources[weight_transfer_config.mode]
 
-    # Verify structure and values match
-    assert received_params.keys() == sample_params.keys()
+    try:
+        # Verify structure and values match
+        assert received_params.keys() == sample_params.keys()
 
-    # For GCS checkpoints, there may be precision loss due to bfloat16 conversion
-    if weight_transfer_config.mode == WeightTransferMode.GCS_CHECKPOINT:
-        np.testing.assert_allclose(
-            received_params["embedding"]["weight"], sample_params["embedding"]["weight"], rtol=1e-2
-        )
-    else:
-        np.testing.assert_array_equal(received_params["embedding"]["weight"], sample_params["embedding"]["weight"])
+        # For GCS checkpoints, there may be precision loss due to bfloat16 conversion
+        if weight_transfer_config.mode == WeightTransferMode.GCS_CHECKPOINT:
+            np.testing.assert_allclose(
+                received_params["embedding"]["weight"],
+                sample_params["embedding"]["weight"],
+                rtol=1e-2,
+            )
+        else:
+            np.testing.assert_array_equal(
+                received_params["embedding"]["weight"], sample_params["embedding"]["weight"]
+            )
+    finally:
+        server.cleanup()
+        client.cleanup()
 
 
-def test_multiple_weight_updates(ray_cluster, weight_transfer_server_client, sample_params):
+def test_multiple_weight_updates(ray_cluster, weight_transfer_config, sample_params):
     """Test multiple sequential weight updates."""
-    server, client = weight_transfer_server_client
+    server, client = create_test_weight_transfer_pair(
+        weight_transfer_config, params_structure=sample_params
+    )
 
     # First weight transfer
     server.serve_weights(1, sample_params)
@@ -268,10 +276,16 @@ def test_multiple_weight_updates(ray_cluster, weight_transfer_server_client, sam
     assert received_params_3 is None
     assert metadata_3 == {}
 
+    # Cleanup
+    server.cleanup()
+    client.cleanup()
 
-def test_client_no_new_weights(ray_cluster, weight_transfer_server_client, sample_params):
+
+def test_client_no_new_weights(ray_cluster, weight_transfer_config, sample_params):
     """Test client behavior when no new weights are available."""
-    server, client = weight_transfer_server_client
+    server, client = create_test_weight_transfer_pair(
+        weight_transfer_config, params_structure=sample_params
+    )
 
     # Serve weights
     server.serve_weights(1, sample_params)
@@ -286,47 +300,22 @@ def test_client_no_new_weights(ray_cluster, weight_transfer_server_client, sampl
     assert received_params_2 is None
     assert metadata_2 == {}
 
+    # Cleanup
+    server.cleanup()
+    client.cleanup()
+
 
 def test_concurrent_clients(ray_cluster, weight_transfer_config, sample_params):
     """Test multiple clients receiving weights concurrently (Ray remoting only)."""
-    # Create mock gather_fns for GCS checkpoint mode
-    if weight_transfer_config.mode == WeightTransferMode.GCS_CHECKPOINT:
 
-        class MockGatherFns:
-            def __init__(self):
-                self.params = None
-
-        class DummyConfig:
-            def to_dict(self):
-                return {}
-
-        server = create_weight_transfer_server(
-            config=weight_transfer_config, gather_fns=MockGatherFns(), model_config=DummyConfig()
-        )
-    else:
-        server = create_weight_transfer_server(config=weight_transfer_config)
-
-    # Create multiple clients with same coordinator
-    def mock_load_checkpoint_fn(path):
-        return sample_params
-
-    load_fn = mock_load_checkpoint_fn if weight_transfer_config.mode == WeightTransferMode.GCS_CHECKPOINT else None
-
-    # Create identity shard functions for testing Ray remoting
-    def identity_shard(x):
-        return x
-
-    shard_fns = (
-        jax.tree.map(lambda x: identity_shard, sample_params)
-        if weight_transfer_config.mode == WeightTransferMode.RAY_REMOTING
-        else None
+    # Create server and first client
+    server, client_1 = create_test_weight_transfer_pair(
+        weight_transfer_config, params_structure=sample_params
     )
 
-    client_1 = create_weight_transfer_client(
-        config=weight_transfer_config, shard_fns=shard_fns, load_checkpoint_fn=load_fn
-    )
-    client_2 = create_weight_transfer_client(
-        config=weight_transfer_config, shard_fns=shard_fns, load_checkpoint_fn=load_fn
+    # Create second client with same config
+    _, client_2 = create_test_weight_transfer_pair(
+        weight_transfer_config, params_structure=sample_params
     )
 
     try:
@@ -362,11 +351,16 @@ def test_with_mesh_sharding(ray_cluster, weight_transfer_config, sample_params):
     # Create server first to set up coordinator
     server = RayRemotingServer(weight_transfer_config)
 
-    # Create client with mesh and sharding
+    # Create shard functions from sharding rules
+    def create_shard_fn(sharding):
+        return lambda x: jax.device_put(x, sharding)
+
+    shard_fns = jax.tree.map(create_shard_fn, params_sharding_rules)
+
+    # Create client with shard functions
     client = RayRemotingClient(
         weight_transfer_config,
-        mesh=mesh,
-        params_sharding_rules=params_sharding_rules,
+        shard_fns=shard_fns,
     )
 
     # Serve and receive weights
@@ -383,56 +377,64 @@ def test_with_mesh_sharding(ray_cluster, weight_transfer_config, sample_params):
     client.cleanup()
 
 
-def test_jax_numpy_conversion(ray_cluster, weight_transfer_server_client):
+def test_jax_numpy_conversion(ray_cluster, weight_transfer_config):
     """Test JAX array to numpy conversion and back."""
-    server, client = weight_transfer_server_client
-
     # Create JAX arrays with specific values for testing
     jax_params = {
         "weight": jnp.array([1.0, 2.0, 3.0, 4.0]),
         "bias": jnp.array([0.1, 0.2]),
     }
 
-    # Transfer weights
-    server.serve_weights(1, jax_params)
-    received_params, metadata = client.receive_weights()
+    server, client = create_test_weight_transfer_pair(
+        weight_transfer_config, params_structure=jax_params
+    )
 
-    # Verify they are JAX arrays (all clients should return JAX arrays)
-    assert isinstance(received_params["weight"], jax.Array)
-    assert isinstance(received_params["bias"], jax.Array)
+    try:
+        # Transfer weights
+        server.serve_weights(1, jax_params)
+        received_params, metadata = client.receive_weights()
 
-    # For GCS checkpoints, account for precision loss due to bfloat16 conversion
-    if metadata["source"] == "gcs_checkpoint":
-        np.testing.assert_allclose(received_params["weight"], jax_params["weight"], rtol=1e-2)
-        np.testing.assert_allclose(received_params["bias"], jax_params["bias"], rtol=1e-2)
-    else:
-        # Verify conversion preserved values and dtypes
-        np.testing.assert_array_equal(received_params["weight"], jax_params["weight"])
-        np.testing.assert_array_equal(received_params["bias"], jax_params["bias"])
+        # Verify they are JAX arrays (all clients should return JAX arrays)
+        assert isinstance(received_params["weight"], jax.Array)
+        assert isinstance(received_params["bias"], jax.Array)
+
+        # For GCS checkpoints, account for precision loss due to bfloat16 conversion
+        if metadata["source"] == "gcs_checkpoint":
+            np.testing.assert_allclose(received_params["weight"], jax_params["weight"], rtol=1e-2)
+            np.testing.assert_allclose(received_params["bias"], jax_params["bias"], rtol=1e-2)
+        else:
+            # Verify conversion preserved values and dtypes
+            np.testing.assert_array_equal(received_params["weight"], jax_params["weight"])
+            np.testing.assert_array_equal(received_params["bias"], jax_params["bias"])
+    finally:
+        server.cleanup()
+        client.cleanup()
 
 
-def test_cleanup(ray_cluster, weight_transfer_server_client, sample_params):
+def test_cleanup(ray_cluster, weight_transfer_config, sample_params):
     """Test proper cleanup of server and client resources."""
-    server, client = weight_transfer_server_client
+    server, client = create_test_weight_transfer_pair(
+        weight_transfer_config, params_structure=sample_params
+    )
 
     # Do a basic transfer
     server.serve_weights(1, sample_params)
     received_params, metadata = client.receive_weights()
     assert received_params is not None
 
-    # Note: cleanup is handled by the fixture
-    # Verify cleanup was successful (no specific assertions needed,
-    # just that no exceptions were raised)
-    assert True
 
-
-def test_empty_params(ray_cluster, weight_transfer_server_client):
+def test_empty_params(ray_cluster, weight_transfer_config):
     """Test behavior with empty parameter trees."""
-    server, client = weight_transfer_server_client
     empty_params = {}
 
-    server.serve_weights(1, empty_params)
-    received_params, metadata = client.receive_weights()
+    server, client = create_test_weight_transfer_pair(weight_transfer_config, params_structure=None)
 
-    assert received_params == {}
-    assert metadata["weight_id"] == 1
+    try:
+        server.serve_weights(1, empty_params)
+        received_params, metadata = client.receive_weights()
+
+        assert received_params == {}
+        assert metadata["weight_id"] == 1
+    finally:
+        server.cleanup()
+        client.cleanup()
