@@ -8,9 +8,11 @@ from marin.evaluation.run import evaluate
 from marin.execution.executor import this_output_path
 from experiments.evals.resource_configs import ResourceConfig
 
+resource_config = ResourceConfig(num_tpu=1, tpu_type="TPU-v6e-8", strategy="STRICT_PACK")
+
 if __name__ == "__main__":
-    model_name = "sft/deeper_starling_sft_nemotron_and_openthoughts3"
-    model_path = "gs://marin-us-central2/checkpoints/sft/mixture_sft_deeper_starling_with_nemotron_and_openthoughts3-de8fa2/hf"
+    model_name = "deeper_starling_sft_nemotron_and_openthoughts3"
+    model_path = "gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/hf/step-1540000"
 
     # Run all evaluations on all models
     helm_eval = ExecutorStep(
@@ -26,13 +28,18 @@ if __name__ == "__main__":
                 EvalTaskConfig(name="lite", num_fewshot=0)
             ],
             apply_chat_template=True,
-            resource_config=ResourceConfig(num_tpu=1, tpu_type="TPU-v4-8", strategy="STRICT_PACK")  # us-central2
+            resource_config=resource_config
         ),
+        pip_dependency_groups=["eval", "transformers", "tiktoken", "sentencepiece"],
     )
 
     max_eval_instances = None
-    engine_kwargs = None
-    resource_config = ResourceConfig(num_tpu=1, tpu_type="TPU-v4-8", strategy="STRICT_PACK")
+    # Configuration to fix rope_scaling original_max_position_embeddings issue
+    # The error occurs because original_max_position_embeddings (8192) > max_position_embeddings (4096)
+    engine_kwargs = {
+        "max_model_len": 4096,
+    }
+    
 
     lm_evaluation_harness_eval = evaluate_lm_evaluation_harness(
         model_name,
@@ -51,6 +58,7 @@ if __name__ == "__main__":
         apply_chat_template=True,
     )
 
+    # These are loglikelihood tasks
     levanter_lm_evaluation_harness_eval = evaluate_levanter_lm_evaluation_harness(
         model_name,
         model_path,
@@ -76,7 +84,7 @@ if __name__ == "__main__":
             # EvalTaskConfig("wsc273", num_fewshot=0, task_alias="wsc273_0shot"),  # Winograd Schema Challenge
             # EvalTaskConfig("winogrande", num_fewshot=0, task_alias="winogrande_0shot"),  # Winograd challenge, extended to more domains
         ],
-        resource_config,
+        resource_config=resource_config,
         max_eval_instances=max_eval_instances,
         apply_chat_template=True,
     )
@@ -86,7 +94,8 @@ if __name__ == "__main__":
     # all_steps.extend(default_sft_eval(mixture_sft_deeper_starling))
     # all_steps.extend(default_sft_eval(llama_3_1_8b_instruct))
     # all_steps.extend(default_sft_eval(tulu_3_1_8b_instruct))
-    all_steps.append(lm_evaluation_harness_eval)
-    all_steps.append(levanter_lm_evaluation_harness_eval)
+    # all_steps.append(lm_evaluation_harness_eval)
+    # all_steps.append(levanter_lm_evaluation_harness_eval)
+    all_steps.append(helm_eval)
 
     executor_main(steps=all_steps)
