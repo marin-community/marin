@@ -86,7 +86,6 @@ class ModelConfig:
 
 class Evaluator(ABC):
 
-    _python_version: str
     _pip_packages: ClassVar[list[Dependency]]
     _py_modules: ClassVar[list[Dependency]]
 

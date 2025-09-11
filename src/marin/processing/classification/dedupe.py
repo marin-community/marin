@@ -55,15 +55,6 @@ from marin.utils import (
 logger = logging.getLogger(__name__)
 
 
-def _check_dolma_available():
-    """Check if dolma CLI is available"""
-    try:
-        subprocess.run(["dolma", "--help"], capture_output=True, check=True)
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Supported input formats for JSON/JSONL documents that can be staged for
 # Dolma deduplication.  All of these will be normalised to GZip-compressed
@@ -507,11 +498,6 @@ def do_dedup(
     pre_estimated_counts: dict[int, int] | None = None,
     debug: bool = False,
 ):
-    if not _check_dolma_available():
-        raise RuntimeError(
-            "Dolma `extra` not installed. Use uv sync --extra=dolma or add " "extra=['dolma'] to your runtime_env."
-        )
-
     bloom_filter_file = os.path.join(local_base_dir, bloom_filter_file)
 
     # If n-gram mode and no explicit bloom_filter_size, use pre-computed estimates
@@ -1004,6 +990,7 @@ def dedupe_with_config_resources(config: DedupeConfig):
     remote_options = {
         "num_cpus": config.num_cpus,
         "memory": config.memory,
+        # "runtime_env": build_runtime_env_for_packages(extra=["deduplication"]),
     }
 
     if config.resources is not None:

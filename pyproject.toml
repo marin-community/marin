@@ -1,6 +1,6 @@
 [build-system]
-requires = ["uv_build>=0.7.19,<0.8.0"]
-build-backend = "uv_build"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 requires-python = ">=3.11"
 
 [project]
@@ -11,35 +11,34 @@ license = { file = "LICENSE" }
 
 requires-python = ">=3.10"
 dependencies = [
+    "braceexpand",
+    "cryptography>=45",
+    "datasets",
+    "deepdiff",
     "draccus>=0.11.5",
-    "google-api-python-client>=2.175.0",
-    "ray==2.45",
+    "fasteners>=0.19",
     "gcsfs",
+    "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "cryptography>=45",
-    "s3fs>=2024",
-    "datasets",
-    "regex",
-    "requests",
+    "haliax>=1.4.dev381",
+    "levanter>=1.2.dev1500",             # We have levanter deps for now. @TODO :: Remove them
+    "lz4",
+    "multiprocess==0.70.16",
     "numpy",
-    "torch",
-    "braceexpand",
-    "deepdiff",
-    "tqdm",
-    "tqdm-loggable",
-    "toml",
+    "openai",
     "pandas",                            # Only needed by Fileprovider in inference.py
     "pyarrow",                           # # Only needed by Fileprovider in inference.py
-    # We have levanter deps for now. @TODO :: Remove them
-    "multiprocess==0.70.16",
-    "levanter>=1.2.dev1500",
-    "haliax>=1.4.dev381",
+    "ray==2.45",
+    "regex",
+    "requests",
+    "s3fs>=2024",
     "sentencepiece",
-    "lz4",
+    "toml",
+    "torch>=2.7.0",
+    "tqdm",
+    "tqdm-loggable",
     "wandb<=0.19.9",
-    "openai",
-    "fasteners>=0.19",
 ]
 
 [dependency-groups]
@@ -79,7 +78,6 @@ docs = [
 math = ["pylatexenc", "sympy"]
 
 metrics = ["google-cloud-logging"]
-
 
 transform_test_deps = [
     "trafilatura>=2.0",
@@ -134,11 +132,11 @@ conflicts = [
 
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cpu", extra = "cpu" },
-    # CUDA12 index only when --extra cuda12 *and* NOT --extra cpu
+    # Default to the CPU index for TPU/CPU builds
+    { index = "pytorch-cpu", extra="cpu" },
+    { index = "pytorch-cpu", extra="tpu" },
+    # CUDA12 index only when --extra cuda12
     { index = "pytorch-cu128", extra = "cuda12" },
-    #   Default index for all other cases
-    #  { index = "pytorch-default", marker = "extra != 'cuda12' and extra != 'cpu'" },
 ]
 sentencepiece = { git = "https://github.com/google/sentencepiece/", subdirectory = "python" }
 
@@ -156,16 +154,7 @@ url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 
-[[tool.uv.index]]
-name = "pytorch-default"
-url = "https://download.pytorch.org/whl/torch_stable.html"
-
-
 [project.optional-dependencies]
-
-deduplication = [
-    "dolma @ git+https://github.com/marin-community/dolma",
-]
 
 gcp = [
     "google-api-python-client>=2.175.0", # ray GCP workaround
@@ -177,9 +166,9 @@ gcp = [
 
 cuda12 = ["jax[cuda12]>=0.6.2", "torch"]
 
-tpu = ["jax[tpu]>=0.6.2", "torch>=2.7.0"]
+tpu = ["jax[tpu]>=0.6.2", "torch"]
 
-cpu = ["torch>=2.7.0", "jax>=0.6.2"]
+cpu = ["jax>=0.6.2", "torch"]
 
 crawl = [
     "w3lib",
@@ -255,7 +244,6 @@ tokenize_train = [
     "tblib",
     "sentencepiece",
     "tiktoken",
-    "dolma @ git+https://github.com/marin-community/dolma",
 ]
 
 
@@ -318,8 +306,14 @@ python_version = "3.10"
 ignore_missing_imports = true
 exclude = ["marin/", "scripts/"]
 
-[tool.uv_build]
-package-dir = "src"
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/marin", "experiments"]
+
+[tool.hatch.build.targets.sdist]
+packages = ["src/marin", "experiments"]
 
 [tool.pytest.ini_options]
 timeout = 300

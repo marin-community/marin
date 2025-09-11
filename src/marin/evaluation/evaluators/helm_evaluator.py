@@ -15,12 +15,12 @@
 import os
 import shutil
 import traceback
-from typing import ClassVar
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
+from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
 from marin.evaluation.utils import is_remote_path, run_bash_command, upload_to_gcs, write_yaml
+from marin.run.ray_deps import build_runtime_env_for_packages
 
 
 class HELMEvaluator(VllmTpuEvaluator):
@@ -49,10 +49,13 @@ class HELMEvaluator(VllmTpuEvaluator):
         "https://raw.githubusercontent.com/stanford-crfm/helm/refs/heads/main/src/helm/benchmark/static/{schema_file}"
     )
 
-    _pip_packages: ClassVar[list[Dependency]] = [
-        *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
-        Dependency(name="crfm-helm@git+https://github.com/stanford-crfm/helm.git@local_vllm"),
-    ]
+    def get_runtime_env(self) -> dict:
+        """
+        Returns the runtime environment to run the evaluator on the Ray cluster.
+        """
+        return build_runtime_env_for_packages(
+            pip_packages=["crfm-helm@git+https://github.com/stanford-crfm/helm.git@local_vllm"]
+        )
 
     @staticmethod
     def write_model_config_files(model: ModelConfig) -> None:
