@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import shlex
+import subprocess
 import time
 
 from ray.job_submission import JobSubmissionClient
@@ -84,6 +85,9 @@ async def submit_and_track_job(
 
     current_dir = os.getcwd()
     client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
+
+    # Inject GIT_COMMIT into the environment for logging
+    env_vars["GIT_COMMIT"] = subprocess.getoutput("git rev-parse HEAD")
 
     logger.info(f"Submitting job with entrypoint: {entrypoint}")
     logger.info(f"Extras: {extra}")

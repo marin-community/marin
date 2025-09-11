@@ -21,6 +21,7 @@ and writes the rollout data to files for training workers to consume.
 
 import logging
 import os
+import socket
 import time
 from functools import partial
 from pathlib import Path
@@ -40,8 +41,8 @@ from .model_helpers import (
     load_tokenizer,
 )
 from .rl_dataset import create_dataset_from_environment
-from .rollout_storage import FileRolloutWriter, RolloutBatch, RolloutWriter
-from .training_config import InferenceWorkerConfig, TrainingConfig
+from .rollout_storage import RolloutBatch, RolloutWriter, TaggedRolloutBatch
+from .training_config import TrainingConfig
 from .utils import (
     float_to_dtype,
     get_float_dtype_by_name,
@@ -64,40 +65,52 @@ class InferenceWorker:
 
     _running: bool = True
     training_config: TrainingConfig
-    inference_config: InferenceWorkerConfig
     rollout_writer: RolloutWriter
 
     def __init__(
         self,
-        config: InferenceWorkerConfig,
-        rollout_writer: RolloutWriter | None = None,
+        training_config: TrainingConfig,
+        environment_spec: str,
+        rollout_writer: RolloutWriter,
+        rollout_batch_size: int = 32,
+        max_rollouts: int | None = None,
+        coordinator=None,
     ):
         """Initialize inference worker.
 
         Args:
-            config: Inference worker configuration containing training config.
-            rollout_writer: Optional rollout writer. If None, creates FileRolloutWriter.
+            training_config: Training configuration.
+            environment_spec: Environment specification string.
+            rollout_writer: Writer for rollout output.
+            rollout_batch_size: Size of rollout batches.
+            max_rollouts: Maximum number of rollouts to generate. None for unlimited.
+            coordinator: Coordinator for weight transfer (required for RAY_REMOTING and JAX_TRANSFER_SERVER modes).
         """
-        self.config = config
-        self.training_config = config.training_config
+        self.training_config = training_config
+        self.environment_spec = environment_spec
+        self.rollout_batch_size = rollout_batch_size
+        self.max_rollouts = max_rollouts
+        self.coordinator = coordinator
 
-        jax_distributed_initalize(**self.training_config.distributed.jax_distributed_initalize_config)
+        jax_distributed_initalize(**self.training_config.distributed.jax_distributed_initialize_config)
         jax_distributed_barrier()
 
         self.mesh = MeshShardingHelper(
-            self.training_config.distributed.sharding,
+            self.training_config.distributed.inference_sharding,
             ["replica", "fsdp", "sequence", "tensor"],
             mesh_axis_splitting=self.training_config.distributed.physical_axis_splitting,
         )
 
         with self.mesh.get_context():
             self._setup_components()
-            self._setup_weight_transfer()
 
-        self.rollout_writer = rollout_writer or FileRolloutWriter(config.rollout_output_path)
+        self.rollout_writer = rollout_writer
 
-        self.current_step = 0
+        # The current model parameters
         self.current_params = None
+
+        # Parameters for the reference (base) model for KL penalties and reference logprobs
+        self.reference_params = None
 
     def stop(self):
         """Stop the inference worker loop."""
@@ -113,8 +126,8 @@ class InferenceWorker:
 
         self.tokenizer = load_tokenizer(model_config.model_paths, model_config.tokenizer_override)
 
-        self.environment_name = self.config.environment_spec
-        self.environment = load_environment_from_spec(self.config.environment_spec, self.tokenizer)
+        self.environment_name = self.environment_spec
+        self.environment = load_environment_from_spec(self.environment_spec, self.tokenizer)
 
         self.max_input_length = self.training_config.hyperparameters.max_input_length
         self.max_output_length = self.training_config.hyperparameters.max_output_length
@@ -146,17 +159,6 @@ class InferenceWorker:
         self._setup_samplers()
         self._compile_functions()
 
-    def _load_checkpoint(self, checkpoint_path: str):
-        return load_checkpoint(
-            checkpoint_path,
-            shard_fns=self.shard_fns,
-            remove_dict_prefix=self.training_config.model.model_paths.remove_dict_prefix,
-            convert_to_dtypes=jax.tree_util.tree_map(
-                lambda x: get_float_dtype_by_name(self.training_config.model.inference_param_dtype),
-                self.params_shape,
-            ),
-        )
-
     def _setup_samplers(self):
         """Setup sampling configurations."""
         generation_config = self.training_config.generation_config
@@ -178,11 +180,6 @@ class InferenceWorker:
 
         self.sampler = build_sampler(generation_config=generation_config, **sampler_kwargs)
 
-    def _setup_weight_transfer(self):
-        """Setup weight transfer manager."""
-        # Will be initialized after model parameters are set up
-        self.weight_transfer_client = None
-
     def _compile_functions(self):
         """Compile JAX functions for inference."""  # Get parameter shapes for sharding
 
@@ -200,7 +197,6 @@ class InferenceWorker:
                     self.max_input_length + self.max_output_length - 1,
                 ),
             )
-            # Convert to inference dtype
             params = float_to_dtype(params, self.training_config.model.inference_param_dtype)
             return params
 
@@ -272,7 +268,7 @@ class InferenceWorker:
             return None
 
         # Return path to the latest checkpoint's params.msgpack
-        latest_step, latest_dir = max(checkpoint_dirs)
+        _, latest_dir = max(checkpoint_dirs)
         params_path = latest_dir / "params.msgpack"
 
         if params_path.exists():
@@ -295,42 +291,35 @@ class InferenceWorker:
                     self.params_shape,
                 ),
             )
-
-            # Convert to inference dtype
             params = float_to_dtype(params, self.training_config.model.inference_param_dtype)
-
-            self.current_params = params
 
             logger.info(f"Successfully loaded checkpoint from {checkpoint_path}")
             jax_distributed_barrier()
+            return params
 
-    def _load_from_config(self):
+    def _load_reference_params(self):
+        model_paths = self.training_config.model.model_paths
+        if model_paths.params:
+            logger.info(f"Found reference checkpoint at {model_paths.params}")
+            return self._load_checkpoint(model_paths.params)
+
+        if model_paths.train_state:
+            logger.info(f"Found reference checkpoint at {model_paths.train_state}")
+            return self._load_checkpoint(model_paths.train_state)
+
+        logger.warning("No checkpoints found, initializing with random weights...")
+        return self.init_params(jax.random.PRNGKey(0))
+
+    def _load_model_params(self):
         """Initialize the model from a training checkpoint, initial checkpoint, or randomly."""
-        jax_distributed_barrier()
 
-        # Try to load from GCS checkpoints first
+        # Try to load from an updated GCS checkpoints first
         latest_checkpoint = self._find_latest_checkpoint_from_gcs()
         if latest_checkpoint is not None:
             logger.info(f"Loading latest checkpoint from GCS at {latest_checkpoint}")
-            self._load_checkpoint(latest_checkpoint)
-            logger.info("Inference model initialized from GCS checkpoint.")
-            jax_distributed_barrier()
-            return
+            return self._load_checkpoint(latest_checkpoint)
 
-        # Fall back to model paths in config
-        model_paths = self.training_config.model.model_paths
-        if model_paths.params:
-            logger.info(f"Found checkpoint at {model_paths.params}")
-            self._load_checkpoint(model_paths.params)
-        elif model_paths.train_state:
-            logger.info(f"Found checkpoint at {model_paths.train_state}")
-            self._load_checkpoint(model_paths.train_state)
-        else:
-            logger.warning("No checkpoints found, initializing with random weights...")
-            self.current_params = self.init_params(jax.random.PRNGKey(0))
-
-        logger.info("Inference model initialized.")
-        jax_distributed_barrier()
+        return self._load_reference_params()
 
     def _initialize_weight_transfer(self):
         """Initialize weight transfer manager."""
@@ -346,37 +335,34 @@ class InferenceWorker:
             params_sharding_rules=self.inference_params_sharding_rules,
             shard_fns=self.shard_fns,
             load_checkpoint_fn=self._load_checkpoint,
+            coordinator=self.coordinator,
         )
 
         self.weight_transfer_client.set_params_placeholder(self.current_params)
 
     def _check_for_new_weights(self):
         """Check for new weights using the weight transfer manager."""
-        if self.weight_transfer_client is None:
-            logger.debug("Weight transfer manager not initialized, skipping weight check")
-            return
-
         try:
-            params, metadata = self.weight_transfer_client.receive_weights()
-            if params is not None:
-                self.current_params = params
-                logger.info(f"Received new weights: {metadata}")
+            jax_distributed_barrier()
+            logger.info("Checking for new weights from weight transfer manager...")
+            self.current_params, metrics = self.weight_transfer_client.receive_weights(self.current_params)
+            jax_distributed_barrier()
+            if metrics:
+                logger.info(f"Weights updated: {metrics}")
         except Exception as e:
             logger.warning(f"Failed to receive weights: {e}")
 
-    def _generate_rollout_batch(self) -> tuple[dict, dict]:
-        """Generate a single rollout batch from the environment."""
-        if self.current_params is None:
-            raise RuntimeError("No model parameters loaded")
-
-        rng = jax.random.PRNGKey(jax.process_index())
-
+    def _generate_rollout_batch(self, rng) -> tuple[list[dict], dict]:
+        """Generate a set of rollout batches from the environment."""
         # Create RL dataset from environment
+        jax_distributed_barrier()
+        logger.info("Current params: %s", type(self.current_params))
+        logger.info("Reference params: %s", type(self.reference_params))
         rl_dataset, dataset_metrics = create_dataset_from_environment(
             environment=self.environment,
             sampler=self.sampler,
             params=self.current_params,
-            reference_params=self.current_params,  # Use same params as reference for now
+            reference_params=self.reference_params,
             get_logprobs_fn=self.get_logprobs,
             n_examples=self.training_config.hyperparameters.n_prompts_per_step,
             n_generations=self.training_config.generation_config.n_generations,
@@ -388,9 +374,12 @@ class InferenceWorker:
             tokenizer=self.tokenizer,
             mode="train",
         )
+        jax_distributed_barrier()
 
-        for batch in rl_dataset.iterate_batches(batch_size=self.config.rollout_batch_size, shuffle=True, loop=False):
-            return batch, dataset_metrics
+        return (
+            list(rl_dataset.iterate_batches(batch_size=self.rollout_batch_size, shuffle=True, loop=False)),
+            dataset_metrics,
+        )
 
     def run(self):
         """Main inference worker loop."""
@@ -399,58 +388,58 @@ class InferenceWorker:
         rollouts_generated = 0
         last_checkpoint_check = 0
 
-        self._load_from_config()
+        self.reference_params = self._load_reference_params()
+        self.current_params = self._load_model_params()
+
         self._initialize_weight_transfer()
 
         step = 0
+
+        rng = jax.random.PRNGKey(0)
 
         while self._running:
             jax_distributed_barrier()
             # Check for new weights periodically using weight transfer manager
             current_time = time.time()
             if current_time - last_checkpoint_check >= self.training_config.weight_transfer.poll_interval_seconds:
-                logger.info("Checking for new weights.")
                 self._check_for_new_weights()
-
-                jax_distributed_barrier()
                 last_checkpoint_check = current_time
 
-            if self.config.max_rollouts is not None and rollouts_generated >= self.config.max_rollouts:
-                logger.info(f"Reached max rollouts ({self.config.max_rollouts}), stopping")
+            if self.max_rollouts is not None and rollouts_generated >= self.max_rollouts:
+                logger.info(f"Reached max rollouts ({self.max_rollouts}), stopping")
                 break
 
+            rng, input_rng = jax.random.split(rng)
+            rollout_batches, metrics = self._generate_rollout_batch(input_rng)
+            for batch_data in rollout_batches:
+                step += 1
+
+                if self.training_config.logging.log_freq > 0 and step % self.training_config.logging.log_freq == 0:
+                    log_metrics = {"step": step}
+                    log_metrics.update(jax.device_get(metrics))
+                    log_metrics.update(self.weight_transfer_client.get_metrics())
+                    log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
+                    logger.info(f"Logging metrics at step {step}... {log_metrics}")
+
+                rollout_batch = TaggedRolloutBatch(
+                    batch=RolloutBatch(
+                        input_ids=batch_data["input_ids"],
+                        attention_mask=batch_data["attention_mask"],
+                        position_ids=batch_data["position_ids"],
+                        target_ids=batch_data["target_ids"],
+                        loss_weights=batch_data["loss_weights"],
+                        loss_masks=batch_data["loss_masks"],
+                        reference_logprobs=batch_data["reference_logprobs"],
+                        policy_logprobs=batch_data["policy_logprobs"],
+                    ),
+                    env_name=self.environment_name,
+                    worker_id=f"{socket.gethostname()}_{os.getpid()}",
+                    timestamp=time.time(),
+                    rollout_id=f"{socket.gethostname()}_{int(time.time() * 1000000)}_{step}",
+                )
+                self.rollout_writer.write_batch(rollout_batch)
+                rollouts_generated += 1
             logger.info(f"Generating rollout batch {rollouts_generated}")
-            jax_distributed_barrier()
-            batch_data, metrics = self._generate_rollout_batch()
-
-            if (
-                self.config.training_config.logging.log_freq > 0
-                and step % self.config.training_config.logging.log_freq == 0
-            ):
-                log_metrics = {"step": step}
-                log_metrics.update(jax.device_get(metrics))
-                log_metrics.update(self.weight_transfer_client.get_metrics())
-                log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
-                logger.info(f"Logging metrics at step {step}... {log_metrics}")
-
-            step += 1
-
-            # TODO (power) -- validate what's actually generated & used in the training.
-            rollout_batch = RolloutBatch(
-                input_ids=batch_data["input_ids"],
-                attention_mask=batch_data["attention_mask"],
-                position_ids=batch_data["position_ids"],
-                target_ids=batch_data["target_ids"],
-                loss_weights=batch_data["loss_weights"],
-                loss_masks=batch_data["loss_masks"],
-                reference_logprobs=batch_data["reference_logprobs"],
-            )
-
-            # Write rollout batch
-            self.rollout_writer.write_batch(rollout_batch)
-
-            rollouts_generated += 1
-            logger.info(f"Generated rollout {rollouts_generated}")
 
         self.weight_transfer_client.cleanup()
         logger.info(f"Inference worker completed after generating {rollouts_generated} rollouts")

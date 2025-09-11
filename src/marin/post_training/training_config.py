@@ -148,9 +148,10 @@ class EnvironmentConfig:
 
 @dataclass
 class DistributedConfig:
-    sharding: list[int]
+    train_sharding: list[int]
+    inference_sharding: list[int]
     physical_axis_splitting: bool = False
-    jax_distributed_initalize_config: dict[str, Any] = field(default_factory=dict)
+    jax_distributed_initialize_config: dict[str, Any] = field(default_factory=dict)
 
 
 class WeightTransferMode(Enum):
@@ -163,11 +164,10 @@ class WeightTransferMode(Enum):
 class WeightTransferConfig:
     mode: WeightTransferMode = WeightTransferMode.GCS_CHECKPOINT
     # Common settings
-    sync_interval_steps: int = 60
+    sync_interval_steps: int = 100
     poll_interval_seconds: float = 30.0
 
-    # JAX Transfer Server specific
-    coordinator_name: str = "weight_transfer_coordinator"
+    # RAY_REMOTING and JAX_TRANSFER_SERVER specific
     transfer_timeout: float = 120.0
 
     # GCS Checkpoint specific
@@ -187,18 +187,3 @@ class TrainingConfig:
     test_generation_config: GenerationConfig = field(default_factory=GenerationConfig)
     checkpoint: CheckpointerConfigData = field(default_factory=CheckpointerConfigData)
     weight_transfer: WeightTransferConfig = field(default_factory=WeightTransferConfig)
-
-
-@dataclass
-class TrainWorkerConfig:
-    training_config: "TrainingConfig"
-    rollout_queue_path: str
-
-
-@dataclass
-class InferenceWorkerConfig:
-    training_config: "TrainingConfig"
-    environment_spec: str
-    rollout_output_path: str
-    rollout_batch_size: int = 32
-    max_rollouts: int | None = None
