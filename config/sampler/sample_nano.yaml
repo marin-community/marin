@@ -1,0 +1,10 @@
+hf_checkpoint: "meta-llama/Llama-3.2-1B"
+tokenizer: "meta-llama/Llama-3.2-1B"
+trainer:
+  ray:
+    auto_start_cluster: false
+  mp: p=bfloat16,c=bfloat16
+  tensor_parallel_axes: ["mlp", "heads", "kv_head", "vocab"]
+  model_axis_size: 1
+
+# num_samples: 2

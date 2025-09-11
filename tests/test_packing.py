@@ -64,7 +64,7 @@ def test_add_example_and_pack():
     expected_loss_mask = [1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
 
     np.testing.assert_array_equal(packed.tokens.array, expected_tokens)
-    np.testing.assert_array_equal(packed.attn_mask.segment_ids.array, expected_segment_ids)
+    np.testing.assert_array_equal(packed.attn_mask.segment_ids[0].array, expected_segment_ids)
     np.testing.assert_array_equal(packed.loss_mask.array, expected_loss_mask)
 
 
@@ -94,7 +94,7 @@ def test_empty_sequence():
     expected_loss_mask = [0] * 10
 
     np.testing.assert_array_equal(packed.tokens.array, expected_tokens)
-    np.testing.assert_array_equal(packed.attn_mask.segment_ids.array, expected_segment_ids)
+    np.testing.assert_array_equal(packed.attn_mask.segment_ids[0].array, expected_segment_ids)
     np.testing.assert_array_equal(packed.loss_mask.array, expected_loss_mask)
 
 
@@ -114,7 +114,7 @@ def test_packing_multiple_examples():
     expected_loss_mask = [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
 
     np.testing.assert_array_equal(packed.tokens.array, expected_tokens)
-    np.testing.assert_array_equal(packed.attn_mask.segment_ids.array, expected_segment_ids)
+    np.testing.assert_array_equal(packed.attn_mask.segment_ids[0].array, expected_segment_ids)
     np.testing.assert_array_equal(packed.loss_mask.array, expected_loss_mask)
 
 
@@ -141,7 +141,7 @@ def test_pack_prompt_completions_simple():
     expected_loss_mask_1 = [0, 1, 0, 1, 0, 0, 0, 0, 0, 0]
 
     np.testing.assert_array_equal(packed_1.tokens.array, expected_tokens_1)
-    np.testing.assert_array_equal(packed_1.attn_mask.segment_ids.array, expected_segment_ids_1)
+    np.testing.assert_array_equal(packed_1.attn_mask.segment_ids[0].array, expected_segment_ids_1)
     np.testing.assert_array_equal(packed_1.loss_mask.array, expected_loss_mask_1)
 
     # Check the second packed example
@@ -151,7 +151,7 @@ def test_pack_prompt_completions_simple():
     expected_loss_mask_2 = [1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
 
     np.testing.assert_array_equal(packed_2.tokens.array, expected_tokens_2)
-    np.testing.assert_array_equal(packed_2.attn_mask.segment_ids.array, expected_segment_ids_2)
+    np.testing.assert_array_equal(packed_2.attn_mask.segment_ids[0].array, expected_segment_ids_2)
     np.testing.assert_array_equal(packed_2.loss_mask.array, expected_loss_mask_2)
 
 
@@ -178,7 +178,7 @@ def test_pack_prompt_completions_exceed_max_buffered_examples():
     expected_loss_mask_1 = [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
 
     np.testing.assert_array_equal(packed_1.tokens.array, expected_tokens_1)
-    np.testing.assert_array_equal(packed_1.attn_mask.segment_ids.array, expected_segment_ids_1)
+    np.testing.assert_array_equal(packed_1.attn_mask.segment_ids[0].array, expected_segment_ids_1)
     np.testing.assert_array_equal(packed_1.loss_mask.array, expected_loss_mask_1)
 
     # Check the second packed example
@@ -188,7 +188,7 @@ def test_pack_prompt_completions_exceed_max_buffered_examples():
     expected_loss_mask_2 = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
     np.testing.assert_array_equal(packed_2.tokens.array, expected_tokens_2)
-    np.testing.assert_array_equal(packed_2.attn_mask.segment_ids.array, expected_segment_ids_2)
+    np.testing.assert_array_equal(packed_2.attn_mask.segment_ids[0].array, expected_segment_ids_2)
     np.testing.assert_array_equal(packed_2.loss_mask.array, expected_loss_mask_2)
 
     # Check the third packed example
@@ -198,7 +198,7 @@ def test_pack_prompt_completions_exceed_max_buffered_examples():
     expected_loss_mask_3 = [1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
 
     np.testing.assert_array_equal(packed_3.tokens.array, expected_tokens_3)
-    np.testing.assert_array_equal(packed_3.attn_mask.segment_ids.array, expected_segment_ids_3)
+    np.testing.assert_array_equal(packed_3.attn_mask.segment_ids[0].array, expected_segment_ids_3)
     np.testing.assert_array_equal(packed_3.loss_mask.array, expected_loss_mask_3)
 
 
@@ -767,7 +767,7 @@ def test_greedy_pack_prompt_completions_simple():
     expected_loss_mask_1 = [0, 1, 0, 1, 0, 0, 0, 0, 0, 0]
 
     np.testing.assert_array_equal(packed_1.tokens.array, expected_tokens_1)
-    np.testing.assert_array_equal(packed_1.attn_mask.segment_ids.array, expected_segment_ids_1)
+    np.testing.assert_array_equal(packed_1.attn_mask.segment_ids[0].array, expected_segment_ids_1)
     np.testing.assert_array_equal(packed_1.loss_mask.array, expected_loss_mask_1)
 
     # Check the second packed example
@@ -777,7 +777,7 @@ def test_greedy_pack_prompt_completions_simple():
     expected_loss_mask_2 = [1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
 
     np.testing.assert_array_equal(packed_2.tokens.array, expected_tokens_2)
-    np.testing.assert_array_equal(packed_2.attn_mask.segment_ids.array, expected_segment_ids_2)
+    np.testing.assert_array_equal(packed_2.attn_mask.segment_ids[0].array, expected_segment_ids_2)
     np.testing.assert_array_equal(packed_2.loss_mask.array, expected_loss_mask_2)
 
 
@@ -803,7 +803,7 @@ def test_greedy_pack_prompt_completions_max_segments():
     expected_loss_mask_1 = [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
 
     np.testing.assert_array_equal(packed_1.tokens.array, expected_tokens_1)
-    np.testing.assert_array_equal(packed_1.attn_mask.segment_ids.array, expected_segment_ids_1)
+    np.testing.assert_array_equal(packed_1.attn_mask.segment_ids[0].array, expected_segment_ids_1)
     np.testing.assert_array_equal(packed_1.loss_mask.array, expected_loss_mask_1)
 
     # Check the second packed example
@@ -813,7 +813,7 @@ def test_greedy_pack_prompt_completions_max_segments():
     expected_loss_mask_2 = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
     np.testing.assert_array_equal(packed_2.tokens.array, expected_tokens_2)
-    np.testing.assert_array_equal(packed_2.attn_mask.segment_ids.array, expected_segment_ids_2)
+    np.testing.assert_array_equal(packed_2.attn_mask.segment_ids[0].array, expected_segment_ids_2)
     np.testing.assert_array_equal(packed_2.loss_mask.array, expected_loss_mask_2)
 
     # Check the third packed example
@@ -823,7 +823,7 @@ def test_greedy_pack_prompt_completions_max_segments():
     expected_loss_mask_3 = [1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
 
     np.testing.assert_array_equal(packed_3.tokens.array, expected_tokens_3)
-    np.testing.assert_array_equal(packed_3.attn_mask.segment_ids.array, expected_segment_ids_3)
+    np.testing.assert_array_equal(packed_3.attn_mask.segment_ids[0].array, expected_segment_ids_3)
     np.testing.assert_array_equal(packed_3.loss_mask.array, expected_loss_mask_3)
 
 
@@ -848,7 +848,7 @@ def test_greedy_pack_prompt_completions_too_long():
     expected_loss_mask_1 = [1, 1, 1, 1, 0]  # Only the last token is not in loss mask
 
     np.testing.assert_array_equal(packed_1.tokens.array, expected_tokens_1)
-    np.testing.assert_array_equal(packed_1.attn_mask.segment_ids.array, expected_segment_ids_1)
+    np.testing.assert_array_equal(packed_1.attn_mask.segment_ids[0].array, expected_segment_ids_1)
     np.testing.assert_array_equal(packed_1.loss_mask.array, expected_loss_mask_1)
 
     # Check the second packed example
@@ -858,7 +858,7 @@ def test_greedy_pack_prompt_completions_too_long():
     expected_loss_mask_2 = [1, 0, 0, 0, 0]
 
     np.testing.assert_array_equal(packed_2.tokens.array, expected_tokens_2)
-    np.testing.assert_array_equal(packed_2.attn_mask.segment_ids.array, expected_segment_ids_2)
+    np.testing.assert_array_equal(packed_2.attn_mask.segment_ids[0].array, expected_segment_ids_2)
     np.testing.assert_array_equal(packed_2.loss_mask.array, expected_loss_mask_2)
 
 

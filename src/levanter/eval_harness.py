@@ -227,7 +227,7 @@ class _Message:
 
 
 def _get_segments_this_batch(batch, max_segments_per_ex):
-    unique_segs = np.unique(batch.attn_mask.segment_ids.array).tolist()
+    unique_segs = np.unique(batch.attn_mask.segment_ids[0].array).tolist()
     # + 1 because we use -1 as a padding value for segments and allow that
     if len(unique_segs) > max_segments_per_ex + 1:
         raise ValueError(f"Too many segments in batch: {len(unique_segs)}")

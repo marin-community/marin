@@ -28,7 +28,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "haliax>=1.4.dev351",
+    "haliax>=1.4.dev404",
     "equinox>=0.11.7,!=0.12.0",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
@@ -119,7 +119,7 @@ extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
 ignore = [
-  "E203", "E501", "W605", "F821", "E266", "E722", "E731", "E741"
+  "E203", "E501", "W605", "F821", "E266", "F722", "E731", "E741"
 ]
 
 [tool.mypy]

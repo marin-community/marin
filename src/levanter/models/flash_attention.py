@@ -175,6 +175,11 @@ def _flash_attention_forward(
     ell = hax.auto_sharded(ell)
 
     is_causal = isinstance(mask, AttentionMask) and mask.is_causal
+    # Non-zero offsets (dynamic or otherwise) are not supported in this implementation
+    if isinstance(mask, AttentionMask) and mask.is_causal and mask.causal_offset is not None:
+        raise NotImplementedError("Non-zero causal offsets are not implemented for flash attention")
+
+    # i refers to the block index in Q, j refers to the block index in K.
 
     @named_call
     def do_o_block(state):
@@ -237,6 +242,7 @@ def _flash_attention_forward(
 
             return (i, j + 1, o_i, q_i, sumexp_i, max_i)
 
+        # For causal (offset==0), limit key blocks up to the diagonal
         j_end = jnp.minimum(i + 1, Tc) if is_causal else Tc
 
         _, _, o_i, _, sumexp_i, max_i = jax.lax.while_loop(
