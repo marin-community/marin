@@ -27,6 +27,7 @@ import logging
 import os
 from collections import deque
 from functools import partial
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -43,7 +44,7 @@ from .model_helpers import (
 )
 from .optimizer import load_adamw_optimizer
 from .rollout_storage import RolloutBatch, RolloutReader
-from .training_config import TrainingConfig, TrainWorkerConfig
+from .training_config import TrainWorkerConfig
 from .utils import (
     WandbLogger,
     checkpointer,
@@ -54,6 +55,7 @@ from .utils import (
     jax_distributed_initalize,
     load_checkpoint,
 )
+from .weight_transfer_manager import create_weight_transfer_server
 
 logger = logging.getLogger(__name__)
 
@@ -63,22 +65,19 @@ class TrainingWorker:
 
     def __init__(
         self,
-        training_config: TrainingConfig,
-        worker_config: TrainWorkerConfig,
+        config: TrainWorkerConfig,
         rollout_reader: RolloutReader | None = None,
     ):
         """Initialize training worker.
 
         Args:
-            training_config: Training configuration.
-            worker_config: Worker-specific configuration.
+            config: Worker configuration containing training config.
             rollout_reader: Reader to read rollout data from. If None, creates FileRolloutReader.
         """
-        self.training_config = training_config
-        self.worker_config = worker_config
+        self.config = config
+        self.training_config = config.training_config
 
-        # Initialize JAX distributed
-        jax_distributed_initalize(**training_config.distributed.jax_distributed_initalize_config)
+        jax_distributed_initalize(**self.training_config.distributed.jax_distributed_initalize_config)
         jax_distributed_barrier()
 
         self.mesh = MeshShardingHelper(
@@ -89,6 +88,7 @@ class TrainingWorker:
 
         self.rollout_reader = rollout_reader
         self._should_stop = False
+        self.weight_id = 0
 
         # Initialize components within mesh context
         with self.mesh.get_context():
@@ -124,6 +124,11 @@ class TrainingWorker:
             self._setup_optimizer()
             self._compile_functions()
             self._setup_logger()
+            self.train_state_shape = jax.eval_shape(lambda: self.init_fn(jax.random.PRNGKey(0)))
+            self.train_state_shard_fns, self.train_state_gather_fns = self.mesh.make_shard_and_gather_fns(
+                self.train_state_shape, self.train_params_sharding_rules
+            )
+            self._setup_weight_transfer()
 
     def _setup_optimizer(self):
         """Setup optimizer configuration."""
@@ -145,7 +150,7 @@ class TrainingWorker:
         if logging_config.config_to_log is None:
             logging_config.config_to_log = dataclasses.asdict(self.training_config)
 
-        logger.info(f"Initializing logger. Worker id: {jax.process_index}, enabled: {logging_config.enable}")
+        logger.info(f"Initializing logger on worker {jax.process_index()}, enabled: {logging_config.enable}")
 
         self.logger = WandbLogger(
             self.training_config.logging.wandb_project,
@@ -237,11 +242,6 @@ class TrainingWorker:
     def _initialize_training_state(self):
         """Initialize training state with proper checkpoint loading."""
         jax_distributed_barrier()
-        train_state_shape = jax.eval_shape(lambda: self.init_fn(jax.random.PRNGKey(0)))
-        self.train_state_shard_fns, self.train_state_gather_fns = self.mesh.make_shard_and_gather_fns(
-            train_state_shape, self.train_params_sharding_rules
-        )
-
         # Initialize training state from checkpoint or params
         latest_checkpoint_step = -1
         if self.logger.can_save():
@@ -253,12 +253,22 @@ class TrainingWorker:
 
         if latest_checkpoint_step > 0:
             logger.info(f"Resuming training from checkpoint at step {latest_checkpoint_step}...")
-            checkpoint_path = os.path.join(
-                self.training_config.output_dir,
-                "checkpoints",
-                f"step_{latest_checkpoint_step}",
-                "params.msgpack",
+            checkpoint_path = (
+                Path(self.training_config.output_dir)
+                / "checkpoints"
+                / f"step_{latest_checkpoint_step}"
+                / "params.msgpack"
             )
+        elif self.training_config.model.model_paths.params:
+            logger.info("Restoring model from provided params path...")
+            checkpoint_path = self.training_config.model.model_paths.params
+        elif self.training_config.model.model_paths.train_state:
+            logger.info("Restoring model from provided train state path...")
+            checkpoint_path = self.training_config.model.model_paths.train_state
+        else:
+            checkpoint_path = None
+
+        if checkpoint_path:
             train_state = self.create_train_state_from_params(
                 load_checkpoint(
                     checkpoint_path,
@@ -266,30 +276,9 @@ class TrainingWorker:
                     remove_dict_prefix=self.training_config.model.model_paths.remove_dict_prefix,
                     convert_to_dtypes=jax.tree_util.tree_map(
                         lambda x: self.training_config.model.training_param_dtype,
-                        train_state_shape.params,
+                        self.train_state_shape.params,
                     ),
                 )
-            )
-        elif self.training_config.model.model_paths.params:
-            train_state = self.create_train_state_from_params(
-                load_checkpoint(
-                    self.training_config.model.model_paths.params,
-                    shard_fns=self.train_state_shard_fns.params,
-                    remove_dict_prefix=self.training_config.model.model_paths.remove_dict_prefix,
-                    convert_to_dtypes=jax.tree_util.tree_map(
-                        lambda x: self.training_config.model.training_param_dtype,
-                        train_state_shape.params,
-                    ),
-                )
-            )
-        elif self.training_config.model.model_paths.train_state:
-            train_state = load_checkpoint(
-                self.training_config.model.model_paths.train_state,
-                shard_fns=self.train_state_shard_fns,
-                remove_dict_prefix=self.training_config.model.model_paths.remove_dict_prefix,
-                convert_to_dtypes=jax.tree_util.tree_map(
-                    lambda x: self.training_config.model.training_param_dtype, train_state_shape
-                ),
             )
         else:
             logger.warning("No params path provided, initializing with random weights...")
@@ -297,7 +286,31 @@ class TrainingWorker:
 
         jax_distributed_barrier()
         self.checkpoint_queue = deque()
+
         return train_state
+
+    def _setup_weight_transfer(self):
+        """Initialize weight transfer manager."""
+        # Setup checkpoint directory for weight transfer config
+        if not self.training_config.weight_transfer.checkpoint_dir:
+            self.training_config.weight_transfer.checkpoint_dir = os.path.join(
+                self.training_config.output_dir, "checkpoints"
+            )
+
+        self.weight_transfer_manager = create_weight_transfer_server(
+            config=self.training_config.weight_transfer,
+            mesh=self.mesh,
+            params_sharding_rules=self.train_params_sharding_rules,
+            gather_fns=self.train_state_gather_fns,
+            model_config=self.model.config,
+        )
+
+    def _transfer_weights(self, train_state, step):
+        """Transfer weights using the weight transfer manager."""
+        self.weight_id += 1
+
+        # sync weights without optimizer state
+        self.weight_transfer_manager.serve_weights(self.weight_id, train_state.params)
 
     def stop(self):
         """Stop the training worker."""
@@ -313,11 +326,9 @@ class TrainingWorker:
             loss_weights=batch.loss_weights[start_idx:end_idx],
             loss_masks=batch.loss_masks[start_idx:end_idx],
             reference_logprobs=batch.reference_logprobs[start_idx:end_idx],
-            metadata=batch.metadata,
         )
 
     def _convert_batch_to_jax(self, batch: RolloutBatch) -> dict[str, jnp.ndarray]:
-        """Convert RolloutBatch to JAX arrays for training."""
         return {
             "input_ids": jnp.array(batch.input_ids),
             "attention_mask": jnp.array(batch.attention_mask),
@@ -349,10 +360,16 @@ class TrainingWorker:
 
         checkpoint_config = dataclasses.asdict(self.training_config.checkpoint)
         checkpoint_config.pop("save_model_freq", None)
+        checkpoint_config.pop("save_optimizer_state", None)
+
+        if self.training_config.checkpoint.save_optimizer_state is False:
+            params = train_state.params
+        else:
+            params = train_state
 
         checkpointer(
             path=os.path.join(self.training_config.output_dir, "checkpoints", f"step_{step}"),
-            train_state=train_state,
+            params=params,
             config=self.model.config.to_dict(),
             gather_fns=self.train_state_gather_fns,
             metadata=metadata,
@@ -369,9 +386,6 @@ class TrainingWorker:
         logger.info("Starting training worker...")
         jax_distributed_barrier()
 
-        # Initialize training state
-        train_state = self._initialize_training_state()
-
         step = 0
         rng = jax.random.PRNGKey(0)
 
@@ -379,23 +393,19 @@ class TrainingWorker:
             "Beginning training loop, target steps: %s",
             self.training_config.hyperparameters.num_train_steps,
         )
+        train_state = self._initialize_training_state()
 
         if self.training_config.logging.save_initial_checkpoint:
             self.save_checkpoint(train_state, 0)
 
         while step < self.training_config.hyperparameters.num_train_steps and not self._should_stop:
             logger.info(f"Training step {step}")
-            # TODO(power) -- ensure we read disjoint batches from the rollouts.
             batch = self.rollout_reader.read_batch(timeout=5)
-
             if batch is None:
                 logger.info("No batch available, waiting for new data...")
                 continue
 
-            # Get batch size and slice if necessary
             batch_size = len(batch.input_ids)
-
-            # Process batch in chunks of train_bsize
             for i in range(0, batch_size, self.train_bsize):
                 if step >= self.training_config.hyperparameters.num_train_steps or self._should_stop:
                     break
@@ -416,22 +426,34 @@ class TrainingWorker:
                 if self.training_config.logging.log_freq > 0 and step % self.training_config.logging.log_freq == 0:
                     log_metrics = {"step": step}
                     log_metrics.update(jax.device_get(metrics))
-                    log_metrics.update(batch_slice.metadata)
+                    log_metrics.update(self.weight_transfer_manager.get_metrics())
                     self.logger.log(log_metrics)
-                    logger.info(f"Step {step}: {log_metrics}")
+                    self.logger.log(self.weight_transfer_manager.get_metrics())
+                    logger.info(f"Logging metrics at step {step}... {log_metrics}")
 
-                # Save checkpoint
+                if (step % self.training_config.weight_transfer.sync_interval_steps) == 0:
+                    self._transfer_weights(train_state, step)
+
                 if (
                     self.training_config.checkpoint.save_model_freq > 0
-                    and step % self.worker_config.checkpoint_sync_interval == 0
+                    and step % self.training_config.checkpoint.save_model_freq == 0
                 ):
                     self.save_checkpoint(train_state, step)
 
-        # Final checkpoint
+        # Final checkpoint and weight transfer
         if self.training_config.checkpoint.save_model_freq > 0:
-            self.save_checkpoint(train_state, step)
+            self._transfer_weights(train_state, step)
+
+            # Log final weight transfer metrics
+            transfer_metrics = self.weight_transfer_manager.get_metrics()
+            if transfer_metrics:
+                self.logger.log(transfer_metrics)
+                logger.info(f"Final weight transfer metrics: {transfer_metrics}")
+
+            self.save_checkpoint(train_state, step)  # Always save final checkpoint
 
         # Cleanup
+        self.weight_transfer_manager.cleanup()
         jax_distributed_barrier()
         self.logger.finish()
         jax_distributed_barrier()

@@ -212,8 +212,8 @@ LLAMA_STANDARD_CONFIGS = {
     },
     "test_1m": {  # Tiny <1M parameter model for testing
         "vocab_size": 1000,
-        "hidden_size": 32,
-        "intermediate_size": 32,
+        "hidden_size": 128,
+        "intermediate_size": 128,
         "num_hidden_layers": 2,
         "num_attention_heads": 2,
         "max_sequence_length": 64,

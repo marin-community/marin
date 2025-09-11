@@ -20,6 +20,7 @@ and writes the rollout data to files for training workers to consume.
 """
 
 import logging
+import os
 import time
 from functools import partial
 from pathlib import Path
@@ -48,6 +49,7 @@ from .utils import (
     jax_distributed_initalize,
     load_checkpoint,
 )
+from .weight_transfer_manager import create_weight_transfer_client
 
 logger = logging.getLogger(__name__)
 
@@ -67,21 +69,19 @@ class InferenceWorker:
 
     def __init__(
         self,
-        training_config: TrainingConfig,
-        inference_config: InferenceWorkerConfig,
+        config: InferenceWorkerConfig,
         rollout_writer: RolloutWriter | None = None,
     ):
         """Initialize inference worker.
 
         Args:
-            training_config: Training configuration (for model/generation settings).
-            inference_config: Inference worker specific configuration.
+            config: Inference worker configuration containing training config.
             rollout_writer: Optional rollout writer. If None, creates FileRolloutWriter.
         """
-        self.training_config = training_config
-        self.inference_config = inference_config
+        self.config = config
+        self.training_config = config.training_config
 
-        jax_distributed_initalize(**training_config.distributed.jax_distributed_initalize_config)
+        jax_distributed_initalize(**self.training_config.distributed.jax_distributed_initalize_config)
         jax_distributed_barrier()
 
         self.mesh = MeshShardingHelper(
@@ -92,11 +92,11 @@ class InferenceWorker:
 
         with self.mesh.get_context():
             self._setup_components()
+            self._setup_weight_transfer()
 
-        self.rollout_writer = rollout_writer or FileRolloutWriter(inference_config.rollout_output_path)
+        self.rollout_writer = rollout_writer or FileRolloutWriter(config.rollout_output_path)
 
         self.current_step = 0
-        self.latest_checkpoint_path = None
         self.current_params = None
 
     def stop(self):
@@ -113,31 +113,53 @@ class InferenceWorker:
 
         self.tokenizer = load_tokenizer(model_config.model_paths, model_config.tokenizer_override)
 
-        self.environment_name = self.inference_config.environment_spec
-        self.environment = load_environment_from_spec(self.inference_config.environment_spec, self.tokenizer)
+        self.environment_name = self.config.environment_spec
+        self.environment = load_environment_from_spec(self.config.environment_spec, self.tokenizer)
 
         self.max_input_length = self.training_config.hyperparameters.max_input_length
         self.max_output_length = self.training_config.hyperparameters.max_output_length
         self.reference_logprobs_bsize = self.training_config.hyperparameters.reference_logprobs_bsize
         self.pad_token_id = self.training_config.hyperparameters.pad_token_id
 
+        self.inference_params_sharding_rules = TreePathShardingRule(
+            *self.prefill_model.config.get_partition_rules(
+                model_all_gather_axis=("fsdp", "sequence"),
+            )
+        )
+        self.inference_intermediate_sharding_rules = self.prefill_model.config.get_intermediate_sharding_rules(
+            data_axis=("replica", "fsdp"),
+            sequence_axis=None,
+        )
+
+        self.params_shape = jax.eval_shape(
+            lambda: self.prefill_model.init_weights(
+                jax.random.PRNGKey(0),
+                (
+                    self.training_config.hyperparameters.decode_bsize,
+                    self.max_input_length + self.max_output_length - 1,
+                ),
+            )
+        )
+
+        self.shard_fns, _ = self.mesh.make_shard_and_gather_fns(self.params_shape, self.inference_params_sharding_rules)
+
         self._setup_samplers()
         self._compile_functions()
+
+    def _load_checkpoint(self, checkpoint_path: str):
+        return load_checkpoint(
+            checkpoint_path,
+            shard_fns=self.shard_fns,
+            remove_dict_prefix=self.training_config.model.model_paths.remove_dict_prefix,
+            convert_to_dtypes=jax.tree_util.tree_map(
+                lambda x: get_float_dtype_by_name(self.training_config.model.inference_param_dtype),
+                self.params_shape,
+            ),
+        )
 
     def _setup_samplers(self):
         """Setup sampling configurations."""
         generation_config = self.training_config.generation_config
-
-        config = self.prefill_model.config
-        self.inference_params_sharding_rules = TreePathShardingRule(
-            *config.get_partition_rules(
-                model_all_gather_axis=("fsdp", "sequence"),
-            )
-        )
-        self.inference_intermediate_sharding_rules = config.get_intermediate_sharding_rules(
-            data_axis=("replica", "fsdp"),
-            sequence_axis=None,
-        )
 
         sampler_kwargs = {
             "prefill_model": self.prefill_model,
@@ -156,8 +178,13 @@ class InferenceWorker:
 
         self.sampler = build_sampler(generation_config=generation_config, **sampler_kwargs)
 
+    def _setup_weight_transfer(self):
+        """Setup weight transfer manager."""
+        # Will be initialized after model parameters are set up
+        self.weight_transfer_client = None
+
     def _compile_functions(self):
-        """Compile JAX functions for inference."""
+        """Compile JAX functions for inference."""  # Get parameter shapes for sharding
 
         @partial(
             self.mesh.sjit,
@@ -223,16 +250,17 @@ class InferenceWorker:
         self.init_params = init_params
         self.get_logprobs = get_logprobs
 
-    def _find_latest_checkpoint(self) -> str | None:
-        """Find the latest checkpoint in the source directory."""
-        source_path = Path(self.inference_config.checkpoint_source_path)
+    def _find_latest_checkpoint_from_gcs(self) -> str | None:
+        """Find the latest checkpoint from the main checkpoint directory for initial loading."""
+        # Use the checkpoint directory from weight transfer config for initial loading
+        checkpoint_dir = Path(self.training_config.weight_transfer.checkpoint_dir)
 
-        if not source_path.exists():
+        if not checkpoint_dir.exists():
             return None
 
         # Look for checkpoint directories
         checkpoint_dirs = []
-        for item in source_path.iterdir():
+        for item in checkpoint_dir.iterdir():
             if item.is_dir() and item.name.startswith("step_"):
                 try:
                     step_num = int(item.name.split("_")[1])
@@ -257,28 +285,14 @@ class InferenceWorker:
         with self.mesh.get_context():
             logger.info(f"Loading checkpoint from {checkpoint_path}")
 
-            # Get parameter shapes for sharding
-            params_shape = jax.eval_shape(
-                lambda: self.prefill_model.init_weights(
-                    jax.random.PRNGKey(0),
-                    (
-                        self.training_config.hyperparameters.decode_bsize,
-                        self.max_input_length + self.max_output_length - 1,
-                    ),
-                )
-            )
-
-            # Create sharding functions
-            shard_fns, _ = self.mesh.make_shard_and_gather_fns(params_shape, self.inference_params_sharding_rules)
-
             # Load and convert parameters
             params = load_checkpoint(
                 checkpoint_path,
-                shard_fns=shard_fns,
+                shard_fns=self.shard_fns,
                 remove_dict_prefix=self.training_config.model.model_paths.remove_dict_prefix,
                 convert_to_dtypes=jax.tree_util.tree_map(
                     lambda x: get_float_dtype_by_name(self.training_config.model.inference_param_dtype),
-                    params_shape,
+                    self.params_shape,
                 ),
             )
 
@@ -286,26 +300,24 @@ class InferenceWorker:
             params = float_to_dtype(params, self.training_config.model.inference_param_dtype)
 
             self.current_params = params
-            self.latest_checkpoint_path = checkpoint_path
 
             logger.info(f"Successfully loaded checkpoint from {checkpoint_path}")
             jax_distributed_barrier()
 
-    def _check_for_new_checkpoint(self):
-        """Check if a new checkpoint is available and load it."""
-        latest_checkpoint = self._find_latest_checkpoint()
-
-        if latest_checkpoint is not None and latest_checkpoint != self.latest_checkpoint_path:
-            self._load_checkpoint(latest_checkpoint)
-
     def _load_from_config(self):
         """Initialize the model from a training checkpoint, initial checkpoint, or randomly."""
         jax_distributed_barrier()
-        latest_checkpoint = self._find_latest_checkpoint()
 
-        if latest_checkpoint != self.latest_checkpoint_path:
+        # Try to load from GCS checkpoints first
+        latest_checkpoint = self._find_latest_checkpoint_from_gcs()
+        if latest_checkpoint is not None:
+            logger.info(f"Loading latest checkpoint from GCS at {latest_checkpoint}")
             self._load_checkpoint(latest_checkpoint)
+            logger.info("Inference model initialized from GCS checkpoint.")
+            jax_distributed_barrier()
+            return
 
+        # Fall back to model paths in config
         model_paths = self.training_config.model.model_paths
         if model_paths.params:
             logger.info(f"Found checkpoint at {model_paths.params}")
@@ -316,10 +328,41 @@ class InferenceWorker:
         else:
             logger.warning("No checkpoints found, initializing with random weights...")
             self.current_params = self.init_params(jax.random.PRNGKey(0))
-            self.latest_checkpoint_path = "random_init"
 
         logger.info("Inference model initialized.")
         jax_distributed_barrier()
+
+    def _initialize_weight_transfer(self):
+        """Initialize weight transfer manager."""
+        # Setup checkpoint directory for weight transfer config
+        if not self.training_config.weight_transfer.checkpoint_dir:
+            self.training_config.weight_transfer.checkpoint_dir = os.path.join(
+                self.training_config.output_dir, "checkpoints"
+            )
+
+        self.weight_transfer_client = create_weight_transfer_client(
+            config=self.training_config.weight_transfer,
+            mesh=self.mesh,
+            params_sharding_rules=self.inference_params_sharding_rules,
+            shard_fns=self.shard_fns,
+            load_checkpoint_fn=self._load_checkpoint,
+        )
+
+        self.weight_transfer_client.set_params_placeholder(self.current_params)
+
+    def _check_for_new_weights(self):
+        """Check for new weights using the weight transfer manager."""
+        if self.weight_transfer_client is None:
+            logger.debug("Weight transfer manager not initialized, skipping weight check")
+            return
+
+        try:
+            params, metadata = self.weight_transfer_client.receive_weights()
+            if params is not None:
+                self.current_params = params
+                logger.info(f"Received new weights: {metadata}")
+        except Exception as e:
+            logger.warning(f"Failed to receive weights: {e}")
 
     def _generate_rollout_batch(self) -> tuple[dict, dict]:
         """Generate a single rollout batch from the environment."""
@@ -346,9 +389,7 @@ class InferenceWorker:
             mode="train",
         )
 
-        for batch in rl_dataset.iterate_batches(
-            batch_size=self.inference_config.rollout_batch_size, shuffle=True, loop=False
-        ):
+        for batch in rl_dataset.iterate_batches(batch_size=self.config.rollout_batch_size, shuffle=True, loop=False):
             return batch, dataset_metrics
 
     def run(self):
@@ -359,31 +400,41 @@ class InferenceWorker:
         last_checkpoint_check = 0
 
         self._load_from_config()
+        self._initialize_weight_transfer()
+
+        step = 0
 
         while self._running:
             jax_distributed_barrier()
-            # Check for new checkpoints periodically.
-            # TOOD(power) - if there's clock skew, checkpoints might become inconsistent across workers.
-            # Use a global all_reduce instead (or switch to levanter)
+            # Check for new weights periodically using weight transfer manager
             current_time = time.time()
-            if current_time - last_checkpoint_check >= self.inference_config.checkpoint_poll_interval:
-                logger.info("Checking for new checkpoints.")
-                self._check_for_new_checkpoint()
+            if current_time - last_checkpoint_check >= self.training_config.weight_transfer.poll_interval_seconds:
+                logger.info("Checking for new weights.")
+                self._check_for_new_weights()
+
                 jax_distributed_barrier()
                 last_checkpoint_check = current_time
 
-            if (
-                self.inference_config.max_rollouts is not None
-                and rollouts_generated >= self.inference_config.max_rollouts
-            ):
-                logger.info(f"Reached max rollouts ({self.inference_config.max_rollouts}), stopping")
+            if self.config.max_rollouts is not None and rollouts_generated >= self.config.max_rollouts:
+                logger.info(f"Reached max rollouts ({self.config.max_rollouts}), stopping")
                 break
 
             logger.info(f"Generating rollout batch {rollouts_generated}")
             jax_distributed_barrier()
             batch_data, metrics = self._generate_rollout_batch()
 
-            # Create RolloutBatch
+            if (
+                self.config.training_config.logging.log_freq > 0
+                and step % self.config.training_config.logging.log_freq == 0
+            ):
+                log_metrics = {"step": step}
+                log_metrics.update(jax.device_get(metrics))
+                log_metrics.update(self.weight_transfer_client.get_metrics())
+                log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
+                logger.info(f"Logging metrics at step {step}... {log_metrics}")
+
+            step += 1
+
             # TODO (power) -- validate what's actually generated & used in the training.
             rollout_batch = RolloutBatch(
                 input_ids=batch_data["input_ids"],
@@ -393,7 +444,6 @@ class InferenceWorker:
                 loss_weights=batch_data["loss_weights"],
                 loss_masks=batch_data["loss_masks"],
                 reference_logprobs=batch_data["reference_logprobs"],
-                metadata=metrics,
             )
 
             # Write rollout batch
@@ -402,5 +452,6 @@ class InferenceWorker:
             rollouts_generated += 1
             logger.info(f"Generated rollout {rollouts_generated}")
 
+        self.weight_transfer_client.cleanup()
         logger.info(f"Inference worker completed after generating {rollouts_generated} rollouts")
         jax_distributed_barrier()

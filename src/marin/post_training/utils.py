@@ -413,31 +413,22 @@ def validate_format(input_text: str) -> dict[str, Any]:
 
 def checkpointer(
     path: str,
-    train_state: Any,
+    params: Any,
     config: Any,
     gather_fns: Any,
     metadata: Any = None,
-    save_optimizer_state: bool = False,
     save_float_dtype: str = "bf16",
     active=True,
 ):
     """Save checkpoint to disk or cloud storage."""
     if not path.startswith("gs://"):
         os.makedirs(path, exist_ok=True)
-    if save_optimizer_state:
-        checkpoint_state = train_state
-        if not active:
-            checkpoint_path = "/dev/null"
-        else:
-            checkpoint_path = os.path.join(path, "train_state.msgpack")
-        checkpoint_gather_fns = gather_fns
+    checkpoint_state = params
+    if not active:
+        checkpoint_path = "/dev/null"
     else:
-        checkpoint_state = train_state.params
-        if not active:
-            checkpoint_path = "/dev/null"
-        else:
-            checkpoint_path = os.path.join(path, "params.msgpack")
-        checkpoint_gather_fns = gather_fns.params
+        checkpoint_path = os.path.join(path, "params.msgpack")
+    checkpoint_gather_fns = gather_fns.params
     metadata_path = os.path.join(path, "metadata.pkl")
     config_path = os.path.join(path, "config.json")
 

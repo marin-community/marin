@@ -337,14 +337,18 @@ class Trainer:
                 args_dict=self.config,
             )
 
+            if self.config.checkpoint.save_optimizer_state:
+                params = train_state
+            else:
+                params = train_state.params
+
             checkpointer(
                 path=str(Path(self.config.output_dir) / "checkpoints" / f"step_{step}"),
-                train_state=train_state,
+                params=params,
                 config=self.train_model.config.to_dict(),
                 gather_fns=self.train_state_gather_fns,
                 metadata=metadata,
                 active=self.logger.can_save(),
-                save_optimizer_state=self.config.checkpoint.save_optimizer_state,
                 save_float_dtype=self.config.checkpoint.save_float_dtype,
             )
 
