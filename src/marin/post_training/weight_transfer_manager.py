@@ -654,15 +654,11 @@ class RayRemotingClient(WeightTransferClient):
     def __init__(
         self,
         config: WeightTransferConfig,
-        mesh=None,
-        params_sharding_rules=None,
         shard_fns=None,
         remove_dict_prefix=None,
         convert_to_dtypes=None,
     ):
         self.config = config
-        self.mesh = mesh
-        self.params_sharding_rules = params_sharding_rules
         self.shard_fns = shard_fns
         self.remove_dict_prefix = remove_dict_prefix
         self.convert_to_dtypes = convert_to_dtypes
@@ -697,7 +693,8 @@ class RayRemotingClient(WeightTransferClient):
 
             # Convert back to JAX arrays
             jax_pytree = jax.tree.map(lambda x: jax.numpy.array(x), numpy_pytree)
-            jax_pytree = jax.tree.map(lambda x, fn: fn(x), jax_pytree, self.shard_fns)
+            if self.shard_fns is not None:
+                jax_pytree = jax.tree.map(lambda x, fn: fn(x), jax_pytree, self.shard_fns)
 
             # Update metrics
             self.metrics["successful_receives"] += 1
@@ -788,8 +785,6 @@ def create_weight_transfer_client(
     elif config.mode == WeightTransferMode.RAY_REMOTING:
         return RayRemotingClient(
             config,
-            mesh=mesh,
-            params_sharding_rules=params_sharding_rules,
             shard_fns=shard_fns,
         )
 
