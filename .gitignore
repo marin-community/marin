@@ -1,3 +1,5 @@
+# redundant, but Ray looks for this otherwise.
+.git
 tests/snapshots/outputs
 tests/snapshots/diffs
 
@@ -205,6 +207,17 @@ wandb
 # Generated leaderboard data
 marin/speedrun/static/data/runs.json
 
+# Ignore generated credentials from google-github-actions/auth
+gha-creds-*.json
+
 .aider*
+<<<<<<< HEAD
 
 .git/*
+=======
+.git/*
+
+*.jsonl
+**/*.jsonl
+scr/*
+>>>>>>> origin/main
