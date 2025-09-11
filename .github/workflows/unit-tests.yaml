@@ -20,51 +20,55 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+      
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
+      
       - name: Set up Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v3
         with:
           node-version: ${{ matrix.node-version }}
-      - name: Cache pip dependencies
+      
+      - name: Setup pandoc
+        uses: r-lib/actions/setup-pandoc@v2
+        with:
+          pandoc-version: '3.1.11'  # Pin version for cache consistency
+      
+      - name: Cache dependencies
+        id: cache-deps
         uses: actions/cache@v3
         with:
           path: |
             ~/.cache/pip
             ~/.cache/uv
-          key: ${{ runner.os }}-${{ matrix.python-version }}-$(hashFiles('uv.lock'))-unittest
-      - name: Cache pandoc and pandiff
-        id: cache-pandoc-pandiff
-        uses: actions/cache@v3
-        with:
-          path: |
-            /usr/bin/pandoc
-            /usr/lib/node_modules/pandiff
             ~/.npm
-          key: ${{ runner.os }}-pandoc-pandiff-v1
+            ~/node_modules
+          key: ${{ runner.os }}-deps-v1-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-deps-v1-
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "uv>=0.7.19" toml
+          npm install -g pandiff
+          uv sync --dev --extra=cpu
+      
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v1
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
+      
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.NEW_GCP_JSON }}
-          
-      - name: Install dependencies
-        run: |
-          if [ "${{ steps.cache-pandoc-pandiff.outputs.cache-hit }}" != "true" ]; then
-            sudo apt-get update && sudo apt-get install -y pandoc
-            npm install -g pandiff
-          fi
-          python -m pip install --upgrade pip
-          pip install "uv>=0.7.19" toml
-          uv sync --dev --extra=cpu 
+      
       - name: Test with pytest
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          CI: true
         run: |
-          export CI=true
-          CI=true PYTHONPATH=tests:. uv run --extra=cpu pytest --durations=5 --tb=no -vv tests/
+          PYTHONPATH=tests:. uv run --extra=cpu pytest --durations=5 --tb=no -vv tests/
