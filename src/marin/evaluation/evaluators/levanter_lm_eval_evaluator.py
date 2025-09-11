@@ -16,7 +16,6 @@ import json
 import logging
 import os
 import shutil
-from typing import ClassVar
 
 import fsspec
 import jmp
@@ -29,8 +28,9 @@ from levanter.trainer import TrainerConfig
 
 from experiments.evals.task_configs import convert_to_levanter_task_config
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
+from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.levanter_tpu_evaluator import LevanterTpuEvaluator
+from marin.run.ray_deps import build_runtime_env_for_packages
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +38,18 @@ logger = logging.getLogger(__name__)
 class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
     """For `Evaluator`s that runs inference with Levanter's Lm Eval Harness on TPUs."""
 
-    _pip_packages: ClassVar[list[Dependency]] = [
-        *LevanterTpuEvaluator.DEFAULT_PIP_PACKAGES,
-        Dependency(name="jax[tpu]==0.5.1"),
-        Dependency(name="haliax==1.4.dev348"),
-        Dependency(name="levanter==1.2.dev1359"),
-        Dependency(name="statsmodels==0.14.4"),
-    ]
+    def get_runtime_env(self) -> dict:
+        """
+        Returns the runtime environment to run the evaluator on the Ray cluster.
+        """
+        return build_runtime_env_for_packages(
+            extra=[],
+            pip_packages=["statsmodels==0.14.4"],
+            env_vars={
+                "TOKENIZERS_PARALLELISM": "false",
+                "HF_DATASETS_TRUST_REMOTE_CODE": "1",
+            },
+        )
 
     def evaluate(
         self,

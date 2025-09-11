@@ -15,11 +15,11 @@
 import os
 import shutil
 import traceback
-from typing import ClassVar
 
-from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
+from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
 from marin.evaluation.utils import is_remote_path, upload_to_gcs, write_yaml
+from marin.run.ray_deps import build_runtime_env_for_packages
 
 
 class AlpacaEvaluator(VllmTpuEvaluator):
@@ -39,7 +39,11 @@ class AlpacaEvaluator(VllmTpuEvaluator):
     # so if the number of instances is not specified, we will run on all of them.
     DEFAULT_MAX_INSTANCES: int = 805
 
-    _pip_packages: ClassVar[list[Dependency]] = [*VllmTpuEvaluator.DEFAULT_PIP_PACKAGES, Dependency(name="alpaca-eval")]
+    def get_runtime_env(self) -> dict:
+        """
+        Returns the runtime environment to run the evaluator on the Ray cluster.
+        """
+        return build_runtime_env_for_packages(pip_packages=["alpaca-eval"])
 
     @staticmethod
     def write_model_config_file(model: ModelConfig, path: str) -> None:
