@@ -5,6 +5,8 @@ from marin.generation.chunk_utils import ChunkingConfig, chunk_with_config, Chun
 from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig
 from marin.processing.classification.inference import run_inference
 
+from experiments.pretraining_datasets import dclm_baseline
+
 # Total files in this shard is 279. The total dataset is roughly 40B tokens. We want to sample
 # around 20 files first which equates to roughly 7B tokens.
 synthetic_dclm_annotation_subset = ExecutorStep(
@@ -183,5 +185,133 @@ synthetic_dclm_diverse_qa = ExecutorStep(
     ),
 )
 
+MCQ_STYLE_PROMPT = """
+Convert the following paragraph into a multiple choice question with 4 options and the correct answer:
+The format should be:
+- Question: [first question]
+A. [first answer]
+B. [second answer]
+C. [third answer]
+D. [fourth answer]
+Answer: [correct answer]
+- Question: [second question]
+A. [first answer]
+B. [second answer]
+C. [third answer]
+D. [fourth answer]
+Answer: [correct answer]
+...
+
+Text to convert:
+<example>
+{example}
+</example>
+
+Just return the multiple choice questions and answer. Do not include any other text.
+"""
+
+tpu_v4_engine_kwargs = {
+    "tensor_parallel_size": 1,
+    "enforce_eager": False,
+    "max_model_len": 8192,
+}
+synthetic_dclm_mcq_style = ExecutorStep(
+    name="documents/synthetic-dclm-subset-chunk-qa-1024-mcq",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=dclm_data_chunked,
+        output_path=this_output_path(),
+        model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-3B-Instruct--0cb88a4",
+        model_type="vllm",
+        attribute_name="mcq_style",
+        filetype="jsonl.zst",
+        batch_size=2048,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+        classifier_kwargs={
+            "template": MCQ_STYLE_PROMPT,
+            "score_extractor_fn": None,
+            "engine_kwargs": tpu_v4_engine_kwargs,
+            "generation_kwargs": generation_kwargs,
+            "save_original_generation": True,
+        },
+    ),
+)
+
+# tpu_v4_single_tpu_chip_engine_kwargs = {
+#     "tensor_parallel_size": 1,
+#     "enforce_eager": False,
+#     "max_model_len": 4096,
+# }
+synthetic_dclm_wrapqa_1b = ExecutorStep(
+    name="documents/synthetic-dclm-subset-chunk-qa-1024-wrapqa-1b",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=dclm_data_chunked,
+        output_path=this_output_path(),
+        model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-1B-Instruct--c4219cc",
+        model_type="vllm",
+        attribute_name="wrap_qa_rephrase",
+        filetype="jsonl.zst",
+        batch_size=2048,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+        classifier_kwargs={
+            "template": WRAP_QA_REPHRASE_PROMPT,
+            "score_extractor_fn": None,
+            "engine_kwargs": tpu_v4_engine_kwargs,
+            "generation_kwargs": generation_kwargs,
+            "save_original_generation": True,
+        },
+    ),
+)
+
+# Roughly 10B Tokens from entire DCLM dataset
+synthetic_dclm_10B_subset = ExecutorStep(
+    name="documents/dclm-baseline-10B-subset",
+    fn=transfer_files,
+    config=TransferConfig(
+        input_path=dclm_baseline,
+        output_path=this_output_path(),
+        num_random_files=80,
+    ),
+)
+
+synthetic_dclm_10B_subset_chunked = ExecutorStep(
+    name="documents/dclm-baseline-10B-subset-chunked",
+    fn=chunk_with_config,
+    config=ChunkingConfig(
+        input_path=synthetic_dclm_10B_subset,
+        output_path=this_output_path(),
+        filetype="jsonl.zst",
+        chunk_strategy=ChunkStrategy.PASSAGE,
+        chunk_size=350,  # 350 tokens per passage
+    ),
+)
+
+synthetic_dclm_10B_subset_wrapqa = ExecutorStep(
+    name="documents/synthetic-dclm-subset-10B-wrapqa-3b",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=synthetic_dclm_10B_subset_chunked,
+        output_path=this_output_path(),
+        model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-3B-Instruct--0cb88a4",
+        model_type="vllm",
+        attribute_name="wrap_qa_rephrase",
+        filetype="jsonl.zst",
+        batch_size=2048,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+        classifier_kwargs={
+            "template": WRAP_QA_REPHRASE_PROMPT,
+            "score_extractor_fn": None,
+            "engine_kwargs": engine_kwargs,
+            "generation_kwargs": generation_kwargs,
+            "save_original_generation": True,
+        },
+    ),
+)
+
+
 if __name__ == "__main__":
-    executor_main([synthetic_dclm_diverse_qa, synthetic_dclm_wrapmed])
+    executor_main([synthetic_dclm_10B_subset_wrapqa])

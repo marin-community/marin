@@ -12,6 +12,8 @@ import os
 import draccus
 import pandas as pd
 import ray
+from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
+from ray.util.queue import Queue
 
 import datetime
 import threading
@@ -21,15 +23,69 @@ from marin.processing.classification.classifier import (
     AutoClassifier,
     BaseClassifier,
 )
+from marin.processing.classification.cleanup import Reaper
 from marin.processing.classification.config.inference_config import InferenceConfig
 from marin.utils import (
     fsspec_glob,
     fsspec_mkdirs,
     rebase_file_path,
-    remove_tpu_lockfile_on_exit,
 )
 
 logger = logging.getLogger("ray")
+
+
+def _kill_processes_by_regex_if_no_vllm(pattern: str) -> None:
+    """Hacky cleanup: kill processes whose name/cmdline matches pattern
+    only if there is no process that mentions "VLLM".
+
+    This is intended to mitigate cases where accelerator lock files are held
+    by crashed or orphaned Ray workers.
+    """
+    try:
+        import os as _os
+        import re as _re
+        import signal as _signal
+        import psutil as _psutil  # type: ignore
+    except Exception:
+        # If psutil or other deps aren't available, silently skip
+        return
+
+    try:
+        # Check if any VLLM process is present; if so, do nothing
+        has_vllm = False
+        for proc in _psutil.process_iter(attrs=["pid", "name", "cmdline"]):
+            try:
+                info = proc.info
+                name = info.get("name") or ""
+                cmdline = " ".join(info.get("cmdline") or [])
+                haystack = f"{name} {cmdline}"
+                if _re.search(r"VLLM", haystack):
+                    has_vllm = True
+                    break
+            except (_psutil.NoSuchProcess, _psutil.AccessDenied, _psutil.ZombieProcess) as e:
+                print(f"Error getting process info for {proc.pid}: {e}")
+                continue
+
+        if has_vllm:
+            return
+
+        # No VLLM processes found; kill processes matching the provided pattern
+        for proc in _psutil.process_iter(attrs=["pid", "name", "cmdline"]):
+            try:
+                info = proc.info
+                name = info.get("name") or ""
+                cmdline = " ".join(info.get("cmdline") or [])
+                haystack = f"{name} {cmdline}"
+                if _re.search(pattern, haystack, flags=_re.IGNORECASE):
+                    if proc.pid == _os.getpid():
+                        continue
+                    _os.kill(proc.pid, _signal.SIGKILL)
+            except (_psutil.NoSuchProcess, _psutil.AccessDenied, _psutil.ZombieProcess) as e:
+                print(f"Error killing process {proc.pid}: {e}")
+                continue
+    except Exception:
+        # Best-effort cleanup; ignore any unexpected errors
+        pass
 
 
 def read_dataset_streaming(input_filename: str, columns: list[str] | None = None):
@@ -367,6 +423,7 @@ def get_output_dataset_column_names(input_filename: str) -> list[str]:
         return ["id", "attributes", "generated_text", "text"]
 
 
+@cached_or_construct_output(success_suffix="SUCCESS")
 def process_file_with_quality_classifier_streaming(
     input_filename: str,
     output_filename: str,
@@ -522,8 +579,10 @@ def process_file_with_quality_classifier(input_filename: str, output_filename: s
     process_file_with_quality_classifier_streaming(input_filename, output_filename, quality_classifier)
 
 
+# @ray.remote(max_calls=1)
+# @remove_tpu_lockfile_on_exit
 @ray.remote(max_calls=1)
-@remove_tpu_lockfile_on_exit
+@cached_or_construct_output(success_suffix="SUCCESS")
 def process_file_ray(
     input_filename: str,
     output_filename: str,
@@ -534,18 +593,34 @@ def process_file_ray(
     classifier_kwargs: dict,
     batch_size: int = 512,
     resume: bool = True,
+    queue: Queue | None = None,
 ):
-    quality_classifier = AutoClassifier.from_model_path(
-        model_name_or_path, attribute_name, model_type, **classifier_kwargs
-    )
+    try:
+        quality_classifier = AutoClassifier.from_model_path(
+            model_name_or_path, attribute_name, model_type, **classifier_kwargs
+        )
 
-    process_file_with_quality_classifier_streaming(
-        input_filename, output_filename, quality_classifier, batch_size, resume
-    )
+        process_file_with_quality_classifier_streaming(
+            input_filename, output_filename, quality_classifier, batch_size, resume
+        )
+
+    except Exception:
+        # On failure, try to clear out stray Ray worker processes if safe
+        # _kill_processes_by_regex_if_no_vllm(r"process_file_ray")
+        raise
+    finally:
+        if queue is not None:
+            queue.put(
+                {
+                    "pid": os.getpid(),
+                    "node_id": ray.get_runtime_context().get_node_id(),
+                }
+            )
 
 
+# @ray.remote(max_calls=1)
+# @remove_tpu_lockfile_on_exit
 @ray.remote(max_calls=1)
-@remove_tpu_lockfile_on_exit
 @cached_or_construct_output(success_suffix="SUCCESS")
 def _process_dir(
     input_path: str,
@@ -557,6 +632,7 @@ def _process_dir(
     classifier_kwargs: dict,
     batch_size: int = 512,
     resume: bool = True,
+    queue: Queue | None = None,
 ):
     """Perform quality classification on a directory of files
 
@@ -599,6 +675,21 @@ def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
 
 
 @ray.remote(num_cpus=0, resources={"head_node": 0.001})
+def cleanup_tpu_processes(queue: Queue):
+    killed_pids = []
+    while True:
+        info = queue.get()
+
+        if info is None:
+            break
+        reaper = Reaper.options(scheduling_strategy=NodeAffinitySchedulingStrategy(info["node_id"], soft=False)).remote()
+        results = ray.get(reaper.kill_if_holding_accel.remote(info["pid"]))
+        killed_pids.extend(results["killed"])
+
+    return killed_pids
+
+
+@ray.remote(num_cpus=0, resources={"head_node": 0.001})
 def run_inference(inference_config: InferenceConfig):
     logger.info(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
     filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
@@ -622,6 +713,8 @@ def run_inference(inference_config: InferenceConfig):
     pending_refs: dict = {}
     attempt_count: dict[str, int] = {}
 
+    queue = Queue(actor_options={"num_cpus": 0, "resources": {"head_node": 0.001}})
+
     def submit(input_fp: str):
         output_fp = rebase_file_path(input_path, input_fp, output_path)
         fsspec_mkdirs(os.path.dirname(output_fp))
@@ -635,8 +728,11 @@ def run_inference(inference_config: InferenceConfig):
             inference_config.classifier_kwargs,
             inference_config.batch_size,
             inference_config.resume,
+            queue,
         )
         pending_refs[ref] = input_fp
+
+    cleanup_task = cleanup_tpu_processes.remote(queue)
 
     for input_filepath in filepaths:
         # Throttle submissions
@@ -652,6 +748,8 @@ def run_inference(inference_config: InferenceConfig):
                 count = attempt_count.get(file_for_ref, 0) + 1
                 attempt_count[file_for_ref] = count
                 logger.warning(f"Task failed for {file_for_ref} (attempt {count}): {e}")
+                # Hacky cleanup on failure to clear accelerator locks held by stray workers
+                _kill_processes_by_regex_if_no_vllm(r"process_file_ray")
                 if count < max_retries_per_file:
                     submit(file_for_ref)
                 else:
@@ -671,10 +769,17 @@ def run_inference(inference_config: InferenceConfig):
             count = attempt_count.get(file_for_ref, 0) + 1
             attempt_count[file_for_ref] = count
             logger.warning(f"Task failed for {file_for_ref} (attempt {count}): {e}")
+            # Hacky cleanup on failure to clear accelerator locks held by stray workers
+            _kill_processes_by_regex_if_no_vllm(r"process_file_ray")
             if count < max_retries_per_file:
                 submit(file_for_ref)
             else:
                 logger.error(f"Giving up after {count} attempts for {file_for_ref}")
+
+    # Stop sentinel for cleanup since all done
+    queue.put(None)
+    killed_pids = ray.get(cleanup_task)
+    print(f"Killed PIDs: {killed_pids}")
 
 
 @draccus.wrap()
