@@ -683,6 +683,9 @@ class Executor:
 
             runtime_env = build_runtime_env_for_packages(extra=step.pip_dependency_groups)
 
+            # Inject themarin prefix into the runtime environment for each step.
+            runtime_env["env_vars"] = runtime_env.get("env_vars", {}) | {"MARIN_PREFIX": self.prefix}
+
             # uv doesn't reuse dependencies and ends up installing CUDA-enabled
             # torch, which is huge and causes OOMs, so disable it for now.
             # if os.system("which uv >/dev/null 2>&1") == 0:
