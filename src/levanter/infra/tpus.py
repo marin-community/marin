@@ -246,9 +246,11 @@ def add_ssh_key(ssh_key_filename):
         )
         for key in existing_keys:
             if key_hash in key:
+                print("Existing key found in keychain, skipping ssh-add")
                 return
 
-            subprocess.check_call(["ssh-add", ssh_key_filename])
+        print("SSH key not in key-chain, adding.")
+        subprocess.check_call(["ssh-add", ssh_key_filename])
     except subprocess.CalledProcessError:
         raise
 
