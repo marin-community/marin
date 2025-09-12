@@ -5,6 +5,7 @@ import jax.numpy as jnp
 
 import haliax as hax
 import haliax.haxtyping as ht
+import numpy as np
 from haliax import NamedArray
 
 
@@ -105,3 +106,19 @@ def purge(array: NamedArray, mask: NamedArray, invalid=INVALID) -> NamedArray:
 
     new_values = purge_raw(array.array, mask.array, invalid=invalid)
     return hax.named(new_values, array.axes)
+
+
+def pad_to_standard_length(tokens: np.ndarray, allowed_lengths: list[int], pad_token_id: int) -> np.ndarray:
+    """Pad the token array to the nearest allowed length using the pad_token_id."""
+    current_length = tokens.shape[0]
+    target_length = min((length for length in allowed_lengths if length >= current_length), default=None)
+
+    if target_length is None:
+        raise ValueError(f"Current length {current_length} exceeds all allowed lengths {allowed_lengths}")
+
+    padding_length = target_length - current_length
+    if padding_length > 0:
+        padding = np.full((padding_length,), pad_token_id, dtype=tokens.dtype)
+        tokens = np.concatenate([tokens, padding], axis=0)
+
+    return tokens

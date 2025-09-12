@@ -58,7 +58,7 @@ class PageTable(eqx.Module):
 
     @property
     def current_num_seqs(self) -> int:
-        return hax.sum(self.seq_lens >= 0).scalar()
+        return hax.sum(self.seq_lens >= 0 & is_valid(self.seq_lens)).scalar()
 
     @property
     def max_Seq(self) -> hax.Axis:

@@ -199,7 +199,7 @@ def log_configuration(hparams: Any, config_name: Optional[str] = None):
                     name = config_name or "config.yaml"
                     _global_tracker.log_artifact(config_path, name=name, type="config")
             except Exception:  # noqa
-                logger.warning("Failed to dump config to yaml. Skipping logging as artifact.")
+                logger.warning("Failed to dump config to yaml. Skipping logging as artifact.", exc_info=True)
 
 
 def set_global_tracker(tracker: Tracker):

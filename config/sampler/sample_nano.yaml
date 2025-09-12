@@ -7,4 +7,10 @@ trainer:
   tensor_parallel_axes: ["mlp", "heads", "kv_head", "vocab"]
   model_axis_size: 1
 
-# num_samples: 2
+service:
+  max_pages: 256
+  max_seqs: 16
+  page_size: 8
+  max_pages_per_seq: 16
+  max_queued_tokens: 16
+  max_seqs_in_prefill: 8
