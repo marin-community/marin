@@ -8,7 +8,7 @@ services:
       args:
         - DEV=true
     ports:
-      - "5000:5000"
+      - "5001:5001"
     volumes:
       - ./gcs-key.json:/app/gcs-key.json
       - ./src:/app/src

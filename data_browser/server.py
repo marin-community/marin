@@ -202,9 +202,23 @@ def has_permissions(path: str, root_paths: list[str], blocked_paths: list[str] |
 
     # Check if path is blocked
     if blocked_paths:
-        for blocked_path in blocked_paths:
-            if _is_path_blocked(path, blocked_path):
-                return False
+        for blocked_path_pattern in blocked_paths:
+            # For cloud storage paths, check if the path starts with the blocked pattern
+            if path.startswith(CLOUD_STORAGE_PREFIXES):
+                if path.startswith(blocked_path_pattern):
+                    return False
+            else:
+                # For local paths, use os.path.commonpath for consistent logic
+                if not os.path.isabs(path):
+                    # Don't allow relative paths
+                    return False
+                try:
+                    if os.path.commonpath([path, blocked_path_pattern]) == blocked_path_pattern:
+                        # The path is blocked if it's a subpath of the blocked pattern
+                        return False
+                except ValueError:
+                    # Paths don't have a common base, so not blocked by this pattern
+                    continue
 
     # Check if path is allowed under root_paths
     for allowed_path in root_paths:
@@ -220,16 +234,6 @@ def has_permissions(path: str, root_paths: list[str], blocked_paths: list[str] |
                 # The path is allowed if it's a subpath of the allowed path
                 return True
     return False
-
-
-def _is_path_blocked(path: str, blocked_path: str) -> bool:
-    """Check if a path should be blocked by comparing normalized paths."""
-    # Normalize paths for consistent comparison
-    normalized_blocked = blocked_path.rstrip("/") + "/"
-    normalized_path = path.rstrip("/") + "/"
-
-    # Block if path starts with blocked path, or if they're exact matches
-    return normalized_path.startswith(normalized_blocked) or path.rstrip("/") == blocked_path.rstrip("/")
 
 
 # Sanity checks to ensure has_permissions works as expected
