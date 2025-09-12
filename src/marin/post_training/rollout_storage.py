@@ -53,7 +53,6 @@ class RolloutBatch:
     loss_weights: np.ndarray
     loss_masks: np.ndarray
     reference_logprobs: np.ndarray
-    metadata: dict
 
 
 class RolloutReader(ABC):

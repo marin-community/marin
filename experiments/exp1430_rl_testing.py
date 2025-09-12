@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import ray
 from levanter.infra.ray_tpu import run_on_pod_ray
 
-from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.post_training.training_config import (
     CheckpointerConfigData,
     DistributedConfig,
@@ -38,6 +38,8 @@ from marin.post_training.training_config import (
     TrainingConfig,
     TrainingHyperparameters,
     TrainWorkerConfig,
+    WeightTransferConfig,
+    WeightTransferMode,
 )
 from marin.resources import TpuPodConfig
 from marin.training.training import (
@@ -89,21 +91,18 @@ def run_rl_training_on_pod(config: RLTrainConfig):
     from marin.post_training.train_worker import TrainingWorker
 
     rollout_queue_path = config.training_config.output_dir + "/rollout_queue"
-    checkpoint_dir = config.training_config.output_dir + "/checkpoints"
 
     train_worker_config = TrainWorkerConfig(
+        training_config=config.training_config,
         rollout_queue_path=rollout_queue_path,
-        checkpoint_sync_interval=60,  # Save checkpoint every 60 steps (~1 minute)
     )
 
     inference_worker_config = InferenceWorkerConfig(
+        training_config=config.training_config,
         environment_spec=ENVIRONMENT_SPEC,
-        checkpoint_source_path=checkpoint_dir,
         rollout_output_path=rollout_queue_path,
-        checkpoint_poll_interval=30.0,  # Check for new checkpoints every 30 seconds
         rollout_batch_size=8,
         max_rollouts=None,  # Generate rollouts continuously
-        checkpoint_timeout=300.0,
     )
 
     env = {}
@@ -125,7 +124,7 @@ def run_rl_training_on_pod(config: RLTrainConfig):
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
             rollout_reader = FileRolloutReader(rollout_queue_path)
-            worker = TrainingWorker(config.training_config, train_worker_config, rollout_reader)
+            worker = TrainingWorker(train_worker_config, rollout_reader)
             worker.train()
 
     inference_pod_config = TpuPodConfig(tpu_type=config.train_tpu_type)
@@ -136,7 +135,7 @@ def run_rl_training_on_pod(config: RLTrainConfig):
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
             rollout_writer = FileRolloutWriter(rollout_queue_path)
-            worker = InferenceWorker(config.training_config, inference_worker_config, rollout_writer)
+            worker = InferenceWorker(inference_worker_config, rollout_writer)
             worker.run()
 
     train_tasks = []
@@ -189,11 +188,7 @@ def default_rl_train(
         **kwargs: Additional arguments
     """
 
-    model_paths_config = ModelPathsConfig(
-        params=model_paths["params"],
-        tokenizer=model_paths["tokenizer"],
-        config=model_paths["config"],
-    )
+    model_paths_config = ModelPathsConfig(**model_paths)
 
     optim_config = OptimizerConfig(
         init_lr=learning_rate,
@@ -234,27 +229,26 @@ def default_rl_train(
         remat_block="nothing_saveable",
         resid_pdrop=0.0,
         embd_pdrop=0.0,
-    )
-
-    model_config_override = ModelOverrideConfig(
-        bos_token_id=128000,
-        eos_token_id=128001,
-        pad_token_id=128002,
-        max_sequence_length=2048,
-        remat_block="nothing_saveable",
-        resid_pdrop=0.0,
-        embd_pdrop=0.0,
         attn_pdrop=0.0,
     )
 
     checkpointer_config = CheckpointerConfigData(
-        save_optimizer_state=False,
-        save_float_dtype="bf16",
-        save_model_freq=1,
+        save_optimizer_state=False, save_float_dtype="bf16", save_model_freq=1000
     )
 
     # Shared paths for worker coordination
     output_dir = this_output_path()
+
+    # Weight transfer configuration
+    weight_transfer_config = WeightTransferConfig(
+        mode=WeightTransferMode.RAY_REMOTING,
+        sync_interval_steps=10,
+        poll_interval_seconds=30.0,
+        coordinator_name=f"coordinator_{name}",
+        transfer_timeout=120.0,
+        checkpoint_dir=f"{output_dir}/checkpoints",
+        max_checkpoints=5,
+    )
 
     training_config = TrainingConfig(
         model=ModelConfig(
@@ -264,11 +258,9 @@ def default_rl_train(
             training_param_dtype="fp32",
             training_activation_dtype="bf16",
             model_config_override=model_config_override,
-            train_attention_kernel_config='splash:{"block_size": 256}',
-            prefill_attention_kernel_config='splash:{"block_size": 256}',
-            generate_attention_kernel_config=(
-                'paged:{"page_size": 256, "pages_per_compute_block": 1, "inline_seq_dim": true, "use_int8": false}'
-            ),
+            train_attention_kernel_config=r"default:{}",
+            prefill_attention_kernel_config=r"default:{}",
+            generate_attention_kernel_config=r"default:{}",
         ),
         hyperparameters=TrainingHyperparameters(
             num_train_steps=num_train_steps,
@@ -284,10 +276,10 @@ def default_rl_train(
             kl_coef=kl_coef,
         ),
         logging=LoggingConfig(
-            log_freq=100,
+            log_freq=1,
             num_eval_examples=0,
             wandb_project=WANDB_PROJECT,
-            save_initial_checkpoint=True,
+            save_initial_checkpoint=False,
             log_initial_step=True,
             max_checkpoints=None,
             online=True,
@@ -304,6 +296,7 @@ def default_rl_train(
         checkpoint=checkpointer_config,
         generation_config=generation_config,
         test_generation_config=test_generation_config,
+        weight_transfer=weight_transfer_config,
     )
 
     config = RLTrainConfig(
@@ -325,9 +318,11 @@ def main():
     """Main function to run RL training experiments."""
 
     model_paths = {
-        "params": InputName.hardcoded("checkpoints/Llama-3.1-8B-Instruct-converted/params.msgpack"),
+        "params": None,
+        # the tokenizer will produce outputs out of vocab range, but
+        # we're just testing to see things work end-to-end
         "tokenizer": "meta-llama/Meta-Llama-3-8B-Instruct",
-        "config": InputName.hardcoded("checkpoints/Llama-3.1-8B-Instruct-converted/config.json"),
+        "default_config_name": "test_1m",
     }
 
     experiments = [
@@ -339,7 +334,7 @@ def main():
             learning_rate=5e-7,
             num_train_steps=10000,
             inference_tpu_type="v4-8",
-            train_tpu_type="v4-64",
+            train_tpu_type="v4-8",
         ),
     ]
 

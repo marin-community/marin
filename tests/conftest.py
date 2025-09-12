@@ -81,7 +81,32 @@ def current_date_time():
 
 @pytest.fixture(scope="session")
 def ray_tpu_cluster(tmp_path_factory, worker_id):
+    if os.getenv("PYTEST_XDIST_WORKER_COUNT") is None or "1":
+        # Single worker, start Ray locally
+        if os.getenv("START_RAY_TPU_CLUSTER") == "true":
+            ray.init(
+                namespace="marin",
+                resources={"TPU": 8, "TPU-v6e-8-head": 1, "head_node": 1},
+                num_cpus=120,
+                ignore_reinit_error=True,
+            )
+        elif os.getenv("START_RAY_CPU_CLUSTER") == "true":
+            ray.init(namespace="marin", num_cpus=8, resources={"head_node": 1}, ignore_reinit_error=True)
+        else:
+            ray.init(namespace="marin", num_cpus=8, resources={"head_node": 1}, ignore_reinit_error=True)
+        yield
+        ray.shutdown()
+        return
+
     root_tmp_dir = tmp_path_factory.getbasetemp().parent
+
+    # best effort isolation in case we fail to clean up between test runs
+    # pytest doesn't provide a unique temp path for a session when running
+    # in xdist. we round to 100 seconds to reduce the risk of workers
+    # getting different timestamps
+    tmp_timestamp = time.time() // 100000
+    root_tmp_dir = root_tmp_dir / f"ray_cluster_{tmp_timestamp}"
+    root_tmp_dir.mkdir(parents=True, exist_ok=True)
     config_file = Path(root_tmp_dir) / "ray_cluster_config.json"
     lock_file = Path(root_tmp_dir) / "ray_cluster_config.lock"
     rw_lock = fasteners.InterProcessReaderWriterLock(str(lock_file))
@@ -120,7 +145,6 @@ def ray_tpu_cluster(tmp_path_factory, worker_id):
             # Connect to the existing cluster
             ray.init(
                 address=current_config.cluster_address,
-                resources={"head_node": 1},
                 namespace="marin",
                 ignore_reinit_error=True,
             )

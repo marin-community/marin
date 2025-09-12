@@ -1,6 +1,5 @@
 # redundant, but Ray looks for this otherwise.
 .git
-
 tests/snapshots/outputs
 tests/snapshots/diffs
 
