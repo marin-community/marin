@@ -39,6 +39,8 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
     _pip_packages: ClassVar[list[Dependency]] = [
         *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
         "pandas",
+        "langdetect",
+        "immutabledict",
     ]
     _env_vars: ClassVar[dict[str, str]] = {
         # Human eval tests code from the model which requires permission to run
