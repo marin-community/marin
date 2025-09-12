@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import math
 
 import equinox
@@ -618,8 +621,13 @@ def test_attention_equivalence(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     q = torch.randn(
-        batch_size, num_queries, num_key_value_heads, num_key_value_groups, head_dim,
-        device=device, dtype=torch.bfloat16,
+        batch_size,
+        num_queries,
+        num_key_value_heads,
+        num_key_value_groups,
+        head_dim,
+        device=device,
+        dtype=torch.bfloat16,
     )
     k = torch.randn(batch_size, num_keys, num_key_value_heads, head_dim, device=device, dtype=torch.bfloat16)
     v = torch.randn(batch_size, num_keys, num_key_value_heads, head_dim, device=device, dtype=torch.bfloat16)

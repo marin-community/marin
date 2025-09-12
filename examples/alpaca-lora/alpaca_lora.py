@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Modified version of [alpaca.py] to use LoRA instead of full finetuning.
 
 import logging

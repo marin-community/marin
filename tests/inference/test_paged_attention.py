@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # tests/test_ragged_paged_attention.py
 import jax
 import math
@@ -133,7 +136,7 @@ def _reference_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, seq_lens
 
 
 # very loose tolerance. JAX uses a very loose tolerance for their ragged_attention tests.
-RPA_TOL=1e-2
+RPA_TOL = 1e-2
 
 
 def test_ragged_paged_attention_single_seq():
@@ -148,21 +151,17 @@ def test_ragged_paged_attention_single_seq():
         assert ragged.axes == ref.axes
         for i in range(len(ragged.array)):
             print(i)
-            assert_trees_all_close(ragged.array[i], ref.array[i], atol=RPA_TOL, rtol=RPA_TOL, custom_message=f" at index {i}")
+            assert_trees_all_close(
+                ragged.array[i], ref.array[i], atol=RPA_TOL, rtol=RPA_TOL, custom_message=f" at index {i}"
+            )
         # assert_trees_all_close(ragged.array[:-1], ref.array[:-1], atol=RPA_TOL, rtol=RPA_TOL)
         # assert_trees_all_close(ragged.array[-1], ref.array[-1], atol=RPA_TOL, rtol=RPA_TOL)
         # assert_trees_all_close(ragged.array, ref.array, atol=RPA_TOL, rtol=RPA_TOL)
 
 
-@pytest.mark.parametrize("seq_lens", [
-    [8],
-    [8, 32, 16],
-    [10, 37, 64],
-    [34, 17],
-    [9, 10, 34, 17],
-    [64, 10, 37],
-    [5, 15, 25, 35, 45]
-])
+@pytest.mark.parametrize(
+    "seq_lens", [[8], [8, 32, 16], [10, 37, 64], [34, 17], [9, 10, 34, 17], [64, 10, 37], [5, 15, 25, 35, 45]]
+)
 def test_ragged_paged_attention_multi_seq(seq_lens):
     rng = jr.PRNGKey(hash(tuple(seq_lens)))
     q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs = _build_random_case(rng, seq_lens)
@@ -381,6 +380,7 @@ def test_attention_paged_decode_ragged_fill_in_chunks():
             "position",
             [x0[Pos, hax.dslice(off0, step0)], x1[Pos, hax.dslice(off1, step1)]],
         )
+
         # compute pos ids for this ragged chunk
         def _relative_positions(seg_ids):
             idx = jnp.arange(seg_ids.shape[0])

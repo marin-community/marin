@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Type, Union
@@ -345,9 +348,7 @@ class LlamaDecoderLayer(eqx.Module):
         # self attention and skip connection
         residual = x
         x = self.input_layernorm(x)
-        attn_output, kv_cache = self.self_attn.paged_decode(
-            x, kv_cache, batch_info, pos_ids=pos_ids, key=k_attn
-        )
+        attn_output, kv_cache = self.self_attn.paged_decode(x, kv_cache, batch_info, pos_ids=pos_ids, key=k_attn)
 
         if self.post_attn_layernorm is not None:
             attn_output = self.post_attn_layernorm(attn_output)

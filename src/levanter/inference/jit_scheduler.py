@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 
 import equinox as eqx
@@ -38,6 +41,7 @@ class PackedSequence(eqx.Module):
 
 class SeqDecodingParams(eqx.Module):
     """Per-sequence decoding parameters."""
+
     max_num_tokens: jnp.ndarray
     stop_tokens: ht.i32[NamedArray, "stop_seq position"] | None
     temperature: jnp.ndarray
@@ -53,7 +57,7 @@ class SeqDecodingParams(eqx.Module):
             max_num_tokens=jnp.array(max_int_jnp - 100000, dtype=jnp.int32),
             stop_tokens=None,
             temperature=jnp.array(0.0, dtype=jnp.float32),
-            key=jax.random.key(0)
+            key=jax.random.key(0),
         )
 
 
@@ -74,6 +78,7 @@ class DecodeState(eqx.Module):
        generated. We don't currently compute log probabilities for the prefix tokens, so `logprobs` is set to nan for
        those positions.
     """
+
     seq_id: ht.i32[NamedArray, "seq"]  # sequence ID. This is the "global" sequence ID
     tokens: ht.i32[NamedArray, "seq position"]
     """ most recent tokens generated for each sequence. Should always start at a page boundary. """
@@ -206,13 +211,15 @@ class DecodeState(eqx.Module):
         return self.stop_tokens.axis_size("position")
 
     @eqx.filter_jit
-    def assign_seq(self,
-                   local_seq_id: int,
-                   global_seq_id: int,
-                   tokens: ht.i32[NamedArray, "position"],  # type: ignore[name-defined]
-                   prefix_len: int,
-                   kv_pages: ht.i32[NamedArray, "page"] | None = None,  # type: ignore[name-defined]
-                   seq_params: SeqDecodingParams | None = None) -> "DecodeState":
+    def assign_seq(
+        self,
+        local_seq_id: int,
+        global_seq_id: int,
+        tokens: ht.i32[NamedArray, "position"],  # type: ignore[name-defined]
+        prefix_len: int,
+        kv_pages: ht.i32[NamedArray, "page"] | None = None,  # type: ignore[name-defined]
+        seq_params: SeqDecodingParams | None = None,
+    ) -> "DecodeState":
         """Assign a new sequence to the given local slot."""
         num = tokens.axis_size("position")
 
@@ -229,7 +236,11 @@ class DecodeState(eqx.Module):
             seq_id=self.seq_id.at["seq", local_seq_id].set(global_seq_id),
             tokens=new_tokens,
             # set log probs to nan for the prefix tokens
-            logprobs=self.logprobs.at["seq", local_seq_id, "position", 0:prefix_len].set(jnp.nan) if self.logprobs is not None else None,
+            logprobs=(
+                self.logprobs.at["seq", local_seq_id, "position", 0:prefix_len].set(jnp.nan)
+                if self.logprobs is not None
+                else None
+            ),
             seq_lens=self.seq_lens.at["seq", local_seq_id].set(prefix_len),
             prefix_len=self.prefix_len.at["seq", local_seq_id].set(prefix_len),
         )
@@ -239,7 +250,7 @@ class DecodeState(eqx.Module):
                 new_state,
                 max_num_tokens=new_state.max_num_tokens.at["seq", local_seq_id].set(seq_params.max_num_tokens),
                 temperature=new_state.temperature.at["seq", local_seq_id].set(seq_params.temperature),
-                prng_keys=self.prng_keys.at[local_seq_id].set(seq_params.key)  # type: ignore[name-defined]
+                prng_keys=self.prng_keys.at[local_seq_id].set(seq_params.key),  # type: ignore[name-defined]
             )
             match (new_state.stop_tokens, seq_params.stop_tokens):
                 case (None, None):
@@ -259,17 +270,21 @@ class DecodeState(eqx.Module):
                     seq_num_stops = seq_stops.axis_size("stop_seq")
                     seq_stop_len = seq_stops.axis_size("position")
                     this_row_full = hax.full_like(stops["seq", local_seq_id], INVALID)
-                    this_row_full = this_row_full.at["stop_seq", 0:seq_num_stops, "position", -seq_stop_len:].set(seq_stops)
+                    this_row_full = this_row_full.at["stop_seq", 0:seq_num_stops, "position", -seq_stop_len:].set(
+                        seq_stops
+                    )
                     new_stops = stops.at["seq", local_seq_id].set(this_row_full)
                     new_state = dataclasses.replace(new_state, stop_tokens=new_stops)
 
         return new_state
 
-    def update_tokens(self,
-                      new_tokens: ht.i32[NamedArray, " position"],  # type: ignore
-                      local_seq_ids: ht.i32[NamedArray, " position"],  # type: ignore
-                      new_log_probs: ht.Float[NamedArray, " position"],  # type: ignore
-                      num_new_tokens: jnp.ndarray | int) -> "DecodeState":  # type: ignore
+    def update_tokens(
+        self,
+        new_tokens: ht.i32[NamedArray, " position"],  # type: ignore
+        local_seq_ids: ht.i32[NamedArray, " position"],  # type: ignore
+        new_log_probs: ht.Float[NamedArray, " position"],  # type: ignore
+        num_new_tokens: jnp.ndarray | int,
+    ) -> "DecodeState":  # type: ignore
         """
         Update the tokens and (optional) log probabilities for the given local sequence IDs,
         and enqueue these tokens onto the pending TokenQueue.
@@ -298,7 +313,9 @@ class DecodeState(eqx.Module):
 
             return jax.lax.cond(is_valid(sid), update, lambda s: s, state)
 
-        tokens, logprobs, counts, pos_ids = jax.lax.fori_loop(0, num_new_tokens, body, (tokens, logprobs, counts, pos_ids))
+        tokens, logprobs, counts, pos_ids = jax.lax.fori_loop(
+            0, num_new_tokens, body, (tokens, logprobs, counts, pos_ids)
+        )
 
         # Enqueue tokens and their corresponding position ids into the queue
         new_tqueue = self.tqueue.enqueue_tokens(new_tokens, local_seq_ids, pos_ids, num_new_tokens)
@@ -322,18 +339,20 @@ class DecodeState(eqx.Module):
         def body(i):
             sid = seq_id[i]
 
-            done = ((self.seq_lens["seq", sid] != INVALID) &
-                    (self.seq_lens["seq", sid] >= self.max_num_tokens["seq", sid])
-                    ).scalar()
+            done = (
+                (self.seq_lens["seq", sid] != INVALID) & (self.seq_lens["seq", sid] >= self.max_num_tokens["seq", sid])
+            ).scalar()
 
             if self.stop_tokens is not None:
                 stop_len = self.stop_tokens.axis_size("position")
                 num = self.seq_lens["seq", sid].scalar()
                 tokens_row = self.tokens["seq", sid].array
-                padded_tokens = jnp.concatenate([
-                    jnp.full((stop_len,), INVALID, dtype=jnp.int32),
-                    tokens_row,
-                ])
+                padded_tokens = jnp.concatenate(
+                    [
+                        jnp.full((stop_len,), INVALID, dtype=jnp.int32),
+                        tokens_row,
+                    ]
+                )
                 tail = jax.lax.dynamic_slice(padded_tokens, (num,), (stop_len,))
                 stop = is_stop_signal(
                     hax.named(tail, axis=("position",)),
@@ -371,7 +390,6 @@ max_num_tokens: {max_num_tokens}
             max_num_tokens=self.max_num_tokens,
         )
 
-
     @staticmethod
     def init(
         max_seqs: int,
@@ -396,11 +414,15 @@ max_num_tokens: {max_num_tokens}
             seq_lens=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
             clone_sources=hax.full({"seq": max_seqs}, INVALID, dtype=jnp.int32),
             max_num_tokens=hax.full({"seq": max_seqs}, 0, dtype=jnp.int32),
-            stop_tokens=hax.full(
-                {"seq": max_seqs, "stop_seq": max_stop_seqs, "position": max_stop_tokens},
-                INVALID,
-                dtype=jnp.int32,
-            ) if max_stop_tokens > 0 else None,
+            stop_tokens=(
+                hax.full(
+                    {"seq": max_seqs, "stop_seq": max_stop_seqs, "position": max_stop_tokens},
+                    INVALID,
+                    dtype=jnp.int32,
+                )
+                if max_stop_tokens > 0
+                else None
+            ),
             temperature=hax.ones({"seq": max_seqs}, dtype=jnp.float32),
             prng_keys=jax.vmap(jax.random.PRNGKey, axis_size=max_seqs, in_axes=None)(0),
             tqueue=TokenQueue.init(max_queued_tokens) if max_queued_tokens > 0 else TokenQueue.init(0),
@@ -412,6 +434,7 @@ class TokenQueue(eqx.Module):
     Manages a queue of tokens that are waiting to be processed. These are tokens that have been generated (or requestd for prefill)
     but have not yet been consumed by the decoding process.
     """
+
     # Notes:
     # - ``queued_tokens`` are stored "flat" with accompanying ``queued_seq_ids``
     queued_tokens: ht.i32[NamedArray, "position"]  # tokens queued for decoding
@@ -480,9 +503,7 @@ class TokenQueue(eqx.Module):
             num_queued_tokens=self.num_queued_tokens + num_new_tokens,
         )
 
-    def pack_next_sequence(
-        self, max_tokens: int
-    ) -> tuple["TokenQueue", PackedSequence]:  # type: ignore[name-defined]
+    def pack_next_sequence(self, max_tokens: int) -> tuple["TokenQueue", PackedSequence]:  # type: ignore[name-defined]
         """
         Dequeue up to ``max_tokens`` tokens from the queue and return them.
 
@@ -514,7 +535,7 @@ class TokenQueue(eqx.Module):
             queued_tokens=new_q_tokens,
             queued_seq_ids=new_q_seq_ids,
             queued_pos_ids=new_q_pos_ids,
-            num_queued_tokens=self.num_queued_tokens - num
+            num_queued_tokens=self.num_queued_tokens - num,
         )
 
         # now ensure seqids are sorted
@@ -573,4 +594,4 @@ class TokenQueue(eqx.Module):
             print(f"{prefix}Queued Seq IDs: {self.queued_seq_ids}")
             print(f"{prefix}Num Queued Tokens: {self.num_queued_tokens}")
 
-        jax.experimental.io_callback(callback,  None, ordered=True, self=self)
+        jax.experimental.io_callback(callback, None, ordered=True, self=self)

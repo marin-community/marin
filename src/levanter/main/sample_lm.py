@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 
 import numpy as np
@@ -37,13 +40,16 @@ from levanter.layers.attention import KvPageCache
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass(frozen=True)
 class Request:
     """A request for generation of a single sequence."""
+
     prompt_tokens: list[int]
     request_id: int
     decode_params: SeqDecodingParams
     n_generations: int
+
 
 SEQ_LENGTHS = [8, 32, 64, 128, 256, 512, 1024, 2048, 4096]
 
@@ -53,6 +59,7 @@ class GenState(eqx.Module):
     Plain Old Data type for generation state.
     Contains all the components needed for language model generation.
     """
+
     cache: KvPageCache
     page_table: PageTable
     decode_state: DecodeState
@@ -86,11 +93,7 @@ class GenState(eqx.Module):
         prefix_len = int(decode_state.seq_lens["seq", parent_local_id].scalar())
         parent_prefix = decode_state.tokens["seq", parent_local_id, "position", 0:prefix_len]
         parent_kv_pages_row = decode_state.kv_pages["seq", parent_local_id]
-        gid = (
-            int(decode_state.seq_id["seq", parent_local_id].scalar())
-            if global_id is None
-            else global_id
-        )
+        gid = int(decode_state.seq_id["seq", parent_local_id].scalar()) if global_id is None else global_id
 
         # Assign child sequence state (copies tokens up to prefix and kv_pages row)
         decode_state = decode_state.assign_seq(
@@ -174,9 +177,12 @@ def _load_model(config: SampleLmConfig, Vocab: Axis, *, key) -> LmHeadModel:
     else:
         assert hasattr(config.model, "hf_checkpoint_converter"), "model config lacks HF loader"
         converter: HFCheckpointConverter = config.model.hf_checkpoint_converter()
-        converter = converter.replaced(reference_checkpoint=config.hf_checkpoint,
-                                       tokenizer=load_tokenizer(config.tokenizer))
-        model = converter.load_pretrained(config.model.model_type, ref=config.hf_checkpoint, dtype=config.trainer.mp.compute_dtype)
+        converter = converter.replaced(
+            reference_checkpoint=config.hf_checkpoint, tokenizer=load_tokenizer(config.tokenizer)
+        )
+        model = converter.load_pretrained(
+            config.model.model_type, ref=config.hf_checkpoint, dtype=config.trainer.mp.compute_dtype
+        )
         return model
 
 
@@ -236,7 +242,6 @@ def run_generation_loop(
 
         new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, key=prng_keys)
 
-
         # Update decode state with the freshly sampled tokens (also enqueues them)
         decode_state = decode_state.update_tokens(new_tokens, new_seq_ids, log_probs, num_new_tokens)
         new_finished = decode_state.is_finished(jnp.arange(decode_state.max_seqs))
@@ -256,8 +261,6 @@ def run_generation_loop(
         )
 
         return new_gen_state, has_finished, step + 1
-
-
 
     has_finished = gen_state.decode_state.is_finished(jnp.arange(gen_state.decode_state.max_seqs))
     init_state = (gen_state, has_finished, jnp.array(0, dtype=jnp.int32))
@@ -308,7 +311,7 @@ def _handle_clones(
 
     # Determine which clone targets can be sampled this step:
     # need a valid source index and a valid target id
-    can_sample = (source_indices != INVALID)
+    can_sample = source_indices != INVALID
 
     # Build a compact position index list of clones to process this time
     selected = hax.where(can_sample, fill_value=INVALID, new_axis=CloneSeq)[0]
@@ -348,6 +351,7 @@ def _handle_clones(
         src_len = page_table.seq_lens["seq", src_seq_id].scalar()
         used_pages = (src_len + size - 1) // size
         last_idx = jnp.maximum(used_pages - 1, 0)
+
         def _copy(_):
             src_page = page_table.page_indices["seq", src_seq_id, "page", last_idx].scalar()
             dst_page = page_table.page_indices["seq", dst_seq_id, "page", last_idx].scalar()
@@ -369,7 +373,6 @@ def _handle_clones(
 
     # Return which clones we sampled this time (mask over seq axis)
     return gen_state, can_sample
-
 
 
 @haliax.named_jit(donate_args=(True, False, False, False, False))
@@ -418,7 +421,6 @@ def run_prefill(
             sampler,
         )
 
-
     return gen_state
 
 
@@ -436,6 +438,7 @@ def _compute_sample_indices(pos_ids, seq_ids, seq_lens, max_sample_indices):
         new_axis=pos_ids.resolve_axis("position").resize(max_sample_indices),
     )[0]
     return sample_indices
+
 
 def main(config: SampleLmConfig):
     levanter.initialize(config)
@@ -503,8 +506,10 @@ def main(config: SampleLmConfig):
             outputs, gen_state, total_generated = _one_round(
                 config, gen_state, model, prompt_ids, sampler, tokenizer, stop_ids, key
             )
-            print(f"Round {R} took {time.time() - time_in:.2f} seconds, "
-                  f"generated {total_generated} tokens in {len(outputs)} sequences.")
+            print(
+                f"Round {R} took {time.time() - time_in:.2f} seconds, "
+                f"generated {total_generated} tokens in {len(outputs)} sequences."
+            )
 
             # clear page table: free all local sequence slots, not just primaries
             page_table = gen_state.page_table
@@ -550,7 +555,14 @@ def _one_round(config, gen_state, model, prompt_ids, sampler, tokenizer, stop_id
             temperature=jnp.array(config.temperature, dtype=jnp.float32),
             key=jax.random.fold_in(key, req_id),
         )
-        requests.append(Request(prompt_tokens=toks, request_id=primary_gid[req_id], decode_params=seq_params, n_generations=config.n_generations))
+        requests.append(
+            Request(
+                prompt_tokens=toks,
+                request_id=primary_gid[req_id],
+                decode_params=seq_params,
+                n_generations=config.n_generations,
+            )
+        )
 
     gen_state, primary_local_ids = prefill_prompts(gen_state, model, sampler, requests, primary_global_ids=primary_gid)
 
@@ -669,9 +681,9 @@ def prefill_prompts(
             offset = 0
             num_seqs_in_prefill = 0
 
-        tokens[offset:offset+len(this_tokens)] = this_tokens
-        seq_ids[offset:offset+len(this_tokens)] = seq_id
-        pos_ids[offset:offset+len(this_tokens)] = np.arange(len(this_tokens))
+        tokens[offset : offset + len(this_tokens)] = this_tokens
+        seq_ids[offset : offset + len(this_tokens)] = seq_id
+        pos_ids[offset : offset + len(this_tokens)] = np.arange(len(this_tokens))
         offset += len(this_tokens)
         num_seqs_in_prefill += 1
 

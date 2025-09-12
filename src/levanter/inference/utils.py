@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import jax.numpy as jnp
 
 import haliax as hax
@@ -6,6 +9,7 @@ from haliax import NamedArray
 
 
 INVALID = 2_000_000
+
 
 def is_invalid(x, invalid=INVALID):
     return (x < 0) | (x == invalid)
@@ -17,8 +21,6 @@ def is_valid(x, invalid=INVALID):
     A token is considered valid if it is not negative and not equal to INVALID.
     """
     return (x >= 0) & (x != invalid)
-
-
 
 
 def masked_set(dest: NamedArray, axis, start, src, num_to_copy) -> NamedArray:
@@ -54,7 +56,9 @@ def is_stop_signal(tail_tokens: ht.i32[NamedArray, "position"], stop_sequences: 
     # next, count up the number of valid tokens in each stop sequence
     total_stop_tokens = hax.sum(is_valid(stop_sequences, invalid), axis="position")
 
-    count_match = hax.sum((tail_tokens == stop_sequences) & (tail_tokens != invalid), axis="position") == total_stop_tokens
+    count_match = (
+        hax.sum((tail_tokens == stop_sequences) & (tail_tokens != invalid), axis="position") == total_stop_tokens
+    )
 
     return hax.any(valid_stop_sequences & count_match)
 

@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 import functools
 import logging
@@ -585,9 +588,9 @@ def _te_materialize_mask(KPos, QPos, batch_size, mask):
 
             fused_attn_mask = mask.materialize(QPos, KPos)
 
-            assert fused_attn_mask is not None, (
-                "If AttentionMask is causal, the materialized array should never be None. Something is wrong."
-            )
+            assert (
+                fused_attn_mask is not None
+            ), "If AttentionMask is causal, the materialized array should never be None. Something is wrong."
 
             fused_attn_mask = fused_attn_mask.array
             fused_attn_mask = jnp.dstack([fused_attn_mask] * batch_size)
@@ -838,7 +841,6 @@ class AttentionMask(eqx.Module):
 
         return mask
 
-
     # Static constructors --------------------------------------------------
 
     @staticmethod
@@ -941,9 +943,13 @@ class AttentionMask(eqx.Module):
 
     def __or__(self, other) -> "AttentionMask":
         # Union: causal only if both are causal with the same offset; otherwise non-causal
-        if self.is_causal and other.is_causal and (
-            (self.causal_offset is None and other.causal_offset is None)
-            or (self.causal_offset is not None and self.causal_offset == other.causal_offset)
+        if (
+            self.is_causal
+            and other.is_causal
+            and (
+                (self.causal_offset is None and other.causal_offset is None)
+                or (self.causal_offset is not None and self.causal_offset == other.causal_offset)
+            )
         ):
             is_causal = True
             causal_offset = self.causal_offset
@@ -1391,9 +1397,9 @@ class AttentionConfig:
     """Configuration for QK normalization. If None, no normalization is applied."""
 
     def __post_init__(self):
-        assert self.num_heads % self.num_kv_heads == 0, (
-            f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
-        )
+        assert (
+            self.num_heads % self.num_kv_heads == 0
+        ), f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
 
     @property
     def head_size(self) -> int:
@@ -1622,7 +1628,6 @@ class Attention(eqx.Module):
         return q, k, v
 
 
-
 class KvPageCache(eqx.Module):
     """
     KvPageCache for paged attention. It contains keys and values for all pages, including
@@ -1735,9 +1740,7 @@ def ragged_paged_attention(
             )
             return out
         except Exception:  # pragma: no cover - fall back if kernel fails
-            warnings.warn(
-                "TPU ragged paged attention failed. Falling back to reference implementation."
-            )
+            warnings.warn("TPU ragged paged attention failed. Falling back to reference implementation.")
             logger.warning("Failed to use TPU ragged paged attention. Falling back to reference", exc_info=True)
 
     return default_ragged_paged_attention(
@@ -1782,7 +1785,13 @@ def _do_tpu_ragged_paged_attention(
             # haliax.partitioning.pspec_for_axis(num_seqs)
             PartitionSpec(),  # num_seqs
         ),
-        out_specs=pspec_for_axis(("position", "kv_head", "head_size",)),
+        out_specs=pspec_for_axis(
+            (
+                "position",
+                "kv_head",
+                "head_size",
+            )
+        ),
         check_rep=False,
     )(
         q_flat.array,
@@ -1794,7 +1803,8 @@ def _do_tpu_ragged_paged_attention(
     )
 
     out = hax.named(
-        o, ("position", "kv_head", "head_size"),
+        o,
+        ("position", "kv_head", "head_size"),
     )
     out = out.unflatten_axis(
         "kv_head",
@@ -1943,6 +1953,7 @@ def default_ragged_paged_attention(
     output = output["position", 0 : q_orig.axis_size("position")]
 
     return output
+
 
 @dataclass(frozen=True)
 class MultiHeadLatentAttentionConfig:
@@ -2114,9 +2125,9 @@ class MultiHeadLatentAttention(eqx.Module):
         if self.config.q_lora_rank is None:
             q = self.q_proj(x, key=k_q_a)
         else:
-            assert self.q_a_proj is not None and self.q_a_norm is not None and self.q_b_proj is not None, (
-                "q_lora_rank defined, but LoRA matrices are not."
-            )
+            assert (
+                self.q_a_proj is not None and self.q_a_norm is not None and self.q_b_proj is not None
+            ), "q_lora_rank defined, but LoRA matrices are not."
             q = self.q_a_proj(x, key=k_q_a)
             q = self.q_a_norm(q)
             q = self.q_b_proj(q, key=k_q_b)
@@ -2164,6 +2175,7 @@ class MultiHeadLatentAttention(eqx.Module):
         assert self.o_proj is not None
         attn_output = self.o_proj(attn_output, key=k_o)
         return attn_output
+
 
 class AttentionWithSink(Attention):
     """Attention module that includes a learned sink term per head.

@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 import functools
 from typing import Sequence, TypeVar, cast
@@ -15,6 +18,7 @@ class NonePolicy(str, Enum):
     PRESERVE = "preserve"
     REPLACE = "replace"
     ERROR = "error"
+
 
 T = TypeVar("T", bound=PyTree)
 

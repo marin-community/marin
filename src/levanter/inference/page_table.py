@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 
 import equinox as eqx
@@ -14,8 +17,7 @@ from levanter.inference.utils import INVALID, is_invalid, is_valid
 
 def _relative_positions(seg_ids: jnp.ndarray):
     idx = jnp.arange(seg_ids.shape[0])
-    is_start = jnp.concatenate([jnp.array([True]),
-                                seg_ids[1:] != seg_ids[:-1]])
+    is_start = jnp.concatenate([jnp.array([True]), seg_ids[1:] != seg_ids[:-1]])
     start_idx = idx * is_start.astype(idx.dtype)
     seg_start = jax.lax.associative_scan(jnp.maximum, start_idx)
     return idx - seg_start  # 0,1,2,… inside each segment
@@ -81,10 +83,7 @@ class PageTable(eqx.Module):
         seq_id = hax.argmax(self.seq_lens, "seq").scalar()
         # Error handling: if there are no sequences available, return INVALID
         seq_id = hax.where(is_invalid(self.seq_lens["seq", seq_id]), seq_id, INVALID)
-        new_seq_lens = hax.where(
-            seq_id >= 0,
-            self.seq_lens.at["seq", seq_id].set(0),
-            self.seq_lens)
+        new_seq_lens = hax.where(seq_id >= 0, self.seq_lens.at["seq", seq_id].set(0), self.seq_lens)
         return dataclasses.replace(self, seq_lens=new_seq_lens), seq_id
 
     @eqx.filter_jit
@@ -235,6 +234,7 @@ class PageTable(eqx.Module):
             def dec(rc):
                 page = seq_pages["page", i].scalar()
                 return rc.at["page", page].add(-1)
+
             return jax.lax.cond(is_valid_page["page", i].scalar(), dec, lambda x: x, ref_counts)
 
         new_ref_counts = jax.lax.fori_loop(0, seq_pages.axis_size("page"), body, self.page_ref_counts)
@@ -271,6 +271,7 @@ class PageTable(eqx.Module):
             def inc(rc):
                 page = pages["page", i].scalar()
                 return rc.at["page", page].add(count)
+
             return jax.lax.cond(is_valid_page["page", i].scalar(), inc, lambda x: x, ref_counts)
 
         new_ref_counts = jax.lax.fori_loop(0, pages.axis_size("page"), body, self.page_ref_counts)
@@ -306,8 +307,10 @@ class PageTable(eqx.Module):
         def inc_shared(ref_counts):
             def body(i, rc):
                 page = src_pages["page", i]
+
                 def inc(rc):
                     return rc.at["page", page].add(1)
+
                 return jax.lax.cond(is_valid(page).scalar(), inc, lambda x: x, rc)
 
             # limit = used_pages if boundary else used_pages - 1

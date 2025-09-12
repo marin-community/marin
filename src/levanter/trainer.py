@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import atexit
 import copy
 import functools
@@ -224,20 +227,16 @@ class Trainer:
         return self.config.num_train_steps
 
     @typing.overload
-    def add_hook(self, fn: Callable[[StepInfo], Any], *, every: int = 1):
-        ...
+    def add_hook(self, fn: Callable[[StepInfo], Any], *, every: int = 1): ...
 
     @typing.overload
-    def add_hook(self, fn: JitCallback, *, every: int = 1):
-        ...
+    def add_hook(self, fn: JitCallback, *, every: int = 1): ...
 
     @typing.overload
-    def add_hook(self, fn: Callback, *, every: int = 1):
-        ...
+    def add_hook(self, fn: Callback, *, every: int = 1): ...
 
     @typing.overload
-    def add_hook(self, *, every: int = 1):
-        ...
+    def add_hook(self, *, every: int = 1): ...
 
     def add_hook(self, fn: Optional[Callable[[StepInfo], Any] | Callback | JitCallback] = None, *, every: int = 1):
         return self.hooks.add_hook(fn, every=every)
@@ -575,10 +574,10 @@ class Trainer:
                     hook_infos = self.hooks.run_jit_hooks(state, jit_info, force=False)
 
         if _no_hooks:
-            return hax.shard_with_axis_mapping( (loss, new_state, metrics, None), self.parameter_axis_mapping)
+            return hax.shard_with_axis_mapping((loss, new_state, metrics, None), self.parameter_axis_mapping)
         else:
             # return loss, new_state, metrics, hook_infos
-            return hax.shard_with_axis_mapping( (loss, new_state, metrics, hook_infos), self.parameter_axis_mapping)
+            return hax.shard_with_axis_mapping((loss, new_state, metrics, hook_infos), self.parameter_axis_mapping)
 
     def _compute_gradients_microbatched(self, loss_fn, model: M, *batch, **batch_kwargs) -> tuple[Scalar, M]:
         Batch = _resolve_axis_in_tree((batch, batch_kwargs), self.config.batch_axis)

@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from levanter.tracker.helpers import capture_time, log_optimizer_hyperparams
 from levanter.tracker.tracker import CompositeTracker, NoopConfig, NoopTracker, Tracker, TrackerConfig
 from levanter.tracker.tracker_fns import (
