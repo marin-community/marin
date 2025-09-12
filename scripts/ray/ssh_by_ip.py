@@ -29,14 +29,12 @@ import sys
 def get_gcloud_config():
     """Get current gcloud project and zone configuration."""
     project_result = subprocess.run(
-        ["gcloud", "config", "get-value", "project"],
-        capture_output=True, text=True, check=True
+        ["gcloud", "config", "get-value", "project"], capture_output=True, text=True, check=True
     )
     project = project_result.stdout.strip()
 
     zone_result = subprocess.run(
-        ["gcloud", "config", "get-value", "compute/zone"],
-        capture_output=True, text=True, check=True
+        ["gcloud", "config", "get-value", "compute/zone"], capture_output=True, text=True, check=True
     )
     zone = zone_result.stdout.strip()
 
@@ -45,12 +43,7 @@ def get_gcloud_config():
 
 def list_tpu_nodes(project, zone):
     """List all TPU nodes and their internal IPs."""
-    cmd = [
-        "gcloud", "compute", "tpus", "tpu-vm", "list",
-        f"--project={project}",
-        f"--zone={zone}",
-        "--format=json"
-    ]
+    cmd = ["gcloud", "compute", "tpus", "tpu-vm", "list", f"--project={project}", f"--zone={zone}", "--format=json"]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     return json.loads(result.stdout)
 
@@ -73,12 +66,7 @@ def find_tpu_by_ip(tpu_nodes, target_ip):
 
 def ssh_to_tpu(tpu_name, zone, project, extra_args=None):
     """SSH into the TPU node."""
-    cmd = [
-        "gcloud", "compute", "tpus", "tpu-vm", "ssh",
-        tpu_name,
-        f"--zone={zone}",
-        f"--project={project}"
-    ]
+    cmd = ["gcloud", "compute", "tpus", "tpu-vm", "ssh", tpu_name, f"--zone={zone}", f"--project={project}"]
 
     if extra_args:
         cmd.extend(["--"] + extra_args)
