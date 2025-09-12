@@ -43,6 +43,9 @@ class ServerConfig:
     root_paths: list[str]
     """Paths (and their descendents) to allow access to."""
 
+    blocked_paths: list[str] | None = None
+    """Paths to explicitly block access to, even if under root_paths."""
+
     max_size: int | None = None
     """Maximum size of a file to read in bytes (for text files), when reading a
     JSON or downloading a file."""
@@ -97,8 +100,13 @@ def list_files(path: str) -> dict:
             return f"{protocol}://{name}"
         return name
 
-    # Replace file with path
-    files = [{"path": name_to_path(file["name"]), **file} for file in files]
+    # Replace file with path and filter out blocked paths
+    files = []
+    for file in server.fs(path).ls(path, detail=True, refresh=True):
+        file_path = name_to_path(file["name"])
+        # Only include files that are not blocked
+        if has_permissions(file_path, server.config.root_paths, server.config.blocked_paths):
+            files.append({"path": file_path, **file})
 
     return {
         "type": "directory",
@@ -189,8 +197,16 @@ def read_parquet_file(path: str, offset: int, count: int) -> dict:
     }
 
 
-def has_permissions(path: str, root_paths: list[str]) -> bool:
+def has_permissions(path: str, root_paths: list[str], blocked_paths: list[str] | None = None) -> bool:
     """Returns whether the user can access `path` according to the permissions."""
+
+    # Check if path is blocked
+    if blocked_paths:
+        for blocked_path in blocked_paths:
+            if _is_path_blocked(path, blocked_path):
+                return False
+
+    # Check if path is allowed under root_paths
     for allowed_path in root_paths:
         # For cloud storage paths, check if the resolved path starts with the allowed path
         if path.startswith(CLOUD_STORAGE_PREFIXES):
@@ -206,6 +222,16 @@ def has_permissions(path: str, root_paths: list[str]) -> bool:
     return False
 
 
+def _is_path_blocked(path: str, blocked_path: str) -> bool:
+    """Check if a path should be blocked by comparing normalized paths."""
+    # Normalize paths for consistent comparison
+    normalized_blocked = blocked_path.rstrip("/") + "/"
+    normalized_path = path.rstrip("/") + "/"
+
+    # Block if path starts with blocked path, or if they're exact matches
+    return normalized_path.startswith(normalized_blocked) or path.rstrip("/") == blocked_path.rstrip("/")
+
+
 # Sanity checks to ensure has_permissions works as expected
 assert has_permissions("gs://marin-us-central2/test/test.txt", ["gs://marin-us-central2"])
 assert not has_permissions("gs://marin-us-central2/test/test.txt", [])
@@ -214,6 +240,24 @@ assert has_permissions("/app/var/test", ["/app/var"])
 assert not has_permissions("/app/various", ["/app/var"])
 assert not has_permissions("../app/var", ["/app/var"])
 assert not has_permissions("../etc/hosts", ["/etc"])
+
+# Test blocked paths functionality
+assert has_permissions(
+    "gs://marin-us-central2/allowed/file.txt", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+assert not has_permissions(
+    "gs://marin-us-central2/blocked/file.txt", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+assert not has_permissions(
+    "gs://marin-us-central2/blocked/subdir/file.txt", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+# Test that both with and without trailing slash work
+assert not has_permissions(
+    "gs://marin-us-central2/blocked", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+assert not has_permissions(
+    "gs://marin-us-central2/blocked/", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
 
 
 @app.route("/api/config", methods=["GET"])
@@ -228,7 +272,7 @@ def download():
     path = request.args.get("path")
     if not path:
         return jsonify({"error": "No path specified"})
-    if not has_permissions(path, server.config.root_paths):
+    if not has_permissions(path, server.config.root_paths, server.config.blocked_paths):
         return jsonify({"error": f"No permission to access: {path}"})
     if not server.fs(path).exists(path):
         return jsonify({"error": f"Path does not exist: {path}"})
@@ -253,12 +297,12 @@ def view():
     try:
         if not path:
             return jsonify({"error": "No path specified"})
-        if not has_permissions(path, server.config.root_paths):
+        if not has_permissions(path, server.config.root_paths, server.config.blocked_paths):
             return jsonify({"error": f"No permission to access: {path}"})
         if not server.fs(path).exists(path):
             return jsonify({"error": f"Path does not exist: {path}"})
 
-        # Directory
+        # Directory - check permissions before listing
         if server.fs(path).isdir(path):
             return jsonify(list_files(path))
 
@@ -347,7 +391,7 @@ def main(config: ServerConfig):
 
     debug = os.environ.get("DEV") == "true"
     assert debug, "This function must be run in debug mode"
-    app.run(host="0.0.0.0", port=5000 if debug else 80, debug=debug)
+    app.run(host="0.0.0.0", port=5001 if debug else 80, debug=debug)
 
 
 if __name__ == "__main__":
