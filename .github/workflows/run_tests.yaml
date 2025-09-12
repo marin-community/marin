@@ -27,4 +27,4 @@ jobs:
       - name: Test with pytest
         run: |
           # check we are using the right jax version
-          PYTHONPATH=tests:src:. uv run --with "jax[cpu]==${{ matrix.jax-version }}" pytest tests -m "not entry and not slow and not ray"
+          PYTHONPATH=tests:src:. uv run --with "jax[cpu]==${{ matrix.jax-version }}" pytest tests -m "not entry and not slow and not ray" --durations=20

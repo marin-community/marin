@@ -24,5 +24,5 @@ jobs:
         run: uv sync --dev
       - name: Test with pytest
         run: |
-          PYTHONPATH=tests:src:. uv run pytest tests -m "ray"
+          PYTHONPATH=tests:src:. uv run pytest tests -m "ray" --durations=20
 
