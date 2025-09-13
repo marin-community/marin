@@ -499,7 +499,7 @@ class SliceActor(ResourcePoolManager[TPUHostInfo]):
             num_cores = int(tpe.split("-")[1])
             num_tpus_per_host = 4
             # "v5litepod-4" should still create 1 host, not 0
-            num_hosts = max(1, num_cores // 8)
+            num_hosts = max(1, num_cores // num_tpus_per_host)
         ip_address = socket.gethostbyname(socket.gethostname())
         self._slice_info = SliceInfo(
             slice_name=pod_name,
