@@ -40,8 +40,16 @@ If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
    conda activate marin
    ```
 
-3. Install the package (this might take a while, which is something we should fix):
+3. Install the package and dependencies
+
+   === "Recommended"
+   `uv sync` for dependencies and an editable install for the local package:
+
    ```bash
+   # Resolve+install dependencies for your accelerator
+   uv sync
+
+   # Install the local package in editable mode so code changes reflect immediately
    uv pip install -e .
    ```
 
@@ -65,6 +73,10 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
 
     === "CPU"
         ```bash
+        # Recommended
+        uv sync --extra=cpu
+
+        # Alternative (pip-style)
         uv pip install -e "."
         ```
 
@@ -87,17 +99,29 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
          ```bash
          nvcc --version
          ```
-         Finally we'll install the correct libraries for GPU setup:
+         Finally install Python deps for GPU setup:
 
          ```bash
+         # Recommended
+         uv sync --extra=cuda12
+
+         # Alternative (pip-style)
          uv pip install -e ".[cuda12]"
          ```
 
     === "TPU"
 
         ```bash
+        # Recommended
+        uv sync --extra=tpu
+
+        # Alternative (pip-style)
         uv pip install -e ".[tpu]"
         ```
+
+### Notes on Ray jobs and code changes
+- When using `marin/run/ray_run.py`, the current working directory is uploaded as the job’s `working_dir`, and the runtime sets `PYTHONPATH` to include `src/` and `experiments/`. Your code snapshot at submission time is used on the cluster. If you make further local changes, re‑submit the job to pick them up.
+- For local runs and tests, editable installs (`uv pip install -e .`) ensure changes under `src/` are immediately visible without reinstalling.
 
 - **CPU**: Works out of the box, suitable for small experiments
 - **GPU**: See [Local GPU Setup](local-gpu.md) for CUDA configuration and multi-GPU support
