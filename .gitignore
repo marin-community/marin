@@ -1,3 +1,5 @@
+# redundant, but Ray looks for this otherwise.
+.git
 tests/snapshots/outputs
 tests/snapshots/diffs
 
@@ -209,3 +211,8 @@ marin/speedrun/static/data/runs.json
 gha-creds-*.json
 
 .aider*
+.git/*
+
+*.jsonl
+**/*.jsonl
+scr/*
