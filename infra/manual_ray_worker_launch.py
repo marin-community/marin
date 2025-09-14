@@ -132,6 +132,10 @@ def main():
     entry_command = f"ray start --address={head}:6379 --block"
     # TODO: would be friendlier to also sniff out the head and docker image from the cluster yaml
 
+    # Extract bucket name - all clusters follow pattern: marin-{region}
+    bucket_name = f"marin-{region}"
+    logger.info(f"Using bucket: {bucket_name}")
+
     logger.info(f"Creating TPU with name: {tpu_name}")
     start_tpu_vm_queued_resources(
         tpu_name=tpu_name,
@@ -149,50 +153,137 @@ def main():
     )
     tpu_ssh(tpu_name, zone, 1, f"docker rm -f {container_name} || true")
 
-    # first we want to make a new entrypoint that starts ray and runs the setup commands
     logger.info(f"Running on tpu_name... {tpu_name}")
-    with tempfile.NamedTemporaryFile("w", prefix="entry", suffix=".sh") as f:
-        f.write("#!/bin/bash\n")
-        for command in setup_commands:
-            f.write(command + "\n")
 
-        # run entry command in a loop since sometimes it seems to die?
-        f.write("while true; do\n")
-        f.write(entry_command + "\n")
-        f.write("sleep 10\n")
-        f.write("done\n")
+    # run all initialization commands on HOST first
+    for command in initialization_commands:
+        tpu_ssh(tpu_name, zone, 1, command)
 
+    # SIMPLE SOLUTION: Use sleep container + direct docker exec commands
+    docker_command = [
+        "docker",
+        "run",
+        "-d",
+        "--net=host",
+        f"--name={container_name}",
+        "--init",
+        "--privileged",
+        # Add environment variables needed for gcsfuse
+        "-e",
+        f"BUCKET={bucket_name}",
+        "-e",
+        f"MARIN_PREFIX=gs://{bucket_name}",
+        "-e",
+        "AUTOSCALER_HEARTBEAT_TIMEOUT_S=600",
+        *worker_run_options,
+        image_id,
+        "sleep",
+        "infinity",  # Keep container alive indefinitely
+    ]
+
+    logger.info(f"Starting container: {' '.join(docker_command)}")
+    tpu_ssh(tpu_name, zone, 1, *docker_command)
+
+    # Run essential setup commands inside container (excluding gcsfuse which we handle separately)
+    logger.info("Running setup commands inside container...")
+    for command in setup_commands:
+        # Skip gcsfuse command - we handle it separately with proper error handling
+        if command.startswith("gcsfuse "):
+            continue
+        # Run other setup commands via docker exec
+        setup_cmd = f"docker exec {container_name} bash -c '{command}'"
+        tpu_ssh(tpu_name, zone, 1, setup_cmd)
+
+    # Mount gcsfuse directly via docker exec (the simple solution!)
+    logger.info("Mounting gcsfuse...")
+    gcsfuse_command = (
+        f"docker exec {container_name} gcsfuse --implicit-dirs --only-dir gcsfuse_mount {bucket_name} /opt/gcsfuse_mount"
+    )
+    tpu_ssh(tpu_name, zone, 1, gcsfuse_command)
+
+    # Start Ray worker with retry logic via external host-level supervision
+    logger.info("Starting Ray worker with retry logic...")
+
+    # Create a retry script that runs on the TPU host (not inside container)
+    # This handles BOTH container death AND Ray worker death
+    worker_run_options_str = " ".join(worker_run_options)
+    
+    # Properly escape setup commands for shell script
+    escaped_setup_commands = []
+    for cmd in setup_commands:
+        if not cmd.startswith("gcsfuse "):
+            # Escape single quotes by replacing ' with '\''
+            escaped_cmd = cmd.replace("'", "'\\''")
+            escaped_setup_commands.append(f"        docker exec {container_name} bash -c '{escaped_cmd}' || true")
+    
+    setup_commands_str = chr(10).join(escaped_setup_commands)
+
+    retry_script_content = f"""#!/bin/bash
+while true; do
+    echo "$(date): Checking container status..."
+
+    # Check if container is running
+    if ! docker ps | grep -q {container_name}; then
+        echo "$(date): Container not running, restarting container..."
+
+        # Remove dead container (ignore errors if it doesn't exist)
+        docker rm -f {container_name} 2>/dev/null || true
+
+        # Restart container with same configuration
+        echo "$(date): Starting new container..."
+        docker run -d --net=host --name={container_name} --init --privileged \\
+            -e BUCKET={bucket_name} \\
+            -e MARIN_PREFIX=gs://{bucket_name} \\
+            -e AUTOSCALER_HEARTBEAT_TIMEOUT_S=600 \\
+            {worker_run_options_str} \\
+            {image_id} \\
+            sleep infinity
+
+        # Wait for container to be ready
+        sleep 5
+
+        # Run setup commands inside container (excluding gcsfuse)
+        echo "$(date): Running setup commands..."
+{setup_commands_str}
+
+        # Remount gcsfuse
+        echo "$(date): Mounting gcsfuse..."
+        docker exec {container_name} gcsfuse --implicit-dirs --only-dir gcsfuse_mount {bucket_name} /opt/gcsfuse_mount || true
+
+        echo "$(date): Container restart complete"
+    fi
+
+    echo "$(date): Starting Ray worker..."
+    docker exec {container_name} {entry_command}
+    echo "$(date): Ray worker exited, retrying in 10 seconds..."
+    sleep 10
+done
+"""
+
+    # Copy retry script to TPU host
+    with tempfile.NamedTemporaryFile("w", prefix="ray_retry", suffix=".sh", delete=False) as f:
+        f.write(retry_script_content)
         f.flush()
 
-        # copy the entrypoint to the tpu
+        # Copy script to TPU host
         run_command(
-            *(f"gcloud compute tpus tpu-vm scp {f.name} {tpu_name}:/tmp/entry.sh --zone={zone} --worker=all".split(" "))
+            *f"gcloud compute tpus tpu-vm scp {f.name} {tpu_name}:/tmp/ray_retry.sh --zone={zone} --worker=all".split(
+                " "
+            )
         )
-        tpu_ssh(tpu_name, zone, 1, "chmod a+rwx /tmp/entry.sh")
 
-        # run all initialization commands
-        for command in initialization_commands:
-            tpu_ssh(tpu_name, zone, 1, command)
+    # Make script executable and run in background on TPU host
+    tpu_ssh(tpu_name, zone, 1, "chmod +x /tmp/ray_retry.sh")
+    tpu_ssh(tpu_name, zone, 1, "nohup /tmp/ray_retry.sh > /tmp/ray_worker.log 2>&1 &")
 
-        docker_command = [
-            "docker",
-            "run",
-            "-d",
-            "--net=host",
-            f"--name={container_name}",
-            "--init",
-            "--privileged",
-            # "-v",
-            # "/tmp:/tmp",
-            *worker_run_options,
-            image_id,
-            "/bin/bash",  # Use bash as entrypoint to set up entry.sh
-            "/tmp/entry.sh",
-        ]
-
-        logger.info(docker_command)
-
-        tpu_ssh(tpu_name, zone, 1, *docker_command)
+    logger.info("Manual worker setup complete with gcsfuse and full restart logic!")
+    logger.info("Verify with:")
+    logger.info(f"  container status: docker ps | grep {container_name}")
+    logger.info(f"  gcsfuse: docker exec {container_name} mount | grep gcsfuse")
+    logger.info(f"  files: docker exec {container_name} ls /opt/gcsfuse_mount/models/")
+    logger.info("  retry logs: tail -f /tmp/ray_worker.log")
+    logger.info("Worker will automatically restart containers AND reconnect Ray workers!")
+    logger.info("Recovery handles: container death, Ray crashes, head node restarts.")
 
 
 if __name__ == "__main__":
