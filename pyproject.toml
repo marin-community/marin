@@ -22,7 +22,7 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-storage-transfer",
     "haliax>=1.4.dev381",
-    "levanter>=1.2.dev1500",             # We have levanter deps for now. @TODO :: Remove them
+    "levanter==1.2.dev1535",
     "lz4",
     "multiprocess==0.70.16",
     "numpy",
@@ -138,7 +138,6 @@ torch = [
     # CUDA12 index only when --extra cuda12
     { index = "pytorch-cu128", extra = "cuda12" },
 ]
-sentencepiece = { git = "https://github.com/google/sentencepiece/", subdirectory = "python" }
 
 
 resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
