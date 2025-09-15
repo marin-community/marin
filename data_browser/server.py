@@ -395,7 +395,7 @@ def main(config: ServerConfig):
 
     debug = os.environ.get("DEV") == "true"
     assert debug, "This function must be run in debug mode"
-    app.run(host="0.0.0.0", port=5001 if debug else 80, debug=debug)
+    app.run(host="0.0.0.0", port=5000 if debug else 80, debug=debug)
 
 
 if __name__ == "__main__":
