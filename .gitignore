@@ -3,6 +3,11 @@
 
 CLAUDE.md
 
+# submodules for co-development with e.g. Levanter.
+
+# CPU profiles
+prof/
+
 tests/snapshots/outputs
 tests/snapshots/diffs
 

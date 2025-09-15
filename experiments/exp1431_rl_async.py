@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-RL training experiment following marin patterns.
+Async RL training experiment for math problems with Llama 8B.
 """
 
 import logging
@@ -21,8 +21,15 @@ import os
 from dataclasses import dataclass
 
 import ray
+from levanter.infra.ray_tpu import run_on_pod_ray
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import (
+    ExecutorStep,
+    InputName,
+    OutputName,
+    executor_main,
+    this_output_path,
+)
 from marin.post_training.training_config import (
     CheckpointerConfigData,
     DistributedConfig,
@@ -36,48 +43,67 @@ from marin.post_training.training_config import (
     TokenizerOverrideConfig,
     TrainingConfig,
     TrainingHyperparameters,
+    WeightTransferConfig,
+    WeightTransferMode,
 )
-from marin.resources import ResourceConfig, TpuPodConfig
+from marin.resources import TpuPodConfig
 from marin.training.training import (
-    _add_default_env_variables,
     _add_run_env_variables,
-    _check_for_wandb_key,
 )
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
+WANDB_PROJECT = "async_rl_math"
+ENVIRONMENT_SPEC = "math"
+
+STOP_TOKENS = [
+    [524, 9399],
+    [694, 9399],
+    [4005, 9399],
+    [6199, 9399],
+    [8217, 9399],
+    [9169, 9399],
+    [12817, 9399],
+    [19203, 9399],
+    [20264, 9399],
+    [22246, 9399],
+    [27147, 9399],
+    [128001],
+]
+
 
 @dataclass(frozen=True)
-class RlTrainOnPodConfig:
-    """Configuration for RL training on a pod, using draccus TrainingConfig."""
+class RLTrainConfig:
+    """Configuration for async RL training on pods."""
 
-    resources: ResourceConfig
     training_config: TrainingConfig
+    inference_tpu_type: str
+    train_tpu_type: str
+    num_inference_workers: int = 8
+    num_train_slices: int = 1
 
 
-@remove_tpu_lockfile_on_exit
-def run_rl_training_on_pod(config: RlTrainOnPodConfig):
+@ray.remote
+def run_rl_training_on_pod(config: RLTrainConfig):
     """
-    Run RL training on a Ray cluster, following marin's execution pattern.
-
-    This function follows the same pattern as run_levanter_train_lm but adapted for RL training.
+    Run async RL training with separate inference and training workers.
     """
+    from marin.post_training.inference_worker import InferenceWorker
+    from marin.post_training.rollout_storage import FileRolloutReader, FileRolloutWriter
+    from marin.post_training.train_worker import TrainingWorker
 
-    import levanter.infra.cli_helpers
+    # Create coordinator for weight transfer
+    # from marin.post_training.weight_transfer_manager import create_coordinator
+    # coordinator = create_coordinator(
+    #     config.training_config.weight_transfer.mode,
+    #     name=f"coordinator_{config.training_config.output_dir.split('/')[-1]}",
+    # )
+    coordinator = None  # Using GCS checkpointing, no coordinator needed
 
-    from marin.post_training.train import main as rl_training_main
+    rollout_queue_path = config.training_config.output_dir + "/rollout_queue"
 
-    default_launch_config = levanter.infra.cli_helpers.load_config()
-
-    env = _add_default_env_variables(
-        config.resources.runtime_env.get("env_vars", {}),
-        default_launch_config.env_for_accel(config.resources.accelerator_descriptor() or ""),
-    )
-
-    if isinstance(config.resources, TpuPodConfig):
-        _check_for_wandb_key(env)
-
+    env = {}
     env = _add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
@@ -88,51 +114,84 @@ def run_rl_training_on_pod(config: RlTrainOnPodConfig):
         else:
             logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
 
-    hw_config = config.resources.with_env_vars(env)
+    train_pod_config = TpuPodConfig(tpu_type=config.train_tpu_type)
+    train_hw_config = train_pod_config.with_env_vars(env)
 
-    @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1, max_retries=10)
-    def rl_train_task():
-        rl_training_main(config.training_config)
-
-    if isinstance(hw_config, TpuPodConfig):
-        from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
-
-        if hw_config.slice_count == 1:
-            return run_on_pod_resumable(rl_train_task, config.resources.accelerator_descriptor(), max_retries_failure=10)
-        else:
-            return run_on_pod_multislice_resumable(
-                rl_train_task,
-                config.resources.accelerator_descriptor(),
-                hw_config.slice_count,
-                max_retries_failure=10,
+    @ray.remote(runtime_env=train_hw_config.runtime_env, max_calls=1)
+    def train_worker_task():
+        with remove_tpu_lockfile_on_exit():
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+            rollout_reader = FileRolloutReader(rollout_queue_path)
+            worker = TrainingWorker(
+                training_config=config.training_config,
+                rollout_reader=rollout_reader,
+                coordinator=coordinator,
             )
-    else:
-        return ray.get(rl_train_task.remote())
+            worker.train()
+
+    inference_pod_config = TpuPodConfig(tpu_type=config.inference_tpu_type)
+    inference_hw_config = inference_pod_config.with_env_vars(env)
+
+    @ray.remote(runtime_env=inference_hw_config.runtime_env, max_calls=1)
+    def inference_worker_task():
+        with remove_tpu_lockfile_on_exit():
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+            rollout_writer = FileRolloutWriter(rollout_queue_path)
+            worker = InferenceWorker(
+                training_config=config.training_config,
+                environment_spec=ENVIRONMENT_SPEC,
+                rollout_writer=rollout_writer,
+                rollout_batch_size=16,
+                max_rollouts=None,
+                coordinator=coordinator,
+            )
+            worker.run()
+
+    train_tasks = []
+    train_tasks.append(
+        run_on_pod_ray.remote(
+            train_worker_task,
+            config.train_tpu_type,
+            num_slices=config.num_train_slices,
+            max_retries_failure=10,
+            max_retries_preemption=10,
+        )
+    )
+
+    inference_tasks = []
+    for _ in range(config.num_inference_workers):
+        inference_tasks.append(
+            run_on_pod_ray.remote(
+                inference_worker_task,
+                config.inference_tpu_type,
+                num_slices=1,
+                max_retries_failure=10,
+                max_retries_preemption=10,
+            )
+        )
+
+    return ray.get(inference_tasks + train_tasks)
 
 
 def default_rl_train(
     name: str,
     model_paths: dict[str, str],
-    tpu_type: str = "v4-64",
     train_bsize: int = 64,
     kl_coef: float = 1e-3,
     learning_rate: float = 5e-7,
     num_train_steps: int = 2048,
-    wandb_project: str = "marin_post_training",
     **kwargs,
 ) -> ExecutorStep:
     """
-    Create an RL training experiment following marin's default_train pattern.
+    Create an async RL training experiment for math problems.
 
     Args:
         name: The name of the training run
         model_paths: Dictionary with 'params', 'tokenizer', and 'config' paths
-        tpu_type: TPU type to use
         train_bsize: Training batch size
         kl_coef: KL coefficient
         learning_rate: Learning rate
         num_train_steps: Number of training steps
-        wandb_project: Wandb project name
         **kwargs: Additional arguments
     """
 
@@ -162,40 +221,14 @@ def default_rl_train(
     generation_config = GenerationConfig(
         max_output_length=1025,
         temperature=1.0,
-        stop_tokens=[
-            [524, 9399],
-            [694, 9399],
-            [4005, 9399],
-            [6199, 9399],
-            [8217, 9399],
-            [9169, 9399],
-            [12817, 9399],
-            [19203, 9399],
-            [20264, 9399],
-            [22246, 9399],
-            [27147, 9399],
-            [128001],
-        ],
-        n_generations=64,
+        stop_tokens=STOP_TOKENS,
+        n_generations=16,
     )
 
     test_generation_config = GenerationConfig(
         max_output_length=1025,
         temperature=0.0,
-        stop_tokens=[
-            [524, 9399],
-            [694, 9399],
-            [4005, 9399],
-            [6199, 9399],
-            [8217, 9399],
-            [9169, 9399],
-            [12817, 9399],
-            [19203, 9399],
-            [20264, 9399],
-            [22246, 9399],
-            [27147, 9399],
-            [128001],
-        ],
+        stop_tokens=STOP_TOKENS,
         n_generations=1,
     )
 
@@ -213,10 +246,19 @@ def default_rl_train(
     checkpointer_config = CheckpointerConfigData(
         save_optimizer_state=False,
         save_float_dtype="bf16",
-        save_model_freq=10,
+        save_model_freq=1000,
     )
 
-    resources = TpuPodConfig(tpu_type=tpu_type)
+    output_dir = this_output_path()
+
+    weight_transfer_config = WeightTransferConfig(
+        mode=WeightTransferMode.GCS_CHECKPOINT,
+        sync_interval_steps=10,
+        poll_interval_seconds=30.0,
+        transfer_timeout=120.0,
+        checkpoint_dir=OutputName("checkpoints"),
+        max_checkpoints=5,
+    )
 
     training_config = TrainingConfig(
         model=ModelConfig(
@@ -238,9 +280,9 @@ def default_rl_train(
             max_input_length=256,
             max_output_length=1025,
             train_bsize=train_bsize,
-            decode_bsize=1024,
-            prefill_bsize=16,
-            reference_logprobs_bsize=256,
+            decode_bsize=64,
+            prefill_bsize=64,
+            reference_logprobs_bsize=64,
             n_prompts_per_step=16,
             optim_config=optim_config,
             pad_token_id=128002,
@@ -249,7 +291,7 @@ def default_rl_train(
         logging=LoggingConfig(
             log_freq=10,
             num_eval_examples=8,
-            wandb_project=wandb_project,
+            wandb_project=WANDB_PROJECT,
             save_initial_checkpoint=False,
             log_initial_step=True,
             max_checkpoints=None,
@@ -260,25 +302,29 @@ def default_rl_train(
         ),
         environment=EnvironmentConfig(),
         distributed=DistributedConfig(
-            train_sharding=[1, 4, 1, -1],
-            inference_sharding=[1, 4, 1, -1],
-            physical_axis_splitting=False,
+            train_sharding=[1, 8, 1, -1],
+            inference_sharding=[1, 32, 1, 4],
+            physical_axis_splitting=True,
             jax_distributed_initialize_config={},
         ),
         generation_config=generation_config,
         test_generation_config=test_generation_config,
-        output_dir=this_output_path(),
+        output_dir=output_dir,
         checkpoint=checkpointer_config,
+        weight_transfer=weight_transfer_config,
     )
 
-    config = RlTrainOnPodConfig(
-        resources=resources,
+    config = RLTrainConfig(
         training_config=training_config,
+        inference_tpu_type="v5litepod-128",
+        train_tpu_type="v5litepod-128",
+        num_inference_workers=1,
+        num_train_slices=1,
     )
 
     return ExecutorStep(
         name=os.path.join("rl_checkpoints", name),
-        description=f"RL training experiment: {name} for {num_train_steps} steps",
+        description=f"Async RL math training: {name} for {num_train_steps} steps",
         fn=run_rl_training_on_pod,
         config=config,
         pip_dependency_groups=["post_training"],
@@ -286,29 +332,28 @@ def default_rl_train(
 
 
 def main():
-    """Main function to run RL training experiments."""
+    """Main function to run async RL math training experiments."""
 
     model_paths = {
-        "params": "gs://marin-us-central2/checkpoints/Llama-3.1-8B-Instruct-converted/params.msgpack",
+        "params": InputName.hardcoded("checkpoints/Llama-3.1-8B-Instruct-converted/params.msgpack"),
         "tokenizer": "meta-llama/Meta-Llama-3-8B-Instruct",
-        "config": "gs://marin-us-central2/checkpoints/Llama-3.1-8B-Instruct-converted/config.json",
+        "config": InputName.hardcoded("checkpoints/Llama-3.1-8B-Instruct-converted/config.json"),
     }
 
     experiments = [
         default_rl_train(
-            name="all-math500-v4-64",
+            name="async-math-llama8b-test0",
             model_paths=model_paths,
-            tpu_type="v4-64",
-            train_bsize=64,
+            train_bsize=16,
             kl_coef=1e-3,
             learning_rate=5e-7,
-            num_train_steps=2048,
+            num_train_steps=1000000,
         ),
     ]
 
     executor_main(
         steps=experiments,
-        description="RL math training experiments on Llama 3.1 8B",
+        description="Async RL math training experiments on Llama 3.1 8B",
     )
 
 
