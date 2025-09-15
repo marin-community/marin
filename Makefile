@@ -46,7 +46,8 @@ test:
 
 # Define regions and tags for the Docker images
 CLUSTER_REPOS = us-central2 us-central1 europe-west4 us-west4 asia-northeast1 us-east5 us-east1
-TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(shell date -u +"%Y%m%d")
+TAG_DATE = $(shell date -u +"%Y%m%d")
+TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(TAG_DATE)
 
 # If VLLM is defined, use different Dockerfile and image name
 ifdef VLLM
@@ -65,6 +66,10 @@ cluster_docker_build:
 	$(foreach region,$(CLUSTER_REPOS), \
 		$(foreach version,$(TAG_VERSIONS), \
 			docker tag '$(DOCKER_IMAGE_NAME):latest' '$(region)-docker.pkg.dev/hai-gcp-models/marin/$(DOCKER_IMAGE_NAME):$(version)';))
+	@echo "Docker image build and tagging complete, updating config.py with latest version..."
+
+cluster_tag:
+	sed -i '' "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" src/marin/cluster/config.py
 
 # Target to push the tagged Docker images to their respective Artifact Registries
 cluster_docker_push:
