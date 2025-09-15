@@ -349,6 +349,17 @@ class RLDataset:
             axis=1,
         )
 
+        policy_logprobs = np.concatenate(
+            [
+                np.zeros(
+                    (examples["prompt_masks"].shape[0], examples["prompt_masks"].shape[1] - 1),
+                    dtype=np.float32,
+                ),
+                examples["policy_logprobs"].astype(np.float32),
+            ],
+            axis=1,
+        )
+
         return {
             "input_ids": input_tokens,
             "attention_mask": input_attention_mask,
@@ -357,6 +368,7 @@ class RLDataset:
             "loss_masks": loss_masks,
             "loss_weights": loss_weights,
             "reference_logprobs": reference_logprobs,
+            "policy_logprobs": policy_logprobs,
         }
 
 
@@ -369,7 +381,17 @@ def compute_rloo_advantages_for_group(rewards: np.ndarray) -> np.ndarray:
     Returns:
         Normalized advantages
     """
-    advantages = (rewards - rewards.mean()) / np.clip(rewards.std(), 1e-8, None)
+    n = len(rewards)
+    if n <= 1:
+        return np.zeros_like(rewards)
+
+    total = rewards.sum()
+    leave_one_out_baselines = (total - rewards) / (n - 1)
+    advantages = rewards - leave_one_out_baselines
+
+    # Add random noise to avoid failure cases when all rewards are identical/zero
+    generator = np.random.default_rng()
+    advantages += generator.normal(loc=0.0, scale=1e-6, size=advantages.shape)
     return advantages
 
 

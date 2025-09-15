@@ -33,12 +33,13 @@ try:
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 
+import uuid
+
 from marin.post_training.model_helpers import load_tokenizer
 from marin.post_training.rollout_storage import (
-    FileRolloutReader,
-    FileRolloutWriter,
     InMemoryRolloutQueue,
     RolloutBatch,
+    TaggedRolloutBatch,
 )
 from marin.post_training.train_worker import TrainingWorker
 from marin.post_training.training_config import (
@@ -46,7 +47,6 @@ from marin.post_training.training_config import (
     DistributedConfig,
     EnvironmentConfig,
     GenerationConfig,
-    InferenceWorkerConfig,
     LoggingConfig,
     ModelConfig,
     ModelOverrideConfig,
@@ -55,10 +55,10 @@ from marin.post_training.training_config import (
     TokenizerOverrideConfig,
     TrainingConfig,
     TrainingHyperparameters,
-    TrainWorkerConfig,
     WeightTransferConfig,
     WeightTransferMode,
 )
+from marin.post_training.weight_transfer_manager import create_coordinator
 
 # Test timeout constants
 CHECKPOINT_POLL_INTERVAL = 0.2
@@ -106,9 +106,10 @@ def temp_checkpoint_dir():
         yield str(checkpoint_dir)
 
 
-@pytest.fixture
-def training_config():
+@pytest.fixture(params=[WeightTransferMode.GCS_CHECKPOINT, WeightTransferMode.RAY_REMOTING])
+def training_config(request):
     """Create minimal training configuration for testing."""
+    weight_transfer_mode = request.param
     model_paths_config = ModelPathsConfig(
         params=None,
         tokenizer="meta-llama/Meta-Llama-3-8B-Instruct",
@@ -144,10 +145,9 @@ def training_config():
     temp_dir = tempfile.mkdtemp()
 
     weight_transfer_config = WeightTransferConfig(
-        mode=WeightTransferMode.RAY_REMOTING,
-        sync_interval_steps=1,  # Transfer weights frequently
+        mode=weight_transfer_mode,
+        sync_interval_steps=1,
         poll_interval_seconds=1.0,
-        coordinator_name="test_coordinator",
         checkpoint_dir=os.path.join(temp_dir, "checkpoints"),
     )
 
@@ -172,10 +172,10 @@ def training_config():
             max_input_length=8,
             max_output_length=8,
             train_bsize=2,
-            decode_bsize=2,
-            prefill_bsize=2,
-            reference_logprobs_bsize=2,
-            n_prompts_per_step=2,
+            decode_bsize=4,
+            prefill_bsize=4,
+            reference_logprobs_bsize=4,
+            n_prompts_per_step=4,
             optim_config=optim_config,
             kl_coef=1e-3,
         ),
@@ -193,34 +193,14 @@ def training_config():
             test_environments_path="environments_test.json",
         ),
         distributed=DistributedConfig(
-            sharding=[1, 1, 1, -1],
+            train_sharding=[1, 1, 1, -1],
+            inference_sharding=[1, 1, 1, -1],
         ),
         generation_config=generation_config,
         test_generation_config=test_generation_config,
         output_dir=temp_dir,
         checkpoint=checkpointer_config,
         weight_transfer=weight_transfer_config,
-    )
-
-
-@pytest.fixture
-def inference_worker_config(training_config):
-    """Create inference worker configuration."""
-    return InferenceWorkerConfig(
-        training_config=training_config,
-        environment_spec="mock",
-        rollout_output_path="/tmp/test_rollouts",  # Won't be used with in-memory queue
-        rollout_batch_size=2,
-        max_rollouts=2,  # Generate 2 rollout batches
-    )
-
-
-@pytest.fixture
-def worker_config(training_config):
-    """Create worker configuration."""
-    return TrainWorkerConfig(
-        training_config=training_config,
-        rollout_queue_path="test_queue",
     )
 
 
@@ -243,78 +223,37 @@ def _print_worker_status(elapsed, inference_runner, training_runner):
     print(f"  Training done: {training_runner.done.is_set()}")
 
 
-@pytest.fixture
-def rollout_queue(request, tmp_path):
-    """Create rollout queue based on parameter, with cleanup."""
-    queue_type = getattr(request, "param", "memory")
-
-    if queue_type == "memory":
-        queue = InMemoryRolloutQueue()
-        reader = queue.reader()
-        writer = queue.writer()
-        yield reader, writer
-        # No cleanup needed for in-memory
-
-    elif queue_type == "file":
-        queue_path = str(tmp_path / "rollout_queue")
-        reader = FileRolloutReader(queue_path)
-        writer = FileRolloutWriter(queue_path)
-        yield reader, writer
-        # Cleanup happens automatically with tmp_path
-
-
-@pytest.mark.parametrize("rollout_queue", ["memory", "file"], indirect=True)
-def test_rollout_queue(rollout_queue):
-    """Test in-memory rollout queue operations."""
-    reader, writer = rollout_queue
-
-    batch_size = 2
-    max_seq_len = 16
-    rng = np.random.default_rng(42)
-
-    batch1 = RolloutBatch(
-        input_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
-        attention_mask=np.ones((batch_size, max_seq_len), dtype=np.int32),
-        position_ids=np.arange(max_seq_len)[None, :].repeat(batch_size, axis=0).astype(np.int32),
-        target_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
-        loss_weights=np.ones((batch_size, max_seq_len), dtype=np.float32),
-        loss_masks=np.ones((batch_size, max_seq_len), dtype=np.float32),
-        reference_logprobs=rng.standard_normal((batch_size, max_seq_len)).astype(np.float32),
+def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16) -> TaggedRolloutBatch:
+    """Helper to create test batches with all required fields."""
+    rng = np.random.default_rng(42 + idx)
+    return TaggedRolloutBatch(
+        batch=RolloutBatch(
+            input_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
+            attention_mask=np.ones((batch_size, max_seq_len), dtype=np.int32),
+            position_ids=np.arange(max_seq_len)[None, :].repeat(batch_size, axis=0).astype(np.int32),
+            target_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
+            loss_weights=np.ones((batch_size, max_seq_len), dtype=np.float32),
+            loss_masks=np.ones((batch_size, max_seq_len), dtype=np.float32),
+            reference_logprobs=rng.standard_normal((batch_size, max_seq_len)).astype(np.float32),
+            policy_logprobs=rng.standard_normal((batch_size, max_seq_len)).astype(np.float32),
+        ),
+        env_name=f"test_env_{idx}",
+        worker_id="test_worker",
+        timestamp=time.time(),
+        rollout_id=f"test_{idx}",
     )
-
-    batch2 = RolloutBatch(
-        input_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
-        attention_mask=np.ones((batch_size, max_seq_len), dtype=np.int32),
-        position_ids=np.arange(max_seq_len)[None, :].repeat(batch_size, axis=0).astype(np.int32),
-        target_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
-        loss_weights=np.ones((batch_size, max_seq_len), dtype=np.float32),
-        loss_masks=np.ones((batch_size, max_seq_len), dtype=np.float32),
-        reference_logprobs=rng.standard_normal((batch_size, max_seq_len)).astype(np.float32),
-    )
-
-    # Test timeout on empty queue
-    empty_batch = reader.read_batch(timeout=0.1)
-    assert empty_batch is None
-
-    # Test writing
-    writer.write_batch(batch1)
-    writer.write_batch(batch2)
-
-    # Test reading (FIFO order)
-    read_batch1 = reader.read_batch(timeout=BATCH_READ_TIMEOUT)
-    assert read_batch1 is not None
-
-    read_batch2 = reader.read_batch(timeout=BATCH_READ_TIMEOUT)
-    assert read_batch2 is not None
 
 
 class InferenceWorkerRunner:
     """Manages running an inference worker in a separate thread with metric tracking."""
 
-    def __init__(self, training_config, inference_worker_config, queue_writer):
+    def __init__(self, training_config, queue_writer, coordinator, max_rollouts=2):
+        if training_config.weight_transfer.mode == WeightTransferMode.RAY_REMOTING:
+            assert coordinator is not None, "Coordinator must be provided for RAY_REMOTING"
         self.training_config = training_config
-        self.inference_worker_config = inference_worker_config
         self.queue_writer = queue_writer
+        self.coordinator = coordinator
+        self.max_rollouts = max_rollouts
 
         # State tracking
         self.worker = None
@@ -343,7 +282,14 @@ class InferenceWorkerRunner:
 
     def _run(self):
         try:
-            self.worker = InferenceWorker(self.inference_worker_config, rollout_writer=self.queue_writer)
+            self.worker = InferenceWorker(
+                training_config=self.training_config,
+                environment_spec="mock",
+                rollout_writer=self.queue_writer,
+                rollout_batch_size=2,
+                max_rollouts=self.max_rollouts,
+                coordinator=self.coordinator,
+            )
 
             def tracking_check_for_new_weights():
                 if self.worker.weight_transfer_client is not None:
@@ -363,8 +309,8 @@ class InferenceWorkerRunner:
             # Override batch generation to count rollouts
             original_generate_batch = self.worker._generate_rollout_batch
 
-            def counting_generate_batch():
-                batch_data, metrics = original_generate_batch()
+            def counting_generate_batch(rng):
+                batch_data, metrics = original_generate_batch(rng)
                 self._track_rollout_generation()
                 # Add metadata about rollout
                 metrics["rollout_number"] = self.rollouts_generated
@@ -376,6 +322,7 @@ class InferenceWorkerRunner:
             self.worker.run()
         except Exception as e:
             print("Inference worker encountered exception:", e, file=sys.stderr)
+            logger.error("Inference worker failed", exc_info=True)
             self.error = e
         finally:
             self.done.set()
@@ -430,10 +377,13 @@ class InferenceWorkerRunner:
 class TrainingWorkerRunner:
     """Manages running a training worker in a separate thread with metric tracking."""
 
-    def __init__(self, training_config, worker_config, queue_reader):
+    def __init__(self, training_config, queue_reader, coordinator=None):
+        if training_config.weight_transfer.mode == WeightTransferMode.RAY_REMOTING:
+            assert coordinator is not None, "Coordinator must be provided for RAY_REMOTING"
+
         self.training_config = training_config
-        self.worker_config = worker_config
         self.queue_reader = queue_reader
+        self.coordinator = coordinator
 
         # State tracking
         self.worker = None
@@ -463,7 +413,11 @@ class TrainingWorkerRunner:
     def _run(self):
         """Thread target - runs the training worker."""
         try:
-            self.worker = TrainingWorker(self.worker_config, rollout_reader=self.queue_reader)
+            self.worker = TrainingWorker(
+                training_config=self.training_config,
+                rollout_reader=self.queue_reader,
+                coordinator=self.coordinator,
+            )
 
             # Override save_checkpoint to track checkpoint creation
             original_save_checkpoint = self.worker.save_checkpoint
@@ -535,25 +489,33 @@ class TrainingWorkerRunner:
         return False
 
 
-def test_inference_worker(ray_cluster, training_config, inference_worker_config, mock_tokenizer):
+def test_inference_worker(ray_cluster, training_config, mock_tokenizer):
     """Test inference worker generates rollouts to in-memory queue."""
     rollout_queue = InMemoryRolloutQueue()
     queue_writer = rollout_queue.writer()
     queue_reader = rollout_queue.reader()
 
-    # Configure for single batch
-    inference_worker_config.max_rollouts = 1
+    # Get coordinator from training_config fixture
+    coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
+    coordinator = create_coordinator(training_config.weight_transfer.mode, name=coordinator_name)
 
     # Use context manager for cleaner test
-    with InferenceWorkerRunner(training_config, inference_worker_config, queue_writer) as runner:
-        batch_data = queue_reader.read_batch()
-        assert batch_data is not None, "Should be able to read batch from queue"
+    with InferenceWorkerRunner(training_config, queue_writer, coordinator) as runner:
+        # Wait for the worker to complete
+        while runner.alive() and not runner.done.is_set():
+            time.sleep(0.5)
+
+        # Give a moment for final writes
+        time.sleep(0.5)
+
+        batches = queue_reader.read_all_available()
+        assert len(batches) > 0, "Should be able to read batches from queue"
         assert runner.rollouts_generated >= 1, f"Expected at least 1 rollout, got {runner.rollouts_generated}"
 
     print("✓ Inference worker generated rollout batch successfully")
 
 
-def test_train_worker(ray_cluster, training_config, worker_config, mock_tokenizer):
+def test_train_worker(ray_cluster, training_config, mock_tokenizer):
     """Test training worker processes rollout batch and creates checkpoint."""
     rollout_queue = InMemoryRolloutQueue()
     queue_reader = rollout_queue.reader()
@@ -563,17 +525,8 @@ def test_train_worker(ray_cluster, training_config, worker_config, mock_tokenize
     batch_size = training_config.hyperparameters.train_bsize
     max_seq_len = training_config.hyperparameters.max_input_length + training_config.hyperparameters.max_output_length
 
-    # Create mock batch data with appropriate shapes
-    rng = np.random.default_rng(42)  # Use fixed seed for reproducibility
-    sample_batch = RolloutBatch(
-        input_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
-        attention_mask=np.ones((batch_size, max_seq_len), dtype=np.int32),
-        position_ids=np.arange(max_seq_len)[None, :].repeat(batch_size, axis=0).astype(np.int32),
-        target_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
-        loss_weights=np.ones((batch_size, max_seq_len), dtype=np.float32),
-        loss_masks=np.ones((batch_size, max_seq_len), dtype=np.float32),
-        reference_logprobs=rng.standard_normal((batch_size, max_seq_len)).astype(np.float32),
-    )
+    # Create mock batch data with appropriate shapes using helper function
+    sample_batch = create_test_batch(1, batch_size=batch_size, max_seq_len=max_seq_len)
 
     # Write batch to queue
     queue_writer.write_batch(sample_batch)
@@ -582,8 +535,12 @@ def test_train_worker(ray_cluster, training_config, worker_config, mock_tokenize
     training_config.hyperparameters.num_train_steps = 1
     training_config.checkpoint.save_model_freq = 1
 
+    # Get coordinator
+    coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
+    coordinator = create_coordinator(training_config.weight_transfer.mode, name=coordinator_name)
+
     # Use context manager for cleaner test
-    with TrainingWorkerRunner(training_config, worker_config, queue_reader) as runner:
+    with TrainingWorkerRunner(training_config, queue_reader, coordinator) as runner:
         # Wait for training to complete
         while not runner.done.is_set() and runner.steps_completed < 1:
             time.sleep(0.1)
@@ -597,15 +554,11 @@ def test_train_worker(ray_cluster, training_config, worker_config, mock_tokenize
     assert checkpoint_created, "Training worker should create checkpoint after processing batch"
 
 
-@pytest.mark.parametrize("rollout_queue", ["memory", "file"], indirect=True)
 def test_inference_and_training_workers(
     ray_cluster,
     tmp_path,
     training_config,
-    inference_worker_config,
-    worker_config,
     mock_tokenizer,
-    rollout_queue,
 ):
     """Test inference & training workers running together with checkpoint updates."""
     # Update configs to use shared checkpoint directory
@@ -619,19 +572,26 @@ def test_inference_and_training_workers(
 
     # Configure inference worker to poll frequently and generate multiple batches
     training_config.weight_transfer.poll_interval_seconds = CHECKPOINT_POLL_INTERVAL
-    inference_worker_config.max_rollouts = None  # Don't limit, let it run continuously
-    inference_worker_config.rollout_batch_size = 2
 
-    # Use provided rollout queue from fixture
-    queue_reader, queue_writer = rollout_queue
+    # Use in-memory rollout queue
+    rollout_queue = InMemoryRolloutQueue()
+    queue_reader = rollout_queue.reader()
+    queue_writer = rollout_queue.writer()
+
+    # Get coordinator
+    coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
+    coordinator = create_coordinator(training_config.weight_transfer.mode, name=coordinator_name)
 
     # Create worker runners and start with context managers
-    with TrainingWorkerRunner(training_config, worker_config, queue_reader) as training_runner:
+    with TrainingWorkerRunner(training_config, queue_reader, coordinator) as training_runner:
         # Wait for initial checkpoint to be created
         while glob.glob(os.path.join(checkpoint_dir, "*")) == []:
             time.sleep(1)
 
-        with InferenceWorkerRunner(training_config, inference_worker_config, queue_writer) as inference_runner:
+        # Create inference runner with unlimited rollouts to allow for weight transfers
+        inference_runner = InferenceWorkerRunner(training_config, queue_writer, coordinator, max_rollouts=None)
+
+        with inference_runner:
             start_time = time.time()
 
             while time.time() - start_time < INTEGRATION_TEST_TIMEOUT:

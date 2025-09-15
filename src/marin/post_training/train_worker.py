@@ -22,9 +22,11 @@ checkpoints are read by the rollout workers to update their models.
 For now we use GCS as a storage backend.
 """
 
+import contextlib
 import dataclasses
 import logging
 import os
+import time
 from collections import deque
 from functools import partial
 from pathlib import Path
@@ -35,6 +37,7 @@ import optax
 from flax.training.train_state import TrainState
 from jax.sharding import PartitionSpec as PS
 from optax import softmax_cross_entropy_with_integer_labels
+from pydantic import BaseModel
 from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 
 from .model_helpers import (
@@ -43,8 +46,9 @@ from .model_helpers import (
     load_tokenizer,
 )
 from .optimizer import load_adamw_optimizer
+from .replay_buffer import ReplayBuffer, ReplayDataLoader
 from .rollout_storage import RolloutBatch, RolloutReader
-from .training_config import TrainWorkerConfig
+from .training_config import TrainingConfig
 from .utils import (
     WandbLogger,
     checkpointer,
@@ -60,33 +64,48 @@ from .weight_transfer_manager import create_weight_transfer_server
 logger = logging.getLogger(__name__)
 
 
+class StepMetrics(BaseModel):
+    step: int = 0
+    loss: float = 0
+    train_step_time: float = 0
+    batch_fetch_time: float = 0
+
+    @contextlib.contextmanager
+    def timer(self):
+        start = time.time()
+        yield lambda: time.time() - start
+
+
 class TrainingWorker:
     """Training worker that reads rollout data from a queue and trains the model."""
 
     def __init__(
         self,
-        config: TrainWorkerConfig,
-        rollout_reader: RolloutReader | None = None,
+        training_config: TrainingConfig,
+        rollout_reader: RolloutReader,
+        coordinator=None,
     ):
         """Initialize training worker.
 
         Args:
-            config: Worker configuration containing training config.
-            rollout_reader: Reader to read rollout data from. If None, creates FileRolloutReader.
+            training_config: Training configuration.
+            rollout_reader: Reader to read rollout data from.
+            coordinator: Coordinator for weight transfer (required for RAY_REMOTING and JAX_TRANSFER_SERVER modes).
         """
-        self.config = config
-        self.training_config = config.training_config
+        self.training_config = training_config
+        self.coordinator = coordinator
 
-        jax_distributed_initalize(**self.training_config.distributed.jax_distributed_initalize_config)
+        jax_distributed_initalize(**self.training_config.distributed.jax_distributed_initialize_config)
         jax_distributed_barrier()
 
         self.mesh = MeshShardingHelper(
-            self.training_config.distributed.sharding,
+            self.training_config.distributed.train_sharding,
             ["replica", "fsdp", "sequence", "tensor"],
             mesh_axis_splitting=self.training_config.distributed.physical_axis_splitting,
         )
 
         self.rollout_reader = rollout_reader
+
         self._should_stop = False
         self.weight_id = 0
 
@@ -129,6 +148,20 @@ class TrainingWorker:
                 self.train_state_shape, self.train_params_sharding_rules
             )
             self._setup_weight_transfer()
+
+            # Initialize replay buffer and data loader after all setup
+            self.replay_buffer = ReplayBuffer(
+                capacity=32000,
+                local_batch_size=self.train_bsize,
+                recency_alpha=3.0,
+                process_id=jax.process_index(),
+                total_processes=jax.process_count(),
+            )
+            self.data_loader = ReplayDataLoader(
+                rollout_reader=self.rollout_reader,
+                replay_buffer=self.replay_buffer,
+                rollout_fetch_interval=1.0,
+            )
 
     def _setup_optimizer(self):
         """Setup optimizer configuration."""
@@ -197,24 +230,38 @@ class TrainingWorker:
             donate_argnums=(0,),
             annotation_shardings=self.train_intermediate_sharding_rules,
         )
-        def train_step(train_state, rng, batch):
+        def train_step(train_state, rng, batch: RolloutBatch):
             def loss(params):
                 logits = self.model(
-                    input_ids=batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
-                    position_ids=batch["position_ids"],
+                    input_ids=batch.input_ids,
+                    attention_mask=batch.attention_mask,
+                    position_ids=batch.position_ids,
                     params=params,
                     dropout_rng=rng,
                     train=True,
                 ).logits
                 logits = logits.astype(jnp.float32)
-                token_loss = softmax_cross_entropy_with_integer_labels(logits, batch["target_ids"])
-                log_ratio = jnp.exp((-token_loss) - jax.lax.stop_gradient(-token_loss))
-                weighted_log_ratio = log_ratio * batch["loss_weights"]
-                reinforce_loss = jnp.mean(-weighted_log_ratio, where=batch["loss_masks"] > 0.0)
-                ref_log_ratio = batch["reference_logprobs"] + token_loss
-                kl_loss = jnp.exp(ref_log_ratio) - 1 - ref_log_ratio
-                kl_loss = jnp.mean(kl_loss, where=batch["loss_masks"] > 0.0)
+                token_loss = softmax_cross_entropy_with_integer_labels(logits, batch.target_ids)
+
+                # Current policy log probabilities (π_θ at training time)
+                current_logprobs = -token_loss
+
+                # RLOO importance sampling ratio: π_θ(a|s) / π_old(a|s)
+                # batch.policy_logprobs contains log probs from the policy that generated samples
+                log_ratio = current_logprobs - batch.policy_logprobs
+                ratio = jnp.exp(log_ratio)
+
+                # RLOO loss with importance sampling
+                # batch.loss_weights contains RLOO advantages: r_i - mean(r_j for j≠i)
+                # Multiply by ratio for off-policy correction
+                weighted_advantages = ratio * batch.loss_weights
+                reinforce_loss = -jnp.sum(weighted_advantages * batch.loss_masks) / jnp.sum(batch.loss_masks)
+
+                # KL regularization against reference policy (prevents drift)
+                # This is standard KL(π_θ || π_ref) to keep policy close to reference
+                kl_penalty = current_logprobs - batch.reference_logprobs
+                kl_loss = -jnp.sum(kl_penalty * batch.loss_masks) / jnp.sum(batch.loss_masks)
+
                 loss = reinforce_loss + self.kl_coef * kl_loss
                 return loss, {
                     "reinforce_loss": reinforce_loss,
@@ -242,31 +289,8 @@ class TrainingWorker:
     def _initialize_training_state(self):
         """Initialize training state with proper checkpoint loading."""
         jax_distributed_barrier()
-        # Initialize training state from checkpoint or params
-        latest_checkpoint_step = -1
-        if self.logger.can_save():
-            checkpoint_dir = os.path.join(self.training_config.output_dir, "checkpoints")
-            if os.path.exists(checkpoint_dir):
-                checkpoint_steps = [int(d.split("_")[1]) for d in os.listdir(checkpoint_dir) if d.startswith("step_")]
-                if checkpoint_steps:
-                    latest_checkpoint_step = max(checkpoint_steps)
 
-        if latest_checkpoint_step > 0:
-            logger.info(f"Resuming training from checkpoint at step {latest_checkpoint_step}...")
-            checkpoint_path = (
-                Path(self.training_config.output_dir)
-                / "checkpoints"
-                / f"step_{latest_checkpoint_step}"
-                / "params.msgpack"
-            )
-        elif self.training_config.model.model_paths.params:
-            logger.info("Restoring model from provided params path...")
-            checkpoint_path = self.training_config.model.model_paths.params
-        elif self.training_config.model.model_paths.train_state:
-            logger.info("Restoring model from provided train state path...")
-            checkpoint_path = self.training_config.model.model_paths.train_state
-        else:
-            checkpoint_path = None
+        checkpoint_path = self._find_checkpoint_path()
 
         if checkpoint_path:
             train_state = self.create_train_state_from_params(
@@ -286,8 +310,35 @@ class TrainingWorker:
 
         jax_distributed_barrier()
         self.checkpoint_queue = deque()
-
         return train_state
+
+    def _find_checkpoint_path(self) -> str | None:
+        """Find the best checkpoint path to load from."""
+        # Check for existing checkpoint to resume from
+        checkpoint_dir = os.path.join(self.training_config.output_dir, "checkpoints")
+        if os.path.exists(checkpoint_dir):
+            checkpoint_steps = [int(d.split("_")[1]) for d in os.listdir(checkpoint_dir) if d.startswith("step_")]
+            if checkpoint_steps:
+                latest_checkpoint_step = max(checkpoint_steps)
+                logger.info(f"Resuming training from checkpoint at step {latest_checkpoint_step}...")
+                return str(
+                    Path(self.training_config.output_dir)
+                    / "checkpoints"
+                    / f"step_{latest_checkpoint_step}"
+                    / "params.msgpack"
+                )
+
+        # Check for provided params path
+        if self.training_config.model.model_paths.params:
+            logger.info("Restoring model from provided params path...")
+            return self.training_config.model.model_paths.params
+
+        # Check for provided train state path
+        if self.training_config.model.model_paths.train_state:
+            logger.info("Restoring model from provided train state path...")
+            return self.training_config.model.model_paths.train_state
+
+        return None
 
     def _setup_weight_transfer(self):
         """Initialize weight transfer manager."""
@@ -303,41 +354,18 @@ class TrainingWorker:
             params_sharding_rules=self.train_params_sharding_rules,
             gather_fns=self.train_state_gather_fns,
             model_config=self.model.config,
+            coordinator=self.coordinator,
         )
 
     def _transfer_weights(self, train_state, step):
         """Transfer weights using the weight transfer manager."""
         self.weight_id += 1
-
-        # sync weights without optimizer state
+        logger.info("Transferring weights at step %d, weight_id %d...", step, self.weight_id)
         self.weight_transfer_manager.serve_weights(self.weight_id, train_state.params)
 
     def stop(self):
         """Stop the training worker."""
         self._should_stop = True
-
-    def _slice_batch(self, batch: RolloutBatch, start_idx: int, end_idx: int) -> RolloutBatch:
-        """Slice a RolloutBatch to get a subset of samples."""
-        return RolloutBatch(
-            input_ids=batch.input_ids[start_idx:end_idx],
-            attention_mask=batch.attention_mask[start_idx:end_idx],
-            position_ids=batch.position_ids[start_idx:end_idx],
-            target_ids=batch.target_ids[start_idx:end_idx],
-            loss_weights=batch.loss_weights[start_idx:end_idx],
-            loss_masks=batch.loss_masks[start_idx:end_idx],
-            reference_logprobs=batch.reference_logprobs[start_idx:end_idx],
-        )
-
-    def _convert_batch_to_jax(self, batch: RolloutBatch) -> dict[str, jnp.ndarray]:
-        return {
-            "input_ids": jnp.array(batch.input_ids),
-            "attention_mask": jnp.array(batch.attention_mask),
-            "position_ids": jnp.array(batch.position_ids),
-            "target_ids": jnp.array(batch.target_ids),
-            "loss_weights": jnp.array(batch.loss_weights),
-            "loss_masks": jnp.array(batch.loss_masks),
-            "reference_logprobs": jnp.array(batch.reference_logprobs),
-        }
 
     def save_checkpoint(self, train_state, step):
         """Save model checkpoint."""
@@ -398,37 +426,52 @@ class TrainingWorker:
         if self.training_config.logging.save_initial_checkpoint:
             self.save_checkpoint(train_state, 0)
 
-        while step < self.training_config.hyperparameters.num_train_steps and not self._should_stop:
-            logger.info(f"Training step {step}")
-            batch = self.rollout_reader.read_batch(timeout=5)
-            if batch is None:
-                logger.info("No batch available, waiting for new data...")
-                continue
-
-            batch_size = len(batch.input_ids)
-            for i in range(0, batch_size, self.train_bsize):
-                if step >= self.training_config.hyperparameters.num_train_steps or self._should_stop:
+        # Start data loader
+        with self.data_loader:
+            while step < self.training_config.hyperparameters.num_train_steps:
+                if self._should_stop:
+                    logger.info("Stop signal received, stopping training worker...")
                     break
 
-                jax_distributed_barrier()
-                end_idx = min(i + self.train_bsize, batch_size)
-                batch_slice = self._slice_batch(batch, i, end_idx)
-                logger.info(f"Training on batch of shape: {batch_slice.attention_mask.shape}")
-                jax_batch = self._convert_batch_to_jax(batch_slice)
+                logger.info(f"Starting training step {step}...")
+                step_metrics = StepMetrics(step=step)
 
-                # Perform training step
-                rng, subrng = jax.random.split(rng)
-                train_state, metrics = self.train_step(train_state, subrng, jax_batch)
-                jax_distributed_barrier()
+                # Get training data from replay buffer
+                with step_metrics.timer() as batch_fetch_timer:
+                    batch = self.data_loader.get_training_batch(timeout=60.0)
+                    if batch is None:
+                        logger.info("No training batch available, waiting...")
+                        continue
+                    step_metrics.batch_fetch_time = batch_fetch_timer()
 
                 step += 1
 
-                if self.training_config.logging.log_freq > 0 and step % self.training_config.logging.log_freq == 0:
-                    log_metrics = {"step": step}
+                # Truncate batch to max sequence length just in case we are reading
+                # an older inference file.
+                max_seq_len = self.training_config.model.model_config_override.max_sequence_length
+                batch = batch.truncate_sequence(max_seq_len)
+                batch = batch.to_jax()
+
+                logger.info("Training on batch with shape: %s", batch.input_ids.shape)
+
+                with step_metrics.timer() as train_step_timer:
+                    rng, subrng = jax.random.split(rng)
+                    train_state, metrics = self.train_step(train_state, subrng, batch)
+                    step_metrics.train_step_time = train_step_timer()
+
+                with step_metrics.timer() as sync_timer:
+                    jax_distributed_barrier()
+
+                step_metrics.train_step_time += sync_timer()
+                if step % 10 == 0:
+                    logger.info("Finished training step", step_metrics.model_dump())
+
+                if self.training_config.logging.log_freq > 0 and (step % self.training_config.logging.log_freq == 0):
+                    log_metrics = {}
                     log_metrics.update(jax.device_get(metrics))
                     log_metrics.update(self.weight_transfer_manager.get_metrics())
+                    log_metrics.update(step_metrics.model_dump())
                     self.logger.log(log_metrics)
-                    self.logger.log(self.weight_transfer_manager.get_metrics())
                     logger.info(f"Logging metrics at step {step}... {log_metrics}")
 
                 if (step % self.training_config.weight_transfer.sync_interval_steps) == 0:
@@ -438,18 +481,12 @@ class TrainingWorker:
                     self.training_config.checkpoint.save_model_freq > 0
                     and step % self.training_config.checkpoint.save_model_freq == 0
                 ):
+                    logger.info("Saving checkpoint at step %d...", step)
                     self.save_checkpoint(train_state, step)
 
         # Final checkpoint and weight transfer
         if self.training_config.checkpoint.save_model_freq > 0:
             self._transfer_weights(train_state, step)
-
-            # Log final weight transfer metrics
-            transfer_metrics = self.weight_transfer_manager.get_metrics()
-            if transfer_metrics:
-                self.logger.log(transfer_metrics)
-                logger.info(f"Final weight transfer metrics: {transfer_metrics}")
-
             self.save_checkpoint(train_state, step)  # Always save final checkpoint
 
         # Cleanup

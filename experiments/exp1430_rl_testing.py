@@ -23,21 +23,25 @@ from dataclasses import dataclass
 import ray
 from levanter.infra.ray_tpu import run_on_pod_ray
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import (
+    ExecutorStep,
+    OutputName,
+    executor_main,
+    this_output_path,
+)
 from marin.post_training.training_config import (
     CheckpointerConfigData,
     DistributedConfig,
     EnvironmentConfig,
     GenerationConfig,
-    InferenceWorkerConfig,
     LoggingConfig,
     ModelConfig,
     ModelOverrideConfig,
     ModelPathsConfig,
     OptimizerConfig,
+    TokenizerOverrideConfig,
     TrainingConfig,
     TrainingHyperparameters,
-    TrainWorkerConfig,
     WeightTransferConfig,
     WeightTransferMode,
 )
@@ -75,7 +79,7 @@ class RLTrainConfig:
     training_config: TrainingConfig
     inference_tpu_type: str
     train_tpu_type: str
-    num_inference_workers: int = 1
+    num_inference_workers: int = 4
     num_train_slices: int = 1
 
 
@@ -90,20 +94,15 @@ def run_rl_training_on_pod(config: RLTrainConfig):
     from marin.post_training.rollout_storage import FileRolloutReader, FileRolloutWriter
     from marin.post_training.train_worker import TrainingWorker
 
+    # Create coordinator for weight transfer
+    # from marin.post_training.weight_transfer_manager import create_coordinator
+    # coordinator = create_coordinator(
+    #     config.training_config.weight_transfer.mode,
+    #     name=f"coordinator_{config.training_config.output_dir.split('/')[-1]}",
+    # )
+    coordinator = None  # Using GCS checkpointing, no coordinator needed
+
     rollout_queue_path = config.training_config.output_dir + "/rollout_queue"
-
-    train_worker_config = TrainWorkerConfig(
-        training_config=config.training_config,
-        rollout_queue_path=rollout_queue_path,
-    )
-
-    inference_worker_config = InferenceWorkerConfig(
-        training_config=config.training_config,
-        environment_spec=ENVIRONMENT_SPEC,
-        rollout_output_path=rollout_queue_path,
-        rollout_batch_size=8,
-        max_rollouts=None,  # Generate rollouts continuously
-    )
 
     env = {}
     env = _add_run_env_variables(env)
@@ -116,7 +115,7 @@ def run_rl_training_on_pod(config: RLTrainConfig):
         else:
             logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
 
-    train_pod_config = TpuPodConfig(tpu_type=config.inference_tpu_type)
+    train_pod_config = TpuPodConfig(tpu_type=config.train_tpu_type)
     train_hw_config = train_pod_config.with_env_vars(env)
 
     @ray.remote(runtime_env=train_hw_config.runtime_env, max_calls=1)
@@ -124,10 +123,14 @@ def run_rl_training_on_pod(config: RLTrainConfig):
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
             rollout_reader = FileRolloutReader(rollout_queue_path)
-            worker = TrainingWorker(train_worker_config, rollout_reader)
+            worker = TrainingWorker(
+                training_config=config.training_config,
+                rollout_reader=rollout_reader,
+                coordinator=coordinator,
+            )
             worker.train()
 
-    inference_pod_config = TpuPodConfig(tpu_type=config.train_tpu_type)
+    inference_pod_config = TpuPodConfig(tpu_type=config.inference_tpu_type)
     inference_hw_config = inference_pod_config.with_env_vars(env)
 
     @ray.remote(runtime_env=inference_hw_config.runtime_env, max_calls=1)
@@ -135,7 +138,14 @@ def run_rl_training_on_pod(config: RLTrainConfig):
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
             rollout_writer = FileRolloutWriter(rollout_queue_path)
-            worker = InferenceWorker(inference_worker_config, rollout_writer)
+            worker = InferenceWorker(
+                training_config=config.training_config,
+                environment_spec=ENVIRONMENT_SPEC,
+                rollout_writer=rollout_writer,
+                rollout_batch_size=8,
+                max_rollouts=None,
+                coordinator=coordinator,
+            )
             worker.run()
 
     train_tasks = []
@@ -144,8 +154,8 @@ def run_rl_training_on_pod(config: RLTrainConfig):
             train_worker_task,
             config.train_tpu_type,
             num_slices=config.num_train_slices,
-            max_retries_failure=1,
-            max_retries_preemption=1,
+            max_retries_failure=10,
+            max_retries_preemption=10,
         )
     )
     inference_tasks = []
@@ -155,8 +165,8 @@ def run_rl_training_on_pod(config: RLTrainConfig):
                 inference_worker_task,
                 config.inference_tpu_type,
                 num_slices=1,
-                max_retries_failure=1,
-                max_retries_preemption=1,
+                max_retries_failure=10,
+                max_retries_preemption=10,
             )
         )
 
@@ -188,7 +198,12 @@ def default_rl_train(
         **kwargs: Additional arguments
     """
 
-    model_paths_config = ModelPathsConfig(**model_paths)
+    model_paths_config = ModelPathsConfig(
+        params=model_paths["params"],
+        tokenizer=model_paths["tokenizer"],
+        config=model_paths.get("config"),
+        default_config_name=model_paths.get("default_config_name"),
+    )
 
     optim_config = OptimizerConfig(
         init_lr=learning_rate,
@@ -202,7 +217,7 @@ def default_rl_train(
         weight_decay=0.0,
         bf16_momentum=False,
         multiply_by_parameter_scale=False,
-        weight_decay_exclusions=(),
+        weight_decay_exclusions=[],
         schedule="cos",
         grad_accum_steps=16,
     )
@@ -239,14 +254,12 @@ def default_rl_train(
     # Shared paths for worker coordination
     output_dir = this_output_path()
 
-    # Weight transfer configuration
     weight_transfer_config = WeightTransferConfig(
-        mode=WeightTransferMode.RAY_REMOTING,
+        mode=WeightTransferMode.GCS_CHECKPOINT,
         sync_interval_steps=10,
         poll_interval_seconds=30.0,
-        coordinator_name=f"coordinator_{name}",
         transfer_timeout=120.0,
-        checkpoint_dir=f"{output_dir}/checkpoints",
+        checkpoint_dir=OutputName("checkpoints"),
         max_checkpoints=5,
     )
 
@@ -258,9 +271,12 @@ def default_rl_train(
             training_param_dtype="fp32",
             training_activation_dtype="bf16",
             model_config_override=model_config_override,
-            train_attention_kernel_config=r"default:{}",
-            prefill_attention_kernel_config=r"default:{}",
-            generate_attention_kernel_config=r"default:{}",
+            tokenizer_override=TokenizerOverrideConfig(),
+            train_attention_kernel_config='splash:{"block_size": 256}',
+            prefill_attention_kernel_config='splash:{"block_size": 256}',
+            generate_attention_kernel_config=(
+                'paged:{"page_size": 256, "pages_per_compute_block": 1, "inline_seq_dim": true, "use_int8": false}'
+            ),
         ),
         hyperparameters=TrainingHyperparameters(
             num_train_steps=num_train_steps,
@@ -276,8 +292,8 @@ def default_rl_train(
             kl_coef=kl_coef,
         ),
         logging=LoggingConfig(
-            log_freq=1,
-            num_eval_examples=0,
+            log_freq=10,
+            num_eval_examples=8,
             wandb_project=WANDB_PROJECT,
             save_initial_checkpoint=False,
             log_initial_step=True,
@@ -285,12 +301,14 @@ def default_rl_train(
             online=True,
             prefix=name,
             prefix_to_id=True,
+            experiment_id=name,
         ),
         environment=EnvironmentConfig(),
         distributed=DistributedConfig(
-            sharding=[1, 4, 1, -1],
-            physical_axis_splitting=False,
-            jax_distributed_initalize_config={},
+            train_sharding=[1, 8, 1, -1],
+            inference_sharding=[1, 32, 1, 4],
+            physical_axis_splitting=True,
+            jax_distributed_initialize_config={},
         ),
         output_dir=output_dir,
         checkpoint=checkpointer_config,
@@ -303,11 +321,13 @@ def default_rl_train(
         training_config=training_config,
         inference_tpu_type=inference_tpu_type,
         train_tpu_type=train_tpu_type,
+        num_inference_workers=1,
+        num_train_slices=1,
     )
 
     return ExecutorStep(
-        name=name,
-        description=f"RL training experiment: {name} for {num_train_steps} steps",
+        name=os.path.join("rl_checkpoints", name),
+        description=f"Async RL math training: {name} for {num_train_steps} steps",
         fn=run_rl_training_on_pod,
         config=config,
         pip_dependency_groups=["post_training"],

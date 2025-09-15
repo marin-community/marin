@@ -71,6 +71,7 @@ class MockEnv(MarinEnv):
         with jax.default_device(jax.devices("cpu")[0]):
             n_to_sample = min(n_examples, len(available_examples))
             indices = jax.random.choice(prng_key, len(available_examples), shape=(n_to_sample,), replace=True)
+            indices = jax.device_get(indices)  # Materialize to local CPU for indexing
             examples = [available_examples[int(idx)] for idx in indices]
 
         # Generate responses
