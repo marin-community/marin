@@ -23,15 +23,15 @@ Install dependencies:
 
 ```bash
 cd data_browser
-poetry install --no-root
+uv venv
+uv pip install -e .
 npm install
 ```
 
-**Note**: If you get `ModuleNotFoundError` when running the server, the Poetry lock file may be incompatible. Fix with:
+**Note**: If you get `ModuleNotFoundError` when running the server, ensure dependencies are installed or run via uv:
 
 ```bash
-poetry lock --no-update
-poetry install --no-root
+DEV=true uv run python server.py --config conf/local.conf
 ```
 
 ## Development Setup
@@ -48,7 +48,7 @@ Run both servers in separate terminals:
 **Terminal 1: Backend Server**
 ```bash
 cd data_browser
-DEV=true poetry run python server.py --config conf/local.conf
+DEV=true uv run python server.py --config conf/local.conf
 ```
 
 **Terminal 2: Frontend Server**
@@ -65,7 +65,7 @@ If you only need to test the API endpoints or the React server won't start:
 
 ```bash
 cd data_browser
-DEV=true poetry run python server.py --config conf/local.conf
+DEV=true uv run python server.py --config conf/local.conf
 ```
 
 **Access**: [http://localhost:5000/api/view?path=../local_store](http://localhost:5000/api/view?path=../local_store)
