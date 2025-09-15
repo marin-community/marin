@@ -15,7 +15,8 @@ Install dependencies:
 
 ```bash
 cd data_browser
-poetry install
+uv venv
+uv pip install -e .
 npm install
 ```
 
@@ -30,7 +31,7 @@ The data browser has two pieces:
 
 To start the data browser, we need to run both servers, in different shells:
 ```bash
-DEV=true python server.py --config conf/local.conf
+DEV=true uv run python server.py --config conf/local.conf
 npm start
 ```
 

@@ -12,11 +12,10 @@ RUN apt-get update && apt-get install -y \
 COPY package*.json ./
 RUN npm install
 
-COPY pyproject.toml .
-COPY poetry.lock .
-RUN pip install poetry && \
-    poetry config virtualenvs.create false && \
-    poetry install --no-root
+COPY pyproject.toml uv.lock .
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh -s -- -y \
+    && mv /root/.cargo/bin/uv /usr/local/bin/uv \
+    && uv pip install --system -r uv.lock
 
 COPY . .
 
