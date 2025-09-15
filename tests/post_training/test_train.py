@@ -133,7 +133,8 @@ def training_config():
             test_environments_path="environments_test.json",
         ),
         distributed=DistributedConfig(
-            sharding=[1, 1, 1, -1],  # Single device sharding
+            train_sharding=[1, 1, 1, -1],  # Single device sharding
+            inference_sharding=[1, 1, 1, -1],
         ),
         generation_config=generation_config,
         test_generation_config=test_generation_config,

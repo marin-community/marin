@@ -494,8 +494,13 @@ def main(config: TrainingConfig):
     """Main training script with environment."""
     logging_config = config.logging
 
+    # Synchronous trainer requires same sharding for training and inference
+    assert (
+        config.distributed.train_sharding == config.distributed.inference_sharding
+    ), "Synchronous trainer requires train_sharding == inference_sharding"
+
     # Initialize JAX distributed
-    jax_distributed_initalize(**config.distributed.jax_distributed_initalize_config)
+    jax_distributed_initalize(**config.distributed.jax_distributed_initialize_config)
     jax_distributed_barrier()
 
     # Load attention kernel configurations
@@ -510,7 +515,7 @@ def main(config: TrainingConfig):
     )
 
     mesh = MeshShardingHelper(
-        config.distributed.sharding,
+        config.distributed.train_sharding,
         ["replica", "fsdp", "sequence", "tensor"],
         mesh_axis_splitting=config.distributed.physical_axis_splitting,
     )

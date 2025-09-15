@@ -334,6 +334,7 @@ def jax_distributed_initalize(
     initialize_jax_distributed: bool = False,
     local_device_ids: list[int] | None = None,
     coordinator_address: str | None = None,
+    coordinator_bind_address: str | None = None,
     num_processes: int | None = None,
     process_id: int | None = None,
 ):
@@ -345,6 +346,7 @@ def jax_distributed_initalize(
 
         jax.distributed.initialize(
             coordinator_address=coordinator_address,
+            coordinator_bind_address=coordinator_bind_address,
             num_processes=num_processes,
             process_id=process_id,
             local_device_ids=local_device_ids,
