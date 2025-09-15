@@ -1724,6 +1724,12 @@ def plot_benchmark_results():
             )
 
     plt.figure(figsize=WIDE_RECTANGLE_FIGSIZE, dpi=300)
+
+    model_x_values = [param_str_to_count[model.model_size] for model in VANILLA_MODEL_SCALING]
+    chinchilla_accs = [0.5435, 0.5534, 0.5342, 0.5414]
+    model_y_values = [1.0 - acc for acc in chinchilla_accs]
+    plt.plot(model_x_values, model_y_values, color=BASELINE_COLOR, label="Epoched recipe", marker="o")
+
     model_x_values = [param_str_to_count[model.model_size] for model in VANILLA_MODEL_SCALING]
     model_y_values = [1.0 - benchmark_results[get_base_name(model)]["1"]["avg_acc"] for model in VANILLA_MODEL_SCALING]
     plt.plot(model_x_values, model_y_values, color=PURPLE, label="Model scaling", marker="o")
@@ -1744,8 +1750,8 @@ def plot_benchmark_results():
         distill_benchmarks = json.load(f)
 
     key_to_pretty_map = {
-        "distill-8ens": "8-Ensemble Distill",
-        "self-distill": "Self-Distill",
+        "distill-8ens": "8-Ensemble distill",
+        "self-distill": "Self-distill",
     }
 
     key_to_color_map = {
@@ -1881,10 +1887,14 @@ def plot_200M_sample(
     min_x = min(param_counts)
     max_x = max([max(x_data * param_str_to_count[model_size]) for model_size, (x_data, _, _) in losses_for_200M.items()])
 
+    chinchilla_losses = [3.83752, 3.78538, 3.74974, 3.76432]
+    plt.scatter(param_counts, chinchilla_losses, color=BASELINE_COLOR, s=50)
+    plt.plot(param_counts, chinchilla_losses, color=BASELINE_COLOR, label="Epoched recipe")
+
     plt.scatter(param_counts, run_losses_200M, color=PURPLE, s=50)
     model_x_fit = np.linspace(min_x, max_x * 25, 5000)
     model_y_fit = power_law_200M.evaluate(model_x_fit)
-    plt.plot(model_x_fit, model_y_fit, "--", color=PURPLE, label=f"Model scaling: (Fit: {power_law_200M})")
+    plt.plot(model_x_fit, model_y_fit, "--", color=PURPLE, label=f"Model scaling")
 
     # # add a shaded gray region for any y value below asymptote
     # plt.fill_between(
@@ -1905,8 +1915,43 @@ def plot_200M_sample(
             y_fit,
             "--",
             color=param_str_color_dict[model_size],
-            label=f"{value_pretty_name_dict[model_size]} ensembles (Fit: {power_law})",
+            label=f"{value_pretty_name_dict[model_size]} ensembles",
         )
+
+
+    key_to_pretty_map = {
+        "distill-8ens": "8-Ensemble distill",
+        "self-distill": "Self-distill",
+    }
+
+    key_to_color_map = {
+        "distill-8ens": ENSEMBLE_COLOR,
+        "self-distill": SELF_DISTILL_COLOR,
+    }
+
+    # Best 8-mixture distill run: 300m4k-209Mx16-dclm+ens8x0730^0.9-cos-lr0.0030-wd0.10-bs64 (3.3635)
+    # Best self-distill run: 300m4k-209Mx16-dclm+sd0805^0.75-cos-lr0.0030-wd0.10-bs64 (3.43243)
+    plt.scatter(
+        0.3,
+        3.43243,
+        color=key_to_color_map["self-distill"],
+        marker="*",
+        s=120,
+        zorder=6,
+        label=f"{key_to_pretty_map['self-distill']}",
+    )
+
+    
+    plt.scatter(
+        0.3,
+        3.3635,
+        color=key_to_color_map["distill-8ens"],
+        marker="*",
+        s=120,
+        zorder=6,
+        label=f"{key_to_pretty_map['distill-8ens']}",
+    )
+
     plt.legend()
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
     plt.xscale("log")
