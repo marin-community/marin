@@ -12,10 +12,13 @@ RUN apt-get update && apt-get install -y \
 COPY package*.json ./
 RUN npm install
 
+COPY --from=docker.io/astral/uv:latest /uv /uvx /bin/
 COPY pyproject.toml uv.lock .
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh -s -- -y \
-    && mv /root/.cargo/bin/uv /usr/local/bin/uv \
-    && uv pip install --system -r uv.lock
+# Create a project-local virtualenv and sync dev deps
+RUN uv sync --frozen --group dev
+
+# Ensure the venv Python is used for subsequent commands and at runtime
+ENV PATH=/app/.venv/bin:$PATH
 
 COPY . .
 
