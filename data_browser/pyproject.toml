@@ -26,3 +26,11 @@ dependencies = [
 dev = [
     "honcho>=2.0.0",
 ]
+
+[tool.hatch.build.targets.wheel]
+# Explicitly declare which top-level modules to include so Hatch can
+# build the editable wheel even though this project is an app (no package dir).
+only-include = [
+    "server.py",
+    "wsgi.py",
+]

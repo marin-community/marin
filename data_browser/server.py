@@ -68,15 +68,22 @@ class Server:
     def __init__(self, config: ServerConfig):
         self.config = config
 
+        # Lazily instantiate remote filesystems to avoid triggering cloud
+        # auth during local-only development.
         self.fs_cache = {
             None: fsspec.filesystem("local"),
-            "gs": fsspec.filesystem("gcs"),
-            "s3": fsspec.filesystem("s3"),
         }
 
     def fs(self, path: str):
         """Automatically figure out the filesystem to use based on the `path`."""
         protocol, _ = fsspec.core.split_protocol(path)
+        if protocol not in self.fs_cache:
+            if protocol == "gs":
+                self.fs_cache[protocol] = fsspec.filesystem("gcs")
+            elif protocol == "s3":
+                self.fs_cache[protocol] = fsspec.filesystem("s3")
+            else:
+                self.fs_cache[protocol] = fsspec.filesystem("local")
         return self.fs_cache[protocol]
 
 
