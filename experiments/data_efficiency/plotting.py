@@ -81,6 +81,7 @@ param_str_color_dict = {
 BASELINE_COLOR = "red"
 REGULARIZED_COLOR = PURPLE
 TIERED_COLOR = GOLD
+
 ENSEMBLE_COLOR = PINK
 SELF_DISTILL_COLOR = VIRIDIAN
 
@@ -2162,6 +2163,82 @@ def plot_batch_size_ablation(run_list):
     plt.close()
 
 
+def plot_wd_overfitting_ablation(run_list):
+    run_list_map = {wd: [
+        run
+        for run in run_list
+        if run["batch_size"] == 64
+        and run["data_name"] == "dclm"
+        and run["weight_decay"] == wd
+        and run["model_name"] == "300m4k"
+        and run["base_tokens"] == 209715200
+        and run['lr'] == 3e-3
+        and "seed" not in run["run_id"]
+        and "-ts" not in run["run_id"]
+    ] for wd in [0.1, 1.6]}
+
+    unique_epochs = sorted(list(set([run["epochs"] for run in run_list])))
+    run_list_map[0.1] = sorted(run_list_map[0.1], key=lambda x: x["epochs"])
+    run_list_map[1.6] = sorted(run_list_map[1.6], key=lambda x: x["epochs"])
+
+    # loss figure
+    low_wd_losses = [run["final_dclm_loss"] for run in run_list_map[0.1]]
+    high_wd_losses = [run["final_dclm_loss"] for run in run_list_map[1.6]]
+    plt.figure(figsize=ABLATION_FIGSIZE, dpi=300)
+    plt.plot(unique_epochs, low_wd_losses, marker="o", color=BASELINE_COLOR, label="Weight decay 0.1")
+    plt.plot(unique_epochs, high_wd_losses, marker="o", color=REGULARIZED_COLOR, label="Weight decay 1.6")
+    plt.ylim(3.5, 5.6)
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.xscale("log")
+    plt.xticks(unique_epochs, [f"{x}" for x in unique_epochs])
+    plt.xticks([], [], minor=True)
+    plt.title("Weight decay overfitting (Loss)")
+    plt.legend()
+    plt.grid(True, which="both", linestyle="--", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig("experiments/data_efficiency/plots/ablation_wd_overfitting_loss.png", bbox_inches="tight")
+
+    # benchmark figure
+    with open('./experiments/data_efficiency/wd_overfitting_results.json', 'r') as f:
+        all_results = json.load(f)
+
+    # Calculate average accuracy across 3 benchmarks for each configuration
+    wd_01_avg_acc = []
+    wd_16_avg_acc = []
+    
+    for (r01, r16) in zip(run_list_map[0.1], run_list_map[1.6]):
+        # WD 0.1 models
+        base_name_01 = r01['run_id'].split('-bs')[0]
+        results_01 = all_results[base_name_01]["1"]
+        avg_acc_01 = (results_01["arc_easy"]["acc"] + results_01["piqa"]["acc"] + results_01["sciq"]["acc"]) / 3
+        wd_01_avg_acc.append(avg_acc_01)
+        
+        # WD 1.6 models
+        base_name_16 = r16['run_id'].split('-bs')[0]
+        results_16 = all_results[base_name_16]["1"]
+        avg_acc_16 = (results_16["arc_easy"]["acc"] + results_16["piqa"]["acc"] + results_16["sciq"]["acc"]) / 3
+        wd_16_avg_acc.append(avg_acc_16)
+    
+    wd_01_avg_err = [1 - acc for acc in wd_01_avg_acc]
+    wd_16_avg_err = [1 - acc for acc in wd_16_avg_acc]
+    # Create the plot
+    plt.figure(figsize=ABLATION_FIGSIZE, dpi=300)
+    plt.plot(unique_epochs, wd_01_avg_err, marker='o', label='Weight decay 0.1', color=BASELINE_COLOR)
+    plt.plot(unique_epochs, wd_16_avg_err, marker='o', label='Weight decay 1.6', color=REGULARIZED_COLOR)
+    
+    plt.xlabel('Epochs')
+    plt.ylabel('Average error')
+    plt.title('Weight decay overfitting (Downstream benchmarks)')
+    plt.legend()
+    plt.grid(True, which="both", linestyle="--", alpha=0.3)
+    plt.xscale("log")
+    plt.xticks(unique_epochs, [f"{x}" for x in unique_epochs])
+    plt.xticks([], [], minor=True)
+    plt.tight_layout()
+    plt.savefig('experiments/data_efficiency/plots/ablation_wd_overfitting_benchmark.png', bbox_inches='tight')
+    
+
 def plot_lr_tuned_epoch_ablation(run_list):
     run_list = [
         run
@@ -2755,6 +2832,7 @@ if __name__ == "__main__":
         )
 
     elif mode == "infinite-model-scaling":
+        plot_wd_overfitting_ablation(run_list)
         no_convex_tuning_ablation(run_list)
         plot_parameter_count_vs_loss(run_list)
         sensitivity_analysis(run_list)
