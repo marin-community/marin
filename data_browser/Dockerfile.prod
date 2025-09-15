@@ -10,18 +10,19 @@ RUN npm run build
 # Stage 2: Build Python dependencies
 FROM python:3.12-slim AS python-builder
 WORKDIR /app
-COPY pyproject.toml .
-COPY poetry.lock .
-RUN pip install poetry && \
-    poetry config virtualenvs.create false && \
-    poetry install --no-root --without dev
+COPY --from=docker.io/astral/uv:latest /uv /uvx /bin/
+COPY pyproject.toml uv.lock .
+# Create a project-local virtualenv and sync (prod) deps
+RUN uv sync --frozen
 
 # Stage 3: Final minimal image
 FROM python:3.12-slim
 WORKDIR /app
 
 # Copy only necessary files from builders
-COPY --from=python-builder /usr/local/lib/python3.12/site-packages/ /usr/local/lib/python3.12/site-packages/
+# Bring in the Python virtual environment from the builder
+COPY --from=python-builder /app/.venv /app/.venv
+ENV PATH=/app/.venv/bin:$PATH
 COPY --from=frontend-builder /app/build ./build
 COPY server.py .
 COPY wsgi.py .
