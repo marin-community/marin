@@ -76,9 +76,9 @@ def mock_eval_config(
 ) -> TrainingConfig:
     """Create training configuration for single node test."""
     model_paths_config = ModelPathsConfig(
-        params=None,  # Will initialize randomly
-        tokenizer="meta-llama/Llama-3.2-1B",
-        default_config_name="test_1m",
+        params="gs://marin-us-central-2/rl_checkpoints/base/Llama-3.2-1B-Instruct",
+        tokenizer="unsloth/Llama-3.2-1B-Instruct",
+        default_config_name=None,
     )
 
     optim_config = OptimizerConfig(
@@ -99,14 +99,14 @@ def mock_eval_config(
     )
 
     generation_config = GenerationConfig(
-        max_output_length=16,
+        max_output_length=32,
         temperature=1.0,
         stop_tokens=STOP_TOKENS,
         n_generations=8,
     )
 
     test_generation_config = GenerationConfig(
-        max_output_length=16,
+        max_output_length=32,
         temperature=0.0,
         stop_tokens=STOP_TOKENS,
         n_generations=8,
@@ -114,7 +114,7 @@ def mock_eval_config(
 
     # Model override configuration for testing
     model_config_override = ModelOverrideConfig(
-        max_sequence_length=128,  # Short sequences for testing
+        max_sequence_length=256,  # Must be >= max_input + max_output for splash attention
         initializer_range=0.02,
         bos_token_id=0,
         eos_token_id=1,
@@ -149,7 +149,7 @@ def mock_eval_config(
         "initialize_jax_distributed": True,
         "process_id": 0,
     }
-    sharding = [4, 1, 1, 1]
+    sharding = [1, 4, 1, 1]
 
     return TrainingConfig(
         model=ModelConfig(
@@ -170,7 +170,7 @@ def mock_eval_config(
             num_train_steps=10000,
             max_input_length=128,
             max_output_length=128,
-            train_bsize=2,
+            train_bsize=4,
             decode_bsize=4,
             prefill_bsize=4,
             reference_logprobs_bsize=4,
@@ -280,6 +280,7 @@ def run_driver_mode():
 
     # Build ray_run commands
     wandb_key = os.environ.get("WANDB_API_KEY", "")
+    hf_token = os.environ.get("HF_TOKEN", "")
 
     inference_cmd = [
         "uv",
@@ -288,6 +289,9 @@ def run_driver_mode():
         "-e",
         "WANDB_API_KEY",
         wandb_key,
+        "-e",
+        "HF_TOKEN",
+        hf_token,
         "--auto-stop",
         "--extra=tpu,post_training",
         "--entrypoint-resources",
@@ -306,6 +310,9 @@ def run_driver_mode():
         "-e",
         "WANDB_API_KEY",
         wandb_key,
+        "-e",
+        "HF_TOKEN",
+        hf_token,
         "--auto-stop",
         "--extra=tpu,post_training",
         "--entrypoint-resources",
@@ -382,16 +389,6 @@ def run_driver_mode():
         training_proc.terminate()
         training_proc.wait(timeout=10)
 
-    # Check results
-    training_success = training_proc.returncode == 0
-    inference_exit = inference_proc.returncode
-
-    logger.info("=== Test Results ===")
-    logger.info(f"Training process exit code: {training_proc.returncode}")
-    logger.info(f"Inference process exit code: {inference_exit}")
-    logger.info(f"Test duration: {time.time() - start_time:.1f}s")
-
-    logger.info("✓ Mock RL training test completed successfully!")
     return 0
 
 

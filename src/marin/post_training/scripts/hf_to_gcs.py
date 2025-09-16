@@ -24,7 +24,6 @@ Example:
 """
 
 import argparse
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -127,23 +126,13 @@ def upload_to_gcs(local_path: Path, gcs_path: str):
 def main():
     parser = argparse.ArgumentParser(description="Convert HuggingFace model to Levanter format and upload to GCS")
     parser.add_argument("model_name", help="HuggingFace model name (e.g., timinar/baby-llama-58m)")
-    parser.add_argument("gcs_path", help="GCS output path (e.g., gs://marin-us-central2/rl_checkpoints/base/...)")
+    parser.add_argument("--gcs-dir", help="GCS output path (e.g., gs://marin-us-central2/rl_checkpoints/base/...)")
     parser.add_argument("--model-type", default="llama", help="Model type for conversion (default: llama)")
-    parser.add_argument("--cache-dir", default=None, help="Cache directory for downloads")
 
     args = parser.parse_args()
 
-    # Use a temporary directory if no cache dir specified
-    if args.cache_dir:
-        cache_dir = args.cache_dir
-        cleanup = False
-    else:
-        cache_dir = tempfile.mkdtemp(prefix="hf_to_gcs_")
-        cleanup = True
-
-    try:
-        # Step 1: Download HF model
-        model_path, tokenizer_path, config_path = download_hf_model(args.model_name, cache_dir)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        model_path, tokenizer_path, config_path = download_hf_model(args.model_name, tmpdir)
 
         # Load the model's state dict
         print("Loading model weights...")
@@ -155,7 +144,7 @@ def main():
         jax_params = convert_torch_to_jax(state_dict)
 
         # Step 3: Save as msgpack
-        params_file = Path(cache_dir) / "params.msgpack"
+        params_file = Path(tmpdir) / "params.msgpack"
         save_msgpack(jax_params, params_file)
 
         # Step 4: Upload to GCS
@@ -178,11 +167,6 @@ def main():
         print(f'  "params": "{gcs_base}/params.msgpack"')
         print(f'  "tokenizer": "{args.model_name}"')
         print(f'  "config": "{gcs_base}/config.json"')
-
-    finally:
-        if cleanup:
-            print(f"Cleaning up temporary directory {cache_dir}")
-            shutil.rmtree(cache_dir)
 
 
 if __name__ == "__main__":
