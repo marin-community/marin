@@ -12,6 +12,7 @@ from jax import numpy as jnp
 import jax
 
 from levanter.inference.utils import INVALID, masked_set, is_valid, is_stop_signal, purge
+from levanter.inference.page_table import PageTable
 
 
 class PackedSequence(eqx.Module):
@@ -70,8 +71,6 @@ class DecodeState(eqx.Module):
     currently being decoded are stored in this buffer.)
     * `tokens` is a buffer of tokens for each sequence. It includes any prompt/prefix.
     * `seq_lens` is a buffer of sequence lengths for each sequence. This is the number of tokens in the `tokens` buffer that have been generated so far.
-    * `prefix_len` is a buffer of prefix lengths for each sequence. This is the length of tokens in the `tokens` buffer
-      that were provided and not generated in the current cycle.
     * `logprobs` is an optional buffer of log probabilities for the tokens. If not None, it should have the same shape
        as `tokens`, i.e. `logprobs["seq", i, "position", j]` is the log probability of the token at position `j` in
        sequence `i`. It is kept in sync with `tokens`, i.e. if a token is generated, its log probability is also
@@ -85,9 +84,6 @@ class DecodeState(eqx.Module):
     logprobs: ht.Float[NamedArray, "seq position"] | None  # log probabilities of the tokens
     seq_lens: ht.i32[NamedArray, "seq"]
     """Sequence length for each sequence. This is the number of tokens currently in the sequence"""
-    # TODO: pretty sure we don't need prefix_len, delete
-    prefix_len: ht.i32[NamedArray, "seq"]
-    """ Length of the prefix for each sequence."""
     clone_sources: ht.i32[NamedArray, "seq"]
     """
     For each local sequence slot, the local source id it should be cloned from, or INVALID if it's either already
@@ -95,9 +91,14 @@ class DecodeState(eqx.Module):
     decoding or potentially beam search / particle filtering.
     """
 
+    # TODO: these aren't actually used anywhere. (We currently only use them from PageTable)
+    # This is a better place for them, so we should move them here and update the code to use them.
     kv_pages: ht.i32[NamedArray, "seq page"]
     """Key-value pages for each sequence. This is used to store the key-value pairs for the sequences."""
     page_size: int = eqx.field(static=True)
+
+    # Page table for KV page allocation and per-sequence lengths/usage
+    page_table: PageTable
 
     # Per sequence sampling parameters
     max_num_tokens: ht.i32[NamedArray, "seq"]
@@ -114,6 +115,33 @@ class DecodeState(eqx.Module):
 
     # Token queue for pending decode work
     tqueue: "TokenQueue"
+
+    # Cached finished flags per sequence (updated when tokens are enqueued)
+    finished: ht.bool_[NamedArray, "seq"]
+
+    @eqx.filter_jit(donate="all")
+    def invalidate_finished(self) -> "DecodeState":
+        """Invalidate metadata for sequences marked finished by ``finished_mask``.
+
+        - Sets ``seq_id`` and ``seq_lens`` to INVALID for finished slots
+        - Resets ``clone_sources`` to INVALID
+        - Clears ``kv_pages`` rows for finished slots to INVALID
+        """
+        mask = self.finished
+        new_seq_id = hax.where(mask, INVALID, self.seq_id)
+        new_seq_lens = hax.where(mask, INVALID, self.seq_lens)
+        new_clone_sources = hax.where(mask, INVALID, self.clone_sources)
+        new_kv_pages = hax.where(mask, INVALID, self.kv_pages)
+        finished = hax.zeros_like(self.finished)  # reset finished flags
+
+        return dataclasses.replace(
+            self,
+            seq_id=new_seq_id,
+            seq_lens=new_seq_lens,
+            clone_sources=new_clone_sources,
+            kv_pages=new_kv_pages,
+            finished=finished,
+        )
 
     def prng_key_for(self, seq_id: int, pos_id: int) -> jaxtyping.PRNGKeyArray:
         """
@@ -216,7 +244,6 @@ class DecodeState(eqx.Module):
         local_seq_id: int,
         global_seq_id: int,
         tokens: ht.i32[NamedArray, "position"],  # type: ignore[name-defined]
-        prefix_len: int,
         kv_pages: ht.i32[NamedArray, "page"] | None = None,  # type: ignore[name-defined]
         seq_params: SeqDecodingParams | None = None,
     ) -> "DecodeState":
@@ -237,12 +264,12 @@ class DecodeState(eqx.Module):
             tokens=new_tokens,
             # set log probs to nan for the prefix tokens
             logprobs=(
-                self.logprobs.at["seq", local_seq_id, "position", 0:prefix_len].set(jnp.nan)
+                self.logprobs.at["seq", local_seq_id, "position", 0:num].set(jnp.nan)
                 if self.logprobs is not None
                 else None
             ),
-            seq_lens=self.seq_lens.at["seq", local_seq_id].set(prefix_len),
-            prefix_len=self.prefix_len.at["seq", local_seq_id].set(prefix_len),
+            seq_lens=self.seq_lens.at["seq", local_seq_id].set(num),
+            finished=self.finished.at["seq", local_seq_id].set(False),
         )
 
         if seq_params is not None:
@@ -292,35 +319,62 @@ class DecodeState(eqx.Module):
         tokens = self.tokens
         logprobs = self.logprobs
         counts = self.seq_lens
+        fins = self.finished
 
         # We'll also compute per-token absolute position ids to feed into the TokenQueue.
         pos_ids = hax.full_like(new_tokens, INVALID)
+        should_purge = hax.full_like(new_tokens, True, dtype=bool)
 
         def body(i, state):
             sid = local_seq_ids["position", i].scalar()
 
             def update(state):
-                tkns, lps, cnts, pids = state
+                tkns, lps, cnts, pids, f, should_purge = state
                 pos = cnts["seq", sid].scalar()
                 tkns = tkns.at["seq", sid, "position", pos].set(new_tokens["position", i])
                 if lps is not None:
                     lps = lps.at["seq", sid, "position", pos].set(new_log_probs["position", i])
                 cnts = cnts.at["seq", sid].add(1)
+                # completion checks
+                max_allowed = self.max_num_tokens["seq", sid].scalar()
+                len_done = (pos + 1) >= max_allowed
+                stop_done = False
+                if self.stop_tokens is not None:
+                    stop_len = self.stop_tokens.axis_size("position")
+                    row = tkns["seq", sid].array
+                    padded = jnp.concatenate([jnp.full((stop_len,), INVALID, dtype=jnp.int32), row])
+                    tail = jax.lax.dynamic_slice(padded, (pos + 1,), (stop_len,))
+                    stop_done = is_stop_signal(hax.named(tail, axis=("position",)), self.stop_tokens["seq", sid]).array
+                f = f.at["seq", sid].set(len_done | stop_done)
+                should_purge = should_purge.at["position", i].set(len_done | stop_done)
+
                 # record position id for this token in the outgoing queue payload
                 # pos here is the absolute position of this token in the sequence buffer
                 pids = pids.at["position", i].set(pos)
-                return tkns, lps, cnts, pids
+                return tkns, lps, cnts, pids, f, should_purge
 
             return jax.lax.cond(is_valid(sid), update, lambda s: s, state)
 
-        tokens, logprobs, counts, pos_ids = jax.lax.fori_loop(
-            0, num_new_tokens, body, (tokens, logprobs, counts, pos_ids)
+        tokens, logprobs, counts, pos_ids, fins, should_purge = jax.lax.fori_loop(
+            0, num_new_tokens, body, (tokens, logprobs, counts, pos_ids, fins, should_purge)
         )
 
-        # Enqueue tokens and their corresponding position ids into the queue
-        new_tqueue = self.tqueue.enqueue_tokens(new_tokens, local_seq_ids, pos_ids, num_new_tokens)
+        # TODO: we want to purge new_tokens of any sequences that have finished, to avoid re-processing them
+        # easiest is to set the purge mask inside the loop above (based on fins)
+        # jax.debug.print("should_purge: {}", should_purge)
+        # jax.debug.print("before {} {} {} {}", local_seq_ids, new_tokens, pos_ids, num_new_tokens)
+        local_seq_ids = purge(local_seq_ids, should_purge)
+        new_tokens = purge(new_tokens, should_purge)
+        pos_ids = purge(pos_ids, should_purge)
+        num_new_tokens_to_queue = hax.sum((~should_purge).astype(jnp.int32)).scalar()
+        # jax.debug.print("after {} {} {} {}", local_seq_ids, new_tokens, pos_ids, num_new_tokens_to_queue)
 
-        return dataclasses.replace(self, tokens=tokens, logprobs=logprobs, seq_lens=counts, tqueue=new_tqueue)
+        # Enqueue tokens and their corresponding position ids into the queue
+        new_tqueue = self.tqueue.enqueue_tokens(new_tokens, local_seq_ids, pos_ids, num_new_tokens_to_queue)
+
+        return dataclasses.replace(
+            self, tokens=tokens, logprobs=logprobs, seq_lens=counts, tqueue=new_tqueue, finished=fins
+        )
 
     def is_finished(self, seq_id: jnp.ndarray) -> jnp.ndarray:
         """
@@ -332,38 +386,9 @@ class DecodeState(eqx.Module):
         Returns jnp.ndarray with the same shape as seq_id, where each entry is True if the sequence is finished.
         """
 
-        # if it's a scalar, we need to make it a vector for the vmap to work properly
         if seq_id.ndim == 0:
             seq_id = jnp.expand_dims(seq_id, axis=0)
-
-        def body(i):
-            sid = seq_id[i]
-
-            done = (
-                (self.seq_lens["seq", sid] != INVALID) & (self.seq_lens["seq", sid] >= self.max_num_tokens["seq", sid])
-            ).scalar()
-
-            if self.stop_tokens is not None:
-                stop_len = self.stop_tokens.axis_size("position")
-                num = self.seq_lens["seq", sid].scalar()
-                tokens_row = self.tokens["seq", sid].array
-                padded_tokens = jnp.concatenate(
-                    [
-                        jnp.full((stop_len,), INVALID, dtype=jnp.int32),
-                        tokens_row,
-                    ]
-                )
-                tail = jax.lax.dynamic_slice(padded_tokens, (num,), (stop_len,))
-                stop = is_stop_signal(
-                    hax.named(tail, axis=("position",)),
-                    self.stop_tokens["seq", sid],
-                ).array
-                done |= stop
-
-            # If the sequence ID is INVALID, we consider it not finished.
-            return done & (self.seq_id["seq", sid] != INVALID).scalar()
-
-        return jax.vmap(body)(seq_id)
+        return self.finished.array[seq_id]
 
     def debug_print(self):
         jax.debug.print(
@@ -371,7 +396,6 @@ class DecodeState(eqx.Module):
 DecodeState:
 seq_id: {seq_id}
 num_tokens: {num_tokens}
-prefix_len: {prefix_len}
 finished: {finished}
 tokens: {tokens}
 stop_tokens: {stop_tokens}
@@ -381,8 +405,7 @@ max_num_tokens: {max_num_tokens}
 """,
             seq_id=self.seq_id,
             num_tokens=self.seq_lens,
-            prefix_len=self.prefix_len,
-            finished=self.is_finished(jnp.arange(self.max_seqs, dtype=jnp.int32)),
+            finished=self.finished,
             tokens=self.tokens,
             stop_tokens=self.stop_tokens,
             kv_pages=self.kv_pages,
@@ -392,10 +415,7 @@ max_num_tokens: {max_num_tokens}
 
     @staticmethod
     def init(
-        max_seqs: int,
-        max_pages: int,
-        page_size: int,
-        max_seq_len: int,
+        page_table: PageTable,
         pad_token_id: int = INVALID,
         max_stop_seqs: int = 0,
         max_stop_tokens: int = 16,
@@ -404,13 +424,18 @@ max_num_tokens: {max_num_tokens}
         """
         Initialize a DecodeState with empty buffers.
         """
+        max_seqs = page_table.max_seqs
+        pages_per_seq = page_table.pages_per_seq
+        page_size = page_table.page_size
+        max_seq_len = page_table.max_len_per_seq
+
         return DecodeState(
-            kv_pages=hax.full({"seq": max_seqs, "page": max_pages}, INVALID, dtype=jnp.int32),
+            kv_pages=hax.full({"seq": max_seqs, "page": pages_per_seq}, INVALID, dtype=jnp.int32),
             page_size=page_size,
+            page_table=page_table,
             seq_id=hax.full({"seq": max_seqs}, INVALID, dtype=jnp.int32),
             tokens=hax.full({"seq": max_seqs, "position": max_seq_len}, pad_token_id, dtype=jnp.int32),
             logprobs=None,
-            prefix_len=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
             seq_lens=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
             clone_sources=hax.full({"seq": max_seqs}, INVALID, dtype=jnp.int32),
             max_num_tokens=hax.full({"seq": max_seqs}, 0, dtype=jnp.int32),
@@ -426,6 +451,7 @@ max_num_tokens: {max_num_tokens}
             temperature=hax.ones({"seq": max_seqs}, dtype=jnp.float32),
             prng_keys=jax.vmap(jax.random.PRNGKey, axis_size=max_seqs, in_axes=None)(0),
             tqueue=TokenQueue.init(max_queued_tokens) if max_queued_tokens > 0 else TokenQueue.init(0),
+            finished=hax.zeros({"seq": max_seqs}, dtype=bool),
         )
 
 
@@ -441,8 +467,6 @@ class TokenQueue(eqx.Module):
     queued_seq_ids: ht.i32[NamedArray, "position"]
     queued_pos_ids: ht.i32[NamedArray, "position"]  # absolute position id for each queued token
     num_queued_tokens: jax.Array
-
-    # TODO: per-seq sampling params
 
     @property
     def empty_queue_space(self) -> jnp.ndarray:
@@ -595,3 +619,115 @@ class TokenQueue(eqx.Module):
             print(f"{prefix}Num Queued Tokens: {self.num_queued_tokens}")
 
         jax.experimental.io_callback(callback, None, ordered=True, self=self)
+
+
+class _DecodeOutputs(eqx.Module):
+    """
+    A simple queue-like buffer for outputs emitted by the decode generation loop.
+
+    Stores the flat stream of sampled token IDs and their corresponding local sequence IDs, with an
+    optional logprob stream. Also carries a copy of the latest `finished` flags from `DecodeState`.
+
+    This mirrors the behavior of `TokenQueue` but is for host-side consumption of outputs rather than
+    feeding work to the device.
+    """
+
+    tokens: ht.i32[NamedArray, "position"]
+    seq_ids: ht.i32[NamedArray, "position"]
+    logprobs: ht.Float[NamedArray, "position"] | None
+    num_tokens: jax.Array
+    finished: ht.bool_[NamedArray, "seq"]
+
+    @property
+    def max_queued_tokens(self) -> int:
+        return self.tokens.axis_size("position")
+
+    @property
+    def empty_queue_space(self) -> jnp.ndarray:
+        return self.tokens.axis_size("position") - self.num_tokens
+
+    @staticmethod
+    def init(max_tokens: int, max_seqs: int, with_logprobs: bool = True) -> "_DecodeOutputs":
+        return _DecodeOutputs(
+            tokens=hax.full({"position": max_tokens}, INVALID, dtype=jnp.int32),
+            seq_ids=hax.full({"position": max_tokens}, INVALID, dtype=jnp.int32),
+            logprobs=(hax.full({"position": max_tokens}, jnp.nan, dtype=jnp.float32) if with_logprobs else None),
+            num_tokens=jnp.array(0, dtype=jnp.int32),
+            finished=hax.zeros({"seq": max_seqs}, dtype=bool),
+        )
+
+    def append(
+        self,
+        new_tokens: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
+        new_seq_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
+        new_logprobs: ht.Float[NamedArray, " position"],  # type: ignore[name-defined]
+        num_new_tokens: int,
+        finished_snapshot: ht.bool_[NamedArray, "seq"],  # type: ignore[name-defined]
+    ) -> "_DecodeOutputs":
+        """Append a batch of outputs and update the finished flags snapshot."""
+
+        new_tok_buf = masked_set(self.tokens, "position", self.num_tokens, new_tokens, num_new_tokens)
+        new_sid_buf = masked_set(self.seq_ids, "position", self.num_tokens, new_seq_ids, num_new_tokens)
+        if self.logprobs is not None:
+            new_lp_buf = masked_set(self.logprobs, "position", self.num_tokens, new_logprobs, num_new_tokens)
+        else:
+            new_lp_buf = None
+        # Keep finished flags monotonic (once finished, always finished)
+        new_finished = self.finished | finished_snapshot
+        return dataclasses.replace(
+            self,
+            tokens=new_tok_buf,
+            seq_ids=new_sid_buf,
+            logprobs=new_lp_buf,
+            num_tokens=self.num_tokens + num_new_tokens,
+            finished=new_finished,
+        )
+
+    def pack_next(self, max_tokens: int):  # type: ignore[no-untyped-def]
+        """Dequeue up to `max_tokens` entries and return them along with an updated buffer.
+
+        Returns (new_outputs, tokens, seq_ids, logprobs, num_packed, finished_snapshot)
+        """
+        num = jnp.minimum(self.num_tokens, max_tokens)
+
+        tokens = self.tokens["position", hax.ds(0, max_tokens)]  # type: ignore[name-defined]
+        seq_ids = self.seq_ids["position", hax.ds(0, max_tokens)]  # type: ignore[name-defined]
+        logprobs = None if self.logprobs is None else self.logprobs["position", hax.ds(0, max_tokens)]
+
+        # roll left by num and refill back with INVALID sentinel
+        rolled_tokens = hax.roll(self.tokens, -num, "position")
+        rolled_seq_ids = hax.roll(self.seq_ids, -num, "position")
+        rolled_logprobs = None if self.logprobs is None else hax.roll(self.logprobs, -num, "position")
+
+        pos_axis = self.tokens.resolve_axis("position")
+        idx = hax.arange(pos_axis)
+        mask = idx >= (pos_axis.size - num)
+        new_tokens = hax.where(mask, hax.full_like(idx, INVALID), rolled_tokens)
+        new_seq_ids = hax.where(mask, hax.full_like(idx, INVALID), rolled_seq_ids)
+        new_logprobs = None
+        if rolled_logprobs is not None:
+            new_logprobs = hax.where(mask, hax.full_like(idx, jnp.nan, dtype=jnp.float32), rolled_logprobs)
+
+        new_self = dataclasses.replace(
+            self,
+            tokens=new_tokens,
+            seq_ids=new_seq_ids,
+            logprobs=new_logprobs,
+            num_tokens=self.num_tokens - num,
+        )
+
+        return new_self, tokens, seq_ids, logprobs, num, self.finished
+
+    def extend_from(self, other: "_DecodeOutputs") -> "_DecodeOutputs":
+        """Append all queued entries from `other` into this buffer and combine finished flags.
+
+        Consumes `other` in the process (by packing it), but does not mutate it in place; returns a new buffer.
+        """
+        if int(jax.device_get(other.num_tokens)) <= 0:
+            # Just combine finished snapshots
+            return dataclasses.replace(self, finished=(self.finished | other.finished))
+
+        _, tokens, seq_ids, logprobs, num, fins = other.pack_next(other.max_queued_tokens)
+        # Combine finished with OR so we never regress a done flag
+        combined_finished = self.finished | fins
+        return self.append(tokens, seq_ids, logprobs, num, combined_finished)

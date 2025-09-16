@@ -92,14 +92,23 @@ def test_kv_cache_copy_page():
     pt = _PT.init(max_pages=3, max_seqs=1, page_size=2, max_pages_per_seq=1)
     kv = KvPageCache.init(pt, kv_heads=hax.Axis("kv_head", 2), head_size=hax.Axis("head", 3), dtype=jnp.float32)
 
-    # Write identifiable values into page 1
+    # Write identifiable values into page 1 for both K and V
     src_page = 1
     dst_page = 2
-    pattern = hax.full_like(kv.kv_pages["page", src_page], 7.0)
-    kv = dataclasses.replace(kv, kv_pages=kv.kv_pages.at["page", src_page].set(pattern))
+    k_pattern = hax.full_like(kv.k_pages["page", src_page], 7.0)
+    v_pattern = hax.full_like(kv.v_pages["page", src_page], 3.0)
+    kv = dataclasses.replace(
+        kv,
+        k_pages=kv.k_pages.at["page", src_page].set(k_pattern),
+        v_pages=kv.v_pages.at["page", src_page].set(v_pattern),
+    )
 
     kv2 = kv.copy_page(src_page, dst_page)
     np.testing.assert_allclose(
-        np.asarray(kv2.kv_pages["page", dst_page].array),
-        np.asarray(kv.kv_pages["page", src_page].array),
+        np.asarray(kv2.k_pages["page", dst_page].array),
+        np.asarray(kv.k_pages["page", src_page].array),
+    )
+    np.testing.assert_allclose(
+        np.asarray(kv2.v_pages["page", dst_page].array),
+        np.asarray(kv.v_pages["page", src_page].array),
     )

@@ -7,11 +7,10 @@ import haliax as hax
 
 from haliax import Axis
 
-from levanter.inference.service import GenerationService, Request
+from levanter.inference.engine import InferenceEngine, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.layers.attention import KvPageCache
 from levanter.inference.page_table import PageTable
-from levanter.inference.utils import INVALID
 import pytest
 import logging
 
@@ -24,7 +23,7 @@ class DummyModel:
     """
 
     def __init__(self, vocab_size: int, eos_id: int = 3):
-        self.vocab = Axis("vocab", vocab_size)
+        self.Vocab = Axis("vocab", vocab_size)
         self.eos = eos_id
 
     def initial_cache(self, page_table: PageTable, *, dtype):
@@ -36,7 +35,7 @@ class DummyModel:
     def decode(self, input_ids, kv_cache, batch_info, pos_ids):
         # Produce logits that prefer `eos` for every sampled position
         Pos = input_ids.resolve_axis("position")
-        Vocab = self.vocab
+        Vocab = self.Vocab
         # One-hot on vocab axis for eos token, broadcast over positions
         logits = hax.nn.one_hot(self.eos, Vocab, dtype=jnp.float32)
         logits = logits.broadcast_axis(Pos)
@@ -45,10 +44,9 @@ class DummyModel:
 
 def _build_service(vocab_size=10):
     model = DummyModel(vocab_size=vocab_size, eos_id=3)
-    service = GenerationService.from_model(
-        model=model,  # type: ignore
+    service = InferenceEngine.from_model(
+        model=model,
         tokenizer=None,
-        vocab_axis=model.vocab,
         max_pages=64,
         max_seqs=8,
         page_size=8,
@@ -82,16 +80,21 @@ def test_release_on_finish_and_reuse_slots(caplog: pytest.LogCaptureFixture):
     outputs, total_generated = svc.generate(reqs)
 
     # Each sequence should be original prompt + a single eos token
-    assert outputs[0] == prompts[0] + [3]
-    assert outputs[1] == prompts[1] + [3]
+    # TODO: we recently stopped appending prompt to outputs; re-enable these checks if we restore that behavior
+    # assert outputs[0] == prompts[0] + [3]
+    # assert outputs[1] == prompts[1] + [3]
+    assert outputs[0] == [3]
+    assert outputs[1] == [3]
     assert total_generated == 2  # one new token per prompt
 
     # Finished sequences are auto-released; PageTable should have no active seqs
-    pt = svc.gen_state.page_table
+    pt = svc.gen_state.decode_state.page_table
     ds = svc.gen_state.decode_state
-    # All seq_lens entries should be invalid now
+    # All slots should be marked unused and lengths zeroed
     seq_lens = jax.device_get(pt.seq_lens.array)
-    assert ((seq_lens < 0) | (seq_lens == INVALID)).all()
+    used_mask = jax.device_get(pt.used_mask.array)
+    assert (used_mask == 0).all()
+    assert (seq_lens == 0).all()
     # All local seq ids should be INVALID
     seq_ids = jax.device_get(ds.seq_id.array)
     assert (seq_ids < 0).all() or ((seq_ids == 2_000_000) | (seq_ids < 0)).all()
@@ -119,5 +122,7 @@ def test_release_on_finish_and_reuse_slots(caplog: pytest.LogCaptureFixture):
         reqs2.append(Request(prompt_tokens=toks, request_id=i, decode_params=seq_params, n_generations=1))
 
     outputs2, total_generated2 = svc.generate(reqs2)
-    assert outputs2[0] == prompts2[0] + [3]
+    # TODO: re-enable if we restore prompt prepending
+    # assert outputs2[0] == prompts2[0] + [3]
+    assert outputs2[0] == [3]
     assert total_generated2 == 1

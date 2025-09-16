@@ -58,6 +58,9 @@ trainer:
       logdir: logs
 ```
 
+Installation note: the TensorBoard tracker depends on `tensorboardX`. Install the profiling extra to get
+both TensorBoard and TensorBoardX: `pip install "levanter[profiling]"` (or `uv sync --extra profiling`).
+
 ## Adding your own tracker
 
 To add your own tracker, you need to implement the [levanter.tracker.Tracker][] interface.

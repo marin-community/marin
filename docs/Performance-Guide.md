@@ -16,6 +16,11 @@ to the command line. This will generate a trace file in the `./logs` directory, 
 (Yeah, it's a mess, but it's what JAX wants to do.)
 It will also upload the information to the relevant tracker (such as Weights & Biases or TensorBoard).
 
+Install profiling dependencies (TensorBoard) with one of:
+
+- `pip install "levanter[profiling]"`
+- `uv sync --extra profiling`
+
 Here are the full list of profiling related options:
 
 | Argument                           | Description | Default |
@@ -57,6 +62,15 @@ TensorBoard is a locally-run tool for examining profiles.
 You want to download the trace files (e.g. `plugins/profile/2024_03_16_07_26_24`)
 and run `tensorboard --logdir <dir>` where `<dir>` is the *directory containing plugins* (not the plugins directory itself).
 Then you can navigate to http://localhost:6006/#profile in your browser and see the profile.
+
+TensorBoard install tips:
+
+- Avoid installing both stable and nightly variants together (e.g., `tensorboard` and `tb-nightly`).
+  If you see “Duplicate plugins” errors, uninstall all TB/TF variants and reinstall a single choice.
+- If the Profile plugin fails to load with a Protobuf version error, align major versions:
+  - Upgrade Protobuf runtime to 6.x: `pip install -U 'protobuf>=6,<7'` (or `uv pip install -U 'protobuf>=6,<7'`).
+  - Ensure `xprof` matches your TensorBoard (stable TB → `xprof`, nightly TB → `xprof-nightly`).
+  - Restart TensorBoard after upgrading.
 
 There are three sections I find particularly useful:
 

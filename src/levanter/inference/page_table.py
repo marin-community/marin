@@ -35,6 +35,7 @@ class PageTable(eqx.Module):
     page_indices: NamedArray  # i32[Seq, PagePerSeq]
     page_ref_counts: NamedArray  # i32[Page]
     seq_lens: NamedArray  # i32[Seq]
+    used_mask: NamedArray  # bool[Seq] — True if slot is in use
     page_size: int = eqx.field(static=True)
 
     # ------------------------------------------------------------------
@@ -58,7 +59,8 @@ class PageTable(eqx.Module):
 
     @property
     def current_num_seqs(self) -> int:
-        return hax.sum(self.seq_lens >= 0 & is_valid(self.seq_lens)).scalar()
+        # Count currently used sequence slots
+        return hax.sum(self.used_mask).scalar()
 
     @property
     def max_Seq(self) -> hax.Axis:
@@ -72,19 +74,32 @@ class PageTable(eqx.Module):
     def init(max_pages: int, max_seqs: int, page_size: int, max_pages_per_seq: int) -> "PageTable":
         page_indices = hax.full({"seq": max_seqs, "page": max_pages_per_seq}, INVALID, dtype=jnp.int32)
         page_ref_counts = hax.full({"page": max_pages}, 0, dtype=jnp.int32)
-        seq_lens = hax.full({"seq": max_seqs}, INVALID, dtype=jnp.int32)
-        return PageTable(page_indices, page_ref_counts, seq_lens, page_size)
+        # With a separate used/free mask, keep seq_lens as lengths and default to 0
+        seq_lens = hax.full({"seq": max_seqs}, 0, dtype=jnp.int32)
+        used_mask = hax.full({"seq": max_seqs}, False)
+        return PageTable(page_indices, page_ref_counts, seq_lens, used_mask, page_size)
 
     # ------------------------------------------------------------------
     # Sequence management
     # ------------------------------------------------------------------
     @eqx.filter_jit(donate="all")
     def assign_seq_id_to_seq(self) -> tuple["PageTable", int]:
-        seq_id = hax.argmax(self.seq_lens, "seq").scalar()
-        # Error handling: if there are no sequences available, return INVALID
-        seq_id = hax.where(is_invalid(self.seq_lens["seq", seq_id]), seq_id, INVALID)
-        new_seq_lens = hax.where(seq_id >= 0, self.seq_lens.at["seq", seq_id].set(0), self.seq_lens)
-        return dataclasses.replace(self, seq_lens=new_seq_lens), seq_id
+        # Find a free slot using the used_mask
+        free_flags = ~self.used_mask
+        seq_id = hax.argmax(free_flags, "seq").scalar()
+        available = (~self.used_mask["seq", seq_id]).scalar()
+        seq_id = hax.where(available, seq_id, INVALID)
+
+        def do_assign(self_):
+            new_seq_lens = self_.seq_lens.at["seq", seq_id].set(0)
+            new_used = self_.used_mask.at["seq", seq_id].set(True)
+            return dataclasses.replace(self_, seq_lens=new_seq_lens, used_mask=new_used)
+
+        def no_op(self_):
+            return self_
+
+        new_self = jax.lax.cond(is_valid(seq_id), do_assign, no_op, self)
+        return new_self, seq_id
 
     @eqx.filter_jit
     # @named_call
@@ -99,10 +114,12 @@ class PageTable(eqx.Module):
 
         new_counts = hax.where(updated_seqs >= self.max_seqs, 0, new_counts)
 
-        current_lens = hax.where(is_invalid(self.seq_lens), 0, self.seq_lens)
-        new_lens = current_lens.at["seq", updated_seqs].add(new_counts, mode="drop")
-        # anything that was INVALID should remain INVALID
-        new_lens = hax.where(~is_invalid(self.seq_lens), new_lens, INVALID)
+        # Only update lengths for active sequences; seq_lens always stores lengths (unused slots have 0)
+        current_lens = self.seq_lens
+        # Mask counts for sequences not currently used
+        active_mask_for_updated = self.used_mask["seq", updated_seqs]
+        masked_counts = new_counts * active_mask_for_updated.astype(new_counts.dtype)
+        new_lens = current_lens.at["seq", updated_seqs].add(masked_counts, mode="drop")
 
         new_num_pages_needed = (new_lens + self.page_size - 1) // self.page_size
         old_num_pages_needed = (self.seq_lens + self.page_size - 1) // self.page_size
@@ -182,7 +199,8 @@ class PageTable(eqx.Module):
         num_seqs = hax.sum(mask).scalar()
 
         token_dests = hax.full(tokens.shape, INVALID, dtype=jnp.int32)
-        seq_cursors = jnp.where(is_invalid(old_seq_lens.array), 0, old_seq_lens.array)
+        # Initialize per-sequence cursors from old lengths for active sequences, else 0
+        seq_cursors = jnp.where(self.used_mask.array, old_seq_lens.array, 0)
 
         def token_body(i, carry):
             token_dests, seq_cursors = carry
@@ -242,13 +260,61 @@ class PageTable(eqx.Module):
         new_ref_counts = hax.maximum(new_ref_counts, hax.zeros_like(new_ref_counts))
 
         new_page_indices = self.page_indices.at["seq", seq_id].set(INVALID)
-        new_seq_lens = self.seq_lens.at["seq", seq_id].set(INVALID)
+        new_seq_lens = self.seq_lens.at["seq", seq_id].set(0)
+        new_used = self.used_mask.at["seq", seq_id].set(False)
 
         return dataclasses.replace(
             self,
             page_ref_counts=new_ref_counts,
             page_indices=new_page_indices,
             seq_lens=new_seq_lens,
+            used_mask=new_used,
+        )
+
+    @eqx.filter_jit(donate="all")
+    def free_pages_for_finished(self, finished_mask: jnp.ndarray) -> "PageTable":
+        """Free pages and clear metadata for all sequences where ``finished_mask[seq]`` is True.
+
+        Processes all sequences in a single JAX program to avoid per-sequence dispatch overhead.
+        """
+        assert finished_mask.ndim == 1
+
+        def dec_refcounts_for_seq(pages_row, ref_counts):
+            is_valid_page = is_valid(pages_row)
+
+            def body(i, rc):
+                def dec(rc):
+                    page = pages_row["page", i].scalar()
+                    return rc.at["page", page].add(-1)
+
+                return jax.lax.cond(is_valid_page["page", i].scalar(), dec, lambda x: x, rc)
+
+            return jax.lax.fori_loop(0, pages_row.axis_size("page"), body, ref_counts)
+
+        def body(i, state):
+            rc, indices, seq_lens, used_mask = state
+
+            def do(rc_ind):
+                rc, indices, seq_lens, used_mask = rc_ind
+                pages_row = indices["seq", i]
+                rc = dec_refcounts_for_seq(pages_row, rc)
+                rc = hax.maximum(rc, hax.zeros_like(rc))
+                indices = indices.at["seq", i].set(INVALID)
+                seq_lens = seq_lens.at["seq", i].set(0)
+                used_mask = used_mask.at["seq", i].set(False)
+                return rc, indices, seq_lens, used_mask
+
+            return jax.lax.cond(finished_mask[i], do, lambda x: x, (rc, indices, seq_lens, used_mask))
+
+        rc, indices, seq_lens, used_mask = jax.lax.fori_loop(
+            0,
+            self.max_seqs,
+            body,
+            (self.page_ref_counts, self.page_indices, self.seq_lens, self.used_mask),
+        )
+
+        return dataclasses.replace(
+            self, page_ref_counts=rc, page_indices=indices, seq_lens=seq_lens, used_mask=used_mask
         )
 
     # (pos id computation moved to call sites; no longer part of PageBatchInfo)
@@ -338,8 +404,11 @@ class PageTable(eqx.Module):
 
         # Keep destination length equal to source length
         new_seq_lens = self.seq_lens.at["seq", dst_seq_id].set(src_len)
+        new_used = self.used_mask.at["seq", dst_seq_id].set(True)
 
-        return dataclasses.replace(self, page_indices=new_indices, page_ref_counts=ref_counts, seq_lens=new_seq_lens)
+        return dataclasses.replace(
+            self, page_indices=new_indices, page_ref_counts=ref_counts, seq_lens=new_seq_lens, used_mask=new_used
+        )
 
     def bump_seq_len_to_next_page(self, seq_id: int) -> "PageTable":
         """

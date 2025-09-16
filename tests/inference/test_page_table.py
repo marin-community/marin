@@ -35,7 +35,8 @@ def test_page_table_free_pages():
 
     assert jnp.all(freed.page_ref_counts.array[:2] == 0)
     assert jnp.all(freed.page_indices.array[0] == INVALID)
-    assert freed.seq_lens.array[0] == INVALID
+    assert freed.seq_lens.array[0] == 0
+    assert freed.used_mask.array[0] == 0
 
 
 def test_page_batch_info_shapes():
@@ -69,15 +70,15 @@ def test_allocate_for_seqs_with_padding():
 
 def test_allocate_for_seqs_updates_only_valid_ids():
     pt = _make_table(seqs=8, pages=16)
-    axis = pt.seq_lens.axes[0]
-    seq_lens = hax.named(jnp.array([0, 0, 0, 0, 0, 0, INVALID, INVALID], dtype=jnp.int32), axis)
-    pt = dataclasses.replace(pt, seq_lens=seq_lens)
+    # Mark first 6 slots as used, last 2 as free
+    used_mask = hax.named(jnp.array([1, 1, 1, 1, 1, 1, 0, 0], dtype=jnp.bool_), pt.seq_lens.axes[0])
+    pt = dataclasses.replace(pt, used_mask=used_mask, seq_lens=hax.zeros_like(pt.seq_lens))
 
     tokens = hax.named(jnp.array([2, 3, 3, 5, 5, 5], dtype=jnp.int32), hax.Axis("position", 6))
     new_pt, batch_info = eqx.filter_jit(pt.allocate_for_seq)(tokens)
 
     assert jnp.all(new_pt.seq_lens.array[:6] == jnp.array([0, 0, 1, 2, 0, 3]))
-    assert jnp.all(new_pt.seq_lens.array[6:] == INVALID)
+    assert jnp.all(new_pt.seq_lens.array[6:] == 0)
     assert batch_info.num_seqs == 3
 
 

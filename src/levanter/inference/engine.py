@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import functools
 import logging
 import time
 from dataclasses import dataclass
@@ -14,14 +15,15 @@ import jax.numpy as jnp
 
 import haliax as hax
 import haliax.haxtyping as ht
-from haliax import Axis, NamedArray
+import numpy as np
+from haliax import NamedArray
 
 from levanter.inference.page_table import PageTable
 from levanter.inference.utils import INVALID, is_valid
 from levanter.layers.attention import KvPageCache
 from levanter.layers.sampler import Sampler
 from levanter.models.lm_model import LmHeadModel
-from levanter.inference.jit_scheduler import DecodeState, SeqDecodingParams, TokenQueue
+from levanter.inference.jit_scheduler import DecodeState, SeqDecodingParams, TokenQueue, _DecodeOutputs
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +38,23 @@ class Request:
     n_generations: int
 
 
+@dataclasses.dataclass
+class DecodeResult:
+    """Holds per-(request, choice) decode outputs and status."""
+
+    id: int
+    choice: int
+    token_list: list[int]
+    # Count of newly appended tokens (includes prompt tokens as extracted)
+    tokens_decoded: int = 0
+    done: bool = False
+    # Optional per-token logprobs (not populated yet)
+    logprobs: list[float] | None = None
+
+
 @dataclass(frozen=True)
-class GenerationServiceConfig:
-    """Configuration for GenerationService memory/layout knobs.
+class InferenceEngineConfig:
+    """Configuration for Engine memory/layout knobs.
 
     Exposes key buffer sizes and limits controlling prefill, decode queueing, and page table capacity.
     """
@@ -58,11 +74,25 @@ class GenerationServiceConfig:
     max_seqs_in_prefill: int = 16
     """Maximum number of sequences to batch in prefill before flushing."""
 
+    # Prefill buffer sizing
+    max_prefill_size: Optional[int] = None
+    """Maximum number of tokens packed into the prefill buffer before a flush.
+
+    If None, inferred at construction time from `tokenizer.model_max_length` when available; otherwise
+    falls back to the page table's `max_len_per_seq` or 4096 as a final default.
+    """
+
     # Decode loop knobs
-    max_tokens_per_round: int = 8
+    max_tokens_per_round: int | None = None
     """Pack size for each decode loop iteration."""
     max_rounds: int = 8
     """Maximum number of while-loop iterations per decode call."""
+
+    # Stop-token capacity (used for validation and buffer sizing at init)
+    max_stop_seqs: int = 4
+    """Maximum number of stop sequences per active sequence. 0 disables stop tokens."""
+    max_stop_tokens: int = 16
+    """Maximum tokens per stop sequence (position axis length)."""
 
     # Default PRNG seed for building per-request keys (optional convenience)
     seed: int = 0
@@ -76,12 +106,12 @@ class GenerationServiceConfig:
 class GenState(eqx.Module):
     """Container for generation state used during decoding.
 
-    Holds the page table, KV cache, and `DecodeState`. Provides `clone_sequence` to
-    efficiently support multi-sample generation by sharing fully used pages.
+    Holds the KV cache and `DecodeState` (which itself owns the `PageTable`).
+    Provides `clone_sequence` to efficiently support multi-sample generation by
+    sharing fully used pages.
     """
 
     cache: KvPageCache
-    page_table: PageTable
     decode_state: DecodeState
 
     def clone_sequence(
@@ -103,12 +133,12 @@ class GenState(eqx.Module):
         Returns:
             updated GenState
         """
-        page_table = self.page_table
+        page_table = self.decode_state.page_table
         if child_local_id is None:
             page_table, new_child = page_table.assign_seq_id_to_seq()
             child_local_id = int(jax.device_get(new_child))
-
-        decode_state = self.decode_state
+        # Important: assign_seq_id_to_seq donates its input; update decode_state.page_table immediately
+        decode_state = dataclasses.replace(self.decode_state, page_table=page_table)
         prefix_len = int(decode_state.seq_lens["seq", parent_local_id].scalar())
         parent_prefix = decode_state.tokens["seq", parent_local_id, "position", 0:prefix_len]
         parent_kv_pages_row = decode_state.kv_pages["seq", parent_local_id]
@@ -119,7 +149,6 @@ class GenState(eqx.Module):
             local_seq_id=child_local_id,
             global_seq_id=gid,
             tokens=parent_prefix,
-            prefix_len=prefix_len,
             kv_pages=parent_kv_pages_row,
             seq_params=seq_params,
         )
@@ -145,7 +174,9 @@ class GenState(eqx.Module):
 
         cache = jax.lax.cond((src_len % page_size != 0) and (src_len > 0), _copy, _identity, None)
 
-        new_state = dataclasses.replace(self, page_table=page_table, decode_state=decode_state, cache=cache)
+        # persist the updated page table inside the decode state
+        decode_state = dataclasses.replace(decode_state, page_table=page_table)
+        new_state = dataclasses.replace(self, decode_state=decode_state, cache=cache)
         return new_state, child_local_id
 
 
@@ -165,6 +196,23 @@ def _compute_sample_indices(pos_ids, seq_ids, seq_lens, max_sample_indices):
     return sample_indices
 
 
+@hax.named_jit(donate_args=(True,))
+def _release_finished_device(gen_state: GenState, finished_mask: ht.bool_[NamedArray, "seq"] | None = None):  # type: ignore
+    """JIT-safe release of finished sequences on device.
+
+    Frees pages in the PageTable for finished slots and invalidates those slots in DecodeState.
+    If ``finished_mask`` is None, uses ``gen_state.decode_state.finished``.
+    """
+    ds = gen_state.decode_state
+    pt = ds.page_table
+
+    mask = finished_mask if finished_mask is not None else ds.finished
+    new_pt = pt.free_pages_for_finished(mask.array)
+    new_ds = ds.invalidate_finished()
+    new_ds = dataclasses.replace(new_ds, page_table=new_pt)
+    return dataclasses.replace(gen_state, decode_state=new_ds)
+
+
 @hax.named_jit(donate_args=(True, False, False, False, False))
 def _run_prefill(
     gen_state: GenState,
@@ -172,15 +220,14 @@ def _run_prefill(
     sampler: Sampler,
     queue: TokenQueue,
     max_seqs_in_prefill: int,  # static
-) -> GenState:
+) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
 
     tokens = queue.queued_tokens
     pos_ids = queue.queued_pos_ids
     seq_ids = queue.queued_seq_ids
     seq_lens = gen_state.decode_state.seq_lens
-
-    page_table, binfo = gen_state.page_table.allocate_for_seq(token_seq_ids=seq_ids)
+    page_table, binfo = gen_state.decode_state.page_table.allocate_for_seq(token_seq_ids=seq_ids)
 
     sample_indices = _compute_sample_indices(pos_ids, seq_ids, seq_lens, max_seqs_in_prefill)
 
@@ -188,6 +235,11 @@ def _run_prefill(
     logits_at_samples = logits["position", sample_indices]
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
+    # jax.debug.print(
+    #     "[prefill] sample_count={num} queued_before={queued}",
+    #     num=num_new_tokens,
+    #     queued=gen_state.decode_state.num_queued_tokens,
+    # )
     new_seq_ids = seq_ids["position", sample_indices]
     new_pos_ids = pos_ids["position", sample_indices]
     prng_keys = gen_state.decode_state.prng_keys_for(new_seq_ids, new_pos_ids)
@@ -199,18 +251,37 @@ def _run_prefill(
     # Update decode_state (also enqueues into the main decode queue)
     decode_state = gen_state.decode_state.update_tokens(new_tokens, new_seq_ids, log_probs, num_new_tokens)
 
-    gen_state = dataclasses.replace(gen_state, page_table=page_table, cache=cache, decode_state=decode_state)
+    # Initialize outputs buffer and append prefill-sampled tokens
+    outputs = _DecodeOutputs.init(
+        max_tokens=gen_state.decode_state.max_seqs * 2,
+        max_seqs=gen_state.decode_state.max_seqs,
+        with_logprobs=True,
+    )
+    outputs = outputs.append(new_tokens, new_seq_ids, log_probs, num_new_tokens, decode_state.finished)
+
+    decode_state = dataclasses.replace(decode_state, page_table=page_table)
+    gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
 
     # If clone targets specified, sample alternative tokens for clones using the same logits slice
     if decode_state.clone_sources is not None:
-        gen_state, _covered_clones = _handle_clones(
+        gen_state, outputs = _handle_clones(
             gen_state,
             logits_at_samples,
             new_seq_ids,
             new_pos_ids,
             sampler,
+            outputs,
         )
-    return gen_state
+
+    # Device-side release of finished sequences (jit-safe)
+    gen_state = _release_finished_device(gen_state)
+
+    # jax.debug.print(
+    #     "[prefill] outputs_size={size} queued_after={queued}",
+    #     size=outputs.num_tokens,
+    #     queued=gen_state.decode_state.num_queued_tokens,
+    # )
+    return gen_state, outputs
 
 
 def _handle_clones(
@@ -219,7 +290,8 @@ def _handle_clones(
     seq_ids: ht.Int[NamedArray, " position"],  # type: ignore
     pos_ids: ht.Int[NamedArray, " position"],  # type: ignore
     sampler: Sampler,
-) -> tuple[GenState, ht.bool_[NamedArray, " seq"]]:  # type: ignore
+    outputs: _DecodeOutputs,
+) -> tuple[GenState, _DecodeOutputs]:  # type: ignore
     """
     Sample alternative tokens for the given logits, seq_ids, pos_ids, and clone_targets.
     This is used for the `n>1` case of `n_generations` in the `Request` class.
@@ -262,6 +334,7 @@ def _handle_clones(
     selected = selected.rename({"seq": "position"})
 
     num_new = hax.sum(selected != INVALID).scalar().astype(jnp.int32)
+    # jax.debug.print("[prefill clones] clone_count={num}", num=num_new)
 
     # Gather per-clone data
     # Use a masked/guarded gather to keep shapes static. First entries are valid clones.
@@ -279,7 +352,7 @@ def _handle_clones(
     new_tokens, log_probs = hax.vmap(sampler, "position")(logits_this_time, temps, key=prng_keys)
 
     # update page table and cache for the clone targets
-    page_table = gen_state.page_table
+    page_table = gen_state.decode_state.page_table
     cache = gen_state.cache
     size = page_table.page_size
 
@@ -313,28 +386,40 @@ def _handle_clones(
     decode_state = gen_state.decode_state.update_tokens(new_tokens, tgt_ids, log_probs, num_new)
     # Discharge processed clones so they are not reprocessed in subsequent flushes
     decode_state = decode_state.discharge_clone(tgt_ids, num_new)
-    gen_state = dataclasses.replace(gen_state, decode_state=decode_state, page_table=page_table, cache=cache)
+    # persist page table into decode state
+    decode_state = dataclasses.replace(decode_state, page_table=page_table)
+    gen_state = dataclasses.replace(gen_state, decode_state=decode_state, cache=cache)
 
-    # Return which clones we sampled this time (mask over seq axis)
-    return gen_state, can_sample
+    # Append clone outputs
+    outputs = outputs.append(new_tokens, tgt_ids, log_probs, num_new, gen_state.decode_state.finished)
+
+    # Device-side release of finished sequences (jit-safe)
+    gen_state = _release_finished_device(gen_state)
+
+    return gen_state, outputs
 
 
-@hax.named_jit(donate_args=(True, False, False))
+# @hax.named_jit(donate_args=(True, False, False))
+@functools.partial(jax.jit, static_argnums=(3, 4), donate_argnames=("gen_state",))
 def _run_generation_loop(
     gen_state: GenState,
     model: LmHeadModel,
     sampler: Sampler,
     max_tokens_per_round: int,
     max_rounds: int,
-) -> GenState:
+) -> tuple[GenState, _DecodeOutputs]:
     """Run autoregressive generation until all sequences finish or `max_rounds` reached."""
 
-    def cond(state: tuple[GenState, jax.Array, jax.Array]):
-        _gen_state, finished, step = state
-        return (step < max_rounds) & (_gen_state.decode_state.num_queued_tokens > 0) & (~jnp.all(finished))
+    def cond(state: tuple[GenState, _DecodeOutputs, jax.Array]):
+        _gen_state, _outputs, step = state
+        return (
+            (step < max_rounds)
+            & (_gen_state.decode_state.num_queued_tokens > 0)
+            & (~hax.all(_gen_state.decode_state.finished)).scalar()
+        )
 
-    def body(state: tuple[GenState, jax.Array, jax.Array]) -> tuple[GenState, jax.Array, jax.Array]:
-        gen_state, has_finished, step = state
+    def body(state: tuple[GenState, _DecodeOutputs, jax.Array]) -> tuple[GenState, _DecodeOutputs, jax.Array]:
+        gen_state, outputs, step = state
 
         # Pack the next chunk from the queue via DecodeState
         decode_state, packed_seq = gen_state.decode_state.pack_next_sequence(max_tokens_per_round)
@@ -342,10 +427,10 @@ def _run_generation_loop(
         tokens = packed_seq.tokens
         pos_ids = packed_seq.pos_ids
         seq_ids = packed_seq.seq_ids
-        # NB: use decode_state.num_tokens to determine the number of tokens in each sequence, not what's in page table
+        # NB: use decode_state.seq_lens to determine the number of tokens in each sequence, not what's in page table
         seq_lens = decode_state.seq_lens
 
-        page_table, binfo = gen_state.page_table.allocate_for_seq(token_seq_ids=seq_ids)
+        page_table, binfo = gen_state.decode_state.page_table.allocate_for_seq(token_seq_ids=seq_ids)
 
         max_sample_indices = min(page_table.max_seqs, max_tokens_per_round)
         sample_indices = _compute_sample_indices(pos_ids, seq_ids, seq_lens, max_sample_indices)
@@ -362,38 +447,50 @@ def _run_generation_loop(
         temps = decode_state.temperature["seq", new_seq_ids]
 
         new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, key=prng_keys)
+        # jax.debug.print(
+        #     "[gen] step={step} packed={packed} sample_count={num} queued_before={queued}",
+        #     step=step,
+        #     packed=packed_seq.num_tokens,
+        #     num=num_new_tokens,
+        #     queued=gen_state.decode_state.num_queued_tokens,
+        # )
 
         # Update decode state with the freshly sampled tokens (also enqueues them)
         decode_state = decode_state.update_tokens(new_tokens, new_seq_ids, log_probs, num_new_tokens)
-        new_finished = decode_state.is_finished(jnp.arange(decode_state.max_seqs))
-        has_finished = has_finished | new_finished
-
-        # purge any finished sequencse
-        finished_sequences = jnp.nonzero(new_finished, size=gen_state.page_table.max_seqs, fill_value=INVALID)[0]
-        finished_sequences = hax.named(finished_sequences, axis="seq")
-        decode_state = decode_state.purge_queue_of_seq(finished_sequences)
 
         # Update the gen_state with all the new components
-        new_gen_state = dataclasses.replace(
-            gen_state,
-            page_table=page_table,
-            cache=cache,
-            decode_state=decode_state,
-        )
-        return new_gen_state, has_finished, step + 1
+        decode_state = dataclasses.replace(decode_state, page_table=page_table)
+        new_gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
+        # Append non-stateful outputs for host-side extraction
+        outputs = outputs.append(new_tokens, new_seq_ids, log_probs, num_new_tokens, decode_state.finished)
+        # Device-side release of finished sequences (jit-safe)
+        new_gen_state = _release_finished_device(new_gen_state)
+        # jax.debug.print(
+        #     "[gen] step={step} outputs_size={size} queued_after={queued}",
+        #     step=step,
+        #     size=outputs.num_tokens,
+        #     queued=new_gen_state.decode_state.num_queued_tokens,
+        # )
+        return new_gen_state, outputs, step + 1
 
-    has_finished = gen_state.decode_state.is_finished(jnp.arange(gen_state.decode_state.max_seqs))
-    init_state = (gen_state, has_finished, jnp.array(0, dtype=jnp.int32))
-    final_gen_state, _, _ = jax.lax.while_loop(cond, body, init_state)
-    return final_gen_state
+    # Allocate an outputs buffer sized for this run
+    outputs_buf = _DecodeOutputs.init(
+        max_tokens=max(max_tokens_per_round * max_rounds, 1),
+        max_seqs=gen_state.decode_state.max_seqs,
+        with_logprobs=True,
+    )
+    init_state = (gen_state, outputs_buf, jnp.array(0, dtype=jnp.int32))
+    final_gen_state, final_outputs, _ = jax.lax.while_loop(cond, body, init_state)
+    # jax.debug.print("[gen] final outputs_size={size}", size=final_outputs.num_tokens)
+    return final_gen_state, final_outputs
 
 
-class GenerationService:
+class InferenceEngine:
     """Encapsulates batch inference: prefill + decode + output extraction.
 
     Typical usage:
 
-        svc = GenerationService.from_model(model, tokenizer, Vocab, max_seqs, max_pages, page_size, max_pages_per_seq, compute_dtype)
+        svc = Engine.from_model(model, tokenizer, Vocab, max_seqs, max_pages, page_size, max_pages_per_seq, compute_dtype)
         texts = svc.generate(requests)
     """
 
@@ -402,20 +499,22 @@ class GenerationService:
         *,
         model: LmHeadModel,
         tokenizer,
-        table: PageTable,
         cache: KvPageCache,
         decode_state: DecodeState,
         sampler: Sampler,
-        config: GenerationServiceConfig,
+        config: InferenceEngineConfig,
     ) -> None:
         self.model = model
         self.tokenizer = tokenizer
         self.sampler = sampler
-        self.gen_state: GenState = GenState(cache=cache, page_table=table, decode_state=decode_state)
+        self.gen_state: GenState = GenState(cache=cache, decode_state=decode_state)
         self._initial_decode_state = decode_state
+        # Impute max_prefill_size if not set
+        if config.max_prefill_size is None:
+            config = dataclasses.replace(config, max_prefill_size=decode_state.page_table.max_len_per_seq)
         self.config = config
         # Track free local sequence slots
-        self.free_slots: int = int(table.max_seqs)
+        self.free_slots: int = int(decode_state.page_table.max_seqs)
         # Mapping structures for active sequences
         # local_map: local seq id -> (request id, child id)
         # sequences: request id -> {child id -> local seq id}
@@ -423,14 +522,15 @@ class GenerationService:
         self.sequences: dict[int, dict[int, int]] = {}
         # FIFO request queue for incremental admission
         self.request_queue: deque[Request] = deque()
+        # Results by request id -> choice -> DecodeResult
+        self.results: dict[int, dict[int, DecodeResult]] = {}
 
     @classmethod
     def from_model(
         cls,
-        *,
         model: LmHeadModel,
         tokenizer,
-        vocab_axis: Axis,
+        *,
         max_pages: int,
         max_seqs: int,
         page_size: int,
@@ -438,20 +538,10 @@ class GenerationService:
         compute_dtype,
         max_queued_tokens: int = 32,
         max_seqs_in_prefill: int = 16,
-    ) -> "GenerationService":
-        """Build a service with fresh PageTable/KV cache/DecodeState and a `Sampler` for `vocab_axis`."""
-        table = PageTable.init(max_pages, max_seqs, page_size, max_pages_per_seq)
-        cache = hax.named_jit(model.initial_cache)(table, dtype=compute_dtype)
-        decode_state = DecodeState.init(
-            table.max_seqs,
-            table.pages_per_seq,
-            table.page_size,
-            table.max_len_per_seq,
-            max_stop_seqs=1,
-            max_queued_tokens=max_queued_tokens,
-        )
-        sampler = Sampler(vocab_axis)
-        cfg = GenerationServiceConfig(
+        max_prefill_size: Optional[int] = None,
+    ) -> "InferenceEngine":
+        """Build an engine using basic sizing knobs. Uses defaults for stop-token capacity."""
+        cfg = InferenceEngineConfig(
             max_pages=max_pages,
             max_seqs=max_seqs,
             page_size=page_size,
@@ -459,41 +549,31 @@ class GenerationService:
             compute_dtype=compute_dtype,
             max_queued_tokens=max_queued_tokens,
             max_seqs_in_prefill=max_seqs_in_prefill,
+            max_prefill_size=max_prefill_size,
         )
-        return cls(
-            model=model,
-            tokenizer=tokenizer,
-            table=table,
-            cache=cache,
-            decode_state=decode_state,
-            sampler=sampler,
-            config=cfg,
-        )
+        return cls.from_model_with_config(model=model, tokenizer=tokenizer, config=cfg)
 
     @classmethod
     def from_model_with_config(
         cls,
-        *,
         model: LmHeadModel,
         tokenizer,
-        config: GenerationServiceConfig,
-    ) -> "GenerationService":
-        """Build a service using a GenerationServiceConfig for sizing knobs."""
+        config: InferenceEngineConfig,
+    ) -> "InferenceEngine":
+        """Build an engine using a EngineConfig for sizing knobs."""
         table = PageTable.init(config.imputed_max_pages, config.max_seqs, config.page_size, config.max_pages_per_seq)
         cache = hax.named_jit(model.initial_cache)(table, dtype=config.compute_dtype)
         decode_state = DecodeState.init(
-            table.max_seqs,
-            table.pages_per_seq,
-            table.page_size,
-            table.max_len_per_seq,
-            max_stop_seqs=1,
+            table,
+            max_stop_seqs=config.max_stop_seqs,
+            max_stop_tokens=config.max_stop_tokens,
             max_queued_tokens=config.max_queued_tokens,
         )
-        sampler = Sampler(model.Vocab)
+        vocab_axis = model.Vocab
+        sampler = Sampler(vocab_axis)
         return cls(
             model=model,
             tokenizer=tokenizer,
-            table=table,
             cache=cache,
             decode_state=decode_state,
             sampler=sampler,
@@ -505,49 +585,30 @@ class GenerationService:
 
         Keeps the KV cache memory allocated. Reuses current `PageTable` object with pages freed.
         """
-        page_table = self.gen_state.page_table
+        page_table = self.gen_state.decode_state.page_table
         for seq_id in range(page_table.max_seqs):
             page_table = page_table.free_pages(seq_id)
-        self.gen_state = dataclasses.replace(
-            self.gen_state,
-            page_table=page_table,
-            decode_state=self._initial_decode_state,
-        )
+        # persist into decode state
+        new_decode_state = dataclasses.replace(self._initial_decode_state, page_table=page_table)
+        self.gen_state = dataclasses.replace(self.gen_state, decode_state=new_decode_state)
         # All local slots are free after reset
         self.free_slots = int(page_table.max_seqs)
         self.local_map.clear()
         self.sequences.clear()
 
-    def _release_finished_sequences(self) -> None:
-        """Release resources for any sequences that have finished.
+    def _release_finished_sequences(self, outputs: _DecodeOutputs) -> None:
+        """Host-side bookkeeping for finished sequences.
 
-        - Frees pages in the PageTable for finished local sequence ids.
-        - Clears DecodeState bookkeeping so the local slots can be reused.
-
-        This makes explicit `reset()` calls generally unnecessary between batches.
+        Device-side page freeing and decode-state invalidation occur inside the JIT loops.
+        Here we update host maps and free-slot counters using the finished mask from outputs when provided.
         """
-        ds = self.gen_state.decode_state
-        pt = self.gen_state.page_table
-
-        # Determine which local sequence slots are finished
-        finished_mask = jax.device_get(ds.is_finished(jnp.arange(ds.max_seqs))).astype(bool)
+        finished_mask = jax.device_get(outputs.finished.array).astype(bool)
         finished_locals = [i for i, f in enumerate(finished_mask) if bool(f)]
-
-        if len(finished_locals) == 0:
+        if not finished_locals:
             return
-
-        # Capture current global ids for logging before we clear them
-        try:
-            seq_ids_host = jax.device_get(ds.seq_id.array)
-            finished_globals = [int(seq_ids_host[i]) for i in finished_locals]
-        except Exception:
-            finished_globals = []
-        logger.info(f"Releasing finished sequences: locals={finished_locals}, globals={finished_globals}")
-
-        # Free pages for finished sequences
+        logger.info(f"Releasing finished sequences: locals={finished_locals}")
+        # Maintain request/child mappings and slot counts on host
         for local_seq in finished_locals:
-            pt = pt.free_pages(local_seq)
-            # Maintain request/child mapping
             info = self.local_map.pop(local_seq, None)
             if info is not None:
                 rid, cid = info
@@ -556,125 +617,111 @@ class GenerationService:
                     cmap.pop(cid, None)
                     if len(cmap) == 0:
                         self.sequences.pop(rid, None)
-            # Freed one local slot
+            # Freed one local slot (host view)
             self.free_slots += 1
-
-        # Clear DecodeState slot metadata for finished sequences
-        # Build a boolean NamedArray mask over the seq axis
-        Seq = ds.seq_id.resolve_axis("seq")
-        mask = hax.named(jnp.asarray(finished_mask, dtype=bool), axis=Seq)
-
-        # Invalidate ids and lengths for finished slots
-        new_seq_id = hax.where(mask, hax.full_like(ds.seq_id, INVALID), ds.seq_id)
-        new_seq_lens = hax.where(mask, hax.full_like(ds.seq_lens, INVALID), ds.seq_lens)
-        new_prefix_len = hax.where(mask, hax.full_like(ds.prefix_len, 0), ds.prefix_len)
-        new_clone_sources = hax.where(mask, hax.full_like(ds.clone_sources, INVALID), ds.clone_sources)
-
-        # Invalidate kv_pages rows for finished slots
-        new_kv_pages = ds.kv_pages
-        for local_seq in finished_locals:
-            new_kv_pages = new_kv_pages.at["seq", local_seq].set(INVALID)
-
-        self.gen_state = dataclasses.replace(
-            self.gen_state,
-            page_table=pt,
-            decode_state=dataclasses.replace(
-                ds,
-                seq_id=new_seq_id,
-                seq_lens=new_seq_lens,
-                prefix_len=new_prefix_len,
-                clone_sources=new_clone_sources,
-                kv_pages=new_kv_pages,
-            ),
-        )
 
     # ------------------------------- Queue helpers -------------------------------
     def enqueue_requests(self, requests: Sequence[Request]) -> None:
         for r in requests:
             self.request_queue.append(r)
 
-    def _admit_from_queue(self) -> int:
+    def _admit_from_queue(self) -> tuple[int, _DecodeOutputs | None]:
         """Admit a batch from the head of the queue that fits in free slots/pages.
 
         Returns the number of admitted requests.
         """
         if not self.request_queue:
-            return 0
-        sim_slots = int(self.free_slots)
+            return 0, None
+        sim_slots = self.free_slots
         sim_pages = self._free_page_count()
+        max_prefill_size = int(self.config.max_prefill_size or self.gen_state.decode_state.page_table.max_len_per_seq)
+        max_seqs_in_prefill = int(self.config.max_seqs_in_prefill)
+        sim_tokens = 0
+        primaries_in_batch = 0
         batch: list[Request] = []
         while self.request_queue:
             nxt = self.request_queue[0]
             need_slots = int(nxt.n_generations)
             need_pages = self._pages_needed_for_prompt(len(nxt.prompt_tokens))
-            if sim_slots < need_slots or sim_pages < need_pages:
+            # Check capacity constraints: slots (including clones), pages, token buffer, prefill batch size
+            if (
+                sim_slots < need_slots
+                or sim_pages < need_pages
+                or sim_tokens + len(nxt.prompt_tokens) > max_prefill_size
+                or primaries_in_batch >= max_seqs_in_prefill
+            ):
                 break
             batch.append(self.request_queue.popleft())
             sim_slots -= need_slots
             sim_pages -= need_pages
+            sim_tokens += len(nxt.prompt_tokens)
+            primaries_in_batch += 1
         if not batch:
-            return 0
-        _ = self._prefill_prompts(batch, primary_global_ids=list(range(len(batch))))
+            return 0, None
+        # Build a single TokenQueue for prefill and run prefill exactly once
+        token_queue = self._prefill_prompts(batch, primary_global_ids=[r.request_id for r in batch])
+        if token_queue is None or int(jax.device_get(token_queue.num_queued_tokens)) == 0:
+            return 0, None
+        new_state = _run_prefill(
+            self.gen_state, self.model, self.sampler, token_queue, int(self.config.max_seqs_in_prefill)
+        )
+        # _run_prefill returns (GenState, _DecodeOutputs)
+        self.gen_state, outputs = new_state
         self.gen_state = jax.block_until_ready(self.gen_state)
-        return len(batch)
+        return len(batch), outputs
 
     def _free_page_count(self) -> int:
         """Return number of free KV pages in the PageTable."""
-        prc = jax.device_get(self.gen_state.page_table.page_ref_counts.array)
+        prc = jax.device_get(self.gen_state.decode_state.page_table.page_ref_counts.array)
         return int((prc == 0).sum())
 
     def _pages_needed_for_prompt(self, prompt_len: int) -> int:
-        size = int(self.gen_state.page_table.page_size)
+        size = int(self.gen_state.decode_state.page_table.page_size)
         return (int(prompt_len) + size - 1) // size
 
     def _prefill_prompts(
         self,
         requests: Sequence[Request],
-        *,
-        primary_global_ids: Optional[Sequence[int]] = None,
-    ) -> list[int]:
-        """Assign sequence ids, set per-seq params, and run prefill using a local queue."""
-        MAX_SEQS_IN_PREFILL = int(self.config.max_seqs_in_prefill)
-        tokens = jnp.full((128,), INVALID, dtype=jnp.int32)
-        seq_ids = jnp.full((128,), INVALID, dtype=jnp.int32)
-        pos_ids = jnp.full((128,), INVALID, dtype=jnp.int32)
+        primary_global_ids: Optional[Sequence[int]],
+    ) -> TokenQueue | None:
+        """Assign sequence ids, set per-seq params, and build a single TokenQueue for prefill.
+
+        Does not run device prefill; caller should invoke _run_prefill once with the returned queue.
+        """
+        max_seqs_in_prefill = int(self.config.max_seqs_in_prefill)
+        max_prefill_size = self.config.max_prefill_size or self.model.Pos.size
+        tokens = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
+        seq_ids = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
+        pos_ids = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
         offset = 0
         num_seqs_in_prefill = 0
 
-        primary_local_ids: list[int] = []
+        prefill_queue: TokenQueue | None = None
 
         for idx, request in enumerate(requests):
             seq_tokens = request.prompt_tokens
             seq_params = request.decode_params
 
-            page_table, seq_id = self.gen_state.page_table.assign_seq_id_to_seq()
+            page_table, seq_id = self.gen_state.decode_state.page_table.assign_seq_id_to_seq()
             seq_id = int(seq_id)
 
             if not is_valid(seq_id):
                 raise RuntimeError("Ran out of sequence IDs in the page table during prefill.")
 
-            self.gen_state = dataclasses.replace(self.gen_state, page_table=page_table)
+            self.gen_state = dataclasses.replace(
+                self.gen_state,
+                decode_state=dataclasses.replace(self.gen_state.decode_state, page_table=page_table),
+            )
 
             this_tokens = jnp.asarray(seq_tokens, dtype=jnp.int32)
-            if len(seq_tokens) + offset > tokens.shape[0] or num_seqs_in_prefill >= MAX_SEQS_IN_PREFILL:
-                token_queue = TokenQueue(
-                    queued_tokens=hax.named(tokens, axis="position"),
-                    queued_seq_ids=hax.named(seq_ids, axis="position"),
-                    queued_pos_ids=hax.named(pos_ids, axis="position"),
-                    num_queued_tokens=jnp.array(offset, dtype=jnp.int32),
-                )
-                self.gen_state = _run_prefill(
-                    self.gen_state, self.model, self.sampler, token_queue, MAX_SEQS_IN_PREFILL
-                )
-                tokens = jnp.full((128,), INVALID, dtype=jnp.int32)
-                seq_ids = jnp.full((128,), INVALID, dtype=jnp.int32)
-                pos_ids = jnp.full((128,), INVALID, dtype=jnp.int32)
-                offset = 0
-                num_seqs_in_prefill = 0
+            # Stop adding more if we would exceed the single prefill buffer or sequence batch
+            if len(seq_tokens) + offset > tokens.shape[0] or num_seqs_in_prefill >= max_seqs_in_prefill:
+                break
 
-            tokens = tokens.at[offset : offset + len(seq_tokens)].set(this_tokens)
-            seq_ids = seq_ids.at[offset : offset + len(seq_tokens)].set(seq_id)
-            pos_ids = pos_ids.at[offset : offset + len(seq_tokens)].set(jnp.arange(len(seq_tokens), dtype=jnp.int32))
+            tokens[offset : offset + len(seq_tokens)] = np.asarray(this_tokens)
+            seq_ids[offset : offset + len(seq_tokens)] = seq_id
+            pos_ids[offset : offset + len(seq_tokens)] = np.arange(len(seq_tokens), dtype=np.int32)
+
             offset += len(seq_tokens)
             num_seqs_in_prefill += 1
 
@@ -682,9 +729,8 @@ class GenerationService:
                 self.gen_state,
                 decode_state=self.gen_state.decode_state.assign_seq(
                     local_seq_id=seq_id,
-                    global_seq_id=(primary_global_ids[idx] if primary_global_ids is not None else request.request_id),
+                    global_seq_id=request.request_id,
                     tokens=hax.named(this_tokens, axis="position"),
-                    prefix_len=len(seq_tokens),
                     kv_pages=None,
                     seq_params=seq_params,
                 ),
@@ -695,7 +741,6 @@ class GenerationService:
             rid = int(request.request_id)
             self.local_map[seq_id] = (rid, 0)
             self.sequences.setdefault(rid, {})[0] = seq_id
-            primary_local_ids.append(seq_id)
 
             if request.n_generations > 1:
                 for k in range(1, request.n_generations):
@@ -713,52 +758,14 @@ class GenerationService:
                     self.sequences.setdefault(rid, {})[k] = child_local_id
 
         if offset > 0:
-            token_queue = TokenQueue(
+            prefill_queue = TokenQueue(
                 queued_tokens=hax.named(tokens, axis="position"),
                 queued_seq_ids=hax.named(seq_ids, axis="position"),
                 queued_pos_ids=hax.named(pos_ids, axis="position"),
                 num_queued_tokens=jnp.array(offset, dtype=jnp.int32),
             )
-            self.gen_state = _run_prefill(self.gen_state, self.model, self.sampler, token_queue, MAX_SEQS_IN_PREFILL)
 
-        return primary_local_ids
-
-    def _extract_outputs(self, outputs: list[list[int]], finished: list[bool]) -> int:
-        """Drain generated tokens from `DecodeState` and append into `outputs`.
-
-        Returns the number of new tokens extracted this call.
-        """
-        total_this_time = 0
-        decode_state = self.gen_state.decode_state
-        num_seqs = decode_state.max_seqs
-        tokens = jax.device_get(decode_state.tokens.array)
-        num_tokens = jax.device_get(decode_state.seq_lens.array)
-        seq_ids = jax.device_get(decode_state.seq_id.array)
-        this_finished = jax.device_get(decode_state.is_finished(jnp.arange(num_seqs)))
-
-        for local_seq in range(num_seqs):
-            global_id = int(seq_ids[local_seq])
-            if global_id < 0 or global_id == INVALID:
-                continue
-
-            current_num_tokens = len(outputs[global_id])
-            new_num_tokens = int(num_tokens[local_seq])
-            count_to_extract = new_num_tokens - current_num_tokens
-
-            if finished[global_id]:
-                continue
-
-            total_this_time += max(0, count_to_extract)
-            if bool(this_finished[local_seq]):
-                finished[global_id] = True
-
-            if count_to_extract <= 0:
-                continue
-
-            seq_tokens = tokens[local_seq, current_num_tokens:new_num_tokens]
-            outputs[global_id].extend(int(x) for x in seq_tokens)
-
-        return total_this_time
+        return prefill_queue
 
     def generate(self, requests: Sequence[Request]) -> tuple[list[list[int]], int]:
         """Generate tokens for a batch of Requests.
@@ -768,72 +775,117 @@ class GenerationService:
         """
         # Enqueue incoming requests to internal queue
         self.enqueue_requests(requests)
-        # Track outputs and finished flags for only this call's requests
+        # Track outputs and finished flags using self.results for only this call's requests
         call_rids = [int(r.request_id) for r in requests]
         expected_children: dict[int, int] = {rid: int(r.n_generations) for rid, r in zip(call_rids, requests)}
-        outputs_for: dict[int, dict[int, list[int]]] = {
-            rid: {k: [] for k in range(expected_children[rid])} for rid in expected_children
-        }
-        finished_for: dict[int, dict[int, bool]] = {
-            rid: {k: False for k in range(expected_children[rid])} for rid in expected_children
-        }
+        # Initialize fresh result buckets for this call
+        for rid in call_rids:
+            self.results[rid] = {
+                k: DecodeResult(id=rid, choice=k, token_list=[]) for k in range(expected_children[rid])
+            }
 
-        # Ensure stop-token buffer capacity is sufficient based on the longest stop sequence requested
-        desired_stop_len = 0
-        for req in requests:
-            if req.decode_params.stop_tokens is not None:
-                desired_stop_len = max(desired_stop_len, int(req.decode_params.stop_tokens.axis_size("position")))
+        # Validate requested stop-token shapes against configured capacity; do not resize dynamically
         ds = self.gen_state.decode_state
-        current_stop_len = 0 if ds.stop_tokens is None else ds.stop_tokens.axis_size("position")
-        if desired_stop_len > current_stop_len:
-            # Reinitialize an empty DecodeState with larger stop-token capacity
-            new_ds = DecodeState.init(
-                ds.max_seqs,
-                ds.kv_pages.axis_size("page"),
-                ds.page_size,
-                ds.tokens.axis_size("position"),
-                max_stop_seqs=1 if desired_stop_len > 0 else 0,
-                max_stop_tokens=desired_stop_len,
-                max_queued_tokens=int(ds.tqueue.max_queued_tokens),
-            )
-            self.gen_state = dataclasses.replace(self.gen_state, decode_state=new_ds)
-            self._initial_decode_state = new_ds
+        cur_stop_seqs = 0 if ds.stop_tokens is None else ds.stop_tokens.axis_size("stop_seq")
+        cur_stop_len = 0 if ds.stop_tokens is None else ds.stop_tokens.axis_size("position")
+        req_stop_seqs = 0
+        req_stop_len = 0
+        for req in requests:
+            st = req.decode_params.stop_tokens
+            if st is None:
+                continue
+            req_stop_seqs = max(req_stop_seqs, int(st.axis_size("stop_seq")))
+            req_stop_len = max(req_stop_len, int(st.axis_size("position")))
+        if req_stop_seqs > 0 or req_stop_len > 0:
+            if ds.stop_tokens is None:
+                raise ValueError(
+                    f"Requested stop tokens (seqs={req_stop_seqs}, len={req_stop_len}) but service was initialized "
+                    f"without stop-token capacity. Recreate service with nonzero max_stop_seqs/max_stop_tokens."
+                )
+            if req_stop_seqs > cur_stop_seqs or req_stop_len > cur_stop_len:
+                raise ValueError(
+                    "Requested stop-token configuration exceeds service capacity: "
+                    f"required (seqs={req_stop_seqs}, len={req_stop_len}) > "
+                    f"configured (seqs={cur_stop_seqs}, len={cur_stop_len}). "
+                    "Increase max_stop_seqs/max_stop_tokens when constructing the service."
+                )
 
         time_in = time.time()
         # Try initial admission from queue and extract prompt tokens
-        _ = self._admit_from_queue()
-        _ = self._extract_outputs_for(outputs_for, finished_for)
-        self._release_finished_sequences()
+        _, decode_outputs = self._admit_from_queue()
+        if decode_outputs:
+            _ = self._ingest_outputs(decode_outputs)
 
         # Autoregressive generation loop with periodic extraction
         def _all_done() -> bool:
-            for rid, kids in finished_for.items():
-                if any(not v for v in kids.values()):
-                    return False
+            for rid, n_kids in expected_children.items():
+                kid_map = self.results.get(rid, {})
+                for cid in range(n_kids):
+                    dr = kid_map.get(cid)
+                    if dr is None or not dr.done:
+                        return False
             return True
 
         stagnant_iters = 0
         while not _all_done():
-            t0 = time.time()
-            self.gen_state = _run_generation_loop(
+            iter_start = time.time()
+
+            fake_submit_start = time.time()
+            # future_state, decode_outputs = _run_generation_loop(
+            jax.tree.flatten(
+                (
+                    self.gen_state,
+                    self.model,
+                    self.sampler,
+                    1,
+                    0,
+                )
+            )
+            jax.block_until_ready(self.gen_state)
+            fake_submit_done = time.time()
+
+            submit_start = iter_start
+            future_state, decode_outputs = _run_generation_loop(
                 self.gen_state,
                 self.model,
                 self.sampler,
-                self.config.max_tokens_per_round,
+                # TODO: tune max_tokens_per_round
+                self.config.max_tokens_per_round or self.config.max_seqs,
                 self.config.max_rounds,
             )
-            loop_time = time.time() - t0
-            self.gen_state = jax.block_until_ready(self.gen_state)
-            new_tokens = self._extract_outputs_for(outputs_for, finished_for)
+            submit_done = time.time()
+            # Time spent with device executing (and the host thread waiting)
+            self.gen_state = jax.block_until_ready(future_state)
+            device_time = time.time() - submit_done
+
+            extract_start = time.time()
+            new_tokens = self._ingest_outputs(decode_outputs)
+            extract_time = time.time() - extract_start
+
             # Release any sequences that finished in this step
-            self._release_finished_sequences()
+            release_start = time.time()
             # Admit more if capacity allows
-            _ = self._admit_from_queue()
-            _ = self._extract_outputs_for(outputs_for, finished_for)
-            self._release_finished_sequences()
-            if loop_time > 0:
-                tps = new_tokens / loop_time
-                logger.info(f"Decode iter: {loop_time:.3f}s, {tps:.2f} tok/s, {new_tokens} new")
+            _, admit_outputs = self._admit_from_queue()
+            mid_tokens = self._ingest_outputs(admit_outputs)
+            # Ensure any bookkeeping kernels complete before next iteration
+            self.gen_state = jax.block_until_ready(self.gen_state)
+            new_tokens += mid_tokens
+            release_time = time.time() - release_start
+
+            iter_end = time.time()
+            iter_time = iter_end - iter_start
+            # Host time is everything except the device execution wait
+            host_time = max(iter_time - device_time, 0.0)
+            submit_time = submit_done - submit_start
+            if iter_time > 0:
+                tps_total = new_tokens / iter_time
+                logger.info(
+                    f"Decode iter: total {iter_time:.3f}s (device {device_time:.3f}s, host {host_time:.3f}s, "
+                    f"submit {submit_time:.3f}s), "
+                    f"fake_submit {fake_submit_done - fake_submit_start:.3f}s, "
+                    f"{tps_total:.2f} tok/s, {new_tokens} new"
+                    f" (extract {extract_time:.3f}s, release {release_time:.3f}s)"
+                )
             # Safety: if nothing new was produced and queue is empty, avoid infinite loop
             if (
                 new_tokens == 0
@@ -853,46 +905,79 @@ class GenerationService:
         for r in requests:
             rid = int(r.request_id)
             total_prompt_tokens += len(r.prompt_tokens) * int(r.n_generations)
+            # Initialize result buckets for this rid if not present
+            kid_map = self.results.get(rid, {})
             for k in range(int(r.n_generations)):
-                outputs_list.append(outputs_for[rid][k])
-        total_generated = sum(len(seq_outputs) for seq_outputs in outputs_list) - total_prompt_tokens
-        logger.info(f"Batch generated in {time.time() - time_in:.2f}s, {total_generated} tokens")
+                dr = kid_map.get(k)
+                if dr is None:
+                    # Ensure a placeholder exists to avoid KeyErrors
+                    kid_map[k] = DecodeResult(id=rid, choice=k, token_list=[])
+                    dr = kid_map[k]
+                outputs_list.append(dr.token_list)
+            self.results[rid] = kid_map
+        total_generated = sum(len(seq_outputs) for seq_outputs in outputs_list)
+        total_time = time.time() - time_in
+        tps_overall = (total_generated / total_time) if total_time > 0 else 0.0
+        logger.info(f"Batch generated in {total_time:.2f}s, {total_generated} tokens, {tps_overall:.2f} tok/s")
+        # Clear results for these requests now that we've assembled outputs
+        for rid in call_rids:
+            if rid in self.results:
+                self.results.pop(rid, None)
         return outputs_list, total_generated
 
-    def _extract_outputs_for(
-        self,
-        outputs: dict[int, dict[int, list[int]]],
-        finished: dict[int, dict[int, bool]],
-    ) -> int:
+    def _extract_outputs(self, pending_outputs) -> int:
         """Append newly available tokens into outputs per (request_id, child_id).
 
         Returns number of new tokens appended.
         """
-        total_this_time = 0
-        decode_state = self.gen_state.decode_state
-        num_seqs = decode_state.max_seqs
-        tokens = jax.device_get(decode_state.tokens.array)
-        num_tokens = jax.device_get(decode_state.seq_lens.array)
-        this_finished = jax.device_get(decode_state.is_finished(jnp.arange(num_seqs)))
+        if pending_outputs is None:
+            return 0
 
-        for local_seq in range(num_seqs):
+        # Pull the entire buffer in one host op
+        pending_outputs = jax.device_get(pending_outputs)
+        n = int(pending_outputs.num_tokens)
+        fins = pending_outputs.finished.array
+        toks_arr = pending_outputs.tokens.array
+        sids_arr = pending_outputs.seq_ids.array
+
+        appended = 0
+        unmapped = 0
+        for i in range(n):
+            local_seq = int(sids_arr[i])
+            tok = int(toks_arr[i])
+            info = self.local_map.get(local_seq)
+            if info is None:
+                unmapped += 1
+                continue
+            rid, cid = info
+            dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
+            dr.token_list.append(tok)
+            dr.tokens_decoded += 1
+            appended += 1
+
+        # Update done flags based on snapshot
+        for local_seq, is_done in enumerate(fins):
+            if not bool(is_done):
+                continue
             info = self.local_map.get(local_seq)
             if info is None:
                 continue
             rid, cid = info
-            if rid not in outputs:
-                continue
-            current_num_tokens = len(outputs[rid][cid])
-            new_num_tokens = int(num_tokens[local_seq])
-            count_to_extract = new_num_tokens - current_num_tokens
-            if count_to_extract <= 0:
-                if bool(this_finished[local_seq]):
-                    finished[rid][cid] = True
-                continue
-            total_this_time += count_to_extract if count_to_extract > 0 else 0
-            if bool(this_finished[local_seq]):
-                finished[rid][cid] = True
-            seq_tokens = tokens[local_seq, current_num_tokens:new_num_tokens]
-            outputs[rid][cid].extend(int(x) for x in seq_tokens)
+            dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
+            dr.done = True
 
-        return total_this_time
+        num_finished = int(fins.sum()) if hasattr(fins, "sum") else 0
+        logger.info(f"extract: appended={appended} (drained={n}) unmapped={unmapped} finished_count={num_finished}")
+
+        return appended
+
+    def _ingest_outputs(self, outputs: _DecodeOutputs | None) -> int:
+        """Drain device outputs into host results and apply host-side release.
+
+        Returns the number of tokens appended to results. No-op if outputs is None.
+        """
+        if outputs is None:
+            return 0
+        appended = self._extract_outputs(outputs)
+        self._release_finished_sequences(outputs)
+        return appended
