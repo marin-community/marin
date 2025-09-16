@@ -14,6 +14,7 @@
 
 """Mock environment for testing RL training without external dependencies."""
 
+from pathlib import Path
 from typing import Any, ClassVar, Protocol
 
 import jax
@@ -67,7 +68,7 @@ class CountTask:
             selected_words = rng.choice(self.WORDS, count, replace=False).tolist()
 
             word_list = " ".join(selected_words)
-            prompt = f"Count: {word_list}"
+            prompt = f"How many words are in '{word_list}'? One word answer only."
             answer = str(count)
             examples.append({"prompt": prompt, "answer": answer})
         return examples
@@ -85,72 +86,7 @@ class CountTask:
         return examples
 
     def compute_reward(self, correct_answer: str, actual_response: str) -> float:
-        if not actual_response:
-            return 0.0
-        # Exact match or if response contains the number
-        if correct_answer.lower() == actual_response.lower() or correct_answer in actual_response:
-            return 1.0
-        return 0.0
-
-
-class LengthTask:
-    """Classify sentence as short (≤3 words) or long (>3 words)."""
-
-    SHORT_SENTENCES: ClassVar[list[str]] = [
-        "Hi there",
-        "Good morning",
-        "Thank you",
-        "I agree",
-        "Very nice",
-        "See you",
-        "Take care",
-        "No problem",
-        "Of course",
-        "Sounds good",
-    ]
-
-    LONG_SENTENCES: ClassVar[list[str]] = [
-        "This is a longer sentence here",
-        "I really enjoy reading books every day",
-        "The weather today is quite nice outside",
-        "Can you please help me with this",
-        "I think we should go to the store",
-        "Let me know when you are ready",
-    ]
-
-    def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        examples = []
-        for _ in range(n_examples):
-            if rng.random() < 0.5:
-                sentence = rng.choice(self.SHORT_SENTENCES)
-                answer = "short"
-            else:
-                sentence = rng.choice(self.LONG_SENTENCES)
-                answer = "long"
-            examples.append({"prompt": f"Length: {sentence}", "answer": answer})
-        return examples
-
-    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator | None = None) -> list[dict[str, str]]:
-        examples = []
-        if rng is None:
-            rng = np.random.default_rng()
-        eval_short = ["Hello", "Good luck", "Thank you very much"]
-        eval_long = ["This is a test sentence for evaluation", "Please let me know what you think"]
-
-        for _ in range(n_examples):
-            if rng.random() < 0.5:
-                sentence = rng.choice(eval_short)
-                answer = "short"
-            else:
-                sentence = rng.choice(eval_long)
-                answer = "long"
-            examples.append({"prompt": f"Length: {sentence}", "answer": answer})
-        return examples
-
-    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
-        if not actual_response:
-            return 0.0
-        return 1.0 if correct_answer.lower() == actual_response.lower() else 0.0
+        return compute_soft_reward(correct_answer, actual_response)
 
 
 class PatternTask:
@@ -174,10 +110,8 @@ class PatternTask:
             examples.append({"prompt": f"Pattern: {pattern}", "answer": answer})
         return examples
 
-    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator | None = None) -> list[dict[str, str]]:
+    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
         examples = []
-        if rng is None:
-            rng = np.random.default_rng()
         eval_patterns = [("A B A B A", "B"), ("1 2 1 2 1", "2"), ("X Y X Y X", "Y")]
         for _ in range(n_examples):
             pattern, answer = eval_patterns[rng.integers(len(eval_patterns))]
@@ -185,130 +119,55 @@ class PatternTask:
         return examples
 
     def compute_reward(self, correct_answer: str, actual_response: str) -> float:
-        if not actual_response:
-            return 0.0
-        return 1.0 if correct_answer.lower() == actual_response.lower() else 0.0
+        return compute_soft_reward(correct_answer, actual_response, strict_format=True)
 
 
 class ReverseTask:
-    """Reverse 3-letter words."""
-
-    WORDS: ClassVar[list[str]] = [
-        "cat",
-        "dog",
-        "bat",
-        "rat",
-        "hat",
-        "mat",
-        "pen",
-        "bed",
-        "red",
-        "run",
-    ]
+    """Reverse the letters in words."""
 
     def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
         examples = []
+        word_list = Path("/usr/share/dict/words").read_text().splitlines()
         for _ in range(n_examples):
-            word = rng.choice(self.WORDS)
+            word = rng.choice(word_list)
             reversed_word = word[::-1]
-            examples.append({"prompt": f"Reverse: {word}", "answer": reversed_word})
+            examples.append(
+                {
+                    "prompt": f"Reverse the letters in '{word}'. One word answer only: ",
+                    "answer": reversed_word,
+                }
+            )
         return examples
 
-    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator | None = None) -> list[dict[str, str]]:
-        examples = []
-        if rng is None:
-            rng = np.random.default_rng()
-        eval_words = ["car", "bag", "cup"]
-        for _ in range(n_examples):
-            word = rng.choice(eval_words)
-            reversed_word = word[::-1]
-            examples.append({"prompt": f"Reverse: {word}", "answer": reversed_word})
-        return examples
+    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
+        return self.generate_training_examples(n_examples, rng)
 
     def compute_reward(self, correct_answer: str, actual_response: str) -> float:
-        if not actual_response:
-            return 0.0
-        return 1.0 if correct_answer.lower() == actual_response.lower() else 0.0
+        return compute_soft_reward(correct_answer, actual_response)
 
 
-class FirstTask:
+class FirstWordTask:
     """Output the first word from a list."""
 
-    WORD_LISTS: ClassVar[list[list[str]]] = [
-        ["apple", "banana"],
-        ["cat", "dog", "bird"],
-        ["red", "blue"],
-        ["big", "small", "tiny"],
-        ["run", "jump"],
-        ["book", "pen", "paper"],
-    ]
-
     def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
+        word_list = Path("/usr/share/dict/words").read_text().splitlines()
         examples = []
         for _ in range(n_examples):
-            idx = rng.choice(len(self.WORD_LISTS))
-            words = self.WORD_LISTS[idx]
-            word_string = " ".join(words)
-            first_word = words[0]
-            examples.append({"prompt": f"First: {word_string}", "answer": first_word})
+            words = [rng.choice(word_list) for _ in range(rng.integers(2, 6))]
+            sentence = " ".join(words)
+            examples.append(
+                {
+                    "prompt": f"Output the first word of this sentence. '{sentence}'. One word answer only: ",
+                    "answer": words[0],
+                }
+            )
         return examples
 
-    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator | None = None) -> list[dict[str, str]]:
-        examples = []
-        if rng is None:
-            rng = np.random.default_rng()
-        eval_lists = [["house", "tree"], ["happy", "sad", "angry"]]
-        for _ in range(n_examples):
-            words = eval_lists[rng.integers(len(eval_lists))]
-            word_string = " ".join(words)
-            first_word = words[0]
-            examples.append({"prompt": f"First: {word_string}", "answer": first_word})
-        return examples
+    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
+        return self.generate_training_examples(n_examples, rng)
 
     def compute_reward(self, correct_answer: str, actual_response: str) -> float:
-        if not actual_response:
-            return 0.0
-        return 1.0 if correct_answer.lower() == actual_response.lower() else 0.0
-
-
-class LastTask:
-    """Output the last word from a list."""
-
-    WORD_LISTS: ClassVar[list[list[str]]] = [
-        ["apple", "banana"],
-        ["cat", "dog", "bird"],
-        ["red", "blue"],
-        ["big", "small", "tiny"],
-        ["run", "jump"],
-        ["book", "pen", "paper"],
-    ]
-
-    def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        examples = []
-        for _ in range(n_examples):
-            idx = rng.choice(len(self.WORD_LISTS))
-            words = self.WORD_LISTS[idx]
-            word_string = " ".join(words)
-            last_word = words[-1]
-            examples.append({"prompt": f"Last: {word_string}", "answer": last_word})
-        return examples
-
-    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator | None = None) -> list[dict[str, str]]:
-        examples = []
-        if rng is None:
-            rng = np.random.default_rng()
-        eval_lists = [["house", "tree"], ["happy", "sad", "angry"]]
-        for _ in range(n_examples):
-            words = eval_lists[rng.integers(len(eval_lists))]
-            word_string = " ".join(words)
-            last_word = words[-1]
-            examples.append({"prompt": f"Last: {word_string}", "answer": last_word})
-        return examples
-
-    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
-        if not actual_response:
-            return 0.0
-        return 1.0 if correct_answer.lower() == actual_response.lower() else 0.0
+        return compute_soft_reward(correct_answer, actual_response)
 
 
 class ArithmeticTask:
@@ -333,19 +192,55 @@ class ArithmeticTask:
         return examples
 
     def compute_reward(self, correct_answer: str, actual_response: str) -> float:
-        if not actual_response:
-            return 0.0
-        return 1.0 if correct_answer.lower() == actual_response.lower() else 0.0
+        return compute_soft_reward(correct_answer, actual_response)
+
+
+def extract_first_n_tokens(response: str, n: int = 10) -> list[str]:
+    """Extract first N tokens from response."""
+    tokens = response.split()
+    return tokens[: min(n, len(tokens))]
+
+
+def compute_soft_reward(correct_answer: str, actual_response: str, strict_format: bool = False) -> float:
+    """Compute soft reward with partial credit for correctness and format."""
+    if not actual_response:
+        return 0.0
+
+    tokens = actual_response.split()
+    first_10_tokens = extract_first_n_tokens(actual_response, 10)
+
+    correctness = 0.0
+    if tokens and tokens[0].lower() == correct_answer.lower():
+        correctness = 1.0  # Perfect match in first position
+    elif tokens and tokens[0].lower() == correct_answer.lower().rstrip(".,!?"):
+        correctness = 0.9  # Match with punctuation
+    elif correct_answer.lower() in [t.lower() for t in first_10_tokens]:
+        correctness = 0.6  # Answer appears early
+    elif correct_answer.lower() in actual_response.lower():
+        correctness = 0.3  # Answer appears somewhere
+
+    format_score = 0.0
+    if len(tokens) == 1:
+        format_score = 1.0  # Perfect - single word
+    elif len(tokens) <= 2 and strict_format:
+        format_score = 0.5  # Stricter scoring for patterns
+    elif len(tokens) <= 3:
+        format_score = 0.7  # Good - very brief
+    elif len(tokens) <= 10:
+        format_score = 0.4 if strict_format else 0.3  # Okay - short sentence
+    else:
+        format_score = 0.1  # Poor - verbose
+
+    # Weighted combination (70% correctness, 30% format)
+    return 0.7 * correctness + 0.3 * format_score
 
 
 # Task mappings
 TASKS = {
     "count": CountTask(),
-    "length": LengthTask(),
     "pattern": PatternTask(),
     "reverse": ReverseTask(),
-    "first": FirstTask(),
-    "last": LastTask(),
+    "first": FirstWordTask(),
     "arithmetic": ArithmeticTask(),
 }
 
@@ -353,7 +248,7 @@ TASKS = {
 class MockEnv(MarinEnv):
     """Mock environment that generates synthetic data for testing."""
 
-    def __init__(self, tokenizer, task_type="count", seed=None, **kwargs):
+    def __init__(self, tokenizer, task_type: str, seed=None, **kwargs):
         self.tokenizer = tokenizer
         self.task_type = task_type
 
@@ -390,8 +285,7 @@ class MockEnv(MarinEnv):
 
         # Use numpy random for sampling
         n_to_sample = min(n_examples, len(available_examples))
-        # Convert JAX prng_key to numpy seed for consistency
-        seed = int(jax.random.randint(prng_key, (), 0, 2**31))
+        seed = jax.random.randint(prng_key, (), 0, 1_000_000).item()
         rng = np.random.default_rng(seed)
         indices = rng.choice(len(available_examples), size=n_to_sample, replace=True)
         examples = [available_examples[int(idx)] for idx in indices]
@@ -441,6 +335,17 @@ class MockEnv(MarinEnv):
                 # Task-specific reward computation
                 reward = self._compute_task_reward(correct_answer, actual_response)
                 rewards[example_idx, gen_idx] = reward
+
+                # Print sample outputs for debugging
+                if example_idx == 0 and gen_idx == 0:
+                    print("=" * 50)
+                    print(f"Task: {self.task_type}")
+                    print(f"Prompt: {prompt}")
+                    print(f"Full decoded response: {decoded_response}")
+                    print(f"Extracted response: '{actual_response}'")
+                    print(f"Expected answer: '{correct_answer}'")
+                    print(f"Reward: {reward}")
+                    print("=" * 50)
 
                 if reward > 0:
                     correct_count += 1

@@ -33,6 +33,8 @@ import torch
 from google.cloud import storage
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
+from marin.post_training.utils import save_checkpoint
+
 
 def download_hf_model(model_name: str, cache_dir: str) -> tuple[Path, Path, Path]:
     """Download HuggingFace model and tokenizer.
@@ -62,18 +64,70 @@ def download_hf_model(model_name: str, cache_dir: str) -> tuple[Path, Path, Path
     return model_path, tokenizer_path, config_path
 
 
+def convert_hf_to_jax_key(hf_key: str) -> tuple:
+    """Convert HuggingFace parameter key to JAX/Marin format."""
+    if hf_key == "model.embed_tokens.weight":
+        return ("transformer", "wte", "embedding")
+    elif hf_key == "model.norm.weight":
+        return ("transformer", "ln_f", "kernel")
+    elif hf_key == "lm_head.weight":
+        return ("lm_head", "kernel")
+    elif hf_key.startswith("model.layers."):
+        # Parse layer index and component
+        parts = hf_key.split(".")
+        layer_idx = parts[2]
+
+        if "self_attn" in hf_key:
+            if "q_proj.weight" in hf_key:
+                return ("transformer", "h", layer_idx, "attention", "wq", "kernel")
+            elif "k_proj.weight" in hf_key:
+                return ("transformer", "h", layer_idx, "attention", "wk", "kernel")
+            elif "v_proj.weight" in hf_key:
+                return ("transformer", "h", layer_idx, "attention", "wv", "kernel")
+            elif "o_proj.weight" in hf_key:
+                return ("transformer", "h", layer_idx, "attention", "wo", "kernel")
+        elif "mlp" in hf_key:
+            if "gate_proj.weight" in hf_key:
+                return ("transformer", "h", layer_idx, "feed_forward", "w1", "kernel")
+            elif "up_proj.weight" in hf_key:
+                return ("transformer", "h", layer_idx, "feed_forward", "w3", "kernel")
+            elif "down_proj.weight" in hf_key:
+                return ("transformer", "h", layer_idx, "feed_forward", "w2", "kernel")
+        elif "input_layernorm.weight" in hf_key:
+            return ("transformer", "h", layer_idx, "attention_norm", "kernel")
+        elif "post_attention_layernorm.weight" in hf_key:
+            return ("transformer", "h", layer_idx, "ffn_norm", "kernel")
+
+    raise ValueError(f"Unknown HuggingFace key: {hf_key}")
+
+
 def convert_torch_to_jax(state_dict: dict) -> dict:
-    """Convert PyTorch state dict to JAX/numpy arrays."""
+    """Convert PyTorch state dict to JAX/numpy arrays with proper nested structure."""
     jax_state_dict = {}
 
-    for key, value in state_dict.items():
+    for hf_key, value in state_dict.items():
         # Convert torch tensor to numpy
         if isinstance(value, torch.Tensor):
             # Move to CPU and convert to numpy
             np_array = value.detach().cpu().numpy()
-            jax_state_dict[key] = np_array
         else:
-            jax_state_dict[key] = value
+            np_array = value
+
+        # Transpose linear layer weights (HF stores as (in, out), JAX expects (out, in))
+        # But NOT embedding layers which are stored correctly in HF format
+        if hf_key.endswith(".weight") and len(np_array.shape) == 2 and not hf_key.endswith("embed_tokens.weight"):
+            np_array = np_array.T
+
+        # Convert HuggingFace key to JAX nested structure
+        jax_key_path = convert_hf_to_jax_key(hf_key)
+
+        # Create nested dict structure
+        current = jax_state_dict
+        for part in jax_key_path[:-1]:
+            if part not in current:
+                current[part] = {}
+            current = current[part]
+        current[jax_key_path[-1]] = np_array
 
     return jax_state_dict
 
@@ -100,36 +154,49 @@ def save_msgpack(params: dict, output_path: Path):
         f.write(packed)
 
 
-def upload_to_gcs(local_path: Path, gcs_path: str):
-    """Upload a file to Google Cloud Storage."""
-    print(f"Uploading {local_path} to {gcs_path}...")
+def copy_file(local_path: Path, dest_path: str):
+    """Copy file to destination (local or GCS)."""
+    print(f"Copying {local_path} to {dest_path}...")
 
-    # Parse GCS path
-    if not gcs_path.startswith("gs://"):
-        raise ValueError(f"GCS path must start with gs://: {gcs_path}")
+    if dest_path.startswith("gs://"):
+        # Parse GCS path
+        parts = dest_path[5:].split("/", 1)
+        if len(parts) != 2:
+            raise ValueError(f"Invalid GCS path: {dest_path}")
 
-    parts = gcs_path[5:].split("/", 1)
-    if len(parts) != 2:
-        raise ValueError(f"Invalid GCS path: {gcs_path}")
+        bucket_name, blob_name = parts
 
-    bucket_name, blob_name = parts
+        # Upload using google-cloud-storage
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(blob_name)
 
-    # Upload using google-cloud-storage
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(blob_name)
+        blob.upload_from_filename(local_path)
+        print(f"Uploaded to {dest_path}")
+    else:
+        # Local file copy
+        import shutil
+        from pathlib import Path
 
-    blob.upload_from_filename(local_path)
-    print(f"Uploaded to {gcs_path}")
+        dest_dir = Path(dest_path).parent
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(local_path, dest_path)
+        print(f"Copied to {dest_path}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Convert HuggingFace model to Levanter format and upload to GCS")
     parser.add_argument("model_name", help="HuggingFace model name (e.g., timinar/baby-llama-58m)")
-    parser.add_argument("--gcs-dir", help="GCS output path (e.g., gs://marin-us-central2/rl_checkpoints/base/...)")
+    parser.add_argument(
+        "--gcs-dir",
+        help="GCS output path (e.g., gs://marin-us-central2/rl_checkpoints/base/...)",
+        type=str,
+        required=True,
+    )
     parser.add_argument("--model-type", default="llama", help="Model type for conversion (default: llama)")
 
     args = parser.parse_args()
+    gcs_base = args.gcs_dir.rstrip("/")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         model_path, tokenizer_path, config_path = download_hf_model(args.model_name, tmpdir)
@@ -142,23 +209,14 @@ def main():
         # Step 2: Convert to JAX format
         print("Converting to JAX format...")
         jax_params = convert_torch_to_jax(state_dict)
+        del state_dict
 
-        # Step 3: Save as msgpack
-        params_file = Path(tmpdir) / "params.msgpack"
-        save_msgpack(jax_params, params_file)
-
-        # Step 4: Upload to GCS
-        # Make sure the GCS path ends without trailing slash
-        gcs_base = args.gcs_path.rstrip("/")
-
-        # Upload params
-        upload_to_gcs(params_file, f"{gcs_base}/params.msgpack")
-
-        # Update tokenizer
-        upload_to_gcs(tokenizer_path / "tokenizer.json", f"{gcs_base}/tokenizer.json")
-
-        # Upload config
-        upload_to_gcs(config_path, f"{gcs_base}/config.json")
+        print("Saving checkpoint...")
+        save_checkpoint(jax_params, f"{gcs_base}/params.msgpack", float_dtype="bf16")
+        print("Saving tokenizer...")
+        copy_file(tokenizer_path / "tokenizer.json", f"{gcs_base}/tokenizer.json")
+        print("Copying config...")
+        copy_file(config_path, f"{gcs_base}/config.json")
 
         # For tokenizer, we'll just reference the HF model name in model_paths
         # (as done in exp1403_rl_math.py)

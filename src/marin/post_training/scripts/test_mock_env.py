@@ -23,10 +23,10 @@ Supports three modes:
 """
 
 import argparse
-import asyncio
 import logging
 import os
 import subprocess
+import threading
 import time
 
 from marin.post_training.inference_worker import InferenceWorker
@@ -71,14 +71,23 @@ STOP_TOKENS = [
 ]
 
 
-def mock_eval_config(
-    checkpoint_dir: str,
-) -> TrainingConfig:
+SCRIPT_PATH = "src/marin/post_training/scripts/test_mock_env.py"
+PREFIX = "gs://marin-us-central2"
+MODEL_NAME = "unsloth/Llama-3.2-1B-Instruct"
+MODEL_TOKENIZER = MODEL_NAME
+MODEL_PARAMS = f"{PREFIX}/rl_checkpoints/base/{MODEL_NAME}/params.msgpack"
+MODEL_CONFIG = f"{PREFIX}/rl_checkpoints/base/{MODEL_NAME}/config.json"
+CHECKPOINT_DIR = f"{PREFIX}/rl_checkpoints/mock_env_test/checkpoints"
+ROLLOUT_QUEUE_PATH = f"{PREFIX}/rl_checkpoints/mock_env_test/rollout_queue"
+
+
+def mock_eval_config() -> TrainingConfig:
     """Create training configuration for single node test."""
     model_paths_config = ModelPathsConfig(
-        params="gs://marin-us-central-2/rl_checkpoints/base/Llama-3.2-1B-Instruct",
-        tokenizer="unsloth/Llama-3.2-1B-Instruct",
+        params=MODEL_PARAMS,
+        tokenizer=MODEL_TOKENIZER,
         default_config_name=None,
+        config=MODEL_CONFIG,
     )
 
     optim_config = OptimizerConfig(
@@ -99,14 +108,14 @@ def mock_eval_config(
     )
 
     generation_config = GenerationConfig(
-        max_output_length=32,
+        max_output_length=129,
         temperature=1.0,
         stop_tokens=STOP_TOKENS,
         n_generations=8,
     )
 
     test_generation_config = GenerationConfig(
-        max_output_length=32,
+        max_output_length=129,
         temperature=0.0,
         stop_tokens=STOP_TOKENS,
         n_generations=8,
@@ -114,7 +123,7 @@ def mock_eval_config(
 
     # Model override configuration for testing
     model_config_override = ModelOverrideConfig(
-        max_sequence_length=256,  # Must be >= max_input + max_output for splash attention
+        max_sequence_length=512,
         initializer_range=0.02,
         bos_token_id=0,
         eos_token_id=1,
@@ -133,10 +142,10 @@ def mock_eval_config(
 
     weight_transfer_config = WeightTransferConfig(
         mode=WeightTransferMode.GCS_CHECKPOINT,
-        sync_interval_steps=2,
+        sync_interval_steps=10,
         poll_interval_seconds=5.0,
         transfer_timeout=30.0,
-        checkpoint_dir=checkpoint_dir,
+        checkpoint_dir=CHECKPOINT_DIR,
         max_checkpoints=3,
     )
 
@@ -147,7 +156,6 @@ def mock_eval_config(
 
     jax_distributed_config = {
         "initialize_jax_distributed": True,
-        "process_id": 0,
     }
     sharding = [1, 4, 1, 1]
 
@@ -160,20 +168,23 @@ def mock_eval_config(
             training_activation_dtype="bf16",
             model_config_override=model_config_override,
             tokenizer_override=TokenizerOverrideConfig(),
-            train_attention_kernel_config='splash:{"block_size": 256}',
-            prefill_attention_kernel_config='splash:{"block_size": 256}',
-            generate_attention_kernel_config=(
-                'paged:{"page_size": 256, "pages_per_compute_block": 1, "inline_seq_dim": true, "use_int8": false}'
-            ),
+            train_attention_kernel_config="default:{}",
+            prefill_attention_kernel_config="default:{}",
+            generate_attention_kernel_config="default:{}",
+            # train_attention_kernel_config='splash:{"block_size": 256}',
+            # prefill_attention_kernel_config='splash:{"block_size": 256}',
+            # generate_attention_kernel_config=(
+            #     'paged:{"page_size": 256, "pages_per_compute_block": 1, "inline_seq_dim": true, "use_int8": false}'
+            # ),
         ),
         hyperparameters=TrainingHyperparameters(
             num_train_steps=10000,
-            max_input_length=128,
-            max_output_length=128,
+            max_input_length=64,
+            max_output_length=65,
             train_bsize=4,
-            decode_bsize=4,
-            prefill_bsize=4,
-            reference_logprobs_bsize=4,
+            decode_bsize=8,
+            prefill_bsize=8,
+            reference_logprobs_bsize=8,
             n_prompts_per_step=8,
             optim_config=optim_config,
             pad_token_id=2,
@@ -201,7 +212,7 @@ def mock_eval_config(
         ),
         generation_config=generation_config,
         test_generation_config=test_generation_config,
-        output_dir=checkpoint_dir,
+        output_dir=CHECKPOINT_DIR,
         checkpoint=checkpointer_config,
         weight_transfer=weight_transfer_config,
     )
@@ -214,15 +225,15 @@ def run_inference_mode(args):
 
     logger.info("Starting inference worker mode...")
 
-    subprocess.run("sudo rm -f /tmp/libtpu_lockfile", shell=True, check=False)
+    subprocess.run("sudo --non-interactive rm -f /tmp/libtpu_lockfile", shell=True, check=False)
 
-    rollout_writer = FileRolloutWriter(args.rollout_queue_path)
+    rollout_writer = FileRolloutWriter(ROLLOUT_QUEUE_PATH)
     worker = InferenceWorker(
-        training_config=mock_eval_config(args.checkpoint_dir),
-        environment_spec="mock_env:count",
+        training_config=mock_eval_config(),
+        environment_spec="mock:task_type=count",
         rollout_writer=rollout_writer,
         rollout_batch_size=2,
-        max_rollouts=15,
+        max_rollouts=100,
         coordinator=None,
     )
 
@@ -236,10 +247,10 @@ def run_training_mode(args):
     logger = logging.getLogger("training_worker")
 
     logger.info("Starting training worker mode...")
-    subprocess.run("sudo rm -f /tmp/libtpu_lockfile", shell=True, check=False)
-    rollout_reader = FileRolloutReader(args.rollout_queue_path)
+    subprocess.run("sudo --non-interactive rm -f /tmp/libtpu_lockfile", shell=True, check=False)
+    rollout_reader = FileRolloutReader(ROLLOUT_QUEUE_PATH)
     worker = TrainingWorker(
-        training_config=mock_eval_config(args.checkpoint_dir),
+        training_config=mock_eval_config(),
         rollout_reader=rollout_reader,
         coordinator=None,
     )
@@ -248,14 +259,14 @@ def run_training_mode(args):
     logger.info("Training worker completed")
 
 
-async def tail_logs(proc, prefix):
+def tail_logs(proc, prefix):
     """Tail logs from a process with a prefix."""
     while proc.poll() is None:
         line = proc.stdout.readline()
         if line:
             print(f"[{prefix}] {line.rstrip()}")
         else:
-            await asyncio.sleep(0.1)
+            time.sleep(0.1)
 
     # Get remaining output
     remaining = proc.stdout.read()
@@ -271,12 +282,7 @@ def run_driver_mode():
 
     logger.info("Starting driver mode...")
 
-    rollout_queue_path = "gs://marin-us-central2/rl_checkpoints/rollout_queue/mock_test"
-    checkpoint_dir = "gs://marin-us-central2/rl_checkpoints/checkpoints/mock_test"
-
-    logger.info(f"Rollout queue path: {rollout_queue_path}")
-
-    script_path = "test_mock_env.py"
+    logger.info(f"Rollout queue path: {ROLLOUT_QUEUE_PATH}")
 
     # Build ray_run commands
     wandb_key = os.environ.get("WANDB_API_KEY", "")
@@ -299,8 +305,7 @@ def run_driver_mode():
         "--",
         "bash",
         "-c",
-        f"python {script_path} --mode inference "
-        f"--rollout-queue-path {rollout_queue_path} --checkpoint-dir={checkpoint_dir}; sudo rm -f /tmp/libtpu_lockfile*",
+        f"python {SCRIPT_PATH} --mode inference; sudo rm -f /tmp/libtpu_lockfile*",
     ]
 
     training_cmd = [
@@ -320,12 +325,11 @@ def run_driver_mode():
         "--",
         "bash",
         "-c",
-        f"python {script_path} --mode training "
-        f"--rollout-queue-path {rollout_queue_path} --checkpoint-dir={checkpoint_dir}; sudo rm -f /tmp/libtpu_lockfile*",
+        f"python {SCRIPT_PATH} --mode training; sudo rm -f /tmp/libtpu_lockfile*",
     ]
 
     # Launch processes
-    logger.info("Launching inference worker...")
+    logger.info("Launching inference worker... with command: " + " ".join(inference_cmd))
     inference_proc = subprocess.Popen(
         inference_cmd,
         stdout=subprocess.PIPE,
@@ -335,7 +339,10 @@ def run_driver_mode():
         universal_newlines=True,
     )
 
-    logger.info("Launching training worker...")
+    # It will surprise no one that Ray gets confused if jobs schedule simultaneously
+    time.sleep(5)
+
+    logger.info("Launching training worker with command: " + " ".join(training_cmd))
     training_proc = subprocess.Popen(
         training_cmd,
         stdout=subprocess.PIPE,
@@ -345,50 +352,38 @@ def run_driver_mode():
         universal_newlines=True,
     )
 
-    start_time = time.time()
-    max_runtime = 300  # 5 minutes max
+    def monitor_processes():
+        # Start log tailing threads
+        inference_thread = threading.Thread(target=tail_logs, args=(inference_proc, "INFERENCE"))
+        training_thread = threading.Thread(target=tail_logs, args=(training_proc, "TRAINING"))
 
-    async def monitor_processes():
-        tasks = [
-            asyncio.create_task(tail_logs(inference_proc, "INFERENCE")),
-            asyncio.create_task(tail_logs(training_proc, "TRAINING")),
-        ]
+        inference_thread.start()
+        training_thread.start()
 
-        while time.time() - start_time < max_runtime:
+        while True:
             # Check if processes are still running
-            if inference_proc.poll() is not None and training_proc.poll() is not None:
-                logger.info("Both workers have completed")
+            if inference_proc.poll() is not None:
+                logger.info("Inference worker has completed")
+                break
+            if training_proc.poll() is not None:
+                logger.info("Training worker has completed")
                 break
 
-            await asyncio.sleep(5)
-            elapsed = time.time() - start_time
-            if int(elapsed) % 30 == 0:  # Log status every 30 seconds
-                logger.info(
-                    f"[{elapsed:.0f}s] Status: " f"inference={inference_proc.poll()}, training={training_proc.poll()}"
-                )
+            time.sleep(5)
 
-        # Cancel tasks
-        for task in tasks:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-    # Run monitoring
-    asyncio.run(monitor_processes())
+    try:
+        monitor_processes()
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received, terminating workers...")
+    except Exception as e:
+        logger.error(f"Error occurred: {e}")
 
     # Clean shutdown
-    if inference_proc.poll() is None:
-        logger.info("Terminating inference worker...")
-        inference_proc.terminate()
-        inference_proc.wait(timeout=10)
-
-    if training_proc.poll() is None:
-        logger.info("Terminating training worker...")
-        training_proc.terminate()
-        training_proc.wait(timeout=10)
-
+    logger.info("Terminating workers...")
+    inference_proc.terminate()
+    training_proc.terminate()
+    inference_proc.wait()
+    training_proc.wait()
     return 0
 
 
@@ -401,8 +396,6 @@ def main():
         default="driver",
         help="Execution mode (default: driver)",
     )
-    parser.add_argument("--rollout-queue-path", help="Path to rollout queue directory")
-    parser.add_argument("--checkpoint-dir", help="Directory for checkpoints")
     args = parser.parse_args()
 
     if args.mode == "inference":
