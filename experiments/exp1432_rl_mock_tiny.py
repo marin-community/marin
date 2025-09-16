@@ -56,9 +56,19 @@ logger = logging.getLogger(__name__)
 
 WANDB_PROJECT = "async_rl_tiny"
 
-# Simpler stop tokens for tiny model
 STOP_TOKENS = [
-    [128001],  # End token
+    [524, 9399],
+    [694, 9399],
+    [4005, 9399],
+    [6199, 9399],
+    [8217, 9399],
+    [9169, 9399],
+    [12817, 9399],
+    [19203, 9399],
+    [20264, 9399],
+    [22246, 9399],
+    [27147, 9399],
+    [128001],
 ]
 
 
@@ -269,9 +279,11 @@ def default_rl_train_tiny(
             training_activation_dtype="bf16",
             model_config_override=model_config_override,
             tokenizer_override=TokenizerOverrideConfig(),
-            train_attention_kernel_config="default",
-            prefill_attention_kernel_config="default",
-            generate_attention_kernel_config="default",
+            train_attention_kernel_config='splash:{"block_size": 256}',
+            prefill_attention_kernel_config='splash:{"block_size": 256}',
+            generate_attention_kernel_config=(
+                'paged:{"page_size": 256, "pages_per_compute_block": 1, "inline_seq_dim": true, "use_int8": false}'
+            ),
         ),
         hyperparameters=TrainingHyperparameters(
             num_train_steps=num_train_steps,
