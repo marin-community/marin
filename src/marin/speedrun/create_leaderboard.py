@@ -83,7 +83,7 @@ def create_entry_from_results(results: dict, results_filepath: str, base_path: s
     # Path information
     run_name = Path(results_filepath).parent.relative_to(base_path_abs).as_posix()
     filepath = Path(results_filepath)
-    repo_root = Path(__file__).resolve().parent.parent.parent
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
     relative_path = filepath.relative_to(repo_root).parent
 
     # Get the run info which contains all the information
