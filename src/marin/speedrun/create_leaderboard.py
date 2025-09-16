@@ -142,7 +142,7 @@ def get_entries(base_path: str) -> list[LeaderboardEntry]:
 def main():
     parser = argparse.ArgumentParser(description="Generate static leaderboard data")
     current_file = Path(__file__).resolve()
-    marin_root = current_file.parent.parent.parent
+    marin_root = current_file.parent.parent.parent.parent
     experiments_path = marin_root / "experiments" / "speedrun"
 
     parser.add_argument(
