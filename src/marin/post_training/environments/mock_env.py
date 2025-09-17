@@ -20,9 +20,7 @@ from typing import Any, ClassVar, Protocol
 import jax
 import numpy as np
 
-from marin.post_training.inference import batch_inference
-
-from .marin_env import EnvStep, MarinEnv
+from .marin_env import EnvStep, InferenceContext, MarinEnv
 
 # Constants
 NUM_TRAIN_EXAMPLES = 1000
@@ -269,12 +267,12 @@ class MockEnv(MarinEnv):
 
     def step(
         self,
-        sampler,
-        params,
+        inference_ctx: InferenceContext,
         n_examples: int,
         prng_key,
         mode: str = "train",
         n_generations: int = 1,
+        temperature: float = 1.0,
         **kwargs,
     ) -> EnvStep:
         """Generate synthetic rollouts for testing."""
@@ -292,10 +290,14 @@ class MockEnv(MarinEnv):
 
         # Generate responses
         prompts = [example["prompt"] for example in examples]
-        responses = batch_inference(sampler, params, prompts, prng_key, n_generations, verbose=False)
+        responses = inference_ctx.generate(
+            prompts,
+            temperature=temperature,
+            n_generations=n_generations,
+        )
 
         # Compute rewards and metrics
-        rewards, metrics = self._compute_rewards(examples, responses)
+        rewards, metrics = self._compute_rewards(examples, responses, inference_ctx.tokenizer)
 
         return EnvStep(examples=examples, responses=responses, rewards=rewards, metrics=metrics)
 
@@ -303,7 +305,9 @@ class MockEnv(MarinEnv):
         """Get evaluation examples."""
         return self.eval_examples[:n_examples]
 
-    def _compute_rewards(self, examples: list[dict], responses: list[list[dict[str, Any]]]) -> tuple[np.ndarray, dict]:
+    def _compute_rewards(
+        self, examples: list[dict], responses: list[list[dict[str, Any]]], tokenizer
+    ) -> tuple[np.ndarray, dict]:
         """Compute rewards for generated responses."""
         n_examples = len(examples)
         n_generations = len(responses[0]) if responses else 1
@@ -320,7 +324,7 @@ class MockEnv(MarinEnv):
 
             for gen_idx, response in enumerate(response_list):
                 # Decode the generated tokens to text
-                decoded_response = self.tokenizer.decode(response["tokens"], skip_special_tokens=True)
+                decoded_response = tokenizer.decode(response["tokens"], skip_special_tokens=True)
 
                 # Extract response after the prompt
                 prompt = example["prompt"]
