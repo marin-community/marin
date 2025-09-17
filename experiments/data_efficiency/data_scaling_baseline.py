@@ -1,3 +1,21 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Script to launch a grid of experiments of interest
+"""
+
 from experiments.data_efficiency.train import DataEfficiencyConfig, data_efficiency_train_step
 from marin.execution.executor import executor_main
 
@@ -14,22 +32,19 @@ train_steps = [
             lr=lr,
             weight_decay=weight_decay,
             wandb_project_name="suhas-data-efficiency",
-            # wandb_additional_tags=["weight-decay-test-6-22"],
             model_name=model_name,
             nametag=f"-bs{batch_size}",
-            tpu_type="v4-64",
+            # tpu_type="v4-64",
+            tpu_type="v5litepod-128",
             # per_device_parallelism=2,
         )
     )
-    for base_train_steps in [800]
+    for base_train_steps in [800, 1600, 3200, 6400]
     for epochs in [1]
     for weight_decay in [0.1]
     for batch_size in [64]
     for model_name, lr in [
-        # ("300m4k", 3e-3),
-        # ("300m4k", 1e-3),
-        # ("300m4k", 3e-4),
-        ("moedebug", 3e-3),
+        ("150m4k", 1e-3),
     ]
 ]
 
