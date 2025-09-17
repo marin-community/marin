@@ -1,8 +1,6 @@
 from experiments.data_efficiency.train import DataEfficiencyConfig, data_efficiency_train_step
 from marin.execution.executor import executor_main
 
-# 800 steps ==> 200M tokens
-
 train_steps = [
     data_efficiency_train_step(
         DataEfficiencyConfig(
@@ -23,20 +21,13 @@ train_steps = [
         )
     )
     for base_train_steps in [800]
-    for weight_decay in [0.4, 0.8]
+    for weight_decay in [0.1]
     for teacher_data_name, initialize_from_hf, nametag, lr, epochs in [
         ("sd0715", None, "", 3e-3, 16),
-        # ("ens2d0717", None, "", 3e-3, 16),
-        # ("ens4d0721", None, "", 3e-3, 16),
-        ("ens4x0728", None, "", 3e-3, 16),
-        ("ens4x0728", None, "", 3e-3, 32),
-        # ("ens2d0717", "gs://marin-us-central2/checkpoints/data_efficiency/300m4k-209Mx16-dclm+sd0715^0.5-cos-lr0.0030-wd0.80-bs64/hf/step-25599", "-iter2", 1e-3, 8),
-        # ("ens4d0721", "gs://marin-us-central2/checkpoints/data_efficiency/300m4k-209Mx16-dclm+sd0715^0.5-cos-lr0.0030-wd0.80-bs64/hf/step-25599", "-iter2", 1e-3, 8),
-        # ("ens4d0721", "gs://marin-us-central2/checkpoints/data_efficiency/300m4k-209Mx8-dclm+ens2d0717^0.5-cos-lr0.0010-wd0.80-bs64-iter2/hf/step-12799", "-iter3", 1e-3, 8),
+        ("ens8x0730", None, "", 3e-3, 16),
     ]
-    for teacher_data_weight in [0.5, 0.75]
+    for teacher_data_weight in [0.75, 0.9]
     for model_name in ["300m4k"]
-
 ]
 
 if __name__ == "__main__":
