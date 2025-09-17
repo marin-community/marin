@@ -36,7 +36,13 @@ logger = logging.getLogger(__name__)
 class InferenceWorker:
     """Example worker class that demonstrates embedding InferenceServer in a larger application."""
 
-    def __init__(self, config: InferenceServerConfig, checkpoint_path: str, check_interval: int = 60):
+    checkpoint_path: Path | None
+    config: InferenceServerConfig
+    server: InferenceServer
+    check_interval: int
+    latest_checkpoint: str | None
+
+    def __init__(self, config: InferenceServerConfig, checkpoint_path: str | None, check_interval: int = 60):
         """Initialize the inference worker.
 
         Args:
@@ -45,7 +51,10 @@ class InferenceWorker:
             check_interval: Interval in seconds between checkpoint checks
         """
         self.config = config
-        self.checkpoint_path = Path(checkpoint_path)
+        if checkpoint_path is not None:
+            self.checkpoint_path = Path(checkpoint_path)
+        else:
+            self.checkpoint_path = None
         self.check_interval = check_interval
         self.server = InferenceServer.create(config)
         self.latest_checkpoint = None
@@ -151,7 +160,8 @@ class InferenceWorker:
 def main(config: InferenceServerConfig):
     """Example main function showing how to use InferenceWorker."""
     checkpoint_path = config.checkpoint_path
-    assert checkpoint_path is not None, "checkpoint_path must be specified in config for monitoring"
+    if checkpoint_path is None:
+        logger.warning("No checkpoint_path specified in config; InferenceWorker will not monitor for checkpoints")
     worker = InferenceWorker(config=config, checkpoint_path=checkpoint_path, check_interval=60)  # Check every minute
 
     try:
@@ -162,4 +172,5 @@ def main(config: InferenceServerConfig):
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     levanter.config.main(main)()
