@@ -22,7 +22,6 @@ checkpoints are read by the rollout workers to update their models.
 For now we use GCS as a storage backend.
 """
 
-import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -31,7 +30,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import levanter
-from levanter.data import AsyncDataset
+import levanter.tracker
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -39,19 +38,23 @@ from optax import softmax_cross_entropy_with_integer_labels
 from transformers import PreTrainedTokenizer
 
 from .replay_buffer import ReplayBuffer, ReplayDataLoader
-from .rollout_storage import RolloutBatch, RolloutReader
+from .rollout_storage import JaxRolloutBatch, RolloutBatch, RolloutReader
 
 logger = logging.getLogger(__name__)
 
 
 def compute_rloo_loss(
-    model: LmHeadModel, batch: RolloutBatch, *, key: jax.Array | None = None, kl_coef: float = 0.1
+    model: LmHeadModel,
+    batch: JaxRolloutBatch,
+    *,
+    key: jax.Array | None = None,
+    kl_coef: float = 0.1,
 ) -> jax.Array:
     """Compute RLOO (Reward Leave-One-Out) loss with importance sampling.
 
     Args:
         model: The language model
-        batch: Batch containing rollout data with RLOO advantages
+        batch: JaxRolloutBatch containing rollout data with RLOO advantages
         key: JAX random key for dropout
         kl_coef: Coefficient for KL regularization
 
@@ -61,44 +64,49 @@ def compute_rloo_loss(
     # Get logits from current policy
     model_output = model(
         input_ids=batch.input_ids,
-        attention_mask=batch.attention_mask,
-        position_ids=batch.position_ids,
+        attn_mask=batch.attention_mask,
+        pos_ids=batch.position_ids,
         key=key,
     )
-    # Handle both tuple and object outputs
-    logits = model_output.logits if hasattr(model_output, "logits") else model_output[0]
+    # LlamaLMHeadModel returns a NamedArray
+    logits = model_output
 
-    logits = logits.astype(jnp.float32)
-    token_loss = softmax_cross_entropy_with_integer_labels(logits, batch.target_ids)
+    # Extract raw JAX arrays from NamedArrays for optax/jax functions
+    logits_array = logits.array
+    target_ids_array = batch.target_ids.array
+    policy_logprobs_array = batch.policy_logprobs.array
+    loss_weights_array = batch.loss_weights.array
+    loss_masks_array = batch.loss_masks.array
+    reference_logprobs_array = batch.reference_logprobs.array
+
+    logits_array = logits_array.astype(jnp.float32)
+    token_loss = softmax_cross_entropy_with_integer_labels(logits_array, target_ids_array)
 
     # Current policy log probabilities (π_θ at training time)
     current_logprobs = -token_loss
 
     # RLOO importance sampling ratio: π_θ(a|s) / π_old(a|s)
-    # batch.policy_logprobs contains log probs from the policy that generated samples
-    log_ratio = jnp.subtract(current_logprobs, batch.policy_logprobs)
+    log_ratio = jnp.subtract(current_logprobs, policy_logprobs_array)
     ratio = jnp.exp(log_ratio)
 
     # RLOO loss with importance sampling
     # batch.loss_weights contains RLOO advantages: r_i - mean(r_j for j≠i)
-    # Multiply by ratio for off-policy correction
-    weighted_advantages = ratio * batch.loss_weights
-    reinforce_loss = -jnp.sum(weighted_advantages * batch.loss_masks) / jnp.sum(batch.loss_masks)
+    weighted_advantages = ratio * loss_weights_array
+    reinforce_loss = -jnp.sum(weighted_advantages * loss_masks_array) / jnp.sum(loss_masks_array)
 
     # KL regularization against reference policy (prevents drift)
-    # This is standard KL(π_θ || π_ref) to keep policy close to reference
-    kl_penalty = jnp.subtract(current_logprobs, batch.reference_logprobs)
-    kl_loss = -jnp.sum(kl_penalty * batch.loss_masks) / jnp.sum(batch.loss_masks)
+    kl_penalty = jnp.subtract(current_logprobs, reference_logprobs_array)
+    kl_loss = -jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
 
     loss = reinforce_loss + kl_coef * kl_loss
 
-    # Log auxiliary metrics to tracker (Levanter handles this automatically)
-    import levanter.tracker
-
-    with levanter.tracker.defer_tracker_for_jit() as tracker:
-        tracker.log(
+    with levanter.tracker.defer_tracker_for_jit() as metrics:
+        metrics.update(
             {
+                "rloo/token_loss": jnp.mean(token_loss),
+                "rloo/log_ratio": jnp.mean(log_ratio),
                 "rloo/reinforce_loss": reinforce_loss,
+                "rloo/loss": loss,
                 "rloo/kl_loss": kl_loss,
                 "rloo/importance_ratio_mean": jnp.mean(ratio),
                 "rloo/importance_ratio_max": jnp.max(ratio),
@@ -108,59 +116,64 @@ def compute_rloo_loss(
     return loss
 
 
-class RolloutDataset(AsyncDataset[RolloutBatch]):
-    """AsyncDataset wrapper for rollout data from replay buffer."""
+class StreamingRolloutLoader:
+    """Direct loader for streaming rollout data that bypasses Levanter's DataLoader."""
 
-    def __init__(self, data_loader: ReplayDataLoader, timeout: float = 60.0):
-        super().__init__()
+    def __init__(self, data_loader: ReplayDataLoader, config):
+        """Initialize the streaming rollout loader.
+
+        Args:
+            data_loader: The replay data loader to get batches from
+            config: Trainer config with mesh and axis mapping information
+        """
         self.data_loader = data_loader
-        self.timeout = timeout
+        self.config = config
+        self.timeout = 60.0
 
-    async def async_len(self) -> int:
-        """Return a large number for infinite streaming dataset."""
-        return 1_000_000  # Large number to indicate streaming
+    def __iter__(self):
+        """Yield batches continuously from the replay buffer."""
+        while True:
+            # Get batch from replay buffer
+            batch = self.data_loader.get_training_batch(timeout=self.timeout)
+            if batch is None:
+                # In a real scenario we might want to handle this differently
+                # For now, we'll raise StopIteration if no data is available
+                logger.warning("No batch available from replay buffer after timeout")
+                raise StopIteration("No data available from replay buffer")
 
-    async def final_length_is_known(self) -> bool:
-        """Streaming dataset never has a final known length."""
-        return False
+            # Convert to JAX with named axes
+            named_batch = self._convert_to_named_batch(batch)
 
-    def is_finite(self) -> bool:
-        """Rollout dataset is infinite/streaming."""
-        return False
+            # Apply sharding if we have a mesh context
+            if hasattr(self.config, "device_mesh"):
+                with self.config.device_mesh:
+                    if hasattr(self.config, "compute_axis_mapping"):
+                        named_batch = hax.shard(named_batch, self.config.compute_axis_mapping)
 
-    async def current_len(self) -> int | None:
-        """Return current size of the replay buffer."""
-        return self.data_loader.replay_buffer.size()
+            yield named_batch
 
-    async def get_batch(self, indices: list[int]) -> list[RolloutBatch]:
-        """Get a batch of rollout data from the replay buffer."""
-        # For rollout data, we ignore indices and get whatever is available
-        batch = await asyncio.to_thread(self.data_loader.get_training_batch, timeout=self.timeout)
-        if batch is None:
-            return []
-        return [self._convert_to_named_batch(batch)]
-
-    def _convert_to_named_batch(self, batch: RolloutBatch) -> RolloutBatch:
+    def _convert_to_named_batch(self, batch: RolloutBatch):
         """Convert numpy arrays to JAX arrays with proper named axes."""
-        import haliax as hax
-        import jax.numpy as jnp
-        from haliax import Axis
+        from marin.post_training.rollout_storage import JaxRolloutBatch
+
+        # Convert to JAX arrays first
+        jax_batch = batch.to_jax()
 
         # Create batch and sequence axes
-        batch_size, seq_len = batch.input_ids.shape
-        Batch = Axis("batch", batch_size)
-        Pos = Axis("position", seq_len)
+        batch_size, seq_len = jax_batch.input_ids.shape
+        Batch = hax.Axis("batch", batch_size)
+        Pos = hax.Axis("position", seq_len)
 
-        # Convert to JAX NamedArrays
-        return RolloutBatch(
-            input_ids=hax.named(jnp.array(batch.input_ids), (Batch, Pos)),
-            attention_mask=hax.named(jnp.array(batch.attention_mask), (Batch, Pos)),
-            position_ids=hax.named(jnp.array(batch.position_ids), (Batch, Pos)),
-            target_ids=hax.named(jnp.array(batch.target_ids), (Batch, Pos)),
-            loss_weights=hax.named(jnp.array(batch.loss_weights), (Batch, Pos)),
-            loss_masks=hax.named(jnp.array(batch.loss_masks), (Batch, Pos)),
-            reference_logprobs=hax.named(jnp.array(batch.reference_logprobs), (Batch, Pos)),
-            policy_logprobs=hax.named(jnp.array(batch.policy_logprobs), (Batch, Pos)),
+        # Add named axes to all fields
+        return JaxRolloutBatch(
+            input_ids=hax.named(jax_batch.input_ids, (Batch, Pos)),
+            attention_mask=hax.named(jax_batch.attention_mask, (Batch, Pos)),
+            position_ids=hax.named(jax_batch.position_ids, (Batch, Pos)),
+            target_ids=hax.named(jax_batch.target_ids, (Batch, Pos)),
+            loss_weights=hax.named(jax_batch.loss_weights, (Batch, Pos)),
+            loss_masks=hax.named(jax_batch.loss_masks, (Batch, Pos)),
+            reference_logprobs=hax.named(jax_batch.reference_logprobs, (Batch, Pos)),
+            policy_logprobs=hax.named(jax_batch.policy_logprobs, (Batch, Pos)),
         )
 
 
@@ -171,21 +184,6 @@ class StopTrainerException(Exception):
     """Exception to signal stopping the trainer."""
 
     pass
-
-
-class RolloutDataConfig:
-    """Data config that returns our rollout dataset."""
-
-    def __init__(self, rollout_dataset):
-        self.rollout_dataset = rollout_dataset
-
-    def train_set(self, pos_axis, batch_schedule, key=None, epochs=0):
-        """Return our rollout dataset."""
-        return self.rollout_dataset
-
-    def tagged_eval_sets(self, pos_axis):
-        """Return empty eval sets since we don't have eval for RLOO."""
-        return {}
 
 
 @dataclass
@@ -245,12 +243,10 @@ class TrainingWorker:
             rollout_fetch_interval=1.0,
         )
 
-        # Create rollout dataset for Levanter
-        self.rollout_dataset = RolloutDataset(self.data_loader)
-
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
         logger.info("Starting RLOO training with Levanter...")
+
         config = self.config
         levanter.initialize(self.config.trainer)
         optimizer = config.optimizer.build(config.trainer.num_train_steps)
@@ -258,12 +254,9 @@ class TrainingWorker:
         def _rloo_loss_function(model, batch, key):
             return compute_rloo_loss(model, batch, key=key, kl_coef=config.kl_coef)
 
-        with Trainer(config.trainer, optimizer, _rloo_loss_function) as trainer:
+        with Trainer(config.trainer, optimizer, _rloo_loss_function) as trainer, self.data_loader:
             seed = config.trainer.seed
-            data_key, model_key, training_key = jrandom.split(jrandom.PRNGKey(seed), 3)
-
-            data_config = RolloutDataConfig(self.rollout_dataset)
-            train_dataset = data_config.train_set(config.model.Pos, config.trainer.batch_schedule, key=data_key)
+            model_key, training_key = jrandom.split(jrandom.PRNGKey(seed), 2)
 
             Vocab = hax.Axis("vocab", self.tokenizer.vocab_size)
 
@@ -272,27 +265,37 @@ class TrainingWorker:
                 model_init=lambda: config.model.build(Vocab, key=model_key),
             )
 
-            trainer.add_hook(
-                self.create_weight_transfer_hook(),
-                every=self.config.weight_transfer_sync_interval,
-            )
-            checkpointer = trainer.config.checkpointer.create("train-id-0")
-            trainer.add_hook(checkpointer.on_step, every=1)
+            self._configure_training_hooks(trainer)
 
-            def _stop_on_signal(info: levanter.callbacks.StepInfo):
-                if self._should_stop:
-                    raise StopTrainerException()
+            # Use our custom streaming loader instead of Levanter's DataLoader
+            train_loader = StreamingRolloutLoader(self.data_loader, config.trainer)
 
-            trainer.add_hook(_stop_on_signal, every=1)
-
-            train_loader = trainer.data_loader(train_dataset)
             try:
                 trainer.train(state, train_loader)
             except StopTrainerException:
                 pass
 
+    def _configure_training_hooks(self, trainer):
+        """Configure training hooks. Override in tests for additional hooks."""
+        trainer.add_hook(
+            self.create_weight_transfer_hook(),
+            every=self.config.weight_transfer_sync_interval,
+        )
+        checkpointer = trainer.config.checkpointer.create("train-id-0")
+        trainer.add_hook(checkpointer.on_step, every=1)
+
+        def _stop_on_signal(info: levanter.callbacks.StepInfo):
+            if self._should_stop:
+                raise StopTrainerException()
+
+        trainer.add_hook(_stop_on_signal, every=1)
+
     def create_weight_transfer_hook(self):
         def weight_transfer_hook(info: levanter.callbacks.StepInfo):
+            if self.coordinator is None:
+                # Skip weight transfer if no coordinator (e.g., in tests)
+                return
+
             step = info.step
             state = info.state
 

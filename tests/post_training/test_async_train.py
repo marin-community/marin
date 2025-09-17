@@ -57,6 +57,20 @@ INTEGRATION_TEST_TIMEOUT = 60
 logger = logging.getLogger(__name__)
 
 
+class TestableTrainingWorker(TrainingWorker):
+    """TrainingWorker subclass for testing with step tracking."""
+
+    def __init__(self, *args, step_callback=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.step_callback = step_callback
+
+    def _configure_training_hooks(self, trainer):
+        """Configure training hooks including test step tracking."""
+        super()._configure_training_hooks(trainer)
+        if self.step_callback:
+            trainer.add_hook(self.step_callback, every=1)
+
+
 # Since we use an actor for the ray transfer, we need a new cluster to
 # avoid stale state.
 @pytest.fixture(scope="function")
@@ -292,9 +306,10 @@ class TrainingWorkerRunner:
     def _run(self):
         """Thread target - runs the training worker."""
         try:
-            self.worker = TrainingWorker(
+            self.worker = TestableTrainingWorker(
                 config=self.training_worker_config,
                 coordinator=self.coordinator,
+                step_callback=lambda info: self._track_training_step(),
             )
 
             self.worker.train()
@@ -375,6 +390,9 @@ def test_inference_worker(ray_cluster, inference_worker_config):
 
 def test_train_worker(ray_cluster, training_worker_config):
     """Test training worker processes rollout batch and creates checkpoint."""
+    # Configure for just 1 training step since we only provide 1 batch
+    training_worker_config.trainer.num_train_steps = 1
+
     # Use the rollout reader's queue from the training worker config
     rollout_reader = training_worker_config.rollout_reader
     queue_writer = rollout_reader._queue.writer()
@@ -383,11 +401,11 @@ def test_train_worker(ray_cluster, training_worker_config):
     batch_size = training_worker_config.trainer.train_batch_size
     max_seq_len = 64  # Use fixed small length for testing
 
-    # Create mock batch data with appropriate shapes using helper function
-    sample_batch = create_test_batch(1, batch_size=batch_size, max_seq_len=max_seq_len)
-
-    # Write batch to queue
-    queue_writer.write_batch(sample_batch)
+    # Create multiple mock batches to ensure we have enough data
+    # The DataLoader might try to fetch multiple indices
+    for i in range(5):  # Create 5 batches to be safe
+        sample_batch = create_test_batch(i, batch_size=batch_size, max_seq_len=max_seq_len)
+        queue_writer.write_batch(sample_batch)
 
     # Get coordinator for GCS mode only
     coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
