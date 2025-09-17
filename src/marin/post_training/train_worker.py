@@ -40,16 +40,13 @@ from optax import softmax_cross_entropy_with_integer_labels
 from pydantic import BaseModel
 from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 
-from .model_helpers import (
+from .flax.model_helpers import (
     build_training_model,
     llama_config_from_model_config,
     load_tokenizer,
 )
-from .optimizer import load_adamw_optimizer
-from .replay_buffer import ReplayBuffer, ReplayDataLoader
-from .rollout_storage import RolloutBatch, RolloutReader
-from .training_config import TrainingConfig
-from .utils import (
+from .flax.optimizer import load_adamw_optimizer
+from .flax.utils import (
     WandbLogger,
     checkpointer,
     delete_with_bucket,
@@ -59,6 +56,9 @@ from .utils import (
     jax_distributed_initalize,
     load_checkpoint,
 )
+from .replay_buffer import ReplayBuffer, ReplayDataLoader
+from .rollout_storage import RolloutBatch, RolloutReader
+from .training_config import TrainingConfig
 from .weight_transfer_manager import create_weight_transfer_server
 
 logger = logging.getLogger(__name__)

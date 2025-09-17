@@ -28,6 +28,8 @@ import time
 from abc import ABC, abstractmethod
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -39,8 +41,29 @@ from flax.traverse_util import flatten_dict, unflatten_dict
 from jax.sharding import Mesh
 from jaxtyping import PyTree
 
-from .training_config import WeightTransferConfig, WeightTransferMode
-from .utils import checkpointer, delete_with_bucket, jax_distributed_barrier
+from .flax.utils import checkpointer, delete_with_bucket, jax_distributed_barrier
+
+
+class WeightTransferMode(Enum):
+    GCS_CHECKPOINT = "gcs_checkpoint"
+    JAX_TRANSFER_SERVER = "jax_transfer_server"
+    RAY_REMOTING = "ray_remoting"
+
+
+@dataclass
+class WeightTransferConfig:
+    mode: WeightTransferMode = WeightTransferMode.GCS_CHECKPOINT
+    # Common settings
+    sync_interval_steps: int = 100
+    poll_interval_seconds: float = 30.0
+
+    # RAY_REMOTING and JAX_TRANSFER_SERVER specific
+    transfer_timeout: float = 120.0
+
+    # GCS Checkpoint specific
+    checkpoint_dir: str = ""
+    max_checkpoints: int | None = 5
+
 
 # Check if JAX transfer is available
 try:

@@ -28,11 +28,12 @@ from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
-from .environments.flax_inference_context import FlaxInferenceContext
-from .environments.marin_env import MarinEnv
-from .inference import build_sampler
+from ..environments.load_environments import load_environments_from_config
+from ..environments.marin_env import MarinEnv
+from ..rl_dataset import create_dataset_from_environment
+from ..training_config import TrainingConfig
+from .inference import FlaxInferenceContext, build_sampler
 from .llama3 import FlaxLLaMAForCausalLM
-from .load_environments import load_environments_from_config
 from .model_helpers import (
     build_generate_model,
     build_prefill_model,
@@ -41,8 +42,6 @@ from .model_helpers import (
     load_tokenizer,
 )
 from .optimizer import load_adamw_optimizer
-from .rl_dataset import create_dataset_from_environment
-from .training_config import TrainingConfig
 from .utils import (
     WandbLogger,
     checkpointer,

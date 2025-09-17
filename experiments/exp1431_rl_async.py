@@ -89,7 +89,7 @@ def run_rl_training_on_pod(config: RLTrainConfig):
     """
     Run async RL training with separate inference and training workers.
     """
-    from marin.post_training.inference_server import InferenceWorker
+    from marin.post_training.inference_loader import InferenceWorker
     from marin.post_training.rollout_storage import FileRolloutReader, FileRolloutWriter
     from marin.post_training.train_worker import TrainingWorker
 

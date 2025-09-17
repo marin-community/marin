@@ -32,25 +32,24 @@ from jax.sharding import PartitionSpec as PS
 from optax import softmax_cross_entropy_with_integer_labels
 from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 
-from .environments.flax_inference_context import FlaxInferenceContext
-from .inference import build_sampler
-from .load_environments import load_environment_from_spec
-from .model_helpers import (
+from .environments.load_environments import load_environment_from_spec
+from .flax.inference import FlaxInferenceContext, build_sampler
+from .flax.model_helpers import (
     build_generate_model,
     build_prefill_model,
     llama_config_from_model_config,
     load_tokenizer,
 )
-from .rl_dataset import create_dataset_from_environment
-from .rollout_storage import RolloutBatch, RolloutWriter, TaggedRolloutBatch
-from .training_config import TrainingConfig
-from .utils import (
+from .flax.utils import (
     float_to_dtype,
     get_float_dtype_by_name,
     jax_distributed_barrier,
     jax_distributed_initalize,
     load_checkpoint,
 )
+from .rl_dataset import create_dataset_from_environment
+from .rollout_storage import RolloutBatch, RolloutWriter, TaggedRolloutBatch
+from .training_config import TrainingConfig
 from .weight_transfer_manager import create_weight_transfer_client
 
 logger = logging.getLogger(__name__)

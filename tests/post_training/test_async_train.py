@@ -35,7 +35,7 @@ except ImportError:
 
 import uuid
 
-from marin.post_training.model_helpers import load_tokenizer
+from marin.post_training.flax.model_helpers import load_tokenizer
 from marin.post_training.rollout_storage import (
     InMemoryRolloutQueue,
     RolloutBatch,
@@ -45,7 +45,6 @@ from marin.post_training.train_worker import TrainingWorker
 from marin.post_training.training_config import (
     CheckpointerConfigData,
     DistributedConfig,
-    EnvironmentConfig,
     GenerationConfig,
     LoggingConfig,
     ModelConfig,
@@ -187,10 +186,6 @@ def training_config(request):
             online=False,
             prefix="test",
             prefix_to_id=True,
-        ),
-        environment=EnvironmentConfig(
-            train_environments_path="environments_test.json",
-            test_environments_path="environments_test.json",
         ),
         distributed=DistributedConfig(
             train_sharding=[1, 1, 1, -1],
@@ -644,7 +639,7 @@ def test_load_tokenizer():
 
     tokenizer_override = TokenizerOverrideConfig()
 
-    with unittest.mock.patch("marin.post_training.model_helpers.AutoTokenizer") as mock_auto_tokenizer:
+    with unittest.mock.patch("marin.post_training.flax.model_helpers.AutoTokenizer") as mock_auto_tokenizer:
         mock_tokenizer = unittest.mock.MagicMock()
         mock_auto_tokenizer.from_pretrained.return_value = mock_tokenizer
 

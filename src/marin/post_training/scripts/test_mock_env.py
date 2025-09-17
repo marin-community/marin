@@ -35,7 +35,6 @@ from marin.post_training.train_worker import TrainingWorker
 from marin.post_training.training_config import (
     CheckpointerConfigData,
     DistributedConfig,
-    EnvironmentConfig,
     GenerationConfig,
     LoggingConfig,
     ModelConfig,
@@ -149,11 +148,6 @@ def mock_eval_config() -> TrainingConfig:
         max_checkpoints=3,
     )
 
-    environment_config = EnvironmentConfig(
-        train_environments_path="environments_test.json",
-        test_environments_path="environments_test.json",
-    )
-
     jax_distributed_config = {
         "initialize_jax_distributed": True,
     }
@@ -203,7 +197,6 @@ def mock_eval_config() -> TrainingConfig:
             prefix_to_id=True,
             experiment_id="test_single_node",
         ),
-        environment=environment_config,
         distributed=DistributedConfig(
             train_sharding=sharding,
             inference_sharding=sharding,

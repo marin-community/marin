@@ -19,7 +19,7 @@ import jax
 import numpy as np
 from tqdm.auto import tqdm
 
-from marin.post_training.utils import validate_format
+from marin.post_training.flax.utils import validate_format
 
 from .marin_env import EnvStep, InferenceContext, MarinEnv
 from .math_utils import grade_answer, last_boxed_only_string, remove_boxed

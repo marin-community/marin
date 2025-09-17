@@ -22,8 +22,8 @@ import ray
 from jax.sharding import Mesh
 
 try:
+    from marin.post_training.flax.utils import load_checkpoint
     from marin.post_training.training_config import WeightTransferConfig, WeightTransferMode
-    from marin.post_training.utils import load_checkpoint
     from marin.post_training.weight_transfer_manager import (
         RayWeightCoordinator,
         create_coordinator,

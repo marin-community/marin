@@ -40,9 +40,7 @@ from levanter.utils.jax_utils import use_cpu_device
 logger = logging.getLogger(__name__)
 
 
-class InferenceServer:
-    """Example worker class that demonstrates embedding InferenceServer in a larger application."""
-
+class InferenceLoader:
     checkpoint_path: Path | None
     config: InferenceServerConfig
     server: InferenceServer
@@ -71,7 +69,7 @@ class InferenceServer:
         logger.info("Starting InferenceWorker...")
 
         try:
-            server_task = asyncio.create_task(self.server.serve_async(host="0.0.0.0", port=8000))
+            server_task = asyncio.create_task(self.server.serve_async())
             monitor_task = asyncio.create_task(self._monitor_for_checkpoints())
             await asyncio.gather(server_task, monitor_task)
         except asyncio.CancelledError:
