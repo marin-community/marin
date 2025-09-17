@@ -148,8 +148,6 @@ def create_nano_inference_server_config(
     """Create a minimal InferenceServerConfig for testing."""
     return InferenceServerConfig(
         model=model_config,
-        host=host,
-        port=port,
         trainer=create_nano_trainer_config(output_dir),
         tokenizer="meta-llama/Llama-3.2-1B-Instruct",  # Use real tokenizer but small
         max_new_tokens=64,

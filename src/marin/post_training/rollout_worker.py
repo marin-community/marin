@@ -253,11 +253,6 @@ class InferenceWorker:
 
         self._server_thread = threading.Thread(target=run_server, daemon=True)
         self._server_thread.start()
-        # Give the server time to start
-        time.sleep(2)
-        logger.info(
-            f"Inference server started on {self.inference_server_config.host}:{self.inference_server_config.port}"
-        )
 
     def stop(self):
         """Stop the inference worker loop and server."""
