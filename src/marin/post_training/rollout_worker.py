@@ -30,6 +30,7 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
+import levanter
 import numpy as np
 import requests
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
@@ -50,8 +51,11 @@ class InferenceWorkerConfig:
     """Configuration for InferenceWorker."""
 
     inference_server_config: InferenceServerConfig
-    policy_model: Any  # We'll type this properly later
-    reference_model: Any  # We'll type this properly later
+
+    # used for initialization
+    trainer: levanter.TrainerConfig
+    policy_model: Any
+    reference_model: Any
     environment_spec: str
     rollout_writer: RolloutWriter
     environment: Any
@@ -208,11 +212,13 @@ class InferenceWorker:
             config: Inference worker configuration.
             coordinator: Coordinator for weight transfer (required for RAY_REMOTING and JAX_TRANSFER_SERVER modes).
         """
-        # Create and start the inference server
+        levanter.initialize(config.trainer)
+
         self.inference_server_config = config.inference_server_config
         self.inference_server = InferenceServer.create(self.inference_server_config)
         self._server_thread = None
         self._start_inference_server()
+
         self.policy_model = config.policy_model
         self.reference_model = config.reference_model
         self.environment_spec = config.environment_spec

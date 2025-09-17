@@ -158,7 +158,7 @@ def create_mock_environment(tokenizer=None):
     """Create a MockEnv instance for testing."""
     if tokenizer is None:
         tokenizer = DummyTokenizer()
-    return MockEnv(tokenizer=tokenizer, task_type="count", seed=42)
+    return MockEnv(tokenizer=tokenizer, task_type="simple_addition", seed=42)
 
 
 def create_nano_inference_worker_config(

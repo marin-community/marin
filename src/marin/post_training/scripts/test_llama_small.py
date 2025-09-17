@@ -42,6 +42,7 @@ from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
+from marin.cluster.ray import ray_dashboard
 from marin.post_training.environments.mock_env import MockEnv
 from marin.post_training.rollout_storage import FileRolloutReader, FileRolloutWriter
 from marin.post_training.rollout_worker import InferenceWorker, InferenceWorkerConfig
@@ -77,6 +78,8 @@ MODEL_TOKENIZER = MODEL_NAME
 MODEL_CHECKPOINT = MODEL_NAME
 CHECKPOINT_DIR = f"{PREFIX}/rl_checkpoints/llama_small_test/checkpoints"
 ROLLOUT_QUEUE_PATH = f"{PREFIX}/rl_checkpoints/llama_small_test/rollout_queue"
+# Default cluster config for dashboard
+DEFAULT_CLUSTER_CONFIG = "infra/marin-us-central2.yaml"
 
 
 def llama_small_config() -> LlamaConfig:
@@ -164,6 +167,7 @@ def llama_small_inference_worker_config(rollout_writer, output_dir: str) -> Infe
 
     # Create mock environment with Llama tokenizer
     from transformers import AutoTokenizer
+
     tokenizer = AutoTokenizer.from_pretrained(MODEL_TOKENIZER)
     environment = MockEnv(tokenizer=tokenizer, task_type="count", seed=42)
 
@@ -294,6 +298,8 @@ def run_driver_mode():
         f"python {SCRIPT_PATH} --mode training; sudo rm -f /tmp/libtpu_lockfile*",
     ]
 
+    logger.info("Ray address: " + os.environ.get("RAY_ADDRESS", "Not set"))
+
     # Launch processes
     logger.info("Launching inference worker... with command: " + " ".join(inference_cmd))
     inference_proc = subprocess.Popen(
@@ -303,6 +309,7 @@ def run_driver_mode():
         text=True,
         bufsize=1,
         universal_newlines=True,
+        env=os.environ,
     )
 
     # It will surprise no one that Ray gets confused if jobs schedule simultaneously
@@ -316,6 +323,7 @@ def run_driver_mode():
         text=True,
         bufsize=1,
         universal_newlines=True,
+        env=os.environ,
     )
 
     def monitor_processes():
@@ -362,6 +370,11 @@ def main():
         default="driver",
         help="Execution mode (default: driver)",
     )
+    parser.add_argument(
+        "--cluster-config",
+        default=DEFAULT_CLUSTER_CONFIG,
+        help=f"Ray cluster config file (default: {DEFAULT_CLUSTER_CONFIG})",
+    )
     args = parser.parse_args()
 
     if args.mode == "inference":
@@ -372,7 +385,9 @@ def main():
         run_training_mode(args)
     else:
         logger.info("Running in driver mode")
-        return run_driver_mode()
+        with ray_dashboard(args.cluster_config) as dashboard_port:
+            logger.info(f"Ray dashboard started on port {dashboard_port}")
+            return run_driver_mode()
 
 
 if __name__ == "__main__":

@@ -57,7 +57,7 @@ INTEGRATION_TEST_TIMEOUT = 60
 logger = logging.getLogger(__name__)
 
 
-class TestableTrainingWorker(TrainingWorker):
+class _TestableTrainingWorker(TrainingWorker):
     """TrainingWorker subclass for testing with step tracking."""
 
     def __init__(self, *args, step_callback=None, **kwargs):
@@ -306,7 +306,7 @@ class TrainingWorkerRunner:
     def _run(self):
         """Thread target - runs the training worker."""
         try:
-            self.worker = TestableTrainingWorker(
+            self.worker = _TestableTrainingWorker(
                 config=self.training_worker_config,
                 coordinator=self.coordinator,
                 step_callback=lambda info: self._track_training_step(),

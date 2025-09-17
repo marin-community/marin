@@ -100,18 +100,18 @@ def compute_rloo_loss(
 
     loss = reinforce_loss + kl_coef * kl_loss
 
-    with levanter.tracker.defer_tracker_for_jit() as metrics:
-        metrics.update(
-            {
-                "rloo/token_loss": jnp.mean(token_loss),
-                "rloo/log_ratio": jnp.mean(log_ratio),
-                "rloo/reinforce_loss": reinforce_loss,
-                "rloo/loss": loss,
-                "rloo/kl_loss": kl_loss,
-                "rloo/importance_ratio_mean": jnp.mean(ratio),
-                "rloo/importance_ratio_max": jnp.max(ratio),
-            }
-        )
+    # with levanter.tracker.defer_tracker_for_jit() as metrics:
+    #     metrics.update(
+    #         {
+    #             "rloo/token_loss": jnp.mean(token_loss),
+    #             "rloo/log_ratio": jnp.mean(log_ratio),
+    #             "rloo/reinforce_loss": reinforce_loss,
+    #             "rloo/loss": loss,
+    #             "rloo/kl_loss": kl_loss,
+    #             "rloo/importance_ratio_mean": jnp.mean(ratio),
+    #             "rloo/importance_ratio_max": jnp.max(ratio),
+    #         }
+    #     )
 
     return loss
 
@@ -133,22 +133,14 @@ class StreamingRolloutLoader:
     def __iter__(self):
         """Yield batches continuously from the replay buffer."""
         while True:
-            # Get batch from replay buffer
             batch = self.data_loader.get_training_batch(timeout=self.timeout)
-            if batch is None:
-                # In a real scenario we might want to handle this differently
-                # For now, we'll raise StopIteration if no data is available
-                logger.warning("No batch available from replay buffer after timeout")
-                raise StopIteration("No data available from replay buffer")
+            if not batch:
+                logger.warning("No batch received from data loader within timeout, retrying...")
+                continue
 
-            # Convert to JAX with named axes
             named_batch = self._convert_to_named_batch(batch)
-
-            # Apply sharding if we have a mesh context
-            if hasattr(self.config, "device_mesh"):
-                with self.config.device_mesh:
-                    if hasattr(self.config, "compute_axis_mapping"):
-                        named_batch = hax.shard(named_batch, self.config.compute_axis_mapping)
+            with self.config.device_mesh:
+                named_batch = hax.shard(named_batch, self.config.compute_axis_mapping)
 
             yield named_batch
 
@@ -219,6 +211,7 @@ class TrainingWorker:
             config: Training worker configuration with Levanter components.
             coordinator: Coordinator for weight transfer.
         """
+        levanter.initialize(config.trainer)
         self.config = config
         self.coordinator = coordinator
         self._should_stop = False
@@ -284,7 +277,7 @@ class TrainingWorker:
         checkpointer = trainer.config.checkpointer.create("train-id-0")
 
         def _checkpoint_step(info: levanter.callbacks.StepInfo):
-            logger.info("Checking? for checkpoint at step %d", info.step)
+            logger.info("Checking for checkpoint at step %d", info.step)
             checkpointer.on_step(info, force=True)
 
         trainer.add_hook(_checkpoint_step, every=1)

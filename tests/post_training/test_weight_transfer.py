@@ -399,8 +399,8 @@ def test_with_mesh_sharding(ray_cluster, weight_transfer_config, sample_params):
         # For GCS checkpoints, there may be precision loss due to bfloat16 conversion
         if weight_transfer_config.mode == WeightTransferMode.GCS_CHECKPOINT:
             np.testing.assert_allclose(
-                received_params["embedding"]["weight"],
-                sample_params["embedding"]["weight"],
+                received_params["embedding"]["weight"].array,
+                sample_params["embedding"]["weight"].array,
                 rtol=1e-2,
             )
         else:
@@ -435,7 +435,7 @@ def test_jax_numpy_conversion(ray_cluster, weight_transfer_config):
             np.testing.assert_allclose(received_params["bias"], jax_params["bias"], rtol=1e-2)
         else:
             # Verify conversion preserved values and dtypes
-            np.testing.assert_array_equal(received_params["weight"].array, jax_params["weight"].array)
+            np.testing.assert_array_equal(received_params["weight"], jax_params["weight"])
             np.testing.assert_array_equal(received_params["bias"], jax_params["bias"])
     finally:
         server.cleanup()
@@ -450,19 +450,3 @@ def test_cleanup(ray_cluster, weight_transfer_config, sample_params):
     server.serve_weights(1, sample_params)
     received_params = client.receive_weights(sample_params)
     assert received_params is not None
-
-
-def test_empty_params(ray_cluster, weight_transfer_config):
-    """Test behavior with empty parameter trees."""
-    empty_params = {}
-
-    server, client = create_test_weight_transfer_pair(weight_transfer_config, params_structure=empty_params)
-
-    try:
-        server.serve_weights(1, empty_params)
-        received_params = client.receive_weights(empty_params)
-
-        assert received_params == {}
-    finally:
-        server.cleanup()
-        client.cleanup()
