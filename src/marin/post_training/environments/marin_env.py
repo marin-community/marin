@@ -99,7 +99,16 @@ class MarinEnv:
         """
         pass
 
-    def step(self, **kwargs) -> EnvStep:
+    def step(
+        self,
+        sampler,
+        params,
+        n_examples: int,
+        prng_key,
+        mode: str = "train",
+        n_generations: int = 1,
+        **kwargs,
+    ) -> EnvStep:
         """Execute one step of environment interaction.
 
         This is the main interface method that subclasses must implement. It should:
