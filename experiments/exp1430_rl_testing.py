@@ -90,7 +90,7 @@ def run_rl_training_on_pod(config: RLTrainConfig):
 
     This function launches both workers that communicate through a shared rollout queue.
     """
-    from marin.post_training.inference_worker import InferenceWorker
+    from marin.post_training.inference_server import InferenceWorker
     from marin.post_training.rollout_storage import FileRolloutReader, FileRolloutWriter
     from marin.post_training.train_worker import TrainingWorker
 

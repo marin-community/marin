@@ -291,7 +291,7 @@ class GenerationManager:
         )
 
 
-class Sampler:
+class FlaxSampler:
     """High-level sampling interface that manages model generation."""
 
     def __init__(
@@ -926,13 +926,13 @@ class Sampler:
                 )
 
 
-def build_sampler(**kwargs) -> Sampler:
+def build_sampler(**kwargs) -> FlaxSampler:
     """Factory function to build a sampler."""
-    return Sampler(**kwargs)
+    return FlaxSampler(**kwargs)
 
 
 def batch_inference(
-    sampler: Sampler,
+    sampler: FlaxSampler,
     params: PyTree,
     prompts: list[str],
     prng_key: jnp.ndarray,

@@ -29,7 +29,7 @@ import pytest
 import ray
 
 try:
-    from marin.post_training.inference_worker import InferenceWorker
+    from marin.post_training.inference_server import InferenceWorker
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 
