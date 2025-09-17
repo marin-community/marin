@@ -169,7 +169,6 @@ class RLDataset:
         prompt_tokens = np.stack(prompt_tokens_list, axis=0)
         prompt_masks = np.stack(prompt_masks_list, axis=0)
 
-        # Compute RLOO advantages
         all_rloo_advantages = []
         for rewards_group in rewards:
             advantages = compute_rloo_advantages_for_group(rewards_group)

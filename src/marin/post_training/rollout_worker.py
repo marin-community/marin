@@ -67,25 +67,18 @@ class InferenceWorkerConfig:
     max_rollouts: int | None = None
 
 
-COMPLETION_EXAMPLE = """
-curl http://localhost:8000/v1/chat/completions \
- -H "Content-Type: application/json" \
- -H "Authorization: Bearer $OPENAI_API_KEY" -d '{
-    "model": "meta-llama/Llama-3.2-1B-Instruct",
-    "messages": [{"role": "user", "content": "How many words in the next sentence? \"I like cats!\""}],
-    "logprobs": false,
-    "max_tokens": 128,
-    "temperature": 0.1
-  }'
-"""
-
-
 class LevanterInferenceContext(InferenceContext):
     """Context that uses Levanter model and inference server."""
 
-    def __init__(self, model, inference_server: InferenceServer):
+    model: Any
+    inference_server: InferenceServer
+    max_tokens: int
+    _tokenizer: Any
+
+    def __init__(self, model, inference_server: InferenceServer, max_tokens: int):
         self.model = model
         self.inference_server = inference_server
+        self.max_tokens = max_tokens
         self._tokenizer = inference_server.inference_context.tokenizer
 
     @property
@@ -101,47 +94,44 @@ class LevanterInferenceContext(InferenceContext):
         top_k: int | None = None,
     ) -> list[list[dict]]:
         """Generate responses for a batch of prompts."""
-        # use requests to call the inference server using the OpenAI chat/completions API
-
         host = self.inference_server.config.host
         port = self.inference_server.config.port
         url = f"http://{host}:{port}/v1/chat/completions"
-        response = requests.post(
-            url,
-            headers={"Content-Type": "application/json"},
-            json={
-                "model": getattr(self.inference_server.config, "model_name", "test-model"),
-                "messages": [{"role": "user", "content": prompt} for prompt in prompts],
-                "logprobs": True,
-                "max_tokens": 1024,
-                "temperature": temperature,
-                "n": n_generations,
-                "top_p": top_p,
-                "top_k": top_k,
-            },
-        )
+        responses = []
+        for prompt in prompts:
+            response = requests.post(
+                url,
+                headers={"Content-Type": "application/json"},
+                json={
+                    "model": getattr(self.inference_server.config, "model_name", "test-model"),
+                    "messages": [{"role": "user", "content": prompt}],
+                    "logprobs": True,
+                    "max_tokens": self.max_tokens,
+                    "temperature": temperature,
+                    "n": n_generations,
+                    "top_p": top_p,
+                    "top_k": top_k,
+                },
+            )
+            responses.append(response)
 
-        # Parse the response
-        if response.status_code != 200:
-            raise RuntimeError(f"Inference server error: {response.status_code} - {response.text}")
+        all_results = []
+        for response in responses:
+            if response.status_code != 200:
+                raise RuntimeError(f"Inference server error: {response.status_code} - {response.text}")
 
-        result = response.json()
+            from openai.types.chat.chat_completion import ChatCompletion
 
-        # Convert OpenAI format to our expected format
-        # We expect a list of lists where each inner list contains generation dicts
-        all_responses = []
-        for i in range(len(prompts)):
-            prompt_responses = []
-            # Get all choices for this prompt
-            for choice in result["choices"]:
-                if choice["index"] // n_generations == i:
-                    content = choice["message"]["content"]
-                    tokens = self._tokenizer.encode(content)
-                    logprobs = [-0.5] * len(tokens)
-                    prompt_responses.append({"tokens": tokens, "logprobs": logprobs})
-            all_responses.append(prompt_responses)
+            chat_response = ChatCompletion.model_validate_json(response.text)
+            prompt_results = []
+            for choice in chat_response.choices:
+                content = choice.message.content
+                tokens = self._tokenizer.encode(content)
+                logprobs = [t.logprob for t in choice.logprobs.content]
+                prompt_results.append({"tokens": tokens, "logprobs": logprobs})
+            all_results.append(prompt_results)
 
-        return all_responses
+        return all_results
 
     def compute_logprobs(
         self,
@@ -168,8 +158,8 @@ class LevanterInferenceContext(InferenceContext):
 
         # Compute logits using the model
         # For causal language modeling, we need tokens[:-1] to predict tokens[1:]
-        input_tokens_named = tokens_named[:, :-1]  # Remove last token
-        input_mask_named = attn_mask_named[:, :-1]  # Remove last mask
+        input_tokens_named = tokens_named.slice(SeqLen, start=0, length=SeqLen.size - 1)
+        input_mask_named = attn_mask_named.slice(SeqLen, start=0, length=SeqLen.size - 1)
 
         # Run forward pass through the model
         logits = self.model(input_tokens_named, attn_mask=input_mask_named)
@@ -265,8 +255,12 @@ class InferenceWorker:
         jax_distributed_barrier()
 
         # Create Levanter inference contexts
-        policy_ctx = LevanterInferenceContext(self.policy_model, self.inference_server)
-        reference_ctx = LevanterInferenceContext(self.reference_model, self.inference_server)
+        policy_ctx = LevanterInferenceContext(
+            self.policy_model, self.inference_server, max_tokens=self.max_output_length
+        )
+        reference_ctx = LevanterInferenceContext(
+            self.reference_model, self.inference_server, max_tokens=self.max_output_length
+        )
 
         rl_dataset, dataset_metrics = create_dataset_from_environment(
             environment=self.environment,
