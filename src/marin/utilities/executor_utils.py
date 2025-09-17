@@ -22,8 +22,6 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any
 
-import ray
-import toml
 from deepdiff import DeepDiff
 
 if TYPE_CHECKING:
@@ -51,33 +49,6 @@ def compare_dicts(dict1: dict[str, Any], dict2: dict[str, Any]) -> bool:
     else:
         logger.warning(diff.pretty())  # Log the differences
         return False
-
-
-def get_pip_dependencies(
-    pip_dep: list[str], pyproject_path: str = "pyproject.toml", include_parents_pip: bool = True
-) -> list[str]:
-    """Given a list of pip dependencies, this function searches keys of project.optional-dependencies in pyproject.toml,
-    If key is not found it is considered a pacakge name. include_parents_pip: include the parent pip packages.
-    Finally return a list of all dependencies."""
-    dependencies = []
-    try:
-        with open(pyproject_path, "r") as f:
-            pyproject = toml.load(f)
-            optional_dependencies = pyproject.get("project", {}).get("optional-dependencies", {})
-            for dep in pip_dep:
-                if dep in optional_dependencies:
-                    dependencies.extend(optional_dependencies[dep])
-                else:
-                    dependencies.append(dep)
-    except FileNotFoundError:
-        logger.error(f"File {pyproject_path} not found.")
-    except toml.TomlDecodeError:
-        logger.error(f"Failed to parse {pyproject_path}.")
-
-    if include_parents_pip:
-        dependencies.extend(ray.get_runtime_context().runtime_env.get("pip", {}).get("packages", []))
-
-    return dependencies
 
 
 def ckpt_path_to_step_name(path: str | InputName) -> str:

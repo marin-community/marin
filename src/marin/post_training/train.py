@@ -12,13 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
-import json
-import os
-import tempfile
+import dataclasses
 from collections import deque
 from functools import partial
-from typing import Any
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -30,40 +27,49 @@ from optax import softmax_cross_entropy_with_integer_labels
 from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
-from pathlib import Path
 
 from .environments.marin_env import MarinEnv
-from .inference import GenerationConfig, batch_inference, build_sampler
-from .llama3 import (
-    LLAMA_STANDARD_CONFIGS,
-    FlaxLLaMAForCausalLM,
-    LLaMAConfig,
-)
+from .inference import batch_inference, build_sampler
+from .llama3 import FlaxLLaMAForCausalLM
 from .load_environments import load_environments_from_config
+from .model_helpers import (
+    build_generate_model,
+    build_prefill_model,
+    build_training_model,
+    llama_config_from_model_config,
+    load_tokenizer,
+)
 from .optimizer import load_adamw_optimizer
 from .rl_dataset import create_dataset_from_environment
+from .training_config import TrainingConfig
 from .utils import (
     WandbLogger,
     checkpointer,
     delete_with_bucket,
     float_to_dtype,
-    get_float_dtype_by_name,
     get_weight_decay_mask,
     global_norm,
     jax_distributed_barrier,
     jax_distributed_initalize,
     load_attention_kernel_config,
     load_checkpoint,
-    open_with_bucket,
 )
 
 
 class Trainer:
     """RL trainer"""
 
+    config: TrainingConfig
+    mesh: MeshShardingHelper
+    models: dict[str, FlaxLLaMAForCausalLM]
+    tokenizer: AutoTokenizer
+    train_environments: list[tuple[str, MarinEnv]]
+    test_environments: list[tuple[str, MarinEnv]]
+    logger: WandbLogger
+
     def __init__(
         self,
-        config: dict[str, Any],
+        config: TrainingConfig,
         mesh: MeshShardingHelper,
         models: dict[str, FlaxLLaMAForCausalLM],
         tokenizer: AutoTokenizer,
@@ -80,12 +86,12 @@ class Trainer:
         self.logger = logger
 
         # Extract frequently used config values
-        self.max_input_length = config["max_input_length"]
-        self.max_output_length = config["max_output_length"]
-        self.train_bsize = config["train_bsize"]
-        self.reference_logprobs_bsize = config["reference_logprobs_bsize"]
-        self.pad_token_id = config["pad_token_id"]
-        self.kl_coef = config["kl_coef"]
+        self.max_input_length = config.hyperparameters.max_input_length
+        self.max_output_length = config.hyperparameters.max_output_length
+        self.train_bsize = config.hyperparameters.train_bsize
+        self.reference_logprobs_bsize = config.hyperparameters.reference_logprobs_bsize
+        self.pad_token_id = config.hyperparameters.pad_token_id
+        self.kl_coef = config.hyperparameters.kl_coef
 
         # Setup training components
         self._setup_optimizer()
@@ -95,16 +101,10 @@ class Trainer:
 
     def _setup_optimizer(self):
         """Setup optimizer configuration."""
-        optim_config = self.config["optim_config"]
-        if optim_config.startswith("adamw:"):
-            optim_config = json.loads(optim_config[len("adamw:") :])
-            optim_config["weight_decay_mask"] = get_weight_decay_mask(
-                optim_config.pop("weight_decay_exclusions", tuple())
-            )
-            self.grad_accum_steps = optim_config.pop("grad_accum_steps", 1)
-            optimizer, self.optimizer_info = load_adamw_optimizer(**optim_config)
-        else:
-            raise ValueError(f"Unknown optimizer config: {optim_config}")
+        optim_config = self.config.hyperparameters.optim_config
+        weight_decay_mask = get_weight_decay_mask(optim_config.weight_decay_exclusions)
+        self.grad_accum_steps = optim_config.grad_accum_steps
+        optimizer, self.optimizer_info = load_adamw_optimizer(config=optim_config, weight_decay_mask=weight_decay_mask)
 
         if self.grad_accum_steps > 1:
             optimizer = optax.MultiSteps(optimizer, self.grad_accum_steps)
@@ -140,15 +140,15 @@ class Trainer:
 
     def _setup_samplers(self):
         """Setup sampling configurations."""
-        generation_config = GenerationConfig(**self.config["generation_config"])
-        test_generation_config = GenerationConfig(**self.config["test_generation_config"])
+        generation_config = self.config.generation_config
+        test_generation_config = self.config.test_generation_config
 
         sampler_kwargs = {
             "prefill_model": self.prefill_model,
             "generate_model": self.generate_model,
             "tokenizer": self.tokenizer,
-            "bsize": self.config["decode_bsize"],
-            "prefill_bsize": self.config["prefill_bsize"],
+            "bsize": self.config.hyperparameters.decode_bsize,
+            "prefill_bsize": self.config.hyperparameters.prefill_bsize,
             "max_input_length": self.max_input_length,
             "params_sharding_rules": self.inference_params_sharding_rules,
             "intermediate_sharding_rules": self.inference_intermediate_sharding_rules,
@@ -192,7 +192,7 @@ class Trainer:
             args_sharding_constraint=(self.train_params_sharding_rules,),
         )
         def reshard_params(params):
-            params = float_to_dtype(params, self.config["inference_param_dtype"])
+            params = float_to_dtype(params, self.config.model.inference_param_dtype)
             return params
 
         @partial(
@@ -241,7 +241,11 @@ class Trainer:
             self.mesh.sjit,
             in_shardings=(self.train_params_sharding_rules, PS(), PS()),
             out_shardings=(self.train_params_sharding_rules, PS()),
-            args_sharding_constraint=(self.train_params_sharding_rules, PS(), PS(("replica", "fsdp"))),
+            args_sharding_constraint=(
+                self.train_params_sharding_rules,
+                PS(),
+                PS(("replica", "fsdp")),
+            ),
             donate_argnums=(0,),
             annotation_shardings=self.train_intermediate_sharding_rules,
         )
@@ -296,14 +300,14 @@ class Trainer:
         eval_metrics = {}
         for env_name, environment in self.test_environments:
             # Get evaluation examples from environment
-            eval_examples = environment.get_eval_examples(self.config["num_eval_examples"])
+            eval_examples = environment.get_eval_examples(self.config.logging.num_eval_examples)
             # Generate samples for evaluation
             samples = batch_inference(
                 self.test_sampler,
                 inference_params,
                 [example["prompt"] for example in eval_examples],
                 prng_key,
-                self.config["test_generation_config"]["n_generations"],
+                self.config.test_generation_config.n_generations,
                 verbose=True,
             )
             del inference_params
@@ -317,12 +321,12 @@ class Trainer:
 
     def save_checkpoint(self, train_state, step):
         """Save model checkpoint."""
-        if (self.config["max_checkpoints"] is not None) and (
-            len(self.checkpoint_queue) >= self.config["max_checkpoints"]
+        if (self.config.logging.max_checkpoints is not None) and (
+            len(self.checkpoint_queue) >= self.config.logging.max_checkpoints
         ):
             old_step = self.checkpoint_queue.popleft()
             if self.logger.can_save():
-                old_path = os.path.join(self.logger.output_dir, "checkpoints", f"step_{old_step}")
+                old_path = str(Path(self.config.output_dir) / "checkpoints" / f"step_{old_step}")
                 delete_with_bucket(old_path, recursive=True)
 
         if self.logger.can_save():
@@ -333,14 +337,19 @@ class Trainer:
                 args_dict=self.config,
             )
 
+            if self.config.checkpoint.save_optimizer_state:
+                params = train_state
+            else:
+                params = train_state.params
+
             checkpointer(
-                path=os.path.join(self.logger.output_dir, "checkpoints", f"step_{step}"),
-                train_state=train_state,
+                path=str(Path(self.config.output_dir) / "checkpoints" / f"step_{step}"),
+                params=params,
                 config=self.train_model.config.to_dict(),
                 gather_fns=self.train_state_gather_fns,
                 metadata=metadata,
                 active=self.logger.can_save(),
-                **self.config.get("checkpointer_config", {}),
+                save_float_dtype=self.config.checkpoint.save_float_dtype,
             )
 
             self.checkpoint_queue.append(step)
@@ -352,7 +361,11 @@ class Trainer:
         train_state_shape = jax.eval_shape(lambda: self.init_fn(jax.random.PRNGKey(0)))
         inference_params_shape = jax.eval_shape(
             lambda: self.prefill_model.init_weights(
-                jax.random.PRNGKey(0), (self.config["decode_bsize"], self.max_input_length + self.max_output_length - 1)
+                jax.random.PRNGKey(0),
+                (
+                    self.config.hyperparameters.decode_bsize,
+                    self.max_input_length + self.max_output_length - 1,
+                ),
             )
         )
         self.train_state_shard_fns, self.train_state_gather_fns = self.mesh.make_shard_and_gather_fns(
@@ -365,62 +378,65 @@ class Trainer:
         # Initialize training state
         latest_checkpoint_step = -1
         if self.logger.can_save():
-            checkpoint_dir = os.path.join(self.logger.output_dir, "checkpoints")
-            if os.path.exists(checkpoint_dir):
-                checkpoint_steps = [int(d.split("_")[1]) for d in os.listdir(checkpoint_dir) if d.startswith("step_")]
+            checkpoint_dir = Path(self.config.output_dir) / "checkpoints"
+            if checkpoint_dir.exists():
+                checkpoint_steps = [
+                    int(d.name.split("_")[1]) for d in checkpoint_dir.iterdir() if d.name.startswith("step_")
+                ]
                 if checkpoint_steps:
                     latest_checkpoint_step = max(checkpoint_steps)
 
         if latest_checkpoint_step > 0:
             print(f"Resuming training from checkpoint at step {latest_checkpoint_step}...")
-            checkpoint_path = os.path.join(
-                self.logger.output_dir, "checkpoints", f"step_{latest_checkpoint_step}", "params.msgpack"
+            checkpoint_path = (
+                Path(self.config.output_dir) / "checkpoints" / f"step_{latest_checkpoint_step}" / "params.msgpack"
             )
             train_state = self.create_train_state_from_params(
                 load_checkpoint(
                     checkpoint_path,
                     shard_fns=self.train_state_shard_fns.params,
-                    remove_dict_prefix=self.config["model_paths"]["remove_dict_prefix"],
+                    remove_dict_prefix=self.config.model.model_paths.remove_dict_prefix,
                     convert_to_dtypes=jax.tree_util.tree_map(
-                        lambda x: self.config["training_param_dtype"], train_state_shape.params
+                        lambda x: self.config.model.training_param_dtype, train_state_shape.params
                     ),
                 )
             )
-        elif "params" in self.config["model_paths"]:
+        elif self.config.model.model_paths.params:
             train_state = self.create_train_state_from_params(
                 load_checkpoint(
-                    self.config["model_paths"]["params"],
+                    self.config.model.model_paths.params,
                     shard_fns=self.train_state_shard_fns.params,
-                    remove_dict_prefix=self.config["model_paths"]["remove_dict_prefix"],
+                    remove_dict_prefix=self.config.model.model_paths.remove_dict_prefix,
                     convert_to_dtypes=jax.tree_util.tree_map(
-                        lambda x: self.config["training_param_dtype"], train_state_shape.params
+                        lambda x: self.config.model.training_param_dtype, train_state_shape.params
                     ),
                 )
             )
-        elif "train_state" in self.config["model_paths"]:
-            train_state = load_checkpoint(
-                self.config["model_paths"]["train_state"],
+        elif self.config.model.model_paths.train_state:
+            train_state: TrainState = load_checkpoint(
+                self.config.model.model_paths.params,
                 shard_fns=self.train_state_shard_fns,
-                remove_dict_prefix=self.config["model_paths"]["remove_dict_prefix"],
+                remove_dict_prefix=self.config.model.model_paths.remove_dict_prefix,
                 convert_to_dtypes=jax.tree_util.tree_map(
-                    lambda x: self.config["training_param_dtype"], train_state_shape
+                    lambda x: self.config.model.training_param_dtype, train_state_shape
                 ),
             )
         else:
             print("WARNING: no params path provided, initializing with random weights...")
-            train_state = self.init_fn(jax.random.PRNGKey(0))
+            train_state: TrainState = self.init_fn(jax.random.PRNGKey(0))
 
-        self.reference_params = float_to_dtype(train_state.params, self.config["inference_param_dtype"])
+        self.reference_params = float_to_dtype(train_state.params, self.config.model.inference_param_dtype)
         self.checkpoint_queue = deque()
 
-        if self.config.get("save_initial_checkpoint", False):
+        if self.config.logging.save_initial_checkpoint and latest_checkpoint_step < 0:
             self.save_checkpoint(train_state, 0)
 
         # Training loop
         rng = jax.random.PRNGKey(0)
 
         for step in tqdm(
-            range(max(0, latest_checkpoint_step), self.config["num_train_steps"]), total=self.config["num_train_steps"]
+            range(max(0, latest_checkpoint_step), self.config.hyperparameters.num_train_steps),
+            total=self.config.hyperparameters.num_train_steps,
         ):
             rng, subrng = jax.random.split(rng)
 
@@ -435,14 +451,15 @@ class Trainer:
                 params=inference_params,
                 reference_params=self.reference_params,
                 get_logprobs_fn=self.get_logprobs,
-                n_examples=self.config["n_prompts_per_step"],
+                # n_prompts_per_step is the number of examples to sample from
+                n_examples=self.config.hyperparameters.n_prompts_per_step,
+                n_generations=self.config.generation_config.n_generations,
                 prng_key=subrng,
                 reference_logprobs_bsize=self.reference_logprobs_bsize,
                 max_input_length=self.max_input_length,
                 max_output_length=self.max_output_length,
                 pad_token_id=self.pad_token_id,
                 tokenizer=self.tokenizer,
-                generation_config=self.config["generation_config"],
                 mode="train",
             )
             del inference_params
@@ -450,10 +467,10 @@ class Trainer:
             for batch in tqdm(rl_dataset.iterate_batches(batch_size=self.train_bsize, shuffle=True, loop=False)):
                 train_state, metrics = self.train_step(train_state, subrng, batch)
 
-            if self.config["log_freq"] > 0 and (
-                (step + 1) % self.config["log_freq"] == 0 or (self.config.get("log_initial_step", True) and step == 0)
+            if self.config.logging.log_freq > 0 and (
+                (step + 1) % self.config.logging.log_freq == 0 or (self.config.logging.log_initial_step and step == 0)
             ):
-                if self.config["num_eval_examples"] > 0:
+                if self.config.logging.num_eval_examples > 0:
                     rng, subrng = jax.random.split(rng)
                     metrics.update(self.evaluate_data_from_environment(train_state.params, subrng))
 
@@ -464,218 +481,93 @@ class Trainer:
                 self.logger.log(log_metrics)
                 print(log_metrics)
 
-            if self.config["save_model_freq"] > 0 and (step + 1) % self.config["save_model_freq"] == 0:
+            if self.config.checkpoint.save_model_freq > 0 and (step + 1) % self.config.checkpoint.save_model_freq == 0:
                 self.save_checkpoint(train_state, step + 1)
 
-        if self.config["save_model_freq"] > 0 and (self.config["num_train_steps"] not in self.checkpoint_queue):
-            self.save_checkpoint(train_state, self.config["num_train_steps"])
+        if self.config.checkpoint.save_model_freq > 0 and (
+            self.config.hyperparameters.num_train_steps not in self.checkpoint_queue
+        ):
+            self.save_checkpoint(train_state, self.config.hyperparameters.num_train_steps)
 
 
-def main(
-    load_model: str,
-    output_dir: str | None,
-    sharding: str,
-    num_train_steps: int,
-    max_input_length: int,
-    max_output_length: int,
-    train_bsize: int,
-    decode_bsize: int,
-    prefill_bsize: int,
-    reference_logprobs_bsize: int,
-    n_prompts_per_step: int,
-    log_freq: int,
-    num_eval_examples: int,
-    save_model_freq: int,
-    wandb_project: str,
-    train_environments_path: str = "environments_train.json",
-    test_environments_path: str = "environments_test.json",
-    inference_param_dtype: str = "bf16",
-    inference_activation_dtype: str = "bf16",
-    training_param_dtype: str = "fp32",
-    training_activation_dtype: str = "fp32",
-    optim_config: str = "adamw:{}",
-    logger_config: str = "{}",
-    checkpointer_config: str = "{}",
-    generation_config: str = "{}",
-    test_generation_config: str = "{}",
-    model_config_override: str = "{}",
-    tokenizer_override: str = "{}",
-    train_attention_kernel_config: str = "splash:{}",
-    prefill_attention_kernel_config: str = "splash:{}",
-    generate_attention_kernel_config: str = "paged:{}",
-    jax_distributed_initalize_config: str = "{}",
-    save_initial_checkpoint: bool = False,
-    log_initial_step: bool = True,
-    max_checkpoints: int | None = None,
-    physical_axis_splitting: bool = False,
-    pad_token_id: int = 128002,
-    kl_coef: float = 0.0,
-):
+def main(config: TrainingConfig):
     """Main training script with environment."""
-    # Parse configurations
-    args_dict = dict(locals())
-    print(args_dict)
-    sharding: list[int] = list(map(lambda x: int(x.strip()), sharding.split(",")))
+    logging_config = config.logging
 
-    # Parse dtype configurations
-    inference_param_dtype = get_float_dtype_by_name(inference_param_dtype)
-    inference_activation_dtype = get_float_dtype_by_name(inference_activation_dtype)
-    training_param_dtype = get_float_dtype_by_name(training_param_dtype)
-    training_activation_dtype = get_float_dtype_by_name(training_activation_dtype)
-
-    # Parse JSON configurations
-    logger_config: dict[str, Any] = json.loads(logger_config)
-    checkpointer_config: dict[str, Any] = json.loads(checkpointer_config)
-    generation_config: dict[str, Any] = json.loads(generation_config)
-    test_generation_config: dict[str, Any] = json.loads(test_generation_config)
-    model_config_override: dict[str, Any] = json.loads(model_config_override)
-    tokenizer_override: dict[str, Any] = json.loads(tokenizer_override)
-    jax_distributed_initalize_config: dict[str, Any] = json.loads(jax_distributed_initalize_config)
+    # Synchronous trainer requires same sharding for training and inference
+    assert (
+        config.distributed.train_sharding == config.distributed.inference_sharding
+    ), "Synchronous trainer requires train_sharding == inference_sharding"
 
     # Initialize JAX distributed
-    jax_distributed_initalize(**jax_distributed_initalize_config)
+    jax_distributed_initalize(**config.distributed.jax_distributed_initialize_config)
     jax_distributed_barrier()
 
     # Load attention kernel configurations
     prefill_attention_kernel, prefill_attention_kernel_config = load_attention_kernel_config(
-        prefill_attention_kernel_config, ["splash", "default"]
+        config.model.prefill_attention_kernel_config, ["splash", "default"]
     )
     generate_attention_kernel, generate_attention_kernel_config = load_attention_kernel_config(
-        generate_attention_kernel_config, ["paged", "default"]
+        config.model.generate_attention_kernel_config, ["paged", "default"]
     )
     train_attention_kernel, train_attention_kernel_config = load_attention_kernel_config(
-        train_attention_kernel_config, ["splash", "default", "ring", "ring_jax"]
+        config.model.train_attention_kernel_config, ["splash", "default", "ring", "ring_jax"]
     )
 
-    # Setup mesh
     mesh = MeshShardingHelper(
-        sharding, ["replica", "fsdp", "sequence", "tensor"], mesh_axis_splitting=physical_axis_splitting
+        config.distributed.train_sharding,
+        ["replica", "fsdp", "sequence", "tensor"],
+        mesh_axis_splitting=config.distributed.physical_axis_splitting,
     )
 
     with mesh.get_context():
-        # Load model configuration and paths
-        if load_model.startswith("paths:"):
-            model_paths = json.loads(load_model[len("paths:") :])
-            if "remove_dict_prefix" not in model_paths:
-                model_paths["remove_dict_prefix"] = None
-        else:
-            raise ValueError(f"Unknown model info type: {load_model}")
+        model_paths = config.model.model_paths
+        llama_config = llama_config_from_model_config(model_paths, config.model.model_config_override)
+        training_model = build_training_model(llama_config, config)
+        inference_model = build_generate_model(llama_config, config)
+        prefill_model = build_prefill_model(llama_config, config)
 
-        # Load model config
-        config_is_temp = False
-        if "config" in model_paths and model_paths["config"].startswith("gs://"):
-            temp_file = tempfile.NamedTemporaryFile("wb", delete=False)
-            with open_with_bucket(model_paths["config"], "rb") as f:
-                temp_file.write(f.read())
-            temp_file.close()
-            model_paths["config"] = temp_file.name
-            config_is_temp = True
-
-        if "config" in model_paths:
-            config = LLaMAConfig.from_pretrained(model_paths["config"], **model_config_override)
-        elif "default_config_name" in model_paths:
-            config = LLaMAConfig(**LLAMA_STANDARD_CONFIGS[model_paths["default_config_name"]], **model_config_override)
-        else:
-            config = LLaMAConfig(**model_config_override)
-
-        # Create model configurations
-        prefill_config = copy.deepcopy(config)
-        prefill_config.attention_kernel = prefill_attention_kernel
-        prefill_config.attention_kernel_settings = prefill_attention_kernel_config
-
-        generate_config = copy.deepcopy(config)
-        train_config = copy.deepcopy(config)
-
-        if config_is_temp:
-            os.remove(model_paths["config"])
-
-        # Initialize models
-        prefill_model = FlaxLLaMAForCausalLM(
-            prefill_config,
-            dtype=inference_activation_dtype,
-            _do_init=False,
-            param_dtype=inference_param_dtype,
-            input_shape=(prefill_bsize, max_input_length),
-        )
-        generate_model = FlaxLLaMAForCausalLM(
-            generate_config,
-            dtype=inference_activation_dtype,
-            _do_init=False,
-            param_dtype=inference_param_dtype,
-            input_shape=(decode_bsize, max_input_length + max_output_length - 1),
-        )
-        train_model = FlaxLLaMAForCausalLM(
-            train_config,
-            dtype=training_activation_dtype,
-            _do_init=False,
-            param_dtype=training_param_dtype,
-            input_shape=(train_bsize, max_input_length + max_output_length - 1),
-        )
-        generate_model.config.attention_kernel = generate_attention_kernel
-        generate_model.config.attention_kernel_settings = generate_attention_kernel_config
-        train_model.config.attention_kernel = train_attention_kernel
-        train_model.config.attention_kernel_settings = train_attention_kernel_config
-
-        models = {
-            "prefill": prefill_model,
-            "generate": generate_model,
-            "train": train_model,
-        }
-
-        # Load tokenizer
-        tokenizer_is_temp = False
-        if model_paths["tokenizer"].startswith("gs://"):
-            temp_file = tempfile.NamedTemporaryFile("wb", delete=False)
-            with open_with_bucket(model_paths["tokenizer"], "rb") as f:
-                temp_file.write(f.read())
-            temp_file.close()
-            model_paths["tokenizer"] = temp_file.name
-            tokenizer_is_temp = True
-
-        tokenizer_kwargs = dict(
-            truncation_side="right",
-            padding_side="right",
-            pad_token="<|reserved_special_token_0|>",
-        )
-        tokenizer_kwargs.update(tokenizer_override)
-        tokenizer = AutoTokenizer.from_pretrained(model_paths["tokenizer"], **tokenizer_kwargs)
-
-        if tokenizer_is_temp:
-            os.remove(model_paths["tokenizer"])
+        tokenizer = load_tokenizer(model_paths, config.model.tokenizer_override)
 
         # Initialize environment with tokenization parameters
         train_environments = load_environments_from_config(
-            Path(__file__).resolve().parent / train_environments_path, tokenizer
+            Path(__file__).resolve().parent / config.environment.train_environments_path, tokenizer
         )
         test_environments = load_environments_from_config(
-            Path(__file__).resolve().parent / test_environments_path, tokenizer
+            Path(__file__).resolve().parent / config.environment.test_environments_path, tokenizer
         )
 
         # Initialize logger
-        if "enable" not in logger_config:
-            logger_config["enable"] = jax.process_index() == 0
-        if "config_to_log" in logger_config:
-            logger_config["config_to_log"].update(args_dict)
-        else:
-            logger_config["config_to_log"] = args_dict
-        logger = WandbLogger(wandb_project, output_dir=output_dir, **logger_config)
-
-        # Create trainer configuration
-        trainer_config = {
-            **args_dict,
-            "model_paths": model_paths,
-            "optim_config": optim_config,
-            "generation_config": generation_config,
-            "test_generation_config": test_generation_config,
-            "checkpointer_config": checkpointer_config,
-            "inference_param_dtype": inference_param_dtype,
-            "inference_activation_dtype": inference_activation_dtype,
-            "training_param_dtype": training_param_dtype,
-            "training_activation_dtype": training_activation_dtype,
-        }
+        if logging_config.enable is None:
+            logging_config.enable = jax.process_index() == 0
+        if logging_config.config_to_log is None:
+            logging_config.config_to_log = {}
+        logging_config.config_to_log.update(dataclasses.asdict(config))
+        logger = WandbLogger(
+            config.logging.wandb_project,
+            output_dir=config.output_dir,
+            online=logging_config.online,
+            prefix=logging_config.prefix,
+            prefix_to_id=logging_config.prefix_to_id,
+            experiment_id=logging_config.experiment_id,
+            enable=logging_config.enable,
+            config_to_log=logging_config.config_to_log,
+        )
 
         # Initialize and run trainer
-        trainer = Trainer(trainer_config, mesh, models, tokenizer, train_environments, test_environments, logger)
+        trainer = Trainer(
+            config,
+            mesh,
+            {
+                "train": training_model,
+                "prefill": prefill_model,
+                "generate": inference_model,
+            },
+            tokenizer,
+            train_environments,
+            test_environments,
+            logger,
+        )
         trainer.train()
 
         jax_distributed_barrier()

@@ -83,7 +83,7 @@ def create_entry_from_results(results: dict, results_filepath: str, base_path: s
     # Path information
     run_name = Path(results_filepath).parent.relative_to(base_path_abs).as_posix()
     filepath = Path(results_filepath)
-    repo_root = Path(__file__).resolve().parent.parent.parent
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
     relative_path = filepath.relative_to(repo_root).parent
 
     # Get the run info which contains all the information
@@ -142,7 +142,7 @@ def get_entries(base_path: str) -> list[LeaderboardEntry]:
 def main():
     parser = argparse.ArgumentParser(description="Generate static leaderboard data")
     current_file = Path(__file__).resolve()
-    marin_root = current_file.parent.parent.parent
+    marin_root = current_file.parent.parent.parent.parent
     experiments_path = marin_root / "experiments" / "speedrun"
 
     parser.add_argument(

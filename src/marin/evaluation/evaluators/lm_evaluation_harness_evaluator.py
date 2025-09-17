@@ -22,9 +22,10 @@ import subprocess
 import time
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
+from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
 from marin.evaluation.utils import is_remote_path, upload_to_gcs
+from marin.run.ray_deps import build_runtime_env_for_packages
 
 logger = logging.getLogger(__name__)
 
@@ -37,16 +38,16 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
 
     RESULTS_PATH: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, "eleuther_results")
 
-    _pip_packages: ClassVar[list[Dependency]] = [
-        *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
-        "pandas",
-        "langdetect",
-        "immutabledict",
-    ]
-    _env_vars: ClassVar[dict[str, str]] = {
-        # Human eval tests code from the model which requires permission to run
-        "HF_ALLOW_CODE_EVAL": "1",
-    }
+    def get_runtime_env(self) -> dict:
+        """
+        Returns the runtime environment to run the evaluator on the Ray cluster.
+        """
+        return build_runtime_env_for_packages(
+            extra=["eval"],
+            env_vars={
+                "HF_ALLOW_CODE_EVAL": "1"
+            },  # Human eval tests code from the model which requires permission to run
+        )
 
     def download_model(self, model: ModelConfig) -> str:
         """
