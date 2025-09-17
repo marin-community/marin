@@ -390,14 +390,9 @@ def test_inference_worker(ray_cluster, inference_worker_config):
 
 def test_train_worker(ray_cluster, training_worker_config):
     """Test training worker processes rollout batch and creates checkpoint."""
-    # Configure for just 1 training step since we only provide 1 batch
-    training_worker_config.trainer.num_train_steps = 1
-
-    # Use the rollout reader's queue from the training worker config
     rollout_reader = training_worker_config.rollout_reader
     queue_writer = rollout_reader._queue.writer()
 
-    # Create a sample rollout batch with correct data shapes
     batch_size = training_worker_config.trainer.train_batch_size
     max_seq_len = 64  # Use fixed small length for testing
 
@@ -414,7 +409,7 @@ def test_train_worker(ray_cluster, training_worker_config):
     # Use context manager for cleaner test
     with TrainingWorkerRunner(training_worker_config, coordinator) as runner:
         # Wait for training to complete
-        while not runner.done.is_set() and runner.steps_completed < 1:
+        while not runner.done.is_set() and runner.steps_completed < 10:
             time.sleep(0.1)
 
     # Verify results

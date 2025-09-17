@@ -282,7 +282,12 @@ class TrainingWorker:
             every=self.config.weight_transfer_sync_interval,
         )
         checkpointer = trainer.config.checkpointer.create("train-id-0")
-        trainer.add_hook(checkpointer.on_step, every=1)
+
+        def _checkpoint_step(info: levanter.callbacks.StepInfo):
+            logger.info("Checking? for checkpoint at step %d", info.step)
+            checkpointer.on_step(info, force=True)
+
+        trainer.add_hook(_checkpoint_step, every=1)
 
         def _stop_on_signal(info: levanter.callbacks.StepInfo):
             if self._should_stop:
