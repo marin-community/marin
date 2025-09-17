@@ -63,7 +63,7 @@ if __name__ == "__main__":
             # EvalTaskConfig(name="gsm8k_cot", num_fewshot=8, task_alias="gsm8k_cot"),
             # EvalTaskConfig("hellaswag", 0, task_alias="hellaswag_0shot"),  # 4-way multiple choice commonsense reasoning dataset
             # EvalTaskConfig("hellaswag", num_fewshot=10, task_alias="hellaswag_10shot"),  # 4-way MCQ commonsense reasoning dataset
-            # EvalTaskConfig(name="humaneval", num_fewshot=10, task_alias="humaneval_10shot"),
+            EvalTaskConfig(name="humaneval_instruct", num_fewshot=0, task_alias="humaneval_instruct_0shot"),
             # EvalTaskConfig(name="bbh_cot_fewshot", num_fewshot=3, task_alias="bbh_3shot"),
             # EvalTaskConfig(name="ifeval", num_fewshot=0, task_alias="ifeval_0shot"),
             # EvalTaskConfig("lambada_openai", num_fewshot=0, task_alias="lambada_openai_0shot"),  # predict the endings of text passages
