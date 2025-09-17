@@ -44,6 +44,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         """
         return build_runtime_env_for_packages(
             extra=["eval"],
+            pip_packages=["pandas", "langdetect", "immutabledict"],
             env_vars={
                 "HF_ALLOW_CODE_EVAL": "1"
             },  # Human eval tests code from the model which requires permission to run
