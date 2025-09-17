@@ -232,7 +232,7 @@ class TrainingWorker:
 
         self.replay_buffer = ReplayBuffer(
             capacity=32000,
-            local_batch_size=config.train_config.trainer.train_batch_size,
+            local_batch_size=config.trainer.train_batch_size,
             recency_alpha=3.0,
             process_id=jax.process_index(),
             total_processes=jax.process_count(),
@@ -245,7 +245,6 @@ class TrainingWorker:
 
         # Create rollout dataset for Levanter
         self.rollout_dataset = RolloutDataset(self.data_loader)
-        self._setup_weight_transfer()
 
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
@@ -261,7 +260,8 @@ class TrainingWorker:
             seed = config.trainer.seed
             data_key, model_key, training_key = jrandom.split(jrandom.PRNGKey(seed), 3)
 
-            train_dataset = config.data.train_set(config.model.Pos, config.trainer.batch_schedule, key=data_key)
+            data_config = RolloutDataConfig(self.rollout_dataset)
+            train_dataset = data_config.train_set(config.model.Pos, config.trainer.batch_schedule, key=data_key)
 
             state = trainer.initial_state(
                 training_key,

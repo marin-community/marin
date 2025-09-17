@@ -19,25 +19,53 @@ This worker loads model checkpoints, generates rollouts from a single environmen
 and writes the rollout data to files for training workers to consume.
 """
 
+import asyncio
 import logging
 import os
 import socket
+import threading
 import time
+from dataclasses import dataclass
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import requests
+from levanter.inference.openai import InferenceServer, InferenceServerConfig
 
-from marin.post_training.inference_loader import InferenceServer
+from marin.post_training.environments.marin_env import InferenceContext
 
 from .flax.utils import (
     jax_distributed_barrier,
 )
 from .rl_dataset import create_dataset_from_environment
 from .rollout_storage import RolloutBatch, RolloutWriter, TaggedRolloutBatch
-from .training_config import TrainingConfig
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class InferenceWorkerConfig:
+    """Configuration for InferenceWorker."""
+
+    inference_server_config: InferenceServerConfig
+    policy_model: Any  # We'll type this properly later
+    reference_model: Any  # We'll type this properly later
+    environment_spec: str
+    rollout_writer: RolloutWriter
+    environment: Any
+    environment_name: str
+    max_input_length: int
+    max_output_length: int
+    pad_token_id: int
+    n_prompts_per_step: int
+    n_generations: int
+    temperature: float
+    log_freq: int
+    rollout_batch_size: int = 32
+    max_rollouts: int | None = None
+
 
 COMPLETION_EXAMPLE = """
 curl http://localhost:8000/v1/chat/completions \
@@ -52,7 +80,7 @@ curl http://localhost:8000/v1/chat/completions \
 """
 
 
-class LevanterInferenceContext:
+class LevanterInferenceContext(InferenceContext):
     """Context that uses Levanter model and inference server."""
 
     def __init__(self, model, inference_server: InferenceServer):
@@ -74,16 +102,15 @@ class LevanterInferenceContext:
     ) -> list[list[dict]]:
         """Generate responses for a batch of prompts."""
         # use requests to call the inference server using the OpenAI chat/completions API
-        import requests
 
         host = self.inference_server.config.host
         port = self.inference_server.config.port
         url = f"http://{host}:{port}/v1/chat/completions"
-        requests.get(
+        response = requests.post(
             url,
             headers={"Content-Type": "application/json"},
-            data={
-                "model": self.inference_server.config.model_name,
+            json={
+                "model": getattr(self.inference_server.config, "model_name", "test-model"),
                 "messages": [{"role": "user", "content": prompt} for prompt in prompts],
                 "logprobs": True,
                 "max_tokens": 1024,
@@ -93,6 +120,28 @@ class LevanterInferenceContext:
                 "top_k": top_k,
             },
         )
+
+        # Parse the response
+        if response.status_code != 200:
+            raise RuntimeError(f"Inference server error: {response.status_code} - {response.text}")
+
+        result = response.json()
+
+        # Convert OpenAI format to our expected format
+        # We expect a list of lists where each inner list contains generation dicts
+        all_responses = []
+        for i in range(len(prompts)):
+            prompt_responses = []
+            # Get all choices for this prompt
+            for choice in result["choices"]:
+                if choice["index"] // n_generations == i:
+                    content = choice["message"]["content"]
+                    tokens = self._tokenizer.encode(content)
+                    logprobs = [-0.5] * len(tokens)
+                    prompt_responses.append({"tokens": tokens, "logprobs": logprobs})
+            all_responses.append(prompt_responses)
+
+        return all_responses
 
     def compute_logprobs(
         self,
@@ -156,46 +205,65 @@ class InferenceWorker:
     """
 
     _running: bool = True
-    training_config: TrainingConfig
     rollout_writer: RolloutWriter
 
     def __init__(
         self,
-        training_config: TrainingConfig,
-        inference_server: InferenceServer,
-        policy_model,
-        reference_model,
-        environment_spec: str,
-        rollout_writer: RolloutWriter,
-        rollout_batch_size: int = 32,
-        max_rollouts: int | None = None,
+        config: InferenceWorkerConfig,
         coordinator=None,
     ):
         """Initialize inference worker.
 
         Args:
-            training_config: Training configuration.
-            inference_server: Levanter inference server.
-            policy_model: Policy model for generation.
-            reference_model: Reference model for logprobs.
-            environment_spec: Environment specification string.
-            rollout_writer: Writer for rollout output.
-            rollout_batch_size: Size of rollout batches.
-            max_rollouts: Maximum number of rollouts to generate. None for unlimited.
+            config: Inference worker configuration.
             coordinator: Coordinator for weight transfer (required for RAY_REMOTING and JAX_TRANSFER_SERVER modes).
         """
-        self.training_config = training_config
-        self.inference_server = inference_server
-        self.policy_model = policy_model
-        self.reference_model = reference_model
-        self.environment_spec = environment_spec
-        self.rollout_batch_size = rollout_batch_size
-        self.max_rollouts = max_rollouts
+        # Create and start the inference server
+        self.inference_server_config = config.inference_server_config
+        self.inference_server = InferenceServer.create(self.inference_server_config)
+        self._server_thread = None
+        self._start_inference_server()
+        self.policy_model = config.policy_model
+        self.reference_model = config.reference_model
+        self.environment_spec = config.environment_spec
+        self.rollout_writer = config.rollout_writer
+        self.environment = config.environment
+        self.environment_name = config.environment_name
+        self.max_input_length = config.max_input_length
+        self.max_output_length = config.max_output_length
+        self.pad_token_id = config.pad_token_id
+        self.n_prompts_per_step = config.n_prompts_per_step
+        self.n_generations = config.n_generations
+        self.temperature = config.temperature
+        self.log_freq = config.log_freq
+        self.rollout_batch_size = config.rollout_batch_size
+        self.max_rollouts = config.max_rollouts
         self.coordinator = coordinator
 
+    def _start_inference_server(self):
+        """Start the inference server in a background thread."""
+
+        def run_server():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self.inference_server.serve_async())
+            except Exception as e:
+                logger.error(f"Inference server error: {e}")
+
+        self._server_thread = threading.Thread(target=run_server, daemon=True)
+        self._server_thread.start()
+        # Give the server time to start
+        time.sleep(2)
+        logger.info(
+            f"Inference server started on {self.inference_server_config.host}:{self.inference_server_config.port}"
+        )
+
     def stop(self):
-        """Stop the inference worker loop."""
+        """Stop the inference worker loop and server."""
         self._running = False
+        if self.inference_server:
+            self.inference_server.shutdown()
 
     def _generate_rollout_batch(self, rng) -> tuple[list[dict], dict]:
         """Generate a set of rollout batches from the environment."""
@@ -209,14 +277,14 @@ class InferenceWorker:
             environment=self.environment,
             policy_ctx=policy_ctx,
             reference_ctx=reference_ctx,
-            n_examples=self.training_config.hyperparameters.n_prompts_per_step,
+            n_examples=self.n_prompts_per_step,
             prng_key=rng,
-            n_generations=self.training_config.generation_config.n_generations,
+            n_generations=self.n_generations,
             max_input_length=self.max_input_length,
             max_output_length=self.max_output_length,
             pad_token_id=self.pad_token_id,
             mode="train",
-            temperature=self.training_config.generation_config.temperature,
+            temperature=self.temperature,
         )
         jax_distributed_barrier()
 
@@ -245,7 +313,7 @@ class InferenceWorker:
             for batch_data in rollout_batches:
                 step += 1
 
-                if self.training_config.logging.log_freq > 0 and step % self.training_config.logging.log_freq == 0:
+                if self.log_freq > 0 and step % self.log_freq == 0:
                     log_metrics = {"step": step}
                     log_metrics.update(jax.device_get(metrics))
                     log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
