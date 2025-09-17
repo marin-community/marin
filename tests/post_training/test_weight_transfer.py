@@ -14,6 +14,7 @@
 
 import tempfile
 
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -22,10 +23,10 @@ import ray
 from jax.sharding import Mesh
 
 try:
-    from marin.post_training.flax.utils import load_checkpoint
-    from marin.post_training.training_config import WeightTransferConfig, WeightTransferMode
     from marin.post_training.weight_transfer_manager import (
         RayWeightCoordinator,
+        WeightTransferConfig,
+        WeightTransferMode,
         create_coordinator,
         create_weight_transfer_client,
         create_weight_transfer_server,
@@ -37,27 +38,65 @@ import uuid
 
 
 def create_sample_pytree(seed: int):
-    """Create a sample JAX pytree representing model parameters."""
+    """Create a sample pytree representing Levanter model parameters."""
     generator = np.random.Generator(np.random.PCG64(seed))
+
+    # Create axes for NamedArrays
+    Vocab = hax.Axis("vocab", 1000)
+    Hidden = hax.Axis("hidden", 512)
+    HiddenOut = hax.Axis("hidden_out", 512)
+    FF = hax.Axis("ff", 2048)
+
     return {
         "embedding": {
-            "weight": jnp.array(generator.standard_normal((1000, 512), dtype=jnp.float32)),
+            "weight": hax.named(
+                jnp.array(generator.standard_normal((1000, 512), dtype=jnp.float32)),
+                (Vocab, Hidden),
+            ),
         },
         "layers": {
             "0": {
                 "attention": {
-                    "query": {"weight": jnp.array(generator.standard_normal((512, 512), dtype=jnp.float32))},
-                    "key": {"weight": jnp.array(generator.standard_normal((512, 512), dtype=jnp.float32))},
-                    "value": {"weight": jnp.array(generator.standard_normal((512, 512), dtype=jnp.float32))},
+                    "query": {
+                        "weight": hax.named(
+                            jnp.array(generator.standard_normal((512, 512), dtype=jnp.float32)),
+                            (Hidden, HiddenOut),
+                        )
+                    },
+                    "key": {
+                        "weight": hax.named(
+                            jnp.array(generator.standard_normal((512, 512), dtype=jnp.float32)),
+                            (Hidden, HiddenOut),
+                        )
+                    },
+                    "value": {
+                        "weight": hax.named(
+                            jnp.array(generator.standard_normal((512, 512), dtype=jnp.float32)),
+                            (Hidden, HiddenOut),
+                        )
+                    },
                 },
                 "feed_forward": {
-                    "linear1": {"weight": jnp.array(generator.standard_normal((512, 2048), dtype=jnp.float32))},
-                    "linear2": {"weight": jnp.array(generator.standard_normal((2048, 512), dtype=jnp.float32))},
+                    "linear1": {
+                        "weight": hax.named(
+                            jnp.array(generator.standard_normal((512, 2048), dtype=jnp.float32)),
+                            (Hidden, FF),
+                        )
+                    },
+                    "linear2": {
+                        "weight": hax.named(
+                            jnp.array(generator.standard_normal((2048, 512), dtype=jnp.float32)),
+                            (FF, Hidden),
+                        )
+                    },
                 },
             },
         },
         "output": {
-            "weight": jnp.array(generator.standard_normal((512, 1000), dtype=jnp.float32)),
+            "weight": hax.named(
+                jnp.array(generator.standard_normal((512, 1000), dtype=jnp.float32)),
+                (Hidden, Vocab),
+            ),
         },
     }
 
@@ -98,7 +137,7 @@ def sample_params():
 
 
 def create_test_weight_transfer_pair(weight_transfer_config, params_structure=None):
-    """Helper function to create server/client pairs for testing."""
+    """Helper function to create server/client pairs for testing with simplified Levanter API."""
     # Create coordinator if needed for this mode
     coordinator = None
     if weight_transfer_config.mode in [
@@ -108,35 +147,21 @@ def create_test_weight_transfer_pair(weight_transfer_config, params_structure=No
         coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
         coordinator = create_coordinator(weight_transfer_config.mode, name=coordinator_name)
 
-    def identity_shard(x):
-        return x
-
-    shard_fns = jax.tree.map(lambda x: identity_shard, params_structure)
-
-    class MockGatherFn:
-        def __init__(self, params):
-            self.params = params
-
-    def identity_gather(x):
-        return x
-
-    gather_fns = MockGatherFn(params=jax.tree.map(lambda x: identity_gather, params_structure))
-
-    class DummyConfig:
-        def to_dict(self):
-            return {}
+    # Create simple mesh and axis mapping for testing
+    mesh = create_mesh()
+    axis_mapping = None  # Use default Levanter sharding
 
     server = create_weight_transfer_server(
         config=weight_transfer_config,
-        gather_fns=gather_fns,
-        model_config=DummyConfig(),
+        mesh=mesh,
+        axis_mapping=axis_mapping,
         coordinator=coordinator,
     )
 
     client = create_weight_transfer_client(
         config=weight_transfer_config,
-        shard_fns=shard_fns,
-        load_checkpoint_fn=load_checkpoint,
+        mesh=mesh,
+        axis_mapping=axis_mapping,
         coordinator=coordinator,
     )
 
@@ -212,7 +237,7 @@ def test_ray_coordinator_version_ordering(ray_cluster, sample_params):
     treedef = ray.get(retrieved_refs["treedef"])
     retrieved_params = jax.tree.unflatten(treedef, leaves)
     # Verify it's version 3 by checking it's different from original
-    assert not np.array_equal(retrieved_params["embedding"]["weight"], numpy_params_1["embedding"]["weight"])
+    assert not np.array_equal(retrieved_params["embedding"]["weight"].array, numpy_params_1["embedding"]["weight"])
 
 
 def test_ray_coordinator_no_weights_initially(ray_cluster):
@@ -232,17 +257,9 @@ def test_basic_weight_transfer(ray_cluster, weight_transfer_config, sample_param
     server.serve_weights(1, sample_params)
 
     # Receive weights
-    received_params, metadata = client.receive_weights()
+    received_params = client.receive_weights(sample_params)
 
     assert received_params is not None
-    assert metadata["weight_id"] == 1
-
-    # Source varies by transfer mode
-    expected_sources = {
-        WeightTransferMode.RAY_REMOTING: "ray_remoting",
-        WeightTransferMode.GCS_CHECKPOINT: "gcs_checkpoint",
-    }
-    assert metadata["source"] == expected_sources[weight_transfer_config.mode]
 
     try:
         # Verify structure and values match
@@ -251,12 +268,15 @@ def test_basic_weight_transfer(ray_cluster, weight_transfer_config, sample_param
         # For GCS checkpoints, there may be precision loss due to bfloat16 conversion
         if weight_transfer_config.mode == WeightTransferMode.GCS_CHECKPOINT:
             np.testing.assert_allclose(
-                received_params["embedding"]["weight"],
-                sample_params["embedding"]["weight"],
+                received_params["embedding"]["weight"].array,
+                sample_params["embedding"]["weight"].array,
                 rtol=1e-2,
             )
         else:
-            np.testing.assert_array_equal(received_params["embedding"]["weight"], sample_params["embedding"]["weight"])
+            np.testing.assert_array_equal(
+                received_params["embedding"]["weight"].array,
+                sample_params["embedding"]["weight"].array,
+            )
     finally:
         server.cleanup()
         client.cleanup()
@@ -268,22 +288,24 @@ def test_multiple_weight_updates(ray_cluster, weight_transfer_config, sample_par
 
     # First weight transfer
     server.serve_weights(1, sample_params)
-    received_params_1, metadata_1 = client.receive_weights()
-    assert metadata_1["weight_id"] == 1
+    received_params_1 = client.receive_weights(sample_params)
+    assert received_params_1 is not None
 
     # Second weight transfer with new params
     new_params = create_sample_pytree(seed=456)  # Different seed
     server.serve_weights(2, new_params)
-    received_params_2, metadata_2 = client.receive_weights()
-    assert metadata_2["weight_id"] == 2
+    received_params_2 = client.receive_weights(received_params_1)
+    assert received_params_2 is not None
 
     # Verify weights are different
-    assert not np.array_equal(received_params_1["embedding"]["weight"], received_params_2["embedding"]["weight"])
+    assert not np.array_equal(
+        received_params_1["embedding"]["weight"].array,
+        received_params_2["embedding"]["weight"].array,
+    )
 
     # Third call should return None (no new weights)
-    received_params_3, metadata_3 = client.receive_weights()
+    received_params_3 = client.receive_weights(received_params_2)
     assert received_params_3 is None
-    assert metadata_3 == {}
 
     # Cleanup
     server.cleanup()
@@ -298,14 +320,12 @@ def test_client_no_new_weights(ray_cluster, weight_transfer_config, sample_param
     server.serve_weights(1, sample_params)
 
     # First receive should get weights
-    received_params_1, metadata_1 = client.receive_weights()
+    received_params_1 = client.receive_weights(sample_params)
     assert received_params_1 is not None
-    assert metadata_1["weight_id"] == 1
 
     # Second receive should return None (no new weights)
-    received_params_2, metadata_2 = client.receive_weights()
+    received_params_2 = client.receive_weights(received_params_1)
     assert received_params_2 is None
-    assert metadata_2 == {}
 
     # Cleanup
     server.cleanup()
@@ -318,10 +338,11 @@ def test_concurrent_clients(ray_cluster, weight_transfer_config, sample_params):
     server, client_1 = create_test_weight_transfer_pair(weight_transfer_config, params_structure=sample_params)
 
     coordinator = getattr(client_1, "coordinator", None)
+    mesh = create_mesh()
     client_2 = create_weight_transfer_client(
         config=weight_transfer_config,
-        load_checkpoint_fn=load_checkpoint,
-        shard_fns=client_1.shard_fns,
+        mesh=mesh,
+        axis_mapping=None,
         coordinator=coordinator,
     )
 
@@ -330,16 +351,17 @@ def test_concurrent_clients(ray_cluster, weight_transfer_config, sample_params):
         server.serve_weights(1, sample_params)
 
         # Both clients should receive the same weights
-        received_params_1, metadata_1 = client_1.receive_weights()
-        received_params_2, metadata_2 = client_2.receive_weights()
+        received_params_1 = client_1.receive_weights(sample_params)
+        received_params_2 = client_2.receive_weights(sample_params)
 
         assert received_params_1 is not None
         assert received_params_2 is not None
-        assert metadata_1["weight_id"] == 1
-        assert metadata_2["weight_id"] == 1
 
         # Verify weights are identical
-        np.testing.assert_array_equal(received_params_1["embedding"]["weight"], received_params_2["embedding"]["weight"])
+        np.testing.assert_array_equal(
+            received_params_1["embedding"]["weight"].array,
+            received_params_2["embedding"]["weight"].array,
+        )
     finally:
         server.cleanup()
         client_1.cleanup()
@@ -370,10 +392,9 @@ def test_with_mesh_sharding(ray_cluster, weight_transfer_config, sample_params):
     try:
         # Serve and receive weights
         server.serve_weights(1, sample_params)
-        received_params, metadata = client.receive_weights()
+        received_params = client.receive_weights(sample_params)
 
         assert received_params is not None
-        assert metadata["weight_id"] == 1
 
         # For GCS checkpoints, there may be precision loss due to bfloat16 conversion
         if weight_transfer_config.mode == WeightTransferMode.GCS_CHECKPOINT:
@@ -384,7 +405,10 @@ def test_with_mesh_sharding(ray_cluster, weight_transfer_config, sample_params):
             )
         else:
             # Verify params are properly sharded (should still have same values)
-            np.testing.assert_array_equal(received_params["embedding"]["weight"], sample_params["embedding"]["weight"])
+            np.testing.assert_array_equal(
+                received_params["embedding"]["weight"].array,
+                sample_params["embedding"]["weight"].array,
+            )
     finally:
         server.cleanup()
         client.cleanup()
@@ -403,15 +427,15 @@ def test_jax_numpy_conversion(ray_cluster, weight_transfer_config):
     try:
         # Transfer weights
         server.serve_weights(1, jax_params)
-        received_params, metadata = client.receive_weights()
+        received_params = client.receive_weights(jax_params)
 
         # For GCS checkpoints, account for precision loss due to bfloat16 conversion
-        if metadata["source"] == "gcs_checkpoint":
+        if weight_transfer_config.mode == WeightTransferMode.GCS_CHECKPOINT:
             np.testing.assert_allclose(received_params["weight"], jax_params["weight"], rtol=1e-2)
             np.testing.assert_allclose(received_params["bias"], jax_params["bias"], rtol=1e-2)
         else:
             # Verify conversion preserved values and dtypes
-            np.testing.assert_array_equal(received_params["weight"], jax_params["weight"])
+            np.testing.assert_array_equal(received_params["weight"].array, jax_params["weight"].array)
             np.testing.assert_array_equal(received_params["bias"], jax_params["bias"])
     finally:
         server.cleanup()
@@ -424,7 +448,7 @@ def test_cleanup(ray_cluster, weight_transfer_config, sample_params):
 
     # Do a basic transfer
     server.serve_weights(1, sample_params)
-    received_params, metadata = client.receive_weights()
+    received_params = client.receive_weights(sample_params)
     assert received_params is not None
 
 
@@ -436,10 +460,9 @@ def test_empty_params(ray_cluster, weight_transfer_config):
 
     try:
         server.serve_weights(1, empty_params)
-        received_params, metadata = client.receive_weights()
+        received_params = client.receive_weights(empty_params)
 
         assert received_params == {}
-        assert metadata["weight_id"] == 1
     finally:
         server.cleanup()
         client.cleanup()
