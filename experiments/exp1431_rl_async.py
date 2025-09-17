@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Async RL training experiment for math problems with Llama 8B.
+Async RL training experiment for mock environment with Llama 8B.
 """
 
 import logging
@@ -54,8 +54,8 @@ from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
-WANDB_PROJECT = "async_rl_math"
-ENVIRONMENT_SPEC = "math"
+WANDB_PROJECT = "async_rl_mock"
+ENVIRONMENT_SPEC = "mock:task_type=count"
 
 STOP_TOKENS = [
     [524, 9399],
@@ -302,8 +302,8 @@ def default_rl_train(
         ),
         environment=EnvironmentConfig(),
         distributed=DistributedConfig(
-            train_sharding=[1, 8, 1, -1],
-            inference_sharding=[1, 32, 1, 4],
+            train_sharding=[1, 4, 1, -1],
+            inference_sharding=[1, 4, 1, -1],
             physical_axis_splitting=True,
             jax_distributed_initialize_config={},
         ),
@@ -316,15 +316,15 @@ def default_rl_train(
 
     config = RLTrainConfig(
         training_config=training_config,
-        inference_tpu_type="v5litepod-128",
-        train_tpu_type="v5litepod-128",
+        inference_tpu_type="v4-8",
+        train_tpu_type="v4-64",
         num_inference_workers=1,
         num_train_slices=1,
     )
 
     return ExecutorStep(
         name=os.path.join("rl_checkpoints", name),
-        description=f"Async RL math training: {name} for {num_train_steps} steps",
+        description=f"Async RL Mock training: {name} for {num_train_steps} steps",
         fn=run_rl_training_on_pod,
         config=config,
         pip_dependency_groups=["post_training"],
@@ -332,7 +332,7 @@ def default_rl_train(
 
 
 def main():
-    """Main function to run async RL math training experiments."""
+    """Main function to run async RL mock environment training experiments."""
 
     model_paths = {
         "params": InputName.hardcoded("checkpoints/Llama-3.1-8B-Instruct-converted/params.msgpack"),
@@ -342,7 +342,7 @@ def main():
 
     experiments = [
         default_rl_train(
-            name="async-math-llama8b-test0",
+            name="async-mock-env-llama8b-test0",
             model_paths=model_paths,
             train_bsize=16,
             kl_coef=1e-3,
