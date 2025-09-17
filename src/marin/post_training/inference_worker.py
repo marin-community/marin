@@ -319,6 +319,7 @@ class InferenceWorker:
             logger.info(f"Loading latest checkpoint from GCS at {latest_checkpoint}")
             return self._load_checkpoint(latest_checkpoint)
 
+        logger.info("Falling back to reference model parameters for initial model parameters")
         return self._load_reference_params()
 
     def _initialize_weight_transfer(self):
@@ -349,6 +350,8 @@ class InferenceWorker:
             jax_distributed_barrier()
             if metrics:
                 logger.info(f"Weights updated: {metrics}")
+            else:
+                logger.info("No new weights available.")
         except Exception as e:
             logger.warning(f"Failed to receive weights: {e}")
 
@@ -356,8 +359,6 @@ class InferenceWorker:
         """Generate a set of rollout batches from the environment."""
         # Create RL dataset from environment
         jax_distributed_barrier()
-        logger.info("Current params: %s", type(self.current_params))
-        logger.info("Reference params: %s", type(self.reference_params))
         rl_dataset, dataset_metrics = create_dataset_from_environment(
             environment=self.environment,
             sampler=self.sampler,
