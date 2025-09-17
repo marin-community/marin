@@ -1,18 +1,17 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
+
+import haliax as hax
 import jax
 import jax.numpy as jnp
-import haliax as hax
-
+import pytest
 from haliax import Axis
-
 from levanter.inference.engine import InferenceEngine, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
-from levanter.layers.attention import KvPageCache
 from levanter.inference.page_table import PageTable
-import pytest
-import logging
+from levanter.layers.attention import KvPageCache
 
 
 class DummyModel:
@@ -77,15 +76,15 @@ def test_release_on_finish_and_reuse_slots(caplog: pytest.LogCaptureFixture):
         )
         reqs.append(Request(prompt_tokens=toks, request_id=i, decode_params=seq_params, n_generations=1))
 
-    outputs, total_generated = svc.generate(reqs)
+    result = svc.generate(reqs)
 
     # Each sequence should be original prompt + a single eos token
     # TODO: we recently stopped appending prompt to outputs; re-enable these checks if we restore that behavior
     # assert outputs[0] == prompts[0] + [3]
     # assert outputs[1] == prompts[1] + [3]
-    assert outputs[0] == [3]
-    assert outputs[1] == [3]
-    assert total_generated == 2  # one new token per prompt
+    assert result.tokens[0] == [3]
+    assert result.tokens[1] == [3]
+    assert result.total_generated == 2  # one new token per prompt
 
     # Finished sequences are auto-released; PageTable should have no active seqs
     pt = svc.gen_state.decode_state.page_table
@@ -121,8 +120,8 @@ def test_release_on_finish_and_reuse_slots(caplog: pytest.LogCaptureFixture):
         )
         reqs2.append(Request(prompt_tokens=toks, request_id=i, decode_params=seq_params, n_generations=1))
 
-    outputs2, total_generated2 = svc.generate(reqs2)
+    result2 = svc.generate(reqs2)
     # TODO: re-enable if we restore prompt prepending
     # assert outputs2[0] == prompts2[0] + [3]
-    assert outputs2[0] == [3]
-    assert total_generated2 == 1
+    assert result2.tokens[0] == [3]
+    assert result2.total_generated == 1

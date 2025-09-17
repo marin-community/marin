@@ -81,6 +81,10 @@ profiling = [
   # Writer used by the TensorBoard tracker implementation
   "tensorboardX>=2.6",
 ]
+serve = [
+  "fastapi>=0.100.0",
+  "uvicorn[standard]>=0.23.0",
+]
 
 [dependency-groups]
 test = [
@@ -91,6 +95,8 @@ test = [
   "librosa",
   "tensorboardX>=2.6",
   "chex>=0.1.86",
+  "httpx>=0.28.1",
+  "pytest-profiling>=1.8.1",
 ]
 
 docs = [

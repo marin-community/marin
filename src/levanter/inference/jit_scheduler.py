@@ -5,14 +5,15 @@ import dataclasses
 
 import equinox as eqx
 import haliax as hax
+import jax
 import jaxtyping
-from haliax import NamedArray, haxtyping as ht
+from haliax import NamedArray
+from haliax import haxtyping as ht
 from haliax.jax_utils import ensure_scalar
 from jax import numpy as jnp
-import jax
 
-from levanter.inference.utils import INVALID, masked_set, is_valid, is_stop_signal, purge
 from levanter.inference.page_table import PageTable
+from levanter.inference.utils import INVALID, is_stop_signal, is_valid, masked_set, purge
 
 
 class PackedSequence(eqx.Module):
@@ -420,6 +421,7 @@ max_num_tokens: {max_num_tokens}
         max_stop_seqs: int = 0,
         max_stop_tokens: int = 16,
         max_queued_tokens: int = 0,
+        enable_logprobs: bool = False,
     ) -> "DecodeState":
         """
         Initialize a DecodeState with empty buffers.
@@ -435,7 +437,11 @@ max_num_tokens: {max_num_tokens}
             page_table=page_table,
             seq_id=hax.full({"seq": max_seqs}, INVALID, dtype=jnp.int32),
             tokens=hax.full({"seq": max_seqs, "position": max_seq_len}, pad_token_id, dtype=jnp.int32),
-            logprobs=None,
+            logprobs=(
+                None
+                if not enable_logprobs
+                else hax.full({"seq": max_seqs, "position": max_seq_len}, jnp.nan, dtype=jnp.float32)
+            ),
             seq_lens=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
             clone_sources=hax.full({"seq": max_seqs}, INVALID, dtype=jnp.int32),
             max_num_tokens=hax.full({"seq": max_seqs}, 0, dtype=jnp.int32),

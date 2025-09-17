@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 import logging
 import time
-from dataclasses import dataclass, field
-from typing import Optional
 from contextlib import ExitStack
-from typing import cast
+from dataclasses import dataclass, field
+from typing import Optional, cast
 
 import equinox as eqx
 import haliax as hax
@@ -15,6 +14,7 @@ from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
+from levanter.callbacks import profile_ctx
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
@@ -24,7 +24,6 @@ from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
-from levanter.callbacks import profile_ctx
 
 logger = logging.getLogger(__name__)
 
@@ -176,14 +175,14 @@ def main(config: SampleLmConfig):
                         )
                     )
 
-                outputs, total_generated = service.generate(reqs)
+                result = service.generate(reqs)
                 print(
                     f"Round {r} took {time.time() - time_in:.2f} seconds, "
-                    f"generated {total_generated} tokens in {len(outputs)} sequences."
+                    f"generated {result.total_generated} tokens in {len(result.tokens)} sequences."
                 )
 
                 # Decode and print outputs
-                for seq_id, seq_outputs in enumerate(outputs):
+                for seq_id, seq_outputs in enumerate(result.tokens):
                     seq_outputs = [tok for tok in seq_outputs if tok != tokenizer.pad_token_id and tok != INVALID]
                     text = tokenizer.decode(seq_outputs, skip_special_tokens=True)
                     print(f"Tokens for sequence {seq_id} (len: {len(seq_outputs)}: {seq_outputs}")
