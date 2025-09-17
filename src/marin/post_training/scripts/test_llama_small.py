@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Test script for mock environment RL training.
+Test script for Llama-3.2-1B-Instruct RL training with mock environment.
 
 Supports three modes:
 - driver (default): Launches inference and training workers via ray_run
@@ -23,36 +23,35 @@ Supports three modes:
 """
 
 import argparse
+import datetime
 import logging
 import os
 import subprocess
 import threading
 import time
+from pathlib import Path
 
-from marin.post_training.inference_worker import InferenceWorker
+import haliax as hax
+import jax.random as jrandom
+import jmp
+from levanter.checkpoint import CheckpointerConfig
+from levanter.distributed import RayConfig
+from levanter.inference.openai import InferenceServerConfig
+from levanter.models.llama import LlamaConfig
+from levanter.optim import AdamConfig
+from levanter.tracker.wandb import WandbConfig
+from levanter.trainer import TrainerConfig
+
+from marin.post_training.environments.mock_env import MockEnv
 from marin.post_training.rollout_storage import FileRolloutReader, FileRolloutWriter
-from marin.post_training.train_worker import TrainingWorker
-from marin.post_training.training_config import (
-    CheckpointerConfigData,
-    DistributedConfig,
-    GenerationConfig,
-    LoggingConfig,
-    ModelConfig,
-    ModelOverrideConfig,
-    ModelPathsConfig,
-    OptimizerConfig,
-    TokenizerOverrideConfig,
-    TrainingConfig,
-    TrainingHyperparameters,
-    WeightTransferConfig,
-    WeightTransferMode,
-)
+from marin.post_training.rollout_worker import InferenceWorker, InferenceWorkerConfig
+from marin.post_training.train_worker import TrainingWorker, TrainingWorkerConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Test configuration
-WANDB_PROJECT = "mock_env_rl_test"
+WANDB_PROJECT = "llama_small_rl_test"
 
 STOP_TOKENS = [
     [524, 9399],
@@ -70,144 +69,121 @@ STOP_TOKENS = [
 ]
 
 
-SCRIPT_PATH = "src/marin/post_training/scripts/test_mock_env.py"
+SCRIPT_PATH = "src/marin/post_training/scripts/test_llama_small.py"
 PREFIX = "gs://marin-us-central2"
-MODEL_NAME = "unsloth/Llama-3.2-1B-Instruct"
+MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 MODEL_TOKENIZER = MODEL_NAME
-MODEL_PARAMS = f"{PREFIX}/rl_checkpoints/base/{MODEL_NAME}/params.msgpack"
-MODEL_CONFIG = f"{PREFIX}/rl_checkpoints/base/{MODEL_NAME}/config.json"
-CHECKPOINT_DIR = f"{PREFIX}/rl_checkpoints/mock_env_test/checkpoints"
-ROLLOUT_QUEUE_PATH = f"{PREFIX}/rl_checkpoints/mock_env_test/rollout_queue"
+# Use HuggingFace checkpoint directly for this test
+MODEL_CHECKPOINT = MODEL_NAME
+CHECKPOINT_DIR = f"{PREFIX}/rl_checkpoints/llama_small_test/checkpoints"
+ROLLOUT_QUEUE_PATH = f"{PREFIX}/rl_checkpoints/llama_small_test/rollout_queue"
 
 
-def mock_eval_config() -> TrainingConfig:
-    """Create training configuration for single node test."""
-    model_paths_config = ModelPathsConfig(
-        params=MODEL_PARAMS,
-        tokenizer=MODEL_TOKENIZER,
-        default_config_name=None,
-        config=MODEL_CONFIG,
+def llama_small_config() -> LlamaConfig:
+    """Create LlamaConfig for Llama-3.2-1B-Instruct."""
+    return LlamaConfig(
+        seq_len=131072,  # Full context length
+        hidden_dim=2048,
+        intermediate_dim=8192,
+        num_heads=32,
+        num_kv_heads=8,
+        num_layers=16,
+        tie_word_embeddings=True,
     )
 
-    optim_config = OptimizerConfig(
-        init_lr=1e-5,
-        end_lr=1e-6,
-        lr=1e-5,
-        lr_warmup_steps=10,
-        lr_decay_steps=100,
-        b1=0.9,
-        b2=0.95,
-        clip_gradient=1.0,
+
+def llama_small_trainer_config(output_dir: str) -> TrainerConfig:
+    """Create TrainerConfig for Llama-3.2-1B training."""
+    return TrainerConfig(
+        tracker=WandbConfig(
+            project=WANDB_PROJECT,
+            mode="disabled",  # Disable for testing
+        ),
+        mp=jmp.get_policy("p=f32,c=bfloat16"),
+        train_batch_size=4,  # Smaller batch for testing
+        num_train_steps=10000,
+        steps_per_eval=5,
+        checkpointer=CheckpointerConfig(
+            base_path=Path(output_dir),
+            save_interval=datetime.timedelta(seconds=30),
+        ),
+        tensor_parallel_axes=["mlp", "heads"],
+        fsdp_axis="embed",
+        batch_axis="batch",
+        ray=RayConfig(auto_start_cluster=False),
+    )
+
+
+def llama_small_optimizer_config() -> AdamConfig:
+    """Create optimizer configuration for Llama-3.2-1B."""
+    return AdamConfig(
+        learning_rate=1e-5,
         weight_decay=0.01,
-        bf16_momentum=False,
-        multiply_by_parameter_scale=False,
-        weight_decay_exclusions=[],
-        schedule="cos",
-        grad_accum_steps=1,
+        warmup=10,
+        lr_schedule="cosine",
     )
 
-    generation_config = GenerationConfig(
-        max_output_length=129,
+
+def llama_small_inference_server_config(output_dir: str) -> InferenceServerConfig:
+    """Create inference server configuration for Llama-3.2-1B."""
+    return InferenceServerConfig(
+        model=llama_small_config(),
+        trainer=llama_small_trainer_config(output_dir),
+        tokenizer=MODEL_TOKENIZER,
+        hf_checkpoint=MODEL_CHECKPOINT,
+        max_new_tokens=129,
         temperature=1.0,
-        stop_tokens=STOP_TOKENS,
+    )
+
+
+def llama_small_training_worker_config(rollout_reader, output_dir: str) -> TrainingWorkerConfig:
+    """Create training worker configuration for Llama-3.2-1B."""
+    return TrainingWorkerConfig(
+        rollout_reader=rollout_reader,
+        model=llama_small_config(),
+        trainer=llama_small_trainer_config(output_dir),
+        optimizer=llama_small_optimizer_config(),
+        tokenizer=MODEL_TOKENIZER,
+        kl_coef=1e-4,
+        reference_logprobs_bsize=8,
+        weight_transfer_sync_interval=10,
+    )
+
+
+def llama_small_inference_worker_config(rollout_writer, output_dir: str) -> InferenceWorkerConfig:
+    """Create inference worker configuration for Llama-3.2-1B."""
+    model_config = llama_small_config()
+
+    # Create models for inference
+    key = jrandom.PRNGKey(42)
+    vocab_size = 128256  # Llama-3.2 vocab size
+    Vocab = hax.Axis("vocab", vocab_size)
+
+    policy_model = model_config.build(Vocab, key=key)
+    reference_model = model_config.build(Vocab, key=jrandom.split(key)[0])
+
+    # Create mock environment with Llama tokenizer
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_TOKENIZER)
+    environment = MockEnv(tokenizer=tokenizer, task_type="count", seed=42)
+
+    return InferenceWorkerConfig(
+        inference_server_config=llama_small_inference_server_config(output_dir),
+        policy_model=policy_model,
+        reference_model=reference_model,
+        environment_spec="mock:task_type=count",
+        rollout_writer=rollout_writer,
+        environment=environment,
+        environment_name="mock_env",
+        max_input_length=64,
+        max_output_length=65,
+        pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id,
+        n_prompts_per_step=8,
         n_generations=8,
-    )
-
-    test_generation_config = GenerationConfig(
-        max_output_length=129,
-        temperature=0.0,
-        stop_tokens=STOP_TOKENS,
-        n_generations=8,
-    )
-
-    # Model override configuration for testing
-    model_config_override = ModelOverrideConfig(
-        max_sequence_length=512,
-        initializer_range=0.02,
-        bos_token_id=0,
-        eos_token_id=1,
-        pad_token_id=2,
-        resid_pdrop=0.0,
-        embd_pdrop=0.0,
-        attn_pdrop=0.0,
-        remat_block="nothing_saveable",
-    )
-
-    checkpointer_config = CheckpointerConfigData(
-        save_optimizer_state=False,
-        save_float_dtype="bf16",
-        save_model_freq=5,  # Save frequently for testing
-    )
-
-    weight_transfer_config = WeightTransferConfig(
-        mode=WeightTransferMode.GCS_CHECKPOINT,
-        sync_interval_steps=10,
-        poll_interval_seconds=5.0,
-        transfer_timeout=30.0,
-        checkpoint_dir=CHECKPOINT_DIR,
-        max_checkpoints=3,
-    )
-
-    jax_distributed_config = {
-        "initialize_jax_distributed": True,
-    }
-    sharding = [1, 4, 1, 1]
-
-    return TrainingConfig(
-        model=ModelConfig(
-            model_paths=model_paths_config,
-            inference_param_dtype="bf16",
-            inference_activation_dtype="bf16",
-            training_param_dtype="fp32",
-            training_activation_dtype="bf16",
-            model_config_override=model_config_override,
-            tokenizer_override=TokenizerOverrideConfig(),
-            train_attention_kernel_config="default:{}",
-            prefill_attention_kernel_config="default:{}",
-            generate_attention_kernel_config="default:{}",
-            # train_attention_kernel_config='splash:{"block_size": 256}',
-            # prefill_attention_kernel_config='splash:{"block_size": 256}',
-            # generate_attention_kernel_config=(
-            #     'paged:{"page_size": 256, "pages_per_compute_block": 1, "inline_seq_dim": true, "use_int8": false}'
-            # ),
-        ),
-        hyperparameters=TrainingHyperparameters(
-            num_train_steps=10000,
-            max_input_length=64,
-            max_output_length=65,
-            train_bsize=4,
-            decode_bsize=8,
-            prefill_bsize=8,
-            reference_logprobs_bsize=8,
-            n_prompts_per_step=8,
-            optim_config=optim_config,
-            pad_token_id=2,
-            kl_coef=1e-4,
-        ),
-        logging=LoggingConfig(
-            log_freq=5,
-            num_eval_examples=2,
-            wandb_project=WANDB_PROJECT,
-            save_initial_checkpoint=True,
-            log_initial_step=True,
-            max_checkpoints=None,
-            online=False,  # Disable wandb for testing
-            enable=False,
-            prefix="test_single_node",
-            prefix_to_id=True,
-            experiment_id="test_single_node",
-        ),
-        distributed=DistributedConfig(
-            train_sharding=sharding,
-            inference_sharding=sharding,
-            physical_axis_splitting=False,
-            jax_distributed_initialize_config=jax_distributed_config,
-        ),
-        generation_config=generation_config,
-        test_generation_config=test_generation_config,
-        output_dir=CHECKPOINT_DIR,
-        checkpoint=checkpointer_config,
-        weight_transfer=weight_transfer_config,
+        temperature=1.0,
+        log_freq=5,
+        rollout_batch_size=2,
+        max_rollouts=100,
     )
 
 
@@ -221,12 +197,9 @@ def run_inference_mode(args):
     subprocess.run("sudo --non-interactive rm -f /tmp/libtpu_lockfile", shell=True, check=False)
 
     rollout_writer = FileRolloutWriter(ROLLOUT_QUEUE_PATH)
+    worker_config = llama_small_inference_worker_config(rollout_writer, "/tmp/inference_checkpoint")
     worker = InferenceWorker(
-        training_config=mock_eval_config(),
-        environment_spec="mock:task_type=count",
-        rollout_writer=rollout_writer,
-        rollout_batch_size=2,
-        max_rollouts=100,
+        config=worker_config,
         coordinator=None,
     )
 
@@ -242,9 +215,9 @@ def run_training_mode(args):
     logger.info("Starting training worker mode...")
     subprocess.run("sudo --non-interactive rm -f /tmp/libtpu_lockfile", shell=True, check=False)
     rollout_reader = FileRolloutReader(ROLLOUT_QUEUE_PATH)
+    worker_config = llama_small_training_worker_config(rollout_reader, CHECKPOINT_DIR)
     worker = TrainingWorker(
-        training_config=mock_eval_config(),
-        rollout_reader=rollout_reader,
+        config=worker_config,
         coordinator=None,
     )
 
@@ -382,7 +355,7 @@ def run_driver_mode():
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    parser = argparse.ArgumentParser(description="Mock environment RL training")
+    parser = argparse.ArgumentParser(description="Llama-3.2-1B-Instruct RL training with mock environment")
     parser.add_argument(
         "--mode",
         choices=["driver", "inference", "training"],

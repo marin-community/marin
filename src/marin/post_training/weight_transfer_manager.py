@@ -36,12 +36,14 @@ from typing import Any
 import jax
 import numpy as np
 import ray
-from flax.serialization import to_state_dict
-from flax.traverse_util import flatten_dict, unflatten_dict
 from jax.sharding import Mesh
 from jaxtyping import PyTree
 
-from .flax.utils import checkpointer, delete_with_bucket, jax_distributed_barrier
+from haliax.partitioning import ResourceMapping
+from haliax.util import is_named_array
+
+import levanter.checkpoint as levanter_checkpoint
+from .flax.utils import delete_with_bucket, jax_distributed_barrier
 
 
 class WeightTransferMode(Enum):
@@ -86,14 +88,6 @@ except (ImportError, AttributeError):
 
 
 logger = logging.getLogger(__name__)
-
-
-def _reshard_with_donation(old_params: PyTree, new_params: PyTree, shard_fns: PyTree) -> PyTree:
-    """Reshard new_params while donating old_params' buffers for memory optimization."""
-    return jax.tree.map(lambda x, fn: fn(x), new_params, shard_fns)
-
-
-_reshard_with_donation = jax.jit(_reshard_with_donation, donate_argnums=(0,))
 
 
 def create_coordinator(mode: WeightTransferMode, name: str):
@@ -143,7 +137,12 @@ class WeightTransferServer(ABC):
 
     @abstractmethod
     def serve_weights(self, weight_id: int, params: PyTree) -> None:
-        """Serve weights to clients."""
+        """Serve weights to clients.
+
+        Args:
+            weight_id: Unique identifier for this weight update
+            params: Levanter model parameters (PyTree of NamedArrays)
+        """
         pass
 
     @abstractmethod
@@ -157,19 +156,24 @@ class WeightTransferServer(ABC):
         pass
 
 
-class WeightTransferClient:
+class WeightTransferClient(ABC):
     """Abstract base class for weight transfer clients (inference worker side)."""
 
+    @abstractmethod
     def receive_weights(self, old_params: PyTree | None = None) -> tuple[PyTree | None, dict[str, Any]]:
-        """Receive weights from server. Returns (params, metadata)."""
+        """Receive weights from server.
+
+        Args:
+            old_params: Previous parameters for memory optimization (optional)
+
+        Returns:
+            Tuple of (new_params, metadata). new_params is None if no update available.
+            new_params will be Levanter model parameters (PyTree of NamedArrays).
+        """
         pass
 
     def cleanup(self) -> None:
         """Cleanup resources."""
-        pass
-
-    def set_params_placeholder(self, params: PyTree):
-        """Set the placeholder params for transfers (only for JAX transfer client)."""
         pass
 
     def get_metrics(self) -> dict[str, Any]:
@@ -178,18 +182,18 @@ class WeightTransferClient:
 
 
 class GCSCheckpointServer(WeightTransferServer):
-    """GCS checkpoint-based weight transfer server."""
+    """GCS checkpoint-based weight transfer server using Levanter checkpointing."""
 
-    config: WeightTransferConfig
-    checkpoint_queue: deque[int]
-    gather_fns: Any
-    model_config: Any  # PretrainedConfig from HF
-
-    def __init__(self, config: WeightTransferConfig, gather_fns: Any, model_config: Any):
+    def __init__(
+        self,
+        config: WeightTransferConfig,
+        axis_mapping: ResourceMapping | None = None,
+        mesh: Mesh | None = None,
+    ):
         self.config = config
         self.checkpoint_queue = deque()
-        self.gather_fns = gather_fns
-        self.model_config = model_config
+        self.axis_mapping = axis_mapping
+        self.mesh = mesh
 
         # Metrics tracking
         self.metrics = {
@@ -205,7 +209,7 @@ class GCSCheckpointServer(WeightTransferServer):
         }
 
     def serve_weights(self, weight_id: int, params: PyTree) -> None:
-        """Save checkpoint to disk."""
+        """Save checkpoint using Levanter's checkpoint system."""
         checkpoint_path = os.path.join(self.config.checkpoint_dir, f"step_{weight_id}")
 
         self.metrics["total_transfers"] += 1
@@ -221,17 +225,12 @@ class GCSCheckpointServer(WeightTransferServer):
 
             logger.info(f"Saving checkpoint at weight_id {weight_id}...")
 
-            # Save checkpoint
-            metadata = {"weight_id": weight_id}
-
-            checkpointer(
-                path=checkpoint_path,
-                params=params,
-                config=self.model_config.to_dict() if self.model_config else {},
-                gather_fns=self.gather_fns,
-                metadata=metadata,
-                active=jax.process_index() == 0,
-                save_float_dtype="bf16",
+            # Save checkpoint using Levanter's native checkpoint system
+            levanter_checkpoint.save_checkpoint(
+                checkpoint_path,
+                params,
+                axis_mapping=self.axis_mapping,
+                mesh=self.mesh,
             )
 
             self.checkpoint_queue.append(weight_id)
@@ -242,7 +241,11 @@ class GCSCheckpointServer(WeightTransferServer):
             self.metrics["last_weight_id"] = weight_id
 
             # Estimate checkpoint size (rough approximation)
-            param_count = sum(np.prod(x.shape) for x in jax.tree.leaves(params) if hasattr(x, "shape"))
+            param_count = sum(
+                np.prod(x.array.shape if is_named_array(x) else x.shape)
+                for x in jax.tree.leaves(params)
+                if (is_named_array(x) or hasattr(x, "shape"))
+            )
             bytes_per_param = 2  # bf16 = 2 bytes per parameter
             estimated_bytes = param_count * bytes_per_param
             self.metrics["total_bytes"] += estimated_bytes
