@@ -210,6 +210,19 @@ LLAMA_STANDARD_CONFIGS = {
         "tie_word_embeddings": False,
         "num_key_value_heads": 4,
     },
+    "test_1m": {  # Tiny <1M parameter model for testing
+        "vocab_size": 1000,
+        "hidden_size": 128,
+        "intermediate_size": 128,
+        "num_hidden_layers": 2,
+        "num_attention_heads": 2,
+        "max_sequence_length": 64,
+        "initializer_range": 0.02,
+        "rms_norm_eps": 1e-6,
+        "use_cache": True,
+        "tie_word_embeddings": False,
+        "num_key_value_heads": 2,
+    },
 }
 
 
@@ -1041,7 +1054,12 @@ class FlaxLLaMAPreTrainedModel(FlaxPreTrainedModel):
         if dropout_rng is not None:
             rngs["dropout"] = dropout_rng
 
-        inputs = {"params": params or self.params}
+        if params is not None:
+            inputs = {"params": params}
+        elif hasattr(self, "params"):
+            inputs = {"params": self.params}
+        else:
+            raise ValueError("Model parameters must be provided when model is created with _do_init=False")
 
         # if past_key_values are passed then cache is already initialized a
         # private flag init_cache has to be passed down to ensure cache is

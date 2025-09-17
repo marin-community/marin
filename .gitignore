@@ -1,11 +1,12 @@
-experiments/data_efficiency/cache/*
-experiments/data_efficiency/plots/*
-experiments/two_stage/cache/*
-experiments/two_stage/plots/*
-experiments/two_stage/plotting/*
-experiments/curriculum/cache/*
-experiments/curriculum/plots/*
-.git/objects/*
+# redundant, but Ray looks for this otherwise.
+.git
+
+CLAUDE.md
+
+# submodules for co-development with e.g. Levanter.
+
+# CPU profiles
+prof/
 
 tests/snapshots/outputs
 tests/snapshots/diffs

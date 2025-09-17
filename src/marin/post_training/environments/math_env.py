@@ -12,15 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import random
 from typing import Any
 
 import datasets
 import jax
 import numpy as np
+from tqdm.auto import tqdm
+
 from marin.post_training.inference import batch_inference
 from marin.post_training.utils import validate_format
-from tqdm.auto import tqdm
 
 from .marin_env import EnvStep, MarinEnv
 from .math_utils import grade_answer, last_boxed_only_string, remove_boxed
@@ -134,15 +134,15 @@ class MathEnv(MarinEnv):
                 else:
                     grade = False
 
-                if random.random() < 1 / 64:
-                    print("=" * 25)
-                    print(examples[i]["prompt"])
-                    print(decoded_response + ">")
-                    print("=" * 25)
-                    print("gt answer: ", examples[i]["answer"])
-                    print("extracted answer: ", validation["answer"])
-                    print("grade: ", grade)
-                    print("=" * 25)
+                # if random.random() < 1 / 64:
+                #     print("=" * 25)
+                #     print(examples[i]["prompt"])
+                #     print(decoded_response + ">")
+                #     print("=" * 25)
+                #     print("gt answer: ", examples[i]["answer"])
+                #     print("extracted answer: ", validation["answer"])
+                #     print("grade: ", grade)
+                #     print("=" * 25)
 
                 score = float(grade)
                 group_rewards.append(float(score))
