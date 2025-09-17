@@ -293,18 +293,15 @@ class TrainingWorker:
         checkpoint_path = self._find_checkpoint_path()
 
         if checkpoint_path:
-            logger.info(f"Loading checkpoint from {checkpoint_path}...")
-            convert_to_dtypes = jax.tree_util.tree_map(
-                lambda x: self.training_config.model.training_param_dtype,
-                self.train_state_shape.params,
-            )
-            print(convert_to_dtypes.keys())
             train_state = self.create_train_state_from_params(
                 load_checkpoint(
                     checkpoint_path,
                     shard_fns=self.train_state_shard_fns.params,
                     remove_dict_prefix=self.training_config.model.model_paths.remove_dict_prefix,
-                    convert_to_dtypes=convert_to_dtypes,
+                    convert_to_dtypes=jax.tree_util.tree_map(
+                        lambda x: self.training_config.model.training_param_dtype,
+                        self.train_state_shape.params,
+                    ),
                 )
             )
         else:
