@@ -32,6 +32,7 @@ from jax.sharding import PartitionSpec as PS
 from optax import softmax_cross_entropy_with_integer_labels
 from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 
+from .environments.flax_inference_context import FlaxInferenceContext
 from .inference import build_sampler
 from .load_environments import load_environment_from_spec
 from .model_helpers import (
@@ -359,21 +360,38 @@ class InferenceWorker:
         """Generate a set of rollout batches from the environment."""
         # Create RL dataset from environment
         jax_distributed_barrier()
+
+        # Create inference contexts
+        policy_ctx = FlaxInferenceContext(
+            params=self.current_params,
+            sampler=self.sampler,
+            prng_key=rng,
+            tokenizer=self.tokenizer,
+            get_logprobs_fn=self.get_logprobs,
+            reference_logprobs_bsize=self.reference_logprobs_bsize,
+        )
+
+        reference_ctx = FlaxInferenceContext(
+            params=self.reference_params,
+            sampler=self.sampler,
+            prng_key=rng,
+            tokenizer=self.tokenizer,
+            get_logprobs_fn=self.get_logprobs,
+            reference_logprobs_bsize=self.reference_logprobs_bsize,
+        )
+
         rl_dataset, dataset_metrics = create_dataset_from_environment(
             environment=self.environment,
-            sampler=self.sampler,
-            params=self.current_params,
-            reference_params=self.reference_params,
-            get_logprobs_fn=self.get_logprobs,
+            policy_ctx=policy_ctx,
+            reference_ctx=reference_ctx,
             n_examples=self.training_config.hyperparameters.n_prompts_per_step,
-            n_generations=self.training_config.generation_config.n_generations,
             prng_key=rng,
-            reference_logprobs_bsize=self.reference_logprobs_bsize,
+            n_generations=self.training_config.generation_config.n_generations,
             max_input_length=self.max_input_length,
             max_output_length=self.max_output_length,
             pad_token_id=self.pad_token_id,
-            tokenizer=self.tokenizer,
             mode="train",
+            temperature=self.training_config.generation_config.temperature,
         )
         jax_distributed_barrier()
 

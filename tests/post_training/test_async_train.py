@@ -29,7 +29,7 @@ import pytest
 import ray
 
 try:
-    from marin.post_training.inference_server import InferenceWorker
+    from marin.post_training.inference_worker import InferenceWorker
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 
@@ -284,7 +284,7 @@ class InferenceWorkerRunner:
         try:
             self.worker = InferenceWorker(
                 training_config=self.training_config,
-                environment_spec="mock",
+                environment_spec="mock:task_type=count",
                 rollout_writer=self.queue_writer,
                 rollout_batch_size=2,
                 max_rollouts=self.max_rollouts,

@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from typing import Any
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
 from .environments.marin_env import EnvStep
@@ -89,26 +88,20 @@ class RLDataset:
     def from_env_step(
         cls,
         env_step: EnvStep,
-        reference_params: Any,
-        get_logprobs_fn: Callable,
-        reference_logprobs_bsize: int,
+        reference_ctx,
         max_input_length: int,
         max_output_length: int,
         pad_token_id: int,
-        tokenizer: AutoTokenizer,
         kl_coef: float = 0.0,
     ) -> "RLDataset":
         """Create RLDataset from environment step.
 
         Args:
             env_step: Environment step containing examples, samples, and rewards
-            reference_params: Parameters for the reference model
-            get_logprobs_fn: Function to compute log probabilities
-            reference_logprobs_bsize: Batch size for reference logprob computation
+            reference_ctx: Reference model context with tokenizer and logprobs function
             max_input_length: Maximum input sequence length
             max_output_length: Maximum output sequence length
             pad_token_id: ID of the padding token
-            tokenizer: Tokenizer for processing text
             kl_coef: KL divergence coefficient (for future use)
 
         Returns:
@@ -117,6 +110,9 @@ class RLDataset:
         examples = env_step.examples
         responses = env_step.responses
         rewards = env_step.rewards
+
+        # Get tokenizer from reference context
+        tokenizer = reference_ctx.tokenizer
 
         # Prepare data to compute reference logprobs
         batch_items = []
@@ -142,57 +138,28 @@ class RLDataset:
                     }
                 )
 
-        true_batch_items_len = len(batch_items)
+        # Prepare all data as numpy arrays
+        all_prompt_tokens = np.concatenate([item["prompt_tokens"] for item in batch_items])
+        all_prompt_masks = np.concatenate([item["prompt_attention_mask"] for item in batch_items])
+        all_answer_tokens = np.concatenate([item["answer_tokens"] for item in batch_items])
+        all_answer_masks = np.concatenate([item["answer_attention_mask"] for item in batch_items])
+        all_policy_logprobs = np.concatenate([item["answer_logprobs"] for item in batch_items])
 
-        # Pad batch_items to be divisible by reference_logprobs_bsize
-        if true_batch_items_len % reference_logprobs_bsize != 0:
-            padding_needed = reference_logprobs_bsize - (true_batch_items_len % reference_logprobs_bsize)
-            for _ in range(padding_needed):
-                batch_items.append(
-                    {
-                        "prompt_tokens": np.full((1, max_input_length), pad_token_id, dtype=np.int32),
-                        "prompt_attention_mask": np.zeros((1, max_input_length), dtype=np.int32),
-                        "answer_tokens": np.full((1, max_output_length), pad_token_id, dtype=np.int32),
-                        "answer_attention_mask": np.zeros((1, max_output_length), dtype=np.int32),
-                        "answer_logprobs": np.zeros((1, max_output_length), dtype=np.float32),
-                    }
-                )
+        # Compute reference logprobs using reference context (context handles batching internally)
+        reference_logprobs = reference_ctx.compute_logprobs(
+            all_prompt_tokens,
+            all_prompt_masks,
+            all_answer_tokens,
+            all_answer_masks,
+        )
 
-        # Compute reference logprobs in batches
-        all_reference_logprobs, all_logprobs = [], []
-        prompt_tokens_list, prompt_masks_list = [], []
-        output_tokens_list, output_masks_list = [], []
-
-        for i in tqdm(range(0, len(batch_items), reference_logprobs_bsize)):
-            curr_batch = batch_items[i : (i + reference_logprobs_bsize)]
-            curr_batch = {k: np.concatenate([item[k] for item in curr_batch], axis=0) for k in curr_batch[0].keys()}
-
-            reference_logprobs = np.asarray(
-                get_logprobs_fn(
-                    reference_params,
-                    curr_batch["prompt_tokens"],
-                    curr_batch["prompt_attention_mask"],
-                    curr_batch["answer_tokens"],
-                    curr_batch["answer_attention_mask"],
-                )
-            )
-
-            # Determine the actual batch size for this iteration
-            if (i // reference_logprobs_bsize) == (len(batch_items) // reference_logprobs_bsize) - 1:
-                true_batch_size = true_batch_items_len % reference_logprobs_bsize
-                if true_batch_size == 0:
-                    true_batch_size = reference_logprobs.shape[0]
-            else:
-                true_batch_size = reference_logprobs.shape[0]
-
-            # Only keep the non-padded examples
-            for x in range(true_batch_size):
-                all_reference_logprobs.append(reference_logprobs[x])
-                all_logprobs.append(curr_batch["answer_logprobs"][x])
-                output_masks_list.append(curr_batch["answer_attention_mask"][x])
-                output_tokens_list.append(curr_batch["answer_tokens"][x])
-                prompt_tokens_list.append(curr_batch["prompt_tokens"][x])
-                prompt_masks_list.append(curr_batch["prompt_attention_mask"][x])
+        # Split back into lists for consistency with rest of function
+        all_reference_logprobs = [reference_logprobs[i] for i in range(len(batch_items))]
+        all_logprobs = [all_policy_logprobs[i] for i in range(len(batch_items))]
+        output_masks_list = [all_answer_masks[i] for i in range(len(batch_items))]
+        output_tokens_list = [all_answer_tokens[i] for i in range(len(batch_items))]
+        prompt_tokens_list = [all_prompt_tokens[i] for i in range(len(batch_items))]
+        prompt_masks_list = [all_prompt_masks[i] for i in range(len(batch_items))]
 
         # Stack all arrays
         all_reference_logprobs = np.stack(all_reference_logprobs, axis=0)
@@ -397,60 +364,52 @@ def compute_rloo_advantages_for_group(rewards: np.ndarray) -> np.ndarray:
 
 def create_dataset_from_environment(
     environment,
-    sampler,
-    params,
-    reference_params,
-    get_logprobs_fn,
+    policy_ctx,
+    reference_ctx,
     n_examples: int,
     prng_key,
-    reference_logprobs_bsize: int,
+    n_generations: int,
     max_input_length: int,
     max_output_length: int,
     pad_token_id: int,
-    tokenizer: AutoTokenizer,
-    n_generations: int,
     mode: str = "train",
+    temperature: float = 1.0,
 ) -> tuple["RLDataset", dict[str, float]]:
     """Create RLDataset by stepping through the environment.
 
     Args:
         environment: Environment to step through
-        sampler: Inference sampler
-        params: Current model parameters
-        reference_params: Reference model parameters
-        get_logprobs_fn: Function to compute log probabilities
-        n_examples: Number of examples to sample
+        policy_ctx: Context wrapping policy model (includes tokenizer, params, etc.)
+        reference_ctx: Context wrapping reference model
+        n_examples: Number of examples to process
         prng_key: Random key for sampling
-        reference_logprobs_bsize: Batch size for reference logprob computation
-        max_input_length: Maximum input sequence length
-        max_output_length: Maximum output sequence length
-        pad_token_id: ID of the padding token
-        tokenizer: Tokenizer for processing text
-        mode: Mode for environment stepping ("train" or "eval")
+        n_generations: Number of generations per example
+        max_input_length: Maximum input length for padding
+        max_output_length: Maximum output length for padding
+        pad_token_id: Padding token ID
+        mode: "train" or "eval"
+        temperature: Generation temperature
 
     Returns:
-        Tuple of (RLDataset, metrics from environment)
+        RLDataset and metrics dictionary
     """
-    # Get environment step
+    # Step environment with policy context
     env_step = environment.step(
-        sampler=sampler,
-        params=params,
+        inference_ctx=policy_ctx,
         n_examples=n_examples,
         prng_key=prng_key,
         mode=mode,
         n_generations=n_generations,
+        temperature=temperature,
     )
 
     # Create dataset from environment step
     dataset = RLDataset.from_env_step(
         env_step=env_step,
-        reference_params=reference_params,
-        get_logprobs_fn=get_logprobs_fn,
-        reference_logprobs_bsize=reference_logprobs_bsize,
+        reference_ctx=reference_ctx,
         max_input_length=max_input_length,
         max_output_length=max_output_length,
         pad_token_id=pad_token_id,
-        tokenizer=tokenizer,
     )
 
     return dataset, env_step.metrics

@@ -1,7 +1,8 @@
 {
     "entries": [
         {
-            "environment": "mock"
+            "environment": "mock",
+            "task_type": "count"
         }
     ]
 }
