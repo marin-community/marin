@@ -22,15 +22,16 @@ import jax.random as jrandom
 import jmp
 import pytest
 from levanter.checkpoint import CheckpointerConfig
+from levanter.distributed import RayConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.llama import LlamaConfig
+from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from marin.post_training.environments.mock_env import MockEnv
 from marin.post_training.rollout_worker import InferenceWorkerConfig
 from marin.post_training.train_worker import TrainingWorkerConfig
-from marin.post_training.training_config import OptimizerConfig
 
 
 class DummyTokenizer:
@@ -112,20 +113,17 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
         tensor_parallel_axes=["mlp", "heads"],
         fsdp_axis="embed",
         batch_axis="batch",
+        ray=RayConfig(auto_start_cluster=False),  # Don't auto-start Ray in tests
     )
 
 
-def create_nano_optimizer_config() -> OptimizerConfig:
-    """Create a minimal OptimizerConfig for testing."""
-    return OptimizerConfig(
-        init_lr=1e-3,
-        end_lr=1e-4,
-        lr=1e-3,
-        lr_warmup_steps=0,
-        lr_decay_steps=3,
+def create_nano_optimizer_config() -> AdamConfig:
+    """Create a minimal AdamConfig for testing."""
+    return AdamConfig(
+        learning_rate=1e-3,
         weight_decay=0.0,
-        bf16_momentum=False,
-        multiply_by_parameter_scale=False,
+        warmup=0.0,
+        lr_schedule="constant",
     )
 
 
@@ -136,6 +134,7 @@ def create_nano_training_worker_config(rollout_reader, output_dir: str | Path) -
         model=create_nano_llama_config(),
         trainer=create_nano_trainer_config(output_dir),
         optimizer=create_nano_optimizer_config(),
+        tokenizer=DummyTokenizer(vocab_size=1000),
         kl_coef=0.1,
         reference_logprobs_bsize=2,
         weight_transfer_sync_interval=1,

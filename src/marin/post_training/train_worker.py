@@ -26,16 +26,17 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import levanter
 from levanter.data import AsyncDataset
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
-
-from marin.post_training.training_config import OptimizerConfig
+from transformers import PreTrainedTokenizer
 
 from .replay_buffer import ReplayBuffer, ReplayDataLoader
 from .rollout_storage import RolloutBatch, RolloutReader
@@ -129,7 +130,7 @@ class RolloutDataset(AsyncDataset[RolloutBatch]):
 
     async def current_len(self) -> int | None:
         """Return current size of the replay buffer."""
-        return len(self.data_loader.replay_buffer)
+        return self.data_loader.replay_buffer.size()
 
     async def get_batch(self, indices: list[int]) -> list[RolloutBatch]:
         """Get a batch of rollout data from the replay buffer."""
@@ -186,11 +187,6 @@ class RolloutDataConfig:
         """Return empty eval sets since we don't have eval for RLOO."""
         return {}
 
-    @property
-    def the_tokenizer(self):
-        """Return a dummy tokenizer - we don't use it for RLOO."""
-        return None
-
 
 @dataclass
 class TrainingWorkerConfig:
@@ -200,6 +196,8 @@ class TrainingWorkerConfig:
     model: LmConfig
     trainer: TrainerConfig
     optimizer: OptimizerConfig
+
+    tokenizer: str | PreTrainedTokenizer
 
     # RLOO-specific parameters
     kl_coef: float = 0.1
@@ -227,6 +225,10 @@ class TrainingWorker:
         self.coordinator = coordinator
         self._should_stop = False
         self.weight_id = 0
+        if isinstance(config.tokenizer, str):
+            self.tokenizer = PreTrainedTokenizer.from_pretrained(config.tokenizer)
+        else:
+            self.tokenizer = config.tokenizer
 
         self.rollout_reader = config.rollout_reader
 
@@ -263,13 +265,11 @@ class TrainingWorker:
             data_config = RolloutDataConfig(self.rollout_dataset)
             train_dataset = data_config.train_set(config.model.Pos, config.trainer.batch_schedule, key=data_key)
 
+            Vocab = hax.Axis("vocab", self.tokenizer.vocab_size)
+
             state = trainer.initial_state(
                 training_key,
-                model_init=lambda: config.model.build(
-                    # Need to handle vocab axis properly
-                    config.model.Vocab if hasattr(config.model, "Vocab") else None,
-                    key=model_key,
-                ),
+                model_init=lambda: config.model.build(Vocab, key=model_key),
             )
 
             trainer.add_hook(
@@ -277,7 +277,7 @@ class TrainingWorker:
                 every=self.config.weight_transfer_sync_interval,
             )
             checkpointer = trainer.config.checkpointer.create("train-id-0")
-            trainer.add_hook(checkpointer)
+            trainer.add_hook(checkpointer.on_step, every=1)
 
             def _stop_on_signal(info: levanter.callbacks.StepInfo):
                 if self._should_stop:

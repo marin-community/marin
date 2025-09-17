@@ -349,8 +349,9 @@ class TrainingWorkerRunner:
 
 def test_inference_worker(ray_cluster, inference_worker_config):
     """Test inference worker generates rollouts to in-memory queue."""
-    rollout_queue = InMemoryRolloutQueue()
-    queue_reader = rollout_queue.reader()
+    # Use the rollout writer's queue from the inference worker config
+    rollout_writer = inference_worker_config.rollout_writer
+    queue_reader = rollout_writer._queue.reader()
 
     # Get coordinator for GCS mode only
     coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
@@ -374,8 +375,9 @@ def test_inference_worker(ray_cluster, inference_worker_config):
 
 def test_train_worker(ray_cluster, training_worker_config):
     """Test training worker processes rollout batch and creates checkpoint."""
-    rollout_queue = InMemoryRolloutQueue()
-    queue_writer = rollout_queue.writer()
+    # Use the rollout reader's queue from the training worker config
+    rollout_reader = training_worker_config.rollout_reader
+    queue_writer = rollout_reader._queue.writer()
 
     # Create a sample rollout batch with correct data shapes
     batch_size = training_worker_config.trainer.train_batch_size
