@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import json
 from typing import Any
 
@@ -62,11 +76,12 @@ def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer) -> MarinEnv:
     return env_cls(tokenizer=tokenizer, **kwargs)
 
 
-def load_environments_from_config(json_path: str, tokenizer: AutoTokenizer) -> MarinEnv:
+def load_environments_from_config(json_path: str, tokenizer: AutoTokenizer) -> list[tuple[str, MarinEnv]]:
     """
-    Load first environment entry from a JSON config file.
+    Load environment entries from a JSON config file.
 
-    # TODO: support multiple environments. For now, we only load the first one.
+    Returns:
+        List of (environment_name, environment) tuples
     """
     with open(json_path, "r", encoding="utf-8") as f:
         conf = json.load(f)
@@ -74,7 +89,9 @@ def load_environments_from_config(json_path: str, tokenizer: AutoTokenizer) -> M
     if not entries:
         raise ValueError("'entries' list is empty in environment config.")
 
-    first_entry = entries[0]
-    if "environment" not in first_entry:
-        raise ValueError("Each entry must have an 'environment' field.")
-    return load_environment_from_spec(first_entry["environment"], tokenizer)
+    envs = []
+    for entry in entries:
+        if "environment" not in entry:
+            raise ValueError("Each entry must have an 'environment' field.")
+        envs.append((entry["environment"], load_environment_from_spec(entry["environment"], tokenizer)))
+    return envs
