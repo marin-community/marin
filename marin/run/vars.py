@@ -2,7 +2,6 @@
 ENV_VARS = {
     "PYTHONPATH": "./submodules/levanter/src:${PYTHONPATH}",
     "LIBTPU_INIT_ARGS": (
-        "--xla_tpu_scoped_vmem_limit_kib=81920 "
         "--xla_enable_async_all_gather=true "
         "--xla_tpu_overlap_compute_collective_tc=true "
         "--xla_tpu_enable_async_collective_fusion_multiple_steps=true "

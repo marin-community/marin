@@ -108,8 +108,8 @@ def get_tpu_type_and_chips(tpu_slice: str) -> tuple[str, int]:
         logger.info(f"TPU type: {tpu_type}, suffix: {suffix}")
 
         # Map size to actual chip count
-        # For v4: size/2 gives chip count up to 256 chips
-        if tpu_type in ("v4", "v5"):
+        # For v4, v5p, v5e: size/2 gives chip count up to 256 chips
+        if tpu_type in ("v4", "v5p", "v5e"):
             num_chips = int(suffix) // 2
         else:
             num_chips = int(suffix)
