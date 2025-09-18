@@ -54,6 +54,59 @@ from .weight_transfer_manager import WeightTransferConfig
 logger = logging.getLogger(__name__)
 
 
+def compute_model_logprobs(
+    model,
+    input_tokens: np.ndarray,
+    input_attention_mask: np.ndarray,
+    target_tokens: np.ndarray,
+    target_attention_mask: np.ndarray,
+) -> np.ndarray:
+    """Compute log probabilities for target tokens given input using a Haliax model.
+
+    Args:
+        model: Haliax model to use for computation
+        input_tokens: (batch_size, input_length) input token IDs
+        input_attention_mask: (batch_size, input_length) attention mask for input
+        target_tokens: (batch_size, target_length) target token IDs
+        target_attention_mask: (batch_size, target_length) attention mask for target
+
+    Returns:
+        np.ndarray: (batch_size, target_length) log probabilities for target tokens
+    """
+    # Concatenate input and target tokens
+    full_tokens = jnp.concatenate([input_tokens, target_tokens], axis=1)
+    full_attention_mask = jnp.concatenate([input_attention_mask, target_attention_mask], axis=1)
+    full_position_ids = jnp.maximum(jnp.cumsum(full_attention_mask, axis=1) - 1, 0)
+
+    # Convert to Haliax named arrays
+    Batch = hax.Axis("batch", full_tokens.shape[0])
+    SeqLen = hax.Axis("position", full_tokens.shape[1])
+
+    tokens_named = hax.named(full_tokens, (Batch, SeqLen))
+    attn_mask_named = hax.named(full_attention_mask.astype(jnp.bool_), (Batch, SeqLen))
+    position_ids_named = hax.named(full_position_ids, (Batch, SeqLen))
+
+    # Compute logits using the model
+    input_tokens_named = tokens_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
+    input_mask_named = attn_mask_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
+    input_position_ids_named = position_ids_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
+
+    # Run forward pass through the model
+    logits = model(
+        input_tokens_named, attn_mask=input_mask_named, pos_ids=input_position_ids_named
+    )  # Shape: (batch, seq_len-1, vocab_size)
+
+    from optax import softmax_cross_entropy_with_integer_labels
+
+    # Extract logits corresponding to target positions
+    logits_array = logits.array[:, input_tokens.shape[1] - 1 :]
+
+    logprobs = -softmax_cross_entropy_with_integer_labels(
+        logits_array.astype(jnp.float32), target_tokens.astype(jnp.int32)
+    )
+    return logprobs
+
+
 @dataclass
 class RolloutWorkerConfig:
     """Configuration for RolloutWorker."""
@@ -151,38 +204,13 @@ class LevanterInferenceContext(InferenceContext):
         target_attention_mask: np.ndarray,
     ) -> np.ndarray:
         """Compute log probabilities for given input/target pairs."""
-        # Concatenate input and target tokens
-        full_tokens = jnp.concatenate([input_tokens, target_tokens], axis=1)
-        full_attention_mask = jnp.concatenate([input_attention_mask, target_attention_mask], axis=1)
-        full_position_ids = jnp.maximum(jnp.cumsum(full_attention_mask, axis=1) - 1, 0)
-
-        # Convert to Haliax named arrays
-        Batch = hax.Axis("batch", full_tokens.shape[0])
-        SeqLen = hax.Axis("position", full_tokens.shape[1])
-
-        tokens_named = hax.named(full_tokens, (Batch, SeqLen))
-        attn_mask_named = hax.named(full_attention_mask.astype(jnp.bool_), (Batch, SeqLen))
-        position_ids_named = hax.named(full_position_ids, (Batch, SeqLen))
-
-        # Compute logits using the model
-        input_tokens_named = tokens_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
-        input_mask_named = attn_mask_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
-        input_position_ids_named = position_ids_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
-
-        # Run forward pass through the model
-        logits = self.model(
-            input_tokens_named, attn_mask=input_mask_named, pos_ids=input_position_ids_named
-        )  # Shape: (batch, seq_len-1, vocab_size)
-
-        from optax import softmax_cross_entropy_with_integer_labels
-
-        # Extract logits corresponding to target positions
-        logits_array = logits.array[:, input_tokens.shape[1] - 1 :]
-
-        logprobs = -softmax_cross_entropy_with_integer_labels(
-            logits_array.astype(jnp.float32), target_tokens.astype(jnp.int32)
+        return compute_model_logprobs(
+            self.model,
+            input_tokens,
+            input_attention_mask,
+            target_tokens,
+            target_attention_mask,
         )
-        return logprobs
 
 
 class RolloutWorker:
@@ -242,13 +270,12 @@ class RolloutWorker:
         vocab_size = self._tokenizer.vocab_size
         Vocab = hax.Axis("vocab", vocab_size)
 
-        # Build models
         with (
             self.config.trainer.device_mesh,
             hax.axis_mapping(self.config.trainer.compute_axis_mapping),
         ):
             self.policy_model = self.config.model.build(Vocab, key=key)
-            self.reference_model = self.config.model.build(Vocab, key=jrandom.split(key)[0])
+            self.reference_model = self.config.model.build(Vocab, key=key)
 
         logger.info("Built policy and reference models after levanter initialization")
 

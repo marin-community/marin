@@ -266,76 +266,15 @@ class RLDataset:
 
             Where seq_len = max_input_length + max_output_length
         """
-        # Concatenate prompt and output tokens
-        full_tokens = np.concatenate((examples["prompt_tokens"], examples["output_tokens"]), axis=1)
-        full_attention_mask = np.concatenate((examples["prompt_masks"], examples["output_masks"]), axis=1)
-
-        # Create position IDs
-        full_position_ids = np.maximum(np.cumsum(full_attention_mask, axis=1) - 1, 0)
-
-        # Prepare input and target sequences for language modeling
-        input_tokens = full_tokens[:, :-1]
-        input_attention_mask = full_attention_mask[:, :-1]
-        target_tokens = full_tokens[:, 1:]
-        position_ids = full_position_ids[:, :-1]
-
-        # Create loss masks (only compute loss on output tokens, not prompt tokens)
-        loss_masks = np.concatenate(
-            [
-                np.zeros(
-                    (examples["prompt_masks"].shape[0], examples["prompt_masks"].shape[1] - 1),
-                    dtype=np.float32,
-                ),
-                examples["output_masks"].astype(np.float32),
-            ],
-            axis=1,
+        return prepare_training_batch(
+            prompt_tokens=examples["prompt_tokens"],
+            prompt_masks=examples["prompt_masks"],
+            output_tokens=examples["output_tokens"],
+            output_masks=examples["output_masks"],
+            loss_weights=examples["returns"],
+            reference_logprobs=examples["reference_logprobs"],
+            policy_logprobs=examples["policy_logprobs"],
         )
-
-        # Create loss weights (advantages/returns for policy gradient)
-        loss_weights = np.concatenate(
-            [
-                np.zeros(
-                    (examples["prompt_masks"].shape[0], examples["prompt_masks"].shape[1] - 1),
-                    dtype=np.float32,
-                ),
-                examples["returns"].astype(np.float32),
-            ],
-            axis=1,
-        )
-
-        # Create reference logprobs for KL penalty
-        reference_logprobs = np.concatenate(
-            [
-                np.zeros(
-                    (examples["prompt_masks"].shape[0], examples["prompt_masks"].shape[1] - 1),
-                    dtype=np.float32,
-                ),
-                examples["reference_logprobs"].astype(np.float32),
-            ],
-            axis=1,
-        )
-
-        policy_logprobs = np.concatenate(
-            [
-                np.zeros(
-                    (examples["prompt_masks"].shape[0], examples["prompt_masks"].shape[1] - 1),
-                    dtype=np.float32,
-                ),
-                examples["policy_logprobs"].astype(np.float32),
-            ],
-            axis=1,
-        )
-
-        return {
-            "input_ids": input_tokens,
-            "attention_mask": input_attention_mask,
-            "position_ids": position_ids,
-            "target_ids": target_tokens,
-            "loss_masks": loss_masks,
-            "loss_weights": loss_weights,
-            "reference_logprobs": reference_logprobs,
-            "policy_logprobs": policy_logprobs,
-        }
 
 
 def compute_rloo_advantages_for_group(rewards: np.ndarray) -> np.ndarray:
@@ -359,6 +298,116 @@ def compute_rloo_advantages_for_group(rewards: np.ndarray) -> np.ndarray:
     generator = np.random.default_rng()
     advantages += generator.normal(loc=0.0, scale=1e-6, size=advantages.shape)
     return advantages
+
+
+def prepare_training_batch(
+    prompt_tokens: np.ndarray,
+    prompt_masks: np.ndarray,
+    output_tokens: np.ndarray,
+    output_masks: np.ndarray,
+    loss_weights: np.ndarray,
+    reference_logprobs: np.ndarray,
+    policy_logprobs: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Prepare training batch from prompt/output components for RLOO training.
+
+    Takes prompt and output tokens/masks along with loss weights and logprobs,
+    and transforms them into the format needed for language model training with
+    RLOO policy gradient losses.
+
+    Args:
+        prompt_tokens: (batch_size, max_input_length) tokenized prompts
+        prompt_masks: (batch_size, max_input_length) attention masks for prompts
+        output_tokens: (batch_size, max_output_length) tokenized model outputs
+        output_masks: (batch_size, max_output_length) attention masks for outputs
+        loss_weights: (batch_size, max_output_length) advantage values for each output token
+        reference_logprobs: (batch_size, max_output_length) log probs from reference model
+        policy_logprobs: (batch_size, max_output_length) log probs from policy model
+
+    Returns:
+        Dictionary containing processed batch ready for language model training:
+            - input_ids: (batch_size, seq_len-1) input token sequences
+            - attention_mask: (batch_size, seq_len-1) attention masks for inputs
+            - position_ids: (batch_size, seq_len-1) position indices for each token
+            - target_ids: (batch_size, seq_len-1) target tokens (shifted by 1 for next-token prediction)
+            - loss_masks: (batch_size, seq_len-1) binary masks indicating which positions to compute loss on
+              (1 for output tokens, 0 for prompt tokens)
+            - loss_weights: (batch_size, seq_len-1) advantage values used as weights in policy gradient loss
+            - reference_logprobs: (batch_size, seq_len-1) reference model logprobs for KL penalty computation
+            - policy_logprobs: (batch_size, seq_len-1) policy model logprobs
+
+        Where seq_len = max_input_length + max_output_length
+    """
+    # Concatenate prompt and output tokens
+    full_tokens = np.concatenate((prompt_tokens, output_tokens), axis=1)
+    full_attention_mask = np.concatenate((prompt_masks, output_masks), axis=1)
+
+    # Create position IDs
+    full_position_ids = np.maximum(np.cumsum(full_attention_mask, axis=1) - 1, 0)
+
+    # Prepare input and target sequences for language modeling
+    input_tokens = full_tokens[:, :-1]
+    input_attention_mask = full_attention_mask[:, :-1]
+    target_tokens = full_tokens[:, 1:]
+    position_ids = full_position_ids[:, :-1]
+
+    # Create loss masks (only compute loss on output tokens, not prompt tokens)
+    loss_masks = np.concatenate(
+        [
+            np.zeros(
+                (prompt_masks.shape[0], prompt_masks.shape[1] - 1),
+                dtype=np.float32,
+            ),
+            output_masks.astype(np.float32),
+        ],
+        axis=1,
+    )
+
+    # Create loss weights (advantages/returns for policy gradient)
+    formatted_loss_weights = np.concatenate(
+        [
+            np.zeros(
+                (prompt_masks.shape[0], prompt_masks.shape[1] - 1),
+                dtype=np.float32,
+            ),
+            loss_weights.astype(np.float32),
+        ],
+        axis=1,
+    )
+
+    # Create reference logprobs for KL penalty
+    formatted_reference_logprobs = np.concatenate(
+        [
+            np.zeros(
+                (prompt_masks.shape[0], prompt_masks.shape[1] - 1),
+                dtype=np.float32,
+            ),
+            reference_logprobs.astype(np.float32),
+        ],
+        axis=1,
+    )
+
+    formatted_policy_logprobs = np.concatenate(
+        [
+            np.zeros(
+                (prompt_masks.shape[0], prompt_masks.shape[1] - 1),
+                dtype=np.float32,
+            ),
+            policy_logprobs.astype(np.float32),
+        ],
+        axis=1,
+    )
+
+    return {
+        "input_ids": input_tokens,
+        "attention_mask": input_attention_mask,
+        "position_ids": position_ids,
+        "target_ids": target_tokens,
+        "loss_masks": loss_masks,
+        "loss_weights": formatted_loss_weights,
+        "reference_logprobs": formatted_reference_logprobs,
+        "policy_logprobs": formatted_policy_logprobs,
+    }
 
 
 def create_dataset_from_environment(

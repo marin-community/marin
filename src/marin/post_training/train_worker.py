@@ -188,21 +188,6 @@ def compute_ppo_loss(
 
     # Total loss
     total_loss = ppo_loss + kl_coef * kl_loss
-
-    # Log some useful metrics (uncomment when needed)
-    # with levanter.tracker.defer_tracker_for_jit() as metrics:
-    #     metrics.update({
-    #         "ppo/loss": ppo_loss,
-    #         "ppo/kl_loss": kl_loss,
-    #         "ppo/total_loss": total_loss,
-    #         "ppo/ratio_mean": jnp.mean(ratio * mask) / jnp.maximum(jnp.mean(mask), 1.0),
-    #         "ppo/ratio_max": jnp.max(ratio * mask),
-    #         "ppo/ratio_min": jnp.min(jnp.where(mask, ratio, jnp.inf)),
-    #         "ppo/advantage_mean": jnp.sum(advantages * mask) / jnp.maximum(jnp.sum(mask), 1.0),
-    #         "ppo/advantage_std": jnp.std(advantages * mask),
-    #         "ppo/approx_kl": jnp.mean(0.5 * jnp.square(log_ratio) * mask),  # 2nd order approx
-    #     })
-
     return total_loss
 
 
@@ -254,9 +239,9 @@ def compute_rloo_loss(
 
     # RLOO loss with importance sampling
     # batch.loss_weights contains RLOO advantages: r_i - mean(r_j for j≠i)
-    # weighted_loss = token_loss * ratio * loss_weights_array
     # weighted_loss = -ratio * loss_weights_array * loss_masks_array
-    weighted_loss = token_loss * ratio * loss_weights_array
+    # weighted_loss = token_loss * ratio * loss_weights_array
+    weighted_loss = -ratio * loss_weights_array
     reinforce_loss = jnp.sum(weighted_loss * loss_masks_array) / jnp.sum(loss_masks_array)
 
     # KL regularization
@@ -264,20 +249,6 @@ def compute_rloo_loss(
     kl_loss = jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
 
     loss = reinforce_loss + kl_coef * kl_loss
-
-    # with levanter.tracker.defer_tracker_for_jit() as metrics:
-    #     metrics.update(
-    #         {
-    #             "rloo/token_loss": jnp.mean(token_loss),
-    #             "rloo/log_ratio": jnp.mean(log_ratio),
-    #             "rloo/reinforce_loss": reinforce_loss,
-    #             "rloo/loss": loss,
-    #             "rloo/kl_loss": kl_loss,
-    #             "rloo/importance_ratio_mean": jnp.mean(ratio),
-    #             "rloo/importance_ratio_max": jnp.max(ratio),
-    #         }
-    #     )
-
     return loss
 
 
@@ -311,26 +282,18 @@ class StreamingRolloutLoader:
 
     def _convert_to_named_batch(self, batch: RolloutBatch):
         """Convert numpy arrays to JAX arrays with proper named axes."""
-        from marin.post_training.rollout_storage import JaxRolloutBatch
-
-        # Convert to JAX arrays first
         jax_batch = batch.to_jax()
-
-        # Create batch and sequence axes
-        batch_size, seq_len = jax_batch.input_ids.shape
-        Batch = hax.Axis("batch", batch_size)
-        Pos = hax.Axis("position", seq_len)
 
         # Add named axes to all fields
         return JaxRolloutBatch(
-            input_ids=hax.named(jax_batch.input_ids, (Batch, Pos)),
-            attention_mask=hax.named(jax_batch.attention_mask, (Batch, Pos)),
-            position_ids=hax.named(jax_batch.position_ids, (Batch, Pos)),
-            target_ids=hax.named(jax_batch.target_ids, (Batch, Pos)),
-            loss_weights=hax.named(jax_batch.loss_weights, (Batch, Pos)),
-            loss_masks=hax.named(jax_batch.loss_masks, (Batch, Pos)),
-            reference_logprobs=hax.named(jax_batch.reference_logprobs, (Batch, Pos)),
-            policy_logprobs=hax.named(jax_batch.policy_logprobs, (Batch, Pos)),
+            input_ids=hax.named(jax_batch.input_ids, ("batch", "position")),
+            attention_mask=hax.named(jax_batch.attention_mask, ("batch", "position")),
+            position_ids=hax.named(jax_batch.position_ids, ("batch", "position")),
+            target_ids=hax.named(jax_batch.target_ids, ("batch", "position")),
+            loss_weights=hax.named(jax_batch.loss_weights, ("batch", "position")),
+            loss_masks=hax.named(jax_batch.loss_masks, ("batch", "position")),
+            reference_logprobs=hax.named(jax_batch.reference_logprobs, ("batch", "position")),
+            policy_logprobs=hax.named(jax_batch.policy_logprobs, ("batch", "position")),
         )
 
 
@@ -418,6 +381,37 @@ class TrainWorker:
             axis_mapping=self.config.trainer.compute_axis_mapping,
         )
 
+        # Build models during initialization
+        self._build_models()
+
+    def _build_models(self):
+        """Build reference and initial policy models."""
+        config = self.config
+        seed = config.trainer.seed
+        model_key = jrandom.PRNGKey(seed)
+        Vocab = hax.Axis("vocab", self.tokenizer.vocab_size)
+
+        # Build or load initial model
+        if config.checkpoint_path is not None or config.hf_checkpoint is not None:
+            initial_model = load_model_from_checkpoint_or_hf(
+                model_config=config.model,
+                trainer_config=config.trainer,
+                vocab_axis=Vocab,
+                tokenizer=self.tokenizer,
+                checkpoint_path=config.checkpoint_path,
+                hf_checkpoint=config.hf_checkpoint,
+                key=model_key,
+            )
+        else:
+            with (
+                config.trainer.device_mesh,
+                hax.axis_mapping(config.trainer.compute_axis_mapping),
+            ):
+                initial_model = config.model.build(Vocab, key=model_key)
+
+        # Reference model is the frozen initial model (for KL regularization)
+        self.reference_model = initial_model
+
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
         logger.info("Starting RLOO training with Levanter...")
@@ -430,27 +424,11 @@ class TrainWorker:
 
         with Trainer(config.trainer, optimizer, _loss_function) as trainer, self.data_loader:
             seed = config.trainer.seed
-            model_key, training_key = jrandom.split(jrandom.PRNGKey(seed), 2)
+            _, training_key = jrandom.split(jrandom.PRNGKey(seed), 2)
 
-            Vocab = hax.Axis("vocab", self.tokenizer.vocab_size)
-
-            # Load model from checkpoint if available, otherwise initialize normally
-            if config.checkpoint_path is not None or config.hf_checkpoint is not None:
-                model = load_model_from_checkpoint_or_hf(
-                    model_config=config.model,
-                    trainer_config=config.trainer,
-                    vocab_axis=Vocab,
-                    tokenizer=self.tokenizer,
-                    checkpoint_path=config.checkpoint_path,
-                    hf_checkpoint=config.hf_checkpoint,
-                    key=model_key,
-                )
-                state = trainer.initial_state(training_key, model_init=lambda: model)
-            else:
-                state = trainer.initial_state(
-                    training_key,
-                    model_init=lambda: config.model.build(Vocab, key=model_key),
-                )
+            # Use the pre-built reference model as the starting point for policy training
+            # The trainer will create a trainable copy that becomes the policy model
+            state = trainer.initial_state(training_key, model_init=lambda: self.reference_model)
 
             self._configure_training_hooks(trainer)
 
