@@ -30,9 +30,9 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from marin.post_training.environments.mock_env import MockEnv
-from marin.post_training.rollout_worker import InferenceWorkerConfig
+from marin.post_training.rollout_worker import RolloutWorkerConfig
 from marin.post_training.train_worker import TrainWorkerConfig
-from marin.post_training.training_config import WeightTransferConfig
+from marin.post_training.weight_transfer_manager import WeightTransferConfig
 
 
 class DummyTokenizer:
@@ -169,8 +169,8 @@ def create_mock_environment(tokenizer=None):
 
 def create_nano_inference_worker_config(
     output_dir: str, inference_server_config, rollout_writer, environment=None
-) -> InferenceWorkerConfig:
-    """Create a minimal InferenceWorkerConfig for testing."""
+) -> RolloutWorkerConfig:
+    """Create a minimal RolloutWorkerConfig for testing."""
     model_config = create_nano_llama_config()
 
     # Create simple mock models
@@ -186,7 +186,7 @@ def create_nano_inference_worker_config(
         # Use the DummyTokenizer for the mock environment
         environment = create_mock_environment(tokenizer=DummyTokenizer())
 
-    return InferenceWorkerConfig(
+    return RolloutWorkerConfig(
         trainer=create_nano_trainer_config(output_dir),
         inference_server_config=inference_server_config,
         policy_model=policy_model,

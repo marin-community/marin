@@ -38,7 +38,7 @@ from optax import softmax_cross_entropy_with_integer_labels
 from transformers import PreTrainedTokenizer
 
 from marin.post_training import weight_transfer_manager
-from marin.post_training.training_config import WeightTransferConfig
+from marin.post_training.weight_transfer_manager import WeightTransferConfig
 
 from .replay_buffer import ReplayBuffer, ReplayDataLoader
 from .rollout_storage import JaxRolloutBatch, RolloutBatch, RolloutReader
@@ -191,12 +191,11 @@ class TrainWorkerConfig:
     optimizer: OptimizerConfig
 
     tokenizer: str | PreTrainedTokenizer
+    weight_transfer: WeightTransferConfig
 
     # RLOO-specific parameters
     kl_coef: float = 0.1
     reference_logprobs_bsize: int = 32
-
-    weight_transfer: WeightTransferConfig
 
 
 class TrainWorker:
@@ -278,7 +277,7 @@ class TrainWorker:
         """Configure training hooks. Override in tests for additional hooks."""
         trainer.add_hook(
             self.create_weight_transfer_hook(),
-            every=self.config.weight_transfer_sync_interval,
+            every=self.config.weight_transfer.sync_interval_steps,
         )
         checkpointer = trainer.config.checkpointer.create("train-id-0")
 

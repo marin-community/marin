@@ -45,7 +45,7 @@ from levanter.trainer import TrainerConfig
 from marin.cluster.ray import ray_dashboard
 from marin.post_training.environments.mock_env import MockEnv
 from marin.post_training.rollout_storage import FileRolloutReader, FileRolloutWriter
-from marin.post_training.rollout_worker import InferenceWorker, InferenceWorkerConfig
+from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.post_training.train_worker import TrainWorker, TrainWorkerConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -153,7 +153,7 @@ def llama_small_training_worker_config(rollout_reader, output_dir: str) -> Train
     )
 
 
-def llama_small_inference_worker_config(rollout_writer, output_dir: str) -> InferenceWorkerConfig:
+def llama_small_inference_worker_config(rollout_writer, output_dir: str) -> RolloutWorkerConfig:
     """Create inference worker configuration for Llama-3.2-1B."""
     model_config = llama_small_config()
 
@@ -171,7 +171,7 @@ def llama_small_inference_worker_config(rollout_writer, output_dir: str) -> Infe
     tokenizer = AutoTokenizer.from_pretrained(MODEL_TOKENIZER)
     environment = MockEnv(tokenizer=tokenizer, task_type="count", seed=42)
 
-    return InferenceWorkerConfig(
+    return RolloutWorkerConfig(
         inference_server_config=llama_small_inference_server_config(output_dir),
         policy_model=policy_model,
         reference_model=reference_model,
@@ -202,7 +202,7 @@ def run_inference_mode(args):
 
     rollout_writer = FileRolloutWriter(ROLLOUT_QUEUE_PATH)
     worker_config = llama_small_inference_worker_config(rollout_writer, "/tmp/inference_checkpoint")
-    worker = InferenceWorker(
+    worker = RolloutWorker(
         config=worker_config,
         coordinator=None,
     )

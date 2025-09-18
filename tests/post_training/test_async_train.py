@@ -26,7 +26,7 @@ import pytest
 import ray
 
 try:
-    from marin.post_training.rollout_worker import InferenceWorker
+    from marin.post_training.rollout_worker import RolloutWorker
     from marin.post_training.train_worker import TrainWorker
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
@@ -116,7 +116,7 @@ def _print_worker_status(elapsed, inference_runner, training_runner):
     print(f"[{elapsed:.1f}s] Status:")
     print(f"  Rollouts generated: {inference_runner.rollouts_generated}")
     print(f"  Training steps: {training_runner.steps_completed}")
-    print(f"  Weight transfers: {len(inference_runner.weight_transfers)}")
+    print(f"  Weight transfers: {inference_runner.weight_transfers}")
 
 
 def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16) -> TaggedRolloutBatch:
@@ -140,12 +140,11 @@ def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16) -> T
     )
 
 
-class InferenceWorkerRunner:
+class RolloutWorkerRunner:
     """Manages running an inference worker in a separate thread with metric tracking."""
 
-    def __init__(self, inference_worker_config, coordinator=None):
+    def __init__(self, inference_worker_config):
         self.inference_worker_config = inference_worker_config
-        self.coordinator = coordinator
 
         # State tracking
         self.worker = None
@@ -155,18 +154,7 @@ class InferenceWorkerRunner:
 
         # Metrics
         self.rollouts_generated = 0
-        self.weight_transfers = []
-
-    def _track_weight_transfer(self, weight_id, metadata):
-        """Called when weights are transferred."""
-        self.weight_transfers.append(
-            {
-                "weight_id": weight_id,
-                "metadata": metadata,
-                "time": time.time(),
-                "rollouts_at_transfer": self.rollouts_generated,
-            }
-        )
+        self.weight_transfers = 0
 
     def _track_rollout_generation(self):
         """Called when rollout is generated."""
@@ -180,23 +168,20 @@ class InferenceWorkerRunner:
 
             with patch("levanter.inference.openai.load_tokenizer") as mock_load:
                 mock_load.return_value = DummyTokenizer(vocab_size=1000)
-                self.worker = InferenceWorker(
+                self.worker = RolloutWorker(
                     config=self.inference_worker_config,
-                    coordinator=self.coordinator,
                 )
 
-            def tracking_receive_weights():
-                try:
-                    if self.coordinator is not None:
-                        # Mock weight transfer for testing
-                        self._track_weight_transfer("test_weight_1", {"weight_id": "test_weight_1"})
-                except Exception as e:
-                    logger.warning(f"Failed to track weight transfer: {e}")
+            _sync_weights_original = self.worker._sync_weights
 
-            # Call this periodically (simplified for testing)
-            tracking_receive_weights()
+            def sync_and_track():
+                result = _sync_weights_original()
+                if result:
+                    self.weight_transfers += 1
+                return result
 
-            # Override batch generation to count rollouts
+            self.worker._sync_weights = sync_and_track
+
             original_generate_batch = self.worker._generate_rollout_batch
 
             def counting_generate_batch(rng):
@@ -267,9 +252,8 @@ class InferenceWorkerRunner:
 class TrainWorkerRunner:
     """Manages running a training worker in a separate thread with metric tracking."""
 
-    def __init__(self, training_worker_config, coordinator=None):
+    def __init__(self, training_worker_config):
         self.training_worker_config = training_worker_config
-        self.coordinator = coordinator
 
         # State tracking
         self.worker = None
@@ -290,7 +274,6 @@ class TrainWorkerRunner:
         try:
             self.worker = _TestableTrainWorker(
                 config=self.training_worker_config,
-                coordinator=self.coordinator,
                 step_callback=lambda info: self._track_training_step(),
             )
 
@@ -355,7 +338,7 @@ def test_inference_worker(ray_cluster, inference_worker_config):
     coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
 
     # Use context manager for cleaner test
-    with InferenceWorkerRunner(inference_worker_config, coordinator) as runner:
+    with RolloutWorkerRunner(inference_worker_config, coordinator) as runner:
         # Wait for the worker to complete
         while runner.alive() and not runner.done.is_set():
             time.sleep(0.5)
@@ -417,13 +400,13 @@ def test_inference_and_training_workers(
     inference_worker_config.rollout_writer = rollout_queue.writer()
     training_worker_config.rollout_reader = rollout_queue.reader()
 
-    coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
-    coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
+    # coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
+    # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
 
     # Create worker runners and start with context managers
-    with TrainWorkerRunner(training_worker_config, coordinator) as training_runner:
+    with TrainWorkerRunner(training_worker_config) as training_runner:
         time.sleep(1)
-        inference_runner = InferenceWorkerRunner(inference_worker_config, coordinator)
+        inference_runner = RolloutWorkerRunner(inference_worker_config)
 
         with inference_runner:
             start_time = time.time()
@@ -455,15 +438,8 @@ def test_inference_and_training_workers(
     print(checkpoint_dirs)
     assert len(checkpoint_dirs) >= 1, f"Expected at least 1 checkpoint, got {len(checkpoint_dirs)}"
 
-    print(f"Weight transfers detected: {len(inference_runner.weight_transfers)}")
-    for i, transfer in enumerate(inference_runner.weight_transfers):
-        print(f"  Transfer {i}: weight_id={transfer['weight_id']}")
-
-    # For weight transfers, we expect at least one transfer with a valid weight_id
-    valid_transfers = [t for t in inference_runner.weight_transfers if t.get("weight_id") is not None]
-    assert valid_transfers, "Inference worker should receive at least one weight transfer"
-
-    assert len(training_runner.checkpoints_created) > 0, "Should have created at least one checkpoint"
+    print(f"Weight transfers detected: {inference_runner.weight_transfers}")
+    assert inference_runner.weight_transfers >= 1, "Expected at least 1 weight transfer"
     assert inference_runner.rollouts_generated > 0, "Should have generated at least one rollout"
 
 

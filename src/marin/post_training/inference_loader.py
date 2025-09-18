@@ -66,14 +66,14 @@ class InferenceLoader:
         self.shutdown_event = threading.Event()
 
     async def run(self):
-        logger.info("Starting InferenceWorker...")
+        logger.info("Starting RolloutWorker...")
 
         try:
             server_task = asyncio.create_task(self.server.serve_async())
             monitor_task = asyncio.create_task(self._monitor_for_checkpoints())
             await asyncio.gather(server_task, monitor_task)
         finally:
-            logger.info("InferenceWorker shutting down...")
+            logger.info("RolloutWorker shutting down...")
             self.server.shutdown()
 
     async def _monitor_for_checkpoints(self):
