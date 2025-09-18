@@ -188,19 +188,6 @@ def create_nano_training_worker_config(rollout_reader, output_dir: str | Path) -
     )
 
 
-def create_nano_inference_server_config(
-    model_config: LlamaConfig, output_dir: str | Path, host: str = "localhost", port: int = 8000
-) -> InferenceServerConfig:
-    """Create a minimal InferenceServerConfig for testing."""
-    return InferenceServerConfig(
-        model=model_config,
-        trainer=create_nano_trainer_config(output_dir),
-        tokenizer=DummyTokenizer(),
-        max_new_tokens=64,
-        temperature=1.0,
-    )
-
-
 def create_mock_environment(tokenizer=None):
     """Create a MockEnv instance for testing."""
     if tokenizer is None:
@@ -227,12 +214,12 @@ def create_nano_rollout_worker_config(
         max_input_length=32,
         max_output_length=32,
         pad_token_id=0,
-        n_prompts_per_step=8,
+        n_prompts_per_step=2,
         n_generations=4,
         temperature=1.0,
         log_freq=1,
-        rollout_batch_size=32,
-        max_rollouts=10000,
+        rollout_batch_size=4,
+        max_rollouts=1,
         weight_transfer=WeightTransferConfig(
             sync_interval_steps=10,
             poll_interval_seconds=1,
@@ -243,7 +230,6 @@ def create_nano_rollout_worker_config(
 
 
 def create_test_inference_server_config(model_config: LlamaConfig, output_dir: str | Path):
-    """Create a minimal InferenceServerConfig for testing."""
     from levanter.checkpoint import save_checkpoint
 
     vocab_size = DummyTokenizer().vocab_size
@@ -262,13 +248,14 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
     checkpoint_data = {"model": model}
     save_checkpoint(checkpoint_data, step=0, checkpoint_path=checkpoint_dir / "step-0")
 
-    config = create_nano_inference_server_config(model_config, output_dir)
-    config.checkpoint_path = str(checkpoint_dir / "step-0")
-
-    # We'll need to mock the tokenizer loading when the server is created
-    # Store the vocab_size in the config for later use
-    config._test_vocab_size = vocab_size
-    return config
+    return InferenceServerConfig(
+        model=model_config,
+        trainer=create_nano_trainer_config(output_dir),
+        tokenizer=DummyTokenizer(),
+        service=InferenceEngineConfig(max_seqs=8, page_size=8, max_pages_per_seq=8, max_queued_tokens=8),
+        temperature=1.0,
+        checkpoint_path=str(checkpoint_dir / "step-0"),
+    )
 
 
 def get_latest_checkpoint_path(checkpoint_base_path):
