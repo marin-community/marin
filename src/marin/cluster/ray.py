@@ -25,6 +25,7 @@ import time
 from collections import Counter
 from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -123,102 +124,185 @@ def run_ray_command(
     )
 
 
-def start_ray_dashboard_with_wait(cluster_config: str, port: int | None = None) -> tuple[subprocess.Popen, int]:
-    """Start Ray dashboard and wait for it to be ready.
+def get_head_ip_from_config(cluster_config: str) -> str:
+    """Get the head node IP from cluster config using ray get_head_ip command."""
+    try:
+        result = subprocess.run(
+            ["ray", "get_head_ip", cluster_config],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+        head_ip = result.stdout.strip()
+        if not head_ip:
+            raise RuntimeError("Empty head IP returned")
+        return head_ip
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to get head IP: {e.stderr}") from e
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Timeout getting head IP") from None
+
+
+@dataclass
+class DashboardInfo:
+    dashboard_port: int
+    gcs_port: int
+    api_port: int
+    ssh_process: subprocess.Popen
+
+
+def start_ssh_tunnel_to_head(cluster_config: str, head_ip: str) -> DashboardInfo:
+    """Start SSH tunnel to Ray head node with port forwarding.
 
     Args:
         cluster_config: Path to the Ray cluster configuration file
-        port: Port for the Ray Dashboard (None for auto-discovery, default 8265)
+        head_ip: IP address of the head node
 
     Returns:
-        Tuple of (dashboard process, actual port used)
+        Tuple of (ssh_process, dashboard_port, gcs_port, api_port)
 
     Raises:
-        RuntimeError: If dashboard fails to start or become ready
+        RuntimeError: If SSH tunnel fails to start
     """
-    if port is None:
-        port = find_free_port()
+    # Find free ports for forwarding
+    ports = set()
+    while len(ports) < 3:
+        ports.add(find_free_port())
 
-    logger.info(f"Connecting to Ray dashboard for {cluster_config} on port {port}...")
-    dashboard_process = subprocess.Popen(
-        ["ray", "dashboard", cluster_config, "-p", str(port)],
+    dashboard_port, gcs_port, api_port = list(ports)
+
+    ssh_cmd = [
+        "ssh",
+        "-tt",
+        f"-L{dashboard_port}:localhost:8265",  # Dashboard
+        f"-L{gcs_port}:localhost:6379",  # Ray GCS
+        f"-L{api_port}:localhost:10001",  # Ray API server
+        "-i",
+        os.path.expanduser("~/.ssh/marin_ray_cluster.pem"),
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "ExitOnForwardFailure=yes",
+        f"ray@{head_ip}",
+        "while true; do sleep 86400; done",
+    ]
+
+    logger.info(
+        f"Starting SSH tunnel to {head_ip} with ports: " + f"dashboard={dashboard_port}, ray={gcs_port}, api={api_port}"
+    )
+
+    ssh_process = subprocess.Popen(
+        ssh_cmd,
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
         env={**os.environ, "TERM": "dumb"},
     )
 
-    try:
-        # Probe for the dashboard to be ready
-        dashboard_url = f"http://localhost:{port}"
-        max_retries = 30
-        retry_delay = 1
+    # Wait for tunnel to be ready
+    max_retries = 30
+    retry_delay = 1
 
-        for attempt in range(max_retries):
-            try:
-                response = requests.get(f"{dashboard_url}/api/version", timeout=5)
-                if response.status_code == 200:
-                    logger.info(f"Ray dashboard is ready on port {port}")
-                    break
-            except (requests.ConnectionError, requests.Timeout):
-                if attempt < max_retries - 1:
-                    logger.info(f"Dashboard not ready, retrying in {retry_delay}s... " f"({attempt + 1}/{max_retries})")
-                    time.sleep(retry_delay)
-                else:
-                    logger.warning(f"Dashboard failed to become ready after {max_retries} attempts")
-                    dashboard_process.terminate()
-                    dashboard_process.wait()
-                    raise RuntimeError(f"Dashboard failed to become ready after {max_retries} attempts") from None
+    for attempt in range(max_retries):
+        try:
+            # Test dashboard connection
+            response = requests.get(f"http://localhost:{dashboard_port}/api/version", timeout=5)
+            if response.status_code == 200:
+                logger.info(f"SSH tunnel is ready - dashboard accessible on port {dashboard_port}")
+                return DashboardInfo(
+                    dashboard_port=dashboard_port,
+                    gcs_port=gcs_port,
+                    api_port=api_port,
+                    ssh_process=ssh_process,
+                )
+        except (requests.ConnectionError, requests.Timeout):
+            if attempt < max_retries - 1:
+                logger.info(f"SSH tunnel not ready, retrying in {retry_delay}s... ({attempt + 1}/{max_retries})")
+                time.sleep(retry_delay)
+            else:
+                logger.warning(f"SSH tunnel failed to become ready after {max_retries} attempts")
+                ssh_process.terminate()
+                ssh_process.wait()
+                raise RuntimeError(f"SSH tunnel failed to become ready after {max_retries} attempts") from None
 
-        return dashboard_process, port
-    except Exception:
-        # Clean up on any error
-        if dashboard_process and dashboard_process.poll() is None:
-            dashboard_process.terminate()
-            dashboard_process.wait()
-        raise
+    # Should not reach here
+    ssh_process.terminate()
+    ssh_process.wait()
+    raise RuntimeError("Unexpected error in SSH tunnel setup")
 
 
 @contextmanager
-def ray_dashboard(cluster_config: str, port: int | None = None) -> Generator[int, None, None]:
-    """Context manager for Ray dashboard connection.
+def ray_dashboard(cluster_config: str, ray_init: bool = False) -> Generator[DashboardInfo, None, None]:
+    """Context manager for Ray dashboard connection using SSH tunneling.
 
-    This starts the Ray dashboard and sets the RAY_ADDRESS environment variable
-    so that ray CLI commands can connect to the cluster.
+    This establishes an SSH tunnel to the Ray head node and sets up environment variables
+    so that Ray CLI commands and Python API can connect to the cluster.
 
     Args:
         cluster_config: Path to the Ray cluster configuration file
-        port: Port for the Ray Dashboard (None for auto-discovery)
 
     Yields:
-        The port number the dashboard is running on
+        DashboardInfo object with port information and SSH process
     """
-    # Save original RAY_ADDRESS if it exists
+    # Save original environment variables
     original_ray_address = os.environ.get("RAY_ADDRESS")
+    original_ray_api_server_address = os.environ.get("RAY_API_SERVER_ADDRESS")
+    original_ray_dashboard_address = os.environ.get("RAY_DASHBOARD_ADDRESS")
 
-    dashboard_process, actual_port = start_ray_dashboard_with_wait(cluster_config, port)
-    # Set RAY_ADDRESS for ray CLI commands
-    os.environ["RAY_ADDRESS"] = f"http://localhost:{actual_port}"
+    # Get head IP and start SSH tunnel
+    logger.info(f"Getting head IP for cluster config: {cluster_config}")
+    head_ip = get_head_ip_from_config(cluster_config)
+
+    dashboard_info = start_ssh_tunnel_to_head(cluster_config, head_ip)
+
+    # Set environment variables for Ray CLI and Python API
+    os.environ["RAY_ADDRESS"] = f"http://localhost:{dashboard_info.dashboard_port}"
+    os.environ["RAY_API_SERVER_ADDRESS"] = f"ray://localhost:{dashboard_info.api_port}"
+    os.environ["RAY_DASHBOARD_ADDRESS"] = f"http://localhost:{dashboard_info.dashboard_port}"
+
     try:
-        yield actual_port
+        if ray_init:
+            import ray
+
+            ray.init(
+                address=f"ray://localhost:{dashboard_info.api_port}",
+                runtime_env={"working_dir": "."},
+            )
+        yield dashboard_info
     except KeyboardInterrupt:
         # Reset terminal to sane state after Ctrl+C
         try:
             subprocess.run(["stty", "sane"], capture_output=True, timeout=5)
             subprocess.run(["reset"], capture_output=True, timeout=5)
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
-            print("Oops.")
-            # stty might not be available or might fail, that's ok
+            logger.debug("Failed to reset terminal state")
             pass
         raise
     finally:
+        # Restore original environment variables
         if original_ray_address is not None:
             os.environ["RAY_ADDRESS"] = original_ray_address
+        else:
+            os.environ.pop("RAY_ADDRESS", None)
 
-        # Clean up the dashboard process
-        if dashboard_process and dashboard_process.poll() is None:
-            dashboard_process.terminate()
-            dashboard_process.wait()
+        if original_ray_api_server_address is not None:
+            os.environ["RAY_API_SERVER_ADDRESS"] = original_ray_api_server_address
+        else:
+            os.environ.pop("RAY_API_SERVER_ADDRESS", None)
+
+        if original_ray_dashboard_address is not None:
+            os.environ["RAY_DASHBOARD_ADDRESS"] = original_ray_dashboard_address
+        else:
+            os.environ.pop("RAY_DASHBOARD_ADDRESS", None)
+
+        # Clean up the SSH tunnel
+        ssh_process = dashboard_info.ssh_process
+        if ssh_process and ssh_process.poll() is None:
+            ssh_process.terminate()
+            ssh_process.wait()
 
 
 def list_jobs() -> list[dict]:
