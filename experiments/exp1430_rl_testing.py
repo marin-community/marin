@@ -22,13 +22,13 @@ from dataclasses import dataclass
 
 import ray
 from levanter.infra.ray_tpu import run_on_pod_ray
-
-from marin.execution.executor import (
+from thalas import (
     ExecutorStep,
     OutputName,
     executor_main,
     this_output_path,
 )
+
 from marin.post_training.training_config import (
     CheckpointerConfigData,
     DistributedConfig,

@@ -31,8 +31,9 @@ Reference Issue: https://github.com/marin-community/marin/issues/579
 
 import logging
 
+from thalas import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+
 from marin.download.ar5iv.download import DownloadConfig, download
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
 from marin.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump
 

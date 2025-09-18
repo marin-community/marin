@@ -9,25 +9,27 @@ This guide shows how to add and run lm-eval harness evaluation tasks in Mari For
 ## Required Imports
 
 ```python
+# Executor
+from thalas import ExecutorMainConfig  # for retry logic
+from thalas import executor_main
+
 # Core evaluation functions
 from experiments.evals.evals import (
-    default_eval,            # Runs CORE_TASKS via LM Evaluation Harness
-    default_key_evals,       # Runs KEY_GENERATION_TASKS, KEY_MULTIPLE_CHOICE_TASKS, and Alpaca
+    default_eval,                    # Runs CORE_TASKS via LM Evaluation Harness
+    default_key_evals,               # Runs KEY_GENERATION_TASKS, KEY_MULTIPLE_CHOICE_TASKS, and Alpaca
     evaluate_lm_evaluation_harness,  # Custom MCQA eval step
 )
 
+# Hardware resources
+from experiments.evals.resource_configs import SINGLE_TPU_V4_8, SINGLE_TPU_V6E_8
+
 # Task configuration constants
 from experiments.evals.task_configs import (
-    CORE_TASKS,             # Default multiple‐choice tasks
-    CORE_TASKS_PLUS_MMLU,   # CORE + MMLU
-    KEY_GENERATION_TASKS,   # Generation tasks (e.g. GSM8K, Alpaca)
+    CORE_TASKS,                 # Default multiple‐choice tasks
+    CORE_TASKS_PLUS_MMLU,       # CORE + MMLU
+    KEY_GENERATION_TASKS,       # Generation tasks (e.g. GSM8K, Alpaca)
     KEY_MULTIPLE_CHOICE_TASKS,  # MMLU few‐shot
 )
-
-# Hardware / executor
-from experiments.evals.resource_configs import SINGLE_TPU_V4_8, SINGLE_TPU_V6E_8
-from marin.execution.executor import executor_main
-from marin.execution.executor import ExecutorMainConfig  # for retry logic
 ```
 
 ## 1. Multiple‐Choice Eval: CORE_TASKS
@@ -38,7 +40,7 @@ Run the canonical CORE_TASKS (subset of DCLM tasks) via LM Evaluation Harness:
 # run_mcqa_eval.py
 from experiments.evals.evals import default_eval
 from experiments.evals.resource_configs import SINGLE_TPU_V4_8
-from marin.execution.executor import executor_main
+from thalas import executor_main
 
 # Example: evaluate a standalone checkpoint
 model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
@@ -67,7 +69,7 @@ Use `default_key_evals` to run a collection of generation tasks (`KEY_GENERATION
 # run_key_evals.py  (see 1:18:experiments/evals/run_key_evals.py)
 from experiments.evals.evals import default_key_evals
 from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
-from marin.execution.executor import executor_main
+from thalas import executor_main
 
 # Point to your checkpoint or a training ExecutorStep
 model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
@@ -120,7 +122,7 @@ If you want fine‐grained control over which tasks to run:
 from experiments.evals.evals import evaluate_lm_evaluation_harness
 from experiments.evals.resource_configs import SINGLE_TPU_V4_8
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import executor_main
+from thalas import executor_main
 
 # Define a custom list of EvalTaskConfig
 custom_tasks = [

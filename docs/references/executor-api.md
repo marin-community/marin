@@ -1,30 +1,20 @@
 # Executor API
 
-This is the API documentation for the executor framework.
+!!! note "Executor Framework Moved to Thalas"
+    The executor framework has been factored out into a separate package called [Thalas](https://github.com/marin-community/thalas).
 
-## Executor Entrypoint
+    For complete API documentation, please see the [Thalas Executor API Reference](https://github.com/marin-community/thalas/blob/main/docs/references/executor-api.md).
 
-::: marin.execution.executor_main
-::: marin.execution.ExecutorMainConfig
+## Migration Guide
 
-## Executor and Steps
+Update your imports from `marin.execution` to `thalas`:
 
-::: marin.execution.Executor
-::: marin.execution.ExecutorStep
+```python
+# Old imports (no longer work)
+from marin.execution import executor_main, ExecutorStep
 
-## Inputs and Outputs
+# New imports
+from thalas import executor_main, ExecutorStep
+```
 
-::: marin.execution.InputName
-::: marin.execution.output_path_of
-::: marin.execution.this_output_path
-::: marin.execution.OutputName
-::: marin.execution.THIS_OUTPUT_PATH
-
-
-## Versioning
-
-::: marin.execution.VersionedValue
-::: marin.execution.versioned
-::: marin.execution.ensure_versioned
-::: marin.execution.unwrap_versioned_value
-::: marin.execution.get_executor_step
+All other aspects of the API remain unchanged.

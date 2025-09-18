@@ -27,6 +27,8 @@ Reference Issue: https://github.com/marin-community/marin/issues/648
 
 import logging
 
+from thalas import executor_main
+
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from experiments.dolma.utils import dolma_pipeline_with_modified_dataset
 from experiments.exp579_ar5iv_markdownify import (
@@ -35,7 +37,6 @@ from experiments.exp579_ar5iv_markdownify import (
     ar5iv_no_problem_resiliparse_with_references_no_links,
     ar5iv_no_problem_resiliparse_with_references_with_links,
 )
-from marin.execution.executor import executor_main
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")

@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from thalas import executor_main
+
 from experiments.datashop.datashop_datasets import datashop_dclm_annotation_subset, datashop_dclm_pretraining_subset
 from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import MEDICAL_TASKS
 from experiments.models import llama_3_1_8b, llama_3_1_8b_instruct
-from marin.execution.executor import executor_main
 
 DATASHOP_MEDICAL_DATA_FILTER_PROMPT = """
 Evaluate the following text extract for its potential usefulness for studying medical content. Use the following 5-point scoring system described below. Points are accumulated based on the satisfaction of
