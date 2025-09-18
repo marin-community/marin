@@ -111,12 +111,6 @@ def compute_ppo_loss(
     clip_epsilon: float = 0.2,
 ) -> jax.Array:
     """Compute PPO-style loss with RLOO advantages.
-
-    RLOO (Reinforce Leave-One-Out) provides advantages that are computed as:
-    advantage_i = reward_i - mean(rewards excluding i)
-
-    This gives us unbiased advantage estimates without needing a value function.
-
     Args:
         model: The language model
         batch: JaxRolloutBatch containing:
@@ -148,13 +142,11 @@ def compute_ppo_loss(
     # Get the old policy's log probs (from the policy that collected the data)
     old_logprobs = batch.policy_logprobs.array
 
-    # Compute importance sampling ratio: π_current(a|s) / π_old(a|s)
-    # In log space: log π_current - log π_old
+    # Compute importance sampling ratio exp(log π_current - log π_old)
     log_ratio = current_logprobs - old_logprobs
     ratio = jnp.exp(log_ratio)
 
-    # RLOO advantages (these are already computed as r_i - baseline)
-    # where baseline = mean of other rewards in the batch
+    # RLOO advantages (returned from the worker, and smeared across tokens)
     advantages = batch.loss_weights.array
 
     # Get the mask for valid tokens (e.g., excluding padding)

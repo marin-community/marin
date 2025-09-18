@@ -80,7 +80,7 @@ class RLTrainConfig:
     training_config: TrainingConfig
     inference_tpu_type: str
     train_tpu_type: str
-    num_inference_workers: int = 8
+    num_rollout_workers: int = 8
     num_train_slices: int = 1
 
 
@@ -89,7 +89,8 @@ def run_rl_training_on_pod(config: RLTrainConfig):
     """
     Run async RL training with separate inference and training workers.
     """
-    from marin.post_training.inference_loader import InferenceWorker
+    from marin.post_training.inference_loader import RolloutWorker
+
     from marin.post_training.rollout_storage import FileRolloutReader, FileRolloutWriter
     from marin.post_training.train_worker import TrainingWorker
 
@@ -133,11 +134,11 @@ def run_rl_training_on_pod(config: RLTrainConfig):
     inference_hw_config = inference_pod_config.with_env_vars(env)
 
     @ray.remote(runtime_env=inference_hw_config.runtime_env, max_calls=1)
-    def inference_worker_task():
+    def rollout_worker_task():
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
             rollout_writer = FileRolloutWriter(rollout_queue_path)
-            worker = InferenceWorker(
+            worker = RolloutWorker(
                 training_config=config.training_config,
                 environment_spec=ENVIRONMENT_SPEC,
                 rollout_writer=rollout_writer,
@@ -159,10 +160,10 @@ def run_rl_training_on_pod(config: RLTrainConfig):
     )
 
     inference_tasks = []
-    for _ in range(config.num_inference_workers):
+    for _ in range(config.num_rollout_workers):
         inference_tasks.append(
             run_on_pod_ray.remote(
-                inference_worker_task,
+                rollout_worker_task,
                 config.inference_tpu_type,
                 num_slices=1,
                 max_retries_failure=10,
@@ -318,7 +319,7 @@ def default_rl_train(
         training_config=training_config,
         inference_tpu_type="v4-8",
         train_tpu_type="v4-64",
-        num_inference_workers=1,
+        num_rollout_workers=1,
         num_train_slices=1,
     )
 

@@ -28,8 +28,8 @@ import pytest
 import ray
 
 try:
-    from marin.post_training.rollout_worker import RolloutWorker
-    from marin.post_training.train_worker import TrainWorker
+    from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
+    from marin.post_training.train_worker import TrainWorker, TrainWorkerConfig
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 
@@ -41,8 +41,8 @@ from marin.post_training.rollout_storage import (
 )
 from tests.post_training.config_helpers import (
     DummyTokenizer,
-    create_nano_inference_worker_config,
     create_nano_llama_config,
+    create_nano_rollout_worker_config,
     create_nano_training_worker_config,
     create_rollout_batch,
     create_test_inference_server_config,
@@ -87,7 +87,7 @@ def training_worker_config(tmp_path):
 
 
 @pytest.fixture
-def inference_worker_config(tmp_path):
+def rollout_worker_config(tmp_path):
     """Create minimal inference worker configuration for testing."""
     rollout_queue = InMemoryRolloutQueue()
     rollout_writer = rollout_queue.writer()
@@ -95,7 +95,7 @@ def inference_worker_config(tmp_path):
     model_config = create_nano_llama_config()
     inference_server_config = create_test_inference_server_config(model_config, tmp_path)
 
-    return create_nano_inference_worker_config(tmp_path, inference_server_config, rollout_writer)
+    return create_nano_rollout_worker_config(tmp_path, inference_server_config, rollout_writer)
 
 
 def _print_worker_status(elapsed, inference_runner, training_runner):
@@ -205,9 +205,9 @@ class ThreadedWorkerRunner(ABC):
 class RolloutWorkerRunner(ThreadedWorkerRunner):
     """Manages running an inference worker in a separate thread with metric tracking."""
 
-    def __init__(self, inference_worker_config):
-        super().__init__(inference_worker_config)
-        self.inference_worker_config = inference_worker_config
+    def __init__(self, rollout_worker_config):
+        super().__init__(rollout_worker_config)
+        self.rollout_worker_config = rollout_worker_config
 
         # Metrics
         self.rollouts_generated = 0
@@ -226,7 +226,7 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
         with patch("levanter.inference.openai.load_tokenizer") as mock_load:
             mock_load.return_value = DummyTokenizer()
             self.worker = RolloutWorker(
-                config=self.inference_worker_config,
+                config=self.rollout_worker_config,
             )
 
         _sync_weights_original = self.worker._sync_weights
@@ -311,19 +311,23 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
         self.worker.train()
 
 
-def test_inference_worker(ray_cluster, inference_worker_config):
+def test_rollout_worker(ray_cluster, rollout_worker_config: RolloutWorkerConfig):
     """Test inference worker generates rollouts to in-memory queue."""
     # Use the rollout writer's queue from the inference worker config
-    rollout_writer = inference_worker_config.rollout_writer
+    rollout_writer = rollout_worker_config.rollout_writer
     queue_reader = rollout_writer._queue.reader()
 
     # Get coordinator for GCS mode only
     # coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
     # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
 
+    rollout_worker_config.max_rollouts = 10
+    rollout_worker_config.n_generations = 2
+    rollout_worker_config.n_prompts_per_step = 2
+    rollout_worker_config.rollout_batch_size = 4
+
     # Use context manager for cleaner test
-    with RolloutWorkerRunner(inference_worker_config) as runner:
-        # Wait for the worker to complete
+    with RolloutWorkerRunner(rollout_worker_config) as runner:
         while runner.alive() and not runner.done.is_set():
             time.sleep(0.5)
 
@@ -334,10 +338,10 @@ def test_inference_worker(ray_cluster, inference_worker_config):
         assert len(batches) > 0, "Should be able to read batches from queue"
         assert runner.rollouts_generated >= 1, f"Expected at least 1 rollout, got {runner.rollouts_generated}"
 
-    print("✓ Inference worker generated rollout batch successfully")
+    print("Rollout worker generated rollout batch successfully")
 
 
-def test_train_worker(ray_cluster, training_worker_config):
+def test_train_worker(ray_cluster, training_worker_config: TrainWorkerConfig):
     """Test training worker processes rollout batch and creates checkpoint."""
     rollout_reader = training_worker_config.rollout_reader
     queue_writer = rollout_reader._queue.writer()
@@ -374,14 +378,14 @@ def test_inference_and_training_workers(
     ray_cluster,
     tmp_path,
     training_worker_config,
-    inference_worker_config,
+    rollout_worker_config,
 ):
     """Test inference & training workers running together with checkpoint updates."""
 
     # Use in-memory rollout queue
     rollout_queue = InMemoryRolloutQueue()
 
-    inference_worker_config.rollout_writer = rollout_queue.writer()
+    rollout_worker_config.rollout_writer = rollout_queue.writer()
     training_worker_config.rollout_reader = rollout_queue.reader()
 
     # coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
@@ -390,7 +394,7 @@ def test_inference_and_training_workers(
     # Create worker runners and start with context managers
     with TrainWorkerRunner(training_worker_config) as training_runner:
         time.sleep(1)
-        inference_runner = RolloutWorkerRunner(inference_worker_config)
+        inference_runner = RolloutWorkerRunner(rollout_worker_config)
 
         with inference_runner:
             start_time = time.time()
@@ -427,75 +431,43 @@ def test_inference_and_training_workers(
     assert inference_runner.rollouts_generated > 0, "Should have generated at least one rollout"
 
 
-def test_moar_cats_improvement(
-    ray_cluster,
-    tmp_path,
-    training_worker_config,
-    inference_worker_config,
-):
-    """Long-running test to validate environment objective improves over time."""
+def print_model_validation(model, tokenizer):
+    print("\n" + "=" * 60)
+    print("Testing trained model responses:")
+    print("=" * 60)
 
-    # Use in-memory rollout queue
-    rollout_queue = InMemoryRolloutQueue()
+    test_prompts = [
+        # prompts from our training data (for train only test)
+        "i like cats, give me moar cats",
+        "do you like cats?",
+        "cats",
+        "moar cats",
+        # novel prompts
+        "moar moar",
+        "i love i love",
+        "  ",
+    ]
 
-    inference_worker_config.rollout_writer = rollout_queue.writer()
-    training_worker_config.rollout_reader = rollout_queue.reader()
+    tokenizer = DummyTokenizer()
 
-    metrics_history = []
+    _, texts = run_inference_with_engine(
+        model=model,
+        prompts=test_prompts,
+        tokenizer=tokenizer,
+        max_tokens=16,
+        temperature=0.8,
+    )
 
-    LONG_TEST_TIMEOUT = 300  # 5 minutes
+    for i, (prompt, response) in enumerate(zip(test_prompts, texts, strict=True)):
+        print(f"\nPrompt {i + 1}: {prompt}")
+        print(f"Response: {response}")
 
-    with TrainWorkerRunner(training_worker_config) as training_runner:
-        time.sleep(1)
-        inference_runner = RolloutWorkerRunner(inference_worker_config)
-
-        with inference_runner:
-            start_time = time.time()
-            while time.time() - start_time < LONG_TEST_TIMEOUT:
-                elapsed = time.time() - start_time
-
-                metrics_history.append(
-                    {
-                        "elapsed": elapsed,
-                        "rollouts_generated": inference_runner.rollouts_generated,
-                        "steps_completed": training_runner.steps_completed,
-                        "weight_transfers": inference_runner.weight_transfers,
-                    }
-                )
-
-                if training_runner.done.is_set() and not inference_runner.done.is_set():
-                    inference_runner.stop()
-                    break
-
-                if inference_runner.done.is_set() and training_runner.done.is_set():
-                    training_runner.stop()
-                    break
-
-                time.sleep(5)  # Less frequent status updates
-
-    # Validate we ran for sufficient time and generated data
-    assert len(metrics_history) >= 2, "Test should run long enough to collect multiple metric snapshots"
-    assert (
-        inference_runner.rollouts_generated >= 5
-    ), f"Expected at least 5 rollouts, got {inference_runner.rollouts_generated}"
-    assert (
-        training_runner.steps_completed >= 2
-    ), f"Expected at least 2 training steps, got {training_runner.steps_completed}"
-
-    # Validate objective improvement - rollout generation should increase over time
-    initial_rollouts = metrics_history[0]["rollouts_generated"]
-    final_rollouts = metrics_history[-1]["rollouts_generated"]
-    assert (
-        final_rollouts > initial_rollouts
-    ), f"Rollout generation should improve: {initial_rollouts} -> {final_rollouts}"
-
-    # Validate training progresses
-    initial_steps = metrics_history[0]["steps_completed"]
-    final_steps = metrics_history[-1]["steps_completed"]
-    assert final_steps >= initial_steps, f"Training should progress: {initial_steps} -> {final_steps}"
-
-    # Validate weight transfers occur
-    assert inference_runner.weight_transfers >= 1, "Should have at least one weight transfer during long run"
+        # Check if response contains cats
+        cat_count = response.lower().count("cat")
+        if cat_count > 0:
+            print(f"  ✓ Contains {cat_count} cat references!")
+        else:
+            print("  - No cat references found")
 
 
 def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_config):
@@ -553,41 +525,70 @@ def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_conf
     print(f"  - Final loss: {runner.losses[-1]:.4f}")
 
     # Test the trained model with example prompts
-    print("\n" + "=" * 60)
-    print("Testing trained model responses:")
-    print("=" * 60)
+    print_model_validation(runner.trained_model, DummyTokenizer())
 
-    test_prompts = [
-        # prompts from our training data
-        "i like cats, give me moar cats",
-        "do you like cats?",
-        "cats",
-        "moar cats",
-        # novel prompts
-        "moar moar",
-        "i love i love",
-        "  ",
-    ]
 
-    tokenizer = DummyTokenizer()
+def test_full_integration_moar_cats(
+    ray_cluster,
+    tmp_path,
+    training_worker_config,
+    rollout_worker_config,
+):
+    """Long-running test to validate environment objective improves over time."""
 
-    _, texts = run_inference_with_engine(
-        model=runner.trained_model,
-        prompts=test_prompts,
-        tokenizer=tokenizer,
-        max_tokens=16,
-        temperature=0.8,
-    )
+    # Use in-memory rollout queue
+    rollout_queue = InMemoryRolloutQueue()
 
-    for i, (prompt, response) in enumerate(zip(test_prompts, texts, strict=True)):
-        print(f"\nPrompt {i + 1}: {prompt}")
-        print(f"Response: {response}")
+    rollout_worker_config.rollout_writer = rollout_queue.writer()
+    training_worker_config.rollout_reader = rollout_queue.reader()
 
-        # Check if response contains cats
-        cat_count = response.lower().count("cat")
-        if cat_count > 0:
-            print(f"  ✓ Contains {cat_count} cat references!")
-        else:
-            print("  - No cat references found")
+    metrics_history = []
+    with TrainWorkerRunner(training_worker_config) as training_runner:
+        time.sleep(1)
+        inference_runner = RolloutWorkerRunner(rollout_worker_config)
 
-    print("✓ Training worker successfully processed 50 cat-themed rollout batches")
+        with inference_runner:
+            while True:
+                metrics_history.append(
+                    {
+                        "rollouts_generated": inference_runner.rollouts_generated,
+                        "steps_completed": training_runner.steps_completed,
+                        "weight_transfers": inference_runner.weight_transfers,
+                    }
+                )
+
+                if training_runner.done.is_set() and not inference_runner.done.is_set():
+                    inference_runner.stop()
+                    break
+
+                if inference_runner.done.is_set() and training_runner.done.is_set():
+                    training_runner.stop()
+                    break
+
+            time.sleep(10)
+
+    # Validate we ran for sufficient time and generated data
+    assert len(metrics_history) >= 2, "Test should run long enough to collect multiple metric snapshots"
+    assert (
+        inference_runner.rollouts_generated >= 5
+    ), f"Expected at least 5 rollouts, got {inference_runner.rollouts_generated}"
+    assert (
+        training_runner.steps_completed >= 2
+    ), f"Expected at least 2 training steps, got {training_runner.steps_completed}"
+
+    # Validate objective improvement - rollout generation should increase over time
+    initial_rollouts = metrics_history[0]["rollouts_generated"]
+    final_rollouts = metrics_history[-1]["rollouts_generated"]
+    assert (
+        final_rollouts > initial_rollouts
+    ), f"Rollout generation should improve: {initial_rollouts} -> {final_rollouts}"
+
+    # Validate training progresses
+    initial_steps = metrics_history[0]["steps_completed"]
+    final_steps = metrics_history[-1]["steps_completed"]
+    assert final_steps >= initial_steps, f"Training should progress: {initial_steps} -> {final_steps}"
+
+    # Validate weight transfers occur
+    assert inference_runner.weight_transfers >= 1, "Should have at least one weight transfer during long run"
+
+    print_model_validation(training_runner.trained_model, DummyTokenizer())

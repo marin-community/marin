@@ -34,10 +34,10 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import levanter
 import numpy as np
-import requests
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
+from openai import OpenAI
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from marin.post_training.environments.load_environments import load_environment_from_spec
@@ -52,6 +52,29 @@ from .rollout_storage import RolloutBatch, RolloutWriter, TaggedRolloutBatch
 from .weight_transfer_manager import WeightTransferConfig
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RolloutWorkerConfig:
+    """Configuration for RolloutWorker."""
+
+    inference_server_config: InferenceServerConfig
+
+    # used for initialization
+    trainer: TrainerConfig
+    model: LlamaConfig
+    environment_spec: str
+    rollout_writer: RolloutWriter
+    max_input_length: int
+    max_output_length: int
+    pad_token_id: int
+    n_prompts_per_step: int
+    n_generations: int
+    temperature: float
+    log_freq: int
+    weight_transfer: WeightTransferConfig
+    rollout_batch_size: int = 32
+    max_rollouts: int | None = None
 
 
 def compute_model_logprobs(
@@ -107,27 +130,11 @@ def compute_model_logprobs(
     return logprobs
 
 
-@dataclass
-class RolloutWorkerConfig:
-    """Configuration for RolloutWorker."""
-
-    inference_server_config: InferenceServerConfig
-
-    # used for initialization
-    trainer: TrainerConfig
-    model: LlamaConfig
-    environment_spec: str
-    rollout_writer: RolloutWriter
-    max_input_length: int
-    max_output_length: int
-    pad_token_id: int
-    n_prompts_per_step: int
-    n_generations: int
-    temperature: float
-    log_freq: int
-    weight_transfer: WeightTransferConfig
-    rollout_batch_size: int = 32
-    max_rollouts: int | None = None
+def find_open_port() -> int:
+    """Find an open port on localhost."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
 
 
 class LevanterInferenceContext(InferenceContext):
@@ -159,35 +166,25 @@ class LevanterInferenceContext(InferenceContext):
         """Generate responses for a batch of prompts."""
         host = self.inference_server.config.host
         port = self.inference_server.config.port
-        url = f"http://{host}:{port}/v1/chat/completions"
-        responses = []
-        for prompt in prompts:
-            response = requests.post(
-                url,
-                headers={"Content-Type": "application/json"},
-                json={
-                    "model": getattr(self.inference_server.config, "model_name", "test-model"),
-                    "messages": [{"role": "user", "content": prompt}],
-                    "logprobs": True,
-                    "max_tokens": self.max_tokens,
-                    "temperature": temperature,
-                    "n": n_generations,
-                    "top_p": top_p,
-                    "top_k": top_k,
-                },
-            )
-            responses.append(response)
+        base_url = f"http://{host}:{port}/v1"
+
+        client = OpenAI(base_url=base_url, api_key="dummy")
 
         all_results = []
-        for response in responses:
-            if response.status_code != 200:
-                raise RuntimeError(f"Inference server error: {response.status_code} - {response.text}")
+        for prompt in prompts:
+            completion = client.chat.completions.create(
+                model=getattr(self.inference_server.config, "model_name", "test-model"),
+                messages=[{"role": "user", "content": prompt}],
+                logprobs=True,
+                max_tokens=self.max_tokens,
+                temperature=temperature,
+                n=n_generations,
+                top_p=top_p,
+                extra_body={"top_k": top_k} if top_k is not None else None,
+            )
 
-            from openai.types.chat.chat_completion import ChatCompletion
-
-            chat_response = ChatCompletion.model_validate_json(response.text)
             prompt_results = []
-            for choice in chat_response.choices:
+            for choice in completion.choices:
                 content = choice.message.content
                 tokens = self.tokenizer.encode(content)
                 logprobs = [t.logprob for t in choice.logprobs.content]
@@ -254,6 +251,7 @@ class RolloutWorker:
 
         self._build_models()
 
+        config.inference_server_config.port = find_open_port()
         self.inference_server = InferenceServer.create(config.inference_server_config)
         self._start_inference_server()
 

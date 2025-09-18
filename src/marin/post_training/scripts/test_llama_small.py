@@ -160,7 +160,7 @@ def llama_small_training_worker_config(rollout_reader, output_dir: str) -> Train
     )
 
 
-def llama_small_inference_worker_config(rollout_writer, output_dir: str) -> RolloutWorkerConfig:
+def llama_small_rollout_worker_config(rollout_writer, output_dir: str) -> RolloutWorkerConfig:
     """Create inference worker configuration for Llama-3.2-1B."""
     # Create mock environment with Llama tokenizer
     from transformers import AutoTokenizer
@@ -194,14 +194,14 @@ def llama_small_inference_worker_config(rollout_writer, output_dir: str) -> Roll
 def run_inference_mode(args):
     """Run in inference worker mode."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    logger = logging.getLogger("inference_worker")
+    logger = logging.getLogger("rollout_worker")
 
     logger.info("Starting inference worker mode...")
 
     subprocess.run("sudo --non-interactive rm -f /tmp/libtpu_lockfile", shell=True, check=False)
 
     rollout_writer = FileRolloutWriter(ROLLOUT_QUEUE_PATH)
-    worker_config = llama_small_inference_worker_config(rollout_writer, "/tmp/inference_checkpoint")
+    worker_config = llama_small_rollout_worker_config(rollout_writer, "/tmp/inference_checkpoint")
     worker = RolloutWorker(
         config=worker_config,
     )

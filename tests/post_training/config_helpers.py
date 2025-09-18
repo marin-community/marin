@@ -208,7 +208,7 @@ def create_mock_environment(tokenizer=None):
     return MockEnv(tokenizer=tokenizer, task_type="simple_addition", seed=42)
 
 
-def create_nano_inference_worker_config(
+def create_nano_rollout_worker_config(
     output_dir: str, inference_server_config, rollout_writer, environment=None
 ) -> RolloutWorkerConfig:
     """Create a minimal RolloutWorkerConfig for testing."""
