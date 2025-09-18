@@ -102,6 +102,110 @@ def load_model_from_checkpoint_or_hf(
         return model
 
 
+def compute_ppo_loss(
+    model: LmHeadModel,
+    batch: JaxRolloutBatch,
+    *,
+    key: jax.Array | None = None,
+    kl_coef: float = 0.01,
+    clip_epsilon: float = 0.2,
+) -> jax.Array:
+    """Compute PPO-style loss with RLOO advantages.
+
+    RLOO (Reinforce Leave-One-Out) provides advantages that are computed as:
+    advantage_i = reward_i - mean(rewards excluding i)
+
+    This gives us unbiased advantage estimates without needing a value function.
+
+    Args:
+        model: The language model
+        batch: JaxRolloutBatch containing:
+            - loss_weights: RLOO advantages (r_i - mean(r_j for j≠i))
+            - policy_logprobs: log probs from the policy that generated the data
+            - reference_logprobs: log probs from the reference model
+        key: JAX random key for dropout
+        kl_coef: Coefficient for KL penalty from reference policy
+        clip_epsilon: PPO clipping parameter (typically 0.1-0.2)
+
+    Returns:
+        Total loss scalar
+    """
+    # Forward pass to get current policy's logits
+    model_output = model(
+        input_ids=batch.input_ids,
+        attn_mask=batch.attention_mask,
+        pos_ids=batch.position_ids,
+        key=key,
+    )
+
+    logits = model_output.array.astype(jnp.float32)
+
+    # Compute current policy's log probabilities for the taken actions
+    # Using cross-entropy gives us -log p(a|s)
+    token_ce_loss = softmax_cross_entropy_with_integer_labels(logits, batch.target_ids.array)
+    current_logprobs = -token_ce_loss
+
+    # Get the old policy's log probs (from the policy that collected the data)
+    old_logprobs = batch.policy_logprobs.array
+
+    # Compute importance sampling ratio: π_current(a|s) / π_old(a|s)
+    # In log space: log π_current - log π_old
+    log_ratio = current_logprobs - old_logprobs
+    ratio = jnp.exp(log_ratio)
+
+    # RLOO advantages (these are already computed as r_i - baseline)
+    # where baseline = mean of other rewards in the batch
+    advantages = batch.loss_weights.array
+
+    # Get the mask for valid tokens (e.g., excluding padding)
+    mask = batch.loss_masks.array
+
+    # PPO objective with clipping
+    # We want to maximize advantage-weighted log probs, so we minimize the negative
+
+    # Unclipped surrogate objective: ratio * advantage
+    surrogate_1 = ratio * advantages
+
+    # Clipped surrogate objective
+    clipped_ratio = jnp.clip(ratio, 1 - clip_epsilon, 1 + clip_epsilon)
+    surrogate_2 = clipped_ratio * advantages
+
+    # PPO takes the minimum of the two (pessimistic bound)
+    # We're minimizing negative rewards, so we take minimum of surrogate objectives
+    # then negate to convert maximization to minimization
+    ppo_loss_per_token = -jnp.minimum(surrogate_1, surrogate_2)
+
+    # Apply mask and average
+    ppo_loss = jnp.sum(ppo_loss_per_token * mask) / jnp.maximum(jnp.sum(mask), 1.0)
+
+    # KL penalty from reference policy (optional regularization)
+    # This keeps the policy from diverging too far from the reference
+    # KL(π_current || π_ref) ≈ π_current * (log π_current - log π_ref)
+    # We use the simpler form: just the log difference
+    reference_logprobs = batch.reference_logprobs.array
+    kl_div = current_logprobs - reference_logprobs
+    kl_loss = jnp.sum(kl_div * mask) / jnp.maximum(jnp.sum(mask), 1.0)
+
+    # Total loss
+    total_loss = ppo_loss + kl_coef * kl_loss
+
+    # Log some useful metrics (uncomment when needed)
+    # with levanter.tracker.defer_tracker_for_jit() as metrics:
+    #     metrics.update({
+    #         "ppo/loss": ppo_loss,
+    #         "ppo/kl_loss": kl_loss,
+    #         "ppo/total_loss": total_loss,
+    #         "ppo/ratio_mean": jnp.mean(ratio * mask) / jnp.maximum(jnp.mean(mask), 1.0),
+    #         "ppo/ratio_max": jnp.max(ratio * mask),
+    #         "ppo/ratio_min": jnp.min(jnp.where(mask, ratio, jnp.inf)),
+    #         "ppo/advantage_mean": jnp.sum(advantages * mask) / jnp.maximum(jnp.sum(mask), 1.0),
+    #         "ppo/advantage_std": jnp.std(advantages * mask),
+    #         "ppo/approx_kl": jnp.mean(0.5 * jnp.square(log_ratio) * mask),  # 2nd order approx
+    #     })
+
+    return total_loss
+
+
 def compute_rloo_loss(
     model: LmHeadModel,
     batch: JaxRolloutBatch,
@@ -142,21 +246,22 @@ def compute_rloo_loss(
 
     current_logprobs = -token_loss
 
-    # RLOO importance sampling ratio: π_θ(a|s) / π_old(a|s)
+    # importance sampling since we're using off-policy data
+    # ratio = π_current(a|s) / π_old(a|s)
     log_ratio = jnp.subtract(current_logprobs, policy_logprobs_array)
     ratio = jnp.exp(log_ratio)
-
-    # Clip ratio for stability (PPO-style)
-    ratio = jnp.clip(ratio, 0.8, 1.2)
+    # ratio = jnp.clip(ratio, 0.8, 1.2)
 
     # RLOO loss with importance sampling
     # batch.loss_weights contains RLOO advantages: r_i - mean(r_j for j≠i)
+    # weighted_loss = token_loss * ratio * loss_weights_array
+    # weighted_loss = -ratio * loss_weights_array * loss_masks_array
     weighted_loss = token_loss * ratio * loss_weights_array
     reinforce_loss = jnp.sum(weighted_loss * loss_masks_array) / jnp.sum(loss_masks_array)
 
-    # KL regularization against reference policy (prevents drift)
-    kl_penalty = jnp.subtract(current_logprobs, reference_logprobs_array)
-    kl_loss = -jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
+    # KL regularization
+    kl_penalty = jnp.exp(current_logprobs) * (current_logprobs - reference_logprobs_array)
+    kl_loss = jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
 
     loss = reinforce_loss + kl_coef * kl_loss
 
@@ -179,7 +284,7 @@ def compute_rloo_loss(
 class StreamingRolloutLoader:
     """Direct loader for streaming rollout data that bypasses Levanter's DataLoader."""
 
-    def __init__(self, data_loader: ReplayDataLoader, config):
+    def __init__(self, data_loader: ReplayDataLoader, config: TrainerConfig):
         """Initialize the streaming rollout loader.
 
         Args:
@@ -239,6 +344,17 @@ class StopTrainerException(Exception):
 
 
 @dataclass
+class ReplayBufferConfig:
+    """Configuration for the replay buffer."""
+
+    capacity: int = 10000
+    """Maximum number of examples per environment in the buffer."""
+
+    alpha: float = 3.0
+    """Recency bias for sampling, higher values favor newer examples."""
+
+
+@dataclass
 class TrainWorkerConfig:
     """Configuration for Levanter-based RL training worker."""
 
@@ -246,6 +362,7 @@ class TrainWorkerConfig:
     model: LmConfig
     trainer: TrainerConfig
     optimizer: OptimizerConfig
+    replay_buffer: ReplayBufferConfig
 
     weight_transfer: WeightTransferConfig
 
@@ -283,9 +400,9 @@ class TrainWorker:
 
         self.replay_buffer = ReplayBuffer(
             # TODO configure from worker config instead
-            capacity=1024,
+            capacity=config.replay_buffer.capacity,
             local_batch_size=config.trainer.train_batch_size,
-            recency_alpha=3.0,
+            recency_alpha=config.replay_buffer.alpha,
             process_id=jax.process_index(),
             total_processes=jax.process_count(),
         )
@@ -308,10 +425,10 @@ class TrainWorker:
         config = self.config
         optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-        def _rloo_loss_function(model, batch, key):
+        def _loss_function(model, batch, key):
             return compute_rloo_loss(model, batch, key=key, kl_coef=config.kl_coef)
 
-        with Trainer(config.trainer, optimizer, _rloo_loss_function) as trainer, self.data_loader:
+        with Trainer(config.trainer, optimizer, _loss_function) as trainer, self.data_loader:
             seed = config.trainer.seed
             model_key, training_key = jrandom.split(jrandom.PRNGKey(seed), 2)
 
