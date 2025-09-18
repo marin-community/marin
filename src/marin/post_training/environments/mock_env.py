@@ -196,9 +196,9 @@ class MoarCatsTask:
     def compute_reward(self, correct_answer: str, actual_response: str) -> float:
         # how many cats
         num_cats = actual_response.lower().count("cat")
-        love_cats = actual_response.lower().count("i love cats")
+        love_cats = actual_response.lower().count("love cats")
 
-        return (num_cats + (2 * love_cats)) / len(actual_response)
+        return (num_cats + (10 * love_cats)) / (1 + len(actual_response))
 
 
 # Task mappings
@@ -297,9 +297,9 @@ class MockEnv(MarinEnv):
                 # Extract response after the prompt
                 prompt = example["prompt"]
                 if prompt in decoded_response:
-                    actual_response = decoded_response.split(prompt, 1)[1].strip()
+                    actual_response = decoded_response[len(prompt) :]
                 else:
-                    actual_response = decoded_response.strip()
+                    actual_response = decoded_response
                 reward = self.task.compute_reward(correct_answer, actual_response)
                 rewards[example_idx, gen_idx] = reward
 
