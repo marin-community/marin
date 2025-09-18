@@ -33,9 +33,12 @@ from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import use_cpu_device
 
 from marin.post_training.environments.mock_env import MockEnv
+from marin.post_training.rl_dataset import (
+    compute_rloo_advantages_for_group,
+    prepare_training_batch,
+)
 from marin.post_training.rollout_storage import RolloutBatch, TaggedRolloutBatch
 from marin.post_training.rollout_worker import RolloutWorkerConfig, compute_model_logprobs
 from marin.post_training.train_worker import ReplayBufferConfig, TrainWorkerConfig
@@ -195,40 +198,6 @@ def create_mock_environment(tokenizer=None):
     return MockEnv(tokenizer=tokenizer, task_type="simple_addition", seed=42)
 
 
-def create_nano_rollout_worker_config(
-    output_dir: str, inference_server_config, rollout_writer, environment=None
-) -> RolloutWorkerConfig:
-    """Create a minimal RolloutWorkerConfig for testing."""
-    model_config = create_nano_llama_config()
-
-    if environment is None:
-        # Use the DummyTokenizer for the mock environment
-        environment = create_mock_environment(tokenizer=DummyTokenizer())
-
-    return RolloutWorkerConfig(
-        trainer=create_nano_trainer_config(output_dir),
-        inference_server_config=inference_server_config,
-        model=model_config,
-        environment_spec="mock:task_type=cats",
-        rollout_writer=rollout_writer,
-        max_input_length=32,
-        max_output_length=32,
-        pad_token_id=0,
-        n_prompts_per_step=2,
-        n_generations=4,
-        temperature=1.0,
-        log_freq=1,
-        rollout_batch_size=4,
-        max_rollouts=1,
-        weight_transfer=WeightTransferConfig(
-            sync_interval_steps=10,
-            poll_interval_seconds=1,
-            checkpoint_dir=Path(output_dir) / "policy_checkpoints",
-            max_checkpoints=5,
-        ),
-    )
-
-
 def create_test_inference_server_config(model_config: LlamaConfig, output_dir: str | Path):
     from levanter.checkpoint import save_checkpoint
 
@@ -252,36 +221,45 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
         model=model_config,
         trainer=create_nano_trainer_config(output_dir),
         tokenizer=DummyTokenizer(),
-        service=InferenceEngineConfig(max_seqs=8, page_size=8, max_pages_per_seq=8, max_queued_tokens=8),
+        service=InferenceEngineConfig(
+            max_seqs=8, page_size=8, max_pages_per_seq=8, max_queued_tokens=8, enable_logprobs=True
+        ),
         temperature=1.0,
         checkpoint_path=str(checkpoint_dir / "step-0"),
     )
 
 
-def get_latest_checkpoint_path(checkpoint_base_path):
-    """Get the path to the latest checkpoint in the given directory.
+def create_nano_rollout_worker_config(output_dir: str, rollout_writer, environment=None) -> RolloutWorkerConfig:
+    """Create a minimal RolloutWorkerConfig for testing."""
+    model_config = create_nano_llama_config()
+    inference_server_config = create_test_inference_server_config(model_config, output_dir)
 
-    Args:
-        checkpoint_base_path: Base path where checkpoints are stored
+    if environment is None:
+        # Use the DummyTokenizer for the mock environment
+        environment = create_mock_environment(tokenizer=DummyTokenizer())
 
-    Returns:
-        Path to the latest checkpoint, or None if no checkpoints found
-    """
-    from pathlib import Path
-
-    checkpoint_dirs = list(Path(checkpoint_base_path).glob("*/*"))
-    if not checkpoint_dirs:
-        return None
-
-    # Sort by step number (extract from step-N pattern)
-    def extract_step(path):
-        try:
-            return int(path.name.split("-")[-1])
-        except (ValueError, IndexError):
-            return -1
-
-    latest = max(checkpoint_dirs, key=extract_step)
-    return str(latest)
+    return RolloutWorkerConfig(
+        trainer=create_nano_trainer_config(output_dir),
+        inference_server_config=inference_server_config,
+        model=model_config,
+        environment_spec="mock:task_type=cats",
+        rollout_writer=rollout_writer,
+        max_input_length=32,
+        max_output_length=32,
+        pad_token_id=0,
+        n_prompts_per_step=2,
+        n_generations=4,
+        temperature=1.0,
+        log_freq=1,
+        rollout_batch_size=4,
+        max_rollouts=1000,
+        weight_transfer=WeightTransferConfig(
+            sync_interval_steps=10,
+            poll_interval_seconds=1,
+            checkpoint_dir=Path(output_dir) / "policy_checkpoints",
+            max_checkpoints=5,
+        ),
+    )
 
 
 def run_inference_with_engine(
@@ -359,57 +337,6 @@ def run_inference_with_engine(
         generated_texts.append(generated_text)
 
     return result.tokens, generated_texts
-
-
-def run_inference_with_checkpoint(
-    checkpoint_path: str,
-    model_config,
-    prompts: list[str],
-    tokenizer=None,
-    max_tokens: int = 32,
-    temperature: float = 1.0,
-    enable_logprobs: bool = False,
-) -> tuple[list[list[int]], list[str]]:
-    """Run inference on prompts using a model loaded from checkpoint.
-
-    Args:
-        checkpoint_path: Path to the checkpoint to load
-        model_config: Model configuration to build the model structure
-        prompts: List of text prompts to process
-        tokenizer: Tokenizer to use (defaults to DummyTokenizer)
-        max_tokens: Maximum tokens to generate per prompt
-        temperature: Temperature for generation
-        enable_logprobs: Whether to compute log probabilities
-
-    Returns:
-        Tuple of (tokens, texts) where:
-        - tokens: List of token sequences (including prompt tokens)
-        - texts: List of generated text strings (excluding prompt)
-    """
-    if tokenizer is None:
-        tokenizer = DummyTokenizer()
-
-    import equinox as eqx
-    import haliax as hax
-    import jax.random as jrandom
-    from levanter.checkpoint import load_checkpoint
-
-    Vocab = hax.Axis("vocab", tokenizer.vocab_size)
-    key = jrandom.PRNGKey(42)
-
-    with use_cpu_device():
-        model = eqx.filter_eval_shape(model_config.build, Vocab, key=key)
-        model = load_checkpoint(model, checkpoint_path, subpath="model")
-
-    # Use the regular inference function with the loaded model
-    return run_inference_with_engine(
-        model=model,
-        prompts=prompts,
-        tokenizer=tokenizer,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        enable_logprobs=enable_logprobs,
-    )
 
 
 def encode_prompt_and_response(
@@ -557,12 +484,6 @@ def create_rollout_batch(
 
     # Compute rewards and advantages
     rewards = np.array([compute_cats_reward(response) for _, response in examples], dtype=np.float32)
-
-    # Compute RLOO advantages
-    from marin.post_training.rl_dataset import (
-        compute_rloo_advantages_for_group,
-        prepare_training_batch,
-    )
 
     advantages = compute_rloo_advantages_for_group(rewards)
 

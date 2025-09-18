@@ -67,8 +67,7 @@ class EnvStep(NamedTuple):
 class InferenceContext(Protocol):
     """Protocol for inference providers that generate text from prompts.
 
-    This abstraction completely hides model parameters and provides
-    a unified interface for both policy and reference models.
+    This decouples the backend (Flax vs Levanter) during our transition period.
     """
 
     @property
@@ -163,7 +162,7 @@ class MarinEnv:
         5. Return all data packaged in an EnvStep container
 
         Args:
-            inference_ctx: Context for generating responses (hides model params)
+            inference_ctx: Context for generating responses
             n_examples: Number of examples to sample
             prng_key: JAX random key
             mode: "train" or "eval"

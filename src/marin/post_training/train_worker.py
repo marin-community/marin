@@ -18,8 +18,6 @@ Training worker for RL/post-training tasks.
 This worker reads rollout information from a queue which is populated by the
 rollout workers, and periodically dumps new checkpoints to disk. These
 checkpoints are read by the rollout workers to update their models.
-
-For now we use GCS as a storage backend.
 """
 
 import logging
@@ -31,7 +29,6 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import levanter
-import levanter.tracker
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.models.lm_model import LmConfig, LmHeadModel
@@ -60,23 +57,7 @@ def load_model_from_checkpoint_or_hf(
     hf_checkpoint: RepoRef | None = None,
     key: jax.Array,
 ) -> LmHeadModel:
-    """Load a model either from a checkpoint or HF repo.
-
-    Args:
-        model_config: Model configuration
-        trainer_config: Trainer configuration for device placement
-        vocab_axis: Vocabulary axis for model building
-        tokenizer: Tokenizer instance
-        checkpoint_path: Path to local checkpoint (optional)
-        hf_checkpoint: HuggingFace checkpoint reference (optional)
-        key: JAX random key for model initialization
-
-    Returns:
-        Loaded model
-
-    Raises:
-        ValueError: If both or neither checkpoint sources are specified
-    """
+    """Load a model either from a checkpoint or HF repo."""
     if checkpoint_path is None and hf_checkpoint is None:
         raise ValueError("Must specify either checkpoint_path or hf_checkpoint")
     if checkpoint_path is not None and hf_checkpoint is not None:
@@ -90,16 +71,14 @@ def load_model_from_checkpoint_or_hf(
             model = load_checkpoint(model, checkpoint_path, subpath="model")
             model = mp.cast_to_compute(model)
         return model
-    else:
-        if not hasattr(model_config, "hf_checkpoint_converter"):
-            raise ValueError("Model config lacks HF checkpoint converter for loading from HuggingFace")
 
-        converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-        converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
-        model = converter.load_pretrained(
-            model_config.model_type, ref=hf_checkpoint, dtype=trainer_config.mp.compute_dtype
-        )
-        return model
+    if not hasattr(model_config, "hf_checkpoint_converter"):
+        raise ValueError("Model config lacks HF checkpoint converter for loading from HuggingFace")
+
+    converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
+    converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
+    model = converter.load_pretrained(model_config.model_type, ref=hf_checkpoint, dtype=trainer_config.mp.compute_dtype)
+    return model
 
 
 def compute_ppo_loss(
@@ -110,21 +89,7 @@ def compute_ppo_loss(
     kl_coef: float = 0.01,
     clip_epsilon: float = 0.2,
 ) -> jax.Array:
-    """Compute PPO-style loss with RLOO advantages.
-    Args:
-        model: The language model
-        batch: JaxRolloutBatch containing:
-            - loss_weights: RLOO advantages (r_i - mean(r_j for j≠i))
-            - policy_logprobs: log probs from the policy that generated the data
-            - reference_logprobs: log probs from the reference model
-        key: JAX random key for dropout
-        kl_coef: Coefficient for KL penalty from reference policy
-        clip_epsilon: PPO clipping parameter (typically 0.1-0.2)
-
-    Returns:
-        Total loss scalar
-    """
-    # Forward pass to get current policy's logits
+    """Compute PPO-style loss with RLOO advantages."""
     model_output = model(
         input_ids=batch.input_ids,
         attn_mask=batch.attention_mask,
@@ -134,12 +99,10 @@ def compute_ppo_loss(
 
     logits = model_output.array.astype(jnp.float32)
 
-    # Compute current policy's log probabilities for the taken actions
-    # Using cross-entropy gives us -log p(a|s)
     token_ce_loss = softmax_cross_entropy_with_integer_labels(logits, batch.target_ids.array)
     current_logprobs = -token_ce_loss
 
-    # Get the old policy's log probs (from the policy that collected the data)
+    # Get the old policy's log probs (from the worker policy that collected the data)
     old_logprobs = batch.policy_logprobs.array
 
     # Compute importance sampling ratio exp(log π_current - log π_old)
@@ -171,11 +134,9 @@ def compute_ppo_loss(
     ppo_loss = jnp.sum(ppo_loss_per_token * mask) / jnp.maximum(jnp.sum(mask), 1.0)
 
     # KL penalty from reference policy (optional regularization)
-    # This keeps the policy from diverging too far from the reference
     # KL(π_current || π_ref) ≈ π_current * (log π_current - log π_ref)
-    # We use the simpler form: just the log difference
     reference_logprobs = batch.reference_logprobs.array
-    kl_div = current_logprobs - reference_logprobs
+    kl_div = jnp.exp(current_logprobs) * (current_logprobs - reference_logprobs)
     kl_loss = jnp.sum(kl_div * mask) / jnp.maximum(jnp.sum(mask), 1.0)
 
     # Total loss
@@ -245,7 +206,12 @@ def compute_rloo_loss(
 
 
 class StreamingRolloutLoader:
-    """Direct loader for streaming rollout data that bypasses Levanter's DataLoader."""
+    """Direct loader for streaming rollout data.
+
+    Rollouts are a continous stream of data, not really well modeled by the
+    default Levanter indexing API. Instead of implemented a Dataset, we
+    implement the expected data loader interface directly.
+    """
 
     def __init__(self, data_loader: ReplayDataLoader, config: TrainerConfig):
         """Initialize the streaming rollout loader.
@@ -287,9 +253,6 @@ class StreamingRolloutLoader:
             reference_logprobs=hax.named(jax_batch.reference_logprobs, ("batch", "position")),
             policy_logprobs=hax.named(jax_batch.policy_logprobs, ("batch", "position")),
         )
-
-
-logger = logging.getLogger(__name__)
 
 
 class StopTrainerException(Exception):
@@ -423,8 +386,6 @@ class TrainWorker:
             state = trainer.initial_state(training_key, model_init=lambda: self.reference_model)
 
             self._configure_training_hooks(trainer)
-
-            # Use our custom streaming loader instead of Levanter's DataLoader
             train_loader = StreamingRolloutLoader(self.data_loader, config.trainer)
 
             try:

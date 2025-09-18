@@ -41,11 +41,9 @@ from marin.post_training.rollout_storage import (
 )
 from tests.post_training.config_helpers import (
     DummyTokenizer,
-    create_nano_llama_config,
     create_nano_rollout_worker_config,
     create_nano_training_worker_config,
     create_rollout_batch,
-    create_test_inference_server_config,
     run_inference_with_engine,
 )
 
@@ -90,10 +88,10 @@ def rollout_worker_config(tmp_path):
     rollout_queue = InMemoryRolloutQueue()
     rollout_writer = rollout_queue.writer()
 
-    model_config = create_nano_llama_config()
-    inference_server_config = create_test_inference_server_config(model_config, tmp_path)
-
-    return create_nano_rollout_worker_config(tmp_path, inference_server_config, rollout_writer)
+    return create_nano_rollout_worker_config(
+        tmp_path,
+        rollout_writer,
+    )
 
 
 def _print_worker_status(elapsed, inference_runner, training_runner):
@@ -529,10 +527,7 @@ def test_full_integration_moar_cats(
     rollout_worker_config,
 ):
     """Long-running test to validate environment objective improves over time."""
-
-    # Use in-memory rollout queue
     rollout_queue = InMemoryRolloutQueue()
-
     rollout_worker_config.rollout_writer = rollout_queue.writer()
     training_worker_config.rollout_reader = rollout_queue.reader()
 
@@ -541,8 +536,6 @@ def test_full_integration_moar_cats(
         time.sleep(1)
 
         with RolloutWorkerRunner(rollout_worker_config) as inference_runner:
-            time.sleep(10)
-            return
             while True:
                 metrics_history.append(
                     {
@@ -560,7 +553,7 @@ def test_full_integration_moar_cats(
                     training_runner.stop()
                     break
 
-            time.sleep(10)
+                time.sleep(10)
 
     # Validate we ran for sufficient time and generated data
     assert len(metrics_history) >= 2, "Test should run long enough to collect multiple metric snapshots"

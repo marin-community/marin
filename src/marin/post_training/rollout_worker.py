@@ -37,16 +37,14 @@ import numpy as np
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
-from openai import OpenAI
+from openai import AsyncOpenAI
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from marin.post_training.environments.load_environments import load_environment_from_spec
 from marin.post_training.environments.marin_env import InferenceContext
 
 from . import weight_transfer_manager
-from .flax.utils import (
-    jax_distributed_barrier,
-)
+from levanter.utils.jax_utils import barrier_sync
 from .rl_dataset import create_dataset_from_environment
 from .rollout_storage import RolloutBatch, RolloutWriter, TaggedRolloutBatch
 from .weight_transfer_manager import WeightTransferConfig
@@ -168,9 +166,8 @@ class LevanterInferenceContext(InferenceContext):
         port = self.inference_server.config.port
         base_url = f"http://{host}:{port}/v1"
 
-        client = OpenAI(base_url=base_url, api_key="dummy")
-
-        all_results = []
+        client = AsyncOpenAI(base_url=base_url, api_key="marin")
+        all_completions = []
         for prompt in prompts:
             completion = client.chat.completions.create(
                 model=getattr(self.inference_server.config, "model_name", "test-model"),
@@ -182,7 +179,16 @@ class LevanterInferenceContext(InferenceContext):
                 top_p=top_p,
                 extra_body={"top_k": top_k} if top_k is not None else None,
             )
+            all_completions.append(completion)
 
+        # run all completions in a thread and await the result.
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        completions = loop.run_until_complete(asyncio.gather(*all_completions))
+        loop.close()
+
+        all_results = []
+        for completion in completions:
             prompt_results = []
             for choice in completion.choices:
                 content = choice.message.content
@@ -190,7 +196,6 @@ class LevanterInferenceContext(InferenceContext):
                 logprobs = [t.logprob for t in choice.logprobs.content]
                 prompt_results.append({"tokens": tokens, "logprobs": logprobs})
             all_results.append(prompt_results)
-
         return all_results
 
     def compute_logprobs(
@@ -306,7 +311,7 @@ class RolloutWorker:
 
     def _generate_rollout_batch(self, rng) -> tuple[list[dict], dict]:
         """Generate a set of rollout batches from the environment."""
-        jax_distributed_barrier()
+        barrier_sync()
 
         # Create Levanter inference contexts
         policy_ctx = LevanterInferenceContext(
@@ -339,7 +344,7 @@ class RolloutWorker:
                 mode="train",
                 temperature=self.config.temperature,
             )
-        jax_distributed_barrier()
+        barrier_sync()
 
         return (
             list(rl_dataset.iterate_batches(batch_size=self.config.rollout_batch_size, shuffle=True, loop=False)),
@@ -370,7 +375,7 @@ class RolloutWorker:
         last_weight_check = time.time()
 
         while self._running:
-            jax_distributed_barrier()
+            barrier_sync()
 
             if self.config.max_rollouts is not None and rollouts_generated >= self.config.max_rollouts:
                 logger.info(f"Reached max rollouts ({self.config.max_rollouts}), stopping")
@@ -412,5 +417,5 @@ class RolloutWorker:
             logger.info(f"Generating rollout batch {rollouts_generated}")
 
         logger.info(f"Inference worker completed after generating {rollouts_generated} rollouts")
-        jax_distributed_barrier()
+        barrier_sync()
         self._shutdown_complete.set()

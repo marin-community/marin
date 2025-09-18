@@ -33,6 +33,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import fsspec
 import haliax as hax
 import jax
 import levanter.checkpoint as levanter_checkpoint
@@ -42,8 +43,7 @@ from haliax.partitioning import ResourceMapping
 from haliax.util import is_named_array
 from jax.sharding import Mesh
 from jaxtyping import PyTree
-
-from .flax.utils import delete_with_bucket, jax_distributed_barrier
+from levanter.utils.jax_utils import barrier_sync
 
 
 class WeightTransferMode(Enum):
@@ -249,7 +249,9 @@ class GCSCheckpointServer(WeightTransferServer):
                 old_path = os.path.join(self.config.checkpoint_dir, f"step_{old_weight_id}")
                 if jax.process_index() == 0:  # Only delete from coordinator
                     logger.info(f"Cleaning up old checkpoint at weight_id {old_weight_id} ({old_path})...")
-                    delete_with_bucket(old_path, recursive=True)
+                    fs, _ = fsspec.core.url_to_fs(old_path)
+                    if fs.exists(old_path):
+                        fs.rm(old_path, recursive=True)
 
             logger.info(f"Saving checkpoint at weight_id {weight_id}...")
 
@@ -560,7 +562,7 @@ class RayRemotingServer(WeightTransferServer):
 
         try:
             logger.info(f"Serving weights for weight_id {weight_id} via Ray remoting...")
-            jax_distributed_barrier()
+            barrier_sync()
 
             # Convert Levanter model params (NamedArrays) to numpy arrays for Ray
             def convert_to_numpy(x):
@@ -572,7 +574,7 @@ class RayRemotingServer(WeightTransferServer):
                     return x
 
             numpy_pytree = jax.tree.map(convert_to_numpy, model)
-            jax_distributed_barrier()
+            barrier_sync()
 
             if jax.process_index() == 0:
                 logger.info(f"Updating Ray object store with new weights at weight_id {weight_id}...")
@@ -589,7 +591,7 @@ class RayRemotingServer(WeightTransferServer):
                     f"Served weights for weight_id {weight_id} via Ray remoting " f"(process {jax.process_index()})"
                 )
 
-            jax_distributed_barrier()
+            barrier_sync()
         except Exception as e:
             self.metrics.failed_transfers += 1
             logger.error(f"Failed to serve weights {weight_id} via Ray remoting: {e}")

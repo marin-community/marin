@@ -16,10 +16,7 @@
 """
 Test script for Llama-3.2-1B-Instruct RL training with mock environment.
 
-Supports three modes:
-- driver (default): Launches inference and training workers via ray_run
-- inference: Runs as an inference worker
-- training: Runs as a training worker
+The driver process launches an inference and training worker on a Ray cluster.
 """
 
 import argparse
