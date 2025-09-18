@@ -32,14 +32,15 @@ from pathlib import Path
 from typing import Any
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 import ray
+from flax.serialization import to_state_dict
+from flax.traverse_util import flatten_dict, unflatten_dict
 from jax.sharding import Mesh
 from jaxtyping import PyTree
 
 from .training_config import WeightTransferConfig, WeightTransferMode
-from .utils import checkpointer, delete_with_bucket
+from .utils import checkpointer, delete_with_bucket, jax_distributed_barrier
 
 # Check if JAX transfer is available
 try:
@@ -54,9 +55,43 @@ try:
     JAX_TRANSFER_AVAILABLE = True
 except (ImportError, AttributeError):
     JAX_TRANSFER_AVAILABLE = False
+    WeightTransferCoordinator = None
+    instantiate_coordinator = None
+    process_weight_transfers = None
+    receive_weight_transfers = None
+    start_transfer_server = None
 
 
 logger = logging.getLogger(__name__)
+
+
+def _reshard_with_donation(old_params: PyTree, new_params: PyTree, shard_fns: PyTree) -> PyTree:
+    """Reshard new_params while donating old_params' buffers for memory optimization."""
+    return jax.tree.map(lambda x, fn: fn(x), new_params, shard_fns)
+
+
+_reshard_with_donation = jax.jit(_reshard_with_donation, donate_argnums=(0,))
+
+
+def create_coordinator(mode: WeightTransferMode, name: str):
+    """Create coordinator based on transfer mode.
+
+    Args:
+        mode: The weight transfer mode
+        name: Unique name for the coordinator
+
+    Returns:
+        Ray actor handle for coordinator, or None if not needed
+    """
+    if mode == WeightTransferMode.RAY_REMOTING:
+        return RayWeightCoordinator.options(name=name).remote()
+    elif mode == WeightTransferMode.JAX_TRANSFER_SERVER:
+        if not JAX_TRANSFER_AVAILABLE:
+            raise RuntimeError("JAX transfer server not available")
+        transfer_server = start_transfer_server()
+        return instantiate_coordinator(transfer_server, name=name)
+    else:
+        return None  # GCS_CHECKPOINT doesn't need coordinator
 
 
 @ray.remote(num_cpus=0)
@@ -64,26 +99,20 @@ class RayWeightCoordinator:
     """Ray actor for coordinating weight transfers using Ray's object store."""
 
     def __init__(self):
-        self.latest_weight_ref = None
+        self.latest_weight_refs = None
         self.weight_id = None
 
-    def put_weights(self, weight_id: int, numpy_pytree: dict) -> None:
-        """Store weights in Ray object store."""
+    def put_weight_refs(self, weight_id: int, weight_refs: dict) -> None:
+        """Store weight references from Ray object store."""
         if self.weight_id is None or weight_id > self.weight_id:
-            self.latest_weight_ref = ray.put(numpy_pytree)
+            del self.latest_weight_refs
+            self.latest_weight_refs = weight_refs
             self.weight_id = weight_id
-            logger.info(f"Stored weights for weight_id {weight_id}")
+            logger.info(f"Stored weight refs for weight_id {weight_id}")
 
-    def get_latest_weights(self) -> tuple[Any | None, int | None]:
-        """Get latest weight reference and ID."""
-        return self.latest_weight_ref, self.weight_id
-
-
-def get_ray_weight_coordinator(name: str):
-    try:
-        return ray.get_actor(name)
-    except ValueError:
-        return RayWeightCoordinator.options(name=name).remote()
+    def get_latest_weight_refs(self) -> tuple[dict | None, int | None]:
+        """Get latest weight references and ID."""
+        return self.latest_weight_refs, self.weight_id
 
 
 class WeightTransferServer(ABC):
@@ -108,7 +137,7 @@ class WeightTransferServer(ABC):
 class WeightTransferClient:
     """Abstract base class for weight transfer clients (inference worker side)."""
 
-    def receive_weights(self) -> tuple[PyTree | None, dict[str, Any]]:
+    def receive_weights(self, old_params: PyTree | None = None) -> tuple[PyTree | None, dict[str, Any]]:
         """Receive weights from server. Returns (params, metadata)."""
         pass
 
@@ -245,47 +274,34 @@ class GCSCheckpointClient(WeightTransferClient):
             "start_time": time.time(),
         }
 
-    def receive_weights(self) -> tuple[PyTree | None, dict[str, Any]]:
+    def receive_weights(self, old_params: PyTree | None = None) -> tuple[PyTree | None, dict[str, Any]]:
         """Load latest checkpoint from disk."""
         self.metrics["total_polls"] += 1
 
-        try:
-            latest_checkpoint = self._find_latest_checkpoint()
+        latest_checkpoint = self._find_latest_checkpoint()
 
-            if latest_checkpoint is not None and latest_checkpoint != self.latest_checkpoint_path:
-                logger.info(f"Loading checkpoint from {latest_checkpoint}")
+        if latest_checkpoint is None or latest_checkpoint == self.latest_checkpoint_path:
+            return old_params, {}
 
-                params = self.load_checkpoint_fn(latest_checkpoint)
-                # lift to jax arrays for consistency with jax & ray transfer
-                params = jax.tree.map(lambda x: jnp.asarray(x) if hasattr(x, "shape") else x, params)
+        del old_params
+        logger.info(f"Loading checkpoint from {latest_checkpoint}")
+        params = self.load_checkpoint_fn(latest_checkpoint)
 
-                self.latest_checkpoint_path = latest_checkpoint
+        self.latest_checkpoint_path = latest_checkpoint
+        weight_id = int(Path(latest_checkpoint).parent.name.split("_")[1])
+        self.metrics["successful_loads"] += 1
+        self.metrics["last_weight_id"] = weight_id
 
-                # Extract weight ID from path
-                weight_id = int(Path(latest_checkpoint).parent.name.split("_")[1])
+        param_count = sum(np.prod(x.shape) for x in jax.tree.leaves(params) if hasattr(x, "shape"))
+        bytes_per_param = 2  # bf16 = 2 bytes per parameter
+        estimated_bytes = param_count * bytes_per_param
+        self.metrics["total_bytes_loaded"] += estimated_bytes
 
-                # Update metrics
-                self.metrics["successful_loads"] += 1
-                self.metrics["last_weight_id"] = weight_id
-
-                # Estimate loaded data size
-                param_count = sum(np.prod(x.shape) for x in jax.tree.leaves(params) if hasattr(x, "shape"))
-                bytes_per_param = 2  # bf16 = 2 bytes per parameter
-                estimated_bytes = param_count * bytes_per_param
-                self.metrics["total_bytes_loaded"] += estimated_bytes
-
-                return params, {
-                    "weight_id": weight_id,
-                    "source": "gcs_checkpoint",
-                    "path": latest_checkpoint,
-                }
-
-            return None, {}
-
-        except Exception as e:
-            self.metrics["failed_loads"] += 1
-            logger.error(f"Failed to load checkpoint: {e}")
-            raise
+        return params, {
+            "weight_id": weight_id,
+            "source": "gcs_checkpoint",
+            "path": latest_checkpoint,
+        }
 
     def _find_latest_checkpoint(self) -> str | None:
         """Find the latest checkpoint in the checkpoint directory."""
@@ -340,19 +356,17 @@ class JAXTransferServer(WeightTransferServer):
 
     coordinator: "WeightTransferCoordinator"
 
-    def __init__(self, config: WeightTransferConfig, mesh, params_sharding_rules=None):
+    def __init__(self, config: WeightTransferConfig, mesh, coordinator, params_sharding_rules=None):
         if not JAX_TRANSFER_AVAILABLE:
             raise RuntimeError("JAX transfer server, cannot use JAX_TRANSFER_SERVER mode")
 
         self.config = config
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
+        self.coordinator = coordinator
 
         # Start transfer server
         self.transfer_server = start_transfer_server()
-
-        # Setup coordinator
-        self.coordinator = instantiate_coordinator(self.transfer_server, name=config.coordinator_name)
 
         # Setup CPU transfer (always enabled)
         self._setup_cpu_transfer()
@@ -461,23 +475,17 @@ class JAXTransferServer(WeightTransferServer):
 class JAXTransferClient(WeightTransferClient):
     """JAX transfer server-based weight transfer client."""
 
-    def __init__(self, config: WeightTransferConfig, mesh, params_sharding_rules=None):
+    def __init__(self, config: WeightTransferConfig, mesh, coordinator, params_sharding_rules=None):
         if not JAX_TRANSFER_AVAILABLE:
             raise RuntimeError("JAX transfer server, cannot use JAX_TRANSFER_SERVER mode")
 
         self.config = config
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
+        self.coordinator = coordinator
 
         # Start transfer server
         self.transfer_server = start_transfer_server()
-        for _ in range(10):
-            try:
-                self.coordinator = ray.get_actor(config.coordinator_name)
-            except ValueError:
-                time.sleep(5)
-                logger.info("Waiting for coordinator actor to be available...")
-
         self._setup_cpu_transfer()
 
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="weight_transfer")
@@ -511,7 +519,7 @@ class JAXTransferClient(WeightTransferClient):
         """Transfer params from CPU back to TPU."""
         return self.mesh.shard(params, self.params_sharding_rules)
 
-    def receive_weights(self) -> tuple[PyTree | None, dict[str, Any]]:
+    def receive_weights(self, old_params: PyTree | None = None) -> tuple[PyTree | None, dict[str, Any]]:
         """Receive weights with CPU transfer."""
         self.metrics["total_polls"] += 1
         start_time = time.time()
@@ -591,11 +599,11 @@ class JAXTransferClient(WeightTransferClient):
 class RayRemotingServer(WeightTransferServer):
     """Ray remoting-based weight transfer server."""
 
-    def __init__(self, config: WeightTransferConfig):
+    def __init__(self, config: WeightTransferConfig, gather_fns, coordinator):
         self.config = config
-        self.coordinator = get_ray_weight_coordinator(config.coordinator_name)
+        self.gather_fns = gather_fns
+        self.coordinator = coordinator
 
-        # Metrics tracking
         self.metrics = {
             "mode": "ray_remoting",
             "total_transfers": 0,
@@ -607,25 +615,43 @@ class RayRemotingServer(WeightTransferServer):
         }
 
     def serve_weights(self, weight_id: int, params: PyTree) -> None:
-        """Convert PyTree to numpy and store in Ray object store."""
         self.metrics["total_transfers"] += 1
 
         try:
-            numpy_pytree = jax.tree.map(lambda x: np.array(x), params)
-            ray.get(self.coordinator.put_weights.remote(weight_id, numpy_pytree))
+            logger.info(f"Serving weights for weight_id {weight_id} via Ray remoting...")
+            jax_distributed_barrier()
 
-            # Update metrics
-            self.metrics["successful_transfers"] += 1
-            self.metrics["last_weight_id"] = weight_id
+            train_state = to_state_dict(params)
+            flattened_train_state = flatten_dict(train_state)
+            gather_fns = flatten_dict(to_state_dict(self.gather_fns.params))
 
-            # Estimate data size
-            param_count = sum(np.prod(x.shape) for x in jax.tree.leaves(params) if hasattr(x, "shape"))
-            bytes_per_param = 4  # Assuming float32 for Ray storage
-            estimated_bytes = param_count * bytes_per_param
-            self.metrics["total_bytes"] += estimated_bytes
+            gathered_params = {}
+            for key, value in flattened_train_state.items():
+                gathered_params[key] = gather_fns[key](value)
 
-            logger.info(f"Served weights for weight_id {weight_id} via Ray remoting")
+            gathered_train_state = unflatten_dict(gathered_params)
+            jax_distributed_barrier()
 
+            if jax.process_index() == 0:
+                logger.info("Updating Ray object store with new weights at weight_id {weight_id}...")
+                numpy_pytree = jax.tree.map(lambda x: np.array(x) if hasattr(x, "shape") else x, gathered_train_state)
+                leaves, treedef = jax.tree.flatten(numpy_pytree)
+                weight_refs = {
+                    "leaves": [ray.put(leaf) for leaf in leaves],
+                    "treedef": ray.put(treedef),
+                }
+                ray.get(self.coordinator.put_weight_refs.remote(weight_id, weight_refs))
+                del weight_refs
+                self.metrics["successful_transfers"] += 1
+                self.metrics["last_weight_id"] = weight_id
+                param_count = sum(np.prod(x.shape) for x in jax.tree.leaves(gathered_train_state) if hasattr(x, "shape"))
+                bytes_per_param = 4
+                estimated_bytes = param_count * bytes_per_param
+                self.metrics["total_bytes"] += estimated_bytes
+
+                logger.info(f"Served weights for weight_id {weight_id} via Ray remoting (process {jax.process_index()})")
+
+            jax_distributed_barrier()
         except Exception as e:
             self.metrics["failed_transfers"] += 1
             logger.error(f"Failed to serve weights {weight_id} via Ray remoting: {e}")
@@ -654,11 +680,13 @@ class RayRemotingClient(WeightTransferClient):
     def __init__(
         self,
         config: WeightTransferConfig,
+        coordinator,
         shard_fns=None,
         remove_dict_prefix=None,
         convert_to_dtypes=None,
     ):
         self.config = config
+        self.coordinator = coordinator
         self.shard_fns = shard_fns
         self.remove_dict_prefix = remove_dict_prefix
         self.convert_to_dtypes = convert_to_dtypes
@@ -675,28 +703,36 @@ class RayRemotingClient(WeightTransferClient):
             "start_time": time.time(),
         }
 
-        self.coordinator = get_ray_weight_coordinator(config.coordinator_name)
-
-    def receive_weights(self) -> tuple[PyTree | None, dict[str, Any]]:
+    def receive_weights(self, old_params: PyTree | None = None) -> tuple[PyTree | None, dict[str, Any]]:
         """Receive weights from Ray object store."""
         self.metrics["total_polls"] += 1
 
         try:
-            # Poll coordinator for latest weights
-            weight_ref, weight_id = ray.get(self.coordinator.get_latest_weights.remote())
+            # Poll coordinator for latest weight references
+            weight_refs, weight_id = ray.get(self.coordinator.get_latest_weight_refs.remote())
 
-            if weight_ref is None or weight_id == self.last_weight_id:
+            if weight_refs is None or weight_id == self.last_weight_id:
                 return None, {}
 
-            # Get numpy pytree from object store
-            numpy_pytree = ray.get(weight_ref)
+            # Get individual leaf arrays and treedef from object store
+            leaf_refs = weight_refs["leaves"]
+            treedef_ref = weight_refs["treedef"]
+
+            # Get all leaves and treedef
+            leaves = [ray.get(ref) for ref in leaf_refs]
+            treedef = ray.get(treedef_ref)
+
+            # Reconstruct the pytree
+            numpy_pytree = jax.tree.unflatten(treedef, leaves)
 
             # Convert back to JAX arrays
             jax_pytree = jax.tree.map(lambda x: jax.numpy.array(x), numpy_pytree)
             if self.shard_fns is not None:
-                jax_pytree = jax.tree.map(lambda x, fn: fn(x), jax_pytree, self.shard_fns)
+                if old_params is not None:
+                    jax_pytree = _reshard_with_donation(old_params, jax_pytree, self.shard_fns)
+                else:
+                    jax_pytree = jax.tree.map(lambda x, fn: fn(x), jax_pytree, self.shard_fns)
 
-            # Update metrics
             self.metrics["successful_receives"] += 1
             self.metrics["last_weight_id"] = weight_id
             self.last_weight_id = weight_id
@@ -744,6 +780,7 @@ def create_weight_transfer_server(
     params_sharding_rules=None,
     gather_fns=None,
     model_config=None,
+    coordinator=None,
 ) -> WeightTransferServer:
     """Factory function to create appropriate transfer server."""
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
@@ -752,11 +789,15 @@ def create_weight_transfer_server(
             config.mode = WeightTransferMode.GCS_CHECKPOINT
         elif mesh is None:
             raise ValueError("Mesh required for JAX transfer server")
+        elif coordinator is None:
+            raise ValueError("Coordinator required for JAX transfer server")
         else:
-            return JAXTransferServer(config, mesh, params_sharding_rules)
+            return JAXTransferServer(config, mesh, coordinator, params_sharding_rules)
 
     elif config.mode == WeightTransferMode.RAY_REMOTING:
-        return RayRemotingServer(config)
+        if coordinator is None:
+            raise ValueError("Coordinator required for Ray remoting")
+        return RayRemotingServer(config, gather_fns, coordinator)
 
     return GCSCheckpointServer(
         config,
@@ -771,6 +812,7 @@ def create_weight_transfer_client(
     params_sharding_rules=None,
     shard_fns=None,
     load_checkpoint_fn=None,
+    coordinator=None,
 ) -> WeightTransferClient:
     """Factory function to create appropriate transfer client."""
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
@@ -779,12 +821,17 @@ def create_weight_transfer_client(
             config.mode = WeightTransferMode.GCS_CHECKPOINT
         elif mesh is None:
             raise ValueError("Mesh required for JAX transfer server")
+        elif coordinator is None:
+            raise ValueError("Coordinator required for JAX transfer server")
         else:
-            return JAXTransferClient(config, mesh, params_sharding_rules)
+            return JAXTransferClient(config, mesh, coordinator, params_sharding_rules)
 
     elif config.mode == WeightTransferMode.RAY_REMOTING:
+        if coordinator is None:
+            raise ValueError("Coordinator required for Ray remoting")
         return RayRemotingClient(
             config,
+            coordinator,
             shard_fns=shard_fns,
         )
 

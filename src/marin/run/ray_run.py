@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import shlex
+import subprocess
 import time
 
 from ray.job_submission import JobSubmissionClient
@@ -74,6 +75,8 @@ async def submit_and_track_job(
     extra: str,
     env_vars: dict,
     no_wait: bool,
+    submission_id: str,
+    client: JobSubmissionClient,
     *,
     entrypoint_num_cpus: float | None = None,
     entrypoint_num_gpus: float | None = None,
@@ -83,17 +86,18 @@ async def submit_and_track_job(
     """Submit a job to Ray and optionally track logs."""
 
     current_dir = os.getcwd()
-    client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
+
+    # Inject GIT_COMMIT into the environment for logging
+    env_vars["GIT_COMMIT"] = subprocess.getoutput("git rev-parse HEAD")
 
     logger.info(f"Submitting job with entrypoint: {entrypoint}")
     logger.info(f"Extras: {extra}")
     logger.info(f"env_vars: {json.dumps(env_vars, indent=4)}")
-    submission_id = generate_submission_id(entrypoint)
 
     runtime_dict = {
         "working_dir": current_dir,
         "config": {"setup_timeout_seconds": 1800},
-        "excludes": [".git", "tests/"],
+        "excludes": [".git", "tests/", "docs/"],
     }
 
     # add the TPU dependency for cluster jobs.
@@ -177,6 +181,7 @@ def main():
         default=None,
         help="TPU type to reserve for the entrypoint (e.g. v4-8)",
     )
+    parser.add_argument("--auto-stop", action="store_true", help="Automatically stop the cluster on shutdown.")
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
 
     args = parser.parse_args()
@@ -231,18 +236,29 @@ def main():
         entrypoint_resources = (entrypoint_resources or {}) | tpu_res
 
     # Submit the job and track it asynchronously
-    asyncio.run(
-        submit_and_track_job(
-            full_cmd,
-            args.extra,
-            env_vars,
-            args.no_wait,
-            entrypoint_num_cpus=args.entrypoint_num_cpus,
-            entrypoint_num_gpus=args.entrypoint_num_gpus,
-            entrypoint_memory=args.entrypoint_memory,
-            entrypoint_resources=entrypoint_resources,
+    submission_id = generate_submission_id(full_cmd)
+    client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
+    try:
+        asyncio.run(
+            submit_and_track_job(
+                full_cmd,
+                args.extra,
+                env_vars,
+                args.no_wait,
+                submission_id=submission_id,
+                client=client,
+                entrypoint_num_cpus=args.entrypoint_num_cpus,
+                entrypoint_num_gpus=args.entrypoint_num_gpus,
+                entrypoint_memory=args.entrypoint_memory,
+                entrypoint_resources=entrypoint_resources,
+            )
         )
-    )
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if args.auto_stop:
+            logger.info(f"Auto-stopping job {submission_id}...")
+            client.stop_job(submission_id)
 
 
 if __name__ == "__main__":

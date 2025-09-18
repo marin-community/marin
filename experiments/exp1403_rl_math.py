@@ -260,9 +260,10 @@ def default_rl_train(
         ),
         environment=EnvironmentConfig(),
         distributed=DistributedConfig(
-            sharding=[1, 4, 1, -1],
+            train_sharding=[1, 4, 1, -1],
+            inference_sharding=[1, 4, 1, -1],
             physical_axis_splitting=False,
-            jax_distributed_initalize_config={},
+            jax_distributed_initialize_config={},
         ),
         generation_config=generation_config,
         test_generation_config=test_generation_config,
