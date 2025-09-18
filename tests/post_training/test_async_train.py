@@ -39,7 +39,7 @@ from marin.post_training.rollout_storage import (
 )
 
 # Import test helpers
-from tests.post_training.test_helpers import (
+from tests.post_training.config_helpers import (
     create_nano_inference_worker_config,
     create_nano_llama_config,
     create_nano_training_worker_config,
@@ -162,10 +162,10 @@ class RolloutWorkerRunner:
         try:
             from unittest.mock import patch
 
-            from tests.post_training.test_helpers import DummyTokenizer
+            from tests.post_training.config_helpers import DummyTokenizer
 
             with patch("levanter.inference.openai.load_tokenizer") as mock_load:
-                mock_load.return_value = DummyTokenizer(vocab_size=1000)
+                mock_load.return_value = DummyTokenizer()
                 self.worker = RolloutWorker(
                     config=self.inference_worker_config,
                 )

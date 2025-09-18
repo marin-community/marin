@@ -40,6 +40,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
+from marin.post_training.environments.load_environments import load_environment_from_spec
 from marin.post_training.environments.marin_env import InferenceContext
 
 from . import weight_transfer_manager
@@ -64,8 +65,6 @@ class RolloutWorkerConfig:
     model: LlamaConfig
     environment_spec: str
     rollout_writer: RolloutWriter
-    environment: Any
-    environment_name: str
     max_input_length: int
     max_output_length: int
     pad_token_id: int
@@ -152,49 +151,35 @@ class LevanterInferenceContext(InferenceContext):
         target_attention_mask: np.ndarray,
     ) -> np.ndarray:
         """Compute log probabilities for given input/target pairs."""
-        import haliax as hax
-        from jax.nn import log_softmax
-
         # Concatenate input and target tokens
         full_tokens = jnp.concatenate([input_tokens, target_tokens], axis=1)
         full_attention_mask = jnp.concatenate([input_attention_mask, target_attention_mask], axis=1)
+        full_position_ids = jnp.maximum(jnp.cumsum(full_attention_mask, axis=1) - 1, 0)
 
         # Convert to Haliax named arrays
-        # Get the axis names from the model config
         Batch = hax.Axis("batch", full_tokens.shape[0])
         SeqLen = hax.Axis("position", full_tokens.shape[1])
 
         tokens_named = hax.named(full_tokens, (Batch, SeqLen))
         attn_mask_named = hax.named(full_attention_mask.astype(jnp.bool_), (Batch, SeqLen))
+        position_ids_named = hax.named(full_position_ids, (Batch, SeqLen))
 
         # Compute logits using the model
-        # For causal language modeling, we need tokens[:-1] to predict tokens[1:]
-        input_tokens_named = tokens_named.slice(SeqLen, start=0, length=SeqLen.size - 1)
-        input_mask_named = attn_mask_named.slice(SeqLen, start=0, length=SeqLen.size - 1)
+        input_tokens_named = tokens_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
+        input_mask_named = attn_mask_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
+        input_position_ids_named = position_ids_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
 
         # Run forward pass through the model
-        logits = self.model(input_tokens_named, attn_mask=input_mask_named)
+        logits = self.model(
+            input_tokens_named, attn_mask=input_mask_named, pos_ids=input_position_ids_named
+        )  # Shape: (batch, seq_len-1, vocab_size)
 
-        # Convert logits to log probabilities
-        log_probs = log_softmax(logits.array, axis=-1)  # Shape: (batch, seq_len-1, vocab_size)
+        from optax import softmax_cross_entropy_with_integer_labels
 
-        # Extract log probabilities for the target tokens
-        target_start_idx = input_tokens.shape[1]
-        target_logits = log_probs[:, target_start_idx - 1 :]  # Adjust for shift
-
-        batch_indices = jnp.arange(target_logits.shape[0])[:, None]  # (batch, 1)
-        seq_indices = jnp.arange(target_logits.shape[1])[None, :]  # (1, target_len)
-
-        # Expand batch indices to match target shape
-        batch_indices = jnp.broadcast_to(batch_indices, target_tokens.shape)  # (batch, target_len)
-
-        # Extract the log probabilities for target tokens
-        target_logprobs = target_logits[batch_indices, seq_indices, target_tokens]
-
-        # Apply target attention mask to zero out padded positions
-        target_logprobs = target_logprobs * target_attention_mask
-
-        return np.array(target_logprobs)
+        logprobs = softmax_cross_entropy_with_integer_labels(
+            logits.astype(jnp.float32), target_tokens.astype(jnp.int32)
+        )
+        return logprobs
 
 
 class RolloutWorker:
@@ -234,6 +219,10 @@ class RolloutWorker:
             self._tokenizer = AutoTokenizer.from_pretrained(self.config.model.tokenizer)
         else:
             self._tokenizer = cast(PreTrainedTokenizer, self.config.model.tokenizer)
+
+        self._environment = load_environment_from_spec(
+            config.environment_spec, tokenizer=self._tokenizer
+        )
 
         self._build_models()
 
@@ -313,7 +302,7 @@ class RolloutWorker:
             hax.axis_mapping(self.config.trainer.compute_axis_mapping),
         ):
             rl_dataset, dataset_metrics = create_dataset_from_environment(
-                environment=self.config.environment,
+                environment=self._environment,
                 policy_ctx=policy_ctx,
                 reference_ctx=reference_ctx,
                 n_examples=self.config.n_prompts_per_step,
@@ -388,7 +377,7 @@ class RolloutWorker:
                         reference_logprobs=batch_data["reference_logprobs"],
                         policy_logprobs=batch_data["policy_logprobs"],
                     ),
-                    env_name=self.config.environment_name,
+                    env_name=self.config.environment_spec,
                     worker_id=f"{socket.gethostname()}_{os.getpid()}",
                     timestamp=time.time(),
                     rollout_id=f"{socket.gethostname()}_{int(time.time() * 1000000)}_{step}",

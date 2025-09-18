@@ -179,8 +179,37 @@ def compute_soft_reward(correct_answer: str, actual_response: str, strict_format
     return 0.7 * correctness + 0.3 * format_score
 
 
+class MoarCatsTask:
+    """Make moar cats."""
+
+    def generate_training_examples(
+        self, n_examples: int, rng: np.random.Generator
+    ) -> list[dict[str, str]]:
+        examples = []
+        for _ in range(n_examples):
+            prompt = "i like cats, give me moar cats."
+            answer = "cats"
+            examples.append({"prompt": prompt, "answer": answer})
+        return examples
+
+    def generate_eval_examples(
+        self, n_examples: int, rng: np.random.Generator
+    ) -> list[dict[str, str]]:
+        return self.generate_training_examples(n_examples, rng)
+
+    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
+        # how many cats
+        num_cats = actual_response.lower().count("cat")
+        love_cats = actual_response.lower().count("i love cats")
+
+        return (num_cats + (2 * love_cats)) / len(
+            actual_response.split()
+        )  # reward is cats per word
+
+
 # Task mappings
 TASKS = {
+    "cats": MoarCatsTask(),
     "simple_addition": SimpleAdditionTask(),
     "simple_opposites": SimpleOppositesTask(),
     "number_comparison": NumberComparisonTask(),

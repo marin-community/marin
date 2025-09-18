@@ -16,6 +16,7 @@
 
 import datetime
 from pathlib import Path
+from typing import ClassVar
 
 import haliax as hax
 import jax.random as jrandom
@@ -36,22 +37,55 @@ from marin.post_training.weight_transfer_manager import WeightTransferConfig
 
 
 class DummyTokenizer:
-    """Dummy tokenizer that only produces token IDs in valid range [0, vocab_size-1]"""
+    """Dummy tokenizer that only produces tokens about cats."""
 
-    def __init__(self, vocab_size=1000, pad_token_id=0):
-        self.vocab_size = vocab_size
+    TOKENS: ClassVar[list[str]] = [
+        "<s>",
+        "love",
+        "feel",
+        "for",
+        "i",
+        "like",
+        "cats",
+        "give",
+        "me",
+        "moar",
+        ",",
+        ".",
+        " ",
+        "</s>",
+    ]
+
+    def __init__(self, pad_token_id=0):
+        self.vocab_size = len(self.TOKENS)
         self.pad_token_id = pad_token_id
         self.eos_token = "</s>"
         self.bos_token = "<s>"
 
     def encode(self, text, add_special_tokens=True):
-        text_hash = hash(text) % (self.vocab_size - 100)
-        seq_len = min(len(text.split()) + 2, 10)
-        tokens = [(text_hash + i) % (self.vocab_size - 100) + 50 for i in range(seq_len)]
-        return tokens[:8]
+        if add_special_tokens:
+            text = f"{self.bos_token} {text} {self.eos_token}"
+
+        tokens = []
+        while text:
+            for token in self.TOKENS:
+                if text.startswith(token):
+                    tokens.append(self.TOKENS.index(token))
+                    text = text[len(token) :]
+                    break
+            else:
+                raise ValueError(f"Unknown token in text: {text[:5]}...")
+
+        return tokens
 
     def decode(self, token_ids, skip_special_tokens=True):
-        return f"decoded_{hash(tuple(token_ids)) % 1000}"
+        words = []
+        for tid in token_ids:
+            token = self.TOKENS[tid]
+            if skip_special_tokens and token in (self.bos_token, self.eos_token):
+                continue
+            words.append(token)
+        return "".join(words)
 
     def __call__(self, text, add_special_tokens=False, **kwargs):
         """Make tokenizer callable like HuggingFace tokenizers."""
@@ -64,11 +98,7 @@ class DummyTokenizer:
     def apply_chat_template(self, messages, tokenize=True, add_generation_prompt=True):
         """Simple chat template support."""
         # Convert messages to a simple prompt
-        prompt = ""
-        for msg in messages:
-            prompt += f"{msg['role']}: {msg['content']}\n"
-        if add_generation_prompt:
-            prompt += "assistant: "
+        prompt = "\n".join([m["content"] for m in messages])
 
         if tokenize:
             return self.encode(prompt)
@@ -93,7 +123,7 @@ def create_nano_llama_config() -> LlamaConfig:
         num_heads=4,
         num_kv_heads=4,
         num_layers=2,
-        tokenizer=DummyTokenizer(vocab_size=1000),
+        tokenizer=DummyTokenizer(),
     )
 
 
@@ -181,10 +211,8 @@ def create_nano_inference_worker_config(
         trainer=create_nano_trainer_config(output_dir),
         inference_server_config=inference_server_config,
         model=model_config,
-        environment_spec="mock:task_type=count",
+        environment_spec="mock:task_type=cats",
         rollout_writer=rollout_writer,
-        environment=environment,
-        environment_name="mock_env",
         max_input_length=32,
         max_output_length=32,
         pad_token_id=0,
@@ -207,8 +235,7 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
     """Create a minimal InferenceServerConfig for testing."""
     from levanter.checkpoint import save_checkpoint
 
-    # Use a fixed small vocab size for testing
-    vocab_size = 1000
+    vocab_size = DummyTokenizer().vocab_size
 
     # Create a dummy checkpoint so the server can load
     checkpoint_dir = Path(output_dir) / "test_checkpoint"

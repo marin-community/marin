@@ -9,7 +9,7 @@ version = "0.1.0"
 readme = "README.md"
 license = { file = "LICENSE" }
 
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "braceexpand",
     "cryptography>=45",
@@ -166,7 +166,7 @@ gcp = [
 
 cuda12 = ["jax[cuda12]>=0.6.2", "torch"]
 
-tpu = ["jax[tpu]>=0.6.2", "torch"]
+tpu = ["jax[tpu]>=0.7.2", "torch"]
 
 cpu = ["jax>=0.6.2", "torch"]
 
