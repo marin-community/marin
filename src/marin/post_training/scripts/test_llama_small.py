@@ -23,6 +23,7 @@ Supports three modes:
 """
 
 import argparse
+import dataclasses
 import datetime
 import logging
 import os
@@ -87,8 +88,7 @@ def llama_small_config() -> LlamaConfig:
 
     hf_config = AutoConfig.from_pretrained(MODEL_NAME)
     config = LlamaConfig.from_hf_config(hf_config)
-    config.seq_len = 512  # Reduced context length for memory savings
-    return config
+    return dataclasses.replace(config, seq_len=512)
 
 
 def llama_small_trainer_config(output_dir: str) -> TrainerConfig:

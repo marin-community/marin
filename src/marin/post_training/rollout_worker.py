@@ -26,7 +26,7 @@ import socket
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import haliax as hax
 import jax
@@ -38,7 +38,7 @@ import requests
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from marin.post_training.environments.marin_env import InferenceContext
 
@@ -84,13 +84,17 @@ class LevanterInferenceContext(InferenceContext):
     model: Any
     inference_server: InferenceServer
     max_tokens: int
-    tokenizer: Any
+    _tokenizer: Any
 
     def __init__(self, model, tokenizer, inference_server: InferenceServer, max_tokens: int):
         self.model = model
         self.inference_server = inference_server
         self.max_tokens = max_tokens
-        self.tokenizer = tokenizer
+        self._tokenizer = tokenizer
+
+    @property
+    def tokenizer(self):
+        return self._tokenizer
 
     def generate(
         self,
@@ -201,10 +205,16 @@ class RolloutWorker:
     training job via a rollout queue.
     """
 
+    _server_thread: threading.Thread
+    inference_server: InferenceServer
+    policy_model: Any
+    reference_model: Any
+    transfer_client: weight_transfer_manager.WeightTransferClient
+    _tokenizer: PreTrainedTokenizer
+
     def __init__(
         self,
         config: RolloutWorkerConfig,
-        coordinator=None,
     ):
         """Initialize inference worker.
 
@@ -216,16 +226,18 @@ class RolloutWorker:
         levanter.initialize(config.trainer)
 
         self.config = config
-        self.coordinator = coordinator
         self._running = True
         self._shutdown_complete = threading.Event()
         self._shutdown_condition = threading.Condition()
 
-        self._tokenizer = AutoTokenizer.from_pretrained(self.config.model.tokenizer)
+        if isinstance(self.config.model.tokenizer, str):
+            self._tokenizer = AutoTokenizer.from_pretrained(self.config.model.tokenizer)
+        else:
+            self._tokenizer = cast(PreTrainedTokenizer, self.config.model.tokenizer)
+
         self._build_models()
 
         self.inference_server = InferenceServer.create(config.inference_server_config)
-        self._server_thread = None
         self._start_inference_server()
 
         self.transfer_client = weight_transfer_manager.create_weight_transfer_client(
@@ -246,8 +258,8 @@ class RolloutWorker:
             self.config.trainer.device_mesh,
             hax.axis_mapping(self.config.trainer.compute_axis_mapping),
         ):
-            self.config.policy_model = self.model.build(Vocab, key=key)
-            self.config.reference_model = self.model.build(Vocab, key=jrandom.split(key)[0])
+            self.policy_model = self.config.model.build(Vocab, key=key)
+            self.reference_model = self.config.model.build(Vocab, key=jrandom.split(key)[0])
 
         logger.info("Built policy and reference models after levanter initialization")
 
@@ -284,29 +296,35 @@ class RolloutWorker:
 
         # Create Levanter inference contexts
         policy_ctx = LevanterInferenceContext(
-            self.config.policy_model,
-            self.inference_server,
+            self.policy_model,
+            tokenizer=self._tokenizer,
+            inference_server=self.inference_server,
             max_tokens=self.config.max_output_length,
         )
         reference_ctx = LevanterInferenceContext(
-            self.config.reference_model,
-            self.inference_server,
+            self.reference_model,
+            tokenizer=self._tokenizer,
+            inference_server=self.inference_server,
             max_tokens=self.config.max_output_length,
         )
 
-        rl_dataset, dataset_metrics = create_dataset_from_environment(
-            environment=self.config.environment,
-            policy_ctx=policy_ctx,
-            reference_ctx=reference_ctx,
-            n_examples=self.config.n_prompts_per_step,
-            prng_key=rng,
-            n_generations=self.config.n_generations,
-            max_input_length=self.config.max_input_length,
-            max_output_length=self.config.max_output_length,
-            pad_token_id=self.config.pad_token_id,
-            mode="train",
-            temperature=self.config.temperature,
-        )
+        with (
+            self.config.trainer.device_mesh,
+            hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+        ):
+            rl_dataset, dataset_metrics = create_dataset_from_environment(
+                environment=self.config.environment,
+                policy_ctx=policy_ctx,
+                reference_ctx=reference_ctx,
+                n_examples=self.config.n_prompts_per_step,
+                prng_key=rng,
+                n_generations=self.config.n_generations,
+                max_input_length=self.config.max_input_length,
+                max_output_length=self.config.max_output_length,
+                pad_token_id=self.config.pad_token_id,
+                mode="train",
+                temperature=self.config.temperature,
+            )
         jax_distributed_barrier()
 
         return (
@@ -316,7 +334,7 @@ class RolloutWorker:
 
     def _sync_weights(self):
         logger.info("Checking for new weights...")
-        weights = self.transfer_client.receive_weights(self.config.policy_model)
+        weights = self.transfer_client.receive_weights(self.policy_model)
         if weights:
             logger.info("Received new weights for policy model")
 

@@ -31,14 +31,12 @@ try:
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 
-import uuid
 
 from marin.post_training.rollout_storage import (
     InMemoryRolloutQueue,
     RolloutBatch,
     TaggedRolloutBatch,
 )
-from marin.post_training.weight_transfer_manager import WeightTransferMode, create_coordinator
 
 # Import test helpers
 from tests.post_training.test_helpers import (
@@ -334,11 +332,11 @@ def test_inference_worker(ray_cluster, inference_worker_config):
     queue_reader = rollout_writer._queue.reader()
 
     # Get coordinator for GCS mode only
-    coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
-    coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
+    # coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
+    # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
 
     # Use context manager for cleaner test
-    with RolloutWorkerRunner(inference_worker_config, coordinator) as runner:
+    with RolloutWorkerRunner(inference_worker_config) as runner:
         # Wait for the worker to complete
         while runner.alive() and not runner.done.is_set():
             time.sleep(0.5)
@@ -368,11 +366,11 @@ def test_train_worker(ray_cluster, training_worker_config):
         queue_writer.write_batch(sample_batch)
 
     # Get coordinator for GCS mode only
-    coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
-    coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
+    # coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
+    # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
 
     # Use context manager for cleaner test
-    with TrainWorkerRunner(training_worker_config, coordinator) as runner:
+    with TrainWorkerRunner(training_worker_config) as runner:
         # Wait for training to complete
         while not runner.done.is_set() and runner.steps_completed < 10:
             time.sleep(0.1)

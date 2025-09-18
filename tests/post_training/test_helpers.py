@@ -93,6 +93,7 @@ def create_nano_llama_config() -> LlamaConfig:
         num_heads=4,
         num_kv_heads=4,
         num_layers=2,
+        tokenizer=DummyTokenizer(vocab_size=1000),
     )
 
 
@@ -135,7 +136,6 @@ def create_nano_training_worker_config(rollout_reader, output_dir: str | Path) -
         model=create_nano_llama_config(),
         trainer=create_nano_trainer_config(output_dir),
         optimizer=create_nano_optimizer_config(),
-        tokenizer=DummyTokenizer(vocab_size=1000),
         kl_coef=0.1,
         reference_logprobs_bsize=2,
         weight_transfer=WeightTransferConfig(
@@ -173,15 +173,6 @@ def create_nano_inference_worker_config(
     """Create a minimal RolloutWorkerConfig for testing."""
     model_config = create_nano_llama_config()
 
-    # Create simple mock models
-    key = jrandom.PRNGKey(42)
-    vocab_size = 1000  # Fixed small vocab size for testing
-    Vocab = hax.Axis("vocab", vocab_size)
-
-    # Build the models (they'll be tiny)
-    policy_model = model_config.build(Vocab, key=key)
-    reference_model = model_config.build(Vocab, key=jrandom.split(key)[0])
-
     if environment is None:
         # Use the DummyTokenizer for the mock environment
         environment = create_mock_environment(tokenizer=DummyTokenizer())
@@ -189,8 +180,7 @@ def create_nano_inference_worker_config(
     return RolloutWorkerConfig(
         trainer=create_nano_trainer_config(output_dir),
         inference_server_config=inference_server_config,
-        policy_model=policy_model,
-        reference_model=reference_model,
+        model=model_config,
         environment_spec="mock:task_type=count",
         rollout_writer=rollout_writer,
         environment=environment,
