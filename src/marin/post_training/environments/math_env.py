@@ -1,12 +1,26 @@
-import random
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from typing import Any
 
 import datasets
 import jax
 import numpy as np
-from post_training.inference import batch_inference
-from post_training.utils import validate_format
 from tqdm.auto import tqdm
+
+from marin.post_training.inference import batch_inference
+from marin.post_training.utils import validate_format
 
 from .marin_env import EnvStep, MarinEnv
 from .math_utils import grade_answer, last_boxed_only_string, remove_boxed
@@ -22,10 +36,10 @@ class MathEnv(MarinEnv):
         self.tokenizer = tokenizer
 
         # Initialize datasets
-        data_source = "DigitalLearningGmbH/MATH-lighteval"
-        dataset = datasets.load_dataset(data_source, trust_remote_code=True)
-        train_dataset = dataset["train"]
-        test_dataset = dataset["test"]
+        train_data_source = "di-zhang-fdu/MATH12000"
+        test_data_source = "HuggingFaceH4/MATH-500"
+        train_dataset = datasets.load_dataset(train_data_source, trust_remote_code=True)["train"]
+        test_dataset = datasets.load_dataset(test_data_source, trust_remote_code=True)["test"]
 
         # Convert to the format expected by the training code and pre-tokenize
         self.train_examples = []
@@ -120,15 +134,15 @@ class MathEnv(MarinEnv):
                 else:
                     grade = False
 
-                if random.random() < 1 / 64:
-                    print("=" * 25)
-                    print(examples[i]["prompt"])
-                    print(decoded_response + ">")
-                    print("=" * 25)
-                    print("gt answer: ", examples[i]["answer"])
-                    print("extracted answer: ", validation["answer"])
-                    print("grade: ", grade)
-                    print("=" * 25)
+                # if random.random() < 1 / 64:
+                #     print("=" * 25)
+                #     print(examples[i]["prompt"])
+                #     print(decoded_response + ">")
+                #     print("=" * 25)
+                #     print("gt answer: ", examples[i]["answer"])
+                #     print("extracted answer: ", validation["answer"])
+                #     print("grade: ", grade)
+                #     print("=" * 25)
 
                 score = float(grade)
                 group_rewards.append(float(score))

@@ -1,5 +1,18 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import math
-from functools import partial
 
 import flax.linen as nn
 import jax
@@ -11,9 +24,7 @@ from flax.linen import partitioning as nn_partitioning
 from flax.linen.attention import dot_product_attention_weights
 from flax.traverse_util import flatten_dict, unflatten_dict
 from jax import lax
-from jax.experimental.shard_map import shard_map
 from jax.sharding import PartitionSpec as PS
-from ringattention import ringattention, ringattention_jax
 from scalax.sharding import MeshShardingHelper, with_sharding_annotation
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_flax_outputs import FlaxBaseModelOutput, FlaxCausalLMOutput
@@ -199,6 +210,19 @@ LLAMA_STANDARD_CONFIGS = {
         "tie_word_embeddings": False,
         "num_key_value_heads": 4,
     },
+    "test_1m": {  # Tiny <1M parameter model for testing
+        "vocab_size": 1000,
+        "hidden_size": 128,
+        "intermediate_size": 128,
+        "num_hidden_layers": 2,
+        "num_attention_heads": 2,
+        "max_sequence_length": 64,
+        "initializer_range": 0.02,
+        "rms_norm_eps": 1e-6,
+        "use_cache": True,
+        "tie_word_embeddings": False,
+        "num_key_value_heads": 2,
+    },
 }
 
 
@@ -358,46 +382,6 @@ class LLaMAConfig(PretrainedConfig):
     # DEPRICATED
     # def get_batch_sharding(self):
     #     return PS(('replica', 'fsdp'), 'sequence')
-
-
-def get_ring_attention_function(
-    chunk_size,
-    deterministic=True,
-    attention_dropout=0.0,
-    dropout_rng=None,
-    use_jax: bool = False,
-):
-    return shard_map(
-        partial(
-            ringattention if not use_jax else ringattention_jax,
-            axis_name="sequence",
-            float32_logits=True,
-            cache_idx=None,
-            blockwise_kwargs=dict(
-                causal_block_size=1,
-                deterministic=deterministic,
-                dropout_rng=dropout_rng,
-                attn_pdrop=attention_dropout,
-                query_chunk_size=chunk_size,
-                key_chunk_size=chunk_size,
-                policy=jax.checkpoint_policies.nothing_saveable,
-                dtype=jnp.float32,
-                precision=None,
-                prevent_cse=True,
-            ),
-        ),
-        mesh=MeshShardingHelper.get_global_mesh(),
-        in_specs=(
-            PS(("replica", "fsdp"), "sequence", "tensor", None),
-            PS(("replica", "fsdp"), "sequence", "tensor", None),
-            PS(("replica", "fsdp"), "sequence", "tensor", None),
-            PS(("replica", "fsdp"), None, None, None),
-            # PS(('replica', 'fsdp'), None),
-            PS(None),
-        ),
-        out_specs=PS(("replica", "fsdp"), "sequence", "tensor", None),
-        check_rep=False,
-    )
 
 
 remat = nn_partitioning.remat
@@ -824,41 +808,6 @@ class FlaxLLaMAAttention(nn.Module):
             attn_output = MeshShardingHelper.with_sharding_constraint(
                 attn_output, PS(("replica", "fsdp"), None, "tensor", None)
             )
-        elif self.config.attention_kernel == "ring":
-            assert not self.has_variable("cache", "cached_key"), "Ring attention does not support caching"
-            # NOTE: this may not be needed for ring attention, need to test
-            xk = repeat_kv(xk, self.num_key_value_groups)
-            xv = repeat_kv(xv, self.num_key_value_groups)
-            attention_bias = lax.select(
-                og_attention_mask > 0,
-                jnp.full(og_attention_mask.shape, 0.0).astype(self.dtype),
-                jnp.full(og_attention_mask.shape, jnp.finfo(self.dtype).min).astype(self.dtype),
-            )
-            attention_bias = jnp.expand_dims(attention_bias, axis=(-3, -2))
-            attn_output = get_ring_attention_function(
-                chunk_size=self.config.attention_kernel_settings["chunk_size"],
-                deterministic=deterministic,
-                attention_dropout=self.config.attn_pdrop,
-                dropout_rng=dropout_rng,
-                use_jax=False,
-            )(xq, xk, xv, attention_bias, None).astype(self.dtype)
-        elif self.config.attention_kernel == "ring_jax":
-            assert not self.has_variable("cache", "cached_key"), "Ring attention does not support caching"
-            xk = repeat_kv(xk, self.num_key_value_groups)
-            xv = repeat_kv(xv, self.num_key_value_groups)
-            attention_bias = lax.select(
-                og_attention_mask > 0,
-                jnp.full(og_attention_mask.shape, 0.0).astype(self.dtype),
-                jnp.full(og_attention_mask.shape, jnp.finfo(self.dtype).min).astype(self.dtype),
-            )
-            attention_bias = jnp.expand_dims(attention_bias, axis=(-3, -2))
-            attn_output = get_ring_attention_function(
-                chunk_size=self.config.attention_kernel_settings["chunk_size"],
-                deterministic=deterministic,
-                attention_dropout=self.config.attn_pdrop,
-                dropout_rng=dropout_rng,
-                use_jax=True,
-            )(xq, xk, xv, attention_bias, None).astype(self.dtype)
         else:
             raise ValueError(f"Invalid attention kernel: {self.attention_kernel}")
 
@@ -1105,7 +1054,12 @@ class FlaxLLaMAPreTrainedModel(FlaxPreTrainedModel):
         if dropout_rng is not None:
             rngs["dropout"] = dropout_rng
 
-        inputs = {"params": params or self.params}
+        if params is not None:
+            inputs = {"params": params}
+        elif hasattr(self, "params"):
+            inputs = {"params": self.params}
+        else:
+            raise ValueError("Model parameters must be provided when model is created with _do_init=False")
 
         # if past_key_values are passed then cache is already initialized a
         # private flag init_cache has to be passed down to ensure cache is
