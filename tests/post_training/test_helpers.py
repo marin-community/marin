@@ -31,7 +31,8 @@ from levanter.trainer import TrainerConfig
 
 from marin.post_training.environments.mock_env import MockEnv
 from marin.post_training.rollout_worker import InferenceWorkerConfig
-from marin.post_training.train_worker import TrainingWorkerConfig
+from marin.post_training.train_worker import TrainWorkerConfig
+from marin.post_training.training_config import WeightTransferConfig
 
 
 class DummyTokenizer:
@@ -104,11 +105,11 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
         ),
         mp=jmp.get_policy("p=f32"),
         train_batch_size=2,
-        num_train_steps=1000,
+        num_train_steps=10,
         steps_per_eval=1,
         checkpointer=CheckpointerConfig(
             base_path=Path(output_dir) / "checkpoints",
-            save_interval=datetime.timedelta(seconds=10),
+            save_interval=datetime.timedelta(seconds=1),
         ),
         tensor_parallel_axes=["mlp", "heads"],
         fsdp_axis="embed",
@@ -127,9 +128,9 @@ def create_nano_optimizer_config() -> AdamConfig:
     )
 
 
-def create_nano_training_worker_config(rollout_reader, output_dir: str | Path) -> TrainingWorkerConfig:
-    """Create a minimal TrainingWorkerConfig for testing."""
-    return TrainingWorkerConfig(
+def create_nano_training_worker_config(rollout_reader, output_dir: str | Path) -> TrainWorkerConfig:
+    """Create a minimal TrainWorkerConfig for testing."""
+    return TrainWorkerConfig(
         rollout_reader=rollout_reader,
         model=create_nano_llama_config(),
         trainer=create_nano_trainer_config(output_dir),
@@ -137,7 +138,12 @@ def create_nano_training_worker_config(rollout_reader, output_dir: str | Path) -
         tokenizer=DummyTokenizer(vocab_size=1000),
         kl_coef=0.1,
         reference_logprobs_bsize=2,
-        weight_transfer_sync_interval=1,
+        weight_transfer=WeightTransferConfig(
+            sync_interval_steps=1,
+            poll_interval_seconds=1,
+            checkpoint_dir=Path(output_dir) / "policy_checkpoints",
+            max_checkpoints=5,
+        ),
     )
 
 
@@ -162,7 +168,7 @@ def create_mock_environment(tokenizer=None):
 
 
 def create_nano_inference_worker_config(
-    inference_server_config, rollout_writer, environment=None
+    output_dir: str, inference_server_config, rollout_writer, environment=None
 ) -> InferenceWorkerConfig:
     """Create a minimal InferenceWorkerConfig for testing."""
     model_config = create_nano_llama_config()
@@ -181,6 +187,7 @@ def create_nano_inference_worker_config(
         environment = create_mock_environment(tokenizer=DummyTokenizer())
 
     return InferenceWorkerConfig(
+        trainer=create_nano_trainer_config(output_dir),
         inference_server_config=inference_server_config,
         policy_model=policy_model,
         reference_model=reference_model,
@@ -196,7 +203,13 @@ def create_nano_inference_worker_config(
         temperature=0.1,
         log_freq=1,
         rollout_batch_size=2,
-        max_rollouts=2,
+        max_rollouts=100,
+        weight_transfer=WeightTransferConfig(
+            sync_interval_steps=1,
+            poll_interval_seconds=1,
+            checkpoint_dir=Path(output_dir) / "policy_checkpoints",
+            max_checkpoints=5,
+        ),
     )
 
 

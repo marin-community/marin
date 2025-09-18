@@ -37,6 +37,9 @@ from levanter.trainer import Trainer, TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
 from transformers import PreTrainedTokenizer
 
+from marin.post_training import weight_transfer_manager
+from marin.post_training.training_config import WeightTransferConfig
+
 from .replay_buffer import ReplayBuffer, ReplayDataLoader
 from .rollout_storage import JaxRolloutBatch, RolloutBatch, RolloutReader
 
@@ -179,7 +182,7 @@ class StopTrainerException(Exception):
 
 
 @dataclass
-class TrainingWorkerConfig:
+class TrainWorkerConfig:
     """Configuration for Levanter-based RL training worker."""
 
     rollout_reader: RolloutReader
@@ -193,17 +196,15 @@ class TrainingWorkerConfig:
     kl_coef: float = 0.1
     reference_logprobs_bsize: int = 32
 
-    # Weight transfer settings
-    weight_transfer_sync_interval: int = 100
+    weight_transfer: WeightTransferConfig
 
 
-class TrainingWorker:
+class TrainWorker:
     """Training worker that reads rollout data from a queue and trains the model using Levanter."""
 
     def __init__(
         self,
-        config: TrainingWorkerConfig,
-        coordinator=None,
+        config: TrainWorkerConfig,
     ):
         """Initialize training worker.
 
@@ -213,7 +214,6 @@ class TrainingWorker:
         """
         levanter.initialize(config.trainer)
         self.config = config
-        self.coordinator = coordinator
         self._should_stop = False
         self.weight_id = 0
         if isinstance(config.tokenizer, str):
@@ -234,6 +234,12 @@ class TrainingWorker:
             rollout_reader=self.rollout_reader,
             replay_buffer=self.replay_buffer,
             rollout_fetch_interval=1.0,
+        )
+
+        self.transfer_server = weight_transfer_manager.create_weight_transfer_server(
+            config.weight_transfer,
+            mesh=self.config.trainer.device_mesh,
+            axis_mapping=self.config.trainer.compute_axis_mapping,
         )
 
     def train(self):
@@ -290,10 +296,6 @@ class TrainingWorker:
 
     def create_weight_transfer_hook(self):
         def weight_transfer_hook(info: levanter.callbacks.StepInfo):
-            if self.coordinator is None:
-                # Skip weight transfer if no coordinator (e.g., in tests)
-                return
-
             step = info.step
             state = info.state
 
@@ -301,7 +303,7 @@ class TrainingWorker:
             logger.info("Transferring weights at step %d, weight_id %d...", step, self.weight_id)
 
             model_params = state.model
-            self.coordinator.serve_weights(self.weight_id, model_params)
+            self.transfer_server.serve_weights(self.weight_id, model_params)
             logger.info(f"Successfully transferred weights with ID {self.weight_id}")
 
         return weight_transfer_hook

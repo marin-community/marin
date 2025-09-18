@@ -72,9 +72,8 @@ class InferenceLoader:
             server_task = asyncio.create_task(self.server.serve_async())
             monitor_task = asyncio.create_task(self._monitor_for_checkpoints())
             await asyncio.gather(server_task, monitor_task)
-        except asyncio.CancelledError:
-            logger.info("InferenceWorker shutting down...")
         finally:
+            logger.info("InferenceWorker shutting down...")
             self.server.shutdown()
 
     async def _monitor_for_checkpoints(self):

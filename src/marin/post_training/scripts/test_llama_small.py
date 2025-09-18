@@ -46,7 +46,7 @@ from marin.cluster.ray import ray_dashboard
 from marin.post_training.environments.mock_env import MockEnv
 from marin.post_training.rollout_storage import FileRolloutReader, FileRolloutWriter
 from marin.post_training.rollout_worker import InferenceWorker, InferenceWorkerConfig
-from marin.post_training.train_worker import TrainingWorker, TrainingWorkerConfig
+from marin.post_training.train_worker import TrainWorker, TrainWorkerConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -139,9 +139,9 @@ def llama_small_inference_server_config(output_dir: str) -> InferenceServerConfi
     )
 
 
-def llama_small_training_worker_config(rollout_reader, output_dir: str) -> TrainingWorkerConfig:
+def llama_small_training_worker_config(rollout_reader, output_dir: str) -> TrainWorkerConfig:
     """Create training worker configuration for Llama-3.2-1B."""
-    return TrainingWorkerConfig(
+    return TrainWorkerConfig(
         rollout_reader=rollout_reader,
         model=llama_small_config(),
         trainer=llama_small_trainer_config(output_dir),
@@ -175,7 +175,7 @@ def llama_small_inference_worker_config(rollout_writer, output_dir: str) -> Infe
         inference_server_config=llama_small_inference_server_config(output_dir),
         policy_model=policy_model,
         reference_model=reference_model,
-        environment_spec="mock:task_type=count",
+        environment_spec="mock:task_type=simple_addition",
         rollout_writer=rollout_writer,
         environment=environment,
         environment_name="mock_env",
@@ -220,7 +220,7 @@ def run_training_mode(args):
     subprocess.run("sudo --non-interactive rm -f /tmp/libtpu_lockfile", shell=True, check=False)
     rollout_reader = FileRolloutReader(ROLLOUT_QUEUE_PATH)
     worker_config = llama_small_training_worker_config(rollout_reader, CHECKPOINT_DIR)
-    worker = TrainingWorker(
+    worker = TrainWorker(
         config=worker_config,
         coordinator=None,
     )
