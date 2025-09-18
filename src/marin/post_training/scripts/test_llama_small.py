@@ -31,8 +31,6 @@ import threading
 import time
 from pathlib import Path
 
-import haliax as hax
-import jax.random as jrandom
 import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.distributed import RayConfig
@@ -84,32 +82,29 @@ DEFAULT_CLUSTER_CONFIG = "infra/marin-us-central2.yaml"
 
 
 def llama_small_config() -> LlamaConfig:
-    """Create LlamaConfig for Llama-3.2-1B-Instruct."""
-    return LlamaConfig(
-        seq_len=131072,  # Full context length
-        hidden_dim=2048,
-        intermediate_dim=8192,
-        num_heads=32,
-        num_kv_heads=8,
-        num_layers=16,
-        tie_word_embeddings=True,
-    )
+    """Create LlamaConfig for Llama-3.2-1B-Instruct with reduced memory usage."""
+    from transformers import AutoConfig
+
+    hf_config = AutoConfig.from_pretrained(MODEL_NAME)
+    config = LlamaConfig.from_hf_config(hf_config)
+    config.seq_len = 512  # Reduced context length for memory savings
+    return config
 
 
 def llama_small_trainer_config(output_dir: str) -> TrainerConfig:
-    """Create TrainerConfig for Llama-3.2-1B training."""
+    """Create TrainerConfig for Llama-3.2-1B training with reduced memory usage."""
     return TrainerConfig(
         tracker=WandbConfig(
             project=WANDB_PROJECT,
             mode="disabled",  # Disable for testing
         ),
         mp=jmp.get_policy("p=f32,c=bfloat16"),
-        train_batch_size=4,  # Smaller batch for testing
-        num_train_steps=10000,
-        steps_per_eval=5,
+        train_batch_size=8,
+        num_train_steps=100,
+        steps_per_eval=10,
         checkpointer=CheckpointerConfig(
             base_path=str(Path(output_dir)),
-            save_interval=datetime.timedelta(seconds=30),
+            save_interval=datetime.timedelta(seconds=60),
         ),
         tensor_parallel_axes=["mlp", "heads"],
         fsdp_axis="embed",
@@ -129,14 +124,23 @@ def llama_small_optimizer_config() -> AdamConfig:
 
 
 def llama_small_inference_server_config(output_dir: str) -> InferenceServerConfig:
-    """Create inference server configuration for Llama-3.2-1B."""
+    """Create inference server configuration for Llama-3.2-1B with reduced memory usage."""
+    from levanter.compat.hf_checkpoints import RepoRef
+    from levanter.inference.engine import InferenceEngineConfig
+
     return InferenceServerConfig(
         model=llama_small_config(),
         trainer=llama_small_trainer_config(output_dir),
         tokenizer=MODEL_TOKENIZER,
-        checkpoint_path=MODEL_CHECKPOINT,
-        max_new_tokens=129,
+        hf_checkpoint=RepoRef(MODEL_NAME),
+        max_new_tokens=32,  # Reduced for memory savings
         temperature=1.0,
+        service=InferenceEngineConfig(
+            max_seqs=8,  # Reduced from default 16
+            max_pages_per_seq=16,  # Reduced from default 64 (16*128 = 2048 tokens max)
+            page_size=128,  # Keep default
+            max_seqs_in_prefill=4,  # Reduced from default 16
+        ),
     )
 
 
@@ -149,7 +153,6 @@ def llama_small_training_worker_config(rollout_reader, output_dir: str) -> Train
         optimizer=llama_small_optimizer_config(),
         tokenizer=MODEL_TOKENIZER,
         kl_coef=1e-4,
-        reference_logprobs_bsize=8,
         weight_transfer=WeightTransferConfig(
             sync_interval_steps=10,
             poll_interval_seconds=1,
@@ -161,40 +164,30 @@ def llama_small_training_worker_config(rollout_reader, output_dir: str) -> Train
 
 def llama_small_inference_worker_config(rollout_writer, output_dir: str) -> RolloutWorkerConfig:
     """Create inference worker configuration for Llama-3.2-1B."""
-    model_config = llama_small_config()
-
-    # Create models for inference
-    key = jrandom.PRNGKey(42)
-    vocab_size = 128256  # Llama-3.2 vocab size
-    Vocab = hax.Axis("vocab", vocab_size)
-
-    policy_model = model_config.build(Vocab, key=key)
-    reference_model = model_config.build(Vocab, key=jrandom.split(key)[0])
-
     # Create mock environment with Llama tokenizer
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_TOKENIZER)
-    environment = MockEnv(tokenizer=tokenizer, task_type="count", seed=42)
+    environment = MockEnv(tokenizer=tokenizer, task_type="simple_addition", seed=42)
 
     return RolloutWorkerConfig(
         trainer=llama_small_trainer_config(output_dir),
         inference_server_config=llama_small_inference_server_config(output_dir),
-        policy_model=policy_model,
-        reference_model=reference_model,
+        policy_model=None,  # Will be built after levanter.initialize()
+        reference_model=None,  # Will be built after levanter.initialize()
         environment_spec="mock:task_type=simple_addition",
         rollout_writer=rollout_writer,
         environment=environment,
         environment_name="mock_env",
-        max_input_length=64,
-        max_output_length=65,
+        max_input_length=32,
+        max_output_length=32,
         pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id,
         n_prompts_per_step=8,
-        n_generations=8,
-        temperature=1.0,
-        log_freq=5,
+        n_generations=4,
+        temperature=0.7,
+        log_freq=10,
         rollout_batch_size=4,
-        max_rollouts=10000,
+        max_rollouts=10,
         weight_transfer=WeightTransferConfig(
             sync_interval_steps=10,
             poll_interval_seconds=1,
@@ -210,6 +203,13 @@ def run_inference_mode(args):
     logger = logging.getLogger("inference_worker")
 
     logger.info("Starting inference worker mode...")
+
+    # Debug: Check JAX device setup before starting
+    import jax
+
+    logger.info(f"JAX devices available: {jax.device_count()}")
+    logger.info(f"JAX local devices: {jax.local_device_count()}")
+    logger.info(f"JAX devices: {jax.devices()}")
 
     subprocess.run("sudo --non-interactive rm -f /tmp/libtpu_lockfile", shell=True, check=False)
 
@@ -229,6 +229,7 @@ def run_training_mode(args):
     logger = logging.getLogger("training_worker")
 
     logger.info("Starting training worker mode...")
+
     subprocess.run("sudo --non-interactive rm -f /tmp/libtpu_lockfile", shell=True, check=False)
     rollout_reader = FileRolloutReader(ROLLOUT_QUEUE_PATH)
     worker_config = llama_small_training_worker_config(rollout_reader, CHECKPOINT_DIR)
@@ -347,10 +348,13 @@ def run_driver_mode():
 
         while True:
             # Check if processes are still running
-            if inference_proc.poll() is not None:
+            inference_finished = inference_proc.poll() is not None
+            training_finished = training_proc.poll() is not None
+
+            if inference_finished:
                 logger.info("Inference worker has completed")
                 break
-            if training_proc.poll() is not None:
+            if training_finished:
                 logger.info("Training worker has completed")
                 break
 
@@ -365,8 +369,13 @@ def run_driver_mode():
 
     # Clean shutdown
     logger.info("Terminating workers...")
-    inference_proc.terminate()
-    training_proc.terminate()
+    inference_proc.send_signal(subprocess.signal.SIGINT)
+    training_proc.send_signal(subprocess.signal.SIGINT)
+    time.sleep(5)
+    if inference_proc.poll() is None:
+        inference_proc.terminate()
+    if training_proc.poll() is None:
+        training_proc.terminate()
     inference_proc.wait()
     training_proc.wait()
     return 0

@@ -28,13 +28,17 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import haliax as hax
 import jax
 import jax.numpy as jnp
+import jax.random as jrandom
 import levanter
 import numpy as np
 import requests
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
+from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
+from transformers import AutoTokenizer
 
 from marin.post_training.environments.marin_env import InferenceContext
 
@@ -57,8 +61,7 @@ class RolloutWorkerConfig:
 
     # used for initialization
     trainer: TrainerConfig
-    policy_model: Any
-    reference_model: Any
+    model: LlamaConfig
     environment_spec: str
     rollout_writer: RolloutWriter
     environment: Any
@@ -81,17 +84,13 @@ class LevanterInferenceContext(InferenceContext):
     model: Any
     inference_server: InferenceServer
     max_tokens: int
-    _tokenizer: Any
+    tokenizer: Any
 
-    def __init__(self, model, inference_server: InferenceServer, max_tokens: int):
+    def __init__(self, model, tokenizer, inference_server: InferenceServer, max_tokens: int):
         self.model = model
         self.inference_server = inference_server
         self.max_tokens = max_tokens
-        self._tokenizer = inference_server.inference_context.tokenizer
-
-    @property
-    def tokenizer(self):
-        return self._tokenizer
+        self.tokenizer = tokenizer
 
     def generate(
         self,
@@ -134,7 +133,7 @@ class LevanterInferenceContext(InferenceContext):
             prompt_results = []
             for choice in chat_response.choices:
                 content = choice.message.content
-                tokens = self._tokenizer.encode(content)
+                tokens = self.tokenizer.encode(content)
                 logprobs = [t.logprob for t in choice.logprobs.content]
                 prompt_results.append({"tokens": tokens, "logprobs": logprobs})
             all_results.append(prompt_results)
@@ -222,6 +221,9 @@ class RolloutWorker:
         self._shutdown_complete = threading.Event()
         self._shutdown_condition = threading.Condition()
 
+        self._tokenizer = AutoTokenizer.from_pretrained(self.config.model.tokenizer)
+        self._build_models()
+
         self.inference_server = InferenceServer.create(config.inference_server_config)
         self._server_thread = None
         self._start_inference_server()
@@ -231,6 +233,23 @@ class RolloutWorker:
             mesh=self.config.trainer.device_mesh,
             axis_mapping=self.config.trainer.compute_axis_mapping,
         )
+
+    def _build_models(self):
+        """Build policy and reference models after levanter initialization."""
+
+        key = jrandom.PRNGKey(42)
+        vocab_size = self._tokenizer.vocab_size
+        Vocab = hax.Axis("vocab", vocab_size)
+
+        # Build models
+        with (
+            self.config.trainer.device_mesh,
+            hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+        ):
+            self.config.policy_model = self.model.build(Vocab, key=key)
+            self.config.reference_model = self.model.build(Vocab, key=jrandom.split(key)[0])
+
+        logger.info("Built policy and reference models after levanter initialization")
 
     def _start_inference_server(self):
         """Start the inference server in a background thread."""
