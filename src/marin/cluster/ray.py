@@ -166,12 +166,14 @@ def start_ssh_tunnel_to_head(cluster_config: str, head_ip: str) -> DashboardInfo
         RuntimeError: If SSH tunnel fails to start
     """
     # Find free ports for forwarding
-    dashboard_port = find_free_port()
-    gcs_port = find_free_port()
-    api_port = find_free_port()
+    ports = set()
+    while len(ports) < 3:
+        ports.add(find_free_port())
+
+    dashboard_port, gcs_port, api_port = list(ports)
 
     # Create control path directory
-    control_dir = f"/tmp/ray_ssh_{hash(cluster_config) % 1000000}"
+    control_dir = tempfile.mkdtemp(prefix="ray_ssh_")
     os.makedirs(control_dir, exist_ok=True)
 
     # Build SSH command for tunneling

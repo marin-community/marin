@@ -260,22 +260,21 @@ def hold_tpu_allocation(
             logger.info(f"Creating TPU allocation actor for {tpu_name}")
             actor = ray.remote(resources={"TPU": 4, "TPU-v4-8-head": 1})(TPUAllocationActor).remote(username, tpu_name, tpu_type)
 
-            while True:
-                allocation_info = ray.get(actor.host_info.remote(), timeout=60)
+            allocation_info = ray.get(actor.host_info.remote(), timeout=60)
 
-                logger.info("Setting up SSH configuration")
-                add_ssh_host_config(allocation_info["hostname"], allocation_info["ip_address"], username, tpu_name)
+            logger.info("Setting up SSH configuration")
+            add_ssh_host_config(allocation_info["hostname"], allocation_info["ip_address"], username, tpu_name)
 
-                logger.info("Syncing environment")
-                sync_to_remote(f"dev-tpu-{tpu_name}", sync_path)
-                setup_remote_environment(f"dev-tpu-{tpu_name}")
+            logger.info("Syncing environment")
+            sync_to_remote(f"dev-tpu-{tpu_name}", sync_path)
+            setup_remote_environment(f"dev-tpu-{tpu_name}")
 
-                print("TPU allocated successfully!")
-                print(f"Hostname: {allocation_info['hostname']}")
-                print(f"IP Address: {allocation_info['ip_address']}")
-                print(f"TPU name: {tpu_name}")
-                print(f"SSH alias: dev-tpu-{tpu_name}")
-                yield allocation_info
+            print("TPU allocated successfully!")
+            print(f"Hostname: {allocation_info['hostname']}")
+            print(f"IP Address: {allocation_info['ip_address']}")
+            print(f"TPU name: {tpu_name}")
+            print(f"SSH alias: dev-tpu-{tpu_name}")
+            yield allocation_info
     finally:
         remove_ssh_host_config(tpu_name)
         if actor:
