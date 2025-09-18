@@ -85,8 +85,17 @@ llama_7b_config = LlamaConfig(
 # -----------------------------------------------------------------------------
 # Multi-book sliding-window likelihood evaluation (Original Llama 7B)
 # -----------------------------------------------------------------------------
+BOOKS_PATH = "gs://marin-us-central2/documents/books/50_books/"
+# BOOKS_PATH = "gs://marin-us-central2/documents/books/2_books/"  # debug
+# BOOKS_PATH = "gs://marin-us-central2/documents/books/1_books/harry_potter_1.txt"  # debug single file
+
+# Pre-resolve books and fail fast if none found to avoid silent no-op runs.
+_books = create_books_from_gcp_directory(BOOKS_PATH)
+if not _books:
+    raise RuntimeError(f"No .txt books found under {BOOKS_PATH}. Update BOOKS_PATH to a valid GCS dir or file.")
+
 eval_sliding_step = ExecutorStep(
-    name="probextraction/llama_7b_50_books_eval",
+    name="probextraction/llama_7b_50_books_eval_again",
     fn=run_levanter_eval_sliding,
     config=EvalSlidingTotalConfig(
         tokenizer_name="huggyllama/llama-7b",
@@ -116,12 +125,8 @@ eval_sliding_step = ExecutorStep(
         eval_batch_size=512,  # max batch size is 512 for TPU v4-128
         output_base_path=this_output_path(),
         gcp_log=True,  # Save plots and data to GCP instead of WandB artifacts
-        # run with 50 books from open-weight copyright memorization paper
-        books=create_books_from_gcp_directory("gs://marin-us-central2/books_evals/50_books/"),
-        # run with 2 books (debugging)
-        # books=create_books_from_gcp_directory("gs://marin-us-central2/books_evals/2_books/"),
-        # run with 1 book (debugging)
-        # books=create_books_from_gcp_directory("gs://marin-us-central2/books_evals/1_books/"),
+        # Use canonical books location (matches other working scripts)
+        books=_books,
     ),
 )
 

@@ -12,57 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from pathlib import Path
+from dataclasses import replace
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.resources import TpuPodConfig
-from marin.utils import fsspec_glob
-from experiments.models import get_model_local_path, llama2_7b
-from levanter.infra.ray_tpu import run_on_pod_resumable
-
-from levanter.main.marin_eval_sliding_total import EvalSlidingTotalConfig, BookConfig, main as eval_sliding_main
-from levanter.trainer import TrainerConfig
-from levanter.tracker.wandb import WandbConfig
-from levanter.distributed import RayConfig
-from levanter.models.llama import LlamaConfig
 import jmp
-import ray
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from experiments.models import get_model_local_path, llama2_7b
+from levanter.distributed import RayConfig
+from levanter.main.eval_pz import PzEvalConfig
+from levanter.models.llama import LlamaConfig
+from levanter.tracker.wandb import WandbConfig
+from levanter.trainer import TrainerConfig
 
+from experiments.probextraction.utils import list_books, make_run_eval_pz_fn, choose_hw_and_batch
 
-def run_levanter_eval_sliding(config: EvalSlidingTotalConfig) -> None:
-    """Run Levanter's eval_sliding_total with proper TPU infrastructure like training."""
-    hw_config = TpuPodConfig(tpu_type="v4-128", slice_count=1, runtime_env={"env_vars": {}})
+"""P(z) evaluation over many books (Llama-2-7B), one step per book for parallelism.
 
-    @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1)
-    def eval_lm_task():
-        eval_sliding_main(config)
-
-    return run_on_pod_resumable(eval_lm_task, hw_config.accelerator_descriptor(), max_retries_failure=10)
-
-
-def create_books_from_gcp_directory(gcp_path: str) -> dict[str, BookConfig]:
-    """Create BookConfig instances for all .txt files in a GCP directory or a single book file.
-
-    Args:
-        gcp_path: GCP directory path like 'gs://marin-us-central2/books_evals/50_books/'
-                 or single file path like 'gs://marin-us-central2/books_evals/50_books/twilight.txt'
-
-    Returns:
-        Dict mapping book IDs to BookConfig instances
-    """
-    # Check if it's a single file or directory
-    txt_files = [gcp_path] if gcp_path.endswith(".txt") else fsspec_glob(f"{gcp_path.rstrip('/')}/*.txt")
-
-    books = {}
-    for txt_path in txt_files:
-        # Extract book name from path and create a clean book ID
-        filename = Path(txt_path).stem  # removes .txt extension
-        book_id = filename.lower()  # Use as-is (already has underscores)
-        book_title = filename  # Keep underscores for WandB artifact compatibility
-
-        books[book_id] = BookConfig(txt_path=txt_path, book_title=book_title)
-
-    return books
+Uses a hardware preset helper (in utils) that maps approximate model parameter
+sizes to TPU hardware and evaluation batch sizes. You can override the hardware
+via the TPU_TYPE_OVERRIDE environment variable (e.g., "v4-64").
+"""
 
 
 # Create Llama 2 7B config based on HF config parameters
@@ -82,49 +50,74 @@ llama2_7b_config = LlamaConfig(
     reference_checkpoint="meta-llama/Llama-2-7b-hf",
 )
 
-# -----------------------------------------------------------------------------
-# Multi-book sliding-window likelihood evaluation (Llama-2-7B)
-# -----------------------------------------------------------------------------
-eval_sliding_step = ExecutorStep(
-    name="probextraction/llama2_7b_50_books_eval",
-    fn=run_levanter_eval_sliding,
-    config=EvalSlidingTotalConfig(
-        tokenizer_name="meta-llama/Llama-2-7b-hf",
-        model=llama2_7b_config,
-        trainer=TrainerConfig(
-            seed=0,
-            tracker=WandbConfig(
-                project="marin",
-                name="llama2_7b_50_books_eval",
-            ),
-            mp=jmp.get_policy("p=f32,c=f32"),
-            per_device_eval_parallelism=-1,
-            tensor_parallel_axes=["mlp", "heads"],
-            fsdp_axis="embed",
-            batch_axis="batch",
-            ray=RayConfig(auto_start_cluster=False, start_workers=False),
-        ),
-        initialize_from_hf=get_model_local_path(llama2_7b),
-        use_hf_model_config=False,
-        # if you change the below, make sure to update seq_len above!
-        chunk_size=100,
-        slice_length=2000,
-        prompt_tokens=50,
-        cursor_inc_chars=10,
-        token_mode=True,
-        cursor_inc_tokens=5,
-        eval_batch_size=512,  # max batch size is 512 for TPU v4-128
-        output_base_path=this_output_path(),
-        gcp_log=True,  # Save plots and data to GCP instead of WandB artifacts
-        # run with 50 books from open-weight copyright memorization paper
-        books=create_books_from_gcp_directory("gs://marin-us-central2/books_evals/50_books/"),
-        # run with 2 books (debugging)
-        # books=create_books_from_gcp_directory("gs://marin-us-central2/books_evals/2_books/"),
-        # run with 1 book (debugging)
-        # books=create_books_from_gcp_directory("gs://marin-us-central2/books_evals/1_books/"),
+
+# Base config for single-book P(z) evaluation
+# Select hardware + batch size based on model size (~7B for Llama-2-7B)
+_TPU_TYPE, _EVAL_BATCH = choose_hw_and_batch(7.0)
+
+_TPU_TYPE = "v4-64"  # override for now, since v4-64 seems unavailable
+base_pz_config = PzEvalConfig(
+    tokenizer_name="meta-llama/Llama-2-7b-hf",
+    model=llama2_7b_config,
+    trainer=TrainerConfig(
+        seed=0,
+        tracker=WandbConfig(project="marin", name="llama2_7b_pz_eval"),
+        mp=jmp.get_policy("p=f32,c=f32"),
+        per_device_eval_parallelism=-1,
+        tensor_parallel_axes=["mlp", "heads"],
+        fsdp_axis="embed",
+        batch_axis="batch",
+        ray=RayConfig(auto_start_cluster=False, start_workers=False),
     ),
+    initialize_from_hf=get_model_local_path(llama2_7b),
+    use_hf_model_config=False,
+    # if you change the below, make sure to update seq_len above!
+    chunk_size=100,
+    slice_length=2000,
+    prompt_tokens=50,
+    cursor_inc_chars=10,
+    token_mode=True,
+    cursor_inc_tokens=5,
+    eval_batch_size=256,  # e.g., 512 on v4-128; 256 on v4-64
+    output_base_path=this_output_path(),
+    gcp_log=True,  # Save plots and data via fsspec
 )
 
 
+# -----------------------------------------------------------------------------
+# Parallel single-book P(z) evaluation over many books (Llama-2-7B)
+# -----------------------------------------------------------------------------
+# Build one ExecutorStep per book to let Executor manage concurrency and waiting.
+BOOKS_PATH = "gs://marin-us-central2/documents/books/50_books/"
+# BOOKS_PATH = "gs://marin-us-central2/books_evals/2_books/"  # debug
+# BOOKS_PATH = "gs://marin-us-central2/books_evals/1_books/harry_potter_1.txt"  # debug single file
+
+book_steps: list[ExecutorStep[PzEvalConfig]] = []
+for book_title, txt_path in list_books(BOOKS_PATH):
+    # Make W&B run metadata depend on the book. This creates a distinct run per book
+    # with a descriptive name and group, and helpful tags for filtering.
+    base_tracker = base_pz_config.trainer.tracker
+    book_tracker = replace(
+        base_tracker,
+        name=f"llama2_7b_pz_{book_title}",
+        group="llama2_7b_pz_books",
+        tags=(list(getattr(base_tracker, "tags", [])) + ["pz", "llama2_7b", f"book:{book_title}"]),
+    )
+    book_trainer = replace(base_pz_config.trainer, tracker=book_tracker)
+
+    per_book_cfg = replace(
+        base_pz_config,
+        book_title=book_title,
+        txt_path=txt_path,
+        trainer=book_trainer,
+    )
+    step = ExecutorStep(
+        name=f"probextraction_llama2_7b_pz_{book_title}_v2",
+        fn=make_run_eval_pz_fn(tpu_type=_TPU_TYPE),
+        config=per_book_cfg,
+    )
+    book_steps.append(step)
+
+
 if __name__ == "__main__":
-    executor_main(steps=[eval_sliding_step])
+    executor_main(steps=book_steps)
