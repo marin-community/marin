@@ -39,11 +39,6 @@ dependencies = [
     "tqdm",
     "tqdm-loggable",
     "wandb<=0.19.9",
-<<<<<<< HEAD
-    "openai",
-    "markdownify",
-=======
->>>>>>> origin/main
 ]
 
 [dependency-groups]
