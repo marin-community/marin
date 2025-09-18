@@ -42,7 +42,6 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from marin.cluster.ray import ray_dashboard
-from marin.post_training.environments.mock_env import MockEnv
 from marin.post_training.rollout_storage import FileRolloutReader, FileRolloutWriter
 from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.post_training.train_worker import TrainWorker, TrainWorkerConfig
@@ -167,16 +166,13 @@ def llama_small_inference_worker_config(rollout_writer, output_dir: str) -> Roll
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_TOKENIZER)
-    environment = MockEnv(tokenizer=tokenizer, task_type="simple_addition", seed=42)
 
     return RolloutWorkerConfig(
         trainer=llama_small_trainer_config(output_dir),
         inference_server_config=llama_small_inference_server_config(output_dir),
         model=llama_small_config(),
-        environment_spec="mock:task_type=simple_addition",
+        environment_spec="mock_env:task_type=simple_addition",
         rollout_writer=rollout_writer,
-        environment=environment,
-        environment_name="mock_env",
         max_input_length=32,
         max_output_length=32,
         pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id,

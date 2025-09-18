@@ -198,7 +198,7 @@ class MoarCatsTask:
         num_cats = actual_response.lower().count("cat")
         love_cats = actual_response.lower().count("i love cats")
 
-        return (num_cats + (2 * love_cats)) / len(actual_response.split())  # reward is cats per word
+        return (num_cats + (2 * love_cats)) / len(actual_response)
 
 
 # Task mappings

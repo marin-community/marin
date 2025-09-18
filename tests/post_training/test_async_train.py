@@ -264,7 +264,6 @@ class TrainWorkerRunner:
 
     def _track_training_step(self):
         """Called after each training step."""
-        print("Called train step.")
         self.steps_completed += 1
 
     def _run(self):
@@ -439,6 +438,82 @@ def test_inference_and_training_workers(
     print(f"Weight transfers detected: {inference_runner.weight_transfers}")
     assert inference_runner.weight_transfers >= 1, "Expected at least 1 weight transfer"
     assert inference_runner.rollouts_generated > 0, "Should have generated at least one rollout"
+
+
+@pytest.mark.slow
+def test_moar_cats_improvement(
+    ray_cluster,
+    tmp_path,
+    training_worker_config,
+    inference_worker_config,
+):
+    """Long-running test to validate environment objective improves over time."""
+
+    # Use in-memory rollout queue
+    rollout_queue = InMemoryRolloutQueue()
+
+    inference_worker_config.rollout_writer = rollout_queue.writer()
+    training_worker_config.rollout_reader = rollout_queue.reader()
+
+    metrics_history = []
+
+    LONG_TEST_TIMEOUT = 300  # 5 minutes
+
+    with TrainWorkerRunner(training_worker_config) as training_runner:
+        time.sleep(1)
+        inference_runner = RolloutWorkerRunner(inference_worker_config)
+
+        with inference_runner:
+            start_time = time.time()
+            last_metric_time = start_time
+
+            while time.time() - start_time < LONG_TEST_TIMEOUT:
+                elapsed = time.time() - start_time
+
+                if elapsed - (last_metric_time - start_time) >= 30:
+                    metrics_history.append(
+                        {
+                            "elapsed": elapsed,
+                            "rollouts_generated": inference_runner.rollouts_generated,
+                            "steps_completed": training_runner.steps_completed,
+                            "weight_transfers": inference_runner.weight_transfers,
+                        }
+                    )
+                    last_metric_time = time.time()
+
+                if training_runner.done.is_set() and not inference_runner.done.is_set():
+                    inference_runner.stop()
+                    break
+
+                if inference_runner.done.is_set() and training_runner.done.is_set():
+                    training_runner.stop()
+                    break
+
+                time.sleep(5)  # Less frequent status updates
+
+    # Validate we ran for sufficient time and generated data
+    assert len(metrics_history) >= 2, "Test should run long enough to collect multiple metric snapshots"
+    assert (
+        inference_runner.rollouts_generated >= 5
+    ), f"Expected at least 5 rollouts, got {inference_runner.rollouts_generated}"
+    assert (
+        training_runner.steps_completed >= 2
+    ), f"Expected at least 2 training steps, got {training_runner.steps_completed}"
+
+    # Validate objective improvement - rollout generation should increase over time
+    initial_rollouts = metrics_history[0]["rollouts_generated"]
+    final_rollouts = metrics_history[-1]["rollouts_generated"]
+    assert (
+        final_rollouts > initial_rollouts
+    ), f"Rollout generation should improve: {initial_rollouts} -> {final_rollouts}"
+
+    # Validate training progresses
+    initial_steps = metrics_history[0]["steps_completed"]
+    final_steps = metrics_history[-1]["steps_completed"]
+    assert final_steps >= initial_steps, f"Training should progress: {initial_steps} -> {final_steps}"
+
+    # Validate weight transfers occur
+    assert inference_runner.weight_transfers >= 1, "Should have at least one weight transfer during long run"
 
 
 # Removed test_load_tokenizer as we're using real Levanter tokenizers now

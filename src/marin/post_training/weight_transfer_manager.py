@@ -248,6 +248,7 @@ class GCSCheckpointServer(WeightTransferServer):
                 old_weight_id = self.checkpoint_queue.popleft()
                 old_path = os.path.join(self.config.checkpoint_dir, f"step_{old_weight_id}")
                 if jax.process_index() == 0:  # Only delete from coordinator
+                    logger.info(f"Cleaning up old checkpoint at weight_id {old_weight_id} ({old_path})...")
                     delete_with_bucket(old_path, recursive=True)
 
             logger.info(f"Saving checkpoint at weight_id {weight_id}...")
@@ -308,12 +309,18 @@ class GCSCheckpointClient(WeightTransferClient):
 
         logger.info(f"Loading checkpoint from {latest_checkpoint}")
 
-        params = levanter_checkpoint.load_checkpoint(
-            tree=old_model,
-            checkpoint_path=latest_checkpoint,
-            axis_mapping=self.axis_mapping,
-            mesh=self.mesh,
-        )
+        try:
+            params = levanter_checkpoint.load_checkpoint(
+                tree=old_model,
+                checkpoint_path=latest_checkpoint,
+                axis_mapping=self.axis_mapping,
+                mesh=self.mesh,
+            )
+        except Exception as e:
+            # might get stuck if checkpoint is being written
+            self.metrics.failed_receives += 1
+            logger.warning(f"Failed to load checkpoint {latest_checkpoint}: {e}")
+            return None
 
         self.latest_checkpoint_path = latest_checkpoint
         self.metrics.successful_receives += 1

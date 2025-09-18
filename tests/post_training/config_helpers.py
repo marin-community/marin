@@ -27,13 +27,13 @@ from levanter.distributed import RayConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
-from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from marin.post_training.environments.mock_env import MockEnv
 from marin.post_training.rollout_worker import RolloutWorkerConfig
 from marin.post_training.train_worker import TrainWorkerConfig
 from marin.post_training.weight_transfer_manager import WeightTransferConfig
+from submodules.levanter.src.levanter.tracker.json_logger import JsonLoggerConfig
 
 
 class DummyTokenizer:
@@ -130,13 +130,10 @@ def create_nano_llama_config() -> LlamaConfig:
 def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
     """Create a minimal TrainerConfig for testing."""
     return TrainerConfig(
-        tracker=WandbConfig(
-            project="test",
-            mode="disabled",  # Don't actually log to wandb in tests
-        ),
+        tracker=JsonLoggerConfig(),
         mp=jmp.get_policy("p=f32"),
         train_batch_size=2,
-        num_train_steps=10,
+        num_train_steps=1000,
         steps_per_eval=1,
         checkpointer=CheckpointerConfig(
             base_path=Path(output_dir) / "checkpoints",
@@ -169,7 +166,7 @@ def create_nano_training_worker_config(rollout_reader, output_dir: str | Path) -
         kl_coef=0.1,
         reference_logprobs_bsize=2,
         weight_transfer=WeightTransferConfig(
-            sync_interval_steps=1,
+            sync_interval_steps=10,
             poll_interval_seconds=1,
             checkpoint_dir=Path(output_dir) / "policy_checkpoints",
             max_checkpoints=5,
@@ -184,9 +181,9 @@ def create_nano_inference_server_config(
     return InferenceServerConfig(
         model=model_config,
         trainer=create_nano_trainer_config(output_dir),
-        tokenizer="meta-llama/Llama-3.2-1B-Instruct",  # Use real tokenizer but small
+        tokenizer=DummyTokenizer(),
         max_new_tokens=64,
-        temperature=0.1,
+        temperature=1.0,
     )
 
 
@@ -218,12 +215,12 @@ def create_nano_inference_worker_config(
         pad_token_id=0,
         n_prompts_per_step=2,
         n_generations=1,
-        temperature=0.1,
+        temperature=1.0,
         log_freq=1,
         rollout_batch_size=2,
-        max_rollouts=100,
+        max_rollouts=10000,
         weight_transfer=WeightTransferConfig(
-            sync_interval_steps=1,
+            sync_interval_steps=10,
             poll_interval_seconds=1,
             checkpoint_dir=Path(output_dir) / "policy_checkpoints",
             max_checkpoints=5,
