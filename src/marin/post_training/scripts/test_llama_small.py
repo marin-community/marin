@@ -88,7 +88,7 @@ def llama_small_config() -> LlamaConfig:
 
     hf_config = AutoConfig.from_pretrained(MODEL_NAME)
     config = LlamaConfig.from_hf_config(hf_config)
-    return dataclasses.replace(config, seq_len=512)
+    return dataclasses.replace(config, seq_len=512, tokenizer=MODEL_TOKENIZER)
 
 
 def llama_small_trainer_config(output_dir: str) -> TrainerConfig:
@@ -151,7 +151,6 @@ def llama_small_training_worker_config(rollout_reader, output_dir: str) -> Train
         model=llama_small_config(),
         trainer=llama_small_trainer_config(output_dir),
         optimizer=llama_small_optimizer_config(),
-        tokenizer=MODEL_TOKENIZER,
         kl_coef=1e-4,
         weight_transfer=WeightTransferConfig(
             sync_interval_steps=10,
@@ -173,8 +172,7 @@ def llama_small_inference_worker_config(rollout_writer, output_dir: str) -> Roll
     return RolloutWorkerConfig(
         trainer=llama_small_trainer_config(output_dir),
         inference_server_config=llama_small_inference_server_config(output_dir),
-        policy_model=None,  # Will be built after levanter.initialize()
-        reference_model=None,  # Will be built after levanter.initialize()
+        model=llama_small_config(),
         environment_spec="mock:task_type=simple_addition",
         rollout_writer=rollout_writer,
         environment=environment,
@@ -203,13 +201,6 @@ def run_inference_mode(args):
     logger = logging.getLogger("inference_worker")
 
     logger.info("Starting inference worker mode...")
-
-    # Debug: Check JAX device setup before starting
-    import jax
-
-    logger.info(f"JAX devices available: {jax.device_count()}")
-    logger.info(f"JAX local devices: {jax.local_device_count()}")
-    logger.info(f"JAX devices: {jax.devices()}")
 
     subprocess.run("sudo --non-interactive rm -f /tmp/libtpu_lockfile", shell=True, check=False)
 
