@@ -440,7 +440,6 @@ def test_inference_and_training_workers(
     assert inference_runner.rollouts_generated > 0, "Should have generated at least one rollout"
 
 
-@pytest.mark.slow
 def test_moar_cats_improvement(
     ray_cluster,
     tmp_path,

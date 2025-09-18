@@ -212,7 +212,6 @@ class RolloutWorker:
                 JAX_TRANSFER_SERVER modes).
         """
         levanter.initialize(config.trainer)
-
         self.config = config
         self._running = True
         self._shutdown_complete = threading.Event()
