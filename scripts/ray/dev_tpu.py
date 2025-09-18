@@ -103,7 +103,7 @@ class TPUAllocationActor:
             self.ip_address = "unknown"
             self.error = e
 
-    def host_info(self) -> dict[str, str]:
+    def host_info(self) -> dict:
         return {
             "hostname": self.hostname,
             "ip_address": self.ip_address,
@@ -133,6 +133,8 @@ def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name:
 
     host_alias = f"dev-tpu-{tpu_name}"
 
+    Path("~/.ssh/control").expanduser().mkdir(parents=True, exist_ok=True)
+
     ssh_config_entry = f"""
 # BEGIN_DEV_TPU_{tpu_name.upper()}
 Host {host_alias}
@@ -143,6 +145,9 @@ Host {host_alias}
     StrictHostKeyChecking no
     IdentitiesOnly yes
     CheckHostIP no
+    ControlPath ~/.ssh/control/%h-%p-%r
+    ControlMaster auto
+    ControlPersist 10s
     User {username}
 # END_DEV_TPU_{tpu_name.upper()}
 """
@@ -179,6 +184,7 @@ def remove_ssh_host_config(tpu_name: str) -> None:
     if tpu_marker in existing_config:
         pattern = f"# BEGIN_DEV_TPU_{tpu_name.upper()}\n(.*?\n)*?# END_DEV_TPU_{tpu_name.upper()}\n"
         updated_config = re.sub(pattern, "", existing_config, flags=re.DOTALL)
+        updated_config = updated_config.strip() + "\n"
         config_path.write_text(updated_config)
         logger.info(f"Removed SSH configuration for dev-tpu-{tpu_name}")
 
@@ -190,7 +196,10 @@ def list_tracked_files(local_path: str) -> list[str]:
     # This includes tracked, modified, staged, and untracked files
     result = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-        cwd=local_path, check=True, capture_output=True, text=True
+        cwd=local_path,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     all_files = [f for f in result.stdout.split("\0") if f.strip()]
     files.update(all_files)
@@ -221,6 +230,7 @@ def sync_to_remote(target_host: str, local_path: os.PathLike = ".") -> None:
         subprocess.run(rsync_cmd, check=True)
         logger.info("File sync completed successfully")
 
+
 def setup_remote_environment(target_host: str) -> None:
     """Set up the remote environment on the TPU."""
     setup_script = """
@@ -241,11 +251,14 @@ uv sync --extra=tpu --python=3.11 || true
     logger.info("Environment setup completed")
 
 
-
-
 @contextmanager
 def hold_tpu_allocation(
-    username: str, tpu_name: str, config_file: str, sync_path: str = ".", tpu_type: str = "v4-8", duration_minutes: int = 480
+    username: str,
+    tpu_name: str,
+    config_file: str,
+    sync_path: str = ".",
+    tpu_type: str = "v4-8",
+    duration_minutes: int = 480,
 ) -> Generator[dict[str, str], None, None]:
     """Context manager that holds a TPU allocation until the context exits.
 
@@ -258,7 +271,9 @@ def hold_tpu_allocation(
     try:
         with ray_utils.ray_dashboard(config_file, ray_init=True):
             logger.info(f"Creating TPU allocation actor for {tpu_name}")
-            actor = ray.remote(resources={"TPU": 4, "TPU-v4-8-head": 1})(TPUAllocationActor).remote(username, tpu_name, tpu_type)
+            actor = ray.remote(resources={"TPU": 4, "TPU-v4-8-head": 1})(TPUAllocationActor).remote(
+                username, tpu_name, tpu_type
+            )
 
             allocation_info = ray.get(actor.host_info.remote(), timeout=60)
 
@@ -425,8 +440,16 @@ class FileChangeHandler(FileSystemEventHandler):
 
         # Skip temp files, build artifacts, etc.
         skip_patterns = [
-            '.git/', '__pycache__/', '.pytest_cache/', '.mypy_cache/',
-            '.DS_Store', '.swp', '.tmp', '~', '.pyc', '.pyo'
+            ".git/",
+            "__pycache__/",
+            ".pytest_cache/",
+            ".mypy_cache/",
+            ".DS_Store",
+            ".swp",
+            ".tmp",
+            "~",
+            ".pyc",
+            ".pyo",
         ]
 
         event_path = str(event.src_path)
@@ -458,6 +481,7 @@ def kill_remote_process(host_alias: str, process_pattern: str) -> None:
 
 class RemoteProcessManager:
     """Run a remote process, synchronizing and restarting on demand."""
+
     def __init__(self, host_alias: str, command_str: str, sync_path: str):
         self._lock = threading.Lock()
         self._process: Optional[subprocess.Popen] = None
@@ -468,14 +492,7 @@ class RemoteProcessManager:
     def __call__(self):
         with self._lock:
             if self._process and self._process.poll() is None:
-                print("Killing remote...")
-                self._process.send_signal(signal.SIGINT)
-                start_time = time.time()
-                while self._process.poll() is None and time.time() - start_time < 5:
-                    time.sleep(0.1)
-                if self._process.poll() is None:
-                    print("Remote process did not exit, killing...")
-                    self._process.terminate()
+                self.kill()
 
             print(f"Syncing changes to {self._host_alias}...")
             sync_to_remote(self._host_alias, self._sync_path)
@@ -491,7 +508,18 @@ class RemoteProcessManager:
             if self._process.returncode != 0:
                 print("Restarting remote process...")
                 self()
-      
+
+    def kill(self):
+        if self._process and self._process.poll() is None:
+            print("Killing remote...")
+            self._process.send_signal(signal.SIGINT)
+            start_time = time.time()
+            while self._process.poll() is None and time.time() - start_time < 5:
+                time.sleep(0.1)
+            if self._process.poll() is None:
+                print("Remote process did not exit, killing...")
+                self._process.terminate()
+
 
 @cli.command("watch", context_settings={"ignore_unknown_options": True})
 @click.argument("command", nargs=-1, required=True)
@@ -522,7 +550,6 @@ def watch(ctx, command, username, sync_path, debounce):
         sys.exit(1)
 
     command_str = " ".join(command)
-    remote_process: subprocess.Popen = None
 
     process_mgr = RemoteProcessManager(host_alias, command_str, sync_path)
     process_mgr()
@@ -540,8 +567,7 @@ def watch(ctx, command, username, sync_path, debounce):
     except KeyboardInterrupt:
         print("\nStopping watch mode...")
         observer.stop()
-        if remote_process:
-            kill_remote_process(host_alias, command_str.split()[0])
+        process_mgr.kill()
 
     observer.join()
     print("Watch mode stopped.")

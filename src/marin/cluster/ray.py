@@ -172,11 +172,6 @@ def start_ssh_tunnel_to_head(cluster_config: str, head_ip: str) -> DashboardInfo
 
     dashboard_port, gcs_port, api_port = list(ports)
 
-    # Create control path directory
-    control_dir = tempfile.mkdtemp(prefix="ray_ssh_")
-    os.makedirs(control_dir, exist_ok=True)
-
-    # Build SSH command for tunneling
     ssh_cmd = [
         "ssh",
         "-tt",
@@ -193,18 +188,6 @@ def start_ssh_tunnel_to_head(cluster_config: str, head_ip: str) -> DashboardInfo
         "IdentitiesOnly=yes",
         "-o",
         "ExitOnForwardFailure=yes",
-        "-o",
-        "ServerAliveInterval=5",
-        "-o",
-        "ServerAliveCountMax=3",
-        "-o",
-        "ControlMaster=auto",
-        "-o",
-        f"ControlPath={control_dir}/control_%C",
-        "-o",
-        "ControlPersist=10s",
-        "-o",
-        "ConnectTimeout=120s",
         f"ray@{head_ip}",
         "while true; do sleep 86400; done",
     ]
@@ -216,8 +199,6 @@ def start_ssh_tunnel_to_head(cluster_config: str, head_ip: str) -> DashboardInfo
     ssh_process = subprocess.Popen(
         ssh_cmd,
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
         env={**os.environ, "TERM": "dumb"},
     )
 
