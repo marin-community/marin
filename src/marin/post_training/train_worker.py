@@ -35,7 +35,7 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
-from transformers import PreTrainedTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from marin.post_training import weight_transfer_manager
 from marin.post_training.weight_transfer_manager import WeightTransferConfig
@@ -216,7 +216,7 @@ class TrainWorker:
         self._should_stop = False
         self.weight_id = 0
         if isinstance(config.tokenizer, str):
-            self.tokenizer = PreTrainedTokenizer.from_pretrained(config.tokenizer)
+            self.tokenizer = AutoTokenizer.from_pretrained(config.tokenizer)
         else:
             self.tokenizer = config.tokenizer
 
@@ -246,7 +246,6 @@ class TrainWorker:
         logger.info("Starting RLOO training with Levanter...")
 
         config = self.config
-        levanter.initialize(self.config.trainer)
         optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
         def _rloo_loss_function(model, batch, key):

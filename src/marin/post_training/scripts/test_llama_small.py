@@ -47,6 +47,7 @@ from marin.post_training.environments.mock_env import MockEnv
 from marin.post_training.rollout_storage import FileRolloutReader, FileRolloutWriter
 from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.post_training.train_worker import TrainWorker, TrainWorkerConfig
+from marin.post_training.weight_transfer_manager import WeightTransferConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -107,7 +108,7 @@ def llama_small_trainer_config(output_dir: str) -> TrainerConfig:
         num_train_steps=10000,
         steps_per_eval=5,
         checkpointer=CheckpointerConfig(
-            base_path=Path(output_dir),
+            base_path=str(Path(output_dir)),
             save_interval=datetime.timedelta(seconds=30),
         ),
         tensor_parallel_axes=["mlp", "heads"],
@@ -133,7 +134,7 @@ def llama_small_inference_server_config(output_dir: str) -> InferenceServerConfi
         model=llama_small_config(),
         trainer=llama_small_trainer_config(output_dir),
         tokenizer=MODEL_TOKENIZER,
-        hf_checkpoint=MODEL_CHECKPOINT,
+        checkpoint_path=MODEL_CHECKPOINT,
         max_new_tokens=129,
         temperature=1.0,
     )
@@ -149,7 +150,12 @@ def llama_small_training_worker_config(rollout_reader, output_dir: str) -> Train
         tokenizer=MODEL_TOKENIZER,
         kl_coef=1e-4,
         reference_logprobs_bsize=8,
-        weight_transfer_sync_interval=10,
+        weight_transfer=WeightTransferConfig(
+            sync_interval_steps=10,
+            poll_interval_seconds=1,
+            checkpoint_dir=str(Path(output_dir) / "policy_checkpoints"),
+            max_checkpoints=5,
+        ),
     )
 
 
@@ -172,6 +178,7 @@ def llama_small_inference_worker_config(rollout_writer, output_dir: str) -> Roll
     environment = MockEnv(tokenizer=tokenizer, task_type="count", seed=42)
 
     return RolloutWorkerConfig(
+        trainer=llama_small_trainer_config(output_dir),
         inference_server_config=llama_small_inference_server_config(output_dir),
         policy_model=policy_model,
         reference_model=reference_model,
@@ -186,8 +193,14 @@ def llama_small_inference_worker_config(rollout_writer, output_dir: str) -> Roll
         n_generations=8,
         temperature=1.0,
         log_freq=5,
-        rollout_batch_size=2,
-        max_rollouts=100,
+        rollout_batch_size=4,
+        max_rollouts=10000,
+        weight_transfer=WeightTransferConfig(
+            sync_interval_steps=10,
+            poll_interval_seconds=1,
+            checkpoint_dir=str(Path(output_dir) / "policy_checkpoints"),
+            max_checkpoints=5,
+        ),
     )
 
 
@@ -204,7 +217,6 @@ def run_inference_mode(args):
     worker_config = llama_small_inference_worker_config(rollout_writer, "/tmp/inference_checkpoint")
     worker = RolloutWorker(
         config=worker_config,
-        coordinator=None,
     )
 
     worker.run()
@@ -222,7 +234,6 @@ def run_training_mode(args):
     worker_config = llama_small_training_worker_config(rollout_reader, CHECKPOINT_DIR)
     worker = TrainWorker(
         config=worker_config,
-        coordinator=None,
     )
 
     worker.train()
