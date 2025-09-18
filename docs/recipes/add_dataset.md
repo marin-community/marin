@@ -7,7 +7,7 @@ This recipe guides agents and humans in inspecting Hugging Face dataset schemas 
 - Install the [Hugging Face `datasets` library](https://huggingface.co/docs/datasets/) (e.g., `pip install datasets`).
 - For YAML output, install `pyyaml` (e.g., `pip install pyyaml`).
 - Ensure access to the dataset: Hugging Face Hub ID, local path, or other supported formats.
-- Use `uv run marin/tools/get_hf_dataset_schema.py` for direct execution, or install Marin in editable mode (`pip install -e .`) for CLI access.
+- Use `uv run marin/tools/get_hf_dataset_schema.py` for direct execution, or install Marin with `uv sync` for CLI access.
 
 ## Guidelines for Humans
 

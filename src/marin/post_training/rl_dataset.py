@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -335,6 +349,17 @@ class RLDataset:
             axis=1,
         )
 
+        policy_logprobs = np.concatenate(
+            [
+                np.zeros(
+                    (examples["prompt_masks"].shape[0], examples["prompt_masks"].shape[1] - 1),
+                    dtype=np.float32,
+                ),
+                examples["policy_logprobs"].astype(np.float32),
+            ],
+            axis=1,
+        )
+
         return {
             "input_ids": input_tokens,
             "attention_mask": input_attention_mask,
@@ -343,6 +368,7 @@ class RLDataset:
             "loss_masks": loss_masks,
             "loss_weights": loss_weights,
             "reference_logprobs": reference_logprobs,
+            "policy_logprobs": policy_logprobs,
         }
 
 
@@ -355,7 +381,17 @@ def compute_rloo_advantages_for_group(rewards: np.ndarray) -> np.ndarray:
     Returns:
         Normalized advantages
     """
-    advantages = (rewards - rewards.mean()) / np.clip(rewards.std(), 1e-8, None)
+    n = len(rewards)
+    if n <= 1:
+        return np.zeros_like(rewards)
+
+    total = rewards.sum()
+    leave_one_out_baselines = (total - rewards) / (n - 1)
+    advantages = rewards - leave_one_out_baselines
+
+    # Add random noise to avoid failure cases when all rewards are identical/zero
+    generator = np.random.default_rng()
+    advantages += generator.normal(loc=0.0, scale=1e-6, size=advantages.shape)
     return advantages
 
 
@@ -372,7 +408,7 @@ def create_dataset_from_environment(
     max_output_length: int,
     pad_token_id: int,
     tokenizer: AutoTokenizer,
-    generation_config: dict[str, Any],
+    n_generations: int,
     mode: str = "train",
 ) -> tuple["RLDataset", dict[str, float]]:
     """Create RLDataset by stepping through the environment.
@@ -390,7 +426,6 @@ def create_dataset_from_environment(
         max_output_length: Maximum output sequence length
         pad_token_id: ID of the padding token
         tokenizer: Tokenizer for processing text
-        generation_config: Configuration for generation
         mode: Mode for environment stepping ("train" or "eval")
 
     Returns:
@@ -403,7 +438,7 @@ def create_dataset_from_environment(
         n_examples=n_examples,
         prng_key=prng_key,
         mode=mode,
-        n_generations=generation_config["n_generations"],
+        n_generations=n_generations,
     )
 
     # Create dataset from environment step
