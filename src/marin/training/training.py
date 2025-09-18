@@ -17,6 +17,7 @@ import logging
 import os
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from pathlib import PurePath
 
 import draccus
 import levanter.infra.cli_helpers
@@ -268,6 +269,14 @@ def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_re
         for i, item in enumerate(obj):
             new_prefix = f"{path_prefix}[{i}]"
             _check_paths_recursively(item, new_prefix, region, local_ok, allow_out_of_region)
+    elif isinstance(obj, os.PathLike):
+        path_str = os.fspath(obj)
+        if isinstance(obj, PurePath):
+            parts = obj.parts
+            if parts and parts[0] == "gs:" and not path_str.startswith("gs://"):
+                remainder = "/".join(parts[1:])
+                path_str = f"gs://{remainder}" if remainder else "gs://"
+        _check_paths_recursively(path_str, path_prefix, region, local_ok, allow_out_of_region)
     elif isinstance(obj, str) and obj.startswith("gs://"):
         # This is a GCS path, check if it's in the right region
         is_allow_listed_path = any(path_prefix.startswith(p) for p in allow_out_of_region)
