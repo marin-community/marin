@@ -133,7 +133,7 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
         # tracker=JsonLoggerConfig(),
         tracker=WandbConfig(mode="disabled", project="marin-tests"),
         mp=jmp.get_policy("p=f32"),
-        train_batch_size=2,
+        train_batch_size=8,
         num_train_steps=1000,
         steps_per_eval=1,
         checkpointer=CheckpointerConfig(
@@ -164,8 +164,8 @@ def create_nano_training_worker_config(rollout_reader, output_dir: str | Path) -
         model=create_nano_llama_config(),
         trainer=create_nano_trainer_config(output_dir),
         optimizer=create_nano_optimizer_config(),
-        kl_coef=0.1,
-        reference_logprobs_bsize=2,
+        # disable KL since we're training from scratch
+        kl_coef=0.0,
         weight_transfer=WeightTransferConfig(
             sync_interval_steps=10,
             poll_interval_seconds=1,
@@ -214,11 +214,11 @@ def create_nano_inference_worker_config(
         max_input_length=32,
         max_output_length=32,
         pad_token_id=0,
-        n_prompts_per_step=2,
-        n_generations=1,
+        n_prompts_per_step=4,
+        n_generations=4,
         temperature=1.0,
         log_freq=1,
-        rollout_batch_size=2,
+        rollout_batch_size=16,
         max_rollouts=10000,
         weight_transfer=WeightTransferConfig(
             sync_interval_steps=10,

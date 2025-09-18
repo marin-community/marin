@@ -255,7 +255,6 @@ class TrainWorkerConfig:
 
     # RLOO-specific parameters
     kl_coef: float = 0.1
-    reference_logprobs_bsize: int = 32
 
 
 class TrainWorker:
@@ -283,7 +282,8 @@ class TrainWorker:
         self.rollout_reader = config.rollout_reader
 
         self.replay_buffer = ReplayBuffer(
-            capacity=4,
+            # TODO configure from worker config instead
+            capacity=1024,
             local_batch_size=config.trainer.train_batch_size,
             recency_alpha=3.0,
             process_id=jax.process_index(),

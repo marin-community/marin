@@ -29,7 +29,7 @@ from marin.execution.executor import (
     executor_main,
     this_output_path,
 )
-from marin.post_training.training_config import (
+from marin.post_training.flax.training_config import (
     CheckpointerConfigData,
     DistributedConfig,
     EnvironmentConfig,

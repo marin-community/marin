@@ -24,7 +24,7 @@ except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 
 from marin.post_training.flax.train import main
-from marin.post_training.training_config import (
+from marin.post_training.flax.training_config import (
     CheckpointerConfigData,
     DistributedConfig,
     EnvironmentConfig,
@@ -194,7 +194,7 @@ def test_environment_loading():
 
     from marin.post_training.environments.load_environments import load_environments_from_config
     from marin.post_training.flax.model_helpers import load_tokenizer
-    from marin.post_training.training_config import ModelPathsConfig, TokenizerOverrideConfig
+    from marin.post_training.flax.training_config import ModelPathsConfig, TokenizerOverrideConfig
 
     # Load tokenizer for environment
     model_paths = ModelPathsConfig(tokenizer="meta-llama/Meta-Llama-3-8B-Instruct")

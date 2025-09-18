@@ -300,12 +300,7 @@ class MockEnv(MarinEnv):
                     actual_response = decoded_response.split(prompt, 1)[1].strip()
                 else:
                     actual_response = decoded_response.strip()
-
-                # Clean up the response - take only the first word/token
-                actual_response = actual_response.split()[0] if actual_response.split() else ""
-
-                # Task-specific reward computation
-                reward = self._compute_task_reward(correct_answer, actual_response)
+                reward = self.task.compute_reward(correct_answer, actual_response)
                 rewards[example_idx, gen_idx] = reward
 
                 # Print sample outputs for debugging
@@ -330,14 +325,10 @@ class MockEnv(MarinEnv):
         mean_reward = float(np.mean(rewards))
 
         metrics = {
-            f"{self.task_type}_accuracy": accuracy,
-            f"{self.task_type}_format_accuracy": format_accuracy,
-            f"{self.task_type}_mean_reward": mean_reward,
-            f"{self.task_type}_total_examples": total_count,
+            f"{self.task_type}.accuracy": accuracy,
+            f"{self.task_type}.format_accuracy": format_accuracy,
+            f"{self.task_type}.mean_reward": mean_reward,
+            f"{self.task_type}.total_examples": total_count,
         }
 
         return rewards, metrics
-
-    def _compute_task_reward(self, correct_answer: str, actual_response: str) -> float:
-        """Compute task-specific reward."""
-        return self.task.compute_reward(correct_answer, actual_response)

@@ -31,7 +31,6 @@ from transformers import AutoTokenizer
 from ..environments.load_environments import load_environments_from_config
 from ..environments.marin_env import MarinEnv
 from ..rl_dataset import create_dataset_from_environment
-from ..training_config import TrainingConfig
 from .inference import FlaxInferenceContext, build_sampler
 from .llama3 import FlaxLLaMAForCausalLM
 from .model_helpers import (
@@ -42,6 +41,7 @@ from .model_helpers import (
     load_tokenizer,
 )
 from .optimizer import load_adamw_optimizer
+from .training_config import TrainingConfig
 from .utils import (
     WandbLogger,
     checkpointer,

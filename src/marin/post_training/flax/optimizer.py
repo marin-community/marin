@@ -19,7 +19,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from ..training_config import OptimizerConfig
+from .training_config import OptimizerConfig
 
 # Adapted from:
 # https://github.com/young-geng/EasyLM/blob/main/EasyLM/optimizers.py

@@ -21,13 +21,13 @@ from dataclasses import asdict
 
 from transformers import AutoTokenizer
 
-from ..training_config import (
+from .llama3 import LLAMA_STANDARD_CONFIGS, FlaxLLaMAForCausalLM, LLaMAConfig
+from .training_config import (
     ModelOverrideConfig,
     ModelPathsConfig,
     TokenizerOverrideConfig,
     TrainingConfig,
 )
-from .llama3 import LLAMA_STANDARD_CONFIGS, FlaxLLaMAForCausalLM, LLaMAConfig
 from .utils import (
     get_float_dtype_by_name,
     load_attention_kernel_config,

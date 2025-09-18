@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import ray
 
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.post_training.training_config import (
+from marin.post_training.flax.training_config import (
     CheckpointerConfigData,
     DistributedConfig,
     EnvironmentConfig,
