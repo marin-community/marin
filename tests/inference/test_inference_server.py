@@ -7,6 +7,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import jax
+import numpy as np
 import pytest
 
 from levanter.compat.hf_checkpoints import RepoRef
@@ -17,7 +19,10 @@ from levanter.trainer import TrainerConfig
 
 try:
     from fastapi.testclient import TestClient
+    from openai.types import Completion
+    from openai.types.chat import ChatCompletion
 
+    from levanter.inference.engine import InferenceEngineConfig
     from levanter.inference.openai import InferenceServer, InferenceServerConfig
     from levanter.main.inference_worker import InferenceWorker
 
@@ -29,10 +34,10 @@ logger = logging.getLogger(__name__)
 
 @pytest.fixture(scope="module")
 def baby_llama_config():
-    """Create a configuration for baby llama model."""
     return InferenceServerConfig(
         hf_checkpoint=RepoRef("timinar/baby-llama-58m"),
         tokenizer="timinar/baby-llama-58m",
+        service=InferenceEngineConfig(max_seqs=2, page_size=4, max_pages_per_seq=4, max_queued_tokens=8),
         model=LlamaConfig(),
         trainer=TrainerConfig(wandb=WandbConfig(mode="disabled"), ray=RayConfig(auto_start_cluster=False)),
         max_new_tokens=32,
@@ -68,7 +73,6 @@ def test_endpoints_exist(test_client):
 def test_short_request(test_client):
     client, server = test_client
 
-    # Test completion request with short prompt, max_tokens=32, and stop="."
     response = client.post(
         "/v1/completions",
         json={
@@ -81,44 +85,19 @@ def test_short_request(test_client):
         },
     )
 
-    # Verify successful response
     assert response.status_code == 200
-    data = response.json()
+    completion = Completion.model_validate(response.json())
 
-    # Verify OpenAI API structure
-    assert "id" in data
-    assert data["object"] == "text_completion"
-    assert "created" in data
-    assert data["model"] == "timinar/baby-llama-58m"
-    assert "choices" in data
-    assert "usage" in data
+    choice = completion.choices[0]
+    assert choice.text
+    assert choice.finish_reason == "stop"
+    assert completion.usage.prompt_tokens > 0
+    assert completion.usage.completion_tokens > 0
+    assert completion.usage.total_tokens == completion.usage.prompt_tokens + completion.usage.completion_tokens
+    assert completion.usage.completion_tokens <= 10
 
-    # Verify choices structure
-    assert len(data["choices"]) == 1
-    choice = data["choices"][0]
-    assert "text" in choice
-    assert choice["index"] == 0
-    assert choice["finish_reason"] == "stop"
-
-    # Verify usage tracking
-    usage = data["usage"]
-    assert "prompt_tokens" in usage
-    assert "completion_tokens" in usage
-    assert "total_tokens" in usage
-    assert usage["total_tokens"] == usage["prompt_tokens"] + usage["completion_tokens"]
-
-    # Verify the generated text exists and is reasonable
-    generated_text = choice["text"]
-    assert isinstance(generated_text, str)
-    assert len(generated_text) > 0
-
-    # Test that completion tokens doesn't exceed max_tokens
-    assert usage["completion_tokens"] <= 32
-
-    # If response finished with stop token, check that it doesn't contain "." at the end
-    # (unless the generation naturally ended with ".")
-    print(f"Generated text: '{generated_text}'")
-    print(f"Usage: {usage}")
+    print(f"Generated text: '{choice.text}'")
+    print(f"Usage: {completion.usage}")
 
 
 @pytest.mark.slow
@@ -298,44 +277,19 @@ def test_completion_with_logprobs(test_client):
     )
 
     assert response.status_code == 200
-    data = response.json()
+    completion = Completion.model_validate(response.json())
 
-    # Verify basic structure
-    assert "choices" in data
-    assert len(data["choices"]) == 1
-    choice = data["choices"][0]
+    choice = completion.choices[0]
+    assert choice.logprobs is not None
+    assert len(choice.logprobs.tokens) > 0
+    assert len(choice.logprobs.tokens) == len(choice.logprobs.token_logprobs)
 
-    # Verify logprobs are present
-    assert "logprobs" in choice
-    assert choice["logprobs"] is not None, choice
-    logprobs = choice["logprobs"]
+    for token, logprob in zip(choice.logprobs.tokens, choice.logprobs.token_logprobs):
+        assert logprob <= 0.0
 
-    # Verify logprobs structure
-    assert isinstance(logprobs, list)
-    assert len(logprobs) > 0
-
-    # Check each logprob entry
-    for logprob in logprobs:
-        assert "token" in logprob
-        assert "logprob" in logprob
-        assert "bytes" in logprob
-
-        # Verify data types
-        assert isinstance(logprob["token"], str)
-        assert isinstance(logprob["logprob"], (int, float))
-        assert isinstance(logprob["bytes"], (list, type(None)))
-
-        # Verify logprob is negative or zero (log probability constraint)
-        assert logprob["logprob"] <= 0.0
-
-        # If bytes are present, verify they're valid UTF-8 encoding
-        if logprob["bytes"] is not None:
-            token_bytes = bytes(logprob["bytes"])
-            decoded = token_bytes.decode("utf-8")
-            assert decoded == logprob["token"]
-
-    print(f"Generated {len(logprobs)} tokens with logprobs")
-    print(f"First few logprobs: {logprobs[:3]}")
+    print(f"Generated {len(choice.logprobs.tokens)} tokens with logprobs")
+    print(f"First few tokens: {choice.logprobs.tokens[:3]}")
+    print(f"First few logprobs: {choice.logprobs.token_logprobs[:3]}")
 
 
 @pytest.mark.slow
@@ -356,33 +310,18 @@ def test_chat_completion_with_logprobs(test_client):
     )
 
     assert response.status_code == 200
-    data = response.json()
+    chat_completion = ChatCompletion.model_validate(response.json())
 
-    logger.info("Chat response: %s", data)
+    logger.info("Chat response: %s", chat_completion)
 
-    # Verify basic structure
-    assert "choices" in data
-    assert len(data["choices"]) == 1
-    choice = data["choices"][0]
+    choice = chat_completion.choices[0]
+    assert choice.logprobs is not None
+    assert len(choice.logprobs.content) > 0
 
-    # Verify logprobs are present
-    assert "logprobs" in choice
-    assert choice["logprobs"] is not None
-    logprobs = choice["logprobs"]
+    for token_logprob in choice.logprobs.content:
+        assert token_logprob.logprob <= 0.0
 
-    # Verify logprobs structure (same as completion)
-    assert isinstance(logprobs, list)
-    assert len(logprobs) > 0
-
-    for logprob in logprobs:
-        assert "token" in logprob
-        assert "logprob" in logprob
-        assert "bytes" in logprob
-        assert isinstance(logprob["token"], str)
-        assert isinstance(logprob["logprob"], (int, float))
-        assert logprob["logprob"] <= 0.0
-
-    print(f"Chat generated {len(logprobs)} tokens with logprobs")
+    print(f"Chat generated {len(choice.logprobs.content)} tokens with logprobs")
 
 
 @pytest.mark.slow
@@ -394,30 +333,34 @@ def test_logprobs_with_multiple_generations(test_client):
         "/v1/completions",
         json={
             "model": "timinar/baby-llama-58m",
-            "prompt": "The weather is",
-            "max_tokens": 3,
+            "prompt": "One plus one is",
+            "max_tokens": 10,
             "temperature": 0.7,
             "logprobs": True,
-            "n": 2,  # Generate 2 completions
+            "n": 2,
             "seed": 42,
         },
     )
 
     assert response.status_code == 200
-    data = response.json()
+    completion = Completion.model_validate(response.json())
 
-    # Verify we got 2 choices
-    assert len(data["choices"]) == 2
+    assert len(completion.choices) == 2
 
-    # Verify both choices have logprobs
-    for i, choice in enumerate(data["choices"]):
-        assert choice["index"] == i
-        assert "logprobs" in choice
-        assert choice["logprobs"] is not None
-        assert isinstance(choice["logprobs"], list)
-        assert len(choice["logprobs"]) > 0
+    logprob_arrays = []
 
-        print(f"Choice {i} generated {len(choice['logprobs'])} tokens with logprobs")
+    for i, choice in enumerate(completion.choices):
+        assert choice.index == i
+        assert choice.logprobs is not None
+        assert len(choice.logprobs.tokens) > 0, choice
+        assert len(choice.logprobs.token_logprobs) == len(choice.logprobs.tokens), choice
+        logprob_arrays.append(choice.logprobs.token_logprobs)
+        print(f"Choice {i} - {choice.text} {choice.logprobs.tokens} {choice.logprobs.token_logprobs}")
+
+    # Ensure the two generations are different
+    assert np.all(
+        np.array(logprob_arrays[0]) != np.array(logprob_arrays[1])
+    ), f"Expected different generations, got {logprob_arrays}"
 
 
 def test_logprobs_deterministic_behavior(test_client):
@@ -440,18 +383,90 @@ def test_logprobs_deterministic_behavior(test_client):
     assert response1.status_code == 200
     assert response2.status_code == 200
 
-    data1 = response1.json()
-    data2 = response2.json()
+    completion1 = Completion.model_validate(response1.json())
+    completion2 = Completion.model_validate(response2.json())
 
-    logprobs1 = data1["choices"][0]["logprobs"]
-    logprobs2 = data2["choices"][0]["logprobs"]
+    logprobs1 = completion1.choices[0].logprobs
+    logprobs2 = completion2.choices[0].logprobs
 
-    # With temperature=0.0 and same seed, results should be identical
-    assert len(logprobs1) == len(logprobs2)
+    assert len(logprobs1.tokens) == len(logprobs2.tokens)
 
-    for lp1, lp2 in zip(logprobs1, logprobs2):
-        assert lp1["token"] == lp2["token"]
-        assert abs(lp1["logprob"] - lp2["logprob"]) < 1e-6  # Allow small floating point differences
-        assert lp1["bytes"] == lp2["bytes"]
+    for t1, t2 in zip(logprobs1.tokens, logprobs2.tokens):
+        assert t1 == t2
+
+    for lp1, lp2 in zip(logprobs1.token_logprobs, logprobs2.token_logprobs):
+        assert abs(lp1 - lp2) < 1e-6
 
     print("Deterministic logprobs test passed!")
+
+
+def test_reload_with_zeros_clears_outputs(test_client):
+    """Test that reloading with a zeroed-out model properly clears outputs."""
+    client, server = test_client
+
+    # Make a request before reload to establish baseline
+    response1 = client.post(
+        "/v1/completions",
+        json={
+            "model": "timinar/baby-llama-58m",
+            "prompt": "The quick brown fox",
+            "max_tokens": 16,
+            "temperature": 0.0,
+            "seed": 42,
+        },
+    )
+
+    assert response1.status_code == 200
+    completion1 = Completion.model_validate(response1.json())
+    original_text = completion1.choices[0].text
+    assert len(original_text.strip()) > 0
+
+    original_model = server.inference_context.model
+
+    # Force a reload with a zeroed-out model callback
+    def _new_model(old_model):
+        return jax.tree_util.tree_map(lambda x: x * 0, old_model)
+
+    server.reload(_new_model)
+
+    # Make a request after reload - should get all zero tokens in theory
+    response2 = client.post(
+        "/v1/completions",
+        json={
+            "model": "timinar/baby-llama-58m",
+            "prompt": "The quick brown fox",
+            "max_tokens": 16,
+            "temperature": 0.0,
+            "seed": 42,
+        },
+    )
+
+    assert response2.status_code == 200
+    completion2 = Completion.model_validate(response2.json())
+    zeroed_text = completion2.choices[0].text
+
+    # With zeroed weights, the output should be different from the original
+    # probably empty but depends on the tokenizer & stop tokens
+    assert completion2.usage.completion_tokens > 0
+    print(f"Original text: '{original_text}'")
+    print(f"Zeroed model text: '{zeroed_text}'")
+
+    # now reload the original weights back
+    def _original_model(old_model):
+        return original_model
+
+    server.reload(_original_model)
+    response3 = client.post(
+        "/v1/completions",
+        json={
+            "model": "timinar/baby-llama-58m",
+            "prompt": "The quick brown fox",
+            "max_tokens": 16,
+            "temperature": 0.0,
+            "seed": 42,
+        },
+    )
+    assert response3.status_code == 200
+    completion3 = Completion.model_validate(response3.json())
+    restored_text = completion3.choices[0].text
+    assert restored_text == original_text

@@ -84,6 +84,7 @@ profiling = [
 serve = [
   "fastapi>=0.100.0",
   "uvicorn[standard]>=0.23.0",
+  "openai>=1.0.0",
 ]
 
 [dependency-groups]
