@@ -124,7 +124,7 @@ class SecondHalfOfWordTask:
     def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
         examples = []
         words = Path("/usr/share/dict/words").read_text().splitlines()
-        for n in range(n_examples):
+        for _ in range(n_examples):
             w = rng.choice(words)
             prompt = f"Second half of '{w}'? Just the letters:"
             mid = len(w) // 2
@@ -182,19 +182,15 @@ def compute_soft_reward(correct_answer: str, actual_response: str, strict_format
 class MoarCatsTask:
     """Make moar cats."""
 
-    def generate_training_examples(
-        self, n_examples: int, rng: np.random.Generator
-    ) -> list[dict[str, str]]:
+    def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
         examples = []
         for _ in range(n_examples):
-            prompt = "i like cats, give me moar cats."
+            prompt = "i like cats, i love cats, give me moar cats."
             answer = "cats"
             examples.append({"prompt": prompt, "answer": answer})
         return examples
 
-    def generate_eval_examples(
-        self, n_examples: int, rng: np.random.Generator
-    ) -> list[dict[str, str]]:
+    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
         return self.generate_training_examples(n_examples, rng)
 
     def compute_reward(self, correct_answer: str, actual_response: str) -> float:
@@ -202,9 +198,7 @@ class MoarCatsTask:
         num_cats = actual_response.lower().count("cat")
         love_cats = actual_response.lower().count("i love cats")
 
-        return (num_cats + (2 * love_cats)) / len(
-            actual_response.split()
-        )  # reward is cats per word
+        return (num_cats + (2 * love_cats)) / len(actual_response.split())  # reward is cats per word
 
 
 # Task mappings

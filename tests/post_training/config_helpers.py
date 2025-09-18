@@ -118,8 +118,8 @@ def create_nano_llama_config() -> LlamaConfig:
     """Create a tiny LlamaConfig for fast testing."""
     return LlamaConfig(
         seq_len=64,
-        hidden_dim=32,
-        intermediate_dim=128,
+        hidden_dim=16,
+        intermediate_dim=16,
         num_heads=4,
         num_kv_heads=4,
         num_layers=2,

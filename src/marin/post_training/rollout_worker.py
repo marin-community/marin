@@ -176,8 +176,11 @@ class LevanterInferenceContext(InferenceContext):
 
         from optax import softmax_cross_entropy_with_integer_labels
 
-        logprobs = softmax_cross_entropy_with_integer_labels(
-            logits.astype(jnp.float32), target_tokens.astype(jnp.int32)
+        # Extract logits corresponding to target positions
+        logits_array = logits.array[:, input_tokens.shape[1] - 1 :]
+
+        logprobs = -softmax_cross_entropy_with_integer_labels(
+            logits_array.astype(jnp.float32), target_tokens.astype(jnp.int32)
         )
         return logprobs
 
@@ -220,9 +223,7 @@ class RolloutWorker:
         else:
             self._tokenizer = cast(PreTrainedTokenizer, self.config.model.tokenizer)
 
-        self._environment = load_environment_from_spec(
-            config.environment_spec, tokenizer=self._tokenizer
-        )
+        self._environment = load_environment_from_spec(config.environment_spec, tokenizer=self._tokenizer)
 
         self._build_models()
 
