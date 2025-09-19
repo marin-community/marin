@@ -29,7 +29,8 @@ docker:
     pull_before_run: true
     worker_run_options:
       # always restart the worker if it happens to crash
-      - --restart=always
+      - -restart=on-failure
+      - --rm=0  # Ray likes to add --rm which doesn't work with --restart=on-failure
       - --privileged
       - --ulimit memlock=-1:-1  #
       - --ulimit nofile=1048576:1048576
@@ -108,7 +109,7 @@ available_node_types:
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
     max_workers: 1024
-    min_workers: 4
+    min_workers: 8
     node_config:
       acceleratorType: v5p-8
       runtimeVersion: v2-alpha-tpuv5
