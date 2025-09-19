@@ -67,6 +67,7 @@ def default_lm_log_probs(
     checkpoint: str | InputName,
     model: LmConfig,
     data: LMMixtureDatasetConfig,
+    resource_config: ResourceConfig,
     checkpoint_is_hf: bool,
     per_device_batch_size: int = 4,
     max_samples_per_dataset: int | None = None,
@@ -79,6 +80,7 @@ def default_lm_log_probs(
         checkpoint:  The checkpoint to evaluate.
         model:  The model configuration.
         data: The data to evaluate on.
+        resource_config: The resource configuration.
         checkpoint_is_hf:  Whether the checkpoint is in HF format.
     """
     if not name:
@@ -93,6 +95,7 @@ def default_lm_log_probs(
             model=model,
             datasets=data,
             log_entropy=True,
+            resource_config=resource_config,
             checkpoint_is_hf=checkpoint_is_hf,
             per_device_batch_size=per_device_batch_size,
             max_samples_per_dataset=max_samples_per_dataset,
