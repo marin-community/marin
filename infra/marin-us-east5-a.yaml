@@ -110,7 +110,7 @@ available_node_types:
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
     max_workers: 1024
-    min_workers: 4
+    min_workers: 8
     node_config:
       acceleratorType: v5p-8
       runtimeVersion: v2-alpha-tpuv5
@@ -158,7 +158,7 @@ available_node_types:
 
   tpu_slice_v5p_64:
     max_workers: 1024
-    min_workers: 0
+    min_workers: 4
     node_config:
       acceleratorType: v5p-64
       runtimeVersion: v2-alpha-tpuv5
@@ -218,7 +218,7 @@ available_node_types:
 
   tpu_slice_v5p_2048:
     max_workers: 1024
-    min_workers: 2
+    min_workers: 0
     node_config:
       acceleratorType: v5p-2048
       runtimeVersion: v2-alpha-tpuv5
