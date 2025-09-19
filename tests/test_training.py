@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import dataclasses
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -213,6 +214,31 @@ def test_dataclass_recursive_checking(trainer_config):
         )
 
         # This should raise an exception
+        with pytest.raises(ValueError) as excinfo:
+            _doublecheck_paths(config)
+
+        assert "not in the same region" in str(excinfo.value)
+
+
+def test_pathlib_path_handling(trainer_config):
+    """Test that pathlib.Path objects are handled correctly."""
+
+    with (
+        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
+        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
+    ):
+
+        mock_get_vm_region.return_value = "us-central1"
+        mock_get_bucket_location.return_value = "us-east1"
+
+        config = TrainLmOnPodConfig(
+            train_config=train_lm.TrainLmConfig(
+                data=MockDataConfig(cache_dir=Path("gs://bucket/path")),
+                trainer=trainer_config,
+            ),
+            resources=TpuPodConfig(tpu_type="v3-8"),
+        )
+
         with pytest.raises(ValueError) as excinfo:
             _doublecheck_paths(config)
 
