@@ -63,6 +63,24 @@ You want to download the trace files (e.g. `plugins/profile/2024_03_16_07_26_24`
 and run `tensorboard --logdir <dir>` where `<dir>` is the *directory containing plugins* (not the plugins directory itself).
 Then you can navigate to http://localhost:6006/#profile in your browser and see the profile.
 
+#### Fetching traces from Weights & Biases
+
+When you log profiles to WandB, the easiest way to grab the latest trace and open it locally is the helper script in
+`scripts/wandb_tensorboard_profile.py`. It understands bare run ids, `entity/project/run` paths, or full WandB URLs and
+downloads the most recent `jax_profile` artifact by default.
+
+```bash
+# Example: launch TensorBoard for a specific run by URL
+uv run scripts/wandb_tensorboard_profile.py https://wandb.ai/my-entity/my-project/runs/abc123 --port 6007
+
+# Example: run by id with explicit entity/project, but just print the command it would run
+uv run scripts/wandb_tensorboard_profile.py abc123 --entity my-entity --project my-project --dry-run
+```
+
+The script creates a temporary download directory unless `--download-root` is provided, prints the resolved aliases, and
+launches TensorBoard (or exits once the command is printed when `--dry-run` is passed). Use `Ctrl+C` to stop TensorBoard
+after inspecting the profile.
+
 TensorBoard install tips:
 
 - Avoid installing both stable and nightly variants together (e.g., `tensorboard` and `tb-nightly`).
