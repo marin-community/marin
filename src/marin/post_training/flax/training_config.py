@@ -15,7 +15,6 @@
 """Configuration dataclasses for RL training."""
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any
 
 
@@ -154,36 +153,14 @@ class DistributedConfig:
     jax_distributed_initialize_config: dict[str, Any] = field(default_factory=dict)
 
 
-class WeightTransferMode(Enum):
-    GCS_CHECKPOINT = "gcs_checkpoint"
-    JAX_TRANSFER_SERVER = "jax_transfer_server"
-    RAY_REMOTING = "ray_remoting"
-
-
-@dataclass
-class WeightTransferConfig:
-    mode: WeightTransferMode = WeightTransferMode.GCS_CHECKPOINT
-    # Common settings
-    sync_interval_steps: int = 100
-    poll_interval_seconds: float = 30.0
-
-    # RAY_REMOTING and JAX_TRANSFER_SERVER specific
-    transfer_timeout: float = 120.0
-
-    # GCS Checkpoint specific
-    checkpoint_dir: str = ""
-    max_checkpoints: int | None = 5
-
-
 @dataclass
 class TrainingConfig:
     output_dir: str
     model: ModelConfig
     hyperparameters: TrainingHyperparameters
     logging: LoggingConfig
-    environment: EnvironmentConfig
     distributed: DistributedConfig
+    environment: EnvironmentConfig = field(default_factory=EnvironmentConfig)
     generation_config: GenerationConfig = field(default_factory=GenerationConfig)
     test_generation_config: GenerationConfig = field(default_factory=GenerationConfig)
     checkpoint: CheckpointerConfigData = field(default_factory=CheckpointerConfigData)
-    weight_transfer: WeightTransferConfig = field(default_factory=WeightTransferConfig)

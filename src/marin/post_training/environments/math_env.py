@@ -19,10 +19,9 @@ import jax
 import numpy as np
 from tqdm.auto import tqdm
 
-from marin.post_training.inference import batch_inference
-from marin.post_training.utils import validate_format
+from marin.post_training.flax.utils import validate_format
 
-from .marin_env import EnvStep, MarinEnv
+from .marin_env import EnvStep, InferenceContext, MarinEnv
 from .math_utils import grade_answer, last_boxed_only_string, remove_boxed
 
 
@@ -72,18 +71,25 @@ class MathEnv(MarinEnv):
         )
 
     def step(
-        self, sampler, params, n_examples: int, prng_key, mode: str = "train", n_generations: int = 1, **kwargs
+        self,
+        inference_ctx: InferenceContext,
+        n_examples: int,
+        prng_key,
+        mode: str = "train",
+        n_generations: int = 1,
+        temperature: float = 1.0,
+        **kwargs,
     ) -> EnvStep:
         """
         Sample problems and generate responses using the model.
 
         Args:
-            sampler: The inference sampler
-            params: Model parameters
+            inference_ctx: Context for generating responses (hides model params)
             n_examples: Number of examples to sample
             prng_key: Random key for sampling
             mode: "train" or "eval"
             n_generations: Number of generations per example
+            temperature: Generation temperature
         """
         # Sample examples from dataset using JAX random (synchronized across workers)
         if mode == "train":
@@ -98,22 +104,20 @@ class MathEnv(MarinEnv):
             examples = [available_examples[int(idx)] for idx in indices]
 
         # Generate responses using the model
-        responses = batch_inference(
-            sampler,
-            params,
-            [example["prompt"] for example in examples],
-            prng_key,
+        prompts = [example["prompt"] for example in examples]
+        responses = inference_ctx.generate(
+            prompts,
+            temperature=temperature,
             n_generations=n_generations,
-            verbose=True,
         )
 
         # Compute rewards
-        rewards, metrics = self._compute_rewards(examples, responses)
+        rewards, metrics = self._compute_rewards(examples, responses, inference_ctx.tokenizer)
 
         return EnvStep(examples=examples, responses=responses, rewards=rewards, metrics=metrics)
 
     def _compute_rewards(
-        self, examples: list[dict[str, Any]], responses: list[list[dict[str, np.ndarray]]]
+        self, examples: list[dict[str, Any]], responses: list[list[dict[str, np.ndarray]]], tokenizer
     ) -> tuple[np.ndarray, dict[str, float]]:
         """Compute rewards for generated responses."""
         all_rewards = []
@@ -127,7 +131,7 @@ class MathEnv(MarinEnv):
             group_correct_rewards = []
             for inner_response in response:
                 all_lens.append(len(inner_response["tokens"]))
-                decoded_response = self.tokenizer.decode(inner_response["tokens"], skip_special_tokens=True)
+                decoded_response = tokenizer.decode(inner_response["tokens"], skip_special_tokens=True)
                 validation = validate_format(decoded_response + ">")
                 if validation["is_valid"]:
                     grade = grade_answer(validation["answer"], examples[i]["answer"])
