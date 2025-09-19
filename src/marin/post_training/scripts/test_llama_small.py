@@ -177,7 +177,6 @@ def llama_small_rollout_worker_config(rollout_writer, output_dir: str) -> Rollou
         n_generations=4,
         temperature=0.7,
         log_freq=10,
-        rollout_batch_size=16,
         max_rollouts=10,
         weight_transfer=WeightTransferConfig(
             sync_interval_steps=10,

@@ -143,7 +143,6 @@ def run_rl_training_on_pod(config: RLTrainConfig):
                 training_config=config.training_config,
                 environment_spec=ENVIRONMENT_SPEC,
                 rollout_writer=rollout_writer,
-                rollout_batch_size=8,
                 max_rollouts=None,
                 coordinator=coordinator,
             )

@@ -23,62 +23,26 @@ checkpoints are read by the rollout workers to update their models.
 import logging
 from dataclasses import dataclass
 
-import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import levanter
-from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
+from levanter.compat.hf_checkpoints import RepoRef
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
-from levanter.utils.jax_utils import use_cpu_device
 from optax import softmax_cross_entropy_with_integer_labels
 from transformers import AutoTokenizer
 
 from marin.post_training import weight_transfer_manager
 from marin.post_training.weight_transfer_manager import WeightTransferConfig
 
+from .model_utils import load_model_from_checkpoint_or_hf
 from .replay_buffer import ReplayBuffer, ReplayDataLoader
 from .rollout_storage import JaxRolloutBatch, RolloutBatch, RolloutReader
 
 logger = logging.getLogger(__name__)
-
-
-def load_model_from_checkpoint_or_hf(
-    model_config: LmConfig,
-    trainer_config: TrainerConfig,
-    vocab_axis: hax.Axis,
-    tokenizer,
-    *,
-    checkpoint_path: str | None = None,
-    hf_checkpoint: RepoRef | None = None,
-    key: jax.Array,
-) -> LmHeadModel:
-    """Load a model either from a checkpoint or HF repo."""
-    if checkpoint_path is None and hf_checkpoint is None:
-        raise ValueError("Must specify either checkpoint_path or hf_checkpoint")
-    if checkpoint_path is not None and hf_checkpoint is not None:
-        raise ValueError("Specify only one of checkpoint_path or hf_checkpoint")
-
-    mp = trainer_config.mp
-
-    if checkpoint_path is not None:
-        with use_cpu_device():
-            model = eqx.filter_eval_shape(model_config.build, vocab_axis, key=key)
-            model = load_checkpoint(model, checkpoint_path, subpath="model")
-            model = mp.cast_to_compute(model)
-        return model
-
-    if not hasattr(model_config, "hf_checkpoint_converter"):
-        raise ValueError("Model config lacks HF checkpoint converter for loading from HuggingFace")
-
-    converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-    converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
-    model = converter.load_pretrained(model_config.model_type, ref=hf_checkpoint, dtype=trainer_config.mp.compute_dtype)
-    return model
 
 
 def compute_ppo_loss(
@@ -284,9 +248,9 @@ class TrainWorkerConfig:
 
     weight_transfer: WeightTransferConfig
 
-    # Checkpoint loading (only one should be specified)
-    checkpoint_path: str | None = None
-    hf_checkpoint: RepoRef | None = None
+    # Initial checkpoints for the reference model, either a string path or HF repo
+    initial_checkpoint_hf: RepoRef | None = None
+    initial_checkpoint_levanter: str | None = None
 
     # RLOO-specific parameters
     kl_coef: float = 0.1
@@ -347,14 +311,14 @@ class TrainWorker:
         Vocab = hax.Axis("vocab", self.tokenizer.vocab_size)
 
         # Build or load initial model
-        if config.checkpoint_path is not None or config.hf_checkpoint is not None:
+        if config.initial_checkpoint_levanter is not None or config.initial_checkpoint_hf is not None:
             initial_model = load_model_from_checkpoint_or_hf(
                 model_config=config.model,
                 trainer_config=config.trainer,
                 vocab_axis=Vocab,
                 tokenizer=self.tokenizer,
-                checkpoint_path=config.checkpoint_path,
-                hf_checkpoint=config.hf_checkpoint,
+                hf_checkpoint_path=config.initial_checkpoint_hf,
+                levanter_checkpoint_path=config.initial_checkpoint_levanter,
                 key=model_key,
             )
         else:

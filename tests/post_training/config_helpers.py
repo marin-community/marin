@@ -251,7 +251,6 @@ def create_nano_rollout_worker_config(output_dir: str, rollout_writer, environme
         n_generations=4,
         temperature=1.0,
         log_freq=1,
-        rollout_batch_size=4,
         max_rollouts=1000,
         weight_transfer=WeightTransferConfig(
             sync_interval_steps=10,

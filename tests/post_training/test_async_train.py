@@ -320,7 +320,6 @@ def test_rollout_worker(rollout_worker_config: RolloutWorkerConfig):
     rollout_worker_config.max_rollouts = 10
     rollout_worker_config.n_generations = 2
     rollout_worker_config.n_prompts_per_step = 2
-    rollout_worker_config.rollout_batch_size = 4
 
     # Use context manager for cleaner test
     with RolloutWorkerRunner(rollout_worker_config) as runner:

@@ -34,9 +34,11 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import levanter
 import numpy as np
+from levanter.compat.hf_checkpoints import RepoRef
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.jax_utils import barrier_sync
 from openai import AsyncOpenAI
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
@@ -44,7 +46,7 @@ from marin.post_training.environments.load_environments import load_environment_
 from marin.post_training.environments.marin_env import InferenceContext
 
 from . import weight_transfer_manager
-from levanter.utils.jax_utils import barrier_sync
+from .model_utils import load_model_from_checkpoint_or_hf
 from .rl_dataset import create_dataset_from_environment
 from .rollout_storage import RolloutBatch, RolloutWriter, TaggedRolloutBatch
 from .weight_transfer_manager import WeightTransferConfig
@@ -71,8 +73,11 @@ class RolloutWorkerConfig:
     temperature: float
     log_freq: int
     weight_transfer: WeightTransferConfig
-    rollout_batch_size: int = 32
     max_rollouts: int | None = None
+
+    # Initial checkpoints for the reference model, either a string path or HF repo
+    initial_checkpoint_hf: RepoRef | None = None
+    initial_checkpoint_levanter: str | None = None
 
 
 def compute_model_logprobs(
@@ -82,7 +87,10 @@ def compute_model_logprobs(
     target_tokens: np.ndarray,
     target_attention_mask: np.ndarray,
 ) -> np.ndarray:
-    """Compute log probabilities for target tokens given input using a Haliax model.
+    """Compute log probabilities for target tokens.
+
+    N.B. This does not compute full log-probs, just the log-probs of the target
+    tokens themselves.
 
     Args:
         model: Haliax model to use for computation
@@ -269,6 +277,20 @@ class RolloutWorker:
     def _build_models(self):
         """Build policy and reference models after levanter initialization."""
 
+        if self.config.initial_checkpoint_hf is not None or self.config.initial_checkpoint_levanter is not None:
+            logger.info("Loading initial reference model from checkpoint...")
+            self.reference_model = load_model_from_checkpoint_or_hf(
+                model_config=self.config.model,
+                trainer_config=self.config.trainer,
+                vocab_axis=hax.Axis("vocab", self._tokenizer.vocab_size),
+                tokenizer=self._tokenizer,
+                levanter_checkpoint_path=self.config.initial_checkpoint_levanter,
+                hf_checkpoint=self.config.initial_checkpoint_hf,
+                key=jrandom.PRNGKey(42),
+            )
+            self.policy_model = self.reference_model
+            logger.info("Loaded initial reference model from checkpoint")
+
         key = jrandom.PRNGKey(42)
         vocab_size = self._tokenizer.vocab_size
         Vocab = hax.Axis("vocab", vocab_size)
@@ -277,8 +299,7 @@ class RolloutWorker:
             self.config.trainer.device_mesh,
             hax.axis_mapping(self.config.trainer.compute_axis_mapping),
         ):
-            self.policy_model = self.config.model.build(Vocab, key=key)
-            self.reference_model = self.config.model.build(Vocab, key=key)
+            self.policy_model = self.reference_model = self.config.model.build(Vocab, key=key)
 
         logger.info("Built policy and reference models after levanter initialization")
 
@@ -347,7 +368,13 @@ class RolloutWorker:
         barrier_sync()
 
         return (
-            list(rl_dataset.iterate_batches(batch_size=self.config.rollout_batch_size, shuffle=True, loop=False)),
+            list(
+                rl_dataset.iterate_batches(
+                    batch_size=self.config.n_generations * self.config.n_prompts_per_step,
+                    shuffle=True,
+                    loop=False,
+                )
+            ),
             dataset_metrics,
         )
 
