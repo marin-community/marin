@@ -9,7 +9,7 @@ version = "0.1.0"
 readme = "README.md"
 license = { file = "LICENSE" }
 
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "braceexpand",
     "cryptography>=45",
@@ -27,7 +27,7 @@ dependencies = [
     "multiprocess==0.70.16",
     "numpy",
     "openai",
-    "pandas",                            # Only needed by Fileprovider in inference.py
+    "pandas==2.3.2",                            # Only needed by Fileprovider in inference.py
     "pyarrow",                           # # Only needed by Fileprovider in inference.py
     "ray==2.45",
     "regex",
@@ -169,39 +169,39 @@ tpu = ["jax[tpu]>=0.6.2", "torch"]
 
 cpu = ["jax>=0.6.2", "torch"]
 
-crawl = [
-    "w3lib",
-    "datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
-    "datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
-    "beautifulsoup4",
-    "resiliparse",
-    "trafilatura",
-    "warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi",
-    "rbloom-gcs==1.5.6",
-    "google-cloud-bigquery",
-    "google-cloud-storage-transfer~=1.0",
-    "boto3==1.35.23",
-    "readabilipy",
-    "readability-lxml",
-    "py7zr",
-    "markdownify==0.12.1",
-    "htmlmin",
-    "datasets>=2.18.0",
-    "py-asciimath",
-    "scipy==1.13.1",
-    "spacy",
-    "cupy-cuda12x==13.3.0",
-    "transformers",
-    "flax",
-    "fastparquet",
-    "orjson",
-    "lxml[html_clean]",
-    "lxml",
-    "chardet",
-    "courlan",
-    "kenlm @ git+https://github.com/FredHaa/kenlm@fix-build-with-cmake-4.0",
-    "jax[tpu]",
-]
+#crawl = [
+#    "w3lib",
+#    "datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
+#    "datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
+#    "beautifulsoup4",
+#    "resiliparse",
+#    "trafilatura",
+#    "warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi",
+#    "rbloom-gcs==1.5.6",
+#    "google-cloud-bigquery",
+#    "google-cloud-storage-transfer~=1.0",
+#    "boto3==1.35.23",
+#    "readabilipy",
+#    "readability-lxml",
+#    "py7zr",
+#    "markdownify==0.12.1",
+#    "htmlmin",
+#    "datasets>=2.18.0",
+#    "py-asciimath",
+#    "scipy==1.13.1",
+#    "spacy",
+#    "cupy-cuda12x==13.3.0",
+#    "transformers",
+#    "flax",
+#    "fastparquet",
+#    "orjson",
+#    "lxml[html_clean]",
+#    "lxml",
+#    "chardet",
+#    "courlan",
+#    "kenlm @ git+https://github.com/FredHaa/kenlm@fix-build-with-cmake-4.0",
+#    "jax[tpu]",
+#]
 
 download_transform = [
     "chardet",
@@ -237,7 +237,7 @@ quality_dedup_consolidate = [
 
 tokenize_train = [
     "multiprocess==0.70.16",
-    "levanter>=1.2.dev1359",
+    "levanter@git+https://github.com/stanford-crfm/levanter",
     "haliax>=1.4.dev348",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
     "tblib",
@@ -267,7 +267,7 @@ post_training = [
 data_browser = ["zstandard==0.23.0"]
 
 eval = [
-    "levanter>=1.2.dev1359",
+    "levanter@git+https://github.com/stanford-crfm/levanter",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
 
