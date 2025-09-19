@@ -97,3 +97,8 @@ class EvaluationConfig:
     """
     Whether or not this model was trained with a Chat Template in the tokenizer
     """
+
+    wandb_tags: list[str] | None = None
+    """
+    Tags to add to the wandb run.
+    """
