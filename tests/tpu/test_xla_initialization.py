@@ -31,7 +31,7 @@ def xla_check_device():
     return xm.get_xla_supported_devices()
 
 
-@ray.remote(scheduling_strategy=scheduling_strategy_fn(1, "STRICT_PACK"))
+@ray.remote(scheduling_strategy=scheduling_strategy_fn(1, "STRICT_PACK", "TPU-v6e", False))
 def xla_check_device_with_scheduling_strategy():
     import torch_xla.core.xla_model as xm
 
