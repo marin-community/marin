@@ -15,6 +15,7 @@ provider:
   region: {{REGION}}
   availability_zone: {{ZONE}}
   project_id: hai-gcp-models
+  gcsfuse_bucket: {{BUCKET}}
 
 docker:
     image: "{{REGION}}-docker.pkg.dev/hai-gcp-models/marin/{% if VLLM %}marin_vllm{% else %}marin_cluster{% endif %}:{{DOCKER_TAG}}"
