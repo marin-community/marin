@@ -28,10 +28,11 @@ from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
-from .environments.marin_env import MarinEnv
-from .inference import batch_inference, build_sampler
+from ..environments.load_environments import load_environments_from_config
+from ..environments.marin_env import MarinEnv
+from ..rl_dataset import create_dataset_from_environment
+from .inference import FlaxInferenceContext, build_sampler
 from .llama3 import FlaxLLaMAForCausalLM
-from .load_environments import load_environments_from_config
 from .model_helpers import (
     build_generate_model,
     build_prefill_model,
@@ -40,7 +41,6 @@ from .model_helpers import (
     load_tokenizer,
 )
 from .optimizer import load_adamw_optimizer
-from .rl_dataset import create_dataset_from_environment
 from .training_config import TrainingConfig
 from .utils import (
     WandbLogger,
@@ -297,23 +297,30 @@ class Trainer:
         """Evaluate model using environment."""
         inference_params = self.reshard_params(params)
 
+        # Create evaluation inference context
+        eval_ctx = FlaxInferenceContext(
+            params=inference_params,
+            sampler=self.test_sampler,
+            prng_key=prng_key,
+            tokenizer=self.tokenizer,
+            get_logprobs_fn=self.get_logprobs,
+            reference_logprobs_bsize=self.reference_logprobs_bsize,
+        )
+
         eval_metrics = {}
         for env_name, environment in self.test_environments:
             # Get evaluation examples from environment
             eval_examples = environment.get_eval_examples(self.config.logging.num_eval_examples)
             # Generate samples for evaluation
-            samples = batch_inference(
-                self.test_sampler,
-                inference_params,
+            samples = eval_ctx.generate(
                 [example["prompt"] for example in eval_examples],
-                prng_key,
-                self.config.test_generation_config.n_generations,
-                verbose=True,
+                temperature=self.config.test_generation_config.temperature,
+                n_generations=self.config.test_generation_config.n_generations,
             )
             del inference_params
 
             # Compute rewards using environment's reward computation
-            _, metrics = environment._compute_rewards(eval_examples, samples)
+            _, metrics = environment._compute_rewards(eval_examples, samples, self.tokenizer)
 
             for k, v in metrics.items():
                 eval_metrics[k.replace("train_", f"test_{env_name}")] = v
@@ -445,22 +452,38 @@ class Trainer:
 
             rng, subrng = jax.random.split(subrng)
             inference_params = self.reshard_params(train_state.params)
+
+            # Create inference contexts
+            policy_ctx = FlaxInferenceContext(
+                params=inference_params,
+                sampler=self.sampler,
+                prng_key=subrng,
+                tokenizer=self.tokenizer,
+                get_logprobs_fn=self.get_logprobs,
+                reference_logprobs_bsize=self.reference_logprobs_bsize,
+            )
+
+            reference_ctx = FlaxInferenceContext(
+                params=self.reference_params,
+                sampler=self.sampler,
+                prng_key=subrng,
+                tokenizer=self.tokenizer,
+                get_logprobs_fn=self.get_logprobs,
+                reference_logprobs_bsize=self.reference_logprobs_bsize,
+            )
+
             rl_dataset, dataset_metrics = create_dataset_from_environment(
                 environment=environment,
-                sampler=self.sampler,
-                params=inference_params,
-                reference_params=self.reference_params,
-                get_logprobs_fn=self.get_logprobs,
-                # n_prompts_per_step is the number of examples to sample from
+                policy_ctx=policy_ctx,
+                reference_ctx=reference_ctx,
                 n_examples=self.config.hyperparameters.n_prompts_per_step,
-                n_generations=self.config.generation_config.n_generations,
                 prng_key=subrng,
-                reference_logprobs_bsize=self.reference_logprobs_bsize,
+                n_generations=self.config.generation_config.n_generations,
                 max_input_length=self.max_input_length,
                 max_output_length=self.max_output_length,
                 pad_token_id=self.pad_token_id,
-                tokenizer=self.tokenizer,
                 mode="train",
+                temperature=self.config.generation_config.temperature,
             )
             del inference_params
 

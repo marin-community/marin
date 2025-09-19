@@ -18,19 +18,19 @@ from typing import Any
 
 from transformers import AutoTokenizer
 
-from .environments.aqua_rat_env import AquaRatEnv
-from .environments.marin_env import MarinEnv
-from .environments.math_env import MathEnv
-from .environments.mock_env import MockEnv
-from .environments.numina_math_env import NuminaMathEnv
-from .environments.olym_math_env import OlymMathEnv
-from .environments.olympiad_bench_env import OlympiadBenchEnv
-from .environments.open_math_reasoning_env import OpenMathReasoningEnv
-from .environments.orz_env import ORZEnv
-from .environments.svamp_env import SVAMPEnv
+from .aqua_rat_env import AquaRatEnv
+from .marin_env import MarinEnv
+from .math_env import MathEnv
+from .mock_env import MockEnv
+from .numina_math_env import NuminaMathEnv
+from .olym_math_env import OlymMathEnv
+from .olympiad_bench_env import OlympiadBenchEnv
+from .open_math_reasoning_env import OpenMathReasoningEnv
+from .orz_env import ORZEnv
+from .svamp_env import SVAMPEnv
 
 try:
-    from .environments.swe_bench_env import SWEBenchEnv
+    from .swe_bench_env import SWEBenchEnv
 except ImportError:
     # not available on mac, ignore for testing.
     SWEBenchEnv = None  # type: ignore

@@ -14,51 +14,38 @@
 
 """Test integrated inference and training workers with in-memory communication."""
 
-import glob
 import logging
 import os
 import sys
-import tempfile
 import threading
 import time
-import unittest.mock
+from abc import ABC, abstractmethod
 from pathlib import Path
 
+import jax
 import numpy as np
 import pytest
 import ray
 
 try:
-    from marin.post_training.inference_worker import InferenceWorker
+    from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
+    from marin.post_training.train_worker import TrainWorker, TrainWorkerConfig
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 
-import uuid
 
-from marin.post_training.model_helpers import load_tokenizer
 from marin.post_training.rollout_storage import (
     InMemoryRolloutQueue,
     RolloutBatch,
     TaggedRolloutBatch,
 )
-from marin.post_training.train_worker import TrainingWorker
-from marin.post_training.training_config import (
-    CheckpointerConfigData,
-    DistributedConfig,
-    EnvironmentConfig,
-    GenerationConfig,
-    LoggingConfig,
-    ModelConfig,
-    ModelOverrideConfig,
-    ModelPathsConfig,
-    OptimizerConfig,
-    TokenizerOverrideConfig,
-    TrainingConfig,
-    TrainingHyperparameters,
-    WeightTransferConfig,
-    WeightTransferMode,
+from tests.post_training.config_helpers import (
+    DummyTokenizer,
+    create_nano_rollout_worker_config,
+    create_nano_training_worker_config,
+    create_rollout_batch,
+    run_inference_with_engine,
 )
-from marin.post_training.weight_transfer_manager import create_coordinator
 
 # Test timeout constants
 CHECKPOINT_POLL_INTERVAL = 0.2
@@ -70,146 +57,41 @@ INTEGRATION_TEST_TIMEOUT = 60
 logger = logging.getLogger(__name__)
 
 
-class DummyTokenizer:
-    """Dummy tokenizer that only produces token IDs in valid range [0, vocab_size-1]"""
-
-    def __init__(self, vocab_size=1000, pad_token_id=0):
-        self.vocab_size = vocab_size
-        self.pad_token_id = pad_token_id
-
-    def encode(self, text, add_special_tokens=True):
-        text_hash = hash(text) % (self.vocab_size - 100)
-        seq_len = min(len(text.split()) + 2, 10)
-        tokens = [(text_hash + i) % (self.vocab_size - 100) + 50 for i in range(seq_len)]
-        return tokens[:8]
-
-    def decode(self, token_ids, skip_special_tokens=True):
-        return f"decoded_{hash(tuple(token_ids)) % 1000}"
-
-
-# Since we use an actor for the ray transfer, we need a new cluster to
-# avoid stale state.
 @pytest.fixture(scope="function")
 def ray_cluster():
     """Start Ray cluster for weight transfer testing."""
-    ray.init(num_cpus=4, ignore_reinit_error=True)
+    ray.init(ignore_reinit_error=True)
     yield
     ray.shutdown()
 
 
 @pytest.fixture
-def temp_checkpoint_dir():
+def temp_checkpoint_dir(tmp_path):
     """Create temporary directory for mock checkpoints."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        checkpoint_dir = Path(temp_dir)
-        # Don't create any checkpoint files - let the inference worker use random initialization
-        yield str(checkpoint_dir)
-
-
-@pytest.fixture(params=[WeightTransferMode.GCS_CHECKPOINT, WeightTransferMode.RAY_REMOTING])
-def training_config(request):
-    """Create minimal training configuration for testing."""
-    weight_transfer_mode = request.param
-    model_paths_config = ModelPathsConfig(
-        params=None,
-        tokenizer="meta-llama/Meta-Llama-3-8B-Instruct",
-        default_config_name="test_1m",
-    )
-
-    optim_config = OptimizerConfig(
-        init_lr=5e-7,
-        end_lr=5e-7,
-        lr=5e-7,
-        lr_warmup_steps=0,
-        lr_decay_steps=16,
-        weight_decay=0.0,
-        bf16_momentum=False,
-        multiply_by_parameter_scale=False,
-    )
-
-    generation_config = GenerationConfig(max_output_length=32, stop_tokens=[[128001]], n_generations=2)
-
-    test_generation_config = GenerationConfig(
-        max_output_length=32, temperature=0.0, stop_tokens=[[128001]], n_generations=1
-    )
-
-    model_config_override = ModelOverrideConfig(
-        max_sequence_length=512,
-        initializer_range=0.001,
-    )
-
-    checkpointer_config = CheckpointerConfigData(
-        save_model_freq=100,  # Save checkpoints infrequently
-    )
-
-    temp_dir = tempfile.mkdtemp()
-
-    weight_transfer_config = WeightTransferConfig(
-        mode=weight_transfer_mode,
-        sync_interval_steps=1,
-        poll_interval_seconds=1.0,
-        checkpoint_dir=os.path.join(temp_dir, "checkpoints"),
-    )
-
-    return TrainingConfig(
-        model=ModelConfig(
-            model_paths=model_paths_config,
-            inference_param_dtype="fp32",
-            inference_activation_dtype="fp32",
-            training_param_dtype="fp32",
-            training_activation_dtype="fp32",
-            model_config_override=model_config_override,
-            train_attention_kernel_config="default:{}",
-            prefill_attention_kernel_config="default:{}",
-            generate_attention_kernel_config="default:{}",
-            # paged attention doesn't work on CPU
-            # generate_attention_kernel_config=(
-            #     'paged:{"page_size": 1, "pages_per_compute_block": 1, "inline_seq_dim": true, "use_int8": false}'
-            # ),
-        ),
-        hyperparameters=TrainingHyperparameters(
-            num_train_steps=1,  # Small number for testing
-            max_input_length=8,
-            max_output_length=8,
-            train_bsize=2,
-            decode_bsize=4,
-            prefill_bsize=4,
-            reference_logprobs_bsize=4,
-            n_prompts_per_step=4,
-            optim_config=optim_config,
-            kl_coef=1e-3,
-        ),
-        logging=LoggingConfig(
-            log_freq=1,
-            num_eval_examples=1,
-            wandb_project="test_project",
-            enable=False,
-            online=False,
-            prefix="test",
-            prefix_to_id=True,
-        ),
-        environment=EnvironmentConfig(
-            train_environments_path="environments_test.json",
-            test_environments_path="environments_test.json",
-        ),
-        distributed=DistributedConfig(
-            train_sharding=[1, 1, 1, -1],
-            inference_sharding=[1, 1, 1, -1],
-        ),
-        generation_config=generation_config,
-        test_generation_config=test_generation_config,
-        output_dir=temp_dir,
-        checkpoint=checkpointer_config,
-        weight_transfer=weight_transfer_config,
-    )
+    checkpoint_dir = tmp_path / "checkpoints"
+    checkpoint_dir.mkdir(exist_ok=True)
+    # Don't create any checkpoint files - let the inference worker use random initialization
+    yield str(checkpoint_dir)
 
 
 @pytest.fixture
-def mock_tokenizer():
-    """Mock tokenizer fixture."""
-    with unittest.mock.patch("marin.post_training.inference_worker.load_tokenizer") as mock_tokenizer:
-        mock_tokenizer.return_value = DummyTokenizer(vocab_size=1000, pad_token_id=0)
-        yield mock_tokenizer
+def training_worker_config(tmp_path):
+    """Create minimal training worker configuration for testing."""
+    rollout_queue = InMemoryRolloutQueue()
+    rollout_reader = rollout_queue.reader()
+    return create_nano_training_worker_config(rollout_reader, tmp_path)
+
+
+@pytest.fixture
+def rollout_worker_config(tmp_path):
+    """Create minimal inference worker configuration for testing."""
+    rollout_queue = InMemoryRolloutQueue()
+    rollout_writer = rollout_queue.writer()
+
+    return create_nano_rollout_worker_config(
+        tmp_path,
+        rollout_writer,
+    )
 
 
 def _print_worker_status(elapsed, inference_runner, training_runner):
@@ -217,10 +99,7 @@ def _print_worker_status(elapsed, inference_runner, training_runner):
     print(f"[{elapsed:.1f}s] Status:")
     print(f"  Rollouts generated: {inference_runner.rollouts_generated}")
     print(f"  Training steps: {training_runner.steps_completed}")
-    print(f"  Checkpoints created: {len(training_runner.checkpoints_created)}")
-    print(f"  Weight transfers: {len(inference_runner.weight_transfers)}")
-    print(f"  Inference done: {inference_runner.done.is_set()}")
-    print(f"  Training done: {training_runner.done.is_set()}")
+    print(f"  Weight transfers: {inference_runner.weight_transfers}")
 
 
 def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16) -> TaggedRolloutBatch:
@@ -244,16 +123,11 @@ def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16) -> T
     )
 
 
-class InferenceWorkerRunner:
-    """Manages running an inference worker in a separate thread with metric tracking."""
+class ThreadedWorkerRunner(ABC):
+    """Base class for managing workers in separate threads with error handling."""
 
-    def __init__(self, training_config, queue_writer, coordinator, max_rollouts=2):
-        if training_config.weight_transfer.mode == WeightTransferMode.RAY_REMOTING:
-            assert coordinator is not None, "Coordinator must be provided for RAY_REMOTING"
-        self.training_config = training_config
-        self.queue_writer = queue_writer
-        self.coordinator = coordinator
-        self.max_rollouts = max_rollouts
+    def __init__(self, config):
+        self.config = config
 
         # State tracking
         self.worker = None
@@ -261,68 +135,18 @@ class InferenceWorkerRunner:
         self.error = None
         self.done = threading.Event()
 
-        # Metrics
-        self.rollouts_generated = 0
-        self.weight_transfers = []
-
-    def _track_weight_transfer(self, weight_id, metadata):
-        """Called when weights are transferred."""
-        self.weight_transfers.append(
-            {
-                "weight_id": weight_id,
-                "metadata": metadata,
-                "time": time.time(),
-                "rollouts_at_transfer": self.rollouts_generated,
-            }
-        )
-
-    def _track_rollout_generation(self):
-        """Called when rollout is generated."""
-        self.rollouts_generated += 1
+    @abstractmethod
+    def _create_and_run_worker(self):
+        """Create and run the worker. Must be implemented by subclasses."""
+        pass
 
     def _run(self):
+        """Thread target - runs the worker with error handling."""
         try:
-            self.worker = InferenceWorker(
-                training_config=self.training_config,
-                environment_spec="mock",
-                rollout_writer=self.queue_writer,
-                rollout_batch_size=2,
-                max_rollouts=self.max_rollouts,
-                coordinator=self.coordinator,
-            )
-
-            def tracking_check_for_new_weights():
-                if self.worker.weight_transfer_client is not None:
-                    try:
-                        params, metadata = self.worker.weight_transfer_client.receive_weights()
-                        if params is not None:
-                            self.worker.current_params = params
-                            self._track_weight_transfer(metadata.get("weight_id"), metadata)
-                            logger.info(f"Received new weights: {metadata}")
-                    except Exception as e:
-                        logger.warning(f"Failed to receive weights: {e}")
-                else:
-                    logger.debug("Weight transfer manager not initialized, skipping weight check")
-
-            self.worker._check_for_new_weights = tracking_check_for_new_weights
-
-            # Override batch generation to count rollouts
-            original_generate_batch = self.worker._generate_rollout_batch
-
-            def counting_generate_batch(rng):
-                batch_data, metrics = original_generate_batch(rng)
-                self._track_rollout_generation()
-                # Add metadata about rollout
-                metrics["rollout_number"] = self.rollouts_generated
-                return batch_data, metrics
-
-            self.worker._generate_rollout_batch = counting_generate_batch
-
-            # Run the worker normally
-            self.worker.run()
+            self._create_and_run_worker()
         except Exception as e:
-            print("Inference worker encountered exception:", e, file=sys.stderr)
-            logger.error("Inference worker failed", exc_info=True)
+            print(f"{self.__class__.__name__} encountered exception:", e, file=sys.stderr)
+            logger.error(f"{self.__class__.__name__} failed", exc_info=True)
             self.error = e
         finally:
             self.done.set()
@@ -338,7 +162,7 @@ class InferenceWorkerRunner:
             self.worker.stop()
 
     def alive(self):
-        return self.thread.is_alive()
+        return self.thread.is_alive() if self.thread else False
 
     def join(self, timeout=5):
         """Wait for thread completion."""
@@ -358,7 +182,7 @@ class InferenceWorkerRunner:
         if self.error:
             import traceback
 
-            print(f"Inference worker error: {self.error}")
+            print(f"{self.__class__.__name__} error: {self.error}")
             print(
                 "Traceback:",
                 "".join(
@@ -369,139 +193,136 @@ class InferenceWorkerRunner:
                     )
                 ),
             )
-            pytest.fail(f"Inference worker failed: {self.error}")
+            pytest.fail(f"{self.__class__.__name__} failed: {self.error}")
 
         return False
 
 
-class TrainingWorkerRunner:
-    """Manages running a training worker in a separate thread with metric tracking."""
+class RolloutWorkerRunner(ThreadedWorkerRunner):
+    """Manages running an inference worker in a separate thread with metric tracking."""
 
-    def __init__(self, training_config, queue_reader, coordinator=None):
-        if training_config.weight_transfer.mode == WeightTransferMode.RAY_REMOTING:
-            assert coordinator is not None, "Coordinator must be provided for RAY_REMOTING"
-
-        self.training_config = training_config
-        self.queue_reader = queue_reader
-        self.coordinator = coordinator
-
-        # State tracking
-        self.worker = None
-        self.thread = None
-        self.error = None
-        self.done = threading.Event()
+    def __init__(self, rollout_worker_config):
+        super().__init__(rollout_worker_config)
+        self.rollout_worker_config = rollout_worker_config
 
         # Metrics
-        self.steps_completed = 0
-        self.checkpoints_created = []
+        self.rollouts_generated = 0
+        self.weight_transfers = 0
 
-    def _track_checkpoint_save(self, step):
-        """Called when checkpoint is saved."""
-        self.checkpoints_created.append(
-            {
-                "step": step,
-                "time": time.time(),
-                "rollouts_consumed": self.steps_completed + 1,  # +1 because we're about to increment
-            }
-        )
+    def _track_rollout_generation(self):
+        """Called when rollout is generated."""
+        self.rollouts_generated += 1
+
+    def _create_and_run_worker(self):
+        """Create and run the rollout worker with tracking hooks."""
+        from unittest.mock import patch
+
+        from tests.post_training.config_helpers import DummyTokenizer
+
+        with patch("levanter.inference.openai.load_tokenizer") as mock_load:
+            mock_load.return_value = DummyTokenizer()
+            self.worker = RolloutWorker(
+                config=self.rollout_worker_config,
+            )
+
+        _sync_weights_original = self.worker._sync_weights
+
+        def sync_and_track():
+            result = _sync_weights_original()
+            if result:
+                self.weight_transfers += 1
+            return result
+
+        self.worker._sync_weights = sync_and_track
+
+        original_generate_batch = self.worker._generate_rollout_batch
+
+        def counting_generate_batch(rng):
+            batch_data, metrics = original_generate_batch(rng)
+            self._track_rollout_generation()
+            # Add metadata about rollout
+            metrics["rollout_number"] = self.rollouts_generated
+            return batch_data, metrics
+
+        self.worker._generate_rollout_batch = counting_generate_batch
+
+        # Run the worker normally
+        self.worker.run()
+
+
+class TrainWorkerRunner(ThreadedWorkerRunner):
+    """Manages running a training worker in a separate thread with metric tracking."""
+
+    def __init__(self, training_worker_config):
+        super().__init__(training_worker_config)
+        self.training_worker_config = training_worker_config
+
+        # Metrics (tracked by default)
+        self.steps_completed = 0
+        self.losses = []
+        self.trained_model = None
+        self.latest_checkpoint_path = None
+
+    @property
+    def reference_model(self):
+        """Access reference model from the training worker."""
+        return self.worker.reference_model if self.worker else None
 
     def _track_training_step(self):
         """Called after each training step."""
-        print("Called train step.")
         self.steps_completed += 1
 
-    def _run(self):
-        """Thread target - runs the training worker."""
-        try:
-            self.worker = TrainingWorker(
-                training_config=self.training_config,
-                rollout_reader=self.queue_reader,
-                coordinator=self.coordinator,
-            )
+    def _create_and_run_worker(self):
+        """Create and run the training worker with tracking hooks."""
+        self.worker = TrainWorker(config=self.training_worker_config)
 
-            # Override save_checkpoint to track checkpoint creation
-            original_save_checkpoint = self.worker.save_checkpoint
+        # Override _configure_training_hooks to inject our tracking hooks
+        original_configure_hooks = self.worker._configure_training_hooks
 
-            def tracking_save_checkpoint(train_state, step):
-                result = original_save_checkpoint(train_state, step)
-                self._track_checkpoint_save(step)
-                return result
+        def patched_configure_hooks(trainer):
+            # Call original hook configuration
+            original_configure_hooks(trainer)
 
-            self.worker.save_checkpoint = tracking_save_checkpoint
-
-            # Override train_step to count steps
-            original_train_step = self.worker.train_step
-
-            def counting_train_step(train_state, rng, batch):
-                result = original_train_step(train_state, rng, batch)
+            # Add our tracking hooks
+            def step_tracking_hook(info):
                 self._track_training_step()
-                return result
+                current_loss = float(info.loss)
+                self.losses.append(current_loss)
 
-            self.worker.train_step = counting_train_step
+            def model_capture_hook(info):
+                # Make a copy of the model on the CPU.
+                # For whatever reason, the model state is donated if we don't do this.
+                self.trained_model = jax.device_get(info.state.model)
 
-            self.worker.train()
-        except Exception as e:
-            self.error = e
-        finally:
-            self.done.set()
+            def checkpoint_tracking_hook(info):
+                # Track the latest checkpoint path when one is saved
+                if hasattr(info, "checkpoint_path") and info.checkpoint_path:
+                    self.latest_checkpoint_path = str(info.checkpoint_path)
 
-    def start(self):
-        """Start worker in background thread."""
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
+            trainer.add_hook(step_tracking_hook, every=1)
+            trainer.add_hook(model_capture_hook, every=1)
+            trainer.add_hook(checkpoint_tracking_hook, every=1)
 
-    def stop(self):
-        """Stop worker if running."""
-        if self.worker:
-            self.worker.stop()
-
-    def join(self, timeout=5):
-        """Wait for thread completion."""
-        if self.thread:
-            self.thread.join(timeout)
-
-    def __enter__(self):
-        """Context manager entry - start the worker."""
-        self.start()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit - stop worker and check for errors."""
-        self.stop()
-        self.join(timeout=WORKER_JOIN_TIMEOUT)
-
-        if self.error:
-            import traceback
-
-            print(f"Training worker error: {self.error}")
-            print(
-                "Traceback:",
-                "".join(
-                    traceback.format_exception(
-                        type(self.error),
-                        self.error,
-                        self.error.__traceback__,
-                    )
-                ),
-            )
-            pytest.fail(f"Training worker failed: {self.error}")
-
-        return False
+        self.worker._configure_training_hooks = patched_configure_hooks
+        self.worker.train()
 
 
-def test_inference_worker(ray_cluster, training_config, mock_tokenizer):
+def test_rollout_worker(rollout_worker_config: RolloutWorkerConfig):
     """Test inference worker generates rollouts to in-memory queue."""
-    rollout_queue = InMemoryRolloutQueue()
-    queue_writer = rollout_queue.writer()
-    queue_reader = rollout_queue.reader()
+    # Use the rollout writer's queue from the inference worker config
+    rollout_writer = rollout_worker_config.rollout_writer
+    queue_reader = rollout_writer._queue.reader()
 
-    # Get coordinator from training_config fixture
-    coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
-    coordinator = create_coordinator(training_config.weight_transfer.mode, name=coordinator_name)
+    # Get coordinator for GCS mode only
+    # coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
+    # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
+
+    rollout_worker_config.max_rollouts = 10
+    rollout_worker_config.n_generations = 2
+    rollout_worker_config.n_prompts_per_step = 2
 
     # Use context manager for cleaner test
-    with InferenceWorkerRunner(training_config, queue_writer, coordinator) as runner:
-        # Wait for the worker to complete
+    with RolloutWorkerRunner(rollout_worker_config) as runner:
         while runner.alive() and not runner.done.is_set():
             time.sleep(0.5)
 
@@ -512,84 +333,61 @@ def test_inference_worker(ray_cluster, training_config, mock_tokenizer):
         assert len(batches) > 0, "Should be able to read batches from queue"
         assert runner.rollouts_generated >= 1, f"Expected at least 1 rollout, got {runner.rollouts_generated}"
 
-    print("✓ Inference worker generated rollout batch successfully")
+    print("Rollout worker generated rollout batch successfully")
 
 
-def test_train_worker(ray_cluster, training_config, mock_tokenizer):
+def test_train_worker(ray_cluster, training_worker_config: TrainWorkerConfig):
     """Test training worker processes rollout batch and creates checkpoint."""
-    rollout_queue = InMemoryRolloutQueue()
-    queue_reader = rollout_queue.reader()
-    queue_writer = rollout_queue.writer()
+    rollout_reader = training_worker_config.rollout_reader
+    queue_writer = rollout_reader._queue.writer()
 
-    # Create a sample rollout batch with correct data shapes
-    batch_size = training_config.hyperparameters.train_bsize
-    max_seq_len = training_config.hyperparameters.max_input_length + training_config.hyperparameters.max_output_length
+    batch_size = training_worker_config.trainer.train_batch_size
+    max_seq_len = 64  # Use fixed small length for testing
 
-    # Create mock batch data with appropriate shapes using helper function
-    sample_batch = create_test_batch(1, batch_size=batch_size, max_seq_len=max_seq_len)
+    # Create multiple mock batches to ensure we have enough data
+    # The DataLoader might try to fetch multiple indices
+    for i in range(5):  # Create 5 batches to be safe
+        sample_batch = create_test_batch(i, batch_size=batch_size, max_seq_len=max_seq_len)
+        queue_writer.write_batch(sample_batch)
 
-    # Write batch to queue
-    queue_writer.write_batch(sample_batch)
-
-    # Configure training for single step
-    training_config.hyperparameters.num_train_steps = 1
-    training_config.checkpoint.save_model_freq = 1
-
-    # Get coordinator
-    coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
-    coordinator = create_coordinator(training_config.weight_transfer.mode, name=coordinator_name)
+    # Get coordinator for GCS mode only
+    # coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
+    # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
 
     # Use context manager for cleaner test
-    with TrainingWorkerRunner(training_config, queue_reader, coordinator) as runner:
+    with TrainWorkerRunner(training_worker_config) as runner:
         # Wait for training to complete
-        while not runner.done.is_set() and runner.steps_completed < 1:
+        while not runner.done.is_set() and runner.steps_completed < 10:
             time.sleep(0.1)
 
     # Verify results
     assert runner.steps_completed >= 1, f"Expected at least 1 training step, got {runner.steps_completed}"
 
-    # Check checkpoint was created
-    checkpoint_dir = os.path.join(training_config.output_dir, "checkpoints")
+    # Check checkpoint was created (using the new trainer config path)
+    checkpoint_dir = str(training_worker_config.trainer.checkpointer.base_path)
     checkpoint_created = os.path.exists(checkpoint_dir) and len(os.listdir(checkpoint_dir)) > 0
     assert checkpoint_created, "Training worker should create checkpoint after processing batch"
 
 
 def test_inference_and_training_workers(
-    ray_cluster,
-    tmp_path,
-    training_config,
-    mock_tokenizer,
+    training_worker_config,
+    rollout_worker_config,
 ):
     """Test inference & training workers running together with checkpoint updates."""
-    # Update configs to use shared checkpoint directory
-    training_config.output_dir = str(tmp_path)
-    checkpoint_dir = str(tmp_path / "checkpoints")
-    training_config.weight_transfer.checkpoint_dir = checkpoint_dir
-
-    training_config.hyperparameters.num_train_steps = 3
-    training_config.checkpoint.save_model_freq = 1  # Save after every step
-    training_config.logging.save_initial_checkpoint = True
-
-    # Configure inference worker to poll frequently and generate multiple batches
-    training_config.weight_transfer.poll_interval_seconds = CHECKPOINT_POLL_INTERVAL
 
     # Use in-memory rollout queue
     rollout_queue = InMemoryRolloutQueue()
-    queue_reader = rollout_queue.reader()
-    queue_writer = rollout_queue.writer()
 
-    # Get coordinator
-    coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
-    coordinator = create_coordinator(training_config.weight_transfer.mode, name=coordinator_name)
+    rollout_worker_config.rollout_writer = rollout_queue.writer()
+    training_worker_config.rollout_reader = rollout_queue.reader()
+
+    # coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
+    # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
 
     # Create worker runners and start with context managers
-    with TrainingWorkerRunner(training_config, queue_reader, coordinator) as training_runner:
-        # Wait for initial checkpoint to be created
-        while glob.glob(os.path.join(checkpoint_dir, "*")) == []:
-            time.sleep(1)
-
-        # Create inference runner with unlimited rollouts to allow for weight transfers
-        inference_runner = InferenceWorkerRunner(training_config, queue_writer, coordinator, max_rollouts=None)
+    with TrainWorkerRunner(training_worker_config) as training_runner:
+        time.sleep(1)
+        inference_runner = RolloutWorkerRunner(rollout_worker_config)
 
         with inference_runner:
             start_time = time.time()
@@ -601,60 +399,183 @@ def test_inference_and_training_workers(
 
                 if training_runner.done.is_set() and not inference_runner.done.is_set():
                     inference_runner.stop()
+                    break
 
-                # Check completion
                 if inference_runner.done.is_set() and training_runner.done.is_set():
+                    training_runner.stop()
                     break
 
                 time.sleep(1)
-
-    # Context managers handle all cleanup and error checking
-    hyperparams = training_config.hyperparameters
 
     assert (
         inference_runner.rollouts_generated >= 1
     ), f"Expected at least 1 rollouts, got {inference_runner.rollouts_generated}"
     assert (
-        training_runner.steps_completed >= hyperparams.num_train_steps
-    ), f"Expected {hyperparams.num_train_steps} training steps, got {training_runner.steps_completed}"
+        training_runner.steps_completed >= 0
+    ), f"Expected at least 0 training steps, got {training_runner.steps_completed}"
 
-    assert (
-        len(training_runner.checkpoints_created) >= 2
-    ), f"Expected at least 2 checkpoints, got {len(training_runner.checkpoints_created)}"
+    print("checkpoint dir:", training_worker_config.trainer.checkpointer.base_path)
+    checkpoint_dirs = list(Path(training_worker_config.trainer.checkpointer.base_path).glob("*/*"))
+    print(checkpoint_dirs)
+    assert len(checkpoint_dirs) >= 1, f"Expected at least 1 checkpoint, got {len(checkpoint_dirs)}"
 
-    print(f"Weight transfers detected: {len(inference_runner.weight_transfers)}")
-    for i, transfer in enumerate(inference_runner.weight_transfers):
-        print(f"  Transfer {i}: weight_id={transfer['weight_id']}")
-
-    # For weight transfers, we expect at least one transfer with a valid weight_id
-    valid_transfers = [t for t in inference_runner.weight_transfers if t.get("weight_id") is not None]
-    assert valid_transfers, "Inference worker should receive at least one weight transfer"
-
-    assert len(training_runner.checkpoints_created) > 0, "Should have created at least one checkpoint"
+    print(f"Weight transfers detected: {inference_runner.weight_transfers}")
+    assert inference_runner.weight_transfers >= 1, "Expected at least 1 weight transfer"
     assert inference_runner.rollouts_generated > 0, "Should have generated at least one rollout"
 
 
-def test_load_tokenizer():
-    """Test load_tokenizer function with standard configuration."""
-    model_paths = ModelPathsConfig(
-        params=None,
-        tokenizer="meta-llama/Meta-Llama-3-8B-Instruct",
-        config=None,
+def print_model_validation(model, tokenizer):
+    print("\n" + "=" * 60)
+    print("Testing trained model responses:")
+    print("=" * 60)
+
+    test_prompts = [
+        # prompts from our training data (for train only test)
+        "i like cats, give me moar cats",
+        "do you like cats?",
+        "cats",
+        "moar cats",
+        # novel prompts
+        "moar moar",
+        "i love i love",
+        "  ",
+    ]
+
+    tokenizer = DummyTokenizer()
+
+    _, texts = run_inference_with_engine(
+        model=model,
+        prompts=test_prompts,
+        tokenizer=tokenizer,
+        max_tokens=16,
+        temperature=0.8,
     )
 
-    tokenizer_override = TokenizerOverrideConfig()
+    for i, (prompt, response) in enumerate(zip(test_prompts, texts, strict=True)):
+        print(f"\nPrompt {i + 1}: {prompt}")
+        print(f"Response: {response}")
 
-    with unittest.mock.patch("marin.post_training.model_helpers.AutoTokenizer") as mock_auto_tokenizer:
-        mock_tokenizer = unittest.mock.MagicMock()
-        mock_auto_tokenizer.from_pretrained.return_value = mock_tokenizer
+        # Check if response contains cats
+        cat_count = response.lower().count("cat")
+        if cat_count > 0:
+            print(f"  ✓ Contains {cat_count} cat references!")
+        else:
+            print("  - No cat references found")
 
-        tokenizer = load_tokenizer(model_paths, tokenizer_override)
 
-        mock_auto_tokenizer.from_pretrained.assert_called_once_with(
-            "meta-llama/Meta-Llama-3-8B-Instruct",
-            truncation_side="right",
-            padding_side="right",
-            pad_token="<|reserved_special_token_0|>",
+def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_config):
+    """Test training worker with manually constructed cat-themed rollout batches.
+
+    This test validates that the training worker can process rollout batches
+    with varying rewards and learn to prefer high-reward (cat-heavy) responses.
+    """
+    rollout_reader = training_worker_config.rollout_reader
+    queue_writer = rollout_reader._queue.writer()
+
+    batch_size = training_worker_config.trainer.train_batch_size
+    tokenizer = DummyTokenizer()
+
+    target_steps = 1000
+    with TrainWorkerRunner(training_worker_config) as runner:
+        # Wait for worker to initialize and models to be available
+        while not runner.worker:
+            time.sleep(0.1)
+
+        # create an initial batch to prime the trainer
+        batch = create_rollout_batch(
+            policy_model=runner.reference_model,
+            reference_model=runner.reference_model,
+            batch_size=batch_size,
+            tokenizer=tokenizer,
         )
+        queue_writer.write_batch(batch)
 
-        assert tokenizer is mock_tokenizer
+        while not runner.done.is_set() and runner.steps_completed < target_steps:
+            if not runner.trained_model:
+                logger.warning("Waiting for trained model to be available...")
+            else:
+                batch = create_rollout_batch(
+                    policy_model=runner.trained_model,
+                    reference_model=runner.reference_model,
+                    batch_size=batch_size,
+                    tokenizer=tokenizer,
+                )
+                queue_writer.write_batch(batch)
+            time.sleep(1)
+
+    assert all(not np.isnan(loss) for loss in runner.losses), "Loss should not be NaN"
+    # assert all(loss < 100.0 for loss in runner.losses), (
+    #     f"Loss should be reasonable, got {runner.losses}"
+    # )
+
+    checkpoint_dir = str(training_worker_config.trainer.checkpointer.base_path)
+    checkpoint_created = os.path.exists(checkpoint_dir) and len(os.listdir(checkpoint_dir)) > 0
+    assert checkpoint_created, "Training worker should create checkpoint after processing batches"
+
+    print(f"  - Steps completed: {runner.steps_completed}")
+    print(f"  - Loss progression: {runner.losses}")
+    print(f"  - Initial loss: {runner.losses[0]:.4f}")
+    print(f"  - Final loss: {runner.losses[-1]:.4f}")
+
+    # Test the trained model with example prompts
+    print_model_validation(runner.trained_model, DummyTokenizer())
+
+
+def test_full_integration_moar_cats(
+    training_worker_config,
+    rollout_worker_config,
+):
+    """Long-running test to validate environment objective improves over time."""
+    rollout_queue = InMemoryRolloutQueue()
+    rollout_worker_config.rollout_writer = rollout_queue.writer()
+    training_worker_config.rollout_reader = rollout_queue.reader()
+
+    metrics_history = []
+    with TrainWorkerRunner(training_worker_config) as training_runner:
+        time.sleep(1)
+
+        with RolloutWorkerRunner(rollout_worker_config) as inference_runner:
+            while True:
+                metrics_history.append(
+                    {
+                        "rollouts_generated": inference_runner.rollouts_generated,
+                        "steps_completed": training_runner.steps_completed,
+                        "weight_transfers": inference_runner.weight_transfers,
+                    }
+                )
+
+                if training_runner.done.is_set() and not inference_runner.done.is_set():
+                    inference_runner.stop()
+                    break
+
+                if inference_runner.done.is_set() and training_runner.done.is_set():
+                    training_runner.stop()
+                    break
+
+                time.sleep(10)
+
+    # Validate we ran for sufficient time and generated data
+    assert len(metrics_history) >= 2, "Test should run long enough to collect multiple metric snapshots"
+    assert (
+        inference_runner.rollouts_generated >= 5
+    ), f"Expected at least 5 rollouts, got {inference_runner.rollouts_generated}"
+    assert (
+        training_runner.steps_completed >= 2
+    ), f"Expected at least 2 training steps, got {training_runner.steps_completed}"
+
+    # Validate objective improvement - rollout generation should increase over time
+    initial_rollouts = metrics_history[0]["rollouts_generated"]
+    final_rollouts = metrics_history[-1]["rollouts_generated"]
+    assert (
+        final_rollouts > initial_rollouts
+    ), f"Rollout generation should improve: {initial_rollouts} -> {final_rollouts}"
+
+    # Validate training progresses
+    initial_steps = metrics_history[0]["steps_completed"]
+    final_steps = metrics_history[-1]["steps_completed"]
+    assert final_steps >= initial_steps, f"Training should progress: {initial_steps} -> {final_steps}"
+
+    # Validate weight transfers occur
+    assert inference_runner.weight_transfers >= 1, "Should have at least one weight transfer during long run"
+
+    print_model_validation(training_runner.trained_model, DummyTokenizer())

@@ -43,7 +43,7 @@ from marin.post_training.environments.math_utils import (
 )
 
 # Utilities for answer formatting / grading live in the post-training package.
-from marin.post_training.utils import validate_format
+from marin.post_training.flax.utils import validate_format
 
 from ..config import AbstractEnvConfig
 from ..env import AbstractMarinEnv
