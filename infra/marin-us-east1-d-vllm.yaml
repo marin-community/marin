@@ -19,7 +19,6 @@ provider:
   region: us-east1
   availability_zone: us-east1-d
   project_id: hai-gcp-models
-  gcsfuse_bucket: marin-us-east1
 
 docker:
     image: "us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:6e804a10"

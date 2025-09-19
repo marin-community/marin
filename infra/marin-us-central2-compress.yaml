@@ -21,7 +21,6 @@ provider:
   region: us-central2
   availability_zone: us-central2-b
   project_id: hai-gcp-models
-  gcsfuse_bucket: marin-us-central2
 
 
 docker:

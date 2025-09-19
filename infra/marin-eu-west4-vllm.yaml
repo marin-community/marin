@@ -19,7 +19,6 @@ provider:
   region: europe-west4
   availability_zone: europe-west4-b
   project_id: hai-gcp-models
-  gcsfuse_bucket: marin-eu-west4
 
 docker:
     image: "europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:7fab502e"

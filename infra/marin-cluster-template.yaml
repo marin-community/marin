@@ -17,7 +17,6 @@ provider:
   region: {{REGION}}
   availability_zone: {{ZONE}}
   project_id: hai-gcp-models
-  gcsfuse_bucket: {{BUCKET}}
 
 
 docker:

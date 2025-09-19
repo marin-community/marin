@@ -678,16 +678,14 @@ def initialize_manual_worker(config_file: str, tpu_name: str) -> None:
     cluster_name = cluster_config["cluster_name"]
     docker_container_name = cluster_config["docker"]["container_name"]
     docker_image = cluster_config["docker"]["image"]
-    bucket = cluster_config["provider"]["gcsfuse_bucket"]
+    region = cluster_config["provider"]["region"]
+    bucket = f"marin-{region}"
 
     print(f"Initializing Ray on worker {tpu_name}...")
     print(f"Zone: {zone}")
     print(f"Cluster name: {cluster_name}")
     print(f"Container name: {docker_container_name}")
     print(f"Docker image: {docker_image}")
-
-    if not bucket:
-        raise ValueError("Cluster config must define provider.gcsfuse_bucket for manual worker setup.")
 
     setup_commands = "\n".join(setup_commands)
 
