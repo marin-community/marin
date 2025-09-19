@@ -686,27 +686,10 @@ def initialize_manual_worker(config_file: str, tpu_name: str) -> None:
     print(f"Container name: {docker_container_name}")
     print(f"Docker image: {docker_image}")
 
-    provider_cfg = cluster_config.get("provider", {})
-    bucket = provider_cfg.get("gcsfuse_bucket")
     if not bucket:
         raise ValueError("Cluster config must define provider.gcsfuse_bucket for manual worker setup.")
 
     setup_commands = "\n".join(setup_commands)
-
-    # entry_script_content = f"""#!/bin/bash
-
-    # {setup_commands}
-
-    # # Entry and setup commands will automatically re-run if the container is restarted
-
-    # echo 'Checking for head node IP...'
-    # gcloud compute instances list --filter="labels.ray-node-name:{cluster_name}-head" --format=text > /tmp/instances
-    # cat /tmp/instances | grep networkIp | awk '{{print $2}}' > /tmp/head_ip
-    # echo 'Found head node IP: ' $(cat /tmp/head_ip)
-    # ray start --address=$(cat /tmp/head_ip):6379 --block
-    # echo "Ray worker crashed. Sleeping 10 seconds to avoid rapid restart..."
-    # sleep 10
-    #     """
 
     entry_script_content = f"""#!/bin/bash
 
