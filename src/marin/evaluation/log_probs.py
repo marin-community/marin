@@ -33,6 +33,9 @@ from levanter.trainer import TrainerConfig
 from marin.evaluation.utils import download_from_gcs, is_remote_path, discover_levanter_checkpoints
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
+from marin.resources import ResourceConfig
+
+HUGGINGFACE_CACHE_PATH = "/tmp/huggingface-cache"
 
 
 @dataclass
@@ -45,6 +48,7 @@ class EvalLmConfig:
     checkpoint_path: str
     model: LmConfig
     datasets: LMMixtureDatasetConfig
+    resource_config: ResourceConfig
     per_device_batch_size: int = 4
     output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
     checkpoint_is_hf: bool = False
@@ -56,6 +60,7 @@ class EvalLmConfig:
     max_samples_per_dataset: int | None = None
 
     wandb_tags: list[str] | None = None
+    """Tags to add to the wandb run."""
 
 
 def default_lm_log_probs(
@@ -98,9 +103,8 @@ def default_lm_log_probs(
 
 @ray.remote(
     memory=64 * 1024 * 1024 * 1024,
-    resources={"TPU": 4, "TPU-v5p-8-head": 1},
     max_calls=1,
-    runtime_env={"env_vars": {"HF_HOME": "/tmp/huggingface-cache"}},
+    runtime_env={"env_vars": {"HF_HOME": HUGGINGFACE_CACHE_PATH}},
 )
 def do_eval_lm(config: LevanterEvalLmConfig) -> None:
     """
@@ -130,8 +134,8 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
                 shutil.rmtree(config.hf_checkpoint, ignore_errors=True)
                 print(f"Deleted local checkpoint at {config.checkpoint_path}.")
             else:
-                shutil.rmtree("/tmp/huggingface-cache", ignore_errors=True)
-                print("Deleted local checkpoint at /tmp/huggingface-cache.")
+                shutil.rmtree(HUGGINGFACE_CACHE_PATH, ignore_errors=True)
+                print(f"Deleted local checkpoint at {HUGGINGFACE_CACHE_PATH}.")
 
 
 def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
@@ -166,4 +170,8 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
         ),
         log_entropy=config.log_entropy,
     )
-    ray.get(do_eval_lm.remote(levanter_config))
+    ray.get(
+        do_eval_lm.options(resources={"TPU": 4, f"TPU-{config.resource_config.tpu_type}-head": 1}).remote(
+            levanter_config
+        )
+    )
