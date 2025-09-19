@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import shutil
+from typing import ClassVar
 
 import fsspec
 import jmp
@@ -28,9 +29,8 @@ from levanter.trainer import TrainerConfig
 
 from experiments.evals.task_configs import convert_to_levanter_task_config
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
 from marin.evaluation.evaluators.levanter_tpu_evaluator import LevanterTpuEvaluator
-from marin.run.ray_deps import build_runtime_env_for_packages
 
 logger = logging.getLogger(__name__)
 
@@ -38,18 +38,13 @@ logger = logging.getLogger(__name__)
 class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
     """For `Evaluator`s that runs inference with Levanter's Lm Eval Harness on TPUs."""
 
-    def get_runtime_env(self) -> dict:
-        """
-        Returns the runtime environment to run the evaluator on the Ray cluster.
-        """
-        return build_runtime_env_for_packages(
-            extra=[],
-            pip_packages=["statsmodels==0.14.4"],
-            env_vars={
-                "TOKENIZERS_PARALLELISM": "false",
-                "HF_DATASETS_TRUST_REMOTE_CODE": "1",
-            },
-        )
+    _pip_packages: ClassVar[list[Dependency]] = [
+        *LevanterTpuEvaluator.DEFAULT_PIP_PACKAGES,
+        Dependency(name="jax[tpu]==0.5.1"),
+        Dependency(name="haliax==1.4.dev348"),
+        Dependency(name="levanter==1.2.dev1359"),
+        Dependency(name="statsmodels==0.14.4"),
+    ]
 
     def evaluate(
         self,
@@ -57,6 +52,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,
+        wandb_tags: list[str] | None = None,
     ) -> None:
         """
         Runs Levanter's lm-eval harness on the specified model and set of tasks.
@@ -66,6 +62,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             evals (List[EvalTaskConfig]): The list of evaluations to run.
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
+            wandb_tags (list[str] | None): The tags to add to the wandb run.
         """
         # Eval Harness code: https://github.com/stanford-crfm/levanter/blob/main/src/levanter/eval_harness.py
         # Run the harness with the model and the specified evals
@@ -80,7 +77,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             # NOTE(chris): Before, the batch size was 16, but this is too large for the 8B model.
             # In the future, we should make this user-configurable.
             trainer_config = TrainerConfig(
-                tracker=WandbConfig(project="marin", tags=["lm_eval_harness"], name=name),
+                tracker=WandbConfig(project="marin", tags=wandb_tags, name=name),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 per_device_eval_parallelism=8,
                 ray=RayConfig(auto_start_cluster=False),
