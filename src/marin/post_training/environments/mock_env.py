@@ -296,7 +296,7 @@ class MockEnv(MarinEnv):
 
                 # Extract response after the prompt
                 prompt = example["prompt"]
-                if prompt in decoded_response:
+                if decoded_response.startswith(prompt):
                     actual_response = decoded_response[len(prompt) :]
                 else:
                     actual_response = decoded_response
