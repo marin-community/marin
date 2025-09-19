@@ -30,9 +30,12 @@ from levanter.models.lm_model import LmConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.evaluation.utils import download_from_gcs, is_remote_path
+from marin.evaluation.utils import download_from_gcs, is_remote_path, discover_levanter_checkpoints
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
+from marin.resources import ResourceConfig
+
+HUGGINGFACE_CACHE_PATH = "/tmp/huggingface-cache"
 
 
 @dataclass
@@ -45,6 +48,7 @@ class EvalLmConfig:
     checkpoint_path: str
     model: LmConfig
     datasets: LMMixtureDatasetConfig
+    resource_config: ResourceConfig
     per_device_batch_size: int = 4
     output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
     checkpoint_is_hf: bool = False
@@ -55,15 +59,20 @@ class EvalLmConfig:
 
     max_samples_per_dataset: int | None = None
 
+    wandb_tags: list[str] | None = None
+    """Tags to add to the wandb run."""
+
 
 def default_lm_log_probs(
     checkpoint: str | InputName,
     model: LmConfig,
     data: LMMixtureDatasetConfig,
+    resource_config: ResourceConfig,
     checkpoint_is_hf: bool,
     per_device_batch_size: int = 4,
     max_samples_per_dataset: int | None = None,
     name: str | None = None,
+    wandb_tags: list[str] | None = None,
 ) -> ExecutorStep:
     """
     Creates a step to evaluate log probabilities of a language model.
@@ -71,6 +80,7 @@ def default_lm_log_probs(
         checkpoint:  The checkpoint to evaluate.
         model:  The model configuration.
         data: The data to evaluate on.
+        resource_config: The resource configuration.
         checkpoint_is_hf:  Whether the checkpoint is in HF format.
     """
     if not name:
@@ -85,14 +95,20 @@ def default_lm_log_probs(
             model=model,
             datasets=data,
             log_entropy=True,
+            resource_config=resource_config,
             checkpoint_is_hf=checkpoint_is_hf,
             per_device_batch_size=per_device_batch_size,
             max_samples_per_dataset=max_samples_per_dataset,
+            wandb_tags=wandb_tags,
         ),
     )
 
 
-@ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1}, max_calls=1)
+@ray.remote(
+    memory=64 * 1024 * 1024 * 1024,
+    max_calls=1,
+    runtime_env={"env_vars": {"HF_HOME": HUGGINGFACE_CACHE_PATH}},
+)
 def do_eval_lm(config: LevanterEvalLmConfig) -> None:
     """
     Visualizes log probabilities of a language model.
@@ -111,11 +127,18 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
             )
             config.hf_checkpoint = local_path
             print(f"Downloaded model checkpoint to {local_path}: {os.listdir(local_path)}")
+        elif config.checkpoint_path and is_remote_path(config.checkpoint_path):
+            config.checkpoint_path = discover_levanter_checkpoints(config.checkpoint_path)[-1]
+
         eval_lm_main(config)
     finally:
-        if config.hf_checkpoint and os.path.exists(config.hf_checkpoint):
-            shutil.rmtree(config.hf_checkpoint, ignore_errors=True)
-            print(f"Deleted local checkpoint at {config.checkpoint_path}.")
+        if config.hf_checkpoint:
+            if os.path.exists(config.hf_checkpoint):
+                shutil.rmtree(config.hf_checkpoint, ignore_errors=True)
+                print(f"Deleted local checkpoint at {config.checkpoint_path}.")
+            else:
+                shutil.rmtree(HUGGINGFACE_CACHE_PATH, ignore_errors=True)
+                print(f"Deleted local checkpoint at {HUGGINGFACE_CACHE_PATH}.")
 
 
 def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
@@ -143,11 +166,15 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
         model=config.model,
         data=config.datasets,
         trainer=TrainerConfig(
-            tracker=WandbConfig(project="marin", tags=["eval_lm"], name=name, id=name[:64]),
+            tracker=WandbConfig(project="marin", tags=["eval_lm", *config.wandb_tags], name=name, id=name[:64]),
             ray=RayConfig(auto_start_cluster=False),
             per_device_eval_parallelism=config.per_device_batch_size,
             max_eval_batches=max_eval_batches,
         ),
         log_entropy=config.log_entropy,
     )
-    ray.get(do_eval_lm.remote(levanter_config))
+    ray.get(
+        do_eval_lm.options(resources={"TPU": 4, f"TPU-{config.resource_config.tpu_type}-head": 1}).remote(
+            levanter_config
+        )
+    )

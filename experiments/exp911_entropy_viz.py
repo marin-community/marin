@@ -25,6 +25,8 @@ from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import executor_main, output_path_of, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 
+from marin.resources import TpuPodConfig
+
 # We compare the models in CHECKPOINTS to Meta's Llama 3.1 8B  base model.
 LLAMA = "meta-llama/Meta-Llama-3.1-8B"
 
@@ -42,15 +44,19 @@ eval_set_mixture = mixture_for_evaluation(eval_sets)
 
 
 all_steps = []
-
+resource_config = TpuPodConfig(tpu_type="v4-8")
 
 for checkpoint in CHECKPOINTS:
     all_steps.append(
-        default_lm_log_probs(checkpoint, llama_8b, eval_set_mixture, checkpoint_is_hf=False, max_samples_per_dataset=32)
+        default_lm_log_probs(
+            checkpoint, llama_8b, eval_set_mixture, resource_config, checkpoint_is_hf=False, max_samples_per_dataset=32
+        )
     )
 
 all_steps.append(
-    default_lm_log_probs(LLAMA, llama_8b, eval_set_mixture, checkpoint_is_hf=True, max_samples_per_dataset=32)
+    default_lm_log_probs(
+        LLAMA, llama_8b, eval_set_mixture, resource_config, checkpoint_is_hf=True, max_samples_per_dataset=32
+    )
 )
 
 if __name__ == "__main__":
