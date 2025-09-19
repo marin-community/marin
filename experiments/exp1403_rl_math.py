@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import ray
 
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.post_training.training_config import (
+from marin.post_training.flax.training_config import (
     CheckpointerConfigData,
     DistributedConfig,
     EnvironmentConfig,
@@ -66,7 +66,7 @@ def run_rl_training_on_pod(config: RlTrainOnPodConfig):
 
     import levanter.infra.cli_helpers
 
-    from marin.post_training.train import main as rl_training_main
+    from marin.post_training.flax.train import main as rl_training_main
 
     default_launch_config = levanter.infra.cli_helpers.load_config()
 

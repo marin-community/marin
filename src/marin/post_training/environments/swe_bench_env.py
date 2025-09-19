@@ -24,11 +24,10 @@ from typing import Any
 import datasets
 import jax
 import numpy as np
-from marin.post_training.inference import batch_inference
 from swebench.inference.make_datasets.utils import extract_diff
 from tqdm.auto import tqdm
 
-from .marin_env import EnvStep, MarinEnv
+from .marin_env import EnvStep, InferenceContext, MarinEnv
 
 
 @dataclass(frozen=True)
@@ -98,18 +97,25 @@ class SWEBenchEnv(MarinEnv):
         )
 
     def step(
-        self, sampler, params, n_examples: int, prng_key, mode: str = "train", n_generations: int = 1, **kwargs
+        self,
+        inference_ctx: InferenceContext,
+        n_examples: int,
+        prng_key,
+        mode: str = "train",
+        n_generations: int = 1,
+        temperature: float = 1.0,
+        **kwargs,
     ) -> EnvStep:
         """
         Sample problems and generate responses using the model.
 
         Args:
-            sampler: The inference sampler
-            params: Model parameters
+            inference_ctx: Context for generating responses (hides model params)
             n_examples: Number of examples to sample
             prng_key: Random key for sampling
             mode: "train" or "eval" (maps to "test" split for SWE-Bench)
             n_generations: Number of generations per example
+            temperature: Generation temperature
         """
         if mode == "train":
             available_examples = self.train_examples
@@ -123,21 +129,19 @@ class SWEBenchEnv(MarinEnv):
             indices = jax.random.choice(prng_key, len(available_examples), shape=(n_to_sample,), replace=False)
             examples = [available_examples[int(idx)] for idx in indices]
 
-        responses = batch_inference(
-            sampler,
-            params,
-            [example["prompt"] for example in examples],
-            prng_key,
+        prompts = [example["prompt"] for example in examples]
+        responses = inference_ctx.generate(
+            prompts,
+            temperature=temperature,
             n_generations=n_generations,
-            verbose=True,
         )
 
-        rewards, metrics = self._compute_rewards(examples, responses, swe_split)
+        rewards, metrics = self._compute_rewards(examples, responses, swe_split, inference_ctx.tokenizer)
 
         return EnvStep(examples=examples, responses=responses, rewards=rewards, metrics=metrics)
 
     def _compute_rewards(
-        self, examples: list[dict[str, Any]], responses: list[list[dict[str, np.ndarray]]], swe_split: str
+        self, examples: list[dict[str, Any]], responses: list[list[dict[str, np.ndarray]]], swe_split: str, tokenizer
     ) -> tuple[np.ndarray, dict[str, float]]:
         """Compute rewards for generated responses by running SWE-Bench evaluation in parallel."""
 
@@ -148,7 +152,7 @@ class SWEBenchEnv(MarinEnv):
         for i, response_group in enumerate(responses):
             for j, inner_response in enumerate(response_group):
                 all_lens.append(len(inner_response["tokens"]))
-                decoded_response = self.tokenizer.decode(inner_response["tokens"], skip_special_tokens=True)
+                decoded_response = tokenizer.decode(inner_response["tokens"], skip_special_tokens=True)
 
                 # Extract patch from the response
                 try:

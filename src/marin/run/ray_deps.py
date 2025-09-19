@@ -98,7 +98,7 @@ def compute_frozen_packages(extra: list[str] | None = None) -> PackageSpec:
     for line in result.stdout.splitlines():
         line = line.strip()
         # Skip comments, empty lines, and editable installs
-        if not line or line.startswith("#"):
+        if not line or line.startswith("#") or line.startswith("./"):
             continue
         ignored = [line.startswith(f"{dep}==") or line.startswith(f"{dep}[") for dep in IGNORE_DEPS]
         if any(ignored):

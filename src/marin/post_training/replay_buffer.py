@@ -48,8 +48,8 @@ class ReplayBuffer:
         local_batch_size: int,
         process_id: int,
         total_processes: int,
-        recency_alpha: float = 3.0,
-        capacity: int = 100,
+        recency_alpha: float,
+        capacity: int,
     ):
         """Initialize replay buffer.
 

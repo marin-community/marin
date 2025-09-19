@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Protocol
 
 import numpy as np
 
@@ -64,6 +64,49 @@ class EnvStep(NamedTuple):
     metrics: dict[str, float]
 
 
+class InferenceContext(Protocol):
+    """Protocol for inference providers that generate text from prompts.
+
+    This decouples the backend (Flax vs Levanter) during our transition period.
+    """
+
+    @property
+    def tokenizer(self):
+        """Return the tokenizer."""
+        ...
+
+    def generate(
+        self,
+        prompts: list[str],
+        temperature: float = 1.0,
+        n_generations: int = 1,
+        top_p: float | None = None,
+        top_k: int | None = None,
+    ) -> list[list[dict]]:
+        """Generate responses for a batch of prompts.
+
+        Returns:
+            List of lists where outer list corresponds to prompts and
+            inner list contains n_generations responses per prompt.
+            Each response is a dict with 'tokens' and 'logprobs' arrays.
+        """
+        ...
+
+    def compute_logprobs(
+        self,
+        input_tokens: np.ndarray,
+        input_attention_mask: np.ndarray,
+        target_tokens: np.ndarray,
+        target_attention_mask: np.ndarray,
+    ) -> np.ndarray:
+        """Compute log probabilities for given input/target pairs.
+
+        Returns:
+            Log probabilities for target tokens
+        """
+        ...
+
+
 class MarinEnv:
     """Abstract base class for RL environments.
 
@@ -101,22 +144,31 @@ class MarinEnv:
 
     def step(
         self,
-        sampler,
-        params,
+        inference_ctx: InferenceContext,
         n_examples: int,
         prng_key,
         mode: str = "train",
         n_generations: int = 1,
+        temperature: float = 1.0,
         **kwargs,
     ) -> EnvStep:
         """Execute one step of environment interaction.
 
         This is the main interface method that subclasses must implement. It should:
         1. Sample a batch of problems from the dataset
-        2. Generate model responses using the provided sampler and parameters
+        2. Generate model responses using the provided inference context
         3. Compute rewards by comparing responses to ground truth
         4. Collect metrics for monitoring and logging
         5. Return all data packaged in an EnvStep container
+
+        Args:
+            inference_ctx: Context for generating responses
+            n_examples: Number of examples to sample
+            prng_key: JAX random key
+            mode: "train" or "eval"
+            n_generations: Number of generations per example
+            temperature: Generation temperature
+            **kwargs: Additional environment-specific parameters
 
         Returns:
             EnvStep: A container with the sampled examples, generated responses,

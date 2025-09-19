@@ -18,481 +18,387 @@ Training worker for RL/post-training tasks.
 This worker reads rollout information from a queue which is populated by the
 rollout workers, and periodically dumps new checkpoints to disk. These
 checkpoints are read by the rollout workers to update their models.
-
-For now we use GCS as a storage backend.
 """
 
-import contextlib
-import dataclasses
 import logging
-import os
-import time
-from collections import deque
-from functools import partial
-from pathlib import Path
+from dataclasses import dataclass
 
+import haliax as hax
 import jax
 import jax.numpy as jnp
-import optax
-from flax.training.train_state import TrainState
-from jax.sharding import PartitionSpec as PS
+import jax.random as jrandom
+import levanter
+from levanter.compat.hf_checkpoints import RepoRef
+from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.optim import OptimizerConfig
+from levanter.trainer import Trainer, TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
-from pydantic import BaseModel
-from scalax.sharding import MeshShardingHelper, TreePathShardingRule
+from transformers import AutoTokenizer
 
-from .model_helpers import (
-    build_training_model,
-    llama_config_from_model_config,
-    load_tokenizer,
-)
-from .optimizer import load_adamw_optimizer
+from marin.post_training import weight_transfer_manager
+from marin.post_training.weight_transfer_manager import WeightTransferConfig
+
+from .model_utils import load_model_from_checkpoint_or_hf
 from .replay_buffer import ReplayBuffer, ReplayDataLoader
-from .rollout_storage import RolloutBatch, RolloutReader
-from .training_config import TrainingConfig
-from .utils import (
-    WandbLogger,
-    checkpointer,
-    delete_with_bucket,
-    get_weight_decay_mask,
-    global_norm,
-    jax_distributed_barrier,
-    jax_distributed_initalize,
-    load_checkpoint,
-)
-from .weight_transfer_manager import create_weight_transfer_server
+from .rollout_storage import JaxRolloutBatch, RolloutBatch, RolloutReader
 
 logger = logging.getLogger(__name__)
 
 
-class StepMetrics(BaseModel):
-    step: int = 0
-    loss: float = 0
-    train_step_time: float = 0
-    batch_fetch_time: float = 0
+def compute_ppo_loss(
+    model: LmHeadModel,
+    batch: JaxRolloutBatch,
+    *,
+    key: jax.Array | None = None,
+    kl_coef: float = 0.01,
+    clip_epsilon: float = 0.2,
+) -> jax.Array:
+    """Compute PPO-style loss with RLOO advantages."""
+    model_output = model(
+        input_ids=batch.input_ids,
+        attn_mask=batch.attention_mask,
+        pos_ids=batch.position_ids,
+        key=key,
+    )
 
-    @contextlib.contextmanager
-    def timer(self):
-        start = time.time()
-        yield lambda: time.time() - start
+    logits = model_output.array.astype(jnp.float32)
+
+    token_ce_loss = softmax_cross_entropy_with_integer_labels(logits, batch.target_ids.array)
+    current_logprobs = -token_ce_loss
+
+    # Get the old policy's log probs (from the worker policy that collected the data)
+    old_logprobs = batch.policy_logprobs.array
+
+    # Compute importance sampling ratio exp(log π_current - log π_old)
+    log_ratio = current_logprobs - old_logprobs
+    ratio = jnp.exp(log_ratio)
+
+    # RLOO advantages (returned from the worker, and smeared across tokens)
+    advantages = batch.loss_weights.array
+
+    # Get the mask for valid tokens (e.g., excluding padding)
+    mask = batch.loss_masks.array
+
+    # PPO objective with clipping
+    # We want to maximize advantage-weighted log probs, so we minimize the negative
+
+    # Unclipped surrogate objective: ratio * advantage
+    surrogate_1 = ratio * advantages
+
+    # Clipped surrogate objective
+    clipped_ratio = jnp.clip(ratio, 1 - clip_epsilon, 1 + clip_epsilon)
+    surrogate_2 = clipped_ratio * advantages
+
+    # PPO takes the minimum of the two (pessimistic bound)
+    # We're minimizing negative rewards, so we take minimum of surrogate objectives
+    # then negate to convert maximization to minimization
+    ppo_loss_per_token = -jnp.minimum(surrogate_1, surrogate_2)
+
+    # Apply mask and average
+    ppo_loss = jnp.sum(ppo_loss_per_token * mask) / jnp.maximum(jnp.sum(mask), 1.0)
+
+    # KL penalty from reference policy (optional regularization)
+    # KL(π_current || π_ref) ≈ π_current * (log π_current - log π_ref)
+    reference_logprobs = batch.reference_logprobs.array
+    kl_div = jnp.exp(current_logprobs) * (current_logprobs - reference_logprobs)
+    kl_loss = jnp.sum(kl_div * mask) / jnp.maximum(jnp.sum(mask), 1.0)
+
+    # Total loss
+    total_loss = ppo_loss + kl_coef * kl_loss
+    return total_loss
 
 
-class TrainingWorker:
-    """Training worker that reads rollout data from a queue and trains the model."""
+def compute_rloo_loss(
+    model: LmHeadModel,
+    batch: JaxRolloutBatch,
+    *,
+    key: jax.Array | None = None,
+    kl_coef: float = 0.1,
+) -> jax.Array:
+    """Compute RLOO (Reward Leave-One-Out) loss with importance sampling.
+
+    Args:
+        model: The language model
+        batch: JaxRolloutBatch containing rollout data with RLOO advantages
+        key: JAX random key for dropout
+        kl_coef: Coefficient for KL regularization
+
+    Returns:
+        Tuple of (loss, aux_metrics)
+    """
+    # Get logits from current policy
+    model_output = model(
+        input_ids=batch.input_ids,
+        attn_mask=batch.attention_mask,
+        pos_ids=batch.position_ids,
+        key=key,
+    )
+
+    logits = model_output
+
+    logits_array = logits.array
+    target_ids_array = batch.target_ids.array
+    policy_logprobs_array = batch.policy_logprobs.array
+    loss_weights_array = batch.loss_weights.array
+    loss_masks_array = batch.loss_masks.array
+    reference_logprobs_array = batch.reference_logprobs.array
+
+    logits_array = logits_array.astype(jnp.float32)
+    token_loss = softmax_cross_entropy_with_integer_labels(logits_array, target_ids_array)
+
+    current_logprobs = -token_loss
+
+    # importance sampling since we're using off-policy data
+    # ratio = π_current(a|s) / π_old(a|s)
+    log_ratio = jnp.subtract(current_logprobs, policy_logprobs_array)
+    ratio = jnp.exp(log_ratio)
+    # ratio = jnp.clip(ratio, 0.8, 1.2)
+
+    # RLOO loss with importance sampling
+    # batch.loss_weights contains RLOO advantages: r_i - mean(r_j for j≠i)
+    # weighted_loss = -ratio * loss_weights_array * loss_masks_array
+    # weighted_loss = token_loss * ratio * loss_weights_array
+    weighted_loss = -ratio * loss_weights_array
+    reinforce_loss = jnp.sum(weighted_loss * loss_masks_array) / jnp.sum(loss_masks_array)
+
+    # KL regularization
+    kl_penalty = jnp.exp(current_logprobs) * (current_logprobs - reference_logprobs_array)
+    kl_loss = jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
+
+    loss = reinforce_loss + kl_coef * kl_loss
+    return loss
+
+
+class StreamingRolloutLoader:
+    """Direct loader for streaming rollout data.
+
+    Rollouts are a continous stream of data, not really well modeled by the
+    default Levanter indexing API. Instead of implemented a Dataset, we
+    implement the expected data loader interface directly.
+    """
+
+    def __init__(self, data_loader: ReplayDataLoader, config: TrainerConfig):
+        """Initialize the streaming rollout loader.
+
+        Args:
+            data_loader: The replay data loader to get batches from
+            config: Trainer config with mesh and axis mapping information
+        """
+        self.data_loader = data_loader
+        self.config = config
+        self.timeout = 60.0
+
+    def __iter__(self):
+        """Yield batches continuously from the replay buffer."""
+        while True:
+            batch = self.data_loader.get_training_batch(timeout=self.timeout)
+            if not batch:
+                logger.warning("No batch received from data loader within timeout, retrying...")
+                continue
+
+            named_batch = self._convert_to_named_batch(batch)
+            with self.config.device_mesh:
+                named_batch = hax.shard(named_batch, self.config.compute_axis_mapping)
+
+            yield named_batch
+
+    def _convert_to_named_batch(self, batch: RolloutBatch):
+        """Convert numpy arrays to JAX arrays with proper named axes."""
+        jax_batch = batch.to_jax()
+
+        # Add named axes to all fields
+        return JaxRolloutBatch(
+            input_ids=hax.named(jax_batch.input_ids, ("batch", "position")),
+            attention_mask=hax.named(jax_batch.attention_mask, ("batch", "position")),
+            position_ids=hax.named(jax_batch.position_ids, ("batch", "position")),
+            target_ids=hax.named(jax_batch.target_ids, ("batch", "position")),
+            loss_weights=hax.named(jax_batch.loss_weights, ("batch", "position")),
+            loss_masks=hax.named(jax_batch.loss_masks, ("batch", "position")),
+            reference_logprobs=hax.named(jax_batch.reference_logprobs, ("batch", "position")),
+            policy_logprobs=hax.named(jax_batch.policy_logprobs, ("batch", "position")),
+        )
+
+
+class StopTrainerException(Exception):
+    """Exception to signal stopping the trainer."""
+
+    pass
+
+
+@dataclass
+class ReplayBufferConfig:
+    """Configuration for the replay buffer."""
+
+    capacity: int = 10000
+    """Maximum number of examples per environment in the buffer."""
+
+    alpha: float = 3.0
+    """Recency bias for sampling, higher values favor newer examples."""
+
+
+@dataclass
+class TrainWorkerConfig:
+    """Configuration for Levanter-based RL training worker."""
+
+    rollout_reader: RolloutReader
+    model: LmConfig
+    trainer: TrainerConfig
+    optimizer: OptimizerConfig
+    replay_buffer: ReplayBufferConfig
+
+    weight_transfer: WeightTransferConfig
+
+    # Initial checkpoints for the reference model, either a string path or HF repo
+    initial_checkpoint_hf: RepoRef | None = None
+    initial_checkpoint_levanter: str | None = None
+
+    # RLOO-specific parameters
+    kl_coef: float = 0.1
+
+
+class TrainWorker:
+    """Training worker that reads rollout data from a queue and trains the model using Levanter."""
 
     def __init__(
         self,
-        training_config: TrainingConfig,
-        rollout_reader: RolloutReader,
-        coordinator=None,
+        config: TrainWorkerConfig,
     ):
         """Initialize training worker.
 
         Args:
-            training_config: Training configuration.
-            rollout_reader: Reader to read rollout data from.
-            coordinator: Coordinator for weight transfer (required for RAY_REMOTING and JAX_TRANSFER_SERVER modes).
+            config: Training worker configuration with Levanter components.
+            coordinator: Coordinator for weight transfer.
         """
-        self.training_config = training_config
-        self.coordinator = coordinator
-
-        jax_distributed_initalize(**self.training_config.distributed.jax_distributed_initialize_config)
-        jax_distributed_barrier()
-
-        self.mesh = MeshShardingHelper(
-            self.training_config.distributed.train_sharding,
-            ["replica", "fsdp", "sequence", "tensor"],
-            mesh_axis_splitting=self.training_config.distributed.physical_axis_splitting,
-        )
-
-        self.rollout_reader = rollout_reader
-
+        levanter.initialize(config.trainer)
+        self.config = config
         self._should_stop = False
         self.weight_id = 0
+        if isinstance(config.model.tokenizer, str):
+            self.tokenizer = AutoTokenizer.from_pretrained(config.model.tokenizer)
+        else:
+            self.tokenizer = config.model.tokenizer
 
-        # Initialize components within mesh context
-        with self.mesh.get_context():
-            llama_config = llama_config_from_model_config(
-                self.training_config.model.model_paths,
-                self.training_config.model.model_config_override,
-            )
-            self.model = build_training_model(llama_config, self.training_config)
-            jax_distributed_barrier()
+        self.rollout_reader = config.rollout_reader
 
-            config = self.model.config
-            self.train_params_sharding_rules = TreePathShardingRule(
-                *config.get_partition_rules(
-                    model_all_gather_axis=("fsdp", "sequence"),
-                )
-            )
-            self.train_intermediate_sharding_rules = config.get_intermediate_sharding_rules(
-                data_axis=("replica", "fsdp"),
-                sequence_axis="sequence",
-            )
-            self.tokenizer = load_tokenizer(
-                self.training_config.model.model_paths,
-                self.training_config.model.tokenizer_override,
-            )
-
-            # Extract frequently used config values
-            self.max_input_length = self.training_config.hyperparameters.max_input_length
-            self.max_output_length = self.training_config.hyperparameters.max_output_length
-            self.train_bsize = self.training_config.hyperparameters.train_bsize
-            self.pad_token_id = self.training_config.hyperparameters.pad_token_id
-            self.kl_coef = self.training_config.hyperparameters.kl_coef
-
-            self._setup_optimizer()
-            self._compile_functions()
-            self._setup_logger()
-            self.train_state_shape = jax.eval_shape(lambda: self.init_fn(jax.random.PRNGKey(0)))
-            self.train_state_shard_fns, self.train_state_gather_fns = self.mesh.make_shard_and_gather_fns(
-                self.train_state_shape, self.train_params_sharding_rules
-            )
-            self._setup_weight_transfer()
-
-            # Initialize replay buffer and data loader after all setup
-            self.replay_buffer = ReplayBuffer(
-                capacity=32000,
-                local_batch_size=self.train_bsize,
-                recency_alpha=3.0,
-                process_id=jax.process_index(),
-                total_processes=jax.process_count(),
-            )
-            self.data_loader = ReplayDataLoader(
-                rollout_reader=self.rollout_reader,
-                replay_buffer=self.replay_buffer,
-                rollout_fetch_interval=1.0,
-            )
-
-    def _setup_optimizer(self):
-        """Setup optimizer configuration."""
-        optim_config = self.training_config.hyperparameters.optim_config
-        weight_decay_mask = get_weight_decay_mask(optim_config.weight_decay_exclusions)
-        self.grad_accum_steps = optim_config.grad_accum_steps
-        optimizer, self.optimizer_info = load_adamw_optimizer(config=optim_config, weight_decay_mask=weight_decay_mask)
-
-        if self.grad_accum_steps > 1:
-            optimizer = optax.MultiSteps(optimizer, self.grad_accum_steps)
-
-        self.optimizer = optimizer
-
-    def _setup_logger(self):
-        """Setup logger for training metrics."""
-        logging_config = self.training_config.logging
-        if logging_config.enable is None:
-            logging_config.enable = jax.process_index() == 0
-        if logging_config.config_to_log is None:
-            logging_config.config_to_log = dataclasses.asdict(self.training_config)
-
-        logger.info(f"Initializing logger on worker {jax.process_index()}, enabled: {logging_config.enable}")
-
-        self.logger = WandbLogger(
-            self.training_config.logging.wandb_project,
-            output_dir=self.training_config.output_dir,
-            online=logging_config.online,
-            prefix=logging_config.prefix,
-            prefix_to_id=logging_config.prefix_to_id,
-            experiment_id=logging_config.experiment_id,
-            enable=logging_config.enable,
-            config_to_log=logging_config.config_to_log,
+        self.replay_buffer = ReplayBuffer(
+            # TODO configure from worker config instead
+            capacity=config.replay_buffer.capacity,
+            local_batch_size=config.trainer.train_batch_size,
+            recency_alpha=config.replay_buffer.alpha,
+            process_id=jax.process_index(),
+            total_processes=jax.process_count(),
+        )
+        self.data_loader = ReplayDataLoader(
+            rollout_reader=self.rollout_reader,
+            replay_buffer=self.replay_buffer,
+            rollout_fetch_interval=1.0,
         )
 
-    def _compile_functions(self):
-        """Compile JAX functions for training."""
-
-        @partial(
-            self.mesh.sjit,
-            in_shardings=(self.train_params_sharding_rules,),
-            out_shardings=self.train_params_sharding_rules,
-            annotation_shardings=self.train_intermediate_sharding_rules,
+        self.transfer_server = weight_transfer_manager.create_weight_transfer_server(
+            config.weight_transfer,
+            mesh=self.config.trainer.device_mesh,
+            axis_mapping=self.config.trainer.compute_axis_mapping,
         )
-        def create_train_state_from_params(params):
-            return TrainState.create(params=params, tx=self.optimizer, apply_fn=None)
 
-        @partial(
-            self.mesh.sjit,
-            in_shardings=(PS(),),
-            out_shardings=self.train_params_sharding_rules,
-            annotation_shardings=self.train_intermediate_sharding_rules,
-        )
-        def init_fn(rng):
-            params = self.model.init_weights(rng, (self.train_bsize, self.max_input_length + self.max_output_length - 1))
-            return create_train_state_from_params(params)
+        # Build models during initialization
+        self._build_models()
 
-        @partial(
-            self.mesh.sjit,
-            in_shardings=(self.train_params_sharding_rules, PS(), PS()),
-            out_shardings=(self.train_params_sharding_rules, PS()),
-            args_sharding_constraint=(
-                self.train_params_sharding_rules,
-                PS(),
-                PS(("replica", "fsdp")),
-            ),
-            donate_argnums=(0,),
-            annotation_shardings=self.train_intermediate_sharding_rules,
-        )
-        def train_step(train_state, rng, batch: RolloutBatch):
-            def loss(params):
-                logits = self.model(
-                    input_ids=batch.input_ids,
-                    attention_mask=batch.attention_mask,
-                    position_ids=batch.position_ids,
-                    params=params,
-                    dropout_rng=rng,
-                    train=True,
-                ).logits
-                logits = logits.astype(jnp.float32)
-                token_loss = softmax_cross_entropy_with_integer_labels(logits, batch.target_ids)
+    def _build_models(self):
+        """Build reference and initial policy models."""
+        config = self.config
+        seed = config.trainer.seed
+        model_key = jrandom.PRNGKey(seed)
+        Vocab = hax.Axis("vocab", self.tokenizer.vocab_size)
 
-                # Current policy log probabilities (π_θ at training time)
-                current_logprobs = -token_loss
-
-                # RLOO importance sampling ratio: π_θ(a|s) / π_old(a|s)
-                # batch.policy_logprobs contains log probs from the policy that generated samples
-                log_ratio = current_logprobs - batch.policy_logprobs
-                ratio = jnp.exp(log_ratio)
-
-                # RLOO loss with importance sampling
-                # batch.loss_weights contains RLOO advantages: r_i - mean(r_j for j≠i)
-                # Multiply by ratio for off-policy correction
-                weighted_advantages = ratio * batch.loss_weights
-                reinforce_loss = -jnp.sum(weighted_advantages * batch.loss_masks) / jnp.sum(batch.loss_masks)
-
-                # KL regularization against reference policy (prevents drift)
-                # This is standard KL(π_θ || π_ref) to keep policy close to reference
-                kl_penalty = current_logprobs - batch.reference_logprobs
-                kl_loss = -jnp.sum(kl_penalty * batch.loss_masks) / jnp.sum(batch.loss_masks)
-
-                loss = reinforce_loss + self.kl_coef * kl_loss
-                return loss, {
-                    "reinforce_loss": reinforce_loss,
-                    "kl_loss": kl_loss,
-                }
-
-            grad_fn = jax.value_and_grad(loss, has_aux=True)
-            (loss, aux), grads = grad_fn(train_state.params)
-            train_state = train_state.apply_gradients(grads=grads)
-            metrics = dict(
-                loss=loss,
-                reinforce_loss=aux["reinforce_loss"],
-                kl_loss=aux["kl_loss"],
-                learning_rate=self.optimizer_info["learning_rate_schedule"](train_state.step),
-                gradient_norm=global_norm(grads),
-                param_norm=global_norm(train_state.params),
-            )
-            return train_state, metrics
-
-        # Store compiled functions
-        self.create_train_state_from_params = create_train_state_from_params
-        self.init_fn = init_fn
-        self.train_step = train_step
-
-    def _initialize_training_state(self):
-        """Initialize training state with proper checkpoint loading."""
-        jax_distributed_barrier()
-
-        checkpoint_path = self._find_checkpoint_path()
-
-        if checkpoint_path:
-            train_state = self.create_train_state_from_params(
-                load_checkpoint(
-                    checkpoint_path,
-                    shard_fns=self.train_state_shard_fns.params,
-                    remove_dict_prefix=self.training_config.model.model_paths.remove_dict_prefix,
-                    convert_to_dtypes=jax.tree_util.tree_map(
-                        lambda x: self.training_config.model.training_param_dtype,
-                        self.train_state_shape.params,
-                    ),
-                )
+        # Build or load initial model
+        if config.initial_checkpoint_levanter is not None or config.initial_checkpoint_hf is not None:
+            initial_model = load_model_from_checkpoint_or_hf(
+                model_config=config.model,
+                trainer_config=config.trainer,
+                vocab_axis=Vocab,
+                tokenizer=self.tokenizer,
+                hf_checkpoint_path=config.initial_checkpoint_hf,
+                levanter_checkpoint_path=config.initial_checkpoint_levanter,
+                key=model_key,
             )
         else:
-            logger.warning("No params path provided, initializing with random weights...")
-            train_state = self.init_fn(jax.random.PRNGKey(0))
+            with (
+                config.trainer.device_mesh,
+                hax.axis_mapping(config.trainer.compute_axis_mapping),
+            ):
+                initial_model = config.model.build(Vocab, key=model_key)
 
-        jax_distributed_barrier()
-        self.checkpoint_queue = deque()
-        return train_state
+        # Reference model is the frozen initial model (for KL regularization)
+        self.reference_model = initial_model
 
-    def _find_checkpoint_path(self) -> str | None:
-        """Find the best checkpoint path to load from."""
-        # Check for existing checkpoint to resume from
-        checkpoint_dir = os.path.join(self.training_config.output_dir, "checkpoints")
-        if os.path.exists(checkpoint_dir):
-            checkpoint_steps = [int(d.split("_")[1]) for d in os.listdir(checkpoint_dir) if d.startswith("step_")]
-            if checkpoint_steps:
-                latest_checkpoint_step = max(checkpoint_steps)
-                logger.info(f"Resuming training from checkpoint at step {latest_checkpoint_step}...")
-                return str(
-                    Path(self.training_config.output_dir)
-                    / "checkpoints"
-                    / f"step_{latest_checkpoint_step}"
-                    / "params.msgpack"
-                )
+    def train(self):
+        """Main training method using Levanter's standard train_lm infrastructure."""
+        logger.info("Starting RLOO training with Levanter...")
 
-        # Check for provided params path
-        if self.training_config.model.model_paths.params:
-            logger.info("Restoring model from provided params path...")
-            return self.training_config.model.model_paths.params
+        config = self.config
+        optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-        # Check for provided train state path
-        if self.training_config.model.model_paths.train_state:
-            logger.info("Restoring model from provided train state path...")
-            return self.training_config.model.model_paths.train_state
+        def _loss_function(model, batch, key):
+            return compute_rloo_loss(model, batch, key=key, kl_coef=config.kl_coef)
 
-        return None
+        with Trainer(config.trainer, optimizer, _loss_function) as trainer, self.data_loader:
+            seed = config.trainer.seed
+            _, training_key = jrandom.split(jrandom.PRNGKey(seed), 2)
 
-    def _setup_weight_transfer(self):
-        """Initialize weight transfer manager."""
-        # Setup checkpoint directory for weight transfer config
-        if not self.training_config.weight_transfer.checkpoint_dir:
-            self.training_config.weight_transfer.checkpoint_dir = os.path.join(
-                self.training_config.output_dir, "checkpoints"
+            # Use the pre-built reference model as the starting point for policy training
+            # The trainer will create a trainable copy that becomes the policy model
+            state = trainer.initial_state(training_key, model_init=lambda: self.reference_model)
+
+            self._configure_training_hooks(trainer)
+            train_loader = StreamingRolloutLoader(self.data_loader, config.trainer)
+
+            try:
+                trainer.train(state, train_loader)
+            except StopTrainerException:
+                pass
+
+    def _configure_training_hooks(self, trainer):
+        """Configure training hooks. Override in tests for additional hooks."""
+        trainer.add_hook(
+            self.create_weight_transfer_hook(),
+            every=self.config.weight_transfer.sync_interval_steps,
+        )
+        checkpointer = trainer.config.checkpointer.create("train-id-0")
+
+        def _checkpoint_step(info: levanter.callbacks.StepInfo):
+            logger.info("Checking for checkpoint at step %d", info.step)
+            checkpointer.on_step(info, force=True)
+
+        trainer.add_hook(_checkpoint_step, every=100)
+
+        def _stop_on_signal(info: levanter.callbacks.StepInfo):
+            if self._should_stop:
+                raise StopTrainerException()
+
+        trainer.add_hook(_stop_on_signal, every=1)
+
+    def create_weight_transfer_hook(self):
+        def weight_transfer_hook(info: levanter.callbacks.StepInfo):
+            step = info.step
+            state = info.state
+
+            if step % self.config.weight_transfer.sync_interval_steps != 0:
+                return
+
+            self.weight_id += 1
+            logger.info(
+                "Transferring weights at step %d, weight_id %d, loss=%s",
+                step,
+                self.weight_id,
+                info.loss,
             )
 
-        self.weight_transfer_manager = create_weight_transfer_server(
-            config=self.training_config.weight_transfer,
-            mesh=self.mesh,
-            params_sharding_rules=self.train_params_sharding_rules,
-            gather_fns=self.train_state_gather_fns,
-            model_config=self.model.config,
-            coordinator=self.coordinator,
-        )
+            model_params = state.model
+            self.transfer_server.serve_weights(self.weight_id, model_params)
+            logger.info(f"Successfully transferred weights with ID {self.weight_id}")
 
-    def _transfer_weights(self, train_state, step):
-        """Transfer weights using the weight transfer manager."""
-        self.weight_id += 1
-        logger.info("Transferring weights at step %d, weight_id %d...", step, self.weight_id)
-        self.weight_transfer_manager.serve_weights(self.weight_id, train_state.params)
+        return weight_transfer_hook
 
     def stop(self):
         """Stop the training worker."""
         self._should_stop = True
-
-    def save_checkpoint(self, train_state, step):
-        """Save model checkpoint."""
-        jax_distributed_barrier()
-        if (self.training_config.logging.max_checkpoints is not None) and (
-            len(self.checkpoint_queue) >= self.training_config.logging.max_checkpoints
-        ):
-            old_step = self.checkpoint_queue.popleft()
-            # TODO(power): this is an ugly way to check for the coordinator
-            if self.logger.can_save():
-                old_path = os.path.join(self.training_config.output_dir, "checkpoints", f"step_{old_step}")
-                delete_with_bucket(old_path, recursive=True)
-
-        logger.info(f"Saving checkpoint at step {step}...")
-
-        metadata = dict(
-            step=step,
-            args_dict=dataclasses.asdict(self.training_config),
-        )
-
-        checkpoint_config = dataclasses.asdict(self.training_config.checkpoint)
-        checkpoint_config.pop("save_model_freq", None)
-        checkpoint_config.pop("save_optimizer_state", None)
-
-        if self.training_config.checkpoint.save_optimizer_state is False:
-            params = train_state.params
-        else:
-            params = train_state
-
-        checkpointer(
-            path=os.path.join(self.training_config.output_dir, "checkpoints", f"step_{step}"),
-            params=params,
-            config=self.model.config.to_dict(),
-            gather_fns=self.train_state_gather_fns,
-            metadata=metadata,
-            active=jax.process_index() == 0,
-            **checkpoint_config,
-        )
-
-        self.checkpoint_queue.append(step)
-        logger.info("Checkpoint saved.")
-        jax_distributed_barrier()
-
-    def train(self):
-        """Main training loop reading from rollout queue."""
-        logger.info("Starting training worker...")
-        jax_distributed_barrier()
-
-        step = 0
-        rng = jax.random.PRNGKey(0)
-
-        logger.info(
-            "Beginning training loop, target steps: %s",
-            self.training_config.hyperparameters.num_train_steps,
-        )
-        train_state = self._initialize_training_state()
-
-        if self.training_config.logging.save_initial_checkpoint:
-            self.save_checkpoint(train_state, 0)
-
-        # Start data loader
-        with self.data_loader:
-            while step < self.training_config.hyperparameters.num_train_steps:
-                if self._should_stop:
-                    logger.info("Stop signal received, stopping training worker...")
-                    break
-
-                logger.info(f"Starting training step {step}...")
-                step_metrics = StepMetrics(step=step)
-
-                # Get training data from replay buffer
-                with step_metrics.timer() as batch_fetch_timer:
-                    batch = self.data_loader.get_training_batch(timeout=60.0)
-                    if batch is None:
-                        logger.info("No training batch available, waiting...")
-                        continue
-                    step_metrics.batch_fetch_time = batch_fetch_timer()
-
-                step += 1
-
-                # Truncate batch to max sequence length just in case we are reading
-                # an older inference file.
-                max_seq_len = self.training_config.model.model_config_override.max_sequence_length
-                batch = batch.truncate_sequence(max_seq_len)
-                batch = batch.to_jax()
-
-                logger.info("Training on batch with shape: %s", batch.input_ids.shape)
-
-                with step_metrics.timer() as train_step_timer:
-                    rng, subrng = jax.random.split(rng)
-                    train_state, metrics = self.train_step(train_state, subrng, batch)
-                    step_metrics.train_step_time = train_step_timer()
-
-                with step_metrics.timer() as sync_timer:
-                    jax_distributed_barrier()
-
-                step_metrics.train_step_time += sync_timer()
-                if step % 10 == 0:
-                    logger.info("Finished training step", step_metrics.model_dump())
-
-                if self.training_config.logging.log_freq > 0 and (step % self.training_config.logging.log_freq == 0):
-                    log_metrics = {}
-                    log_metrics.update(jax.device_get(metrics))
-                    log_metrics.update(self.weight_transfer_manager.get_metrics())
-                    log_metrics.update(step_metrics.model_dump())
-                    self.logger.log(log_metrics)
-                    logger.info(f"Logging metrics at step {step}... {log_metrics}")
-
-                if (step % self.training_config.weight_transfer.sync_interval_steps) == 0:
-                    self._transfer_weights(train_state, step)
-
-                if (
-                    self.training_config.checkpoint.save_model_freq > 0
-                    and step % self.training_config.checkpoint.save_model_freq == 0
-                ):
-                    logger.info("Saving checkpoint at step %d...", step)
-                    self.save_checkpoint(train_state, step)
-
-        # Final checkpoint and weight transfer
-        if self.training_config.checkpoint.save_model_freq > 0:
-            self._transfer_weights(train_state, step)
-            self.save_checkpoint(train_state, step)  # Always save final checkpoint
-
-        # Cleanup
-        self.weight_transfer_manager.cleanup()
-        jax_distributed_barrier()
-        self.logger.finish()
-        jax_distributed_barrier()
-
-        logger.info(f"Training completed after {step} steps")
