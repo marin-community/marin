@@ -1,5 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from levanter.models.llama import LlamaConfig
 from marin.execution import InputName
 from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig
 from marin.resources import ResourceConfig, TpuPodConfig
@@ -15,9 +16,15 @@ class AnnealConfig:
     # Annealing dataset and proportions
     dataset_config: LMMixtureDatasetConfig
 
+    # Model Config
+    model_config: LlamaConfig
+
     # Model Checkpoint related
     # The path to the checkpoint to initialize from. This is the checkpoint you start the annealing from.
     initialize_from_checkpoint_path: str | InputName = DEFAULT_CHECKPOINT_PATH
+
+    # The path to the model to initialize from. This is the model you start the annealing from.
+    initialize_from_hf: str | None = None
 
     # Training schedule related
     # The learning rate to use for training. Since our checkpoint has a stable phase LR of 1e-3, we use that.
@@ -31,6 +38,9 @@ class AnnealConfig:
 
     # The learning rate schedule to use. Linear is recommended and commonly used for annealing.
     lr_schedule: str = "linear"
+
+    # The warmup to use for the training optimizer.
+    warmup: float | None = None
 
     # The batch size to use for training.
     train_batch_size: int = 1024
@@ -50,6 +60,9 @@ class AnnealConfig:
     # This argument is used in the default_train. If set to True, the validation set is Paloma.
     # If set to False, we will not calculate validation loss.
     use_default_validation: bool = True
+
+    # WandB tags
+    wandb_tags: list[str] = field(default_factory=list)
 
     @property
     def tpu_type(self) -> str | None:

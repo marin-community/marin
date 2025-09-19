@@ -171,3 +171,28 @@ def discover_hf_checkpoints(base_path: str):
     checkpoint_paths = [os.path.dirname(path) for path in paths if _is_checkpoint_dir(os.path.dirname(path))]
 
     return checkpoint_paths
+
+
+def discover_levanter_checkpoints(base_path: str):
+    """
+    Discover the Levanter checkpoints in the given path, sorted by the last modified time. (Most recent last)
+    Args:
+        base_path:  Fsspec Path to the directory containing the checkpoints, possibly in nested directories.
+    Returns:
+        List of paths to the checkpoints, sorted by the last modified time.
+    """
+
+    def _is_checkpoint_dir(path):
+        return fsspec_exists(os.path.join(path, "metadata.json")) and fsspec_exists(
+            os.path.join(path, "model"),
+        )
+
+    paths = fsspec_glob(os.path.join(base_path, "**/metadata.json"))
+
+    # sort by modified time
+    paths.sort(key=lambda path: fsspec_mtime(path))
+
+    # Filter out the paths that are not checkpoint directories
+    checkpoint_paths = [os.path.dirname(path) for path in paths if _is_checkpoint_dir(os.path.dirname(path))]
+
+    return checkpoint_paths

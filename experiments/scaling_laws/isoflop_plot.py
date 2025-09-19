@@ -4,6 +4,7 @@ import jax.numpy as jnp
 from jaxopt import ScipyMinimize
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import re
 
 # ---------------- Theme ----------------
@@ -44,7 +45,14 @@ MARKERS = [
     "bowtie",
 ]
 DASHES = ["solid", "dot", "dash", "longdash", "dashdot", "longdashdot"]
-DEFAULT_METRIC_KEY = "eval/paloma/c4_en/bpb"
+# Allow multiple metrics; each becomes a panel in the plots
+DEFAULT_METRIC_KEYS = [
+    "eval/paloma/c4_en/bpb",
+    "lm_eval/mmlu_sl_verb_5_shot/choice_logprob",
+    "lm_eval/mmlu_sl_verb_5_shot/acc_norm",
+    "eval/paloma/bpb",
+]
+# DEFAULT_METRIC_KEY = "lm_eval/mmlu_sl_verb_5_shot/choice_logprob"
 SEQ_LEN = 4096
 
 _MIN_MARKER = dict(symbol="diamond", size=10, color="#000000")
@@ -76,7 +84,7 @@ def _parse_flops_from_name(name: str) -> float | None:
         return None
 
 
-def df_from_sources(source_runs: list[tuple[list, str]], metric_key: str = DEFAULT_METRIC_KEY) -> pd.DataFrame:
+def df_from_sources(source_runs: list[tuple[list, str]], metric_key: str = DEFAULT_METRIC_KEYS[0]) -> pd.DataFrame:
     """Build a dataframe from [(runs, fragment), ...] and compute a 'label' per row."""
     records = []
     for runs, fragment in source_runs:
@@ -104,8 +112,12 @@ def df_from_sources(source_runs: list[tuple[list, str]], metric_key: str = DEFAU
 
             tokens = steps * batch * SEQ_LEN
             loss = run.summaryMetrics.get(metric_key)
+            # print(loss)
             if loss is None:
                 continue
+
+            if "choice_logprob" in metric_key:
+                loss = -loss
 
             params = run.summaryMetrics.get("parameter_count")
 
@@ -303,6 +315,49 @@ def iso_plot_with_minima_df(df: pd.DataFrame):
     return fig_iso, fig_scale
 
 
+# ---------------- Multi-metric helpers ----------------
+def multi_metric_subplots_from_sources(
+    source_runs: list[tuple[list, str]], metric_keys: list[str] = DEFAULT_METRIC_KEYS
+):
+    """
+    Build two multi-panel figures (ISO and SCALING), one column per metric key.
+    """
+    if not metric_keys:
+        metric_keys = DEFAULT_METRIC_KEYS
+
+    num_cols = len(metric_keys)
+    fig_iso_all = make_subplots(rows=1, cols=num_cols, subplot_titles=metric_keys)
+    fig_scaling_all = make_subplots(rows=1, cols=num_cols, subplot_titles=metric_keys)
+
+    for i, mkey in enumerate(metric_keys, start=1):
+        df_m = df_from_sources(source_runs, metric_key=mkey)
+        fig_iso_m, fig_scaling_m = iso_plot_with_minima_df(df_m)
+
+        # Add traces to ISO panel i
+        for tr in fig_iso_m.data:
+            fig_iso_all.add_trace(tr, row=1, col=i)
+        # Log-scale axes and titles per panel
+        fig_iso_all.update_xaxes(type="log", title_text="Tokens (log)", row=1, col=i)
+        fig_iso_all.update_yaxes(
+            title_text=("Loss" if "choice_logprob" not in mkey else "-Choice LogProb"), row=1, col=i
+        )
+
+        # Add traces to SCALING panel i
+        for tr in fig_scaling_m.data:
+            fig_scaling_all.add_trace(tr, row=1, col=i)
+        fig_scaling_all.update_xaxes(type="log", title_text="Compute C (FLOPs, log)", row=1, col=i)
+        fig_scaling_all.update_yaxes(type="log", title_text="Optimal tokens N* (log)", row=1, col=i)
+
+    fig_iso_all.update_layout(
+        template="plotly_white", title="Marin IsoFLOP Suite (multi-metric)", width=1400 * num_cols, height=1400
+    )
+    fig_scaling_all.update_layout(
+        template="plotly_white", title="Scaling fits per dataset (multi-metric)", width=1400 * num_cols, height=800
+    )
+
+    return fig_iso_all, fig_scaling_all
+
+
 # ---------------- Main ----------------
 def main(sources: list[tuple[str, str]]):
     """
@@ -310,14 +365,12 @@ def main(sources: list[tuple[str, str]]):
     We query with r'isoflop.*(<fragment>)' and infer dataset labels from displayName,
     falling back to the fragment so nothing gets dropped.
     """
-    RUN_ID = "marin-scaling-suite-isoflop-dolma-100-subreddits"
     wandb.login()
     run = wandb.init(
         entity="marin-community",
         project="marin-analysis",
         job_type="isoflop-analysis",
-        id=RUN_ID,
-        resume="allow",
+        resume="never",
         name="isoflop-analysis",
     )
 
@@ -329,19 +382,33 @@ def main(sources: list[tuple[str, str]]):
         if not fragment:
             raise ValueError("Empty regex fragment")
 
+        # NOTE(chris): bit hacky, we don't wanna include the midtrain runs directly after
+        # e.g. nemo-wider-depth-adapt should not include runs from nemo-wider-depth-adapt-mt-flan-80-20
+        # regex = rf"isoflop.*({fragment})(?!-mt).*lmeval.*"
+        # regex = rf"isoflop.*({fragment})(?!-mt).*"
         regex = rf"isoflop.*({fragment}).*"
         filters = {"displayName": {"$regex": regex}, "state": "finished"}
         runs = api.runs(entity_project.strip(), filters=filters)
-        source_runs.append((runs, fragment.strip()))
+        # breakpoint()
+        fragment = fragment.strip()
+        source_runs.append((runs, fragment))
 
-    df = df_from_sources(source_runs)
-    # breakpoint()
-    fig_iso, fig_scaling = iso_plot_with_minima_df(df)
+        # Per-source plots
+        # per_df = df_from_sources([(runs, fragment)])
+        # fig_iso_src, fig_scaling_src = iso_plot_with_minima_df(per_df)
+        # wandb.log(
+        #     {
+        #         f"isoFLOP_plot/{fragment}": wandb.Plotly(fig_iso_src),
+        #         f"scaling_plot/{fragment}": wandb.Plotly(fig_scaling_src),
+        #     }
+        # )
 
+    # Aggregated overlay plots across all sources, with one panel per metric key
+    fig_iso_all, fig_scaling_all = multi_metric_subplots_from_sources(source_runs, DEFAULT_METRIC_KEYS)
     wandb.log(
         {
-            "isoFLOP_plot": wandb.Plotly(fig_iso),
-            "scaling_plot": wandb.Plotly(fig_scaling),
+            "isoFLOP_plot/all": wandb.Plotly(fig_iso_all),
+            "scaling_plot/all": wandb.Plotly(fig_scaling_all),
         }
     )
     run.finish()
@@ -349,12 +416,19 @@ def main(sources: list[tuple[str, str]]):
 
 if __name__ == "__main__":
     SOURCES = [
+        # ("stanford-mercury/marin", "nemo-wider-depth-adapt"),
         ("marin-community/marin", "nemo-wider-depth-adapt"),
-        ("marin-community/marin", "comma"),
-        ("stanford-mercury/marin", "dclm-default"),
-        ("stanford-mercury/marin", "nemo-wider-depth-adapt-decay"),
-        ("stanford-mercury/marin", "nemo-wider-depth-adapt-mt-flan-80-20"),
-        ("stanford-mercury/marin", "nemo-wider-depth-adapt-mt-flan-70-30"),
-        ("stanford-mercury/marin", "dolmino-dclm-sweep"),
+        # ("marin-community/marin", "comma"),
+        # ("stanford-mercury/marin", "dclm-default"),
+        # ("stanford-mercury/marin", "nemo-wider-depth-adapt-decay"),
+        # ("stanford-mercury/marin", "nemo-wider-depth-adapt-mt-flan-80-20"),
+        # ("stanford-mercury/marin", "nemo-wider-depth-adapt-mt-flan-70-30"),
+        # ("stanford-mercury/marin", "dolmino-dclm-sweep"),
+        # ("stanford-mercury/marin", "dclm-shard-1-1"),
+        # ("stanford-mercury/marin", "dclm-wrap-qa-1024-v2"),
+        # ("stanford-mercury/marin", "dclm-wrap-med-1024"),
+        # ("stanford-mercury/marin", "dclm-nemo-qa-1024"),
+        # ("stanford-mercury/marin", "dclm-mcq-1024"),
+        # ("stanford-mercury/marin", "dclm-qa-1b-1024"),
     ]
     main(SOURCES)

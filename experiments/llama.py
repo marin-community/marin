@@ -113,6 +113,17 @@ llama_8b = LlamaConfig(
     rope=Llama3RotaryEmbeddingsConfig(),
 )
 
+llama_3_2_1b = LlamaConfig(
+    seq_len=4096,
+    hidden_dim=2048,
+    intermediate_dim=8192,
+    num_heads=32,
+    num_kv_heads=8,
+    num_layers=16,
+    rope=Llama3RotaryEmbeddingsConfig(),
+    tie_word_embeddings=True,
+)
+
 
 llama_8b_old_rotary = LlamaConfig(
     seq_len=4096,

@@ -254,6 +254,7 @@ def candidate_configs(cfg: IsoFlopSweepConfig, budget: float):
         b2 = 0.98 ** (batch_size / 128)  # https://arxiv.org/pdf/2507.07101
 
         if batch_size < 8:
+            # Batch size too small for stability; skip this candidate
             continue
 
         steps_exact = budget / compute_total_flops(
