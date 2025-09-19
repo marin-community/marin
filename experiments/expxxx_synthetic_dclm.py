@@ -1,10 +1,12 @@
 from experiments.datashop.datashop_datasets import dclm_baseline_global_shard_1_local_shard_1
 from marin.download.filesystem.transfer import TransferConfig, transfer_files
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, output_path_of
 from marin.generation.chunk_utils import ChunkingConfig, chunk_with_config, ChunkStrategy
 from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig
+from marin.processing.classification.consolidate import consolidate, ConsolidateConfig, FilterConfig
 from marin.processing.classification.inference import run_inference
 
+from experiments.evals.resource_configs import SINGLE_TPU_V4_8
 from experiments.pretraining_datasets import dclm_baseline
 
 # Total files in this shard is 279. The total dataset is roughly 40B tokens. We want to sample
@@ -312,6 +314,195 @@ synthetic_dclm_10B_subset_wrapqa = ExecutorStep(
     ),
 )
 
+synthetic_dclm_10B_subset_wrapqa_1b = ExecutorStep(
+    name="documents/synthetic-dclm-subset-10B-wrapqa-1b",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=synthetic_dclm_10B_subset_chunked,
+        output_path=this_output_path(),
+        model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-1B-Instruct--c4219cc",
+        model_type="vllm",
+        attribute_name="wrap_qa_rephrase",
+        filetype="jsonl.zst",
+        batch_size=2048,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+        classifier_kwargs={
+            "template": WRAP_QA_REPHRASE_PROMPT,
+            "score_extractor_fn": None,
+            "engine_kwargs": engine_kwargs,
+            "generation_kwargs": generation_kwargs,
+            "save_original_generation": True,
+        },
+        # classifier_actor_options={"resources": {"TPU": 1}},
+        # use_autoscaling_actor_pool=True,
+    ),
+)
+
+# NOTE(chris): Does not work
+# synthetic_dclm_10B_subset_wrapqa_1b_ray_data = default_synthetic_data_generation(
+#     # datashop_runner.filtered_documents,
+#     # output_path_of(datashop_runner.filtered_documents),
+#     synthetic_dclm_10B_subset_chunked,
+#     "documents/synthetic-dclm-subset-10B-wrapqa-1b-ray-data",
+#     "/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-1B-Instruct--c4219cc",
+#     WRAP_QA_REPHRASE_PROMPT,
+#     "jsonl.zst",
+#     "text",
+#     checkpoint_id_column={"metadata": "WARC-Record-ID"},
+#     engine_kwargs=engine_kwargs,
+#     generation_kwargs=generation_kwargs,
+#     resource_config=SINGLE_TPU_V4_8,
+# )
+
+
+# BEGIN EXPERIMENT: Impact of high quality data rephrasing vs. low quality data rephrasing
+# Roughly 25B tokens given the heuristic that each file is roughly 150M tokens
+synthetic_dclm_25B_subset = ExecutorStep(
+    name="documents/dclm-baseline-25B-subset",
+    fn=transfer_files,
+    config=TransferConfig(
+        input_path=dclm_baseline,
+        output_path=this_output_path(),
+        num_random_files=170,
+    ),
+)
+
+synthetic_dclm_25B_finewebedu_filtered = ExecutorStep(
+    name="attributes/synthetic-dclm-25B-finewebedu",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=synthetic_dclm_25B_subset,
+        output_path=this_output_path(),
+        model_name="HuggingFaceFW/fineweb-edu-classifier",
+        model_type="fineweb",
+        attribute_name="fineweb-edu-quality",
+        filetype="jsonl.zst",
+        batch_size=512,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+    ),
+)
+
+synthetic_dclm_5B_high_quality_subset = ExecutorStep(
+        name=f"documents/quality_filtering/synthetic-dclm-25B-subset-fineweb-edu-top-20",
+        fn=consolidate,
+        config=ConsolidateConfig(
+            input_path=synthetic_dclm_25B_subset,
+            output_path=this_output_path(),
+            filters=[
+                FilterConfig(
+                    attribute_path=output_path_of(synthetic_dclm_25B_finewebedu_filtered),
+                    name=f"fineweb-edu-quality",
+                    type="classify",
+                    label="score",
+                    keep_fraction=0.2,
+                ),
+            ],
+            filetype="jsonl.zst",
+            ray_memory_limit_gb=12,
+        ),
+        pip_dependency_groups=["ddsketch"],
+    )
+
+synthetic_dclm_5B_low_quality_subset = ExecutorStep(
+    name=f"documents/quality_filtering/synthetic-dclm-25B-subset-fineweb-edu-bottom-20",
+    fn=consolidate,
+    config=ConsolidateConfig(
+        input_path=synthetic_dclm_25B_subset,
+        output_path=this_output_path(),
+        filters=[
+            FilterConfig(
+                attribute_path=output_path_of(synthetic_dclm_25B_finewebedu_filtered),
+                name=f"fineweb-edu-quality",
+                type="classify",
+                label="score",
+                keep_fraction=0.8,
+                reverse=True,
+            ),
+        ],
+        filetype="jsonl.zst",
+        ray_memory_limit_gb=12,
+    ),
+    pip_dependency_groups=["ddsketch"],
+)
+
+synthetic_dclm_5B_low_quality_subset_chunked = ExecutorStep(
+    name="documents/synthetic-dclm-subset-5B-low-quality-subset-chunked",
+    fn=chunk_with_config,
+    config=ChunkingConfig(
+        input_path=synthetic_dclm_5B_low_quality_subset,
+        output_path=this_output_path(),
+        filetype="jsonl.zst",
+        chunk_strategy=ChunkStrategy.PASSAGE,
+        chunk_size=350,  # 350 tokens per passage
+    ),
+)
+
+
+synthetic_dclm_5B_high_quality_subset_chunked = ExecutorStep(
+    name="documents/synthetic-dclm-subset-5B-high-quality-subset-chunked",
+    fn=chunk_with_config,
+    config=ChunkingConfig(
+        input_path=synthetic_dclm_5B_high_quality_subset,
+        output_path=this_output_path(),
+        filetype="jsonl.zst",
+        chunk_strategy=ChunkStrategy.PASSAGE,
+        chunk_size=350,  # 350 tokens per passage
+    ),
+)
+
+synthetic_dclm_5B_high_quality_subset_wrapqa = ExecutorStep(
+    name="documents/synthetic-dclm-subset-5B-chunked-wrapqa-hq-3b",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=synthetic_dclm_5B_high_quality_subset_chunked,
+        output_path=this_output_path(),
+        model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-3B-Instruct--0cb88a4",
+        model_type="vllm",
+        attribute_name="wrap_qa_rephrase",
+        filetype="jsonl.zst",
+        batch_size=2048,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+        classifier_kwargs={
+            "template": WRAP_QA_REPHRASE_PROMPT,
+            "score_extractor_fn": None,
+            "engine_kwargs": engine_kwargs,
+            "generation_kwargs": generation_kwargs,
+            "save_original_generation": True,
+        },
+    ),
+)
+
+synthetic_dclm_5B_low_quality_subset_wrapqa = ExecutorStep(
+    name="documents/synthetic-dclm-subset-5B-chunked-wrapqa-lq-3b",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=synthetic_dclm_5B_low_quality_subset_chunked,
+        output_path=this_output_path(),
+        model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-3B-Instruct--0cb88a4",
+        model_type="vllm",
+        attribute_name="wrap_qa_rephrase",
+        filetype="jsonl.zst",
+        batch_size=2048,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+        classifier_kwargs={
+            "template": WRAP_QA_REPHRASE_PROMPT,
+            "score_extractor_fn": None,
+            "engine_kwargs": engine_kwargs,
+            "generation_kwargs": generation_kwargs,
+            "save_original_generation": True,
+        },
+    ),
+)
 
 if __name__ == "__main__":
-    executor_main([synthetic_dclm_10B_subset_wrapqa])
+    # executor_main([synthetic_dclm_10B_subset_wrapqa])
+    executor_main([
+        # synthetic_dclm_25B_finewebedu_filtered,
+        # synthetic_dclm_5B_wrapqa,
+        synthetic_dclm_5B_low_quality_subset_wrapqa,
+        synthetic_dclm_5B_high_quality_subset_wrapqa,
+    ])

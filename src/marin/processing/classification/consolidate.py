@@ -56,6 +56,9 @@ class FilterConfig:
     upper_threshold: float | None = None
     """Keep documents where the value is below this."""
 
+    reverse: bool = False
+    """Reverse the direction of the filter. Normally, we keep documents where the value is above the threshold. If reverse is True, we keep documents where the value is below the threshold."""
+
 
 @dataclass(frozen=True)
 class ConsolidateConfig:
@@ -137,11 +140,18 @@ def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attr
         value = attribute_value
 
     # Check both lower and upper bounds if specified
-    if doc_filter.threshold is not None and value < doc_filter.threshold:
-        return False
 
-    if doc_filter.upper_threshold is not None and value > doc_filter.upper_threshold:
-        return False
+    if doc_filter.reverse:
+        if doc_filter.threshold is not None and value > doc_filter.threshold:
+            return False
+        if doc_filter.upper_threshold is not None and value < doc_filter.upper_threshold:
+            return False
+    else:
+        if doc_filter.threshold is not None and value < doc_filter.threshold:
+            return False
+
+        if doc_filter.upper_threshold is not None and value > doc_filter.upper_threshold:
+            return False
 
     return True
 

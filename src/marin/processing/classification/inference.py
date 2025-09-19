@@ -14,7 +14,6 @@ import pandas as pd
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from ray.util.queue import Queue
-
 import datetime
 import threading
 import queue
@@ -30,6 +29,7 @@ from marin.utils import (
     fsspec_mkdirs,
     rebase_file_path,
 )
+from marin.processing.classification.autoscaler import AutoscalingActorPool
 
 logger = logging.getLogger("ray")
 
@@ -184,6 +184,19 @@ def make_json_serializable(row: dict) -> dict:
             row[key] = value.isoformat()
     return row
 
+
+def convert_batch_dict_to_output_rows(batch_dict: dict, output_column_names: list[str], batch_size: int) -> list[dict]:
+    output_rows = []
+    for i in range(batch_size):
+        output_row = {}
+        for col in output_column_names:
+            if col in batch_dict:
+                output_row[col] = batch_dict[col][i]
+            elif col in batch_dict:
+                output_row[col] = batch_dict[col][i]
+        output_rows.append(output_row)
+
+    return output_rows
 
 def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = False):
     """Writes rows to a file in streaming fashion
@@ -427,9 +440,15 @@ def get_output_dataset_column_names(input_filename: str) -> list[str]:
 def process_file_with_quality_classifier_streaming(
     input_filename: str,
     output_filename: str,
-    quality_classifier: BaseClassifier,
+    # quality_classifier: BaseClassifier,
+    model_name_or_path: str,
+    attribute_name: str,
+    model_type: str,
+    classifier_kwargs: dict,
     batch_size: int = 512,
     resume: bool = True,
+    use_autoscaling_actor_pool: bool = False,
+    classifier_actor_options: dict = {},
 ):
     """Process a file with streaming I/O and resumption capability"""
     print(f"[*] Processing {input_filename} to {output_filename}")
@@ -471,6 +490,15 @@ def process_file_with_quality_classifier_streaming(
     batch = []
     total_processed = rows_to_skip
 
+    task_queue = Queue()
+    result_queue = Queue()
+
+    if use_autoscaling_actor_pool:
+        pool = AutoscalingActorPool(AutoClassifier, model_name_or_path, attribute_name, model_type, task_queue, result_queue, actor_kwargs=classifier_kwargs, actor_options=classifier_actor_options)
+    else:
+        quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type, **classifier_kwargs)
+
+    num_batches = 0
     for row in row_iterator:
         batch.append(row)
 
@@ -480,63 +508,94 @@ def process_file_with_quality_classifier_streaming(
             for key in input_column_names:
                 batch_dict[key] = [row.get(key, "") for row in batch]
 
+            num_batches += 1
             # Apply classifier
-            processed_batch = quality_classifier(batch_dict)
-
-            # Prepare output rows
-            output_rows = []
-            for i in range(len(batch)):
-                output_row = {}
-                for col in output_column_names:
-                    if col in processed_batch:
-                        output_row[col] = processed_batch[col][i]
-                    elif col in batch_dict:
-                        output_row[col] = batch_dict[col][i]
-                output_rows.append(output_row)
-
-            # Write batch
-            if output_filename.endswith(".parquet"):
-                parquet_batches.extend(output_rows)
-                # Write parquet in larger chunks to be efficient
-                if len(parquet_batches) >= batch_size * 10:
-                    _write_parquet_batch(parquet_batches, output_filename, append=append_mode or total_processed > 0)
-                    parquet_batches = []
+            if use_autoscaling_actor_pool:
+                task_queue.put(batch_dict)
             else:
-                # Enqueue JSONL write to overlap with next compute batch
-                # async_writer.submit_rows(output_rows)
+                processed_batch = quality_classifier(batch_dict)
+                output_rows = convert_batch_dict_to_output_rows(processed_batch, output_column_names, len(batch))
                 write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
-
-            total_processed += len(batch)
-            print(f"[*] Processed {total_processed} rows from {input_filename}")
+                total_processed += len(batch)
+                logger.info(f"[*] Processed {total_processed} rows from {input_filename}")
+            
             batch = []
 
-    # Process remaining rows in final batch
+
+    # Final batch that might not be of size batch_size
     if batch:
         batch_dict = {}
         for key in input_column_names:
             batch_dict[key] = [row.get(key, "") for row in batch]
+        num_batches += 1
 
-        processed_batch = quality_classifier(batch_dict)
-
-        output_rows = []
-        for i in range(len(batch)):
-            output_row = {}
-            for col in output_column_names:
-                if col in processed_batch:
-                    output_row[col] = processed_batch[col][i]
-                elif col in batch_dict:
-                    output_row[col] = batch_dict[col][i]
-            output_rows.append(output_row)
-
-        # Write final batch
-        if output_filename.endswith(".parquet"):
-            parquet_batches.extend(output_rows)
+        if use_autoscaling_actor_pool:
+            task_queue.put(batch_dict)
         else:
-            # Enqueue final JSONL rows
-            # async_writer.submit_rows(output_rows)
+            processed_batch = quality_classifier(batch_dict)
+            output_rows = convert_batch_dict_to_output_rows(processed_batch, output_column_names, len(batch))
             write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
+            total_processed += len(batch)
+            logger.info(f"[*] Processed {total_processed} rows from {input_filename}")
 
-        total_processed += len(batch)
+    if use_autoscaling_actor_pool:
+        num_collected_batches = 0
+        while num_collected_batches < num_batches:
+            processed_batch = result_queue.get()
+
+            num_collected_batches += 1
+
+            batch_size = len(processed_batch['text'])
+            output_rows = convert_batch_dict_to_output_rows(processed_batch, output_column_names, batch_size)
+            write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
+            total_processed += batch_size
+            logger.info(f"[*] Processed {total_processed} rows from {input_filename}")
+        
+        pool.shutdown()
+
+            # Write batch
+    #         if output_filename.endswith(".parquet"):
+    #             parquet_batches.extend(output_rows)
+    #             # Write parquet in larger chunks to be efficient
+    #             if len(parquet_batches) >= batch_size * 10:
+    #                 _write_parquet_batch(parquet_batches, output_filename, append=append_mode or total_processed > 0)
+    #                 parquet_batches = []
+    #         else:
+    #             # Enqueue JSONL write to overlap with next compute batch
+    #             # async_writer.submit_rows(output_rows)
+    #             write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
+
+    #         total_processed += len(batch)
+    #         print(f"[*] Processed {total_processed} rows from {input_filename}")
+    #         batch = []
+
+    # # Process remaining rows in final batch
+    # if batch:
+    #     batch_dict = {}
+    #     for key in input_column_names:
+    #         batch_dict[key] = [row.get(key, "") for row in batch]
+
+    #     processed_batch = quality_classifier(batch_dict)
+
+    #     output_rows = []
+    #     for i in range(len(batch)):
+    #         output_row = {}
+    #         for col in output_column_names:
+    #             if col in processed_batch:
+    #                 output_row[col] = processed_batch[col][i]
+    #             elif col in batch_dict:
+    #                 output_row[col] = batch_dict[col][i]
+    #         output_rows.append(output_row)
+
+    #     # Write final batch
+    #     if output_filename.endswith(".parquet"):
+    #         parquet_batches.extend(output_rows)
+    #     else:
+    #         # Enqueue final JSONL rows
+    #         # async_writer.submit_rows(output_rows)
+    #         write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
+
+    #     total_processed += len(batch)
 
     # Flush remaining writes
     # if output_filename.endswith(".parquet"):
@@ -594,14 +653,16 @@ def process_file_ray(
     batch_size: int = 512,
     resume: bool = True,
     queue: Queue | None = None,
+    use_autoscaling_actor_pool: bool = False,
+    classifier_actor_options: dict = {},
 ):
     try:
-        quality_classifier = AutoClassifier.from_model_path(
-            model_name_or_path, attribute_name, model_type, **classifier_kwargs
-        )
+        # quality_classifier = AutoClassifier.from_model_path(
+        #     model_name_or_path, attribute_name, model_type, **classifier_kwargs
+        # )
 
         process_file_with_quality_classifier_streaming(
-            input_filename, output_filename, quality_classifier, batch_size, resume
+            input_filename, output_filename, model_name_or_path, attribute_name, model_type, classifier_kwargs, batch_size, resume, use_autoscaling_actor_pool, classifier_actor_options
         )
 
     except Exception:
@@ -620,49 +681,50 @@ def process_file_ray(
 
 # @ray.remote(max_calls=1)
 # @remove_tpu_lockfile_on_exit
-@ray.remote(max_calls=1)
-@cached_or_construct_output(success_suffix="SUCCESS")
-def _process_dir(
-    input_path: str,
-    output_path: str,
-    model_name_or_path: str,
-    attribute_name: str,
-    model_type: str | None,
-    filetype: str,
-    classifier_kwargs: dict,
-    batch_size: int = 512,
-    resume: bool = True,
-    queue: Queue | None = None,
-):
-    """Perform quality classification on a directory of files
+# @ray.remote(max_calls=1)
+# @cached_or_construct_output(success_suffix="SUCCESS")
+# def _process_dir(
+#     input_path: str,
+#     output_path: str,
+#     model_name_or_path: str,
+#     attribute_name: str,
+#     model_type: str | None,
+#     filetype: str,
+#     classifier_kwargs: dict,
+#     batch_size: int = 512,
+#     resume: bool = True,
+#     queue: Queue | None = None,
+#     use_autoscaling_actor_pool: bool = False,
+# ):
+#     """Perform quality classification on a directory of files
 
-    We assume that the input_path is a directory of files. Using _process_dir is more
-    efficient than process_file_ray because it avoids the overhead of spawning a new
-    Ray task for each file and instead processes all files in a single task.
-    """
+#     We assume that the input_path is a directory of files. Using _process_dir is more
+#     efficient than process_file_ray because it avoids the overhead of spawning a new
+#     Ray task for each file and instead processes all files in a single task.
+#     """
 
-    files = fsspec_glob(os.path.join(input_path, f"*.{filetype}"))
+#     files = fsspec_glob(os.path.join(input_path, f"*.{filetype}"))
 
-    if len(files) == 0:
-        logger.error(f"No files found in {input_path} with pattern {filetype}!!! This is likely an error.")
-        return
+#     if len(files) == 0:
+#         logger.error(f"No files found in {input_path} with pattern {filetype}!!! This is likely an error.")
+#         return
 
-    quality_classifier = AutoClassifier.from_model_path(
-        model_name_or_path, attribute_name, model_type, **classifier_kwargs
-    )
+#     quality_classifier = AutoClassifier.from_model_path(
+#         model_name_or_path, attribute_name, model_type, **classifier_kwargs
+#     )
 
-    for input_filename in files:
-        output_filename = rebase_file_path(input_path, input_filename, output_path)
-        process_file_with_quality_classifier_streaming(
-            input_filename, output_filename, quality_classifier, batch_size, resume
-        )
+#     for input_filename in files:
+#         output_filename = rebase_file_path(input_path, input_filename, output_path)
+#         process_file_with_quality_classifier_streaming(
+#             input_filename, output_filename, quality_classifier, batch_size, resume, use_autoscaling_actor_pool
+#         )
 
 
 def get_process_filepath_func(subdirectories: list[str]):
-    if len(subdirectories) > 0:
-        return _process_dir
-    else:
-        return process_file_ray
+    # if len(subdirectories) > 0:
+    #     return _process_dir
+    # else:
+    return process_file_ray
 
 
 def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
@@ -707,8 +769,10 @@ def run_inference(inference_config: InferenceConfig):
 
     options_kwargs = {
         "memory": inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
-        "resources": inference_config.runtime.resources,
     }
+
+    if not inference_config.classifier_actor_options:
+        options_kwargs["resources"] = inference_config.runtime.resources
 
     pending_refs: dict = {}
     attempt_count: dict[str, int] = {}
@@ -729,6 +793,8 @@ def run_inference(inference_config: InferenceConfig):
             inference_config.batch_size,
             inference_config.resume,
             queue,
+            inference_config.use_autoscaling_actor_pool,
+            inference_config.classifier_actor_options,
         )
         pending_refs[ref] = input_fp
 

@@ -42,3 +42,8 @@ class InferenceConfig:
     resume: bool = True
 
     classifier_kwargs: dict = field(default_factory=dict)
+
+    # Whether to use the autoscaling actor pool
+    use_autoscaling_actor_pool: bool = False
+
+    classifier_actor_options: dict = field(default_factory=dict)

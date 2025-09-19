@@ -174,10 +174,12 @@ class TestVLLMSingleFileProcessing:
 
         # Process file using Ray
         ray.get(
-            process_file_ray.options(resources={"TPU": 1}).remote(
+            # process_file_ray.options(resources={"TPU": 1}).remote(
+            process_file_ray.remote(
                 input_file,
                 output_file,
-                gcsfuse_mount_model_path,
+                # gcsfuse_mount_model_path,
+                "/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-3B-Instruct--0cb88a4",
                 "quality",
                 "vllm",
                 "jsonl.gz",
@@ -190,6 +192,8 @@ class TestVLLMSingleFileProcessing:
                 },
                 batch_size=5,
                 resume=False,
+                use_autoscaling_actor_pool=True,
+                classifier_actor_options={"resources": {"TPU": 1}},
             )
         )
 
@@ -301,6 +305,7 @@ class TestVLLMFullInferencePipeline:
                 "generation_kwargs": default_generation_params,
                 "save_original_generation": True,
             },
+            use_autoscaling_actor_pool=True,
         )
 
         # Run full inference pipeline

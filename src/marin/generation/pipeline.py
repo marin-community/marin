@@ -49,7 +49,6 @@ class TextGeneration:
 
         return self._update_batch(batch, generated_text, prompts)
 
-
 class vLLMTextGeneration(TextGeneration):
     def __init__(
         self,

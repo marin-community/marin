@@ -98,7 +98,7 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
     if config.tensor_parallel_size == 1:
-        return {"resources": {"TPU": 1}}
+        return {"resources": {"TPU": 1}, "max_restarts": -1}
     else:
         return {
             "ray_remote_args_fn": get_ray_remote_args_scheduling_strategy_fn(

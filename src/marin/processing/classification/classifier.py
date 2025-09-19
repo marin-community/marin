@@ -34,6 +34,9 @@ class BaseClassifier:
     def predict(self, documents: list[str]):
         raise NotImplementedError
 
+    def ping(self):
+        return True
+
     def __call__(self, batch: dict[str, Any]):
         raise NotImplementedError
 
@@ -370,7 +373,7 @@ class vLLMClassifier(BaseClassifier):
             generated_text_column_name=generated_text_column_name,
         )
         self.save_original_generation = save_original_generation
-        self.score_extractor_fn = score_extractor_fn or self._default_score_extractor
+        self.score_extractor_fn = score_extractor_fn
         self.generated_text_column_name = generated_text_column_name
         self.prompt_column = prompt_column
 
