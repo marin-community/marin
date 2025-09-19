@@ -228,7 +228,7 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
     Double-check that we're not using local paths in some of the standard places that Levanter sets defaults.
     Also check that the paths are in the same region as the VM, to avoid performance issues and billing surprises.
 
-    This function recursively examines all strings in the config to identify GCS paths and checks their regions.
+    This function recursively examines all strings/paths in the config to identify GCS paths and checks their regions.
     """
     # Determine if we're running locally or if path checks should be bypassed
     allow_out_of_region = config.allow_out_of_region
@@ -251,7 +251,7 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
 
 def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_region):
     """
-    Recursively check all strings in the config object that look like GCS paths.
+    Check all strings in the config object that look like GCS paths appear to respect same-region constraints.
 
     Args:
         obj: The object to check (could be a dict, list, or other object)
