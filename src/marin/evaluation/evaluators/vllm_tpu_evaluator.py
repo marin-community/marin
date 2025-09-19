@@ -16,6 +16,7 @@ import os
 import subprocess
 import time
 from abc import ABC
+from typing import ClassVar
 
 import ray
 import requests
@@ -39,10 +40,20 @@ class VllmTpuEvaluator(Evaluator, ABC):
         """
         Download the model if it's not already downloaded
         """
-        downloaded_path: str | None = model.ensure_downloaded(
-            local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
-        )
-        # Use the model name if a path is not specified (e.g., for Hugging Face models)
+        local_path = os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
+        downloaded_path: str | None = model.ensure_downloaded(local_path=local_path)
+
+        # If prefer_in_memory_loading returned None for a GCS path, force a local download for vLLM.
+        # vLLM cannot load directly from gs://, so we need a concrete filesystem path.
+        if downloaded_path is None and model.path is not None and model.path.startswith("gs://"):
+            original_flag = model.prefer_in_memory_loading
+            try:
+                model.prefer_in_memory_loading = False
+                downloaded_path = model.ensure_downloaded(local_path=local_path)
+            finally:
+                model.prefer_in_memory_loading = original_flag
+
+        # Use the local downloaded path if available; otherwise fall back to the model name (HF hub case)
         model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
         return model_name_or_path
 

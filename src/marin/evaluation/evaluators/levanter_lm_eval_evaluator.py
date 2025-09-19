@@ -44,7 +44,17 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         """
         return build_runtime_env_for_packages(
             extra=[],
-            pip_packages=["statsmodels==0.14.4"],
+            pip_packages=[
+                "statsmodels==0.14.4",
+                "jax[tpu]==0.5.1",
+                "haliax>=1.4.dev348",
+                "levanter==1.2.dev1359",
+                "ray==2.45",
+                "lm-eval[math]",
+                "math-verify",
+                "sympy>=1.12",
+                "antlr4-python3-runtime==4.11",
+            ],
             env_vars={
                 "TOKENIZERS_PARALLELISM": "false",
                 "HF_DATASETS_TRUST_REMOTE_CODE": "1",
@@ -92,7 +102,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             tasks = convert_to_levanter_task_config(evals)
             logger.info(f"Tasks: {tasks}")
 
-            model_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.path)
+            model_path = model_name_or_path
 
             logger.info(f"Model path: {model_path}")
             logger.info(f"Levanter Cache Path: {LevanterTpuEvaluator.CACHE_PATH}")
@@ -105,7 +115,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     max_examples=max_eval_instances,
                     log_samples=False,
                     max_eval_length=4096,
-                    apply_chat_template=model.apply_chat_template,
                 ),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,
