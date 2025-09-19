@@ -3,10 +3,10 @@
 
 import dataclasses
 
-import equinox as eqx
 import jax.numpy as jnp
 
 import haliax as hax
+import numpy
 
 from levanter.inference.utils import INVALID
 from levanter.inference.page_table import PageBatchInfo, PageTable
@@ -43,6 +43,7 @@ def test_page_batch_info_shapes():
     seq = hax.Axis("seq", 2)
     page = hax.Axis("page", 3)
     pb = PageBatchInfo(
+        slot_ids=hax.arange(seq),
         page_indices=hax.full((seq, page), INVALID, dtype=jnp.int32),
         seq_lens=hax.full((seq,), INVALID, dtype=jnp.int32),
         cu_q_lens=hax.named(jnp.array([0, 1, 2], dtype=jnp.int32), hax.Axis("seq_plus_one", 3)),
@@ -60,7 +61,9 @@ def test_allocate_for_seqs_with_padding():
     pt = _make_table()
     pt, seq_id = pt.assign_seq_id_to_seq()
 
-    new_pt, batch_info = pt.allocate_for_seq(hax.zeros({"position": 1}, dtype=jnp.int32))
+    seq_id = hax.zeros({"position": 1}, dtype=jnp.int32)
+    pos_ids = hax.zeros({"position": 1}, dtype=jnp.int32)
+    new_pt, batch_info = pt.allocate_for_seq(seq_id, pos_ids)
 
     assert batch_info.new_token_dests.array[0] == 0
 
@@ -74,12 +77,42 @@ def test_allocate_for_seqs_updates_only_valid_ids():
     used_mask = hax.named(jnp.array([1, 1, 1, 1, 1, 1, 0, 0], dtype=jnp.bool_), pt.seq_lens.axes[0])
     pt = dataclasses.replace(pt, used_mask=used_mask, seq_lens=hax.zeros_like(pt.seq_lens))
 
-    tokens = hax.named(jnp.array([2, 3, 3, 5, 5, 5], dtype=jnp.int32), hax.Axis("position", 6))
-    new_pt, batch_info = eqx.filter_jit(pt.allocate_for_seq)(tokens)
+    tokens = hax.named(jnp.array([2, 3, 3, 5, 5, 5], dtype=jnp.int32), "position")
+    pos_ids = hax.named(jnp.array([0, 0, 1, 0, 1, 2], dtype=jnp.int32), "position")
+    new_pt, batch_info = pt.allocate_for_seq(tokens, pos_ids)
 
     assert jnp.all(new_pt.seq_lens.array[:6] == jnp.array([0, 0, 1, 2, 0, 3]))
     assert jnp.all(new_pt.seq_lens.array[6:] == 0)
     assert batch_info.num_seqs == 3
+
+
+def test_assign_seq_id_to_seq_explicit_free_slot():
+    pt = _make_table(seqs=4)
+    pt, auto_seq = pt.assign_seq_id_to_seq()
+
+    assert int(auto_seq) == 0
+
+    pt, chosen_seq = pt.assign_seq_id_to_seq(2)
+
+    assert int(chosen_seq) == 2
+    assert bool(pt.used_mask.array[2])
+    assert jnp.array_equal(pt.seq_lens.array, jnp.zeros_like(pt.seq_lens.array))
+
+
+def test_assign_seq_id_to_seq_rejects_used_slot():
+    pt = _make_table(seqs=3)
+
+    pt, seq_id = pt.assign_seq_id_to_seq(1)
+    assert int(seq_id) == 1
+
+    before = pt
+    before_used = numpy.array(before.used_mask.array)
+    before_seq_lens = numpy.array(before.seq_lens.array)
+    new_pt, reuse = pt.assign_seq_id_to_seq(1)
+
+    assert int(reuse) == INVALID
+    assert jnp.array_equal(new_pt.used_mask.array, before_used)
+    assert jnp.array_equal(new_pt.seq_lens.array, before_seq_lens)
 
 
 def test_free_pages_invalid_seq_id_noop():

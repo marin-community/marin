@@ -12,7 +12,7 @@ from haliax import NamedArray
 
 __all__ = ["PageTable", "PageBatchInfo"]
 
-from levanter.inference.utils import INVALID, is_invalid, is_valid
+from levanter.inference.utils import INVALID, is_invalid, is_valid, get_unique_in_order
 
 
 def _relative_positions(seg_ids: jnp.ndarray):
@@ -82,13 +82,51 @@ class PageTable(eqx.Module):
     # ------------------------------------------------------------------
     # Sequence management
     # ------------------------------------------------------------------
+
+    def assign_seq_id_to_seq(self, seq_id: int | jnp.ndarray | None = None) -> tuple["PageTable", int]:
+        """Assign a free sequence slot and return its ID.
+
+        DONATES self
+
+        If ``seq_id`` is provided and valid (0 <= seq_id < max_seqs), it is used directly and no search is done.
+        If ``seq_id`` is None or invalid (<0 or >= max_seqs), a free slot is searched for and assigned.
+
+        If no free slots are available, returns INVALID (-1) as the seq_id and does not modify the table.
+
+        Args:
+            seq_id: Optional specific sequence ID to assign. If None or invalid, a free slot is searched for.
+
+        Returns:
+            A tuple of (new PageTable with updated metadata, assigned sequence ID or INVALID if none available).
+        """
+        # JIT compile the inner function to avoid recompiling the whole function on different seq_id inputs
+        if isinstance(seq_id, int):
+            seq_id = jnp.array(seq_id, dtype=jnp.int32)
+        return self._assign_seq_id_to_seq_jit(seq_id)
+
     @eqx.filter_jit(donate="all")
-    def assign_seq_id_to_seq(self) -> tuple["PageTable", int]:
+    def _assign_seq_id_to_seq_jit(self, seq_id: jnp.ndarray | None = None) -> tuple["PageTable", int]:
         # Find a free slot using the used_mask
-        free_flags = ~self.used_mask
-        seq_id = hax.argmax(free_flags, "seq").scalar()
-        available = (~self.used_mask["seq", seq_id]).scalar()
-        seq_id = hax.where(available, seq_id, INVALID)
+        if seq_id is None:
+            seq_id = INVALID
+
+        def validate(seq_id):
+            return hax.where(self.used_mask["seq", seq_id], INVALID, seq_id)
+
+        def _find_free(seq_id):
+            free_flags = ~self.used_mask
+            maybe_seq_id = hax.argmax(free_flags, "seq").scalar()
+            available = (~self.used_mask["seq", maybe_seq_id]).scalar()
+            maybe_seq_id = hax.where(available, maybe_seq_id, INVALID)
+
+            return maybe_seq_id
+
+        seq_id = jax.lax.cond(
+            is_valid(seq_id),
+            validate,
+            _find_free,
+            seq_id,
+        )
 
         def do_assign(self_):
             new_seq_lens = self_.seq_lens.at["seq", seq_id].set(0)
@@ -102,24 +140,68 @@ class PageTable(eqx.Module):
         return new_self, seq_id
 
     @eqx.filter_jit
-    # @named_call
     def allocate_for_seq(
         self,
-        token_seq_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
+        token_slot_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
+        token_pos_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
     ) -> tuple["PageTable", "PageBatchInfo"]:
-        """Allocate pages for new sequences and update ``seq_lens``."""
+        """
+        Allocate pages for new sequences and update ``seq_lens``.
 
-        token_seq_ids = hax.where(token_seq_ids < 0, self.max_seqs, token_seq_ids)
-        updated_seqs, new_counts = hax.unique_counts(token_seq_ids, self.max_Seq, fill_value=INVALID)
+        **ASSUMES** that the ``token_slot_ids`` are already grouped by sequence ID, i.e. all tokens for a given sequence
+        are contiguous in the input. The order of sequences in the input does not matter.
+        """
+
+        token_slot_ids = hax.where(token_slot_ids < 0, self.max_seqs, token_slot_ids)
+        # CAREFUL: we don't assume slot_ids are sorted, just contiguous. segment_sum is our friend
+        # NB: segment_sum assumes that segment ids are in the range [0, num_segments)
+        # and returns an array of that length
+        # essentially this means segment_sum et al require dense segment ids so we have to denseify the slot ids first
+        unique_ids, dense_ids = get_unique_in_order(
+            token_slot_ids.array,
+            size=self.max_seqs + 1,  # +1 for INVALID
+            fill_value=INVALID,
+        )
+        segment_lengths = jax.ops.segment_sum(
+            data=jnp.ones_like(token_slot_ids.array, dtype=jnp.int32),
+            segment_ids=dense_ids,
+            num_segments=self.max_seqs,
+        )
+        # now we need to know the segment_ids
+        segment_ids = jax.ops.segment_max(
+            data=token_slot_ids.array,
+            segment_ids=dense_ids,
+            num_segments=self.max_seqs,
+        )
+        # and then the maximum position within each segment
+        max_pos_per_seq = jax.ops.segment_max(
+            data=token_pos_ids.array,
+            segment_ids=dense_ids,
+            num_segments=self.max_seqs,
+        )
+
+        updated_seqs = hax.named(segment_ids, axis="seq")
+        new_counts = hax.named(segment_lengths, axis="seq")
+        new_max_pos = hax.named(max_pos_per_seq, axis="seq")
+
+        cu_new_counts = hax.concatenate(
+            "seq",
+            [
+                hax.zeros({"seq": 1}, dtype=jnp.int32),
+                hax.cumsum(new_counts, "seq", dtype=jnp.int32),
+            ],
+        )
 
         new_counts = hax.where(updated_seqs >= self.max_seqs, 0, new_counts)
 
-        # Only update lengths for active sequences; seq_lens always stores lengths (unused slots have 0)
+        # Only update lengths for active sequences
         current_lens = self.seq_lens
         # Mask counts for sequences not currently used
         active_mask_for_updated = self.used_mask["seq", updated_seqs]
-        masked_counts = new_counts * active_mask_for_updated.astype(new_counts.dtype)
-        new_lens = current_lens.at["seq", updated_seqs].add(masked_counts, mode="drop")
+        active_mask_for_updated = active_mask_for_updated & is_valid(updated_seqs)
+
+        masked_seq_len = (new_max_pos + 1) * active_mask_for_updated.astype(new_counts.dtype)
+        new_lens = current_lens.at["seq", updated_seqs].max(masked_seq_len, mode="drop")
 
         new_num_pages_needed = (new_lens + self.page_size - 1) // self.page_size
         old_num_pages_needed = (self.seq_lens + self.page_size - 1) // self.page_size
@@ -182,11 +264,17 @@ class PageTable(eqx.Module):
             seq_lens=new_lens,
         )
 
-        batch_info = self._slice_batch_info(updated_seqs, self.seq_lens, new_table, new_counts, token_seq_ids)
+        batch_info = self._slice_batch_info(
+            updated_seqs,
+            cu_new_counts,
+            new_table,
+            token_slot_ids,
+            token_pos_ids,
+        )
 
         return new_table, batch_info
 
-    def _slice_batch_info(self, updated_seqs, old_seq_lens, new_table, new_token_counts, tokens):
+    def _slice_batch_info(self, updated_seqs, cu_q_lens, new_table, slot_ids, pos_ids):
         mask = is_valid(updated_seqs)
         safe_updated = hax.where(mask, updated_seqs, 0)
 
@@ -198,37 +286,34 @@ class PageTable(eqx.Module):
 
         num_seqs = hax.sum(mask).scalar()
 
-        token_dests = hax.full(tokens.shape, INVALID, dtype=jnp.int32)
-        # Initialize per-sequence cursors from old lengths for active sequences, else 0
-        seq_cursors = jnp.where(self.used_mask.array, old_seq_lens.array, 0)
+        token_dests = hax.full(slot_ids.shape, INVALID, dtype=jnp.int32)
 
-        def token_body(i, carry):
-            token_dests, seq_cursors = carry
-            seq_id = tokens["position", i].scalar()
+        def token_body(i, token_dests):
+            seq_id = slot_ids["position", i].scalar()
+            pos_id = pos_ids["position", i].scalar()
 
-            def assign(carry):
-                token_dests, seq_cursors = carry
-                page_idx = seq_cursors[seq_id] // self.page_size
-                page_offset = seq_cursors[seq_id] % self.page_size
+            def assign(token_dests):
+                page_idx = pos_id // self.page_size
+                page_offset = pos_id % self.page_size
                 page = new_table.page_indices["seq", seq_id, "page", page_idx]
                 dest = hax.where(is_invalid(page), INVALID, page * self.page_size + page_offset)
-                token_dests = token_dests.at["position", i].set(dest)
-                seq_cursors = seq_cursors.at[seq_id].add(1)
-                return token_dests, seq_cursors
+                return token_dests.at["position", i].set(dest)
 
-            token_dests, seq_cursors = jax.lax.cond(is_valid(seq_id), assign, lambda c: c, (token_dests, seq_cursors))
-            return token_dests, seq_cursors
+            return jax.lax.cond(is_valid(seq_id) & is_valid(pos_id), assign, lambda t: t, token_dests)
 
-        token_dests, _ = jax.lax.fori_loop(0, tokens.axis_size("position"), token_body, (token_dests, seq_cursors))
+        token_dests = jax.lax.fori_loop(0, slot_ids.axis_size("position"), token_body, token_dests)
 
-        cu_q_lens = hax.concatenate(
-            "seq",
-            [
-                hax.zeros({"seq": 1}, dtype=jnp.int32),
-                hax.cumsum(new_token_counts, "seq", dtype=jnp.int32),
-            ],
-        )
+        # jax.debug.print(
+        #     "[allocate_for_seq] slots={slots} pos={pos} dest={dest} cu_q_lens={cu_q_lens} n_seqs={n_seqs}",
+        #     slots=slot_ids.array,
+        #     pos=pos_ids.array,
+        #     dest=token_dests.array,
+        #     cu_q_lens=cu_q_lens,
+        #     n_seqs=num_seqs,
+        # )
+
         batch_info = PageBatchInfo(
+            slot_ids=updated_seqs,
             page_indices=page_indices,
             seq_lens=seq_lens,
             cu_q_lens=cu_q_lens,
@@ -316,8 +401,6 @@ class PageTable(eqx.Module):
         return dataclasses.replace(
             self, page_ref_counts=rc, page_indices=indices, seq_lens=seq_lens, used_mask=used_mask
         )
-
-    # (pos id computation moved to call sites; no longer part of PageBatchInfo)
 
     # ------------------------------------------------------------------
     # Page sharing / refcount helpers
@@ -430,8 +513,10 @@ class PageBatchInfo(eqx.Module):
     page_indices[0] does not in general correspond to the first sequence in DecodeState, but rather the first sequence
     that has tokens **in this batch**.
 
+    To recover the mapping, use slot_ids to map from batch sequence index to DecodeState sequence index.
     """
 
+    slot_ids: ht.i32[NamedArray, " seq"]  # type: ignore[name-defined]
     page_indices: ht.i32[NamedArray, " seq page"]  # type: ignore[name-defined]
     seq_lens: ht.i32[NamedArray, " seq"]  # type: ignore[name-defined]
     cu_q_lens: ht.i32[NamedArray, " seq"]  # type: ignore[name-defined]
@@ -447,5 +532,11 @@ class PageBatchInfo(eqx.Module):
 
         t_pages = hax.where(is_valid(token_dests), token_dests // self.page_size, INVALID)
         t_slots = hax.where(is_valid(token_dests), token_dests % self.page_size, INVALID)
+        # jax.debug.print(
+        #     "[pages_and_slots] dest={dest} page={page} slot={slot}",
+        #     dest=token_dests.array,
+        #     page=t_pages.array,
+        #     slot=t_slots.array,
+        # )
 
         return t_pages, t_slots

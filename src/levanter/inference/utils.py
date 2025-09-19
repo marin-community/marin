@@ -122,3 +122,38 @@ def pad_to_standard_length(tokens: np.ndarray, allowed_lengths: list[int], pad_t
         tokens = np.concatenate([tokens, padding], axis=0)
 
     return tokens
+
+
+def get_unique_in_order(array, **kwargs):
+    """
+    Finds unique elements in a JAX array, preserving the order of first appearance.
+
+    Args:
+      array: The input 1D JAX array.
+      **kwargs: Additional arguments for jnp.unique (e.g., size, fill_value).
+
+    Returns:
+      A tuple of:
+        - unique_ids_in_order: The unique values in appearance order.
+        - dense_ids_in_order: An array where original values are replaced by their
+                              new 0-indexed position in appearance order.
+    """
+    # jnp.unique sorts the unique values and provides the indices
+    # of their first appearance corresponding to that sorted order.
+    unique_sorted, first_indices, dense_sorted, counts = jnp.unique(
+        array, return_index=True, return_inverse=True, return_counts=True, **kwargs
+    )
+
+    first_indices = jnp.where(counts == 0, jnp.iinfo(first_indices.dtype).max, first_indices)
+
+    # To restore the original appearance order, we sort the `first_indices`.
+    # The result of argsort gives us the permutation needed.
+    perm = jnp.argsort(first_indices)
+    unique_ids_in_order = unique_sorted[perm]
+
+    # We also need to remap the dense_ids to match the new order.
+    # We can create a remapping array using the inverse of the permutation.
+    remap_indices = jnp.argsort(perm)
+    dense_ids_in_order = remap_indices[dense_sorted]
+
+    return unique_ids_in_order, dense_ids_in_order

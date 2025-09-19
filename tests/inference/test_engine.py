@@ -3,11 +3,13 @@
 
 import logging
 
+
 import haliax as hax
 import jax
 import jax.numpy as jnp
 import pytest
 from haliax import Axis
+
 from levanter.inference.engine import InferenceEngine, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.page_table import PageTable
@@ -88,15 +90,11 @@ def test_release_on_finish_and_reuse_slots(caplog: pytest.LogCaptureFixture):
 
     # Finished sequences are auto-released; PageTable should have no active seqs
     pt = svc.gen_state.decode_state.page_table
-    ds = svc.gen_state.decode_state
     # All slots should be marked unused and lengths zeroed
     seq_lens = jax.device_get(pt.seq_lens.array)
     used_mask = jax.device_get(pt.used_mask.array)
     assert (used_mask == 0).all()
     assert (seq_lens == 0).all()
-    # All local seq ids should be INVALID
-    seq_ids = jax.device_get(ds.seq_id.array)
-    assert (seq_ids < 0).all() or ((seq_ids == 2_000_000) | (seq_ids < 0)).all()
     # No pages should be held
     ref_counts = jax.device_get(pt.page_ref_counts.array)
     assert int(ref_counts.sum()) == 0
@@ -125,3 +123,32 @@ def test_release_on_finish_and_reuse_slots(caplog: pytest.LogCaptureFixture):
     # assert outputs2[0] == prompts2[0] + [3]
     assert result2.tokens[0] == [3]
     assert result2.total_generated == 1
+
+
+def test_reuse_with_clones_and_slot_reassignment():
+    svc = _build_service()
+
+    prompts = [[7, 7], [1, 2]]
+    stop_tokens = [3]
+
+    stop_ids = hax.named(jnp.asarray(stop_tokens, dtype=jnp.int32), axis=("position",)).broadcast_axis({"stop_seq": 1})
+
+    def build_requests(seed_offset: int) -> list[Request]:
+        reqs: list[Request] = []
+        for i, toks in enumerate(prompts):
+            seq_params = SeqDecodingParams(
+                max_num_tokens=jnp.array(len(toks) + 5, dtype=jnp.int32),
+                stop_tokens=stop_ids,
+                temperature=jnp.array(0.0, dtype=jnp.float32),
+                key=jax.random.PRNGKey(seed_offset + i),
+            )
+            reqs.append(Request(prompt_tokens=toks, request_id=i, decode_params=seq_params, n_generations=3))
+        return reqs
+
+    reqs = build_requests(0)
+    outputs = svc.generate(reqs)
+    assert all(out == [3] for out in outputs.tokens)
+
+    reqs2 = build_requests(100)
+    outputs2 = svc.generate(reqs2)
+    assert all(out == [3] for out in outputs2.tokens)
