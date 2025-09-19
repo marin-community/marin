@@ -105,6 +105,7 @@ def evaluate_lm_evaluation_harness(
     engine_kwargs: dict | None = None,
     resource_config: ResourceConfig | None = None,
     apply_chat_template: bool = False,
+    wandb_tags: list[str] | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
@@ -129,6 +130,7 @@ def evaluate_lm_evaluation_harness(
             engine_kwargs=engine_kwargs,
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
+            wandb_tags=wandb_tags,
         ),
     )
 
