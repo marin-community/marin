@@ -48,7 +48,6 @@ from tests.post_training.config_helpers import (
 )
 
 # Test timeout constants
-CHECKPOINT_POLL_INTERVAL = 0.2
 WORKER_JOIN_TIMEOUT = 5
 BATCH_READ_TIMEOUT = 1.0
 INTEGRATION_TEST_TIMEOUT = 60
