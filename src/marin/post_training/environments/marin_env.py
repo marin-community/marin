@@ -12,9 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Iterator
+from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol
 
 import numpy as np
+
+
+@dataclass
+class DataExample:
+    """Single data example with transformations for debugging."""
+
+    raw_prompt: str
+    raw_answer: str
+    processed_prompt: str
+    processed_answer: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class EnvStep(NamedTuple):
@@ -80,8 +93,6 @@ class InferenceContext(Protocol):
         prompts: list[str],
         temperature: float = 1.0,
         n_generations: int = 1,
-        top_p: float | None = None,
-        top_k: int | None = None,
     ) -> list[list[dict]]:
         """Generate responses for a batch of prompts.
 
@@ -141,6 +152,30 @@ class MarinEnv:
         - Configuring tokenizers (used for reward computation)
         """
         pass
+
+    def training_data(self) -> Iterator[DataExample]:
+        """Iterate over training data with transformations visible.
+
+        This method should yield DataExample instances showing both the raw
+        and processed versions of each training example, allowing inspection
+        of the data cleaning and transformation pipeline.
+
+        Returns:
+            Iterator over DataExample instances for debugging data transformations.
+        """
+        raise NotImplementedError("Subclasses must implement training_data iterator")
+
+    def eval_data(self) -> Iterator[DataExample]:
+        """Iterate over evaluation data with transformations visible.
+
+        This method should yield DataExample instances showing both the raw
+        and processed versions of each evaluation example, allowing inspection
+        of the data cleaning and transformation pipeline.
+
+        Returns:
+            Iterator over DataExample instances for debugging data transformations.
+        """
+        raise NotImplementedError("Subclasses must implement eval_data iterator")
 
     def step(
         self,

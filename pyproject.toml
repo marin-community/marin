@@ -23,13 +23,14 @@ dependencies = [
     "google-cloud-storage-transfer",
     "jax==0.6.2",
     "haliax>=1.4.dev381",
-    "levanter[serve]@git+https://github.com/marin-community/levanter.git",
+    "jmp",
+    "levanter[serve]",
     "lz4",
     "multiprocess==0.70.16",
     "numpy",
     "openai",
-    "pandas",                            # Only needed by Fileprovider in inference.py
-    "pyarrow",                           # # Only needed by Fileprovider in inference.py
+    "pandas", # Only needed by Fileprovider in inference.py
+    "pyarrow", # # Only needed by Fileprovider in inference.py
     "ray==2.45",
     "regex",
     "requests",
@@ -77,8 +78,6 @@ docs = [
 ]
 
 
-math = ["pylatexenc", "sympy"]
-
 metrics = ["google-cloud-logging"]
 
 transform_test_deps = [
@@ -95,7 +94,6 @@ dev = [
     { include-group = "lint" },
     { include-group = "docs" },
     #    {include-group="gcp"},
-    { include-group = "math" },
     { include-group = "transform_test_deps" },
 ]
 
@@ -141,6 +139,8 @@ torch = [
     { index = "pytorch-cu128", extra = "cuda12" },
 ]
 
+# levanter = { git = "https://github.com/marin-community/levanter", subdirectory="." }
+levanter = { path = "./submodules/levanter" }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
@@ -246,21 +246,20 @@ tokenize_train = [
 
 
 post_training = [
-    "gcsfs",
-    "transformers",
-    "flax==0.10.0",
-    "jaxtyping",
-    "tyro==0.8.11",
-    "tqdm",
-    "wandb",
-    "einops",
-    "ringattention==0.1.2",
-    "sympy",
-    "pylatexenc",
-    "ipython",
     "datasets",
+    "einops",
+    "flax==0.10.0",
+    "gcsfs",
+    "ipython",
+    "jaxtyping",
+    "ringattention==0.1.2",
     "scalax@git+https://github.com/Sea-Snell/scalax.git",
     "swebench ; sys_platform != 'darwin'",
+    "sympy",
+    "tqdm",
+    "transformers",
+    "tyro==0.8.11",
+    "wandb",
 ]
 
 data_browser = ["zstandard==0.23.0"]
