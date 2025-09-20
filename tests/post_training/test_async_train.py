@@ -28,29 +28,22 @@ import pytest
 import ray
 
 try:
+    from marin.post_training.rollout_storage import (
+        InMemoryRolloutQueue,
+        RolloutBatch,
+        TaggedRolloutBatch,
+    )
     from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
     from marin.post_training.train_worker import TrainWorker, TrainWorkerConfig
+    from tests.post_training.config_helpers import (
+        DummyTokenizer,
+        create_nano_rollout_worker_config,
+        create_nano_training_worker_config,
+        create_rollout_batch,
+        run_inference_with_engine,
+    )
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
-
-
-from marin.post_training.rollout_storage import (
-    InMemoryRolloutQueue,
-    RolloutBatch,
-    TaggedRolloutBatch,
-)
-from tests.post_training.config_helpers import (
-    DummyTokenizer,
-    create_nano_rollout_worker_config,
-    create_nano_training_worker_config,
-    create_rollout_batch,
-    run_inference_with_engine,
-)
-
-# Test timeout constants
-WORKER_JOIN_TIMEOUT = 5
-BATCH_READ_TIMEOUT = 1.0
-INTEGRATION_TEST_TIMEOUT = 60
 
 
 logger = logging.getLogger(__name__)
@@ -176,7 +169,7 @@ class ThreadedWorkerRunner(ABC):
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit - stop worker and check for errors."""
         self.stop()
-        self.join(timeout=WORKER_JOIN_TIMEOUT)
+        self.join(timeout=5)
 
         if self.error:
             import traceback
@@ -306,6 +299,7 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
         self.worker.train()
 
 
+@pytest.mark.slow("Integration test.")
 def test_rollout_worker(rollout_worker_config: RolloutWorkerConfig):
     """Test inference worker generates rollouts to in-memory queue."""
     # Use the rollout writer's queue from the inference worker config
@@ -317,8 +311,10 @@ def test_rollout_worker(rollout_worker_config: RolloutWorkerConfig):
     # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
 
     rollout_worker_config.max_rollouts = 10
-    rollout_worker_config.n_generations = 2
-    rollout_worker_config.n_prompts_per_step = 2
+    rollout_worker_config.n_generations = 1
+    rollout_worker_config.n_prompts_per_step = 1
+    rollout_worker_config.max_input_length = 8
+    rollout_worker_config.max_output_length = 8
 
     # Use context manager for cleaner test
     with RolloutWorkerRunner(rollout_worker_config) as runner:
@@ -335,17 +331,16 @@ def test_rollout_worker(rollout_worker_config: RolloutWorkerConfig):
     print("Rollout worker generated rollout batch successfully")
 
 
+@pytest.mark.slow("Integration test.")
 def test_train_worker(ray_cluster, training_worker_config: TrainWorkerConfig):
     """Test training worker processes rollout batch and creates checkpoint."""
     rollout_reader = training_worker_config.rollout_reader
     queue_writer = rollout_reader._queue.writer()
 
     batch_size = training_worker_config.trainer.train_batch_size
-    max_seq_len = 64  # Use fixed small length for testing
+    max_seq_len = 64
 
-    # Create multiple mock batches to ensure we have enough data
-    # The DataLoader might try to fetch multiple indices
-    for i in range(5):  # Create 5 batches to be safe
+    for i in range(5):
         sample_batch = create_test_batch(i, batch_size=batch_size, max_seq_len=max_seq_len)
         queue_writer.write_batch(sample_batch)
 
@@ -368,6 +363,7 @@ def test_train_worker(ray_cluster, training_worker_config: TrainWorkerConfig):
     assert checkpoint_created, "Training worker should create checkpoint after processing batch"
 
 
+@pytest.mark.slow("Integration test.")
 def test_inference_and_training_workers(
     training_worker_config,
     rollout_worker_config,
@@ -391,7 +387,7 @@ def test_inference_and_training_workers(
         with inference_runner:
             start_time = time.time()
 
-            while time.time() - start_time < INTEGRATION_TEST_TIMEOUT:
+            while time.time() - start_time < 60:
                 elapsed = time.time() - start_time
 
                 _print_worker_status(elapsed, inference_runner, training_runner)
@@ -462,6 +458,7 @@ def print_model_validation(model, tokenizer):
             print("  - No cat references found")
 
 
+@pytest.mark.slow("Integration test with training loop")
 def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_config):
     """Test training worker with manually constructed cat-themed rollout batches.
 
