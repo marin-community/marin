@@ -162,7 +162,7 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
 def create_nano_optimizer_config() -> AdamConfig:
     """Create a minimal AdamConfig for testing."""
     return AdamConfig(
-        learning_rate=1e-4,
+        learning_rate=1e-3,
         weight_decay=0.01,
         warmup=0.0,
         lr_schedule="constant",
@@ -177,8 +177,8 @@ def create_nano_training_worker_config(rollout_reader, output_dir: str | Path) -
         trainer=create_nano_trainer_config(output_dir),
         optimizer=create_nano_optimizer_config(),
         replay_buffer=ReplayBufferConfig(
-            capacity=128,
-            alpha=3.0,
+            capacity=256,
+            alpha=4.0,
         ),
         # disable KL since we're training from scratch
         kl_coef=0.0,
