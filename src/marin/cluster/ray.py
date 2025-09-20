@@ -678,6 +678,8 @@ def initialize_manual_worker(config_file: str, tpu_name: str) -> None:
     cluster_name = cluster_config["cluster_name"]
     docker_container_name = cluster_config["docker"]["container_name"]
     docker_image = cluster_config["docker"]["image"]
+    region = cluster_config["provider"]["region"]
+    bucket = f"marin-{region}"
 
     print(f"Initializing Ray on worker {tpu_name}...")
     print(f"Zone: {zone}")
@@ -689,15 +691,27 @@ def initialize_manual_worker(config_file: str, tpu_name: str) -> None:
 
     entry_script_content = f"""#!/bin/bash
 
+set -eo pipefail
+
+export BUCKET="{bucket}"
+
 {setup_commands}
 
 # Entry and setup commands will automatically re-run if the container is restarted
 
 echo 'Checking for head node IP...'
-gcloud compute instances list --filter="labels.ray-node-name:{cluster_name}-head" --format=text > /tmp/instances
-cat /tmp/instances | grep networkIp | awk '{{print $2}}' > /tmp/head_ip
-echo 'Found head node IP: ' $(cat /tmp/head_ip)
-ray start --address=$(cat /tmp/head_ip):6379 --block
+gcloud compute instances list \\
+  --filter="labels.ray-cluster-name:{cluster_name} AND labels.ray-node-type=head" \\
+  --format="value(networkInterfaces[0].networkIP)" > /tmp/head_ip
+
+HEAD_IP=$(cat /tmp/head_ip || true)
+if [ -z "$HEAD_IP" ]; then
+  echo 'Failed to resolve head node IP' >&2
+  exit 1
+fi
+
+echo "Found head node IP: $HEAD_IP"
+ray start --address=${{HEAD_IP}}:6379 --block
 echo "Ray worker crashed. Sleeping 10 seconds to avoid rapid restart..."
 sleep 10
     """
