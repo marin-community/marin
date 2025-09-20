@@ -30,8 +30,6 @@ import ray
 try:
     from marin.post_training.rollout_storage import (
         InMemoryRolloutQueue,
-        RolloutBatch,
-        TaggedRolloutBatch,
     )
     from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
     from marin.post_training.train_worker import TrainWorker, TrainWorkerConfig
@@ -92,27 +90,6 @@ def _print_worker_status(elapsed, inference_runner, training_runner):
     print(f"  Rollouts generated: {inference_runner.rollouts_generated}")
     print(f"  Training steps: {training_runner.steps_completed}")
     print(f"  Weight transfers: {inference_runner.weight_transfers}")
-
-
-def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16) -> TaggedRolloutBatch:
-    """Helper to create test batches with all required fields."""
-    rng = np.random.default_rng(42 + idx)
-    return TaggedRolloutBatch(
-        batch=RolloutBatch(
-            input_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
-            attention_mask=np.ones((batch_size, max_seq_len), dtype=np.int32),
-            position_ids=np.arange(max_seq_len)[None, :].repeat(batch_size, axis=0).astype(np.int32),
-            target_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
-            loss_weights=np.ones((batch_size, max_seq_len), dtype=np.float32),
-            loss_masks=np.ones((batch_size, max_seq_len), dtype=np.float32),
-            reference_logprobs=rng.standard_normal((batch_size, max_seq_len)).astype(np.float32),
-            policy_logprobs=rng.standard_normal((batch_size, max_seq_len)).astype(np.float32),
-        ),
-        env_name=f"test_env_{idx}",
-        worker_id="test_worker",
-        timestamp=time.time(),
-        rollout_id=f"test_{idx}",
-    )
 
 
 class ThreadedWorkerRunner(ABC):
@@ -328,18 +305,22 @@ def test_train_worker(ray_cluster, training_worker_config: TrainWorkerConfig):
     queue_writer = rollout_reader._queue.writer()
 
     batch_size = training_worker_config.trainer.train_batch_size
-    max_seq_len = 64
+    tokenizer = DummyTokenizer()
 
-    for i in range(5):
-        sample_batch = create_test_batch(i, batch_size=batch_size, max_seq_len=max_seq_len)
-        queue_writer.write_batch(sample_batch)
-
-    # Get coordinator for GCS mode only
-    # coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
-    # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
-
-    # Use context manager for cleaner test
     with TrainWorkerRunner(training_worker_config) as runner:
+        # Wait for worker to initialize and models to be available
+        while not runner.worker:
+            time.sleep(0.1)
+
+        for _ in range(5):
+            batch = create_rollout_batch(
+                policy_model=runner.reference_model,
+                reference_model=runner.reference_model,
+                batch_size=batch_size,
+                tokenizer=tokenizer,
+            )
+            queue_writer.write_batch(batch)
+
         # Wait for training to complete
         while not runner.done.is_set() and runner.steps_completed < 10:
             time.sleep(0.1)
@@ -366,10 +347,12 @@ def test_inference_and_training_workers(
     rollout_worker_config.rollout_writer = rollout_queue.writer()
     training_worker_config.rollout_reader = rollout_queue.reader()
 
+    rollout_worker_config.max_rollouts = 10
+    training_worker_config.trainer.num_train_steps = 10
+
     # coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
     # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
 
-    # Create worker runners and start with context managers
     with TrainWorkerRunner(training_worker_config) as training_runner:
         time.sleep(1)
         inference_runner = RolloutWorkerRunner(rollout_worker_config)
