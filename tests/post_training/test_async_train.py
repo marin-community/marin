@@ -490,6 +490,7 @@ def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_conf
     print_model_validation(runner.trained_model, DummyTokenizer())
 
 
+@pytest.mark.slow("Long-running integration test.")
 def test_full_integration_moar_cats(
     training_worker_config,
     rollout_worker_config,
