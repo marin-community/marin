@@ -74,13 +74,14 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         output_path: str,
         max_eval_instances: int | None = None,
         resource_config: ResourceConfig | None = None,
+        wandb_tags: list[str] | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
         """
 
         @ray.remote(
-            scheduling_strategy=self._get_scheduling_strategy(resource_config),
+            resources={"TPU": resource_config.num_tpu, f"{resource_config.tpu_type}-head": 1},
             runtime_env=self.get_runtime_env(),
             max_calls=1,
         )
@@ -90,7 +91,8 @@ class LevanterTpuEvaluator(Evaluator, ABC):
             evals: list[EvalTaskConfig],
             output_path: str,
             max_eval_instances: int | None = None,
+            wandb_tags: list[str] | None = None,
         ) -> None:
-            self.evaluate(model, evals, output_path, max_eval_instances)
+            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
 
-        ray.get(launch.remote(model, evals, output_path, max_eval_instances))
+        ray.get(launch.remote(model, evals, output_path, max_eval_instances, wandb_tags))
