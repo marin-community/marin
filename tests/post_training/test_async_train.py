@@ -249,11 +249,9 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
         super().__init__(training_worker_config)
         self.training_worker_config = training_worker_config
 
-        # Metrics (tracked by default)
         self.steps_completed = 0
         self.losses = []
         self.trained_model = None
-        self.latest_checkpoint_path = None
 
     @property
     def reference_model(self):
@@ -272,10 +270,8 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
         original_configure_hooks = self.worker._configure_training_hooks
 
         def patched_configure_hooks(trainer):
-            # Call original hook configuration
             original_configure_hooks(trainer)
 
-            # Add our tracking hooks
             def step_tracking_hook(info):
                 self._track_training_step()
                 current_loss = float(info.loss)
@@ -286,14 +282,8 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
                 # For whatever reason, the model state is donated if we don't do this.
                 self.trained_model = jax.device_get(info.state.model)
 
-            def checkpoint_tracking_hook(info):
-                # Track the latest checkpoint path when one is saved
-                if hasattr(info, "checkpoint_path") and info.checkpoint_path:
-                    self.latest_checkpoint_path = str(info.checkpoint_path)
-
             trainer.add_hook(step_tracking_hook, every=1)
             trainer.add_hook(model_capture_hook, every=1)
-            trainer.add_hook(checkpoint_tracking_hook, every=1)
 
         self.worker._configure_training_hooks = patched_configure_hooks
         self.worker.train()
