@@ -28,19 +28,81 @@ import time
 from abc import ABC, abstractmethod
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import fsspec
+import haliax as hax
 import jax
+import levanter.checkpoint as levanter_checkpoint
 import numpy as np
 import ray
-from flax.serialization import to_state_dict
-from flax.traverse_util import flatten_dict, unflatten_dict
+from haliax.partitioning import ResourceMapping
+from haliax.util import is_named_array
 from jax.sharding import Mesh
 from jaxtyping import PyTree
+from levanter.utils.jax_utils import barrier_sync
 
-from .training_config import WeightTransferConfig, WeightTransferMode
-from .utils import checkpointer, delete_with_bucket, jax_distributed_barrier
+
+class WeightTransferMode(Enum):
+    GCS_CHECKPOINT = "gcs_checkpoint"
+    JAX_TRANSFER_SERVER = "jax_transfer_server"
+    RAY_REMOTING = "ray_remoting"
+
+
+@dataclass
+class WeightTransferServerMetrics:
+    """Metrics for weight transfer servers."""
+
+    total_transfers: int = 0
+    successful_transfers: int = 0
+    failed_transfers: int = 0
+    start_time: float = 0.0
+
+    @property
+    def transfer_rate(self) -> float:
+        """Transfers per second."""
+        elapsed = time.time() - self.start_time
+        return self.successful_transfers / max(elapsed, 1.0)
+
+
+@dataclass
+class WeightTransferClientMetrics:
+    """Metrics for weight transfer clients."""
+
+    total_polls: int = 0
+    successful_receives: int = 0
+    failed_receives: int = 0
+    start_time: float = 0.0
+
+    @property
+    def poll_rate(self) -> float:
+        """Polls per second."""
+        elapsed = time.time() - self.start_time
+        return self.total_polls / max(elapsed, 1.0)
+
+    @property
+    def success_rate(self) -> float:
+        """Ratio of successful receives to total polls."""
+        return self.successful_receives / max(self.total_polls, 1)
+
+
+@dataclass
+class WeightTransferConfig:
+    mode: WeightTransferMode = WeightTransferMode.GCS_CHECKPOINT
+    # Common settings
+    sync_interval_steps: int = 100
+    poll_interval_seconds: float = 30.0
+
+    # RAY_REMOTING and JAX_TRANSFER_SERVER specific
+    transfer_timeout: float = 120.0
+
+    # GCS Checkpoint specific
+    checkpoint_dir: str = ""
+    max_checkpoints: int | None = 5
+
 
 # Check if JAX transfer is available
 try:
@@ -63,14 +125,6 @@ except (ImportError, AttributeError):
 
 
 logger = logging.getLogger(__name__)
-
-
-def _reshard_with_donation(old_params: PyTree, new_params: PyTree, shard_fns: PyTree) -> PyTree:
-    """Reshard new_params while donating old_params' buffers for memory optimization."""
-    return jax.tree.map(lambda x, fn: fn(x), new_params, shard_fns)
-
-
-_reshard_with_donation = jax.jit(_reshard_with_donation, donate_argnums=(0,))
 
 
 def create_coordinator(mode: WeightTransferMode, name: str):
@@ -119,8 +173,13 @@ class WeightTransferServer(ABC):
     """Abstract base class for weight transfer servers (training worker side)."""
 
     @abstractmethod
-    def serve_weights(self, weight_id: int, params: PyTree) -> None:
-        """Serve weights to clients."""
+    def serve_weights(self, weight_id: int, model) -> None:
+        """Serve weights to clients.
+
+        Args:
+            weight_id: Unique identifier for this weight update
+            model: Levanter model parameters (PyTree of NamedArrays)
+        """
         pass
 
     @abstractmethod
@@ -129,63 +188,59 @@ class WeightTransferServer(ABC):
         pass
 
     @abstractmethod
-    def get_metrics(self) -> dict[str, Any]:
+    def get_metrics(self) -> WeightTransferServerMetrics:
         """Get transfer metrics."""
         pass
 
 
-class WeightTransferClient:
+class WeightTransferClient(ABC):
     """Abstract base class for weight transfer clients (inference worker side)."""
 
-    def receive_weights(self, old_params: PyTree | None = None) -> tuple[PyTree | None, dict[str, Any]]:
-        """Receive weights from server. Returns (params, metadata)."""
+    @abstractmethod
+    def receive_weights(self, old_model: PyTree) -> Any:
+        """Receive weights from server.
+
+        Args:
+            old_model: Previous model for memory optimization (optional)
+
+        Returns:
+            new_model or None if no update available.
+            new_model will be Levanter model parameters (PyTree of NamedArrays).
+        """
         pass
 
+    @abstractmethod
     def cleanup(self) -> None:
         """Cleanup resources."""
         pass
 
-    def set_params_placeholder(self, params: PyTree):
-        """Set the placeholder params for transfers (only for JAX transfer client)."""
-        pass
-
-    def get_metrics(self) -> dict[str, Any]:
+    def get_metrics(self) -> WeightTransferClientMetrics:
         """Get transfer metrics."""
-        return {}
+        return WeightTransferClientMetrics(start_time=time.time())
 
 
 class GCSCheckpointServer(WeightTransferServer):
-    """GCS checkpoint-based weight transfer server."""
+    """GCS checkpoint-based weight transfer server using Levanter checkpointing."""
 
-    config: WeightTransferConfig
-    checkpoint_queue: deque[int]
-    gather_fns: Any
-    model_config: Any  # PretrainedConfig from HF
-
-    def __init__(self, config: WeightTransferConfig, gather_fns: Any, model_config: Any):
+    def __init__(
+        self,
+        config: WeightTransferConfig,
+        axis_mapping: ResourceMapping | None = None,
+        mesh: Mesh | None = None,
+    ):
         self.config = config
         self.checkpoint_queue = deque()
-        self.gather_fns = gather_fns
-        self.model_config = model_config
+        self.axis_mapping = axis_mapping
+        self.mesh = mesh
 
         # Metrics tracking
-        self.metrics = {
-            "mode": "gcs_checkpoint",
-            "total_transfers": 0,
-            "successful_transfers": 0,
-            "failed_transfers": 0,
-            "total_bytes": 0,
-            "checkpoints_saved": 0,
-            "checkpoints_deleted": 0,
-            "last_weight_id": None,
-            "start_time": time.time(),
-        }
+        self.metrics = WeightTransferServerMetrics(start_time=time.time())
 
-    def serve_weights(self, weight_id: int, params: PyTree) -> None:
-        """Save checkpoint to disk."""
+    def serve_weights(self, weight_id: int, model: PyTree) -> None:
+        """Save checkpoint using Levanter's checkpoint system."""
         checkpoint_path = os.path.join(self.config.checkpoint_dir, f"step_{weight_id}")
 
-        self.metrics["total_transfers"] += 1
+        self.metrics.total_transfers += 1
 
         try:
             # Manage checkpoint queue
@@ -193,41 +248,29 @@ class GCSCheckpointServer(WeightTransferServer):
                 old_weight_id = self.checkpoint_queue.popleft()
                 old_path = os.path.join(self.config.checkpoint_dir, f"step_{old_weight_id}")
                 if jax.process_index() == 0:  # Only delete from coordinator
-                    delete_with_bucket(old_path, recursive=True)
-                    self.metrics["checkpoints_deleted"] += 1
+                    logger.info(f"Cleaning up old checkpoint at weight_id {old_weight_id} ({old_path})...")
+                    fs, _ = fsspec.core.url_to_fs(old_path)
+                    if fs.exists(old_path):
+                        fs.rm(old_path, recursive=True)
 
             logger.info(f"Saving checkpoint at weight_id {weight_id}...")
 
-            # Save checkpoint
-            metadata = {"weight_id": weight_id}
-
-            checkpointer(
-                path=checkpoint_path,
-                params=params,
-                config=self.model_config.to_dict() if self.model_config else {},
-                gather_fns=self.gather_fns,
-                metadata=metadata,
-                active=jax.process_index() == 0,
-                save_float_dtype="bf16",
+            # Save checkpoint using Levanter's native checkpoint system
+            levanter_checkpoint.save_checkpoint(
+                tree=model,
+                step=weight_id,
+                checkpoint_path=checkpoint_path,
             )
 
             self.checkpoint_queue.append(weight_id)
 
             # Update metrics
-            self.metrics["successful_transfers"] += 1
-            self.metrics["checkpoints_saved"] += 1
-            self.metrics["last_weight_id"] = weight_id
-
-            # Estimate checkpoint size (rough approximation)
-            param_count = sum(np.prod(x.shape) for x in jax.tree.leaves(params) if hasattr(x, "shape"))
-            bytes_per_param = 2  # bf16 = 2 bytes per parameter
-            estimated_bytes = param_count * bytes_per_param
-            self.metrics["total_bytes"] += estimated_bytes
+            self.metrics.successful_transfers += 1
 
             logger.info(f"Checkpoint saved at {checkpoint_path}")
 
         except Exception as e:
-            self.metrics["failed_transfers"] += 1
+            self.metrics.failed_transfers += 1
             logger.error(f"Failed to save checkpoint at weight_id {weight_id}: {e}")
             raise
 
@@ -235,73 +278,54 @@ class GCSCheckpointServer(WeightTransferServer):
         """No cleanup needed for GCS checkpoints."""
         pass
 
-    def get_metrics(self) -> dict[str, Any]:
+    def get_metrics(self) -> WeightTransferServerMetrics:
         """Get transfer metrics."""
-        current_time = time.time()
-        elapsed_time = current_time - self.metrics["start_time"]
-
-        metrics = self.metrics.copy()
-        metrics["transfer_rate"] = metrics["successful_transfers"] / max(elapsed_time, 1.0)  # transfers per second
-        metrics["avg_checkpoint_size_mb"] = (metrics["total_bytes"] / (1024 * 1024)) / max(
-            metrics["checkpoints_saved"], 1
-        )
-
-        return {"weight_transfer." + k: v for k, v in metrics.items()}
+        return self.metrics
 
 
 class GCSCheckpointClient(WeightTransferClient):
-    """GCS checkpoint-based weight transfer client."""
+    """GCS checkpoint-based weight transfer client using Levanter checkpointing."""
 
     def __init__(
         self,
         config: WeightTransferConfig,
-        shard_fns: Any,
-        load_checkpoint_fn: callable,
+        axis_mapping: ResourceMapping | None = None,
+        mesh: Mesh | None = None,
     ):
         self.config = config
-        self.shard_fns = shard_fns
-        self.load_checkpoint_fn = load_checkpoint_fn
+        self.axis_mapping = axis_mapping
+        self.mesh = mesh
         self.latest_checkpoint_path = None
+        self.metrics = WeightTransferClientMetrics(start_time=time.time())
 
-        # Metrics tracking
-        self.metrics = {
-            "mode": "gcs_checkpoint",
-            "total_polls": 0,
-            "successful_loads": 0,
-            "failed_loads": 0,
-            "total_bytes_loaded": 0,
-            "last_weight_id": None,
-            "start_time": time.time(),
-        }
-
-    def receive_weights(self, old_params: PyTree | None = None) -> tuple[PyTree | None, dict[str, Any]]:
-        """Load latest checkpoint from disk."""
-        self.metrics["total_polls"] += 1
+    def receive_weights(self, old_model: PyTree) -> Any:
+        """Load latest checkpoint using Levanter's checkpoint system."""
+        self.metrics.total_polls += 1
 
         latest_checkpoint = self._find_latest_checkpoint()
 
         if latest_checkpoint is None or latest_checkpoint == self.latest_checkpoint_path:
-            return old_params, {}
+            return None
 
-        del old_params
         logger.info(f"Loading checkpoint from {latest_checkpoint}")
-        params = self.load_checkpoint_fn(latest_checkpoint)
+
+        try:
+            params = levanter_checkpoint.load_checkpoint(
+                tree=old_model,
+                checkpoint_path=latest_checkpoint,
+                axis_mapping=self.axis_mapping,
+                mesh=self.mesh,
+            )
+        except Exception as e:
+            # might get stuck if checkpoint is being written
+            self.metrics.failed_receives += 1
+            logger.warning(f"Failed to load checkpoint {latest_checkpoint}: {e}")
+            return None
 
         self.latest_checkpoint_path = latest_checkpoint
-        weight_id = int(Path(latest_checkpoint).parent.name.split("_")[1])
-        self.metrics["successful_loads"] += 1
-        self.metrics["last_weight_id"] = weight_id
+        self.metrics.successful_receives += 1
 
-        param_count = sum(np.prod(x.shape) for x in jax.tree.leaves(params) if hasattr(x, "shape"))
-        bytes_per_param = 2  # bf16 = 2 bytes per parameter
-        estimated_bytes = param_count * bytes_per_param
-        self.metrics["total_bytes_loaded"] += estimated_bytes
-
-        return params, {
-            "weight_id": weight_id,
-            "source": "gcs_checkpoint",
-            "path": latest_checkpoint,
-        }
+        return params
 
     def _find_latest_checkpoint(self) -> str | None:
         """Find the latest checkpoint in the checkpoint directory."""
@@ -323,32 +347,17 @@ class GCSCheckpointClient(WeightTransferClient):
         if not checkpoint_dirs:
             return None
 
-        # Return path to the latest checkpoint's params.msgpack
-        latest_step, latest_dir = max(checkpoint_dirs)
-        params_path = latest_dir / "params.msgpack"
-
-        if params_path.exists():
-            return str(params_path)
-
-        return None
+        # Return path to the latest checkpoint directory (Levanter checkpoints are directories)
+        _, latest_dir = max(checkpoint_dirs)
+        return str(latest_dir)
 
     def cleanup(self) -> None:
         """No cleanup needed for GCS checkpoints."""
         pass
 
-    def get_metrics(self) -> dict[str, Any]:
+    def get_metrics(self) -> WeightTransferClientMetrics:
         """Get transfer metrics."""
-        current_time = time.time()
-        elapsed_time = current_time - self.metrics["start_time"]
-
-        metrics = self.metrics.copy()
-        metrics["poll_rate"] = metrics["total_polls"] / max(elapsed_time, 1.0)  # polls per second
-        metrics["load_success_rate"] = metrics["successful_loads"] / max(metrics["total_polls"], 1)
-        metrics["avg_load_size_mb"] = (metrics["total_bytes_loaded"] / (1024 * 1024)) / max(
-            metrics["successful_loads"], 1
-        )
-
-        return {"weight_transfer." + k: v for k, v in metrics.items()}
+        return self.metrics
 
 
 class JAXTransferServer(WeightTransferServer):
@@ -376,16 +385,7 @@ class JAXTransferServer(WeightTransferServer):
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="weight_transfer")
 
         # Metrics tracking
-        self.metrics = {
-            "mode": "jax_transfer",
-            "total_transfers": 0,
-            "successful_transfers": 0,
-            "failed_transfers": 0,
-            "queue_drops": 0,
-            "total_transfer_time_ms": 0,
-            "last_weight_id": None,
-            "start_time": time.time(),
-        }
+        self.metrics = WeightTransferServerMetrics(start_time=time.time())
 
     def _setup_cpu_transfer(self):
         """Setup CPU mesh for transfers."""
@@ -399,24 +399,23 @@ class JAXTransferServer(WeightTransferServer):
         except Exception as e:
             raise RuntimeError(f"Failed to setup CPU mesh: {e}") from e
 
-    def _transfer_to_cpu(self, params: PyTree) -> PyTree:
+    def _transfer_to_cpu(self, model) -> PyTree:
         """Transfer params to CPU devices."""
         try:
             with self.cpu_mesh:
                 cpu_devices = jax.devices("cpu")
-                return jax.device_put(params, cpu_devices[0])
+                return jax.device_put(model, cpu_devices[0])
         except Exception as e:
             logger.warning(f"Failed to transfer to CPU: {e}, using original params")
-            return params
+            return model
 
-    def serve_weights(self, weight_id: int, params: PyTree) -> None:
+    def serve_weights(self, weight_id: int, model) -> None:
         """Serve weights with CPU transfer and threading."""
-        self.metrics["total_transfers"] += 1
-        start_time = time.time()
+        self.metrics.total_transfers += 1
 
         def _serve_in_thread():
             try:
-                cpu_params = self._transfer_to_cpu(params)
+                cpu_params = self._transfer_to_cpu(model)
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
@@ -426,27 +425,23 @@ class JAXTransferServer(WeightTransferServer):
                     logger.info(f"Processed {result} weight transfers for weight_id {weight_id}")
 
                     # Update metrics
-                    self.metrics["successful_transfers"] += 1
-                    self.metrics["last_weight_id"] = weight_id
-                    elapsed_time = (time.time() - start_time) * 1000  # Convert to ms
-                    self.metrics["total_transfer_time_ms"] += elapsed_time
+                    self.metrics.successful_transfers += 1
 
                     return result
                 finally:
                     loop.close()
             except Exception as e:
                 logger.error(f"Error serving weights {weight_id}: {e}")
-                self.metrics["failed_transfers"] += 1
+                self.metrics.failed_transfers += 1
                 return 0
 
         # Use single-item queue - drop old requests if training runs ahead
         try:
-            self.poll_queue.put_nowait((weight_id, params))
+            self.poll_queue.put_nowait((weight_id, model))
         except queue.Full:
             old_item = self.poll_queue.get_nowait()
             logger.info(f"Dropping old weight transfer {old_item[0]} for new {weight_id}")
-            self.metrics["queue_drops"] += 1
-            self.poll_queue.put_nowait((weight_id, params))
+            self.poll_queue.put_nowait((weight_id, model))
 
         _ = self.executor.submit(_serve_in_thread)
 
@@ -457,19 +452,9 @@ class JAXTransferServer(WeightTransferServer):
         if hasattr(self, "transfer_server"):
             self.transfer_server = None
 
-    def get_metrics(self) -> dict[str, Any]:
+    def get_metrics(self) -> WeightTransferServerMetrics:
         """Get transfer metrics."""
-        current_time = time.time()
-        elapsed_time = current_time - self.metrics["start_time"]
-
-        metrics = self.metrics.copy()
-        metrics["transfer_rate"] = metrics["successful_transfers"] / max(elapsed_time, 1.0)
-        if metrics["successful_transfers"] > 0:
-            metrics["avg_transfer_time_ms"] = metrics["total_transfer_time_ms"] / metrics["successful_transfers"]
-        else:
-            metrics["avg_transfer_time_ms"] = 0.0
-
-        return {"weight_transfer." + k: v for k, v in metrics.items()}
+        return self.metrics
 
 
 class JAXTransferClient(WeightTransferClient):
@@ -492,16 +477,7 @@ class JAXTransferClient(WeightTransferClient):
         self.current_params_placeholder = None
 
         # Metrics tracking
-        self.metrics = {
-            "mode": "jax_transfer",
-            "total_polls": 0,
-            "successful_receives": 0,
-            "failed_receives": 0,
-            "total_bytes_received": 0,
-            "total_transfer_time_ms": 0,
-            "last_weight_id": None,
-            "start_time": time.time(),
-        }
+        self.metrics = WeightTransferClientMetrics(start_time=time.time())
 
     def _setup_cpu_transfer(self):
         """Setup CPU mesh for transfers."""
@@ -515,14 +491,13 @@ class JAXTransferClient(WeightTransferClient):
         except Exception as e:
             raise RuntimeError(f"Failed to setup CPU mesh: {e}") from e
 
-    def _transfer_from_cpu(self, params: PyTree) -> PyTree:
+    def _transfer_from_cpu(self, model) -> PyTree:
         """Transfer params from CPU back to TPU."""
-        return self.mesh.shard(params, self.params_sharding_rules)
+        return self.mesh.shard(model, self.params_sharding_rules)
 
-    def receive_weights(self, old_params: PyTree | None = None) -> tuple[PyTree | None, dict[str, Any]]:
+    def receive_weights(self, old_model: PyTree) -> Any:
         """Receive weights with CPU transfer."""
-        self.metrics["total_polls"] += 1
-        start_time = time.time()
+        self.metrics.total_polls += 1
 
         def _receive_in_thread():
             loop = asyncio.new_event_loop()
@@ -545,29 +520,19 @@ class JAXTransferClient(WeightTransferClient):
 
             if params is not None and metadata is not None:
                 # Update metrics
-                self.metrics["successful_receives"] += 1
-                self.metrics["last_weight_id"] = metadata.weight_id
-                self.metrics["total_bytes_received"] += metadata.weight_bytes
-                elapsed_time = (time.time() - start_time) * 1000  # Convert to ms
-                self.metrics["total_transfer_time_ms"] += elapsed_time
+                self.metrics.successful_receives += 1
+                return params
 
-                return params, {
-                    "weight_id": metadata.weight_id,
-                    "transfer_time": metadata.time_elapsed,
-                    "transfer_bytes": metadata.weight_bytes,
-                    "source": "jax_transfer",
-                }
-
-            return None, {}
+            return None
 
         except Exception as e:
-            self.metrics["failed_receives"] += 1
+            self.metrics.failed_receives += 1
             logger.error(f"Failed to receive weights: {e}")
             raise
 
-    def set_params_placeholder(self, params: PyTree):
+    def set_params_placeholder(self, model):
         """Set the placeholder params for transfers."""
-        self.current_params_placeholder = params
+        self.current_params_placeholder = model
 
     def cleanup(self) -> None:
         """Cleanup transfer server and thread pool."""
@@ -576,65 +541,41 @@ class JAXTransferClient(WeightTransferClient):
         if hasattr(self, "transfer_server"):
             self.transfer_server = None
 
-    def get_metrics(self) -> dict[str, Any]:
+    def get_metrics(self) -> WeightTransferClientMetrics:
         """Get transfer metrics."""
-        current_time = time.time()
-        elapsed_time = current_time - self.metrics["start_time"]
-
-        metrics = self.metrics.copy()
-        metrics["poll_rate"] = metrics["total_polls"] / max(elapsed_time, 1.0)
-        metrics["receive_success_rate"] = metrics["successful_receives"] / max(metrics["total_polls"], 1)
-        if metrics["successful_receives"] > 0:
-            metrics["avg_transfer_time_ms"] = metrics["total_transfer_time_ms"] / metrics["successful_receives"]
-            metrics["avg_transfer_size_mb"] = (
-                metrics["total_bytes_received"] / (1024 * 1024) / metrics["successful_receives"]
-            )
-        else:
-            metrics["avg_transfer_time_ms"] = 0.0
-            metrics["avg_transfer_size_mb"] = 0.0
-
-        return {"weight_transfer." + k: v for k, v in metrics.items()}
+        return self.metrics
 
 
 class RayRemotingServer(WeightTransferServer):
-    """Ray remoting-based weight transfer server."""
+    """Ray remoting-based weight transfer server for Levanter models."""
 
-    def __init__(self, config: WeightTransferConfig, gather_fns, coordinator):
+    def __init__(self, config: WeightTransferConfig, coordinator):
         self.config = config
-        self.gather_fns = gather_fns
         self.coordinator = coordinator
 
-        self.metrics = {
-            "mode": "ray_remoting",
-            "total_transfers": 0,
-            "successful_transfers": 0,
-            "failed_transfers": 0,
-            "total_bytes": 0,
-            "last_weight_id": None,
-            "start_time": time.time(),
-        }
+        self.metrics = WeightTransferServerMetrics(start_time=time.time())
 
-    def serve_weights(self, weight_id: int, params: PyTree) -> None:
-        self.metrics["total_transfers"] += 1
+    def serve_weights(self, weight_id: int, model) -> None:
+        self.metrics.total_transfers += 1
 
         try:
             logger.info(f"Serving weights for weight_id {weight_id} via Ray remoting...")
-            jax_distributed_barrier()
+            barrier_sync()
 
-            train_state = to_state_dict(params)
-            flattened_train_state = flatten_dict(train_state)
-            gather_fns = flatten_dict(to_state_dict(self.gather_fns.params))
+            # Convert Levanter model params (NamedArrays) to numpy arrays for Ray
+            def convert_to_numpy(x):
+                if is_named_array(x):
+                    return np.array(x.array)
+                elif hasattr(x, "shape"):
+                    return np.array(x)
+                else:
+                    return x
 
-            gathered_params = {}
-            for key, value in flattened_train_state.items():
-                gathered_params[key] = gather_fns[key](value)
-
-            gathered_train_state = unflatten_dict(gathered_params)
-            jax_distributed_barrier()
+            numpy_pytree = jax.tree.map(convert_to_numpy, model)
+            barrier_sync()
 
             if jax.process_index() == 0:
-                logger.info("Updating Ray object store with new weights at weight_id {weight_id}...")
-                numpy_pytree = jax.tree.map(lambda x: np.array(x) if hasattr(x, "shape") else x, gathered_train_state)
+                logger.info(f"Updating Ray object store with new weights at weight_id {weight_id}...")
                 leaves, treedef = jax.tree.flatten(numpy_pytree)
                 weight_refs = {
                     "leaves": [ray.put(leaf) for leaf in leaves],
@@ -642,77 +583,51 @@ class RayRemotingServer(WeightTransferServer):
                 }
                 ray.get(self.coordinator.put_weight_refs.remote(weight_id, weight_refs))
                 del weight_refs
-                self.metrics["successful_transfers"] += 1
-                self.metrics["last_weight_id"] = weight_id
-                param_count = sum(np.prod(x.shape) for x in jax.tree.leaves(gathered_train_state) if hasattr(x, "shape"))
-                bytes_per_param = 4
-                estimated_bytes = param_count * bytes_per_param
-                self.metrics["total_bytes"] += estimated_bytes
+                self.metrics.successful_transfers += 1
 
-                logger.info(f"Served weights for weight_id {weight_id} via Ray remoting (process {jax.process_index()})")
+                logger.info(
+                    f"Served weights for weight_id {weight_id} via Ray remoting " f"(process {jax.process_index()})"
+                )
 
-            jax_distributed_barrier()
+            barrier_sync()
         except Exception as e:
-            self.metrics["failed_transfers"] += 1
+            self.metrics.failed_transfers += 1
             logger.error(f"Failed to serve weights {weight_id} via Ray remoting: {e}")
             raise
 
     def cleanup(self) -> None:
         pass
 
-    def get_metrics(self) -> dict[str, Any]:
+    def get_metrics(self) -> WeightTransferServerMetrics:
         """Get transfer metrics."""
-        current_time = time.time()
-        elapsed_time = current_time - self.metrics["start_time"]
-
-        metrics = self.metrics.copy()
-        metrics["transfer_rate"] = metrics["successful_transfers"] / max(elapsed_time, 1.0)
-        metrics["avg_transfer_size_mb"] = (
-            metrics["total_bytes"] / (1024 * 1024) / max(metrics["successful_transfers"], 1)
-        )
-
-        return {"weight_transfer." + k: v for k, v in metrics.items()}
+        return self.metrics
 
 
 class RayRemotingClient(WeightTransferClient):
-    """Ray remoting-based weight transfer client."""
+    """Ray remoting-based weight transfer client for Levanter models."""
 
     def __init__(
         self,
         config: WeightTransferConfig,
         coordinator,
-        shard_fns=None,
-        remove_dict_prefix=None,
-        convert_to_dtypes=None,
     ):
         self.config = config
         self.coordinator = coordinator
-        self.shard_fns = shard_fns
-        self.remove_dict_prefix = remove_dict_prefix
-        self.convert_to_dtypes = convert_to_dtypes
         self.last_weight_id = None
 
         # Metrics tracking
-        self.metrics = {
-            "mode": "ray_remoting",
-            "total_polls": 0,
-            "successful_receives": 0,
-            "failed_receives": 0,
-            "total_bytes_received": 0,
-            "last_weight_id": None,
-            "start_time": time.time(),
-        }
+        self.metrics = WeightTransferClientMetrics(start_time=time.time())
 
-    def receive_weights(self, old_params: PyTree | None = None) -> tuple[PyTree | None, dict[str, Any]]:
-        """Receive weights from Ray object store."""
-        self.metrics["total_polls"] += 1
+    def receive_weights(self, old_model: PyTree = None) -> PyTree | None:
+        """Receive weights from Ray object store and reconstruct as Levanter model."""
+        self.metrics.total_polls += 1
 
         try:
             # Poll coordinator for latest weight references
             weight_refs, weight_id = ray.get(self.coordinator.get_latest_weight_refs.remote())
 
             if weight_refs is None or weight_id == self.last_weight_id:
-                return None, {}
+                return None
 
             # Get individual leaf arrays and treedef from object store
             leaf_refs = weight_refs["leaves"]
@@ -722,36 +637,36 @@ class RayRemotingClient(WeightTransferClient):
             leaves = [ray.get(ref) for ref in leaf_refs]
             treedef = ray.get(treedef_ref)
 
-            # Reconstruct the pytree
+            # Reconstruct the pytree from numpy arrays
             numpy_pytree = jax.tree.unflatten(treedef, leaves)
 
-            # Convert back to JAX arrays
-            jax_pytree = jax.tree.map(lambda x: jax.numpy.array(x), numpy_pytree)
-            if self.shard_fns is not None:
-                if old_params is not None:
-                    jax_pytree = _reshard_with_donation(old_params, jax_pytree, self.shard_fns)
-                else:
-                    jax_pytree = jax.tree.map(lambda x, fn: fn(x), jax_pytree, self.shard_fns)
+            # Convert back to JAX arrays and reconstruct NamedArrays structure
+            if old_model is not None:
 
-            self.metrics["successful_receives"] += 1
-            self.metrics["last_weight_id"] = weight_id
+                def convert_from_numpy(numpy_val, target_val=None):
+                    if target_val is not None and is_named_array(target_val):
+                        # Reconstruct NamedArray with same axes as target
+                        return hax.named(jax.numpy.array(numpy_val), target_val.axes)
+                    else:
+                        return jax.numpy.array(numpy_val)
+
+                def _convert_tree(numpy_tree, target_tree):
+                    return jax.tree.map(convert_from_numpy, numpy_tree, target_tree)
+
+                levanter_pytree = _convert_tree(numpy_pytree, old_model)
+            else:
+                # Without old_model, just convert to JAX arrays (lose NamedArray structure)
+                levanter_pytree = jax.tree.map(lambda x: jax.numpy.array(x), numpy_pytree)
+
+            self.metrics.successful_receives += 1
             self.last_weight_id = weight_id
-
-            # Estimate data size
-            param_count = sum(np.prod(x.shape) for x in jax.tree.leaves(jax_pytree) if hasattr(x, "shape"))
-            bytes_per_param = 4  # float32
-            estimated_bytes = param_count * bytes_per_param
-            self.metrics["total_bytes_received"] += estimated_bytes
 
             logger.info(f"Received weights for weight_id {weight_id} via Ray remoting")
 
-            return jax_pytree, {
-                "weight_id": weight_id,
-                "source": "ray_remoting",
-            }
+            return levanter_pytree
 
         except Exception as e:
-            self.metrics["failed_receives"] += 1
+            self.metrics.failed_receives += 1
             logger.error(f"Failed to receive weights via Ray remoting: {e}")
             raise
 
@@ -759,72 +674,68 @@ class RayRemotingClient(WeightTransferClient):
         """No cleanup needed for Ray remoting client."""
         pass
 
-    def get_metrics(self) -> dict[str, Any]:
+    def get_metrics(self) -> WeightTransferClientMetrics:
         """Get transfer metrics."""
-        current_time = time.time()
-        elapsed_time = current_time - self.metrics["start_time"]
-
-        metrics = self.metrics.copy()
-        metrics["poll_rate"] = metrics["total_polls"] / max(elapsed_time, 1.0)
-        metrics["receive_success_rate"] = metrics["successful_receives"] / max(metrics["total_polls"], 1)
-        metrics["avg_transfer_size_mb"] = (
-            metrics["total_bytes_received"] / (1024 * 1024) / max(metrics["successful_receives"], 1)
-        )
-
-        return {"weight_transfer." + k: v for k, v in metrics.items()}
+        return self.metrics
 
 
 def create_weight_transfer_server(
     config: WeightTransferConfig,
-    mesh=None,
-    params_sharding_rules=None,
-    gather_fns=None,
-    model_config=None,
+    mesh: Mesh | None = None,
+    axis_mapping: ResourceMapping | None = None,
     coordinator=None,
 ) -> WeightTransferServer:
-    """Factory function to create appropriate transfer server."""
+    """Factory function to create appropriate transfer server for Levanter models.
+
+    Args:
+        config: Weight transfer configuration
+        mesh: JAX mesh for distributed computation (optional)
+        axis_mapping: Levanter axis mapping for sharding (optional)
+        coordinator: Ray coordinator for distributed modes (required for RAY_REMOTING)
+
+    Returns:
+        WeightTransferServer instance
+    """
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
-        if not JAX_TRANSFER_AVAILABLE:
-            logger.warning("JAX transfer server not available, falling back to GCS checkpoints")
-            config.mode = WeightTransferMode.GCS_CHECKPOINT
-        elif mesh is None:
-            raise ValueError("Mesh required for JAX transfer server")
-        elif coordinator is None:
-            raise ValueError("Coordinator required for JAX transfer server")
-        else:
-            return JAXTransferServer(config, mesh, coordinator, params_sharding_rules)
+        # JAX transfer server is currently not supported with Levanter models
+        logger.warning("JAX transfer server not yet supported with Levanter models, " "falling back to GCS checkpoints")
+        config.mode = WeightTransferMode.GCS_CHECKPOINT
 
     elif config.mode == WeightTransferMode.RAY_REMOTING:
         if coordinator is None:
             raise ValueError("Coordinator required for Ray remoting")
-        return RayRemotingServer(config, gather_fns, coordinator)
+        return RayRemotingServer(config, coordinator)
 
+    # Default to GCS checkpoint mode
     return GCSCheckpointServer(
         config,
-        gather_fns=gather_fns,
-        model_config=model_config,
+        axis_mapping=axis_mapping,
+        mesh=mesh,
     )
 
 
 def create_weight_transfer_client(
     config: WeightTransferConfig,
-    mesh=None,
-    params_sharding_rules=None,
-    shard_fns=None,
-    load_checkpoint_fn=None,
+    mesh: Mesh | None = None,
+    axis_mapping: ResourceMapping | None = None,
     coordinator=None,
 ) -> WeightTransferClient:
-    """Factory function to create appropriate transfer client."""
+    """Factory function to create appropriate transfer client for Levanter models.
+
+    Args:
+        config: Weight transfer configuration
+        mesh: JAX mesh for distributed computation (optional)
+        axis_mapping: Levanter axis mapping for sharding (optional)
+        target_model: Target parameter structure for reconstructing NamedArrays (optional)
+        coordinator: Ray coordinator for distributed modes (required for RAY_REMOTING)
+
+    Returns:
+        WeightTransferClient instance
+    """
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
-        if not JAX_TRANSFER_AVAILABLE:
-            logger.warning("JAX transfer server not available, falling back to GCS checkpoints")
-            config.mode = WeightTransferMode.GCS_CHECKPOINT
-        elif mesh is None:
-            raise ValueError("Mesh required for JAX transfer server")
-        elif coordinator is None:
-            raise ValueError("Coordinator required for JAX transfer server")
-        else:
-            return JAXTransferClient(config, mesh, coordinator, params_sharding_rules)
+        # JAX transfer server is currently not supported with Levanter models
+        logger.warning("JAX transfer server not supported, falling back to GCS checkpoints")
+        config.mode = WeightTransferMode.GCS_CHECKPOINT
 
     elif config.mode == WeightTransferMode.RAY_REMOTING:
         if coordinator is None:
@@ -832,13 +743,11 @@ def create_weight_transfer_client(
         return RayRemotingClient(
             config,
             coordinator,
-            shard_fns=shard_fns,
         )
 
-    if load_checkpoint_fn is None:
-        raise ValueError("load_checkpoint_fn must be provided for GCSCheckpointClient")
+    # Default to GCS checkpoint mode
     return GCSCheckpointClient(
         config,
-        shard_fns=shard_fns,
-        load_checkpoint_fn=load_checkpoint_fn,
+        axis_mapping=axis_mapping,
+        mesh=mesh,
     )
