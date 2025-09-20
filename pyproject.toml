@@ -12,6 +12,7 @@ license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
     "braceexpand",
+    "chex==0.1.90",
     "cryptography>=45",
     "datasets",
     "deepdiff",
@@ -22,7 +23,7 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-storage-transfer",
     "haliax>=1.4.dev381",
-    "levanter==1.2.dev1535",
+    "levanter@git+https://github.com/marin-community/levanter@chiheem/inference",
     "lz4",
     "multiprocess==0.70.16",
     "numpy",
@@ -38,7 +39,8 @@ dependencies = [
     "torch>=2.7.0",
     "tqdm",
     "tqdm-loggable",
-    "wandb<=0.19.9",
+    "uv",
+    "wandb",
 ]
 
 [dependency-groups]
@@ -209,7 +211,7 @@ download_transform = [
     "fastparquet",
     "google-cloud-storage-transfer~=1.0",
     "html2text==2024.2.26",               # TODO :: Check pin?
-    "htmlmin==0.1.12",                    # TODO :: Check usage | pin?
+    #"htmlmin==0.1.12",                    # TODO :: Check usage | pin?
     "markdownify==0.12.1",                # TODO :: Check usage | pin?
     "py7zr",
     "readabilipy",
@@ -219,7 +221,6 @@ download_transform = [
     "resiliparse",
     "trafilatura>=2.0",
     "boto3==1.35.23",
-    "htmlmin",
 ]
 
 quality_dedup_consolidate = [
@@ -237,7 +238,7 @@ quality_dedup_consolidate = [
 
 tokenize_train = [
     "multiprocess==0.70.16",
-    "levanter@git+https://github.com/stanford-crfm/levanter",
+    "levanter@git+https://github.com/marin-community/levanter@chiheem/inference",
     "haliax>=1.4.dev348",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
     "tblib",
@@ -267,7 +268,7 @@ post_training = [
 data_browser = ["zstandard==0.23.0"]
 
 eval = [
-    "levanter@git+https://github.com/stanford-crfm/levanter",
+    "levanter@git+https://github.com/marin-community/levanter@chiheem/inference",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
 
