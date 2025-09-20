@@ -49,6 +49,7 @@ test = [
     "pytest-xdist",
     "pytest-timeout",
     "pytest-cov",
+    "pytest-profiling",
     # need this for integration tests
     "pip",
     "openai-responses",
