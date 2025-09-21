@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from marin.download.huggingface.download import DownloadConfig, download
 from marin.download.huggingface.download_gated_manual import download_and_upload_to_store
 from marin.download.huggingface.download_hf import download_hf
@@ -116,6 +130,18 @@ proofpile_2 = ExecutorStep(
     ),
     override_output_path="raw/proof-pile-2-f1b1d8",
 ).cd("901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927")
+
+the_pile_openwebtext2 = ExecutorStep(
+    name="raw/the_pile_openwebtext2",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id="vietgpt/the_pile_openwebtext2",
+        revision="1de27c6",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+    override_output_path="raw/the_pile_openwebtext2",
+).cd("1de27c6/huggingface.co/datasets/vietgpt/the_pile_openwebtext2/resolve/1de27c6")
 
 # TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
 #   Migrate the dataset and cd can be removed.

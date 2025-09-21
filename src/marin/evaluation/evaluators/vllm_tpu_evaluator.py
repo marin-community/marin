@@ -1,23 +1,35 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
 import subprocess
 import time
 from abc import ABC
-from typing import ClassVar
 
 import ray
 import requests
 
 from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Dependency, Evaluator, ModelConfig
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port
+from marin.run.ray_deps import build_runtime_env_for_packages
 from marin.utils import remove_tpu_lockfile_on_exit
 
 
 class VllmTpuEvaluator(Evaluator, ABC):
     """For `Evaluator`s that runs inference with VLLM on TPUs."""
-
-    DEFAULT_PIP_PACKAGES: ClassVar[list[Dependency]] = []
 
     # Where to store checkpoints, cache inference results, etc.
     CACHE_PATH: str = "/tmp"
@@ -106,39 +118,11 @@ class VllmTpuEvaluator(Evaluator, ABC):
         # Delete the checkpoint
         model.destroy()
 
-    _python_version: str = "3.10"
-    _pip_packages: ClassVar[list[Dependency]] = DEFAULT_PIP_PACKAGES
-    _py_modules: ClassVar[list[Dependency]] = []
-    _env_vars: ClassVar[dict[str, str]] = {}
-
     def get_runtime_env(self) -> dict:
         """
         Returns the runtime environment to run the evaluator on the Ray cluster.
         """
-        # Get the current runtime environment
-        current_runtime_env = ray.get_runtime_context().runtime_env or {}
-
-        # Get the current pip packages
-        current_pip_packages = []
-        if current_runtime_env.get("pip"):
-            if isinstance(current_runtime_env["pip"], dict):
-                current_pip_packages = current_runtime_env["pip"].get("packages", [])
-            else:
-                current_pip_packages = current_runtime_env["pip"]
-
-        all_packages = current_pip_packages + [str(package) for package in self._pip_packages]
-        runtime_env: dict = {
-            "pip": {
-                "packages": all_packages,
-            },
-            "env_vars": self._env_vars,
-        }
-
-        # An empty list of py_modules can cause an error in Ray
-        if len(self._py_modules) > 0:
-            runtime_env["py_modules"] = [str(module) for module in self._py_modules]
-
-        return runtime_env
+        return build_runtime_env_for_packages()
 
     def launch_evaluate_with_ray(
         self,
