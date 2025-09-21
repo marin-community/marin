@@ -3,7 +3,7 @@
 
 import logging
 
-
+import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
@@ -16,12 +16,15 @@ from levanter.inference.page_table import PageTable
 from levanter.layers.attention import KvPageCache
 
 
-class DummyModel:
+class DummyModel(eqx.Module):
     """Minimal model stub to drive GenerationService for tests.
 
     - `initial_cache` returns an empty KvPageCache sized to the PageTable.
     - `decode` returns constant logits that strongly prefer token `EOS`.
     """
+
+    Vocab: Axis = eqx.field(static=True)
+    eos: int = eqx.field(static=True)
 
     def __init__(self, vocab_size: int, eos_id: int = 3):
         self.Vocab = Axis("vocab", vocab_size)

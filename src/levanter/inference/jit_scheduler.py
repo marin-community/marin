@@ -59,7 +59,7 @@ class SeqDecodingParams(eqx.Module):
             max_num_tokens=jnp.array(max_int_jnp - 100000, dtype=jnp.int32),
             stop_tokens=None,
             temperature=jnp.array(0.0, dtype=jnp.float32),
-            key=jax.random.key(0),
+            key=jax.random.PRNGKey(0),
         )
 
 

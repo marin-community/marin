@@ -17,6 +17,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from haliax import NamedArray
+from haliax.jax_utils import is_jax_array_like
 
 from levanter.inference.jit_scheduler import (
     DecodeState,
@@ -211,6 +212,18 @@ def _clone_sequence(
     return new_state, child_local_id
 
 
+class PrefillWork(eqx.Module):
+    """Plain data container describing host-side work required for a prefill flush."""
+
+    queue: TokenQueue
+    new_num_seqs: jnp.ndarray
+    new_slot_ids: ht.i32[NamedArray, "seq"]  # type: ignore[name-defined]
+    clone_targets: ht.i32[NamedArray, "seq"]  # type: ignore[name-defined]
+    prompt_tokens: ht.i32[NamedArray, "seq position"]  # type: ignore[name-defined]
+    prompt_lengths: ht.i32[NamedArray, "seq"]  # type: ignore[name-defined]
+    seq_params: SeqDecodingParams
+
+
 def _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices):
     """
     Compute positions of last tokens per sequence inside a packed slice.
@@ -244,8 +257,7 @@ def _release_finished_device(gen_state: GenState, finished_mask: ht.bool_[NamedA
     return dataclasses.replace(gen_state, decode_state=new_ds)
 
 
-@hax.named_jit(donate_args=(True, False, False, False, False))
-def _run_prefill(
+def _prefill_kernel(
     gen_state: GenState,
     model: LmHeadModel,
     sampler: Sampler,
@@ -330,6 +342,83 @@ def _run_prefill(
     #     queued=gen_state.decode_state.num_queued_tokens,
     # )
     return gen_state, outputs
+
+
+def _stop_tokens_from_work(work: PrefillWork, idx: int) -> ht.i32[NamedArray, "stop_seq position"] | None:  # type: ignore[name-defined]
+    stop_tokens = work.seq_params.stop_tokens
+    if stop_tokens is None:
+        return None
+    return stop_tokens["seq", idx]
+
+
+def _seq_params_from_work(work: PrefillWork, idx: int) -> SeqDecodingParams:
+    def select(x):
+        if isinstance(x, NamedArray):
+            return x["seq", idx]
+        elif is_jax_array_like(x):
+            return x[idx]
+        else:
+            raise TypeError(f"Unexpected type in seq_params: {type(x)}")
+
+    return hax.tree_util.tree_map(select, work.seq_params)
+
+
+def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
+    num_new = work.new_num_seqs.astype(jnp.int32)
+    max_slots = work.new_slot_ids.array.shape[0]
+
+    def body(i: int, state: GenState) -> GenState:
+        slot_val = work.new_slot_ids.array[i]
+
+        def process(gs: GenState) -> GenState:
+            parent_val = work.clone_targets.array[i]
+            seq_params = _seq_params_from_work(work, i)
+
+            def do_clone(gs_clone: GenState) -> GenState:
+                new_state, _ = gs_clone.clone_sequence(
+                    parent_val,
+                    child_local_id=slot_val,
+                    seq_params=seq_params,
+                )
+                return new_state
+
+            def do_primary(gs_primary: GenState) -> GenState:
+                decode_state = gs_primary.decode_state
+                page_table, assigned = decode_state.page_table.assign_seq_id_to_seq(slot_val)
+                assigned = eqx.error_if(
+                    assigned,
+                    assigned != slot_val,
+                    "Requested local slot mismatch during prefill.",
+                )
+                decode_state = dataclasses.replace(decode_state, page_table=page_table)
+                prompt_len = work.prompt_lengths.array[i].astype(jnp.int32)
+                decode_state = decode_state.assign_seq(
+                    local_slot_id=slot_val,
+                    tokens=work.prompt_tokens["seq", i],
+                    seq_len=prompt_len,
+                    kv_pages=None,
+                    seq_params=seq_params,
+                )
+                return dataclasses.replace(gs_primary, decode_state=decode_state)
+
+            return jax.lax.cond(is_valid(parent_val), do_clone, do_primary, gs)
+
+        should_process = (i < num_new) & is_valid(slot_val)
+        return jax.lax.cond(should_process, process, lambda gs: gs, state)
+
+    return jax.lax.fori_loop(0, max_slots, body, gen_state)
+
+
+@functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill",))
+def _run_prefill(
+    gen_state: GenState,
+    model: LmHeadModel,
+    sampler: Sampler,
+    work: PrefillWork,
+    max_seqs_in_prefill: int,
+) -> tuple[GenState, _DecodeOutputs]:
+    gen_state = _apply_prefill_work(gen_state, work)
+    return _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill)
 
 
 def _handle_clones(
@@ -709,31 +798,28 @@ class InferenceEngine:
                     if len(cmap) == 0:
                         self.sequences.pop(rid, None)
             # Ensure any residual tokens/logprobs for this slot are dropped from the pending queue
-            # TODO: this shouldn't be necessary.
-            self.gen_state = dataclasses.replace(
-                self.gen_state, decode_state=self.gen_state.decode_state.purge_queue_of_slot(local_slot)
-            )
             self.free_slots.append(local_slot)
-        self._verify_free_slot_view(context="release_finished")
 
     # ------------------------------- Queue helpers -------------------------------
     def enqueue_requests(self, requests: Sequence[Request]) -> None:
         for r in requests:
             self.request_queue.append(r)
 
-    def _admit_from_queue(self) -> tuple[int, _DecodeOutputs | None]:
+    def _admit_from_queue(self) -> _DecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.
 
-        Returns the number of admitted requests.
+        Returns the decode outputs for the admitted prefill batch, or None if no work was admitted.
         """
         if not self.request_queue:
-            return 0, None
+            return None
+
         sim_slots = len(self.free_slots)
         sim_pages = self._free_page_count()
         max_prefill_size = int(self.config.max_prefill_size or self.gen_state.decode_state.page_table.max_len_per_seq)
         max_seqs_in_prefill = int(self.config.max_seqs_in_prefill)
         sim_tokens = 0
         primaries_in_batch = 0
+
         batch: list[Request] = []
         while self.request_queue:
             nxt = self.request_queue[0]
@@ -752,19 +838,21 @@ class InferenceEngine:
             sim_pages -= need_pages
             sim_tokens += len(nxt.prompt_tokens)
             primaries_in_batch += 1
+
         if not batch:
-            return 0, None
-        # Build a single TokenQueue for prefill and run prefill exactly once
-        token_queue = self._prefill_prompts(batch)
-        if token_queue is None or int(jax.device_get(token_queue.num_queued_tokens)) == 0:
-            return 0, None
+            return None
+
+        # Build a single PrefillWork description and run prefill exactly once
+        prefill_work = self._prefill_prompts(batch)
+        if prefill_work is None:
+            return None
         new_state = _run_prefill(
-            self.gen_state, self.model, self.sampler, token_queue, int(self.config.max_seqs_in_prefill)
+            self.gen_state, self.model, self.sampler, prefill_work, self.config.max_seqs_in_prefill
         )
+
         # _run_prefill returns (GenState, _DecodeOutputs)
         self.gen_state, outputs = new_state
-        self.gen_state = jax.block_until_ready(self.gen_state)
-        return len(batch), outputs
+        return outputs
 
     def _free_page_count(self) -> int:
         """Return number of free KV pages in the PageTable."""
@@ -778,31 +866,52 @@ class InferenceEngine:
     def _prefill_prompts(
         self,
         requests: Sequence[Request],
-    ) -> TokenQueue | None:
-        """Assign slot ids, set per-seq params, and build a single TokenQueue for prefill.
+    ) -> PrefillWork | None:
+        """Pack prompt work into a single PrefillWork structure for downstream device execution."""
 
-        Does not run device prefill; caller should invoke _run_prefill once with the returned queue.
-        """
-        max_seqs_in_prefill = int(self.config.max_seqs_in_prefill)
+        decode_state = self.gen_state.decode_state
+        max_seqs_in_prefill = self.config.max_seqs_in_prefill
         max_prefill_size = self.config.max_prefill_size or self.model.Pos.size
-        tokens = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
-        slot_ids = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
-        pos_ids = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
+        max_seq_len = decode_state.tokens.axis_size("position")
+        max_slots = decode_state.max_seqs
+
+        queue_tokens = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
+        queue_slot_ids = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
+        queue_pos_ids = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
+
+        work_slot_ids = np.full((max_slots,), INVALID, dtype=np.int32)
+        clone_targets = np.full((max_slots,), INVALID, dtype=np.int32)
+        prompt_tokens = np.full((max_slots, max_seq_len), INVALID, dtype=np.int32)
+        prompt_lengths = np.zeros((max_slots,), dtype=np.int32)
+
+        stop_tokens_template = decode_state.stop_tokens
+        max_num_tokens = np.zeros((max_slots,), dtype=np.int32)
+        temperatures = np.zeros((max_slots,), dtype=np.float32)
+        prng_keys = np.zeros((max_slots, 2), dtype=np.uint32)
+        if stop_tokens_template is not None:
+            stop_tokens = np.full(
+                (
+                    max_slots,
+                    stop_tokens_template.axis_size("stop_seq"),
+                    stop_tokens_template.axis_size("position"),
+                ),
+                INVALID,
+                dtype=np.int32,
+            )
+        else:
+            stop_tokens = None
+
         offset = 0
-        num_seqs_in_prefill = 0
+        num_primary = 0
+        total_new = 0
 
-        prefill_queue: TokenQueue | None = None
-
-        for idx, request in enumerate(requests):
+        for request in requests:
             seq_tokens = request.prompt_tokens
             seq_params = request.decode_params
 
-            # Stop adding more if we would exceed the single prefill buffer or sequence batch
-            if len(seq_tokens) + offset > tokens.shape[0] or num_seqs_in_prefill >= max_seqs_in_prefill:
+            if len(seq_tokens) + offset > queue_tokens.shape[0] or num_primary >= max_seqs_in_prefill:
                 break
 
-            # also give up if we don't have enough slots for all n_generations
-            # TODO: relax this constraint
             if len(self.free_slots) < request.n_generations:
                 if max_seqs_in_prefill < request.n_generations:
                     raise RuntimeError(
@@ -813,70 +922,100 @@ class InferenceEngine:
                 break
 
             requested_slot = self.free_slots.pop()
-            page_table, assigned_slot = self.gen_state.decode_state.page_table.assign_seq_id_to_seq(requested_slot)
-            slot_id = int(jax.device_get(assigned_slot))
-
-            if slot_id != requested_slot:
-                raise RuntimeError(f"Requested local slot {requested_slot} but PageTable assigned {slot_id}.")
-
-            self.gen_state = dataclasses.replace(
-                self.gen_state,
-                decode_state=dataclasses.replace(self.gen_state.decode_state, page_table=page_table),
-            )
+            slot_id = int(requested_slot)
 
             this_tokens = np.asarray(seq_tokens, dtype=np.int32)
-            tokens[offset : offset + len(seq_tokens)] = this_tokens
-            slot_ids[offset : offset + len(seq_tokens)] = slot_id
-            pos_ids[offset : offset + len(seq_tokens)] = np.arange(len(seq_tokens), dtype=np.int32)
+            queue_tokens[offset : offset + len(seq_tokens)] = this_tokens
+            queue_slot_ids[offset : offset + len(seq_tokens)] = slot_id
+            queue_pos_ids[offset : offset + len(seq_tokens)] = np.arange(len(seq_tokens), dtype=np.int32)
 
-            offset += len(seq_tokens)
-            num_seqs_in_prefill += 1
+            prefill_idx = total_new
+            if prefill_idx >= max_slots:
+                raise RuntimeError("Exceeded maximum slot instructions while building prefill work.")
 
-            self.gen_state = dataclasses.replace(
-                self.gen_state,
-                decode_state=self.gen_state.decode_state.assign_seq(
-                    local_slot_id=slot_id,
-                    tokens=hax.named(this_tokens, axis="position"),
-                    seq_len=jnp.asarray(len(seq_tokens)),
-                    kv_pages=None,
-                    seq_params=seq_params,
-                ),
-            )
-            # Record mapping: primary child id is 0
+            work_slot_ids[prefill_idx] = slot_id
+            clone_targets[prefill_idx] = INVALID
+            prompt_lengths[prefill_idx] = len(seq_tokens)
+            prompt_tokens[prefill_idx, : len(seq_tokens)] = this_tokens
+
+            max_num_tokens[prefill_idx] = np.asarray(seq_params.max_num_tokens, dtype=np.int32).item()
+            temperatures[prefill_idx] = np.asarray(seq_params.temperature, dtype=np.float32).item()
+            prng_keys[prefill_idx] = np.asarray(seq_params.key, dtype=np.uint32)
+            if stop_tokens is not None:
+                if seq_params.stop_tokens is None:
+                    stop_tokens[prefill_idx].fill(INVALID)
+                else:
+                    row = stop_tokens[prefill_idx]
+                    row.fill(INVALID)
+                    seq_stop = np.asarray(seq_params.stop_tokens.array)
+                    seq_num_stops, seq_stop_len = seq_stop.shape
+                    row[:seq_num_stops, -seq_stop_len:] = seq_stop
+
             rid = int(request.request_id)
             self.local_map[slot_id] = (rid, 0)
             self.sequences.setdefault(rid, {})[0] = slot_id
 
+            offset += len(seq_tokens)
+            num_primary += 1
+            total_new += 1
+
             if request.n_generations > 1:
+                parent_length = len(seq_tokens)
                 for k in range(1, request.n_generations):
                     if not self.free_slots:
                         raise RuntimeError("Clone requested but no free local slots remained.")
 
                     requested_child_slot = self.free_slots.pop()
-                    self.gen_state, child_local_id = self.gen_state.clone_sequence(
-                        slot_id,
-                        child_local_id=requested_child_slot,
-                        seq_params=dataclasses.replace(seq_params, key=jax.random.fold_in(seq_params.key, k)),
-                    )
-                    child_local_id = int(jax.device_get(child_local_id))
-                    if child_local_id != requested_child_slot:
-                        raise RuntimeError(
-                            f"Requested clone slot {requested_child_slot} but received {child_local_id}."
-                        )
-                    # Record mapping for clone: child id is k
-                    self.local_map[child_local_id] = (rid, k)
-                    self.sequences.setdefault(rid, {})[k] = child_local_id
+                    child_slot_id = int(requested_child_slot)
+                    clone_idx = total_new
+                    if clone_idx >= max_slots:
+                        raise RuntimeError("Exceeded maximum slot instructions while adding clones.")
 
-        if offset > 0:
-            prefill_queue = TokenQueue(
-                queued_tokens=hax.named(tokens, axis="position"),
-                queued_slot_ids=hax.named(slot_ids, axis="position"),
-                queued_pos_ids=hax.named(pos_ids, axis="position"),
-                num_queued_tokens=jnp.array(offset, dtype=jnp.int32),
-            )
+                    child_params = dataclasses.replace(seq_params, key=jax.random.fold_in(seq_params.key, k))
 
-        self._verify_free_slot_view(context="prefill_prompts")
-        return prefill_queue
+                    work_slot_ids[clone_idx] = child_slot_id
+                    clone_targets[clone_idx] = slot_id
+                    prompt_lengths[clone_idx] = parent_length
+                    # Clones reuse prompt tokens from their parent; no need to copy here.
+                    max_num_tokens[clone_idx] = np.asarray(child_params.max_num_tokens, dtype=np.int32).item()
+                    temperatures[clone_idx] = np.asarray(child_params.temperature, dtype=np.float32).item()
+                    prng_keys[clone_idx] = np.asarray(child_params.key, dtype=np.uint32)
+                    if stop_tokens is not None:
+                        stop_tokens[clone_idx] = stop_tokens[prefill_idx]
+
+                    self.local_map[child_slot_id] = (rid, k)
+                    self.sequences.setdefault(rid, {})[k] = child_slot_id
+
+                    total_new += 1
+
+        if offset == 0:
+            return None
+
+        prefill_queue = TokenQueue(
+            queued_tokens=hax.named(jnp.asarray(queue_tokens, dtype=jnp.int32), axis="position"),
+            queued_slot_ids=hax.named(jnp.asarray(queue_slot_ids, dtype=jnp.int32), axis="position"),
+            queued_pos_ids=hax.named(jnp.asarray(queue_pos_ids, dtype=jnp.int32), axis="position"),
+            num_queued_tokens=jnp.array(offset, dtype=jnp.int32),
+        )
+
+        return PrefillWork(
+            queue=prefill_queue,
+            new_num_seqs=jnp.array(total_new, dtype=jnp.int32),
+            new_slot_ids=hax.named(jnp.asarray(work_slot_ids, dtype=jnp.int32), axis="seq"),
+            clone_targets=hax.named(jnp.asarray(clone_targets, dtype=jnp.int32), axis="seq"),
+            prompt_tokens=hax.named(jnp.asarray(prompt_tokens, dtype=jnp.int32), axis=("seq", "position")),
+            prompt_lengths=hax.named(jnp.asarray(prompt_lengths, dtype=jnp.int32), axis="seq"),
+            seq_params=SeqDecodingParams(
+                max_num_tokens=jnp.asarray(max_num_tokens, dtype=jnp.int32),
+                stop_tokens=(
+                    None
+                    if stop_tokens is None
+                    else hax.named(jnp.asarray(stop_tokens, dtype=jnp.int32), axis=("seq", "stop_seq", "position"))
+                ),
+                temperature=jnp.asarray(temperatures, dtype=jnp.float32),
+                key=jnp.asarray(prng_keys, dtype=jnp.uint32),
+            ),
+        )
 
     def generate(self, requests: Sequence[Request]) -> GenerationResult:
         """Generate tokens for a batch of Requests.
@@ -943,9 +1082,11 @@ class InferenceEngine:
 
         time_in = time.time()
         # Try initial admission from queue and extract prompt tokens
-        _, decode_outputs = self._admit_from_queue()
+        decode_outputs = self._admit_from_queue()
         if decode_outputs:
             _ = self._ingest_outputs(decode_outputs)
+        initial_prefill_out = time.time()
+        logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
         # Autoregressive generation loop with periodic extraction
         def _all_done() -> bool:
@@ -972,7 +1113,6 @@ class InferenceEngine:
                     0,
                 )
             )
-            jax.block_until_ready(self.gen_state)
             fake_submit_done = time.time()
 
             submit_start = iter_start
@@ -986,7 +1126,7 @@ class InferenceEngine:
             )
             submit_done = time.time()
             # Time spent with device executing (and the host thread waiting)
-            self.gen_state = jax.block_until_ready(future_state)
+            self.gen_state = future_state
             device_time = time.time() - submit_done
 
             extract_start = time.time()
@@ -996,10 +1136,11 @@ class InferenceEngine:
             # Release any sequences that finished in this step
             release_start = time.time()
             # Admit more if capacity allows
-            _, admit_outputs = self._admit_from_queue()
-            mid_tokens = self._ingest_outputs(admit_outputs)
-            # Ensure any bookkeeping kernels complete before next iteration
-            self.gen_state = jax.block_until_ready(self.gen_state)
+            admit_outputs = self._admit_from_queue()
+            if admit_outputs is not None:
+                mid_tokens = self._ingest_outputs(admit_outputs)
+            else:
+                mid_tokens = 0
             new_tokens += mid_tokens
             release_time = time.time() - release_start
 
