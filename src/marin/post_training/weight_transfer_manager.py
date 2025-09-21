@@ -296,8 +296,6 @@ class GCSCheckpointClient(WeightTransferClient):
         self.axis_mapping = axis_mapping
         self.mesh = mesh
         self.latest_checkpoint_path = None
-
-        # Metrics tracking
         self.metrics = WeightTransferClientMetrics(start_time=time.time())
 
     def receive_weights(self, old_model: PyTree) -> Any:

@@ -28,30 +28,20 @@ import pytest
 import ray
 
 try:
+    from marin.post_training.rollout_storage import (
+        InMemoryRolloutQueue,
+    )
     from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
     from marin.post_training.train_worker import TrainWorker, TrainWorkerConfig
+    from tests.post_training.config_helpers import (
+        DummyTokenizer,
+        create_nano_rollout_worker_config,
+        create_nano_training_worker_config,
+        create_rollout_batch,
+        run_inference_with_engine,
+    )
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
-
-
-from marin.post_training.rollout_storage import (
-    InMemoryRolloutQueue,
-    RolloutBatch,
-    TaggedRolloutBatch,
-)
-from tests.post_training.config_helpers import (
-    DummyTokenizer,
-    create_nano_rollout_worker_config,
-    create_nano_training_worker_config,
-    create_rollout_batch,
-    run_inference_with_engine,
-)
-
-# Test timeout constants
-CHECKPOINT_POLL_INTERVAL = 0.2
-WORKER_JOIN_TIMEOUT = 5
-BATCH_READ_TIMEOUT = 1.0
-INTEGRATION_TEST_TIMEOUT = 60
 
 
 logger = logging.getLogger(__name__)
@@ -100,27 +90,6 @@ def _print_worker_status(elapsed, inference_runner, training_runner):
     print(f"  Rollouts generated: {inference_runner.rollouts_generated}")
     print(f"  Training steps: {training_runner.steps_completed}")
     print(f"  Weight transfers: {inference_runner.weight_transfers}")
-
-
-def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16) -> TaggedRolloutBatch:
-    """Helper to create test batches with all required fields."""
-    rng = np.random.default_rng(42 + idx)
-    return TaggedRolloutBatch(
-        batch=RolloutBatch(
-            input_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
-            attention_mask=np.ones((batch_size, max_seq_len), dtype=np.int32),
-            position_ids=np.arange(max_seq_len)[None, :].repeat(batch_size, axis=0).astype(np.int32),
-            target_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
-            loss_weights=np.ones((batch_size, max_seq_len), dtype=np.float32),
-            loss_masks=np.ones((batch_size, max_seq_len), dtype=np.float32),
-            reference_logprobs=rng.standard_normal((batch_size, max_seq_len)).astype(np.float32),
-            policy_logprobs=rng.standard_normal((batch_size, max_seq_len)).astype(np.float32),
-        ),
-        env_name=f"test_env_{idx}",
-        worker_id="test_worker",
-        timestamp=time.time(),
-        rollout_id=f"test_{idx}",
-    )
 
 
 class ThreadedWorkerRunner(ABC):
@@ -177,7 +146,7 @@ class ThreadedWorkerRunner(ABC):
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit - stop worker and check for errors."""
         self.stop()
-        self.join(timeout=WORKER_JOIN_TIMEOUT)
+        self.join(timeout=5)
 
         if self.error:
             import traceback
@@ -257,11 +226,9 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
         super().__init__(training_worker_config)
         self.training_worker_config = training_worker_config
 
-        # Metrics (tracked by default)
         self.steps_completed = 0
         self.losses = []
         self.trained_model = None
-        self.latest_checkpoint_path = None
 
     @property
     def reference_model(self):
@@ -280,10 +247,8 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
         original_configure_hooks = self.worker._configure_training_hooks
 
         def patched_configure_hooks(trainer):
-            # Call original hook configuration
             original_configure_hooks(trainer)
 
-            # Add our tracking hooks
             def step_tracking_hook(info):
                 self._track_training_step()
                 current_loss = float(info.loss)
@@ -294,19 +259,14 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
                 # For whatever reason, the model state is donated if we don't do this.
                 self.trained_model = jax.device_get(info.state.model)
 
-            def checkpoint_tracking_hook(info):
-                # Track the latest checkpoint path when one is saved
-                if hasattr(info, "checkpoint_path") and info.checkpoint_path:
-                    self.latest_checkpoint_path = str(info.checkpoint_path)
-
             trainer.add_hook(step_tracking_hook, every=1)
             trainer.add_hook(model_capture_hook, every=1)
-            trainer.add_hook(checkpoint_tracking_hook, every=1)
 
         self.worker._configure_training_hooks = patched_configure_hooks
         self.worker.train()
 
 
+@pytest.mark.slow("Integration test.")
 def test_rollout_worker(rollout_worker_config: RolloutWorkerConfig):
     """Test inference worker generates rollouts to in-memory queue."""
     # Use the rollout writer's queue from the inference worker config
@@ -318,8 +278,10 @@ def test_rollout_worker(rollout_worker_config: RolloutWorkerConfig):
     # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
 
     rollout_worker_config.max_rollouts = 10
-    rollout_worker_config.n_generations = 2
-    rollout_worker_config.n_prompts_per_step = 2
+    rollout_worker_config.n_generations = 1
+    rollout_worker_config.n_prompts_per_step = 1
+    rollout_worker_config.max_input_length = 8
+    rollout_worker_config.max_output_length = 8
 
     # Use context manager for cleaner test
     with RolloutWorkerRunner(rollout_worker_config) as runner:
@@ -336,26 +298,29 @@ def test_rollout_worker(rollout_worker_config: RolloutWorkerConfig):
     print("Rollout worker generated rollout batch successfully")
 
 
+@pytest.mark.slow("Integration test.")
 def test_train_worker(ray_cluster, training_worker_config: TrainWorkerConfig):
     """Test training worker processes rollout batch and creates checkpoint."""
     rollout_reader = training_worker_config.rollout_reader
     queue_writer = rollout_reader._queue.writer()
 
     batch_size = training_worker_config.trainer.train_batch_size
-    max_seq_len = 64  # Use fixed small length for testing
+    tokenizer = DummyTokenizer()
 
-    # Create multiple mock batches to ensure we have enough data
-    # The DataLoader might try to fetch multiple indices
-    for i in range(5):  # Create 5 batches to be safe
-        sample_batch = create_test_batch(i, batch_size=batch_size, max_seq_len=max_seq_len)
-        queue_writer.write_batch(sample_batch)
-
-    # Get coordinator for GCS mode only
-    # coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
-    # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
-
-    # Use context manager for cleaner test
     with TrainWorkerRunner(training_worker_config) as runner:
+        # Wait for worker to initialize and models to be available
+        while not runner.worker:
+            time.sleep(0.1)
+
+        for _ in range(5):
+            batch = create_rollout_batch(
+                policy_model=runner.reference_model,
+                reference_model=runner.reference_model,
+                batch_size=batch_size,
+                tokenizer=tokenizer,
+            )
+            queue_writer.write_batch(batch)
+
         # Wait for training to complete
         while not runner.done.is_set() and runner.steps_completed < 10:
             time.sleep(0.1)
@@ -369,6 +334,7 @@ def test_train_worker(ray_cluster, training_worker_config: TrainWorkerConfig):
     assert checkpoint_created, "Training worker should create checkpoint after processing batch"
 
 
+@pytest.mark.slow("Integration test.")
 def test_inference_and_training_workers(
     training_worker_config,
     rollout_worker_config,
@@ -381,10 +347,12 @@ def test_inference_and_training_workers(
     rollout_worker_config.rollout_writer = rollout_queue.writer()
     training_worker_config.rollout_reader = rollout_queue.reader()
 
+    rollout_worker_config.max_rollouts = 10
+    training_worker_config.trainer.num_train_steps = 10
+
     # coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
     # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
 
-    # Create worker runners and start with context managers
     with TrainWorkerRunner(training_worker_config) as training_runner:
         time.sleep(1)
         inference_runner = RolloutWorkerRunner(rollout_worker_config)
@@ -392,7 +360,7 @@ def test_inference_and_training_workers(
         with inference_runner:
             start_time = time.time()
 
-            while time.time() - start_time < INTEGRATION_TEST_TIMEOUT:
+            while time.time() - start_time < 60:
                 elapsed = time.time() - start_time
 
                 _print_worker_status(elapsed, inference_runner, training_runner)
@@ -463,6 +431,7 @@ def print_model_validation(model, tokenizer):
             print("  - No cat references found")
 
 
+@pytest.mark.slow("Integration test with training loop")
 def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_config):
     """Test training worker with manually constructed cat-themed rollout batches.
 
@@ -521,6 +490,7 @@ def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_conf
     print_model_validation(runner.trained_model, DummyTokenizer())
 
 
+@pytest.mark.slow("Long-running integration test.")
 def test_full_integration_moar_cats(
     training_worker_config,
     rollout_worker_config,
