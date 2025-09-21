@@ -108,6 +108,18 @@ llama_1_9b = LlamaConfig(
     num_layers=24,
 )
 
+# Llama-3.2-1B
+llama_3_2_1b = LlamaConfig(
+    seq_len=4096,
+    hidden_dim=2048,
+    intermediate_dim=8192,
+    num_heads=32,
+    num_kv_heads=8,
+    num_layers=16,
+    rope=Llama3RotaryEmbeddingsConfig(),
+    tie_word_embeddings=True,
+)
+
 llama_3_5b = LlamaConfig(
     seq_len=4096,
     hidden_dim=2560,
