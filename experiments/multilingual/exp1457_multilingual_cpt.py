@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Multilingual continual pretraining experiment starting from Phoenix phase.
 This experiment continues training from the Phoenix phase checkpoint (step 1320000) using a mix of
@@ -82,7 +96,7 @@ MULTILINGUAL_CPT_TRANSITION_END = MULTILINGUAL_CPT_START + 1000
 MULTILINGUAL_CPT_END = MULTILINGUAL_CPT_START + MULTILINGUAL_CPT_STEPS
 
 
-fineweb2_hq_mixture = lm_varying_mixture_data_config(
+fineweb2_hq = lm_varying_mixture_data_config(
     components={**phase_3_tokenized, **tokenize_fineweb2hq_steps},
     weights_list=[
         (0, DCLM_MIXTURE_WEIGHTS),
@@ -96,7 +110,7 @@ fineweb2_hq_mixture = lm_varying_mixture_data_config(
 
 multilingual_cpt_8b_fineweb2_hq = default_train(
     name="multilingual-cpt-8b-fineweb2-hq",
-    tokenized=fineweb2_hq_mixture,
+    tokenized=fineweb2_hq,
     model_config=llama_8b,
     train_config=cooldown_train_config,
     tags=["llama", "8b", "ema", "exp1457", "multilingual", "cpt"],
