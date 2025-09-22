@@ -112,16 +112,25 @@ def run_ray_command(
     if env is None:
         env = os.environ.copy() | {"TERM": "dumb"}
 
-    return subprocess.run(
-        command,
-        stdout=subprocess.PIPE if capture_output else None,
-        stderr=subprocess.PIPE if capture_output else None,
-        text=text,
-        env=env,
-        check=check,
-        timeout=timeout,
-        start_new_session=True,  # Creates new process group to avoid terminal issues
-    )
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE if capture_output else None,
+            stderr=subprocess.PIPE if capture_output else None,
+            text=text,
+            env=env,
+            check=check,
+            timeout=timeout,
+            start_new_session=True,  # Creates new process group to avoid terminal issues
+        )
+        return result
+    except subprocess.CalledProcessError as e:
+        raise RayCommandError(
+            command=command,
+            returncode=e.returncode,
+            stdout=e.stdout or "",
+            stderr=e.stderr or "",
+        ) from e
 
 
 def get_head_ip_from_config(cluster_config: str) -> str:
@@ -330,7 +339,7 @@ def submit_job(
         cmd.extend(["--working-dir", working_dir])
 
     if runtime_env:
-        cmd.extend(["--runtime-env", json.dumps(runtime_env)])
+        cmd.extend(["--runtime-env-json", json.dumps(runtime_env)])
 
     if resources:
         for resource, amount in resources.items():
@@ -385,9 +394,11 @@ def resubmit_job(
     raise_errors: bool,
 ) -> None:
     """Resubmit the job using the working directory and runtime environment."""
-    runtime_env_args = ["--runtime-env", json.dumps(runtime_env)] if runtime_env else []
+    runtime_env_args = ["--runtime-env-json", json.dumps(runtime_env)] if runtime_env else []
 
     logger.info(f"Resubmitting job {job_id}...")
+    import shlex
+
     job_array = [
         "ray",
         "job",
@@ -396,10 +407,11 @@ def resubmit_job(
         working_dir,
         *runtime_env_args,
         "--",
-        entrypoint,
+        *shlex.split(entrypoint),
     ]
     job_str = " ".join(job_array)
-    logger.info(f"Submitting the job: {job_str}")
+
+    logger.info(f"Submitting the job: {shlex.quote(job_str)}")
 
     try:
         run_ray_command(job_array)
