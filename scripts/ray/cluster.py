@@ -128,7 +128,7 @@ def stop_cluster(ctx):
 
 @cli.command("restart-cluster")
 @click.pass_context
-@click.option("--preserve-jobs", help="Restart without preserving jobs", default=True)
+@click.option("--preserve-jobs", help="Whether to preserve jobs during restart", default=True)
 def restart_cluster(ctx, preserve_jobs):
     """Restart cluster with job preservation."""
     config_obj, config_path = ctx.obj.config_obj, ctx.obj.config_file

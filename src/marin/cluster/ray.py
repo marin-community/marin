@@ -347,7 +347,7 @@ def submit_job(
 
     cmd.extend(["--", entrypoint])
 
-    result = run_ray_command(cmd, timeout=60)
+    result = run_ray_command(cmd, timeout=500, capture_output=False)
     # Extract job ID from output (usually in format "Job submitted with ID: <id>")
     output_lines = result.stdout.strip().split("\n")
     for line in output_lines:
@@ -414,7 +414,7 @@ def resubmit_job(
     logger.info(f"Submitting the job: {shlex.quote(job_str)}")
 
     try:
-        run_ray_command(job_array)
+        run_ray_command(job_array, timeout=500, capture_output=False)
         logger.info(f"Successfully resubmitted job {job_id}")
     except RayCommandError as e:
         logger.error(f"Failed to resubmit job {job_id}: {e}")
