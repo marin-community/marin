@@ -17,21 +17,22 @@ from typing import Callable, List, Optional, ParamSpec, Sequence, TypeVar, Union
 
 import equinox
 import fsspec
+import haliax.partitioning
 import jax
 import jax.numpy as jnp
 from draccus import field
 from fsspec import AbstractFileSystem
+from haliax.jax_utils import is_in_jit, is_jax_array_like
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 from jax.experimental.multihost_utils import broadcast_one_to_all
 from jaxtyping import PyTree
 
-import haliax.partitioning
-from haliax.jax_utils import is_in_jit, is_jax_array_like
-
-from levanter.tensorstore_serialization import tree_deserialize_leaves_tensorstore, tree_serialize_leaves_tensorstore
+from levanter.tensorstore_serialization import (
+    tree_deserialize_leaves_tensorstore,
+    tree_serialize_leaves_tensorstore,
+)
 from levanter.utils import fsspec_utils
 from levanter.utils.types import FilterSpec
-
 
 logger = logging.getLogger(__name__)
 
@@ -643,7 +644,9 @@ class CheckpointerConfig:
         )
 
     def __post_init__(self):
-        self.base_path = os.path.expanduser(self.base_path)
+        # Workaround for Executor using placeholder types.
+        if isinstance(self.base_path, str):
+            self.base_path = os.path.expanduser(self.base_path)
 
         # validate the checkpoint intervals.
         # we want to make sure that the intervals are monotonic. only the last one can be None

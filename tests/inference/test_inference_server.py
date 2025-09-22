@@ -40,7 +40,6 @@ def baby_llama_config():
         service=InferenceEngineConfig(max_seqs=2, page_size=4, max_pages_per_seq=4, max_queued_tokens=8),
         model=LlamaConfig(),
         trainer=TrainerConfig(wandb=WandbConfig(mode="disabled"), ray=RayConfig(auto_start_cluster=False)),
-        max_new_tokens=32,
         temperature=0.7,
         seed=42,
     )
@@ -192,7 +191,6 @@ def test_inference_worker_checkpoint_monitoring():
         tokenizer="timinar/baby-llama-58m",
         model=LlamaConfig(),
         trainer=TrainerConfig(wandb=WandbConfig(mode="disabled")),
-        max_new_tokens=8,
         temperature=0.7,
         seed=42,
     )

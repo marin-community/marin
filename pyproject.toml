@@ -58,8 +58,8 @@ dependencies = [
     "tqdm-loggable>=0.2",
     "deepdiff",
     "lenses",
-  "jinja2",  # needed for apply_chat_template
-  "protobuf>=6,<7",  # ensure TB/XProf compatibility; avoid 7+ due to ray
+    "jinja2",  # needed for apply_chat_template
+    "protobuf>=6,<7",  # ensure TB/XProf compatibility; avoid 7+ due to ray
   # "lm-eval==0.4.2",
   # "lm-eval @ git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch"
 ]
@@ -116,6 +116,8 @@ docs = [
 dev = [
   "pygments",
   "pre-commit",
+  "click>=8.0.0",
+  "prompt_toolkit>=3.0.0",
 ]
 
 [tool.uv]

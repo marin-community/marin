@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Literal, Optional, Union
 
 import equinox as eqx
 import haliax as hax
@@ -35,11 +35,8 @@ from openai.types.chat.chat_completion import Choice as ChatCompletionChoice
 from openai.types.chat.chat_completion import ChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
-from openai.types.chat.completion_create_params import (
-    CompletionCreateParams as ChatCompletionRequest,
-)
 from openai.types.completion_choice import CompletionChoice, Logprobs
-from openai.types.completion_create_params import CompletionCreateParams as CompletionRequest
+from pydantic import BaseModel, Field
 
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
@@ -51,6 +48,71 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 
 logger = logging.getLogger(__name__)
+
+
+# OpenAI requests are all defined as TypedDicts, which FastAPI struggles to
+# encode in a useful way. Since we control this half of the API, we'll define
+# our own equivalent Pydantic models here.
+
+
+class ChatMessage(BaseModel):
+    """A single chat message in the conversation."""
+
+    role: Literal["system", "user", "assistant", "tool", "function", "developer"]
+    content: Optional[str] = None
+    name: Optional[str] = None
+    tool_calls: Optional[List[Dict]] = None
+    tool_call_id: Optional[str] = None
+    function_call: Optional[Dict] = None
+
+
+class ChatCompletionRequest(BaseModel):
+    """Request model for chat completions endpoint."""
+
+    model: str
+    messages: List[ChatMessage]
+    frequency_penalty: Optional[float] = None
+    logit_bias: Optional[Dict[str, int]] = None
+    logprobs: bool = Field(default=False, description="Whether to include logprobs in the response")
+    top_logprobs: Optional[int] = None
+    max_tokens: int = Field(default=1024, description="Maximum number of tokens to generate")
+    n: Optional[int] = None
+    presence_penalty: Optional[float] = None
+    response_format: Optional[Dict] = None
+    seed: Optional[int] = None
+    service_tier: Optional[str] = None
+    stop: Optional[Union[str, List[str]]] = None
+    stream: Optional[bool] = None
+    stream_options: Optional[Dict] = None
+    temperature: float = Field(default=1.0, description="Sampling temperature")
+    top_p: Optional[float] = None
+    tools: Optional[List[Dict]] = None
+    tool_choice: Optional[Union[str, Dict]] = None
+    parallel_tool_calls: Optional[bool] = None
+    user: Optional[str] = None
+
+
+class CompletionRequest(BaseModel):
+    """Request model for text completions endpoint."""
+
+    model: str
+    prompt: Union[str, List[str]]
+    best_of: Optional[int] = None
+    echo: Optional[bool] = None
+    frequency_penalty: Optional[float] = None
+    logit_bias: Optional[Dict[str, int]] = None
+    logprobs: Optional[int] = None
+    max_tokens: int = Field(default=1024, description="Maximum number of tokens to generate")
+    n: Optional[int] = None
+    presence_penalty: Optional[float] = None
+    seed: Optional[int] = None
+    stop: Optional[Union[str, List[str]]] = None
+    stream: Optional[bool] = None
+    stream_options: Optional[Dict] = None
+    suffix: Optional[str] = None
+    temperature: float = Field(default=1.0, description="Sampling temperature")
+    top_p: Optional[float] = None
+    user: Optional[str] = None
 
 
 @dataclass
@@ -69,7 +131,6 @@ class InferenceServerConfig:
     service: InferenceEngineConfig = field(default_factory=InferenceEngineConfig)
 
     # Default generation parameters for API
-    max_new_tokens: int = 16
     temperature: float = 0.7
     seed: int = 42
 
@@ -115,19 +176,6 @@ class InferenceBatch(list):
 
 # A callback which replaces the current model.
 WeightSource = collections.abc.Callable[[LmHeadModel], LmHeadModel]
-
-
-# The OpenAI request types are TypedDicts instead of BaseModel
-# For consistency we convert them to objects with attribute access
-class ObjDict(dict):
-    def __init__(self, d):
-        super().__init__(**d)
-
-    def __getattr__(self, k):
-        res = self.get(k)
-        if isinstance(res, dict):
-            return ObjDict(res)
-        return res
 
 
 def _fetch_all_from_queue(q: queue.Queue, timeout: float) -> List:
@@ -202,7 +250,7 @@ class InferenceContext:
         max_tokens: int,
         temperature: float,
         stop_tokens: Optional[List[int]],
-        seed: int,
+        seed: int | None,
         future: asyncio.Future,
         n_generations: int = 1,
         original_prompt: str = "",
@@ -331,9 +379,7 @@ class InferenceContext:
                 req_outputs = []
                 for _ in range(req.n_generations):
                     if output_idx < len(result.tokens):
-                        # Decode tokens to text, excluding prompt
-                        prompt_len = len(req.prompt_tokens)
-                        generated_tokens = result.tokens[output_idx][prompt_len:]
+                        generated_tokens = result.tokens[output_idx]
                         text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
                         # Extract logprobs if requested, logprobs are already only for generated tokens
@@ -347,7 +393,7 @@ class InferenceContext:
                                 text=text,
                                 tokens=result.tokens[output_idx],
                                 logprobs=result_logprobs,
-                                prompt_tokens=prompt_len,
+                                prompt_tokens=len(req.prompt_tokens),
                                 completion_tokens=len(generated_tokens),
                                 request_id=req.request_id,
                             )
@@ -378,7 +424,7 @@ def _health_check() -> dict:
     return {"status": "healthy", "service": "levanter-inference"}
 
 
-async def _create_completion(ctx: InferenceContext, request: ObjDict) -> Completion:
+async def _create_completion(ctx: InferenceContext, request: CompletionRequest) -> Completion:
     """Create a text completion using OpenAI API format."""
     try:
         if isinstance(request.prompt, str):
@@ -488,18 +534,19 @@ async def _create_completion(ctx: InferenceContext, request: ObjDict) -> Complet
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def _create_chat_completion(ctx: InferenceContext, request: ObjDict) -> ChatCompletion:
+async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletionRequest) -> ChatCompletion:
     """Create a chat completion using OpenAI API format."""
     try:
-        messages = request.messages
+        # Convert Pydantic models to dicts for tokenizer
+        messages_dict = [msg.model_dump(exclude_none=True) for msg in request.messages]
 
         # Apply chat template
         try:
-            prompt_tokens = ctx.tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+            prompt_tokens = ctx.tokenizer.apply_chat_template(messages_dict, tokenize=True, add_generation_prompt=True)
         except Exception as e:
             # Fallback: simple concatenation if template fails
-            logger.warning(f"Chat template failed, using fallback: {e}")
-            prompt_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
+            logger.warning(f"Chat template failed, using fallback: {e}", exc_info=True)
+            prompt_text = "\n".join([f"{msg.role}: {msg.content}" for msg in request.messages])
             prompt_tokens = ctx.tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
 
         # Process stop sequences
@@ -656,11 +703,11 @@ class InferenceServer:
 
         @app.post("/v1/completions", response_model=Completion)
         async def create_completion(request: CompletionRequest) -> Completion:
-            return await _create_completion(inference_context, ObjDict(request))
+            return await _create_completion(inference_context, request)
 
         @app.post("/v1/chat/completions", response_model=ChatCompletion)
         async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompletion:
-            return await _create_chat_completion(inference_context, ObjDict(request))
+            return await _create_chat_completion(inference_context, request)
 
         return app
 
