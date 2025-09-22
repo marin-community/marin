@@ -61,7 +61,7 @@ endif
 # Target to build the Docker image and tag it appropriately
 cluster_docker_build:
 	@echo "Building Docker image using Dockerfile: $(DOCKERFILE)"
-	docker buildx build --platform linux/amd64 -t '$(DOCKER_IMAGE_NAME):latest' -f $(DOCKERFILE) .
+	docker buildx build --platform linux/amd64 --output "type=docker,compression=zstd" -t '$(DOCKER_IMAGE_NAME):latest' -f $(DOCKERFILE) .
 	@echo "Tagging Docker image for each region and version..."
 	$(foreach region,$(CLUSTER_REPOS), \
 		$(foreach version,$(TAG_VERSIONS), \
@@ -69,7 +69,7 @@ cluster_docker_build:
 	@echo "Docker image build and tagging complete, updating config.py with latest version..."
 
 cluster_tag:
-	sed -i '' "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" src/marin/cluster/config.py
+	sed -ie "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" src/marin/cluster/config.py
 
 # Target to push the tagged Docker images to their respective Artifact Registries
 cluster_docker_push:
