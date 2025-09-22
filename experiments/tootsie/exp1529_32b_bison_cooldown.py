@@ -16,6 +16,7 @@ from experiments.tootsie.exp1395_qwen3_32b import (
     qwen3_32b_remat,
     qwen_32b_warmstart_train,
 )
+from experiments.evals.evals import default_base_eval
 from experiments.nemotron_cc.tokenize_nemotron import (
     NEMOTRON_WEIGHTS,
     tokenize_nemotron_steps,
@@ -124,8 +125,49 @@ tootsie_32b_cooldown_bison = default_train(
     eval_harness_tasks=[],
 ).with_output_path("checkpoints/tootsie-32b-cooldown-bison-adamc")
 
+
+# Loss Spiked, see if flat LR works. (Will: It doesn't but preserving for posterity)
+
+qwen_phase3_checkpoint_for_phase4 = tootsie_32b_cooldown_bison.cd(f"checkpoints/step-190000").nonblocking()
+
+bison_train_config_flat = dataclasses.replace(
+    bison_train_config,
+    decay=0,
+    num_train_steps=PHASE_3_END,
+    initialize_from_checkpoint_path=qwen_phase3_checkpoint_for_phase4,
+    optimizer_config=AdamConfig(
+        # Modulate Decay And Warmup to Just Cool This Model Down
+        decay=0,
+        warmup=0.0,
+        adamc_weight_decay=True,
+        learning_rate=(7e-4 * (1 - (30 / 32))) + (7e-5 * (30 / 32)),
+        # From here out, this is a copy of the Optimizer hparams from bison_train_config
+        beta1=0.9,
+        beta2=0.95,
+        epsilon=1e-8,
+        max_grad_norm=0.2,  # we're almost always < .2 except during spikes
+        # width is a little smaller than the 24B and we're using a much larger batch size
+        # 4.2e-4 * sqrt(8192/3072) ≈ 7e-4
+        weight_decay=0.05,
+        skip_bad_steps=True,
+        # update_rms_clipping=1.0,  # added at 67522, removed at 72233
+        lr_schedule="linear",
+        # this was inadvertently off from about 74k to 80k
+        clip_update_norm=ClipUpdateNormConfig(rolling_interval_length=128, sigma_factor=2.0),
+    ),
+)
+
+tootsie_32b_cooldown_bison_flat = default_train(
+    name="tootsie-32b-cooldown-bison-adamc-flat",
+    tokenized=bison_cooldown_mixture,
+    model_config=qwen3_32b_remat,
+    train_config=bison_train_config_flat,
+    tags=["qwen", "32b", "ema", "exp1529", "tootsie", "cooldown"],
+    eval_harness_tasks=[],
+).with_output_path("checkpoints/tootsie-32b-cooldown-bison-adamc-flat")
+
 if __name__ == "__main__":
     executor_main(
-        [tootsie_32b_cooldown_bison],
+        [tootsie_32b_cooldown_bison, *default_base_eval(tootsie_32b_cooldown_bison)],
         description="Cooldown the 32B Qwen model on bison mixture",
     )
