@@ -24,9 +24,12 @@ RUN sudo rm -rf /var/lib/apt/lists/* \
  && sudo apt-get install -y --no-install-recommends \
       apt-transport-https \
       ca-certificates \
+      clang \
+      cmake \
       curl \
       docker.io \
       fuse \
+      g++ \
       gnupg \
       libpython3.11 \
       libpython3.11-dev \
@@ -48,7 +51,7 @@ ENV PATH=$PATH:/home/ray/google-cloud-sdk/bin
 # Copy Rust toolchain from rust stage
 COPY --from=rust-builder --chown=ray /usr/local/cargo /home/ray/.cargo
 COPY --from=rust-builder --chown=ray /usr/local/rustup /home/ray/.rustup
-ENV PATH=$HOME/.cargo/bin:$PATH
+ENV PATH=/home/ray/.cargo/bin:$PATH
 ENV RUSTUP_HOME=/home/ray/.rustup
 ENV CARGO_HOME=/home/ray/.cargo
 
@@ -56,13 +59,12 @@ RUN sudo mkdir -p /opt/marin/
 RUN sudo chown -R ray /opt/marin/
 
 # Ray uses conda
-ENV PATH=/home/ray/anaconda3/bin:/home/ray/anaconda3/bin:/home/ray/anaconda3/condabin:$PATH
+ENV PATH=/home/ray/anaconda3/bin:/home/ray/anaconda3/condabin:$PATH
 
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
 # outputs a noisy warning because it doesn't include version information.
 ENV LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/:/home/ray/anaconda3/lib
-ENV PATH=$PATH:/home/ray/anaconda3/bin
 
 COPY docker/marin/preemptible-fix.patch .
 # apply the patch to fix preemptible GCP in Ray in the installed ray package
@@ -71,11 +73,13 @@ RUN patch -d /home/ray/anaconda3/lib/python3.11/site-packages/ -p2 < preemptible
 # to run docker containers, we need to be in the docker group
 RUN sudo usermod -aG docker ray
 
+# Set UV to use system Python
+ENV UV_SYSTEM_PYTHON=1
+
 # Install into the system Python environment b/c Ray will use this as a base
 COPY --chown=ray pyproject.toml /tmp/marin/
 WORKDIR /tmp/marin
-RUN cd /tmp/marin\
-  && mkdir -p src/marin/\
+RUN mkdir -p src/marin/\
   && touch src/marin/__init__.py\
   && touch README.md\
   && touch LICENSE\

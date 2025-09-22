@@ -157,7 +157,7 @@ CONFIGS = {
         "BUCKET": "marin-eu-west4",
         "DOCKER_TAG": LATEST,
         "tpu_generation": "v5e",
-        "min_workers": 0,
+        "min_workers": 4,
         "worker_targets": {
             "v5e-128": 1,
         },

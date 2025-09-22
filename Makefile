@@ -61,7 +61,7 @@ endif
 # Target to build the Docker image and tag it appropriately
 cluster_docker_build:
 	@echo "Building Docker image using Dockerfile: $(DOCKERFILE)"
-	docker buildx build --platform linux/amd64 -t '$(DOCKER_IMAGE_NAME):latest' -f $(DOCKERFILE) .
+	docker buildx build --platform linux/amd64 --output "type=docker,compression=zstd" -t '$(DOCKER_IMAGE_NAME):latest' -f $(DOCKERFILE) .
 	@echo "Tagging Docker image for each region and version..."
 	$(foreach region,$(CLUSTER_REPOS), \
 		$(foreach version,$(TAG_VERSIONS), \
