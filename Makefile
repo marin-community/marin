@@ -69,7 +69,7 @@ cluster_docker_build:
 	@echo "Docker image build and tagging complete, updating config.py with latest version..."
 
 cluster_tag:
-	sed -i '' "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" src/marin/cluster/config.py
+	sed -ie "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" src/marin/cluster/config.py
 
 # Target to push the tagged Docker images to their respective Artifact Registries
 cluster_docker_push:

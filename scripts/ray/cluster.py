@@ -331,7 +331,7 @@ def add_worker(ctx, tpu_type, capacity, name):
 
 
 @cli.command("init-worker")
-@click.option("--name")
+@click.argument("name")
 @click.pass_context
 def init_worker(ctx, name):
     """Initialize Ray on a manual TPU worker."""

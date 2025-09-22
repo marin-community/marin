@@ -23,6 +23,7 @@ RUN sudo rm -rf /var/lib/apt/lists/* \
  && sudo apt-get update \
  && sudo apt-get install -y --no-install-recommends \
       apt-transport-https \
+      build-essential \
       ca-certificates \
       clang \
       cmake \
@@ -31,11 +32,17 @@ RUN sudo rm -rf /var/lib/apt/lists/* \
       fuse \
       g++ \
       gnupg \
+      liblz4-dev \
       libpython3.11 \
       libpython3.11-dev \
+      libre2-dev \
+      libssl-dev \
+      libuchardet-dev \
       lsb-release \
+      pkg-config \
       ubuntu-keyring \
       vim \
+      zlib1g-dev \
  && sudo rm -rf /var/lib/apt/lists/*
 
 # Setup gcsfuse repository and install
