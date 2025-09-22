@@ -29,7 +29,7 @@ dependencies = [
     "numpy",
     "openai",
     "pandas",                            # Only needed by Fileprovider in inference.py
-    "pyarrow",                           # # Only needed by Fileprovider in inference.py
+    "pyarrow",                           # Only needed by Fileprovider in inference.py
     "ray==2.45",
     "regex",
     "requests",
