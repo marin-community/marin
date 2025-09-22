@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import json
 import os
 import pickle as pkl
@@ -320,6 +334,7 @@ def jax_distributed_initalize(
     initialize_jax_distributed: bool = False,
     local_device_ids: list[int] | None = None,
     coordinator_address: str | None = None,
+    coordinator_bind_address: str | None = None,
     num_processes: int | None = None,
     process_id: int | None = None,
 ):
@@ -331,6 +346,7 @@ def jax_distributed_initalize(
 
         jax.distributed.initialize(
             coordinator_address=coordinator_address,
+            coordinator_bind_address=coordinator_bind_address,
             num_processes=num_processes,
             process_id=process_id,
             local_device_ids=local_device_ids,
@@ -399,31 +415,22 @@ def validate_format(input_text: str) -> dict[str, Any]:
 
 def checkpointer(
     path: str,
-    train_state: Any,
+    params: Any,
     config: Any,
     gather_fns: Any,
     metadata: Any = None,
-    save_optimizer_state: bool = False,
     save_float_dtype: str = "bf16",
     active=True,
 ):
     """Save checkpoint to disk or cloud storage."""
     if not path.startswith("gs://"):
         os.makedirs(path, exist_ok=True)
-    if save_optimizer_state:
-        checkpoint_state = train_state
-        if not active:
-            checkpoint_path = "/dev/null"
-        else:
-            checkpoint_path = os.path.join(path, "train_state.msgpack")
-        checkpoint_gather_fns = gather_fns
+    checkpoint_state = params
+    if not active:
+        checkpoint_path = "/dev/null"
     else:
-        checkpoint_state = train_state.params
-        if not active:
-            checkpoint_path = "/dev/null"
-        else:
-            checkpoint_path = os.path.join(path, "params.msgpack")
-        checkpoint_gather_fns = gather_fns.params
+        checkpoint_path = os.path.join(path, "params.msgpack")
+    checkpoint_gather_fns = gather_fns.params
     metadata_path = os.path.join(path, "metadata.pkl")
     config_path = os.path.join(path, "config.json")
 
