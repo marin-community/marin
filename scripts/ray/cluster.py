@@ -128,7 +128,8 @@ def stop_cluster(ctx):
 
 @cli.command("restart-cluster")
 @click.pass_context
-def restart_cluster(ctx):
+@click.option("--preserve-jobs", help="Whether to preserve jobs during restart", default=True)
+def restart_cluster(ctx, preserve_jobs):
     """Restart cluster with job preservation."""
     config_obj, config_path = ctx.obj.config_obj, ctx.obj.config_file
     if not config_obj or not config_path:
@@ -136,6 +137,15 @@ def restart_cluster(ctx):
         sys.exit(1)
 
     print(f"Restarting cluster {config_obj.cluster_name}...")
+
+    if not preserve_jobs:
+        print("Stopping cluster...")
+        subprocess.run(["ray", "down", "-y", config_path], check=True)
+
+        print("Starting cluster...")
+        subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
+        print("Cluster restarted successfully!")
+        return
 
     # Backup jobs
     print("Backing up jobs...")
@@ -321,7 +331,7 @@ def add_worker(ctx, tpu_type, capacity, name):
 
 
 @cli.command("init-worker")
-@click.option("--name")
+@click.argument("name")
 @click.pass_context
 def init_worker(ctx, name):
     """Initialize Ray on a manual TPU worker."""
