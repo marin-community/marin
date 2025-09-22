@@ -46,9 +46,8 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             extra=[],
             pip_packages=[
                 "statsmodels==0.14.4",
-                "jax[tpu]==0.5.1",
+                "jax[tpu]",
                 "haliax>=1.4.dev348",
-                "levanter==1.2.dev1359",
                 "ray==2.45",
                 "lm-eval[math]",
                 "math-verify",
