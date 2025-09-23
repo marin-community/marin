@@ -47,7 +47,7 @@ dependencies = [
     "tensorstore>=0.1.73",
     "pytimeparse>=1.1.8",
     "humanfriendly==10.0",
-    "safetensors[numpy]>=0.4.2,<0.6.0",
+    "safetensors[numpy]>=0.4.2,<0.7.0",
     "matplotlib>=3.7.0",
     "tblib>=1.7.0,<4.0.0",
     "dataclasses-json~=0.6.4",
