@@ -97,7 +97,7 @@ async def submit_and_track_job(
     runtime_dict = {
         "working_dir": current_dir,
         "config": {"setup_timeout_seconds": 1800},
-        "excludes": [".git", "tests/", "docs/"],
+        "excludes": [".git", "tests/", "docs/", "**/*.pack"],
     }
 
     # add the TPU dependency for cluster jobs.
@@ -122,7 +122,7 @@ async def submit_and_track_job(
         submission_id=submission_id,
     )
     logger.info(f"Job submitted with ID: {submission_id}")
-    logger.info(f"Job URL: http://localhost:8265/#/jobs/{submission_id}")
+    logger.info(f"Job URL: {client.get_address()}/#/jobs/{submission_id}")
 
     if no_wait:
         return
@@ -237,7 +237,11 @@ def main():
 
     # Submit the job and track it asynchronously
     submission_id = generate_submission_id(full_cmd)
-    client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
+    if "RAY_ADDRESS" not in os.environ:
+        client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
+    else:
+        client = JobSubmissionClient()
+
     try:
         asyncio.run(
             submit_and_track_job(

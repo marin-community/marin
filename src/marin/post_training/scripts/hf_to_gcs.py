@@ -33,7 +33,7 @@ import torch
 from google.cloud import storage
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-from marin.post_training.utils import save_checkpoint
+from marin.post_training.flax.utils import save_checkpoint
 
 
 def download_hf_model(model_name: str, cache_dir: str) -> tuple[Path, Path, Path]:

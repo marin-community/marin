@@ -176,6 +176,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,
+        wandb_tags: list[str] | None = None,
     ) -> None:
         """
         Runs EleutherAI's lm-eval harness on the specified model and set of  tasks.
@@ -218,10 +219,14 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 evaluation_tracker_args = simple_parse_args_string(f",output_path={result_filepath}")
                 evaluation_tracker = EvaluationTracker(**evaluation_tracker_args)
 
-                # wandb_args_dict = simple_parse_args_string(f"project=marin,job_type=eval,name={model.name}")
-                # wandb_config_args_dict = simple_parse_args_string("")
-                # wandb_logger = WandbLogger(**wandb_args_dict, **wandb_config_args_dict)
-                wandb_logger = WandbLogger()
+                wandb_args_dict = {
+                    "project": "marin",
+                    "job_type": "eval",
+                    "name": model.name,
+                    "tags": wandb_tags,
+                }
+            
+                wandb_logger = WandbLogger(**wandb_args_dict)
                 
                 # Use vLLM directly with TPU configuration that avoids deserialization issues
                 # Set environment variables to help with TPU compilation                

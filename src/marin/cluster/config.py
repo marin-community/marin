@@ -22,7 +22,7 @@ import jinja2
 import yaml
 
 # Cluster configuration constants and templates
-LATEST = "20250821"  # The latest docker tag used for the clusters
+LATEST = "20250922"  # The latest docker tag used for the clusters
 
 
 @dataclass
@@ -157,7 +157,7 @@ CONFIGS = {
         "BUCKET": "marin-eu-west4",
         "DOCKER_TAG": LATEST,
         "tpu_generation": "v5e",
-        "min_workers": 0,
+        "min_workers": 4,
         "worker_targets": {
             "v5e-128": 1,
         },
@@ -202,9 +202,10 @@ CONFIGS = {
         "BUCKET": "marin-us-east5",
         "DOCKER_TAG": LATEST,
         "tpu_generation": "v5p",
-        "min_workers": 4,
+        "min_workers": 8,
         "worker_targets": {
-            "v5p-2048": 2,
+            "v5p-64": 4,
+            "v5p-2048": 0,
         },
     },
     "marin-eu-west4-a": {

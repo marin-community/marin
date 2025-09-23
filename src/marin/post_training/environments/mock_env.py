@@ -20,11 +20,8 @@ from typing import Any, ClassVar, Protocol
 import jax
 import numpy as np
 
-from marin.post_training.inference import batch_inference
+from .marin_env import EnvStep, InferenceContext, MarinEnv
 
-from .marin_env import EnvStep, MarinEnv
-
-# Constants
 NUM_TRAIN_EXAMPLES = 1000
 NUM_EVAL_EXAMPLES = 100
 
@@ -45,98 +42,18 @@ class Task(Protocol):
         ...
 
 
-class CountTask:
-    """Count the number of words in the input."""
-
-    WORDS: ClassVar[list[str]] = [
-        "apple",
-        "banana",
-        "cat",
-        "dog",
-        "bird",
-        "fish",
-        "tree",
-        "car",
-        "book",
-        "pen",
-    ]
+class SimpleAdditionTask:
+    """Simple single-digit addition - 90% success rate target."""
 
     def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
         examples = []
         for _ in range(n_examples):
-            count = rng.integers(1, 6)
-            selected_words = rng.choice(self.WORDS, count, replace=False).tolist()
-
-            word_list = " ".join(selected_words)
-            prompt = f"How many words are in '{word_list}'? One word answer only."
-            answer = str(count)
+            a = rng.integers(0, 25)
+            b = rng.integers(0, 25)
+            result = a + b
+            prompt = f"What is {a}+{b}? Just the number:"
+            answer = str(result)
             examples.append({"prompt": prompt, "answer": answer})
-        return examples
-
-    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        examples = []
-        for _ in range(n_examples):
-            count = rng.integers(1, 4)  # 1-3 words for eval
-            selected_words = rng.choice(self.WORDS, count, replace=False).tolist()
-
-            word_list = " ".join(selected_words)
-            prompt = f"Count: {word_list}"
-            answer = str(count)
-            examples.append({"prompt": prompt, "answer": answer})
-        return examples
-
-    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
-        return compute_soft_reward(correct_answer, actual_response)
-
-
-class PatternTask:
-    """Complete simple patterns."""
-
-    PATTERNS: ClassVar[list[tuple[str, str]]] = [
-        ("A B A B A", "B"),
-        ("1 2 1 2 1", "2"),
-        ("X Y X Y X", "Y"),
-        ("red blue red blue red", "blue"),
-        ("up down up down up", "down"),
-        ("cat dog cat dog cat", "dog"),
-        ("sun moon sun moon sun", "moon"),
-    ]
-
-    def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        examples = []
-        for _ in range(n_examples):
-            idx = rng.choice(len(self.PATTERNS))
-            pattern, answer = self.PATTERNS[idx]
-            examples.append({"prompt": f"Pattern: {pattern}", "answer": answer})
-        return examples
-
-    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        examples = []
-        eval_patterns = [("A B A B A", "B"), ("1 2 1 2 1", "2"), ("X Y X Y X", "Y")]
-        for _ in range(n_examples):
-            pattern, answer = eval_patterns[rng.integers(len(eval_patterns))]
-            examples.append({"prompt": f"Pattern: {pattern}", "answer": answer})
-        return examples
-
-    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
-        return compute_soft_reward(correct_answer, actual_response, strict_format=True)
-
-
-class ReverseTask:
-    """Reverse the letters in words."""
-
-    def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        examples = []
-        word_list = Path("/usr/share/dict/words").read_text().splitlines()
-        for _ in range(n_examples):
-            word = rng.choice(word_list)
-            reversed_word = word[::-1]
-            examples.append(
-                {
-                    "prompt": f"Reverse the letters in '{word}'. One word answer only: ",
-                    "answer": reversed_word,
-                }
-            )
         return examples
 
     def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
@@ -146,21 +63,29 @@ class ReverseTask:
         return compute_soft_reward(correct_answer, actual_response)
 
 
-class FirstWordTask:
-    """Output the first word from a list."""
+class SimpleOppositesTask:
+    """Simple opposite words - 75% success rate target."""
+
+    OPPOSITES: ClassVar[list[tuple[str, str]]] = [
+        ("hot", "cold"),
+        ("big", "small"),
+        ("up", "down"),
+        ("yes", "no"),
+        ("in", "out"),
+        ("day", "night"),
+        ("fast", "slow"),
+        ("old", "new"),
+        ("happy", "sad"),
+        ("good", "bad"),
+    ]
 
     def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        word_list = Path("/usr/share/dict/words").read_text().splitlines()
         examples = []
         for _ in range(n_examples):
-            words = [rng.choice(word_list) for _ in range(rng.integers(2, 6))]
-            sentence = " ".join(words)
-            examples.append(
-                {
-                    "prompt": f"Output the first word of this sentence. '{sentence}'. One word answer only: ",
-                    "answer": words[0],
-                }
-            )
+            word, opposite = self.OPPOSITES[rng.integers(len(self.OPPOSITES))]
+            prompt = f"Opposite of {word}? One word:"
+            answer = opposite
+            examples.append({"prompt": prompt, "answer": answer})
         return examples
 
     def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
@@ -170,26 +95,45 @@ class FirstWordTask:
         return compute_soft_reward(correct_answer, actual_response)
 
 
-class ArithmeticTask:
-    """Simple single-digit arithmetic."""
+class NumberComparisonTask:
+    """Compare two numbers - 50% success rate target."""
 
     def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
         examples = []
         for _ in range(n_examples):
-            a = rng.integers(1, 10)
-            b = rng.integers(1, 10)
-            result = a + b
-            examples.append({"prompt": f"Add: {a} + {b}", "answer": str(result)})
+            a = rng.integers(1, 100)
+            b = rng.integers(1, 100)
+            if a != b:
+                if rng.random() < 0.5:
+                    prompt = f"Bigger: {a} or {b}? Just the number:"
+                    answer = str(max(a, b))
+                else:
+                    prompt = f"Smaller: {a} or {b}? Just the number:"
+                    answer = str(min(a, b))
+                examples.append({"prompt": prompt, "answer": answer})
         return examples
 
     def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
+        return self.generate_training_examples(n_examples, rng)
+
+    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
+        return compute_soft_reward(correct_answer, actual_response)
+
+
+class SecondHalfOfWordTask:
+    def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
         examples = []
+        words = Path("/usr/share/dict/words").read_text().splitlines()
         for _ in range(n_examples):
-            a = rng.integers(1, 10)
-            b = rng.integers(1, 10)
-            result = a + b
-            examples.append({"prompt": f"Add: {a} + {b}", "answer": str(result)})
+            w = rng.choice(words)
+            prompt = f"Second half of '{w}'? Just the letters:"
+            mid = len(w) // 2
+            answer = w[mid:]
+            examples.append({"prompt": prompt, "answer": answer})
         return examples
+
+    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
+        return self.generate_training_examples(n_examples, rng)
 
     def compute_reward(self, correct_answer: str, actual_response: str) -> float:
         return compute_soft_reward(correct_answer, actual_response)
@@ -235,13 +179,35 @@ def compute_soft_reward(correct_answer: str, actual_response: str, strict_format
     return 0.7 * correctness + 0.3 * format_score
 
 
+class MoarCatsTask:
+    """Make moar cats."""
+
+    def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
+        examples = []
+        for _ in range(n_examples):
+            prompt = "i like cats, i love cats, give me moar cats."
+            answer = "cats"
+            examples.append({"prompt": prompt, "answer": answer})
+        return examples
+
+    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
+        return self.generate_training_examples(n_examples, rng)
+
+    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
+        # how many cats
+        num_cats = actual_response.lower().count("cat")
+        love_cats = actual_response.lower().count("love cats")
+
+        return (num_cats + (10 * love_cats)) / (1 + len(actual_response))
+
+
 # Task mappings
 TASKS = {
-    "count": CountTask(),
-    "pattern": PatternTask(),
-    "reverse": ReverseTask(),
-    "first": FirstWordTask(),
-    "arithmetic": ArithmeticTask(),
+    "cats": MoarCatsTask(),
+    "simple_addition": SimpleAdditionTask(),
+    "simple_opposites": SimpleOppositesTask(),
+    "number_comparison": NumberComparisonTask(),
+    "second_half_of_word": SecondHalfOfWordTask(),
 }
 
 
@@ -269,12 +235,12 @@ class MockEnv(MarinEnv):
 
     def step(
         self,
-        sampler,
-        params,
+        inference_ctx: InferenceContext,
         n_examples: int,
         prng_key,
         mode: str = "train",
         n_generations: int = 1,
+        temperature: float = 1.0,
         **kwargs,
     ) -> EnvStep:
         """Generate synthetic rollouts for testing."""
@@ -292,10 +258,14 @@ class MockEnv(MarinEnv):
 
         # Generate responses
         prompts = [example["prompt"] for example in examples]
-        responses = batch_inference(sampler, params, prompts, prng_key, n_generations, verbose=False)
+        responses = inference_ctx.generate(
+            prompts,
+            temperature=temperature,
+            n_generations=n_generations,
+        )
 
         # Compute rewards and metrics
-        rewards, metrics = self._compute_rewards(examples, responses)
+        rewards, metrics = self._compute_rewards(examples, responses, inference_ctx.tokenizer)
 
         return EnvStep(examples=examples, responses=responses, rewards=rewards, metrics=metrics)
 
@@ -303,7 +273,9 @@ class MockEnv(MarinEnv):
         """Get evaluation examples."""
         return self.eval_examples[:n_examples]
 
-    def _compute_rewards(self, examples: list[dict], responses: list[list[dict[str, Any]]]) -> tuple[np.ndarray, dict]:
+    def _compute_rewards(
+        self, examples: list[dict], responses: list[list[dict[str, Any]]], tokenizer
+    ) -> tuple[np.ndarray, dict]:
         """Compute rewards for generated responses."""
         n_examples = len(examples)
         n_generations = len(responses[0]) if responses else 1
@@ -320,20 +292,15 @@ class MockEnv(MarinEnv):
 
             for gen_idx, response in enumerate(response_list):
                 # Decode the generated tokens to text
-                decoded_response = self.tokenizer.decode(response["tokens"], skip_special_tokens=True)
+                decoded_response = tokenizer.decode(response["tokens"], skip_special_tokens=True)
 
                 # Extract response after the prompt
                 prompt = example["prompt"]
-                if prompt in decoded_response:
-                    actual_response = decoded_response.split(prompt, 1)[1].strip()
+                if decoded_response.startswith(prompt):
+                    actual_response = decoded_response[len(prompt) :]
                 else:
-                    actual_response = decoded_response.strip()
-
-                # Clean up the response - take only the first word/token
-                actual_response = actual_response.split()[0] if actual_response.split() else ""
-
-                # Task-specific reward computation
-                reward = self._compute_task_reward(correct_answer, actual_response)
+                    actual_response = decoded_response
+                reward = self.task.compute_reward(correct_answer, actual_response)
                 rewards[example_idx, gen_idx] = reward
 
                 # Print sample outputs for debugging
@@ -358,14 +325,10 @@ class MockEnv(MarinEnv):
         mean_reward = float(np.mean(rewards))
 
         metrics = {
-            f"{self.task_type}_accuracy": accuracy,
-            f"{self.task_type}_format_accuracy": format_accuracy,
-            f"{self.task_type}_mean_reward": mean_reward,
-            f"{self.task_type}_total_examples": total_count,
+            f"{self.task_type}.accuracy": accuracy,
+            f"{self.task_type}.format_accuracy": format_accuracy,
+            f"{self.task_type}.mean_reward": mean_reward,
+            f"{self.task_type}.total_examples": total_count,
         }
 
         return rewards, metrics
-
-    def _compute_task_reward(self, correct_answer: str, actual_response: str) -> float:
-        """Compute task-specific reward."""
-        return self.task.compute_reward(correct_answer, actual_response)
