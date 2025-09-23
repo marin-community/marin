@@ -33,7 +33,7 @@ dependencies = [
     "pyarrow", # # Only needed by Fileprovider in inference.py
     # We have levanter deps for now. @TODO :: Remove them
     "multiprocess==0.70.16",
-    "levanter>=1.2.dev1359",
+    #"levanter>=1.2.dev1359",
     "haliax>=1.4.dev381",
     "sentencepiece",
     "lz4",
@@ -251,7 +251,7 @@ quality_dedup_consolidate = [
 ]
 tokenize_train = [
     "multiprocess==0.70.16",
-    "levanter>=1.2.dev1359",
+    #"levanter>=1.2.dev1359",
     "haliax>=1.4.dev348",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
     "tblib",
@@ -287,7 +287,7 @@ data_browser = [
 ]
 
 eval = [
-    "levanter>=1.2.dev1359",
+    #"levanter>=1.2.dev1359",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
 
