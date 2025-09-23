@@ -10,6 +10,9 @@ from levanter.utils.ray_utils import RayResources
 from ray.remote_function import RemoteFunction
 from ray.runtime_env import RuntimeEnv
 
+import draccus
+from draccus.parsers.decoding import decode_dataclass
+
 from marin.resources_utils import AcceleratorType
 
 logger = logging.getLogger(__name__)
@@ -230,3 +233,24 @@ class TpuPodConfig(ResourceConfig):
             "slice_count": self.slice_count,
             "device_flops_override": self.device_flops_override,
         }
+
+
+def _decode_resource_config(raw_value, _ctx=()):
+    # Accept already-constructed configs
+    # Note: ResourceConfig is a Protocol, so we don't use isinstance checks here.
+    if isinstance(raw_value, dict):
+        # Choose the concrete config based on keys present
+        if "tpu_type" in raw_value:
+            return decode_dataclass(TpuPodConfig, raw_value)
+        if "gpu_count" in raw_value or "accelerator_type" in raw_value:
+            return decode_dataclass(GpuConfig, raw_value)
+        if "num_cpus" in raw_value or len(raw_value) == 0:
+            return decode_dataclass(CpuOnlyConfig, raw_value)
+
+    raise Exception(
+        f"Unsupported ResourceConfig format: {raw_value!r}. "
+        f"Expected keys like 'tpu_type', 'gpu_count'/'accelerator_type', or 'num_cpus'."
+    )
+
+# Let draccus decode ResourceConfig from dicts in config files
+draccus.decode.register(ResourceConfig, _decode_resource_config)
