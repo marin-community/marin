@@ -79,7 +79,8 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 return local_path
             else:
                 raise ValueError(
-                    f"Failed to download model {model.name} to local path {local_path}. vLLM requires a local filesystem path. Model path: {model.path}"
+                    f"Failed to download model {model.name} to local path {local_path}. \
+                        vLLM requires a local filesystem path. Model path: {model.path}"
                 )
 
         print(f"Final model path: {downloaded_path}")
