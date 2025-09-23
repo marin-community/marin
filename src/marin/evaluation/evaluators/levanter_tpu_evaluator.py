@@ -33,7 +33,11 @@ class LevanterTpuEvaluator(Evaluator, ABC):
     # pip packages to install for running levanter's eval_harness on TPUs
     # Where to store checkpoints, cache inference results, etc.
     # Prefer memory-backed tmpfs when available to avoid disk I/O and capacity limits.
-    CACHE_PATH: str = os.environ.get("MARIN_CACHE_PATH", "/dev/shm/levanter-lm-eval") if os.path.isdir("/dev/shm") else "/tmp/levanter-lm-eval"
+    CACHE_PATH: str = (
+        os.environ.get("MARIN_CACHE_PATH", "/dev/shm/levanter-lm-eval")
+        if os.path.isdir("/dev/shm")
+        else "/tmp/levanter-lm-eval"
+    )
 
     @staticmethod
     def download_model(model: ModelConfig) -> str:

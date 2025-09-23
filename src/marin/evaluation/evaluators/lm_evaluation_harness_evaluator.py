@@ -17,7 +17,6 @@ import json
 import os
 import shutil
 import traceback
-from typing import ClassVar
 import subprocess
 import time
 
@@ -56,10 +55,10 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         """
         print(f"Downloading model: {model.name}, path: {model.path}")
         print(f"Cache path: {VllmTpuEvaluator.CACHE_PATH}")
-        
+
         local_path = os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
         print(f"Local download path: {local_path}")
-        
+
         try:
             downloaded_path: str | None = model.ensure_downloaded(local_path=local_path)
             print(f"Download result: {downloaded_path}")
@@ -79,8 +78,10 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 print(f"Using existing local path: {local_path}")
                 return local_path
             else:
-                raise ValueError(f"Failed to download model {model.name} to local path {local_path}. vLLM requires a local filesystem path. Model path: {model.path}")
-        
+                raise ValueError(
+                    f"Failed to download model {model.name} to local path {local_path}. vLLM requires a local filesystem path. Model path: {model.path}"
+                )
+
         print(f"Final model path: {downloaded_path}")
         return downloaded_path
 
@@ -92,18 +93,18 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             # Kill any lingering vLLM processes
             subprocess.run(["pkill", "-f", "vllm"], check=False)
             subprocess.run(["pkill", "-f", "python.*tpu"], check=False)
-            
+
             # Remove TPU lockfiles
             for i in range(8):
                 try:
                     os.unlink(f"/tmp/libtpu_lockfile_{i}")
                 except (FileNotFoundError, PermissionError):
                     pass
-            
+
             # Wait for resources to be released
             if wait_time > 0:
                 time.sleep(wait_time)
-                
+
         except Exception as e:
             print(f"TPU resource cleanup failed: {e}")
 
@@ -112,14 +113,14 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         Clean up TPU resources and model checkpoint to prevent Ray runtime env cleanup issues.
         """
         print("Cleaning up TPU resources and model checkpoint...")
-        
+
         try:
             # Clean up TPU resources
             self._cleanup_tpu_resources(wait_time=2)
-            
+
             # Clean up model checkpoint
             model.destroy()
-            
+
             print("Cleanup completed successfully")
         except Exception as e:
             print(f"Cleanup failed: {e}")
@@ -225,19 +226,21 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                     "name": model.name,
                     "tags": wandb_tags,
                 }
-            
+
                 wandb_logger = WandbLogger(**wandb_args_dict)
-                
+
                 # Use vLLM directly with TPU configuration that avoids deserialization issues
-                # Set environment variables to help with TPU compilation                
+                # Set environment variables to help with TPU compilation
                 # Clean up TPU resources before vLLM initialization
                 print("Cleaning up TPU resources before vLLM initialization...")
                 self._cleanup_tpu_resources(wait_time=5)
                 print("TPU cleanup completed")
-                
-                os.environ["XLA_FLAGS"] = "--xla_gpu_enable_async_all_gather=false --xla_gpu_enable_async_all_reduce=false"
+
+                os.environ["XLA_FLAGS"] = (
+                    "--xla_gpu_enable_async_all_gather=false --xla_gpu_enable_async_all_reduce=false"
+                )
                 os.environ["XLA_USE_BF16"] = "1"
-                
+
                 # Note: vLLM expects 'pretrained' argument, not 'model'
                 results = simple_evaluate(
                     model="vllm",
@@ -287,11 +290,11 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
 
                 # Clean up TPU resources and model checkpoint
                 self.cleanup(model)
-                
+
                 # Clean up results directory
                 if os.path.exists(self.RESULTS_PATH):
                     shutil.rmtree(self.RESULTS_PATH)
-                    
+
                 print("Final cleanup completed successfully")
             except Exception as cleanup_error:
                 print(f"Final cleanup failed: {cleanup_error}")

@@ -16,7 +16,6 @@ import os
 import subprocess
 import time
 from abc import ABC
-from typing import ClassVar
 
 import ray
 import requests
