@@ -46,7 +46,8 @@ test:
 
 # Define regions and tags for the Docker images
 CLUSTER_REPOS = us-central2 us-central1 europe-west4 us-west4 asia-northeast1 us-east5 us-east1
-TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(shell date -u +"%Y%m%d")
+TAG_DATE = $(shell date -u +"%Y%m%d")
+TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(TAG_DATE)
 
 # If VLLM is defined, use different Dockerfile and image name
 ifdef VLLM
@@ -60,11 +61,15 @@ endif
 # Target to build the Docker image and tag it appropriately
 cluster_docker_build:
 	@echo "Building Docker image using Dockerfile: $(DOCKERFILE)"
-	docker buildx build --platform linux/amd64 -t '$(DOCKER_IMAGE_NAME):latest' -f $(DOCKERFILE) .
+	docker buildx build --platform linux/amd64 --output "type=docker,compression=zstd" -t '$(DOCKER_IMAGE_NAME):latest' -f $(DOCKERFILE) .
 	@echo "Tagging Docker image for each region and version..."
 	$(foreach region,$(CLUSTER_REPOS), \
 		$(foreach version,$(TAG_VERSIONS), \
 			docker tag '$(DOCKER_IMAGE_NAME):latest' '$(region)-docker.pkg.dev/hai-gcp-models/marin/$(DOCKER_IMAGE_NAME):$(version)';))
+	@echo "Docker image build and tagging complete, updating config.py with latest version..."
+
+cluster_tag:
+	sed -ie "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" src/marin/cluster/config.py
 
 # Target to push the tagged Docker images to their respective Artifact Registries
 cluster_docker_push:
@@ -95,6 +100,15 @@ cluster_docker_ghcr_push: cluster_docker_build
 cluster_docker: cluster_docker_build cluster_docker_push
 	@echo "Docker image build and push complete."
 
+
+# Target to configure GCP registry cleanup policy for all standard regions
+default_registry_name = marin
+configure_gcp_registry_all:
+	@echo "Configuring GCP registry cleanup policy for all standard regions..."
+	$(foreach region,$(CLUSTER_REPOS), \
+		python infra/configure_gcp_registry.py $(default_registry_name) --region=$(region) ; \
+	)
+	@echo "Cleanup policy configured for all regions."
 
 
 # stuff for setting up locally
