@@ -12,4 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-REMOTE_DASHBOARD_URL = "http://127.0.0.1:8265"
+REMOTE_DASHBOARD_URL = "http://127.0.0.1:8000"

@@ -1,0 +1,4 @@
+[submodule "submodules/levanter"]
+	path = submodules/levanter
+	url = git@github.com:stanford-crfm/levanter.git
+	branch = sp765/dv2

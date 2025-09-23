@@ -78,10 +78,15 @@ def _update_config_to_use_out_path(pod_config: TrainLmOnPodConfig) -> TrainLmOnP
         ),
     )
 
+    # Allow bypassing HuggingFace checkpoint exports via env flag.
+    # When MARIN_DISABLE_HF_SAVE is truthy ("1", "true", "yes"), do not set hf_save_path,
+    # which prevents Levanter from registering the HF export callback.
+    disable_hf = os.environ.get("MARIN_DISABLE_HF_SAVE", "").lower() in {"1", "true", "yes"}
+
     config = replace(
         pod_config.train_config,
         trainer=trainer,
-        hf_save_path=os.path.join(pod_config.output_path, DEFAULT_HF_CHECKPOINTS_PATH),
+        hf_save_path=(None if disable_hf else os.path.join(pod_config.output_path, DEFAULT_HF_CHECKPOINTS_PATH)),
     )
     return replace(pod_config, train_config=config)
 
@@ -391,5 +396,8 @@ def _check_path_in_region(key, path, region, local_ok):
         logger.warning(f"Could not check region for {key}. Be sure it's in the same region as the VM.", exc_info=True)
 
 
+def _cli_entry(config: TrainLmOnPodConfig):
+    return ray.get(run_levanter_train_lm.remote(config))
+
 if __name__ == "__main__":
-    draccus.wrap()(run_levanter_train_lm)()
+    draccus.wrap()(_cli_entry)()
