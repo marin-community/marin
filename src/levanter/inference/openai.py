@@ -169,9 +169,11 @@ class InferenceResponse:
 
 
 class InferenceBatch(list):
-    @property
     def num_seqs(self) -> int:
         return sum(req.n_generations for req in self)
+
+    def total_tokens(self) -> int:
+        return sum(len(req.prompt_tokens) + req.max_tokens for req in self)
 
 
 # A callback which replaces the current model.
@@ -219,6 +221,14 @@ class InferenceContext:
         self.shutdown_event.set()
         self.inference_thread.join(timeout=1)
         self.batch_thread.join(timeout=1)
+
+    def unload(self):
+        """Unload the inference model to free up resources."""
+        logger.info("Unloading inference model...")
+        with self.model_lock:
+            self.model = None
+            self.engine = None
+        logger.info("Inference model unloaded.")
 
     def reload(self, weight_callback: WeightSource):
         """Reload the inference model using the given weight callback.
@@ -283,12 +293,26 @@ class InferenceContext:
         logger.info("Inference thread started")
 
         while not self.shutdown_event.is_set():
-            requests = _fetch_all_from_queue(self.request_queue, self.config.batch_timeout)
+            requests: list[InferenceRequest] = _fetch_all_from_queue(self.request_queue, self.config.batch_timeout)
             if not requests:
                 continue
 
             batch = InferenceBatch()
+            max_tokens_per_seq = self.engine.config.max_pages_per_seq * self.engine.config.page_size
+            max_tokens_per_batch = self.engine.config.imputed_max_pages * self.engine.config.page_size
+            logger.info(f"Max tokens per seq: {max_tokens_per_seq}, per batch: {max_tokens_per_batch}")
+
             for r in requests:
+                if len(r.prompt_tokens) > max_tokens_per_seq:
+                    # slice down requests that are too long
+                    logger.warning(
+                        "Request %s prompt too long (%d tokens), truncating to last %d tokens",
+                        r.request_id,
+                        len(r.prompt_tokens),
+                        max_tokens_per_seq,
+                    )
+                    r.prompt_tokens = r.prompt_tokens[-max_tokens_per_seq:]
+
                 if r.n_generations > self.engine.config.max_seqs:
                     # fail requests that are too large
                     error_msg = (
@@ -297,12 +321,14 @@ class InferenceContext:
                     )
                     logger.error(error_msg)
                     r.future.get_loop().call_soon_threadsafe(r.future.set_exception, ValueError(error_msg))
-                elif batch.num_seqs + r.n_generations <= self.engine.config.max_seqs:
+                elif (
+                    batch.num_seqs() + r.n_generations <= self.engine.config.max_seqs
+                    and batch.total_tokens() + (len(r.prompt_tokens) + r.max_tokens) <= max_tokens_per_batch
+                ):
                     batch.append(r)
                 else:
                     self.batch_queue.put(batch)
                     batch = InferenceBatch([r])
-
             if batch:
                 self.batch_queue.put(batch)
 
@@ -337,6 +363,9 @@ class InferenceContext:
     def _execute_batch(self, requests: InferenceBatch):
         """Execute a batch of inference requests"""
         service_requests = []
+
+        if not self.engine:
+            raise RuntimeError("Inference engine is not initialized.")
 
         for i, req in enumerate(requests):
             # Create stop tokens if specified
@@ -710,6 +739,10 @@ class InferenceServer:
             return await _create_chat_completion(inference_context, request)
 
         return app
+
+    def unload(self):
+        """Unload the inference model to free up resources."""
+        self.inference_context.unload()
 
     def reload(self, weight_callback: WeightSource):
         """Reload the model weights using the provided callback.

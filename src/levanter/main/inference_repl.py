@@ -15,8 +15,10 @@ CLI Usage:
 """
 
 import asyncio
+import json
 import logging
 import shlex
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -31,7 +33,6 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
 
 import levanter
 from levanter.checkpoint import load_checkpoint
@@ -87,7 +88,7 @@ class InferenceReplConfig:
     model: LlamaConfig = field(default_factory=LlamaConfig)
     service: InferenceEngineConfig = field(
         default_factory=lambda: InferenceEngineConfig(
-            max_seqs=2, page_size=8, max_pages_per_seq=16, max_queued_tokens=8
+            max_seqs=4, page_size=8, max_pages_per_seq=16, max_queued_tokens=8
         )
     )
 
@@ -111,6 +112,7 @@ class Commands:
             "unload": self.unload_model,
             "chat": self.chat,
             "complete": self.complete,
+            "batch": self.batch,
             "reload": self.reload,
             "config": self.show_config,
             "info": self.info,
@@ -255,6 +257,110 @@ class Commands:
         finally:
             loop.close()
 
+    def batch(self, batch_input: str):
+        """Submit a batch of chat completion requests from JSON.
+
+        Args:
+            batch_input: Either a JSON file path or inline JSON string
+        """
+        if not server:
+            console.print("[red]No model loaded[/red]")
+            return
+
+        try:
+            # Try to load as file first
+            if Path(batch_input).exists():
+                with open(batch_input, "r") as f:
+                    batch_data = json.load(f)
+                console.print(f"[blue]Loaded {len(batch_data)} requests from {batch_input}[/blue]")
+            else:
+                # Try to parse as inline JSON
+                batch_data = json.loads(batch_input)
+                if not isinstance(batch_data, list):
+                    batch_data = [batch_data]
+                console.print(f"[blue]Parsed {len(batch_data)} requests from inline JSON[/blue]")
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            console.print(f"[red]Failed to parse batch input: {e}[/red]")
+            return
+
+        # Submit all requests concurrently
+        console.print(f"[cyan]Submitting batch of {len(batch_data)} requests...[/cyan]")
+
+        start_time = time.time()
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def submit_batch():
+            tasks = []
+            for i, req_data in enumerate(batch_data):
+                # Convert to ChatCompletionRequest
+                messages = []
+                for msg in req_data.get("messages", []):
+                    messages.append(ChatMessage(role=msg["role"], content=msg.get("content", "")))
+
+                request = ChatCompletionRequest(
+                    model=req_data.get("model", model_name or "model"),
+                    messages=messages,
+                    max_tokens=req_data.get("max_tokens", self.config.max_tokens),
+                    temperature=req_data.get("temperature", server_config.temperature),
+                    n=req_data.get("n", 1),
+                    logprobs=req_data.get("logprobs", False),
+                    stop=req_data.get("stop"),
+                )
+
+                task = _create_chat_completion(server.inference_context, request)
+                tasks.append(task)
+
+            # Wait for all completions
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            return responses
+
+        try:
+            responses = loop.run_until_complete(submit_batch())
+            elapsed = time.time() - start_time
+
+            # Print results
+            console.print(f"\n[green]Batch completed in {elapsed:.2f}s[/green]")
+
+            success_count = sum(1 for r in responses if not isinstance(r, Exception))
+            error_count = len(responses) - success_count
+
+            console.print(f"Total Requests: {len(batch_data)}")
+            console.print(f"Successful: {success_count}")
+            console.print(f"Failed: {error_count}")
+            console.print(f"Time: {elapsed:.2f}s")
+            console.print(f"Throughput: {len(batch_data)/elapsed:.2f} req/s")
+
+            # Show all responses and errors
+            console.print("\n[cyan]Results:[/cyan]")
+            for i, resp in enumerate(responses):
+                if isinstance(resp, Exception):
+                    console.print(f"\n[red]Request {i} FAILED:[/red] {resp}")
+                else:
+                    console.print(f"\n[green]Request {i} SUCCESS:[/green]")
+                    # Show the actual response content
+                    if hasattr(resp, "choices") and resp.choices:
+                        for j, choice in enumerate(resp.choices):
+                            if hasattr(choice, "message"):
+                                content = choice.message.content
+                            else:
+                                content = choice.text if hasattr(choice, "text") else str(choice)
+                            console.print(
+                                f"  Choice {j}: {content[:200]}..."
+                                if len(content) > 200
+                                else f"  Choice {j}: {content}"
+                            )
+
+                    # Show token usage
+                    if hasattr(resp, "usage") and resp.usage:
+                        console.print(
+                            f"  Tokens - Prompt: {resp.usage.prompt_tokens}, Completion: {resp.usage.completion_tokens}"
+                        )
+
+        finally:
+            loop.close()
+
     def reload(self, model: str):
         """Reload model from a new checkpoint."""
         global server_config
@@ -286,19 +392,14 @@ class Commands:
             console.print("[yellow]No model loaded[/yellow]")
             return
 
-        table = Table(title="Model Information")
-        table.add_column("Property", style="cyan")
-        table.add_column("Value", style="green")
-
-        table.add_row("Model", model_name or "Unknown")
-        table.add_row("Tokenizer", str(server_config.tokenizer))
-        table.add_row("Vocab Size", str(len(server.inference_context.tokenizer)))
-        table.add_row("Max Sequences", str(server_config.service.max_seqs))
-        table.add_row("Temperature", str(server_config.temperature))
-        table.add_row("Seed", str(server_config.seed))
-        table.add_row("Max Tokens", str(self.config.max_tokens))
-
-        console.print(table)
+        console.print("[cyan]Model Information:[/cyan]")
+        console.print(f"Model: {model_name or 'Unknown'}")
+        console.print(f"Tokenizer: {str(server_config.tokenizer)}")
+        console.print(f"Vocab Size: {len(server.inference_context.tokenizer)}")
+        console.print(f"Max Sequences: {server_config.service.max_seqs}")
+        console.print(f"Temperature: {server_config.temperature}")
+        console.print(f"Seed: {server_config.seed}")
+        console.print(f"Max Tokens: {self.config.max_tokens}")
 
     def show_help(self):
         """Show help text."""
@@ -308,6 +409,7 @@ class Commands:
   unload                    Unload current model
   chat [text]               Chat with model (interactive if no text)
   complete <text>           Complete text prompt
+  batch <file.json|json>    Submit batch of requests from JSON
   reload <checkpoint>       Reload from new checkpoint
   info                      Show model information
   help                      Show this help
@@ -425,6 +527,12 @@ def repl_mode(config: InferenceReplConfig, commands: Commands):
                     continue
                 prompt_text = " ".join(args)
                 commands.execute("complete", prompt_text)
+            elif cmd == "batch":
+                if not args:
+                    console.print("[red]Usage: batch <file.json> or batch <inline_json>[/red]")
+                    continue
+                batch_input = " ".join(args)
+                commands.execute("batch", batch_input)
             elif cmd == "reload":
                 if not args:
                     console.print("[red]Usage: reload <model>[/red]")
@@ -470,6 +578,11 @@ def cli_mode(config: InferenceReplConfig, commands: Commands):
             return
         prompt_text = config.args
         commands.execute("complete", prompt_text)
+    elif config.command == "batch":
+        if not config.args:
+            console.print("[red]Usage: batch <file.json> or batch <inline_json>[/red]")
+            return
+        commands.execute("batch", config.args)
     else:
         commands.execute(config.command, *config.args)
 

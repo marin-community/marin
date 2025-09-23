@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
 import equinox as eqx
-
 import haliax as hax
 import haliax.haxtyping as ht
 import jax
