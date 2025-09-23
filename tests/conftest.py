@@ -1,8 +1,24 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
+import shutil
 import time
 
 import pytest
 import ray
+from pydantic import BaseModel
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 
@@ -14,6 +30,11 @@ default_generation_params = {"max_tokens": 16}
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
+
+
+class WorkerConfig(BaseModel):
+    worker_count: int = 0
+    cluster_address: str | None = None
 
 
 @pytest.fixture(scope="module")
@@ -56,13 +77,53 @@ def current_date_time():
     return formatted_time
 
 
-@pytest.fixture(scope="module")
-def ray_tpu_cluster():
-    if os.getenv("START_RAY_TPU_CLUSTER") == "true":
-        ray.init(resources={"TPU": 8, "TPU-v6e-8-head": 1}, num_cpus=120, ignore_reinit_error=True)
-    elif os.getenv("START_RAY_CPU_CLUSTER") == "true":
-        ray.init(num_cpus=4, ignore_reinit_error=True)
+@pytest.fixture(scope="session")
+def ray_tpu_cluster(tmp_path_factory, worker_id):
+    """Start a Ray cluster for testing.
+
+    When running under pytest-xdist, we need to ensure each cluster is isolated
+    by specifying unique temp directories and ports.
+    """
+    if not worker_id or worker_id == "master":
+        worker_id = 0
     else:
-        ray.init("auto", ignore_reinit_error=True)
+        worker_id = int(worker_id.replace("gw", ""))
+    worker_offset = 10 * worker_id
+
+    # N.B. We cannot use the default temp directory as Ray will complain with:
+    # AF_UNIX path length cannot exceed 103 bytes
+    tmp_path = f"/tmp/ray_tests/{os.getpid()}/{worker_id}"
+
+    init_args = {
+        "address": "local",
+        "namespace": "marin",
+        # In case the user is running a Ray cluster already
+        "dashboard_port": 10265 + worker_offset,
+        "_temp_dir": tmp_path,
+        "ignore_reinit_error": True,
+    }
+    print("Starting on worker_id", worker_id, "with init_args", init_args)
+    if os.getenv("START_RAY_TPU_CLUSTER") == "true":
+        ray.init(
+            resources={"TPU": 8, "TPU-v6e-8-head": 1, "head_node": 1},
+            num_cpus=120,
+            **init_args,
+        )
+    elif os.getenv("START_RAY_CPU_CLUSTER") == "true":
+        ray.init(
+            **init_args,
+            num_cpus=8,
+            resources={"head_node": 1},
+        )
+    else:
+        ray.init(
+            **init_args,
+            num_cpus=8,
+            resources={"head_node": 1},
+        )
+
     yield
+
+    # cleanup temp directory
     ray.shutdown()
+    shutil.rmtree(tmp_path, ignore_errors=True)

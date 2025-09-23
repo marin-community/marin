@@ -43,10 +43,10 @@ nvcc --version
 ```
 
 Marin uses [JAX](https://jax.readthedocs.io/en/latest/index.html) as a core library.
-Install JAX with the CUDA 12.9.0 backend:
+Install Python dependencies for CUDA 12.x via uv:
 
 ```bash
-pip3 install -e . jax[cuda12]
+uv sync --extra=cuda12
 ```
 
 See [JAX's installation guide](https://jax.readthedocs.io/en/latest/installation.html) for more options.

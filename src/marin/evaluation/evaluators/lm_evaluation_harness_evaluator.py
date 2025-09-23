@@ -1,13 +1,27 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import logging
 import os
 import shutil
 import traceback
-from typing import ClassVar
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
+from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
 from marin.evaluation.utils import is_remote_path, upload_to_gcs
+from marin.run.ray_deps import build_runtime_env_for_packages
 
 logger = logging.getLogger(__name__)
 
@@ -21,14 +35,16 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
     CACHE_PATH: str = "/tmp/lm-eval"
     RESULTS_PATH: str = os.path.join(CACHE_PATH, "eleuther_results")
 
-    _pip_packages: ClassVar[list[Dependency]] = [
-        *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
-        "lm-eval",
-    ]
-    _env_vars: ClassVar[dict[str, str]] = {
-        # Human eval tests code from the model which requires permission to run
-        "HF_ALLOW_CODE_EVAL": "1",
-    }
+    def get_runtime_env(self) -> dict:
+        """
+        Returns the runtime environment to run the evaluator on the Ray cluster.
+        """
+        return build_runtime_env_for_packages(
+            extra=["eval"],
+            env_vars={
+                "HF_ALLOW_CODE_EVAL": "1"
+            },  # Human eval tests code from the model which requires permission to run
+        )
 
     def evaluate(
         self,
@@ -36,6 +52,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,
+        wandb_tags: list[str] | None = None,
     ) -> None:
         """
         Runs EleutherAI's lm-eval harness on the specified model and set of  tasks.
@@ -74,9 +91,14 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 evaluation_tracker_args = simple_parse_args_string(f",output_path={result_filepath}")
                 evaluation_tracker = EvaluationTracker(**evaluation_tracker_args)
 
-                wandb_args_dict = simple_parse_args_string(f"project=marin,job_type=eval,name={model.name}")
-                wandb_config_args_dict = simple_parse_args_string("")
-                wandb_logger = WandbLogger(**wandb_args_dict, **wandb_config_args_dict)
+                wandb_args_dict = {
+                    "project": "marin",
+                    "job_type": "eval",
+                    "name": model.name,
+                    "tags": wandb_tags,
+                }
+                # wandb_config_args_dict = simple_parse_args_string("")
+                wandb_logger = WandbLogger(**wandb_args_dict)
 
                 results = simple_evaluate(
                     model="vllm",
