@@ -121,9 +121,27 @@ def stop_cluster(ctx):
         print("Error: --config required for cluster commands", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Stopping cluster {config_obj.cluster_name}...")
-    subprocess.run(["ray", "down", "-y", config_path], check=True)
+    _stop_cluster_internal(config_obj, config_path)
     print("Cluster stopped successfully!")
+
+
+def _stop_cluster_internal(config_obj: RayClusterConfig, config_path: str):
+    """Internal function to stop cluster using the proper shutdown sequence."""
+    # Step 1: Terminate the head node directly to prevent it from restarting TPUs
+    print(f"Terminating coordinator node for cluster {config_obj.cluster_name}...")
+    terminated_head = gcp.terminate_head_node(config_obj.cluster_name, config_obj.project_id, config_obj.zone)
+    if terminated_head:
+        print(f"Terminated head node: {terminated_head}")
+
+    # Step 2: Now terminate TPUs (head can't restart them anymore)
+    print(f"Terminating TPUs in zone {config_obj.zone}...")
+    terminated_tpus = gcp.terminate_tpus_in_zone(config_obj.project_id, config_obj.zone)
+    if terminated_tpus:
+        print(f"Terminated {len(terminated_tpus)} TPUs")
+
+    # Step 3: Clean up Ray's state files
+    print(f"Cleaning up Ray cluster state for {config_obj.cluster_name}...")
+    subprocess.run(["ray", "down", "-y", config_path], check=False)  # check=False since instances may already be gone
 
 
 @cli.command("restart-cluster")
@@ -140,7 +158,7 @@ def restart_cluster(ctx, preserve_jobs):
 
     if not preserve_jobs:
         print("Stopping cluster...")
-        subprocess.run(["ray", "down", "-y", config_path], check=True)
+        _stop_cluster_internal(config_obj, config_path)
 
         print("Starting cluster...")
         subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
@@ -153,9 +171,9 @@ def restart_cluster(ctx, preserve_jobs):
         with ray.ray_dashboard(config_path):
             ray.backup_jobs(config_path, backup_dir)
 
-        # Restart cluster
+        # Restart cluster using proper stop sequence
         print("Stopping cluster...")
-        subprocess.run(["ray", "down", "-y", config_path], check=True)
+        _stop_cluster_internal(config_obj, config_path)
 
         print("Starting cluster...")
         subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
