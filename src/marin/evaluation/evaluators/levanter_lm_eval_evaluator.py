@@ -45,18 +45,19 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         return build_runtime_env_for_packages(
             extra=[],
             pip_packages=[
-                "statsmodels==0.14.4",
-                "jax[tpu]",
+                "antlr4-python3-runtime==4.11",
                 "haliax>=1.4.dev348",
-                "ray==2.45",
+                "immutabledict",
+                "jax[tpu]",
+                "langdetect",
                 "lm-eval[math]",
                 "math-verify",
+                "ray==2.45",
+                "statsmodels==0.14.4",
                 "sympy>=1.12",
-                "antlr4-python3-runtime==4.11",
             ],
             env_vars={
                 "TOKENIZERS_PARALLELISM": "false",
-                "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             },
         )
 
