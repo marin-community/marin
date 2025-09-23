@@ -85,7 +85,7 @@ def list_instances(project: str, zone: str, filter_expr: str | None = None) -> l
 
 def find_head_node_ip(cluster_name: str, project: str, zone: str) -> str:
     """Find the internal IP of the Ray cluster head node."""
-    filter_expr = f"labels.ray-node-type=head AND labels.ray-cluster-name={cluster_name}"
+    filter_expr = f"labels.ray-node-type=head AND labels.ray-node-name=ray-marin-{cluster_name}-head"
     instances = list_instances(project, zone, filter_expr)
 
     if not instances:
@@ -104,6 +104,24 @@ def list_tpu_nodes(project: str, zone: str) -> list[dict[str, Any]]:
         "list",
         f"--project={project}",
         f"--zone={zone}",
+        "--format=json",
+    ]
+
+    result = run_gcloud_command(cmd)
+    return json.loads(result.stdout)
+
+
+def list_tpu_nodes_by_label(project: str, zone: str, label_filter: str) -> list[dict[str, Any]]:
+    """List TPU nodes in a zone filtered by labels."""
+    cmd = [
+        "gcloud",
+        "compute",
+        "tpus",
+        "tpu-vm",
+        "list",
+        f"--project={project}",
+        f"--zone={zone}",
+        f"--filter={label_filter}",
         "--format=json",
     ]
 
@@ -228,13 +246,15 @@ def get_tpu_health_status(project: str, zone: str) -> dict[str, Any]:
     return health_status
 
 
-def terminate_tpus_in_zone(project: str, zone: str) -> list[str]:
-    """Terminate all TPU nodes in a zone in parallel."""
-    nodes = list_tpu_nodes(project, zone)
+def terminate_tpus_in_cluster(project: str, zone: str, cluster_name: str) -> list[str]:
+    """Terminate TPU nodes belonging to a specific cluster in parallel."""
+    # Use gcloud filtering to only query TPUs with the ray-node-name label for this cluster
+    label_filter = f"labels.ray-node-name:ray-marin-{cluster_name}-worker"
+    nodes = list_tpu_nodes_by_label(project, zone, label_filter)
     terminated_nodes = []
 
     if not nodes:
-        logger.info(f"No TPU nodes found in zone {zone}")
+        logger.info(f"No TPU nodes found for cluster {cluster_name} in zone {zone}")
         return terminated_nodes
 
     def delete_single_tpu(node: dict[str, Any]) -> str | None:
@@ -257,19 +277,18 @@ def terminate_tpus_in_zone(project: str, zone: str) -> list[str]:
             if result is not None:
                 terminated_nodes.append(result)
 
-    logger.info(f"Terminated {len(terminated_nodes)} TPU nodes in zone {zone}")
+    logger.info(f"Terminated {len(terminated_nodes)} TPU nodes for cluster {cluster_name} in zone {zone}")
     return terminated_nodes
 
 
 def terminate_head_node(cluster_name: str, project: str, zone: str) -> str | None:
     """Terminate the Ray cluster head node directly via gcloud."""
-    # Use ray-node-name label for precise identification
-    head_node_name = f"ray-{cluster_name}-head"
-    filter_expr = f"labels.ray-node-name={head_node_name}"
+    # Use ray-cluster-name label for cluster identification
+    filter_expr = f"labels.ray-node-type=head AND labels.ray-node-name=ray-marin-{cluster_name}-head"
     instances = list_instances(project, zone, filter_expr)
 
     if not instances:
-        logger.warning(f"No head node found with name {head_node_name} in zone {zone}")
+        logger.warning(f"No head node found for cluster {cluster_name} in zone {zone}")
         return None
 
     head_name = instances[0]["name"]

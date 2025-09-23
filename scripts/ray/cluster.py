@@ -25,12 +25,10 @@ Usage:
 from dataclasses import dataclass
 import json
 import logging
-import stat
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 import click
 
@@ -64,8 +62,8 @@ def check_cluster_head_running(config_path: str) -> bool:
 @dataclass
 class Context:
     verbose: bool = False
-    config_file: Optional[str] = None
-    config_obj: Optional[RayClusterConfig] = None
+    config_file: str | None = None
+    config_obj: RayClusterConfig | None = None
 
 
 # Context object to pass global options between commands
@@ -126,20 +124,24 @@ def stop_cluster(ctx):
 
 
 def _stop_cluster_internal(config_obj: RayClusterConfig, config_path: str):
-    """Internal function to stop cluster using the proper shutdown sequence."""
-    # Step 1: Terminate the head node directly to prevent it from restarting TPUs
+    """Terminate a Ray cluster.
+
+    N.B. We terminate the Ray coordinator node first to avoid restarting any new TPUs while
+    shutting down. We then explicitly shut down the TPU nodes in parallel. Ray serializes this
+    and often times out by default.
+
+    Finally we call ray down to finish up any leftover resources.
+    """
     print(f"Terminating coordinator node for cluster {config_obj.cluster_name}...")
     terminated_head = gcp.terminate_head_node(config_obj.cluster_name, config_obj.project_id, config_obj.zone)
     if terminated_head:
         print(f"Terminated head node: {terminated_head}")
 
-    # Step 2: Now terminate TPUs (head can't restart them anymore)
-    print(f"Terminating TPUs in zone {config_obj.zone}...")
-    terminated_tpus = gcp.terminate_tpus_in_zone(config_obj.project_id, config_obj.zone)
+    print(f"Terminating TPUs for cluster {config_obj.cluster_name} in zone {config_obj.zone}...")
+    terminated_tpus = gcp.terminate_tpus_in_cluster(config_obj.project_id, config_obj.zone, config_obj.cluster_name)
     if terminated_tpus:
         print(f"Terminated {len(terminated_tpus)} TPUs")
 
-    # Step 3: Clean up Ray's state files
     print(f"Cleaning up Ray cluster state for {config_obj.cluster_name}...")
     subprocess.run(["ray", "down", "-y", config_path], check=False)  # check=False since instances may already be gone
 
