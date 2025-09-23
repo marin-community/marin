@@ -21,6 +21,7 @@ dependencies = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
+    "jax==0.6.2",
     "haliax>=1.4.dev381",
     "levanter[serve]@git+https://github.com/marin-community/levanter.git",
     "lz4",
