@@ -39,11 +39,13 @@ Usage:
 
 """
 
+import atexit
 import getpass
-import glob
 import logging
+
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -64,9 +66,116 @@ from watchdog.observers import Observer
 # script instead of launching a driver job. This confuses cloudpickle for some reason.
 from src.marin.cluster import ray as ray_utils
 from src.marin.cluster.config import RayClusterConfig, find_config_by_region
+from src.marin.run.vars import LIBTPU_INIT_ARGS
 from src.marin.utils import _hacky_remove_tpu_lockfile
 
 logger = logging.getLogger(__name__)
+
+# Default environment variables to forward to remote
+DEFAULT_ENV_VARS = [
+    "HF_TOKEN",
+    "WANDB_API_KEY",
+    "MARIN_PREFIX",
+    "OPENAI_API_KEY",
+    "GCLOUD_PROJECT",
+    "GCLOUD_TOKEN_PATH",
+    "RAY_ADDRESS",
+    "RAY_API_SERVER_ADDRESS",
+    "RAY_DASHBOARD_ADDRESS",
+    "WANDB_MODE",
+    "RUN_ID",
+]
+
+
+def build_env_dict(env_vars: list[str], extra_env: list[str] = None, forward_all: bool = False) -> dict[str, str]:
+    """Build environment variable dictionary for forwarding."""
+    # Start with all environment variables if requested, otherwise just defaults
+    if forward_all:
+        env_dict = dict(os.environ)
+    else:
+        env_dict = {}
+        for var in env_vars:
+            if value := os.environ.get(var):
+                env_dict[var] = value
+
+    if "LIBTPU_INIT_ARGS" not in env_dict:
+        env_dict["LIBTPU_INIT_ARGS"] = LIBTPU_INIT_ARGS
+
+    # Add extra environment variables from command line (these override existing env vars)
+    if extra_env:
+        for env_var in extra_env:
+            if "=" in env_var:
+                key, value = env_var.split("=", 1)
+                env_dict[key] = value
+            else:
+                # Just the key, get value from current environment
+                if value := os.environ.get(env_var):
+                    env_dict[env_var] = value
+
+    return env_dict
+
+
+def build_env_string(env_dict: dict[str, str]) -> str:
+    """Build properly escaped environment variable string for shell."""
+    if not env_dict:
+        return ""
+
+    env_parts = []
+    for key, value in env_dict.items():
+        # Escape both key and value for shell safety
+        escaped_key = shlex.quote(key)
+        escaped_value = shlex.quote(value)
+        env_parts.append(f"{escaped_key}={escaped_value}")
+
+    return " ".join(env_parts)
+
+
+def build_ssh_command(
+    host_alias: str, command: str, env_dict: dict[str, str] = None, working_dir: str = "marin"
+) -> list[str]:
+    """Build SSH command with proper cleanup and environment forwarding.
+
+    Always wraps the user command in bash -c for consistent shell behavior.
+    User should NOT include 'bash -c' in their command - this will raise an error.
+    """
+    env_string = build_env_string(env_dict or {})
+
+    # Error if user tries to use bash -c themselves
+    if command.strip().startswith("bash -c"):
+        raise ValueError(
+            "Do not include 'bash -c' in your command. "
+            "The script automatically wraps commands in bash -c. "
+            f"Use: execute -- {command.strip()[7:].strip()} "
+            f"instead of: execute -- {command}"
+        )
+
+    # Always wrap user command in bash -c for consistent shell behavior
+    remote_cmd_parts = [
+        "exec bash -c",
+        shlex.quote(
+            f"""
+            set -e
+            trap 'jobs -p | xargs -r kill' EXIT HUP INT TERM
+            source $HOME/.local/bin/env
+            cd {shlex.quote(working_dir)}
+            {env_string} exec bash -c {shlex.quote(command)}
+        """
+        ),
+    ]
+
+    remote_cmd = " ".join(remote_cmd_parts)
+
+    return ["ssh", "-t", host_alias, remote_cmd]
+
+
+def kill_ssh_session(host_alias: str) -> None:
+    """Kill SSH session using control socket."""
+    try:
+        subprocess.run(["ssh", "-O", "exit", host_alias], capture_output=True, check=False, timeout=5)
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Timeout killing SSH control connection to {host_alias}")
+    except Exception as e:
+        logger.debug(f"Failed to kill SSH control connection to {host_alias}: {e}")
 
 
 class TPUAllocationActor:
@@ -117,6 +226,13 @@ class TPUAllocationActor:
         return f"TPU allocation '{self.tpu_name}' active for {self.username}"
 
     def __del__(self):
+        # delete the work directories in the background, use the ls to make sure we don't
+        # accidentally run this on our local machine
+        subprocess.Popen(
+            ["bash", "-c", "ls /dev/accel* && rm -rf $HOME/marin/ $HOME/.cache/"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         _hacky_remove_tpu_lockfile()
 
 
@@ -202,8 +318,15 @@ def list_tracked_files(local_path: str) -> list[str]:
         text=True,
     )
     all_files = [f for f in result.stdout.split("\0") if f.strip()]
-    files.update(all_files)
-
+    # traverse into directories and try to add all files
+    for f in all_files:
+        full_path = Path(local_path) / f
+        full_path = full_path.relative_to(local_path)
+        if full_path.is_dir():
+            for f in list_tracked_files(full_path):
+                files.add(str(full_path / f))
+        else:
+            files.add(str(full_path))
     return sorted(files)
 
 
@@ -271,11 +394,12 @@ def hold_tpu_allocation(
     try:
         with ray_utils.ray_dashboard(config_file, ray_init=True):
             logger.info(f"Creating TPU allocation actor for {tpu_name}")
-            actor = ray.remote(resources={"TPU": 4, "TPU-v4-8-head": 1})(TPUAllocationActor).remote(
+            actor = ray.remote(resources={"TPU": 4, f"TPU-{tpu_type}-head": 1})(TPUAllocationActor).remote(
                 username, tpu_name, tpu_type
             )
 
-            allocation_info = ray.get(actor.host_info.remote(), timeout=60)
+            logger.info(f"Waiting up to 10 minutes for TPU to be ready...")
+            allocation_info = ray.get(actor.host_info.remote(), timeout=600)
 
             logger.info("Setting up SSH configuration")
             add_ssh_host_config(allocation_info["hostname"], allocation_info["ip_address"], username, tpu_name)
@@ -373,6 +497,8 @@ def connect(ctx, username):
 
     tpu_name = ctx.obj.tpu_name
     host_alias = f"dev-tpu-{tpu_name}"
+    env = build_env_dict(env_vars=DEFAULT_ENV_VARS)
+    env_string = build_env_string(env)
 
     config_path = Path.home() / ".ssh" / "config"
     if not config_path.exists() or f"Host {host_alias}" not in config_path.read_text():
@@ -381,15 +507,18 @@ def connect(ctx, username):
         sys.exit(1)
 
     print(f"Connecting to {host_alias}...")
-    subprocess.run(["ssh", host_alias])
+    cmd = shlex.quote(f"source $HOME/.local/bin/env && cd marin && {env_string} exec bash")
+    subprocess.run(["ssh", host_alias, "-t", "bash", "-c", cmd])
 
 
 @cli.command("execute", context_settings={"ignore_unknown_options": True})
 @click.argument("command", nargs=-1, required=True)
 @click.option("--username", help="Username to use for ssh", default=getpass.getuser())
 @click.option("--sync-path", default=".", help="Local path to sync")
+@click.option("--env", "-e", multiple=True, help="Environment variables to forward (KEY=VALUE or KEY)")
+@click.option("--forward-all-env", is_flag=True, help="Forward all environment variables")
 @click.pass_context
-def execute(ctx, command, username, sync_path):
+def execute(ctx, command, username, sync_path, env, forward_all_env):
     """Execute a command on the development TPU.
 
     This command will:
@@ -417,11 +546,17 @@ def execute(ctx, command, username, sync_path):
     print(f"Syncing local changes to {host_alias}...")
     sync_to_remote(host_alias, sync_path)
 
-    command_str = " ".join(command)
-    full_cmd = f"ssh -t {host_alias} 'source $HOME/.local/bin/env && cd marin && {command_str}'"
-    result = subprocess.run(full_cmd, check=False, shell=True)
+    # Build environment variables
+    env_dict = build_env_dict(env_vars=DEFAULT_ENV_VARS, extra_env=list(env), forward_all=forward_all_env)
 
-    sys.exit(result.returncode)
+    command_str = " ".join(command)
+    ssh_cmd = build_ssh_command(host_alias, command_str, env_dict)
+
+    print(f"Running: {command_str}")
+    ssh_session = subprocess.Popen(ssh_cmd)
+    atexit.register(lambda: kill_ssh_session(host_alias))
+    result = ssh_session.wait()
+    sys.exit(result)
 
 
 class FileChangeHandler(FileSystemEventHandler):
@@ -468,26 +603,16 @@ class FileChangeHandler(FileSystemEventHandler):
         self.callback()
 
 
-def kill_remote_process(host_alias: str, process_pattern: str) -> None:
-    """Kill remote process matching pattern."""
-    try:
-        # Find and kill processes matching the pattern
-        kill_cmd = f"ssh {host_alias} 'pkill -f \"{process_pattern}\"'"
-        subprocess.run(kill_cmd, shell=True, check=False, capture_output=True)
-        logger.info(f"Killed remote processes matching: {process_pattern}")
-    except Exception as e:
-        logger.warning(f"Failed to kill remote process: {e}")
-
-
 class RemoteProcessManager:
     """Run a remote process, synchronizing and restarting on demand."""
 
-    def __init__(self, host_alias: str, command_str: str, sync_path: str):
+    def __init__(self, host_alias: str, command_str: str, sync_path: str, env_dict: dict[str, str] = None):
         self._lock = threading.Lock()
         self._process: Optional[subprocess.Popen] = None
         self._command_str = command_str
         self._host_alias = host_alias
         self._sync_path = sync_path
+        self._env_dict = env_dict or {}
 
     def __call__(self):
         with self._lock:
@@ -497,28 +622,43 @@ class RemoteProcessManager:
             print(f"Syncing changes to {self._host_alias}...")
             sync_to_remote(self._host_alias, self._sync_path)
 
-            full_cmd = f"ssh -t {self._host_alias} 'source $HOME/.local/bin/env && cd marin && {self._command_str}'"
+            ssh_cmd = build_ssh_command(self._host_alias, self._command_str, self._env_dict)
             print(f"Running: {self._command_str}")
-            self._process = subprocess.Popen(full_cmd, shell=True)
+            self._process = subprocess.Popen(ssh_cmd, stdin=subprocess.DEVNULL)
 
     def check_status(self):
         if self._process and self._process.poll() is not None:
             print(f"Remote process exited with code {self._process.returncode}")
-            # restart if we exited with an error, otherwise wait for a file change.
-            if self._process.returncode != 0:
-                print("Restarting remote process...")
-                self()
 
     def kill(self):
         if self._process and self._process.poll() is None:
             print("Killing remote...")
-            self._process.send_signal(signal.SIGINT)
+            # First try to kill via SSH control socket
+            kill_ssh_session(self._host_alias)
+
+            # Give it a moment to clean up
             start_time = time.time()
-            while self._process.poll() is None and time.time() - start_time < 5:
+            while self._process.poll() is None and time.time() - start_time < 3:
                 time.sleep(0.1)
+
+            # If still running, send SIGINT to the subprocess
             if self._process.poll() is None:
-                print("Remote process did not exit, killing...")
+                self._process.send_signal(signal.SIGINT)
+                start_time = time.time()
+                while self._process.poll() is None and time.time() - start_time < 5:
+                    time.sleep(0.1)
+
+            # Final resort: terminate
+            if self._process.poll() is None:
+                print("Remote process did not exit, terminating...")
                 self._process.terminate()
+
+    def __del__(self):
+        """Ensure cleanup when object is destroyed."""
+        try:
+            self.kill()
+        except Exception:
+            pass
 
 
 @cli.command("watch", context_settings={"ignore_unknown_options": True})
@@ -526,8 +666,10 @@ class RemoteProcessManager:
 @click.option("--username", help="Username to connect as", default=getpass.getuser())
 @click.option("--sync-path", default=".", help="Local path to sync")
 @click.option("--debounce", default=1, help="Debounce time for file changes in seconds")
+@click.option("--env", "-e", multiple=True, help="Environment variables to forward (KEY=VALUE or KEY)")
+@click.option("--forward-all-env", is_flag=True, help="Forward all environment variables")
 @click.pass_context
-def watch(ctx, command, username, sync_path, debounce):
+def watch(ctx, command, username, sync_path, debounce, env, forward_all_env):
     """Watch for file changes and restart command on TPU.
 
     This command will:
@@ -549,9 +691,13 @@ def watch(ctx, command, username, sync_path, debounce):
         print(f"You need to run 'allocate --tpu-name {tpu_name}' first to set up the TPU", file=sys.stderr)
         sys.exit(1)
 
+    # Build environment variables
+    env_dict = build_env_dict(env_vars=DEFAULT_ENV_VARS, extra_env=list(env), forward_all=forward_all_env)
+
     command_str = " ".join(command)
 
-    process_mgr = RemoteProcessManager(host_alias, command_str, sync_path)
+    process_mgr = RemoteProcessManager(host_alias, command_str, sync_path, env_dict)
+    atexit.register(process_mgr.kill)  # ensure we clean up on exit
     process_mgr()
     observer = Observer()
     event_handler = FileChangeHandler(process_mgr, debounce_seconds=debounce)
