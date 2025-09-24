@@ -39,11 +39,20 @@ Usage:
 
 """
 
+
+from contextlib import contextmanager
+from draccus import wrap
+from pathlib import Path
+from typing import Generator, Optional
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
 import atexit
+import click
 import getpass
 import logging
-
 import os
+import ray
 import re
 import shlex
 import signal
@@ -52,21 +61,12 @@ import sys
 import tempfile
 import threading
 import time
-from contextlib import contextmanager
-from pathlib import Path
-from typing import Generator, Optional
-
-import click
-import ray
-from draccus import wrap
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
+import yaml
 
 # N.B. We have to import from "src" as we are using the `ray.remote` directly from our `uv run`
 # script instead of launching a driver job. This confuses cloudpickle for some reason.
 from src.marin.cluster import ray as ray_utils
 from src.marin.cluster.config import RayClusterConfig, find_config_by_region
-from src.marin.run.vars import LIBTPU_INIT_ARGS
 from src.marin.utils import _hacky_remove_tpu_lockfile
 
 logger = logging.getLogger(__name__)
@@ -98,15 +98,12 @@ def build_env_dict(env_vars: list[str], extra_env: list[str] = None, forward_all
             if value := os.environ.get(var):
                 env_dict[var] = value
 
-    if "LIBTPU_INIT_ARGS" not in env_dict:
-        env_dict["LIBTPU_INIT_ARGS"] = LIBTPU_INIT_ARGS
-
     CONFIG_FILES = [".levanter.yaml", ".marin.yaml", ".config"]
     for config_file in CONFIG_FILES:
         if os.path.exists(config_file):
             logger.info(f"Injecting environment variables from {config_file}")
             try:
-                config_yaml = yaml.safe_loads(open(config_file).read())
+                config_yaml = yaml.safe_load(open(config_file).read())
             except Exception as e:
                 logger.warning(f"Failed to load config from environment {e}")
 
@@ -248,10 +245,24 @@ class TPUAllocationActor:
         _hacky_remove_tpu_lockfile()
 
 
-def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name: str) -> None:
+def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name: str, zone: str) -> None:
     """Add SSH host configuration."""
     config_path = Path.home() / ".ssh" / "config"
     config_path.parent.mkdir(exist_ok=True)
+
+    # try using gcloud compute tpu-vm ssh to forward keys
+    logger.info(f"Setting up SSH keys...")
+    gcloud_ssh_cmd = f"gcloud compute tpu-vm ssh {tpu_name} --zone={zone} -- hostname"
+    try:
+        subprocess.run(
+            shlex.split(gcloud_ssh_cmd),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        logger.info("SSH keys set up successfully via gcloud")
+    except subprocess.CalledProcessError as e:
+        logger.warning("gcloud compute tpu-vm ssh failed to set up SSH keys")
 
     # Check if Google Compute Engine SSH key exists
     gce_key_path = Path.home() / ".ssh" / "google_compute_engine"
@@ -399,37 +410,40 @@ def hold_tpu_allocation(
 
     Uses a Ray actor to manage the TPU allocation lifecycle.
     """
-    logger.info(f"START_TPU_{tpu_name.upper()}: Beginning TPU allocation")
+    logger.info(f"{tpu_name}: Beginning TPU allocation")
 
     actor = None
+    config_obj = yaml.safe_load(open(config_file).read())
+    zone = config_obj["provider"]["availability_zone"]
 
-    try:
-        with ray_utils.ray_dashboard(config_file, ray_init=True):
+    with ray_utils.ray_dashboard(config_file, ray_init=True):
+        try:
             logger.info(f"Creating TPU allocation actor for {tpu_name}")
             actor = ray.remote(resources={"TPU": 4, f"TPU-{tpu_type}-head": 1})(TPUAllocationActor).remote(
                 username, tpu_name, tpu_type
             )
 
             logger.info(f"Waiting up to 10 minutes for TPU to be ready...")
-            allocation_info = ray.get(actor.host_info.remote(), timeout=600)
+            host_info = ray.get(actor.host_info.remote(), timeout=600)
 
             logger.info("Setting up SSH configuration")
-            add_ssh_host_config(allocation_info["hostname"], allocation_info["ip_address"], username, tpu_name)
+            add_ssh_host_config(host_info["hostname"], host_info["ip_address"], username, tpu_name, zone=zone)
 
             logger.info("Syncing environment")
             sync_to_remote(f"dev-tpu-{tpu_name}", sync_path)
             setup_remote_environment(f"dev-tpu-{tpu_name}")
 
             print("TPU allocated successfully!")
-            print(f"Hostname: {allocation_info['hostname']}")
-            print(f"IP Address: {allocation_info['ip_address']}")
+            print(f"Hostname: {host_info['hostname']}")
+            print(f"IP Address: {host_info['ip_address']}")
             print(f"TPU name: {tpu_name}")
             print(f"SSH alias: dev-tpu-{tpu_name}")
-            yield allocation_info
-    finally:
-        remove_ssh_host_config(tpu_name)
-        if actor:
-            ray.kill(actor)
+            yield host_info
+        except Exception as e:
+            logger.error(f"Error during TPU allocation or setup: {e}", exc_info=True)
+            raise
+        finally:
+            remove_ssh_host_config(tpu_name)
 
 
 class Context:
