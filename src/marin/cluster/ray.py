@@ -225,7 +225,11 @@ def start_ssh_tunnel_to_head(cluster_config: str, head_ip: str) -> DashboardInfo
     ]
 
     logger.info(
-        f"Starting SSH tunnel to {head_ip} with ports: " + f"dashboard={dashboard_port}, ray={gcs_port}, api={api_port}"
+        f"Starting SSH tunnel to {head_ip} with ports: "
+        + f"\ndashboard={dashboard_port}"
+        + f"\nray={gcs_port}"
+        + f"\napi={api_port}"
+        + f"\n View the dashboard at http://localhost:{dashboard_port}"
     )
 
     ssh_process = subprocess.Popen(
@@ -287,7 +291,6 @@ def ray_dashboard(cluster_config: str, ray_init: bool = False) -> Generator[Dash
     # Get head IP and start SSH tunnel
     logger.info(f"Getting head IP for cluster config: {cluster_config}")
     head_ip = get_head_ip_from_config(cluster_config)
-
     dashboard_info = start_ssh_tunnel_to_head(cluster_config, head_ip)
 
     # Set environment variables for Ray CLI and Python API
@@ -304,15 +307,6 @@ def ray_dashboard(cluster_config: str, ray_init: bool = False) -> Generator[Dash
                 runtime_env={"working_dir": "."},
             )
         yield dashboard_info
-    except KeyboardInterrupt:
-        # Reset terminal to sane state after Ctrl+C
-        try:
-            subprocess.run(["stty", "sane"], capture_output=True, timeout=5)
-            subprocess.run(["reset"], capture_output=True, timeout=5)
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
-            logger.debug("Failed to reset terminal state")
-            pass
-        raise
     finally:
         # Restore original environment variables
         if original_ray_address is not None:
@@ -741,7 +735,7 @@ def initialize_manual_worker(config_file: str, tpu_name: str) -> None:
     setup_commands = "\n".join(setup_commands)
 
     entry_script_content = f"""#!/bin/bash
-
+set -x
 set -eo pipefail
 
 export BUCKET="{bucket}"
@@ -755,7 +749,7 @@ gcloud compute instances list \\
   --filter="labels.ray-cluster-name:{cluster_name} AND labels.ray-node-type=head AND name~'ray-{cluster_name}-head-.*'" \\
   --format="value(networkInterfaces[0].networkIP)" > /tmp/head_ip
 
-HEAD_IP=$(cat /tmp/head_ip || true)
+HEAD_IP=$(cat /tmp/head_ip | head -1 | awk '{{print $1}}' || true)
 if [ -z "$HEAD_IP" ]; then
   echo 'Failed to resolve head node IP' >&2
   exit 1
