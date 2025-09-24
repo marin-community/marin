@@ -242,6 +242,7 @@ tokenize_train = [
     "tblib",
     "sentencepiece",
     "tiktoken",
+    "datasets==3.6.0",
 ]
 
 
