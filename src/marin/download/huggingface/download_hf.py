@@ -46,7 +46,7 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
         raise ValueError(f"No write access to fsspec path: {output_path} ({e})") from e
 
 
-@ray.remote
+@ray.remote(max_retries=5, retry_exceptions=True)
 def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: str, fsspec_file_path: str):
     """Ray task to stream a file from HfFileSystem to another fsspec path."""
     target_fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
