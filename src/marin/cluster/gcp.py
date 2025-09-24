@@ -108,11 +108,10 @@ def list_tpu_nodes(project: str, zone: str, filter_expr: str = "") -> list[dict[
         "--format=json",
     ]
     if filter_expr:
-      cmd.append(f"--filter={filter_expr}")
+        cmd.append(f"--filter={filter_expr}")
 
     result = run_gcloud_command(cmd)
     return json.loads(result.stdout)
-
 
 
 def delete_tpu_node(node_name: str, project: str, zone: str, quiet: bool = False) -> None:
@@ -236,7 +235,7 @@ def terminate_tpus_in_cluster(project: str, zone: str, cluster_name: str) -> lis
     """Terminate TPU nodes belonging to a specific cluster in parallel."""
     # Find TPUs with the correct node name.
     # Note we don't use the zone as a tag (we might have different clusters in a zone)
-    # Nor the cluster name tag, as some clusters do not include the zone name and 
+    # Nor the cluster name tag, as some clusters do not include the zone name and
     # are ambiguous e.g. eu-west4 vs eu-west4-a
     label_filter = f"labels.ray-node-name:ray-{cluster_name}-worker"
     nodes = list_tpu_nodes(project, zone, label_filter)
