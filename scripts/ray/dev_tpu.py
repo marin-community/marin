@@ -101,6 +101,18 @@ def build_env_dict(env_vars: list[str], extra_env: list[str] = None, forward_all
     if "LIBTPU_INIT_ARGS" not in env_dict:
         env_dict["LIBTPU_INIT_ARGS"] = LIBTPU_INIT_ARGS
 
+    CONFIG_FILES = [".levanter.yaml", ".marin.yaml", ".config"]
+    for config_file in CONFIG_FILES:
+        if os.path.exists(config_file):
+            logger.info(f"Injecting environment variables from {config_file}")
+            try:
+                config_yaml = yaml.safe_loads(open(config_file).read())
+            except Exception as e:
+                logger.warning(f"Failed to load config from environment {e}")
+
+            for key, value in config_yaml.get("env", {}).items():
+                env_dict[key] = str(value)
+
     # Add extra environment variables from command line (these override existing env vars)
     if extra_env:
         for env_var in extra_env:
