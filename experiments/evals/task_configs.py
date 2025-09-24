@@ -73,9 +73,11 @@ CORE_TASKS_PLUS_LEADERBOARD = (
 
 CORE_TASKS_PLUS_MMLU = CORE_TASKS + MMLU_TASKS
 
+GSM8K_COT = EvalTaskConfig(name="gsm8k_cot", num_fewshot=8)
+
 BASE_GENERATION_TASKS = (
     EvalTaskConfig(name="bbh_cot_fewshot", num_fewshot=3),
-    EvalTaskConfig(name="gsm8k_cot", num_fewshot=8),
+    GSM8K_COT,
     EvalTaskConfig(name="nq_open", num_fewshot=0, task_alias="nq_open"),
     EvalTaskConfig(name="triviaqa", num_fewshot=0, task_alias="triviaqa"),
 )
@@ -83,7 +85,7 @@ BASE_GENERATION_TASKS = (
 # Settings are chosen to compare to Olmo2
 KEY_GENERATION_TASKS = (
     EvalTaskConfig(name="ifeval", num_fewshot=0),
-    EvalTaskConfig(name="gsm8k_cot", num_fewshot=8),
+    GSM8K_COT,
     EvalTaskConfig(name="drop", num_fewshot=0),
     EvalTaskConfig(name="humaneval", num_fewshot=10),
     EvalTaskConfig(name="bbh_cot_fewshot", num_fewshot=3, task_alias="bbh"),

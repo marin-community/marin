@@ -226,6 +226,7 @@ def evaluate_levanter_lm_evaluation_harness(
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
     wandb_tags: list[str] | None = None,
+    generation_params: dict | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
@@ -245,6 +246,7 @@ def evaluate_levanter_lm_evaluation_harness(
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
             wandb_tags=versioned(wandb_tags),
+            generation_params=versioned(generation_params),
         ),
     )
 

@@ -457,6 +457,31 @@ lingoly = ExecutorStep(
     ),
 )
 
+gsm8k_raw = ExecutorStep(
+    name="raw/openai/gsm8k",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="openai/gsm8k",
+        revision=versioned("e53f048"),
+    ),
+)
+
+gsm8k_train = ExecutorStep(
+    name="evaluation/gsm8k-train",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="openai/gsm8k",
+        subsets=["main"],
+        splits=["train"],
+        input_path=gsm8k_raw,
+        hf_path="openai/gsm8k",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("concatenated_qa"),
+        prompt_key="question",
+        answer_text_key="answer",
+    ),
+)
+
 ############################################################
 
 if __name__ == "__main__":

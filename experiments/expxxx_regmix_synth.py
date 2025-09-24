@@ -5,8 +5,9 @@ from dataclasses import replace
 
 from experiments.defaults import default_train, default_tokenize
 from experiments.evals.task_configs import BEYOND_WEB_TASKS
-from experiments.llama import llama_150m, llama3_tokenizer
+from experiments.llama import llama3_tokenizer
 from levanter.data.text import TextLmDatasetFormat
+from levanter.models.llama import LlamaConfig
 from marin.execution.executor import ExecutorStep, executor_main, InputName
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.resources import TpuPodConfig
@@ -59,6 +60,15 @@ TOKEN_COUNTS = {
     "nemo_qa": 3_626_282_543,
 }
 
+llama_130m = LlamaConfig(
+    seq_len=4096,
+    hidden_dim=512,
+    intermediate_dim=2048,
+    num_heads=8,
+    num_kv_heads=8,
+    num_layers=32,
+)
+
 
 def _dirichlet_weights_from_counts(
     counts: dict[str, int], concentration_scale: float, rng: random.Random
@@ -83,24 +93,42 @@ def _compute_num_steps(total_tokens: int, batch_size: int, seq_len: int) -> int:
     return math.ceil(total_tokens / tokens_per_step)
 
 
-def _make_train_config(total_tokens: int = 2_400_000_000) -> SimpleTrainConfig:
+def _make_train_config(total_tokens: int = 2_600_000_000) -> SimpleTrainConfig:
     # Keep batch/seq modest and use small TPU for economical trials
-    batch_size = 256
-    seq_len = llama_150m.seq_len
+    # for the 150m trials
+    # batch_size = 256
+    # seq_len = 1024
+
+    original_batch_size = 128  # from the pretraning optimizers paper
+    batch_size = 64
+    # seq_len = 4096
+    # seq_len = llama_150m.seq_len
+    seq_len = llama_130m.seq_len
     num_steps = _compute_num_steps(total_tokens, batch_size, seq_len)
 
     return SimpleTrainConfig(
         resources=TpuPodConfig(tpu_type="v4-8"),
         train_batch_size=batch_size,
         num_train_steps=num_steps,
-        learning_rate=1e-4,
-        weight_decay=1e-7,
+        learning_rate=0.008 * math.sqrt(batch_size) / math.sqrt(original_batch_size),
+        beta1=0.9,
+        beta2=0.98 ** (original_batch_size / batch_size),  # beta2 tuning
+        weight_decay=0.1,
+        max_grad_norm=1.0,
         warmup=0.05,
         steps_per_task_eval=1000,
     )
 
 
-def _trial_steps(num_trials: int = 25, seed: int = 20250919) -> list[ExecutorStep]:
+def _trial_steps(
+    num_trials: int = 25,
+    seed: int = 20250919,
+    vary_concentration: bool = True,
+    concentration_min: float = 0.1,  # from regmix
+    concentration_max: float = 5.0,  # from regmix
+    log_uniform: bool = False,
+    fixed_concentration: float = 10.0,
+) -> list[ExecutorStep]:
     rng = random.Random(seed)
 
     components = {
@@ -116,23 +144,41 @@ def _trial_steps(num_trials: int = 25, seed: int = 20250919) -> list[ExecutorSte
     base_train_cfg = _make_train_config()
 
     for i in range(num_trials):
-        weights = _dirichlet_weights_from_counts(TOKEN_COUNTS, concentration_scale=10.0, rng=rng)
+        # Choose Dirichlet concentration scale per trial. When varying, we sample
+        # either linearly or log-uniformly between [concentration_min, concentration_max].
+        if vary_concentration:
+            if log_uniform:
+                # sample log-uniform in [min, max]
+                c = 10 ** rng.uniform(math.log10(concentration_min), math.log10(concentration_max))
+            else:
+                c = rng.uniform(concentration_min, concentration_max)
+        else:
+            c = fixed_concentration
+
+        weights = _dirichlet_weights_from_counts(TOKEN_COUNTS, concentration_scale=c, rng=rng)
 
         data_cfg = lm_mixture_data_config(
             components=components,
             weights=weights,
         )
 
-        trial_name = f"llama-150m-regmix-t{i:02d}"
+        trial_name = f"llama-130m-regmix-v3p1-t{i:02d}"
 
         train_cfg = replace(base_train_cfg)
 
         train_step = default_train(
             name=trial_name,
             tokenized=data_cfg,
-            model_config=llama_150m,
+            model_config=llama_130m,
             train_config=train_cfg,
-            tags=["regmix", "150m", "2.4b", *[f"{k}={weights[k]:.3f}" for k in components.keys()]],
+            tags=[
+                "regmix",
+                "130m",
+                "2.6b",
+                f"lr={train_cfg.learning_rate:.3f}",
+                f"alpha_scale={c:.3f}",
+                *[f"{k}={weights[k]:.3f}" for k in components.keys()],
+            ],
             only_return_config=False,
             eval_harness_tasks=BEYOND_WEB_TASKS,
         )
@@ -150,5 +196,12 @@ def _trial_steps(num_trials: int = 25, seed: int = 20250919) -> list[ExecutorSte
 
 
 if __name__ == "__main__":
-    trials = _trial_steps(num_trials=25)
+    trials = _trial_steps(
+        num_trials=200,
+        vary_concentration=True,
+        concentration_min=0.1,
+        concentration_max=5.0,
+        log_uniform=False,
+        seed=20250922,
+    )
     executor_main(steps=trials)

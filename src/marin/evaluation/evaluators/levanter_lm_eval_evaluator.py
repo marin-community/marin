@@ -26,10 +26,10 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *LevanterTpuEvaluator.DEFAULT_PIP_PACKAGES,
-        Dependency(name="jax[tpu]==0.5.1"),
-        Dependency(name="haliax==1.4.dev348"),
-        Dependency(name="levanter==1.2.dev1359"),
-        Dependency(name="statsmodels==0.14.4"),
+        # Dependency(name="jax[tpu]==0.5.1"),
+        # Dependency(name="haliax==1.4.dev348"),
+        # Dependency(name="levanter==1.2.dev1359"),
+        # Dependency(name="statsmodels==0.14.4"),
     ]
 
     def evaluate(
@@ -64,9 +64,11 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             # In the future, we should make this user-configurable.
             trainer_config = TrainerConfig(
                 tracker=WandbConfig(project="marin", tags=wandb_tags, name=name),
-                mp=jmp.get_policy("p=f32,c=bfloat16"),
+                mp=jmp.get_policy("p=bfloat16,c=bfloat16"),
                 per_device_eval_parallelism=8,
                 ray=RayConfig(auto_start_cluster=False),
+                tensor_parallel_axes=["mlp", "heads", "kv_head", "vocab"],
+                model_axis_size=4,
             )
 
             model_config = HFCheckpointConverter.from_hf(model_name_or_path).LevConfigClass()
@@ -89,6 +91,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     log_samples=False,
                     max_eval_length=4096,
                     apply_chat_template=model.apply_chat_template,
+                    gen_kwargs=model.generation_params,
                 ),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,

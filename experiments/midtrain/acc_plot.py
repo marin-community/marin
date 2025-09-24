@@ -100,126 +100,54 @@ def main():
     api = wandb.Api()
     runs = api.runs(f"{args.entity}/{args.project}")
 
+    # Define metric groups (name, regex patterns list, pretty title, y-axis label)
     if args.metric_pattern is None:
-        metric_patterns = [
-            re.compile(r"^lm_eval/mmlu_.*_mathematics_5shot/" + args.metric_name + "$"),
-            re.compile(r"^lm_eval/gsm8k_loss_8shot/" + args.metric_name + "$"),
+        metric_groups = [
+            (
+                "mmlu_math_choice_logprob_norm",
+                [re.compile(r"^lm_eval/mmlu_.*_mathematics_5shot/choice_logprob_norm$")],
+                "MMLU mathematics 5-shot choice_logprob_norm vs pretraining ratio",
+                "choice_logprob_norm",
+            ),
+            (
+                "mmlu_math_acc_norm",
+                [re.compile(r"^lm_eval/mmlu_.*_mathematics_5shot/acc_norm$")],
+                "MMLU mathematics 5-shot acc_norm vs pretraining ratio",
+                "acc_norm",
+            ),
+            (
+                "gsm8k_loss_8shot_bpb",
+                [re.compile(r"^lm_eval/gsm8k_loss_8shot/bpb$")],
+                "GSM8K loss 8-shot bpb vs pretraining ratio",
+                "bpb",
+            ),
+            (
+                "math_500_loss_bpb",
+                [re.compile(r"^lm_eval/math_500_loss/bpb$")],
+                "Math 500 loss bpb vs pretraining ratio",
+                "bpb",
+            ),
         ]
     else:
-        metric_patterns = [
-            re.compile(args.metric_pattern),
+        metric_groups = [
+            (
+                "custom_metric",
+                [re.compile(args.metric_pattern)],
+                f"Custom metric {args.metric_pattern} vs pretraining ratio",
+                args.metric_name,
+            )
         ]
 
-    # Collect: ratio -> { split_metric_name -> value }
-    collected: list[tuple[float, dict[str, float], str]] = []  # (pre_ratio, metrics_map, run_name)
-
-    for run in runs:
-        name: str = run.name or ""
-        tags: list[str] = list(run.tags or [])
-
-        if args.name_contains and args.name_contains not in name:
-            continue
-        if args.filter_tag and not all(t in tags for t in args.filter_tag):
-            continue
-
-        ratio = parse_ratio_from_tags_or_name(name, tags)
-        if not ratio:
-            continue
-        pre_ratio, fine_ratio = ratio
-
-        # Optionally exclude runs that have mcq in tags unless explicitly included
-        if not args.include_control:
-            # We don't filter here strictly; user asked to just plot by ratio.
-            pass
-
-        # Extract metrics matching the patterns
-        history_val: dict[str, float] = {}
-        # Prefer run.summary first; if absent, try scan history for last value
-        for key, val in (run.summary or {}).items():
-            if not isinstance(key, str):
-                continue
-            for pat in metric_patterns:
-                if pat.match(key):
-                    try:
-                        if isinstance(val, int | float):
-                            history_val[key] = float(val)
-                        elif isinstance(val, dict) and "value" in val:
-                            history_val[key] = float(val["value"])  # sometimes scalars stored as {value: x}
-                    except Exception:
-                        pass
-
-        # If not found in summary, optionally look in history for the last value
-        if not history_val:
-            try:
-                _ = run.history(keys=["_step"], pandas=False)
-                # Fetch full keys separately to minimize payload
-                all_hist = run.history(samples=20000, pandas=False)
-                last_values: dict[str, float] = {}
-                for row in all_hist:
-                    for k, v in row.items():
-                        if isinstance(k, str) and any(pat.match(k) for pat in metric_patterns):
-                            if isinstance(v, int | float):
-                                last_values[k] = float(v)
-                            elif isinstance(v, dict) and "value" in v:
-                                try:
-                                    last_values[k] = float(v["value"])
-                                except Exception:
-                                    pass
-                history_val = last_values
-            except Exception:
-                pass
-
-        if not history_val:
-            continue
-
-        collected.append((pre_ratio, history_val, name))
-
-    if not collected:
-        raise SystemExit("No runs found with parsed ratios and matching MMLU math metrics.")
-
-    # Sort by pretraining ratio ascending
-    collected.sort(key=lambda x: x[0])
-
-    # Build consistent metric ordering across runs
-    all_metric_names: list[str] = []
-    for _, metrics_map, _ in collected:
-        for k in metrics_map.keys():
-            if k not in all_metric_names:
-                all_metric_names.append(k)
-    all_metric_names.sort()
-
-    # Prepare data for plotting: for each metric, a series over ratios
-    ratios: list[float] = [r for r, _, _ in collected]
-    series: dict[str, list[float | None]] = {m: [] for m in all_metric_names}
-    for _, metrics_map, _ in collected:
-        for m in all_metric_names:
-            series[m].append(metrics_map.get(m))
-
-    fig = go.Figure()
-    for m, ys in series.items():
-        # Plot lines with markers; skip metrics entirely missing
-        if all(v is None for v in ys):
-            continue
-        fig.add_trace(go.Scatter(x=ratios, y=ys, mode="lines+markers", name=m))
-
-    fig.update_layout(
-        title="MMLU mathematics 5-shot " + args.metric_name + " vs pretraining ratio",
-        xaxis_title="Pretraining ratio (dclm)",
-        yaxis_title=args.metric_name,
-        template="plotly_white",
-        legend=dict(font=dict(size=10)),
-    )
-
-    # Log to a new W&B run
+    # Log to a new W&B run once
     log_entity = args.log_entity or args.entity
     log_project = args.log_project or args.project
-    default_run_name = args.run_name or f"mmlu-math-vs-ratio-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+    default_run_name = args.run_name or f"midtrain-metrics-vs-ratio-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
 
     wb_run = wandb.init(
         project=log_project,
         entity=log_entity,
         name=default_run_name,
-        tags=["plot", "mmlu", "mathematics", args.metric_name],
+        tags=["plot", "midtrain", "ratio"],
         config={
             "source_entity": args.entity,
             "source_project": args.project,
@@ -227,47 +155,118 @@ def main():
                 "name_contains": args.name_contains,
                 "filter_tag": args.filter_tag,
             },
-            "num_series": len(all_metric_names),
-            "num_points": len(ratios),
         },
         reinit=False,
         allow_val_change=True,
     )
 
-    # Log the interactive figure
-    wandb.log({"mmlu_math_vs_ratio": fig})
+    # Helper to build, log figure and table for one metric group
+    def build_and_log(metric_key_prefix: str, patterns: list[re.Pattern[str]], title: str, y_label: str) -> None:
+        collected: list[tuple[float, dict[str, float], str]] = []
 
-    # Log a table of the underlying data
-    table = wandb.Table(columns=["pretraining_ratio", "metric", "value", "source_run_name"])
-    for ratio_val, metrics_map, src_name in collected:
-        for metric_name in all_metric_names:
-            v = metrics_map.get(metric_name)
-            if v is None:
+        for run in runs:
+            name: str = run.name or ""
+            tags: list[str] = list(run.tags or [])
+
+            if args.name_contains and args.name_contains not in name:
                 continue
-            table.add_data(ratio_val, metric_name, float(v), src_name)
-    wandb.log({"mmlu_math_vs_ratio_table": table})
+            if args.filter_tag and not all(t in tags for t in args.filter_tag):
+                continue
 
-    print(f"Logged plot to W&B: {wb_run.url}")
+            ratio = parse_ratio_from_tags_or_name(name, tags)
+            if not ratio:
+                continue
+            pre_ratio, fine_ratio = ratio
 
-    # Optionally save locally
-    if args.save:
-        out_path = args.save
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        try:
-            if out_path.lower().endswith(".html"):
-                fig.write_html(out_path, include_plotlyjs="cdn")
-            else:
-                # Requires kaleido for static image export
-                fig.write_image(out_path, scale=2)
-            print(f"Saved plot to {out_path}")
-        except Exception as e:
-            # Fallback to HTML next to requested path
-            fallback = os.path.splitext(out_path)[0] + ".html"
-            try:
-                fig.write_html(fallback, include_plotlyjs="cdn")
-                print(f"Static image save failed ({e}). Wrote HTML to {fallback}")
-            except Exception:
-                print(f"Failed to save plot locally: {e}")
+            if not args.include_control:
+                pass
+
+            history_val: dict[str, float] = {}
+            for key, val in (run.summary or {}).items():
+                if not isinstance(key, str):
+                    continue
+                for pat in patterns:
+                    if pat.match(key):
+                        try:
+                            if isinstance(val, int | float):
+                                history_val[key] = float(val)
+                            elif isinstance(val, dict) and "value" in val:
+                                history_val[key] = float(val["value"])  # sometimes scalars stored as {value: x}
+                        except Exception:
+                            pass
+
+            if not history_val:
+                try:
+                    _ = run.history(keys=["_step"], pandas=False)
+                    all_hist = run.history(samples=20000, pandas=False)
+                    last_values: dict[str, float] = {}
+                    for row in all_hist:
+                        for k, v in row.items():
+                            if isinstance(k, str) and any(pat.match(k) for pat in patterns):
+                                if isinstance(v, int | float):
+                                    last_values[k] = float(v)
+                                elif isinstance(v, dict) and "value" in v:
+                                    try:
+                                        last_values[k] = float(v["value"])
+                                    except Exception:
+                                        pass
+                    history_val = last_values
+                except Exception:
+                    pass
+
+            if not history_val:
+                continue
+
+            collected.append((pre_ratio, history_val, name))
+
+        if not collected:
+            return
+
+        collected.sort(key=lambda x: x[0])
+
+        all_metric_names: list[str] = []
+        for _, metrics_map, _ in collected:
+            for k in metrics_map.keys():
+                if k not in all_metric_names:
+                    all_metric_names.append(k)
+        all_metric_names.sort()
+
+        ratios: list[float] = [r for r, _, _ in collected]
+        series: dict[str, list[float | None]] = {m: [] for m in all_metric_names}
+        for _, metrics_map, _ in collected:
+            for m in all_metric_names:
+                series[m].append(metrics_map.get(m))
+
+        fig = go.Figure()
+        for m, ys in series.items():
+            if all(v is None for v in ys):
+                continue
+            fig.add_trace(go.Scatter(x=ratios, y=ys, mode="lines+markers", name=m))
+
+        fig.update_layout(
+            title=title,
+            xaxis_title="Pretraining ratio (dclm)",
+            yaxis_title=y_label,
+            template="plotly_white",
+            legend=dict(font=dict(size=10)),
+        )
+
+        wandb.log({f"{metric_key_prefix}_vs_ratio": fig})
+
+        table = wandb.Table(columns=["pretraining_ratio", "metric", "value", "source_run_name"])
+        for ratio_val, metrics_map, src_name in collected:
+            for metric_name in all_metric_names:
+                v = metrics_map.get(metric_name)
+                if v is None:
+                    continue
+                table.add_data(ratio_val, metric_name, float(v), src_name)
+        wandb.log({f"{metric_key_prefix}_vs_ratio_table": table})
+
+    # Build and log for each metric group
+    for key_prefix, patterns, title, y_label in metric_groups:
+        build_and_log(key_prefix, patterns, title, y_label)
+
+    print(f"Logged plots to W&B: {wb_run.url}")
 
 
 if __name__ == "__main__":

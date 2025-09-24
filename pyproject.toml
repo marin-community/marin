@@ -34,7 +34,7 @@ dependencies = [
     # We have levanter deps for now. @TODO :: Remove them
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1500",
-    "haliax>=1.4.dev381",
+    "haliax>=1.4.dev413",
     "sentencepiece",
     "lz4",
     "wandb<=0.19.9",

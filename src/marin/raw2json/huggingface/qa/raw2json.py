@@ -43,10 +43,12 @@ class OutputFormatOptions(str, Enum):
 
         - For decontamination: `OutputFormatOptions.decontamination`
         - For evaluation: `OutputFormatOptions.evaluation`
+        - For concatenated QA: `OutputFormatOptions.concatenated_qa`
     """
 
     decontamination = "decontamination"
     evaluation = "evaluation"
+    concatenated_qa = "concatenated_qa"
 
 
 @dataclass
@@ -502,6 +504,8 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                         response = answer_text
                     document.prompt = prompt
                     document.response = response
+                elif cfg.output_format.value == OutputFormatOptions.concatenated_qa:
+                    document.text = f"Question: {question_text}\nAnswer: {answer_text}"
                 # write json to output file
                 print(json.dumps(asdict_without_nones(document)), file=dolma_file)
 

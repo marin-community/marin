@@ -116,7 +116,7 @@ async def submit_and_track_job(
         "working_dir": current_dir,
         "env_vars": env_vars,
         "config": {"setup_timeout_seconds": 1800},
-        "excludes": ["**/*.pack"],
+        "excludes": [".git"],
     }
 
     if len(dependencies) == 0:
