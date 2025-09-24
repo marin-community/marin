@@ -66,7 +66,6 @@ from watchdog.observers import Observer
 # script instead of launching a driver job. This confuses cloudpickle for some reason.
 from src.marin.cluster import ray as ray_utils
 from src.marin.cluster.config import RayClusterConfig, find_config_by_region
-from src.marin.run.vars import LIBTPU_INIT_ARGS
 from src.marin.utils import _hacky_remove_tpu_lockfile
 
 logger = logging.getLogger(__name__)
@@ -97,9 +96,6 @@ def build_env_dict(env_vars: list[str], extra_env: list[str] = None, forward_all
         for var in env_vars:
             if value := os.environ.get(var):
                 env_dict[var] = value
-
-    if "LIBTPU_INIT_ARGS" not in env_dict:
-        env_dict["LIBTPU_INIT_ARGS"] = LIBTPU_INIT_ARGS
 
     CONFIG_FILES = [".levanter.yaml", ".marin.yaml", ".config"]
     for config_file in CONFIG_FILES:
@@ -252,6 +248,20 @@ def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name:
     """Add SSH host configuration."""
     config_path = Path.home() / ".ssh" / "config"
     config_path.parent.mkdir(exist_ok=True)
+
+    # try using gcloud compute tpu-vm ssh to forward keys
+    logger.info(f"Setting up SSH keys...")
+    gcloud_ssh_cmd = f"gcloud compute tpu-vm ssh {tpu_name} --zone={zone} -- hostname"
+    try:
+        subprocess.run(
+            shlex.split(gcloud_ssh_cmd),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        logger.info("SSH keys set up successfully via gcloud")
+    except subprocess.CalledProcessError as e:
+        logger.warning("gcloud compute tpu-vm ssh failed to set up SSH keys")
 
     # Check if Google Compute Engine SSH key exists
     gce_key_path = Path.home() / ".ssh" / "google_compute_engine"
