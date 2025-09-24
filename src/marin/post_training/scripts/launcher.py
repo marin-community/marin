@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
 
 from tpu_pod_launcher import TPUPodClient, TPUPodProject, create_cli
@@ -13,19 +27,19 @@ apt-get update -q \
     vim \
     wget \
     tmux \
-    redis-server \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # install miniforge
-rm -rf ~/Miniconda3-py39_4.12.0-Linux-x86_64.sh
-wget https://repo.anaconda.com/miniconda/Miniconda3-py310_23.1.0-1-Linux-x86_64.sh -P ~/
-bash ~/Miniconda3-py310_23.1.0-1-Linux-x86_64.sh -b
+MINICONDA_INSTALLER=Miniconda3-py311_25.7.0-2-Linux-x86_64.sh
+rm -f ~/$MINICONDA_INSTALLER
+wget https://repo.anaconda.com/miniconda/$MINICONDA_INSTALLER -P ~/
+bash ~/$MINICONDA_INSTALLER -b
 
 # install dependencies
 source ~/miniconda3/bin/activate
 conda init bash
-conda create -n llama3_train python=3.10 -y
+conda create -n llama3_train python=3.11 -y
 conda activate llama3_train
 cd ~/llama3_train/post_training
 python -m pip install -r requirements.txt
@@ -33,7 +47,7 @@ python -m pip install -U "jax[tpu]==0.4.29" -f https://storage.googleapis.com/ja
 
 # clean up
 cd ~/
-rm -rf ~/Miniconda3-py310_23.1.0-1-Linux-x86_64.sh
+rm -f ~/$MINICONDA_INSTALLER
 """.strip()
 
 CHECK_DEVICES = r"""

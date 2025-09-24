@@ -1,5 +1,19 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.isoflop_sweep import generate_isoflop_sweep
+from experiments.isoflop_sweep import IsoFlopSweepConfig, generate_isoflop_steps
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, InputName
 import os
@@ -230,10 +244,9 @@ def generate_midtrain_step(config: DecayConfig):
 decay_data_name = "flan"
 decay_data_tokenized = get_dolmino_step_llama3("flan")
 # NOTE(chris): Working on the low isoflop budgets for now.
-isoflop_steps, isoflop_model_configs, isoflop_train_configs, isoflop_budgets = generate_isoflop_sweep(
-    nemotron_mix,
-    experiment_name="nemo-wider-depth-adapt",
-    budgets=[1e18, 3e18, 6e18, 1e19, 3e19],
+sweep_cfg = IsoFlopSweepConfig(tokenized_dataset=decay_data_tokenized, budgets=[1e18, 3e18, 6e18, 1e19, 3e19])
+isoflop_steps, isoflop_model_configs, isoflop_train_configs, isoflop_budgets, _ = generate_isoflop_steps(
+    sweep_cfg, "nemo-wider-depth-adapt"
 )
 
 eval_tasks = (
@@ -273,12 +286,9 @@ for isoflop_step, isoflop_model_config, isoflop_train_config, isoflop_budget in 
 
 # Dolmino DCLM
 dolmino_dclm = get_dolmino_step_llama3("dclm")
-dolmino_isoflop_steps, dolmino_isoflop_model_configs, dolmino_isoflop_train_configs, dolmino_isoflop_budgets = (
-    generate_isoflop_sweep(
-        dolmino_dclm,
-        experiment_name="dolmino-dclm-sweep",
-        budgets=[1e18, 3e18, 6e18],
-    )
+dolmino_sweep_cfg = IsoFlopSweepConfig(tokenized_dataset=dolmino_dclm, budgets=[1e18, 3e18, 6e18])
+dolmino_isoflop_steps, dolmino_isoflop_model_configs, dolmino_isoflop_train_configs, dolmino_isoflop_budgets, _ = (
+    generate_isoflop_steps(dolmino_sweep_cfg, "dolmino-dclm-sweep")
 )
 
 for dolmino_isoflop_step, dolmino_isoflop_model_config, dolmino_isoflop_train_config, dolmino_isoflop_budget in zip(

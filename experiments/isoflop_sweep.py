@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Generate ISOFlop sweep steps for varying model sizes on a target datasett.
 
 This script constructs `ExecutorStep` objects that train models of different
@@ -22,6 +36,7 @@ from experiments.llama import compute_num_parameters
 from experiments.metrics.wandb_related import get_vocab_size_for_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
+from experiments.common_pile.tokenize_common_pile import comma_main_mixture
 from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.resources import TpuPodConfig
 
@@ -295,6 +310,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
     model_configs = []
     train_configs = []
     budgets = []
+    metadata = []
     vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
 
     for budget in config.budgets:
@@ -351,12 +367,13 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
                     f"tpu={tpu_type}",
                 ),
             )
+            metadata.append((budget, hidden_size, num_layers, batch_size, train_steps))
             steps.append(step)
             train_configs.append(train_cfg)
             model_configs.append(model_cfg)
             budgets.append(budget)
 
-    return steps, model_configs, train_configs, budgets
+    return steps, model_configs, train_configs, budgets, metadata
 
 
 def generate_isoflop_sweep(
@@ -365,12 +382,16 @@ def generate_isoflop_sweep(
     **kwargs,
 ) -> list[ExecutorStep]:
     sweep_cfg = IsoFlopSweepConfig(tokenized_dataset=tokenized, **kwargs)
-    steps, model_configs, train_configs, budgets = generate_isoflop_steps(sweep_cfg, experiment_name)
+    steps, _, _, _, _ = generate_isoflop_steps(sweep_cfg, experiment_name)
 
-    return steps, model_configs, train_configs, budgets
+    return steps
 
 
-steps, _, _, _ = generate_isoflop_sweep(nemotron_mix, experiment_name="nemo-wider-depth-adapt")
+MARIN_SCALING_SUITES = {
+    "nemotron": generate_isoflop_sweep(nemotron_mix, experiment_name="nemo-wider-depth-adapt"),
+    "common_pile": generate_isoflop_sweep(comma_main_mixture(), experiment_name="comma-mix"),
+}
 
 if __name__ == "__main__":
-    executor_main(steps=steps)
+    steps = MARIN_SCALING_SUITES["common_pile"]
+    executor_main(steps=steps[0])

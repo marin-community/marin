@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 This script evaluates log probabilities of the Tootsie 8b model and Llama 3.1 8B, as well as logging entropies.
 
@@ -10,6 +24,8 @@ from experiments.tootsie.exp883_viz_compare_tootsie_llama import tulu_3_in_dolma
 from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import executor_main, output_path_of, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
+
+from marin.resources import TpuPodConfig
 
 # We compare the models in CHECKPOINTS to Meta's Llama 3.1 8B  base model.
 LLAMA = "meta-llama/Meta-Llama-3.1-8B"
@@ -28,15 +44,19 @@ eval_set_mixture = mixture_for_evaluation(eval_sets)
 
 
 all_steps = []
-
+resource_config = TpuPodConfig(tpu_type="v4-8")
 
 for checkpoint in CHECKPOINTS:
     all_steps.append(
-        default_lm_log_probs(checkpoint, llama_8b, eval_set_mixture, checkpoint_is_hf=False, max_samples_per_dataset=32)
+        default_lm_log_probs(
+            checkpoint, llama_8b, eval_set_mixture, resource_config, checkpoint_is_hf=False, max_samples_per_dataset=32
+        )
     )
 
 all_steps.append(
-    default_lm_log_probs(LLAMA, llama_8b, eval_set_mixture, checkpoint_is_hf=True, max_samples_per_dataset=32)
+    default_lm_log_probs(
+        LLAMA, llama_8b, eval_set_mixture, resource_config, checkpoint_is_hf=True, max_samples_per_dataset=32
+    )
 )
 
 if __name__ == "__main__":
