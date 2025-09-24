@@ -56,6 +56,7 @@ from typing import Generator, Optional
 
 import click
 import ray
+import yaml
 from draccus import wrap
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -302,6 +303,17 @@ class Context:
         self.config_file: Optional[str] = None
         self.config_obj: Optional[RayClusterConfig] = None
         self.tpu_name: Optional[str] = None
+        self.config_data: Optional[dict] = None
+
+
+def _infer_tpu_type_from_config(config_data: Optional[dict]) -> Optional[str]:
+    if not config_data:
+        return None
+
+    try:
+        return config_data["available_node_types"]["tpu_worker"]["node_config"]["acceleratorType"]
+    except KeyError:
+        return None
 
 
 @click.group()
@@ -326,10 +338,12 @@ def cli(ctx, config, cluster, tpu_name, verbose):
 
     if config:
         ctx.obj.config_obj = RayClusterConfig.from_yaml(config)
+        with open(config, "r", encoding="utf-8") as f:
+            ctx.obj.config_data = yaml.safe_load(f)
 
 
 @cli.command("allocate")
-@click.option("--tpu-type", default="v4-8", help="TPU type")
+@click.option("--tpu-type", help="TPU type")
 @click.option("--sync-path", default=".", help="Local path to sync")
 @click.option("--username", help="Username to use for ssh", default=getpass.getuser())
 @click.option("--duration", default=480, help="Allocation duration in minutes")
@@ -344,6 +358,16 @@ def allocate(ctx, tpu_type, sync_path, username, duration):
         username = getpass.getuser()
 
     tpu_name = ctx.obj.tpu_name
+
+    if not tpu_type:
+        inferred_tpu_type = _infer_tpu_type_from_config(ctx.obj.config_data)
+        if inferred_tpu_type:
+            tpu_type = inferred_tpu_type
+        else:
+            tpu_type = "v4-8"
+            logger.warning(
+                "Could not infer TPU type from config; defaulting to %s", tpu_type
+            )
 
     if tpu_type not in ["v4-8", "v5p-8"]:
         print(f"Warning: TPU type {tpu_type} may not be supported", file=sys.stderr)
