@@ -32,6 +32,7 @@ from typing import Iterator, List, Optional, Tuple
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import jax.random as jrandom
 import jmp
 import numpy as np
 from jax.sharding import PartitionSpec
@@ -52,6 +53,8 @@ from levanter.models.loss import next_token_loss
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.py_utils import set_global_rng_seeds
+from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request as GenRequest
+from levanter.inference.jit_scheduler import SeqDecodingParams
 
 
 try:
@@ -328,7 +331,156 @@ class LevanterHarnessLM(LM):
         raise NotImplementedError()
 
     def generate_until(self, requests) -> List[str]:
-        raise NotImplementedError()
+        # print(f'len(requests)={len(requests)}')
+
+        # Implement simple generation using InferenceEngine.
+        # requests: list[Instance] where args[0] = prompt, args[1] may be stop strings (list[str])
+        # kwargs may include max_gen_toks, temperature, n (n_generations), seed
+        if self.tokenizer.pad_token_id is None:
+            logger.warning("No pad token set. Setting to eos token.")
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+
+        # Require a model with paged decode support
+        if not hasattr(self.leader.model, "initial_cache") or not hasattr(self.leader.model, "decode"):
+            raise NotImplementedError(
+                "generate_until requires a model with paged decode support (initial_cache/decode)."
+            )
+
+        # Extract prompts and per-request params
+        prompts: list[str] = []
+        until_lists: list[list[str] | None] = []
+        max_new_tokens_list: list[int] = []
+        temperature_list: list[float] = []
+        n_generations_list: list[int] = []
+        seeds: list[int | None] = []
+
+        for req in requests:
+            # prompt
+            if self.leader.apply_chat_template:
+                context = self.tokenizer.apply_chat_template(
+                    [{"role": "user", "content": req.args[0]}], tokenize=False, add_generation_prompt=True
+                )
+            else:
+                context = req.args[0]
+            prompts.append(context)
+
+            # until (stop sequences)
+            until = None
+            if hasattr(req, "kwargs") and req.kwargs is not None:
+                until = req.kwargs.get("until")
+            if until is None and len(req.args) > 1 and isinstance(req.args[1], list):
+                until = req.args[1]
+            until_lists.append(until)
+
+            # max tokens
+            max_gen = 128
+            if hasattr(req, "kwargs") and req.kwargs is not None and req.kwargs.get("max_gen_toks") is not None:
+                max_gen = int(req.kwargs.get("max_gen_toks"))
+            elif len(req.args) > 2 and isinstance(req.args[2], int):
+                max_gen = int(req.args[2])
+            max_new_tokens_list.append(max_gen)
+
+            # temperature
+            temp = 0.0
+            if hasattr(req, "kwargs") and req.kwargs is not None and req.kwargs.get("temperature") is not None:
+                temp = float(req.kwargs.get("temperature"))
+            temperature_list.append(temp)
+
+            # n generations
+            n_gens = 1
+            if hasattr(req, "kwargs") and req.kwargs is not None and req.kwargs.get("n") is not None:
+                n_gens = int(req.kwargs.get("n"))
+            n_generations_list.append(n_gens)
+
+            # seed
+            seed = None
+            if hasattr(req, "kwargs") and req.kwargs is not None and req.kwargs.get("seed") is not None:
+                seed = int(req.kwargs.get("seed"))
+            seeds.append(seed)
+
+        # Tokenize prompts and compute capacity needs
+        # print(f'{prompts=}')
+        enc = self.tokenizer(prompts, add_special_tokens=False)
+        prompt_token_lists: list[list[int]] = enc["input_ids"]
+
+        # Truncate from left if needed to fit model eval length
+        max_eval_len = self.EvalPos.size
+        for i, toks in enumerate(prompt_token_lists):
+            if len(toks) > max_eval_len:
+                overflow = len(toks) - max_eval_len
+                logger.warning(f"Prompt {i} too long ({len(toks)}). Truncating left by {overflow}.")
+                prompt_token_lists[i] = toks[-max_eval_len:]
+
+        # Build stop tokens (support first stop sequence if provided)
+        stop_ids = None
+        # If any request has until, prefer the first provided sequence across the batch
+        first_until = None
+        for u in until_lists:
+            if u:
+                first_until = u[0] if isinstance(u, list) else u
+                break
+        if first_until:
+            stop_ids_list = self.tokenizer(first_until, add_special_tokens=False)["input_ids"]
+            if len(stop_ids_list) > 0:
+                stop_ids = haliax.named(jnp.asarray(stop_ids_list, dtype=jnp.int32), axis="position").broadcast_axis(
+                    {"stop_seq": 1}
+                )
+
+        # Taken from: config/sampler/sample_llama8b.yaml
+        engine_cfg = InferenceEngineConfig(
+            max_pages=16384,
+            max_seqs=256,
+            page_size=8,
+            max_pages_per_seq=512,
+            compute_dtype=jnp.bfloat16,
+            max_queued_tokens=256,
+            max_seqs_in_prefill=16,
+            max_prefill_size=max_eval_len,
+        )
+
+        engine = InferenceEngine.from_model_with_config(
+            model=self.leader.model, tokenizer=self.tokenizer, config=engine_cfg
+        )
+
+        # Build generation requests
+        base_key = jrandom.PRNGKey(engine_cfg.seed)
+        gen_requests: list[GenRequest] = []
+        for i, toks in enumerate(prompt_token_lists):
+            seq_params = SeqDecodingParams(
+                max_num_tokens=jnp.array(len(toks) + max_new_tokens_list[i], dtype=jnp.int32),
+                stop_tokens=stop_ids,
+                temperature=jnp.array(temperature_list[i], dtype=jnp.float32),
+                key=jrandom.fold_in(base_key if seeds[i] is None else jrandom.PRNGKey(seeds[i]), i),
+            )
+            gen_requests.append(
+                GenRequest(
+                    prompt_tokens=list(map(int, toks)),
+                    request_id=i,
+                    decode_params=seq_params,
+                    n_generations=int(n_generations_list[i]),
+                    enable_logprobs=False,
+                )
+            )
+
+        result = engine.generate(gen_requests)
+
+        # Decode first generation per request (LM Harness expects one string per request)
+        outputs: list[str] = []
+        output_idx = 0
+        for i, toks in enumerate(prompt_token_lists):
+            # Consume one sequence output per request
+            if output_idx < len(result.tokens):
+                full_tokens = result.tokens[output_idx]
+                # Engine tokens are generated tokens only (prompt not included)
+                text = self.tokenizer.decode(full_tokens, skip_special_tokens=True)
+                outputs.append(text)
+                output_idx += 1  # consume one generation per request
+            else:
+                outputs.append("")
+        
+        # print(f'{outputs=}')
+
+        return outputs
 
 
 @dataclass(frozen=True)
@@ -898,3 +1050,4 @@ def _make_dummy_batch(EvalBatch, EvalPos):
 if __name__ == "__main__":
     levanter.config.main(run_eval_harness_main)()
     print("Done", flush=True)
+
