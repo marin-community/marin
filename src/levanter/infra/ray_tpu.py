@@ -493,13 +493,7 @@ class SliceActor(ResourcePoolManager[TPUHostInfo]):
         pod_name = ray.util.accelerators.tpu.get_current_pod_name()
         num_hosts = ray.util.accelerators.tpu.get_current_pod_worker_count()
         num_tpus_per_host = TPUAcceleratorManager.get_current_node_num_accelerators()
-        tpe = TPUAcceleratorManager._get_current_node_tpu_pod_type()
-        # there seems to be a bug with some version of ray here
-        if tpe.startswith("v4") or tpe.startswith("v5"):
-            num_cores = int(tpe.split("-")[1])
-            num_tpus_per_host = 4
-            # "v5litepod-4" should still create 1 host, not 0
-            num_hosts = max(1, num_cores // num_tpus_per_host)
+        logger.info(f"SliceActor on pod {pod_name} with {num_hosts} hosts and {num_tpus_per_host} TPUs per host")
         ip_address = socket.gethostbyname(socket.gethostname())
         self._slice_info = SliceInfo(
             slice_name=pod_name,
