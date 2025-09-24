@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 def run_gcloud_command(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     """Run a gcloud command with error handling."""
     try:
+        logger.info(f"Running {' '.join(cmd)}")
         return subprocess.run(cmd, check=True, capture_output=True, text=True, **kwargs)
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"gcloud command failed: {' '.join(cmd)}\nError: {e.stderr}") from e
@@ -85,7 +86,7 @@ def list_instances(project: str, zone: str, filter_expr: str | None = None) -> l
 
 def find_head_node_ip(cluster_name: str, project: str, zone: str) -> str:
     """Find the internal IP of the Ray cluster head node."""
-    filter_expr = f"labels.ray-node-type=head AND labels.ray-node-name=ray-marin-{cluster_name}-head"
+    filter_expr = f"labels.ray-node-type=head AND labels.ray-node-name=ray-{cluster_name}-head"
     instances = list_instances(project, zone, filter_expr)
 
     if not instances:
@@ -94,7 +95,7 @@ def find_head_node_ip(cluster_name: str, project: str, zone: str) -> str:
     return instances[0]["networkInterfaces"][0]["networkIP"]
 
 
-def list_tpu_nodes(project: str, zone: str) -> list[dict[str, Any]]:
+def list_tpu_nodes(project: str, zone: str, filter_expr: str = "") -> list[dict[str, Any]]:
     """List TPU nodes in a zone."""
     cmd = [
         "gcloud",
@@ -106,27 +107,12 @@ def list_tpu_nodes(project: str, zone: str) -> list[dict[str, Any]]:
         f"--zone={zone}",
         "--format=json",
     ]
+    if filter_expr:
+      cmd.append(f"--filter={filter_expr}")
 
     result = run_gcloud_command(cmd)
     return json.loads(result.stdout)
 
-
-def list_tpu_nodes_by_label(project: str, zone: str, label_filter: str) -> list[dict[str, Any]]:
-    """List TPU nodes in a zone filtered by labels."""
-    cmd = [
-        "gcloud",
-        "compute",
-        "tpus",
-        "tpu-vm",
-        "list",
-        f"--project={project}",
-        f"--zone={zone}",
-        f"--filter={label_filter}",
-        "--format=json",
-    ]
-
-    result = run_gcloud_command(cmd)
-    return json.loads(result.stdout)
 
 
 def delete_tpu_node(node_name: str, project: str, zone: str, quiet: bool = False) -> None:
@@ -248,9 +234,12 @@ def get_tpu_health_status(project: str, zone: str) -> dict[str, Any]:
 
 def terminate_tpus_in_cluster(project: str, zone: str, cluster_name: str) -> list[str]:
     """Terminate TPU nodes belonging to a specific cluster in parallel."""
-    # Use gcloud filtering to only query TPUs with the ray-node-name label for this cluster
-    label_filter = f"labels.ray-node-name:ray-marin-{cluster_name}-worker"
-    nodes = list_tpu_nodes_by_label(project, zone, label_filter)
+    # Find TPUs with the correct node name.
+    # Note we don't use the zone as a tag (we might have different clusters in a zone)
+    # Nor the cluster name tag, as some clusters do not include the zone name and 
+    # are ambiguous e.g. eu-west4 vs eu-west4-a
+    label_filter = f"labels.ray-node-name:ray-{cluster_name}-worker"
+    nodes = list_tpu_nodes(project, zone, label_filter)
     terminated_nodes = []
 
     if not nodes:
@@ -258,7 +247,6 @@ def terminate_tpus_in_cluster(project: str, zone: str, cluster_name: str) -> lis
         return terminated_nodes
 
     def delete_single_tpu(node: dict[str, Any]) -> str | None:
-        """Delete a single TPU node."""
         node_name = node.get("name", "").split("/")[-1]
         try:
             delete_tpu_node(node_name, project, zone, quiet=True)
@@ -284,7 +272,7 @@ def terminate_tpus_in_cluster(project: str, zone: str, cluster_name: str) -> lis
 def terminate_head_node(cluster_name: str, project: str, zone: str) -> str | None:
     """Terminate the Ray cluster head node directly via gcloud."""
     # Use ray-cluster-name label for cluster identification
-    filter_expr = f"labels.ray-node-type=head AND labels.ray-node-name=ray-marin-{cluster_name}-head"
+    filter_expr = f"labels.ray-node-type=head AND labels.ray-node-name=ray-{cluster_name}-head"
     instances = list_instances(project, zone, filter_expr)
 
     if not instances:
