@@ -40,10 +40,9 @@ Usage:
 """
 
 
+from collections.abc import Generator
 from contextlib import contextmanager
-from draccus import wrap
 from pathlib import Path
-from typing import Generator, Optional
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
@@ -88,7 +87,9 @@ DEFAULT_ENV_VARS = [
 ]
 
 
-def build_env_dict(env_vars: list[str], extra_env: list[str] = None, forward_all: bool = False) -> dict[str, str]:
+def build_env_dict(
+    env_vars: list[str], extra_env: list[str] | None = None, forward_all: bool = False
+) -> dict[str, str]:
     """Build environment variable dictionary for forwarding."""
     # Start with all environment variables if requested, otherwise just defaults
     if forward_all:
@@ -141,7 +142,10 @@ def build_env_string(env_dict: dict[str, str]) -> str:
 
 
 def build_ssh_command(
-    host_alias: str, command: str, env_dict: dict[str, str] = None, working_dir: str = "marin"
+    host_alias: str,
+    command: str,
+    env_dict: dict[str, str] | None = None,
+    working_dir: str = "marin",
 ) -> list[str]:
     """Build SSH command with proper cleanup and environment forwarding.
 
@@ -252,7 +256,7 @@ def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name:
     config_path.parent.mkdir(exist_ok=True)
 
     # try using gcloud compute tpu-vm ssh to forward keys
-    logger.info(f"Setting up SSH keys...")
+    logger.info("Setting up SSH keys...")
     gcloud_ssh_cmd = f"gcloud compute tpu-vm ssh {tpu_name} --zone={zone} -- hostname"
     try:
         subprocess.run(
@@ -262,7 +266,7 @@ def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name:
             text=True,
         )
         logger.info("SSH keys set up successfully via gcloud")
-    except subprocess.CalledProcessError as e:
+    except subprocess.CalledProcessError:
         logger.warning("gcloud compute tpu-vm ssh failed to set up SSH keys")
 
     # Check if Google Compute Engine SSH key exists
@@ -418,7 +422,7 @@ def hold_tpu_allocation(
                 username, tpu_name, tpu_type
             )
 
-            logger.info(f"Waiting up to 10 minutes for TPU to be ready...")
+            logger.info("Waiting up to 10 minutes for TPU to be ready...")
             host_info = ray.get(actor.host_info.remote(), timeout=600)
             logger.info("TPU allocated successfully!")
             print(f"Hostname: {host_info['hostname']}")
@@ -447,13 +451,13 @@ def hold_tpu_allocation(
 class Context:
     def __init__(self):
         self.verbose: bool = False
-        self.config_file: Optional[str] = None
-        self.config_obj: Optional[RayClusterConfig] = None
-        self.tpu_name: Optional[str] = None
-        self.config_data: Optional[dict] = None
+        self.config_file: str | None = None
+        self.config_obj: RayClusterConfig | None = None
+        self.tpu_name: str | None = None
+        self.config_data: dict | None = None
 
 
-def _infer_tpu_type_from_config(config_data: Optional[dict]) -> Optional[str]:
+def _infer_tpu_type_from_config(config_data: dict | None) -> str | None:
     if not config_data:
         return None
 
@@ -638,7 +642,6 @@ class FileChangeHandler(FileSystemEventHandler):
             return
 
         # Debounce rapid file changes
-        current_time = time.time()
         if self._timer:
             self._timer.cancel()
 
@@ -652,9 +655,15 @@ class FileChangeHandler(FileSystemEventHandler):
 class RemoteProcessManager:
     """Run a remote process, synchronizing and restarting on demand."""
 
-    def __init__(self, host_alias: str, command_str: str, sync_path: str, env_dict: dict[str, str] = None):
+    def __init__(
+        self,
+        host_alias: str,
+        command_str: str,
+        sync_path: str,
+        env_dict: dict[str, str] | None = None,
+    ):
         self._lock = threading.Lock()
-        self._process: Optional[subprocess.Popen] = None
+        self._process: subprocess.Popen | None = None
         self._command_str = command_str
         self._host_alias = host_alias
         self._sync_path = sync_path
