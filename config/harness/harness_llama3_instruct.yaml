@@ -5,7 +5,7 @@ eval_harness:
  fewshot_as_multiturn: true
  max_gen_toks: 1024
  max_length: 4096
- max_examples: 10
+#  max_examples: 10
 tokenizer: meta-llama/Meta-Llama-3.1-8B-Instruct
 model:
   type: llama
