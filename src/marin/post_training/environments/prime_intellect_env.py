@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Environment Wrapper for the Environments Hub by Prime-Intellect, which contains a collection of environments.
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
@@ -24,6 +38,7 @@ from verifiers.utils.message_utils import messages_to_printable, sanitize_tool_c
 from .marin_env import EnvStep, InferenceContext, MarinEnv
 
 logger = logging.getLogger(__name__)
+
 
 def eval_environment(
     env: str,
@@ -60,20 +75,16 @@ def eval_environment(
             spec.loader.exec_module(endpoints_module)
             # check that module exposes ENDPOINTS
             if not hasattr(endpoints_module, "ENDPOINTS"):
-                raise AttributeError(
-                    f"Module '{endpoints_file}' does not have a 'ENDPOINTS' attribute"
-                )
+                raise AttributeError(f"Module '{endpoints_file}' does not have a 'ENDPOINTS' attribute")
             ENDPOINTS = cast(Endpoints, endpoints_module.ENDPOINTS)
-            logger.debug(
-                f"Successfully loaded {len(ENDPOINTS)} endpoints from registry"
-            )
+            logger.debug(f"Successfully loaded {len(ENDPOINTS)} endpoints from registry")
         else:
             raise ImportError(f"endpoints.py not found at {endpoints_file}")
     except (ImportError, AttributeError) as e:
         logger.warning(
             f"No local endpoint registry found at {endpoints_path}. "
             f"Please specify the model name (-m), API host base URL (-b), and API key variable name (-k). "
-            f"Error details: {str(e)}"
+            f"Error details: {e!s}"
         )
         logger.debug("Using default empty endpoints registry")
         ENDPOINTS: Endpoints = {}
@@ -84,9 +95,7 @@ def eval_environment(
         model = ENDPOINTS[model]["model"]
         logger.debug(f"Using endpoint configuration for model '{model}' from registry")
     else:
-        logger.debug(
-            f"Model '{model}' not found in endpoint registry, using command-line arguments"
-        )
+        logger.debug(f"Model '{model}' not found in endpoint registry, using command-line arguments")
 
     # Setup eval client with high limits to prevent API timeout errors
     client = setup_client(
@@ -132,14 +141,10 @@ def eval_environment(
     print("--- Example ---")
     printable_prompts = [messages_to_printable(p) for p in results.prompt]
     printable_completions = [messages_to_printable(c) for c in results.completion]
-    vf.print_prompt_completions_sample(
-        printable_prompts, printable_completions, results.reward, step=0
-    )
+    vf.print_prompt_completions_sample(printable_prompts, printable_completions, results.reward, step=0)
     print("--- All ---")
     print("Rewards:")
-    print(
-        f"reward: avg - {sum(results.reward) / len(results.reward):.3f}, std - {np.std(results.reward):.3f}"
-    )
+    print(f"reward: avg - {sum(results.reward) / len(results.reward):.3f}, std - {np.std(results.reward):.3f}")
     r = rollouts_per_example
     n = len(results.reward) // r
     for i in range(r):
@@ -200,9 +205,7 @@ def eval_environment(
             local_env_dir = Path(env_dir_path) / module_name
             print(local_env_dir)
             if local_env_dir.exists():
-                results_path = (
-                    local_env_dir / "outputs" / "evals" / env_model_str / uuid_str
-                )
+                results_path = local_env_dir / "outputs" / "evals" / env_model_str / uuid_str
             else:
                 results_path = Path("./outputs") / "evals" / env_model_str / uuid_str
             results_path.parent.mkdir(parents=True, exist_ok=True)
@@ -213,9 +216,7 @@ def eval_environment(
             logger.info(f"Saved dataset to {results_path}")
         if save_to_hf_hub:
             if hf_hub_dataset_name == "":
-                dataset_name = (
-                    f"{env}_{model.replace('/', '-')}_n{n}_r{rollouts_per_example}"
-                )
+                dataset_name = f"{env}_{model.replace('/', '-')}_n{n}_r{rollouts_per_example}"
             else:
                 dataset_name = hf_hub_dataset_name
             dataset.push_to_hub(dataset_name)
@@ -234,7 +235,6 @@ class PrimeIntellectEnv(MarinEnv):
         self._output_dir_path: str = os.path.join(output_dir_path)
         os.makedirs(self._output_dir_path, exist_ok=True)
 
-
     def step(
         self,
         env_id: str,
@@ -252,14 +252,7 @@ class PrimeIntellectEnv(MarinEnv):
             kwargs: The keyword arguments
         """
         # Download the environment
-        subprocess.run(
-            [
-                "prime",
-                "env",
-                "install",
-                env_id
-            ]
-        )
+        subprocess.run(["prime", "env", "install", env_id])
         env_id = env_id.split("/", 1)[-1]
         base_url = inference_ctx.inference_server.base_url if inference_ctx is not None else "https://api.openai.com/v1"
 
@@ -282,5 +275,7 @@ class PrimeIntellectEnv(MarinEnv):
             save_to_hf_hub=kwargs.get("save_to_hf_hub", False),
             hf_hub_dataset_name=kwargs.get("hf_hub_dataset_name", ""),
         )
-        
-        return EnvStep(examples=result.prompt, responses=result.completion, rewards=result.reward, metrics=result.metrics)
+
+        return EnvStep(
+            examples=result.prompt, responses=result.completion, rewards=result.reward, metrics=result.metrics
+        )
