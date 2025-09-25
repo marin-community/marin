@@ -154,12 +154,12 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
         steps_per_eval=1,
         checkpointer=CheckpointerConfig(
             base_path=Path(output_dir) / "checkpoints",
-            save_interval=datetime.timedelta(seconds=10),
+            save_interval=datetime.timedelta(seconds=1),
         ),
         tensor_parallel_axes=["mlp", "kv_heads"],
         fsdp_axis="embed",
         batch_axis="batch",
-        ray=RayConfig(auto_start_cluster=False),  # Don't auto-start Ray in tests
+        ray=RayConfig(auto_start_cluster=False),
     )
 
 

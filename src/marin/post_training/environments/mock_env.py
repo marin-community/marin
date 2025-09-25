@@ -14,8 +14,8 @@
 
 """Mock environment for testing RL training without external dependencies."""
 
-from typing import Any, ClassVar, Protocol
 from collections.abc import Iterator
+from typing import Any, ClassVar, Protocol
 
 import jax
 import numpy as np
@@ -180,7 +180,7 @@ class MoarCatsTask:
         num_cats = actual_response.lower().count("cat")
         love_cats = actual_response.lower().count("love cats")
 
-        return (num_cats + (10 * love_cats)) / (1 + len(actual_response))
+        return (num_cats + (10 * love_cats)) / np.sqrt(1 + len(actual_response))
 
 
 # Task mappings
