@@ -1244,7 +1244,7 @@ def plot_standard_model_seed_scaling(parameter_scaling_losses, best_run_dict, fi
         "--",
         color=BASELINE_COLOR,
         zorder=4,
-        label=f"Tuned epoching\n(Fit: {epoched_power_law})",
+        label=f"Standard recipe\n(Fit: {epoched_power_law})",
         alpha=0.8,
     )
 
@@ -1455,7 +1455,7 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     """2b: 200M tokens"""
     plt.figure(figsize=SEED_SCALING_FIGSIZE, dpi=300)
 
-    plt.axhline(y=3.74974, color=BASELINE_COLOR, linestyle="--", zorder=4, alpha=0.8, label="Tuned epoching")
+    plt.axhline(y=3.74974, color=BASELINE_COLOR, linestyle="--", zorder=4, alpha=0.8, label="Standard recipe")
     plt.axhline(y=3.43, color=REGULARIZED_COLOR, linestyle="--", zorder=4, alpha=0.8, label="Regularized asymptote")
 
     for token_count in token_counts[:1]:
@@ -1543,7 +1543,7 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
         "--",
         color=BASELINE_COLOR,
         zorder=4,
-        label=f"Tuned epoching\n(Fit: {epoched_power_law})",
+        label=f"Standard recipe\n(Fit: {epoched_power_law})",
         alpha=0.8,
     )
 
@@ -1820,6 +1820,55 @@ def plot_benchmark_results():
     plt.close()
 
 
+def plot_simple_cross(best_asymptote_ensemble_200M, power_law_200M, run_losses_200M):
+    x_data, y_data, power_law = best_asymptote_ensemble_200M
+    plt.figure(figsize=WIDE_RECTANGLE_FIGSIZE, dpi=300)
+    max_x = max(x_data * param_str_to_count["300m4k"] * 2)
+
+    plt.scatter(PARAM_COUNTS, run_losses_200M, color=PURPLE, s=50)
+
+    # fit a power law to the model scaling
+    model_x_fit = np.linspace(min(PARAM_COUNTS), max_x, 5000)
+    model_y_fit = power_law_200M.evaluate(model_x_fit)
+    plt.plot(model_x_fit, model_y_fit, "--", color=PURPLE, label=f"Regularized recipe (Fit: {power_law_200M})")
+
+    model_size = "300m4k"
+
+    x_fit = np.linspace(min(x_data * param_str_to_count[model_size]), max_x, 5000)
+    y_fit = power_law.evaluate(x_fit / param_str_to_count[model_size])
+    plt.scatter(x_data * param_str_to_count[model_size], y_data, color=param_str_color_dict[model_size])
+    plt.plot(
+        x_fit,
+        y_fit,
+        "--",
+        color=param_str_color_dict[model_size],
+        label=f"{value_pretty_name_dict[model_size]} ensembles (Fit: {power_law})",
+    )
+
+    # Add black arrow to legend
+    from matplotlib.lines import Line2D
+
+    arrow_legend = Line2D(
+        [0], [0], marker="$\u2192$", color="black", linestyle="None", markersize=12, label="Distillation", alpha=0.6
+    )
+
+    # Get existing legend handles and labels, then add the arrow
+    handles, labels = plt.gca().get_legend_handles_labels()
+    handles.insert(2, arrow_legend)
+    labels.insert(2, "Distilling from teacher to student")
+
+    # plt.legend(handles=handles, labels=labels)
+    plt.xscale("log")
+    plt.xticks(PARAM_COUNTS, [value_pretty_name_dict[param_count] for param_count in PARAM_COUNTS])
+    plt.xticks([], [], minor=True)
+    plt.xlabel("Total parameter count")
+    plt.ylabel("DCLM Loss")
+    plt.grid(True, which="both", linestyle="--", alpha=0.3)
+    # plt.title("Distilling a 300M student (200M seed tokens)")
+    plt.savefig("experiments/data_efficiency/plots/simple_cross.png", bbox_inches="tight")
+    plt.close()
+
+
 def plot_distillation(best_asymptote_ensemble_200M, power_law_200M, run_losses_200M):
     x_data, y_data, power_law = best_asymptote_ensemble_200M
     plt.figure(figsize=WIDE_RECTANGLE_FIGSIZE, dpi=300)
@@ -2060,7 +2109,7 @@ def plot_200M_sample(
     xmax_multiplier = 5
     chinchilla_losses = [3.83752, 3.78538, 3.74974, 3.76432]
     ax1.scatter(param_counts, chinchilla_losses, color=BASELINE_COLOR, s=50)
-    ax1.plot(param_counts, chinchilla_losses, color=BASELINE_COLOR, label="Epoched recipe")
+    ax1.plot(param_counts, chinchilla_losses, color=BASELINE_COLOR, label="Standard recipe")
 
     ax1.scatter(param_counts, run_losses_200M, color=REGULARIZED_COLOR, s=50, zorder=5)
     model_x_fit = np.linspace(min(x_data * param_str_to_count["150m4k"]), max_x * xmax_multiplier, 5000)
@@ -2087,7 +2136,7 @@ def plot_200M_sample(
             y_fit,
             "--",
             color=param_str_color_dict[model_size],
-            label=f"Ensemble recipe\n(Fit: {power_law})",
+            label=f"Ensembling recipe\n(Fit: {power_law})",
             zorder=4,
             alpha=0.8,
         )
@@ -2100,7 +2149,7 @@ def plot_200M_sample(
     ax1.axhline(
         y=infinite_compute_asymptote,
         linestyle=":",
-        label="Parameter and ensemble\nscaling asymptote",
+        label="Joint scaling recipe\nasymptote ($N,K\\to\\infty$)",
         color=TIERED_COLOR,
         zorder=3,
     )
@@ -2114,7 +2163,7 @@ def plot_200M_sample(
         effective_data = data_efficiency * back_out_data(min(chinchilla_losses), epoched_data_scaling_law)
         return epoched_data_scaling_law.evaluate(effective_data)
 
-    ax1.legend()
+    ax1.legend(framealpha=1.0)
 
     ax1.set_xscale("log")
     ax1.set_xticks(param_counts)
@@ -2941,6 +2990,7 @@ if __name__ == "__main__":
         )
 
         plot_distillation(best_asymptote_ensemble_200M, power_law_200M, run_losses_200M)
+        plot_simple_cross(best_asymptote_ensemble_200M, power_law_200M, run_losses_200M)
 
     elif mode == "standard-batch-size":
         plot_batch_size_ablation(run_list)
