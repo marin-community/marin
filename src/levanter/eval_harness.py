@@ -257,6 +257,8 @@ class LevanterHarnessLM(TemplateLM):
     def __init__(self, leader: _LmEvalHarnessWorker):
         super().__init__()
         self.leader = leader
+        # Storage for prompts and generations to include in outputs
+        self.sample_outputs: dict[str, list[dict]] = {}
 
     tokenizer = property(lambda self: self.leader.tokenizer)
     EvalBatch = property(lambda self: self.leader.EvalBatch)
@@ -319,6 +321,20 @@ class LevanterHarnessLM(TemplateLM):
         """Return the end-of-text token ID."""
         return self.tokenizer.eos_token_id
 
+    def set_current_task(self, task_name: str):
+        """Set the current task name for organizing sample outputs."""
+        self._current_task = task_name
+        if task_name not in self.sample_outputs:
+            self.sample_outputs[task_name] = []
+
+    def get_sample_outputs(self) -> dict[str, list[dict]]:
+        """Get all stored sample outputs."""
+        return self.sample_outputs
+
+    def clear_sample_outputs(self):
+        """Clear all stored sample outputs."""
+        self.sample_outputs.clear()
+
     def _loglikelihood_tokens(self, requests, disable_tqdm: bool = False):
         raise NotImplementedError("_loglikelihood_tokens is not yet supported")
 
@@ -331,6 +347,19 @@ class LevanterHarnessLM(TemplateLM):
         if self.tokenizer.pad_token_id is None:
             logger.warning("No pad token set. Setting to eos token.")
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+
+        # Store prompt-continuation pairs for output logging
+        current_task = getattr(self, '_current_task', 'loglikelihood_task')
+        if current_task not in self.sample_outputs:
+            self.sample_outputs[current_task] = []
+        
+        for request in requests:
+            prompt = request.args[0]
+            continuation = request.args[1]
+            self.sample_outputs[current_task].append({
+                "prompt": prompt,
+                "generation": continuation  # For loglikelihood, the "generation" is the continuation being evaluated
+            })
 
         packed = _pack_requests(
             requests, self.tokenizer, self.EvalPos, self.leader.max_packed_segments
@@ -586,6 +615,9 @@ class LevanterHarnessLM(TemplateLM):
         outputs: list[str] = []
         output_idx = 0
         for i, (toks, gen_kwargs) in enumerate(zip(prompt_token_lists, processed_kwargs_list)):
+            # Decode the prompt for storage
+            prompt_text = self.tokenizer.decode(toks, skip_special_tokens=True)
+            
             # Consume one sequence output per request
             if output_idx < len(result.tokens):
                 full_tokens = result.tokens[output_idx]
@@ -601,7 +633,17 @@ class LevanterHarnessLM(TemplateLM):
                 outputs.append(text)
                 output_idx += 1  # consume one generation per request
             else:
-                outputs.append("")
+                text = ""
+                outputs.append(text)
+            
+            # Store prompt and generation for output logging
+            current_task = getattr(self, '_current_task', 'generation_task')
+            if current_task not in self.sample_outputs:
+                self.sample_outputs[current_task] = []
+            self.sample_outputs[current_task].append({
+                "prompt": prompt_text,
+                "generation": text,
+            })
         
         # print(f'{outputs=}')
 
@@ -916,6 +958,10 @@ def _actually_run_eval_harness(
 
         # eval_harness only sets seeds in simple_evaluate, which we can't use (I think?)
         tasks_to_run = _adjust_config(tasks_to_run, 0)
+        
+        # Clear any previous sample outputs
+        harness.clear_sample_outputs()
+        
         with set_global_rng_seeds(0):
             outputs = evaluator.evaluate(
                 harness,
@@ -926,10 +972,23 @@ def _actually_run_eval_harness(
                 apply_chat_template=config.apply_chat_template,
                 fewshot_as_multiturn=config.fewshot_as_multiturn,
             )
+            
         worker.stop()
 
         averages = _compute_averages(outputs)
         outputs["averages"] = averages
+        
+        # Get the collected sample outputs and add them to the results
+        sample_outputs = harness.get_sample_outputs()
+        if sample_outputs:
+            # Add outputs to each benchmark in results
+            for task_name in outputs.get("results", {}):
+                # Get all sample outputs for this task (since we don't track individual tasks yet)
+                all_samples = []
+                for samples in sample_outputs.values():
+                    all_samples.extend(samples)
+                if all_samples:
+                    outputs["results"][task_name]["outputs"] = all_samples
 
         return outputs
     else:
