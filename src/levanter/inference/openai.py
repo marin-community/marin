@@ -42,7 +42,6 @@ from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
-from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
@@ -123,7 +122,7 @@ class InferenceServerConfig:
     hf_checkpoint: Optional[RepoRef] = None
 
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
-    model: LmConfig = field(default_factory=LlamaConfig)
+    model: LmConfig = field(default_factory=LmConfig)
 
     tokenizer: str | None = None
 
@@ -152,7 +151,6 @@ class InferenceRequest:
     seed: int | None
     future: asyncio.Future
     n_generations: int = 1
-    original_prompt: str = ""
     enable_logprobs: bool = False
 
 
@@ -263,7 +261,6 @@ class InferenceContext:
         seed: int | None,
         future: asyncio.Future,
         n_generations: int = 1,
-        original_prompt: str = "",
         enable_logprobs: bool = False,
     ) -> str:
         """Submit a request to the inference queue"""
@@ -280,7 +277,6 @@ class InferenceContext:
             seed=seed,
             future=future,
             n_generations=n_generations,
-            original_prompt=original_prompt,
             enable_logprobs=enable_logprobs,
         )
 
@@ -500,7 +496,6 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                 seed=request.seed,
                 future=future,
                 n_generations=request.n or 1,
-                original_prompt=prompt,
                 enable_logprobs=bool(request.logprobs),
             )
 
@@ -699,26 +694,27 @@ class InferenceServer:
         vocab_size = len(tokenizer)
         logger.info(f"Loaded tokenizer with vocab size {vocab_size} from {tokenizer_path}")
 
+        # N.B. I don't know what the difference between compute and parameter axis mapping is
+        # `compute_axis_mapping` shards across tensor-parallel dimensions (?)
         with (
             config.trainer.device_mesh,
             hax.axis_mapping(config.trainer.compute_axis_mapping),
         ):
             Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), config.trainer.compute_axis_mapping)
             model = _load_model(config, Vocab, key=key)
-            assert isinstance(model, LlamaLMHeadModel), "Only LlamaLMHeadModel supported"
 
-            service = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.service)
+        service = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.service)
 
-            # Create and start inference thread
-            inference_context = InferenceContext(model, tokenizer, service, config)
-            inference_context.start()
+        # Create and start inference thread
+        inference_context = InferenceContext(model, tokenizer, service, config)
+        inference_context.start()
 
-            logger.info("Inference service initialized and ready")
+        logger.info("Inference service initialized and ready")
 
-            # Create FastAPI app with initialized context
-            app = InferenceServer._create_app(inference_context)
+        # Create FastAPI app with initialized context
+        app = InferenceServer._create_app(inference_context)
 
-            return InferenceServer(config, inference_context, app)
+        return InferenceServer(config, inference_context, app)
 
     @staticmethod
     def _create_app(inference_context: InferenceContext) -> FastAPI:
@@ -790,12 +786,25 @@ def _load_model(config: InferenceServerConfig, Vocab: Axis, *, key) -> LmHeadMod
             model = mp.cast_to_compute(model)
         return model
     else:
-        assert hasattr(config.model, "hf_checkpoint_converter"), "model config lacks HF loader"
-        converter: HFCheckpointConverter = config.model.hf_checkpoint_converter()
-        converter = converter.replaced(
-            reference_checkpoint=config.hf_checkpoint, tokenizer=load_tokenizer(config.tokenizer)
+        assert config.hf_checkpoint
+        logger.info(
+            f"Loading model from HF checkpoint {config.hf_checkpoint} "
+            + f"type={config.model.model_type}, "
+            + f"vocab_size={Vocab.size}, "
+            + f"dtype={config.trainer.mp.compute_dtype}"
         )
+        converter: HFCheckpointConverter = HFCheckpointConverter.from_hf(config.hf_checkpoint)
+        converter = converter.replaced(reference_checkpoint=config.hf_checkpoint)
+        if config.tokenizer is not None:
+            converter = converter.replaced(tokenizer=load_tokenizer(config.tokenizer))
+
+        logger.info(f"Param mapping: {config.trainer.parameter_axis_mapping}")
+        logger.info(f"Compute mapping: {config.trainer.compute_axis_mapping}")
+
         model = converter.load_pretrained(
-            config.model.model_type, ref=config.hf_checkpoint, dtype=config.trainer.mp.compute_dtype
+            config.model.model_type,
+            ref=config.hf_checkpoint,
+            dtype=config.trainer.mp.compute_dtype,
+            axis_mapping=config.trainer.parameter_axis_mapping,
         )
         return model

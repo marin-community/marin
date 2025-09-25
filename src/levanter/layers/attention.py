@@ -4,12 +4,11 @@
 import dataclasses
 import functools
 import logging
-
 import math
 import warnings
 from dataclasses import dataclass
-from numbers import Integral
 from enum import Enum
+from numbers import Integral
 from typing import Optional, Union, overload
 
 import equinox as eqx
@@ -23,27 +22,27 @@ try:
     from jax.experimental.pallas.ops.tpu.ragged_paged_attention import (
         ragged_paged_attention as tpu_ragged_paged_attention,
     )
+
+    raise ImportError("Disabling TPU ragged paged attention until bugs are fixed.")
 except Exception:  # pragma: no cover - optional dep
     tpu_ragged_paged_attention = None
 
-from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds
-from jax.experimental.shard_map import shard_map
-from jax.sharding import PartitionSpec
-from jaxtyping import PRNGKeyArray
-
 import haliax
 import haliax as hax
-import haliax.nn as hnn
 import haliax.haxtyping as ht
+import haliax.nn as hnn
 from haliax import Axis, AxisSelection, AxisSelector, NamedArray, axis_name
 from haliax.jax_utils import maybe_rng_split, named_call
 from haliax.nn.attention import causal_mask, combine_masks_and, combine_masks_or
 from haliax.nn.normalization import LayerNormBase
 from haliax.partitioning import pspec_for_axis
 from haliax.types import PrecisionLike
+from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds
+from jax.experimental.shard_map import shard_map
+from jax.sharding import PartitionSpec
+from jaxtyping import PRNGKeyArray
 
 from ..inference.page_table import PageBatchInfo, PageTable
-
 from .normalization import LayerNormConfigBase
 from .rotary import RotaryEmbeddings, RotaryEmbeddingsConfig
 
@@ -475,8 +474,12 @@ def _te_flash_attention(
     scaling_factor: float,
     logits_soft_cap: Optional[float] = None,
 ):
-    from transformer_engine.jax.attention import fused_attn  # noqa: F401
-    from transformer_engine.jax.attention import AttnBiasType, AttnMaskType, QKVLayout  # noqa: F401
+    from transformer_engine.jax.attention import (  # noqa: F401
+        AttnBiasType,
+        AttnMaskType,
+        QKVLayout,
+        fused_attn,  # noqa: F401
+    )
 
     if logits_soft_cap is not None:
         raise NotImplementedError(
@@ -1140,7 +1143,10 @@ def _tpu_splash_attention(
     scaling_factor: float,
     logits_soft_cap: float | None = None,
 ) -> Optional[NamedArray]:
-    from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
+    from jax.experimental.pallas.ops.tpu.splash_attention import (
+        splash_attention_kernel,
+        splash_attention_mask,
+    )
 
     # Splash attention requires BHSD format
     # We need to reshape the input to match this format

@@ -1,7 +1,6 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from abc import ABC, abstractmethod
 import dataclasses
 import logging
 import multiprocessing
@@ -10,6 +9,7 @@ import socket
 import subprocess
 import tempfile
 import time
+from abc import ABC, abstractmethod
 from asyncio import QueueEmpty
 from dataclasses import dataclass
 from typing import Callable, Generic, Optional, Sequence, TypeVar
@@ -37,7 +37,6 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from levanter.infra.docker import make_docker_run_command
 from levanter.utils.ray_utils import ser_exc_info
-
 
 # CF https://gist.github.com/allenwang28/e3400b9e9212b50aa1cda55ebeccea60
 # CF: https://github.com/AI-Hypercomputer/ray-tpu/blob/main/src/ray_tpu.py
@@ -92,7 +91,65 @@ from levanter.utils.ray_utils import ser_exc_info
 # TODO: look into https://github.com/jax-ml/jax/blob/main/jax/experimental/transfer.py to see if we
 #  can avoid crashing (probably doing some kind of diloco thing) Or we just go full parameter server
 
+# Note: TPU configurations are complicated. The number of chips per host is
+# always the same for a particular generation, but the number of VMs per host
+# can vary based on the pod size.
+#
+# We define a mapping to handle these oddities.
+# TPU configuration table: tpu_type -> (chips_per_vm, chips_to_vms_fn)
+# See docs here: https://cloud.google.com/tpu/docs/v6e
+#
+# Note that even more confusingly, Google sometimes refers to TPU cores
+# as chips and vice-versa.
+TPU_CONFIGURATIONS = {
+    "v4": (4, lambda chips: max(1, chips // 4)),
+    # v5p always uses VMs = Hosts, with 4 chips per host.
+    "v5p": (4, lambda chips: max(1, chips // 4)),
+    # v5 and v6 transition from 8 chips per VM for "serving" instances
+    # to 4 chips per VM for larger pods. The number of chips per host
+    # remains 8 in all cases.
+    "v5litepod-1": (1, lambda _: 1),
+    "v5litepod-2": (2, lambda _: 1),
+    "v5litepod-4": (4, lambda _: 1),
+    "v5litepod-8": (8, lambda _: 1),
+    "v5litepod": (4, lambda chips: max(1, chips // 4)),
+    "v6e-1": (1, lambda _: 1),
+    "v6e-2": (2, lambda _: 1),
+    "v6e-4": (4, lambda _: 1),
+    "v6e-8": (8, lambda _: 1),
+    "v6e": (4, lambda chips: max(1, chips // 4)),
+}
+
 logger = logging.getLogger("ray")
+
+
+def _parse_tpu_type(tpe: str) -> tuple[str, int]:
+    """Parse TPU type string to extract family and chip count."""
+    parts = tpe.split("-")
+    if len(parts) < 2:
+        raise ValueError(f"Invalid TPU type: {tpe}")
+
+    family = parts[0]
+    try:
+        chip_count = int(parts[1])
+    except ValueError:
+        raise ValueError(f"Invalid chip count in TPU type: {tpe}")
+
+    return family, chip_count
+
+
+def _get_tpu_config(tpe: str, family: str) -> tuple[int, Callable[[int], int]]:
+    """Get TPU configuration for the given type."""
+    if tpe in TPU_CONFIGURATIONS:
+        return TPU_CONFIGURATIONS[tpe]
+
+    # Fall back to family default
+    if family in TPU_CONFIGURATIONS:
+        return TPU_CONFIGURATIONS[family]
+
+    # Unknown TPU type - use conservative defaults
+    logger.warning(f"Unknown TPU type {tpe}, using default configuration")
+    return (4, lambda chips: max(1, chips // 4))
 
 
 # My kingdom for ADTs
@@ -151,9 +208,9 @@ class SliceInfo:
     """
 
     slice_name: str
-    num_hosts: int
+    num_vms: int
     ip_address: str
-    num_tpus_per_host: int
+    num_tpus_per_vm: int
 
 
 @dataclass(frozen=True)
@@ -256,7 +313,13 @@ class ResourcePoolManager(ABC, Generic[ActorInfoT]):
                         f"{self.get_actor_pool_name()} actor pool member {self.get_actor_name_from_actor_info(member.actor_info)} is unhealthy. Removing from actor pool."
                     )
                     unhealthy_members.append(member)
-            except (RayActorError, RayTaskError, ActorDiedError, ActorUnavailableError, GetTimeoutError) as e:
+            except (
+                RayActorError,
+                RayTaskError,
+                ActorDiedError,
+                ActorUnavailableError,
+                GetTimeoutError,
+            ) as e:
                 logger.warning(
                     f"{self.get_actor_pool_name()} actor pool member {self.get_actor_name_from_actor_info(member.actor_info)} is dead or unavailable. Removing from actor pool. Error: {e}"
                 )
@@ -491,17 +554,21 @@ class SliceActor(ResourcePoolManager[TPUHostInfo]):
 
     def get_info(self) -> SliceInfo:
         pod_name = ray.util.accelerators.tpu.get_current_pod_name()
-        num_hosts = ray.util.accelerators.tpu.get_current_pod_worker_count()
-        num_tpus_per_host = TPUAcceleratorManager.get_current_node_num_accelerators()
-        logger.info(f"SliceActor on pod {pod_name} with {num_hosts} hosts and {num_tpus_per_host} TPUs per host")
+        tpe = TPUAcceleratorManager._get_current_node_tpu_pod_type()
+        tpu_family, chip_count = _parse_tpu_type(tpe)
+        chips_per_vm, chips_to_vms = _get_tpu_config(tpe, tpu_family)
+        num_vms = chips_to_vms(chip_count)
         ip_address = socket.gethostbyname(socket.gethostname())
+
+        logger.info(f"TPU type: {tpe}, chips: {chip_count}, VMs: {num_vms}, chips/VM: {chips_per_vm}")
+
         self._slice_info = SliceInfo(
             slice_name=pod_name,
-            num_hosts=num_hosts,
-            num_tpus_per_host=num_tpus_per_host,
+            num_vms=num_vms,
+            num_tpus_per_vm=chips_per_vm,
             ip_address=ip_address,
         )
-        self._scale_actor_pool(num_hosts)
+        self._scale_actor_pool(num_vms)
         return self._slice_info
 
     def run_remote_fn(self, remote_fn: RemoteFunction, runtime_env: dict) -> list[ray.ObjectRef]:
@@ -511,7 +578,7 @@ class SliceActor(ResourcePoolManager[TPUHostInfo]):
         NOTE: This returns a list of Ray futures. If calling this method on a remote Actor, you will get a future of a list of futures.
         """
         actors = self.get_all_actors_in_pool()
-        if not self._slice_info or len(actors) < self._slice_info.num_hosts:
+        if not self._slice_info or len(actors) < self._slice_info.num_vms:
             raise Exception("Insufficient host actors; call setup() before calling run_remote_fn()")
         futures_of_futures: list[ray.ObjectRef] = [
             actor.run_remote_fn.remote(remote_fn, runtime_env) for actor in actors
@@ -550,7 +617,7 @@ class TPUHostActor:
             slice_name=self._slice_info.slice_name,
             worker_index=TPUAcceleratorManager._get_current_node_tpu_worker_id(),
             node_id=ray.get_runtime_context().get_node_id(),
-            num_tpus=self._slice_info.num_tpus_per_host,
+            num_tpus=self._slice_info.num_tpus_per_vm,
         )
         return self._host_info
 
@@ -985,7 +1052,13 @@ def run_on_pod_multislice(
         A Ray ObjectRef that represents the result of the function
     """
     return ray.get(
-        run_on_pod(remote_fn, tpu_type, num_slices=num_slices, max_retries_failure=0, max_retries_preemption=0)
+        run_on_pod(
+            remote_fn,
+            tpu_type,
+            num_slices=num_slices,
+            max_retries_failure=0,
+            max_retries_preemption=0,
+        )
     )
 
 
