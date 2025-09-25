@@ -65,9 +65,15 @@ class RayWeightCoordinator:
 class RayRemotingServer(WeightTransferServer):
     """Ray remoting-based weight transfer server for Levanter models."""
 
-    def __init__(self, config: WeightTransferConfig, coordinator):
+    def __init__(self, config: WeightTransferConfig):
         self.config = config
-        self.coordinator = coordinator
+
+        # Create or get Ray coordinator using generic helper
+        from . import get_or_create_actor
+        self.coordinator = get_or_create_actor(
+            RayWeightCoordinator,
+            config.coordinator_name
+        )
 
         self.metrics = WeightTransferServerMetrics(start_time=time.time())
 
@@ -123,10 +129,16 @@ class RayRemotingClient(WeightTransferClient):
     def __init__(
         self,
         config: WeightTransferConfig,
-        coordinator,
     ):
         self.config = config
-        self.coordinator = coordinator
+
+        # Get existing Ray coordinator using generic helper
+        from . import get_or_create_actor
+        self.coordinator = get_or_create_actor(
+            RayWeightCoordinator,
+            config.coordinator_name
+        )
+
         self.last_weight_id = None
 
         # Metrics tracking

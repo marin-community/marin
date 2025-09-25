@@ -334,11 +334,20 @@ class JAXTransferServer(WeightTransferServer):
 
     coordinator: WeightTransferCoordinator
 
-    def __init__(self, config: WeightTransferConfig, mesh, coordinator, params_sharding_rules=None):
+    def __init__(self, config: WeightTransferConfig, mesh, params_sharding_rules=None):
         self.config = config
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
-        self.coordinator = coordinator
+
+        # Create or get JAX coordinator using generic helper
+        from . import get_or_create_actor
+        # For JAX coordinator, pass address parameter
+        address = "localhost:12345"  # Default address
+        self.coordinator = get_or_create_actor(
+            WeightTransferCoordinator,
+            config.coordinator_name,
+            address
+        )
 
         # Start transfer server
         self.transfer_server = start_transfer_server()
@@ -423,11 +432,19 @@ class JAXTransferServer(WeightTransferServer):
 class JAXTransferClient(WeightTransferClient):
     """JAX transfer server-based weight transfer client."""
 
-    def __init__(self, config: WeightTransferConfig, mesh, coordinator, params_sharding_rules=None):
+    def __init__(self, config: WeightTransferConfig, mesh, params_sharding_rules=None):
         self.config = config
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
-        self.coordinator = coordinator
+
+        # Get existing JAX coordinator using generic helper
+        from . import get_or_create_actor
+        address = "localhost:12345"  # Same address as server
+        self.coordinator = get_or_create_actor(
+            WeightTransferCoordinator,
+            config.coordinator_name,
+            address
+        )
 
         # Start transfer server
         self.transfer_server = start_transfer_server()
@@ -452,8 +469,12 @@ class JAXTransferClient(WeightTransferClient):
             raise RuntimeError(f"Failed to setup CPU mesh: {e}") from e
 
     def _transfer_from_cpu(self, model) -> PyTree:
-        """Transfer params from CPU back to TPU."""
-        return self.mesh.shard(model, self.params_sharding_rules)
+        """Transfer params from CPU back to target devices."""
+        if self.params_sharding_rules is not None:
+            return jax.device_put(model, self.params_sharding_rules)
+        else:
+            # Use default device placement
+            return jax.device_put(model, jax.devices()[0])
 
     def receive_weights(self, old_model: PyTree) -> Any:
         """Receive weights with CPU transfer."""
