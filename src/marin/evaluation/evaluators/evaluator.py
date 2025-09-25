@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
 import shutil
 from abc import ABC, abstractmethod
@@ -72,7 +86,6 @@ class ModelConfig:
 
 class Evaluator(ABC):
 
-    _python_version: str
     _pip_packages: ClassVar[list[Dependency]]
     _py_modules: ClassVar[list[Dependency]]
 
@@ -80,7 +93,12 @@ class Evaluator(ABC):
         if resource_config is None:
             fn = None
         else:
-            fn = scheduling_strategy_fn(resource_config.num_tpu, resource_config.strategy)
+            fn = scheduling_strategy_fn(
+                resource_config.num_tpu,
+                resource_config.strategy,
+                resource_config.tpu_type,
+                resource_config.include_head_in_scheduling_strategy,
+            )
 
         return fn
 
@@ -92,6 +110,7 @@ class Evaluator(ABC):
         output_path: str,
         max_eval_instances: int | None = None,
         resource_config: ResourceConfig | None = None,
+        wandb_tags: list[str] | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
@@ -102,6 +121,7 @@ class Evaluator(ABC):
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
             step (ExecutorStep | None): The step to evaluate. Used to get the config for the model and the trainer.
+            wandb_tags (list[str] | None): The tags to add to the wandb run.
         """
         pass
 
@@ -112,6 +132,7 @@ class Evaluator(ABC):
         evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,
+        wandb_tags: list[str] | None = None,
     ) -> None:
         """What to run to evaluate."""
         pass

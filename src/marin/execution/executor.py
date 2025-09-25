@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 The `Executor` framework provides a way to specify a DAG of `ExecutorStep`s that
 are executed in a topological order using Ray.  Beyond that:
@@ -96,7 +110,6 @@ import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
 import ray
 import ray.remote_function
-from ray.runtime_env import RuntimeEnv
 from ray.util import state  # noqa
 
 from marin.execution.executor_step_status import (
@@ -112,7 +125,7 @@ from marin.execution.executor_step_status import (
     get_status_path,
 )
 from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
-from marin.utilities.executor_utils import get_pip_dependencies
+from marin.run.ray_deps import build_runtime_env_for_packages
 from marin.utilities.json_encoder import CustomJsonEncoder
 from marin.utilities.ray_utils import is_local_ray_cluster, schedule_on_head_node_strategy
 
@@ -161,6 +174,7 @@ class ExecutorStep(Generic[ConfigT]):
     doesn't match the automatically computed one."""
 
     pip_dependency_groups: list[str] | None = None
+    """List of `extra` dependencies from pyproject.toml to include with this step."""
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
@@ -612,6 +626,7 @@ class Executor:
                 status_path = get_status_path(self.output_paths[finished_step])
                 ran = running[finished_step][1]
                 try:
+                    logger.info(f"Waiting for {ref} to finish for step {finished_step.name}")
                     ray.get(ref)
                 except Exception:
                     message = traceback.format_exc()
@@ -649,11 +664,6 @@ class Executor:
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
 
-        if step.pip_dependency_groups is not None:
-            pip_dependencies = get_pip_dependencies(step.pip_dependency_groups)
-        else:
-            pip_dependencies = None
-
         if not dry_run:
             step_name = f"{step.name}: {get_fn_name(step.fn)}"
 
@@ -671,7 +681,10 @@ class Executor:
 
             append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
 
-            runtime_env = RuntimeEnv(pip=pip_dependencies)
+            runtime_env = build_runtime_env_for_packages(extra=step.pip_dependency_groups)
+
+            # Inject themarin prefix into the runtime environment for each step.
+            runtime_env["env_vars"] = runtime_env.get("env_vars", {}) | {"MARIN_PREFIX": self.prefix}
 
             # uv doesn't reuse dependencies and ends up installing CUDA-enabled
             # torch, which is huge and causes OOMs, so disable it for now.
@@ -1082,6 +1095,7 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     time_in = time.time()
+
     ray.init(
         namespace="marin",
         ignore_reinit_error=True,

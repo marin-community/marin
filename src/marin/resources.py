@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import dataclasses
 import logging
 from collections.abc import Callable
@@ -184,7 +198,7 @@ class TpuPodConfig(ResourceConfig):
 
     tpu_type: str
     """Type of TPU to use, e.g. v4-128."""
-    slice_count: int = 1
+    slice_count: int | list[int] = 1
     """Number of TPU slices for training."""
 
     runtime_env: RuntimeEnv = dataclasses.field(default_factory=lambda: RuntimeEnv())
@@ -221,7 +235,9 @@ class TpuPodConfig(ResourceConfig):
 
         # Get the number of devices for this TPU configuration
         _, num_devices = get_tpu_type_and_chips(self.tpu_type)
-        return self.slice_count * num_devices
+
+        slice_count = self.slice_count if isinstance(self.slice_count, int) else max(self.slice_count)
+        return slice_count * num_devices
 
     def as_json_dict(self) -> dict:
         """Convert TpuPodConfig to a JSON-serializable dictionary."""
