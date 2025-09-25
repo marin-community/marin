@@ -22,43 +22,39 @@ import re
 import shlex
 import subprocess
 import time
+from pathlib import Path
 
 from ray.job_submission import JobSubmissionClient
 
+from marin.cluster.config import find_config_by_region
+from marin.cluster.ray import ray_dashboard
 from marin.run.ray_deps import build_runtime_env_for_packages
 from marin.run.vars import REMOTE_DASHBOARD_URL
-from src.marin.cluster.config import find_config_by_region
-from src.marin.cluster.ray import ray_dashboard
 
 logger = logging.getLogger(__name__)
 
 
-def parse_user_command_line(command: str) -> dict[str, str | None]:
-    """Parse command line to extract experiment name and prefix for submission ID."""
-    experiment = re.search(r"experiments/([^ ]+)", command)
+def parse_user_command_line(command: str) -> dict[str, str]:
+    """Extract interesting parts from a user command line."""
+    parts = command.strip().split(" ")
+    entrypoint = None
+    for part in parts:
+        if Path(part).exists() and "/python" not in part:
+            entrypoint = Path(part).name
 
-    try:
-        if experiment:
-            experiment = experiment.group(1).split("/")[-1].split(".")[0]
-    except Exception:
-        experiment = ""
+    if parts and entrypoint is None:
+        entrypoint = parts[0]
+    else:
+        entrypoint = "unknown"
 
-    return {
-        "experiment": experiment,
-    }
+    return {"entrypoint": entrypoint}
 
 
 def generate_submission_id(command: str) -> str:
     """Generate a nice submission ID based on the inferred experiment."""
     parsed = parse_user_command_line(command)
-    # format date for timestamp
     timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-    parts = ["ray-run"]
-    parts.append(f"experiment-{parsed.get('experiment', 'unknown')}")
-    parts.append(f"user-{getpass.getuser()}")
-    # parts.append(f"prefix-{parsed.get('prefix', 'unknown')}")
-    parts.append(timestamp)
-
+    parts = ["ray-run", getpass.getuser(), parsed["entrypoint"], timestamp]
     return "-".join(parts)
 
 
