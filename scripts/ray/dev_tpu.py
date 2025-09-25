@@ -40,10 +40,9 @@ Usage:
 """
 
 
+from collections.abc import Generator
 from contextlib import contextmanager
-from draccus import wrap
 from pathlib import Path
-from typing import Generator, Optional
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
@@ -87,7 +86,7 @@ DEFAULT_ENV_VARS = [
 ]
 
 
-def build_env_dict(env_vars: list[str], extra_env: list[str] = None, forward_all: bool = False) -> dict[str, str]:
+def build_env_dict(env_vars: list[str], extra_env: list[str] | None = None, forward_all: bool = False) -> dict[str, str]:
     """Build environment variable dictionary for forwarding."""
     # Start with all environment variables if requested, otherwise just defaults
     if forward_all:
@@ -140,7 +139,10 @@ def build_env_string(env_dict: dict[str, str]) -> str:
 
 
 def build_ssh_command(
-    host_alias: str, command: str, env_dict: dict[str, str] = None, working_dir: str = "marin"
+    host_alias: str,
+    command: str,
+    env_dict: dict[str, str] | None = None,
+    working_dir: str = "marin",
 ) -> list[str]:
     """Build SSH command with proper cleanup and environment forwarding.
 
@@ -251,7 +253,7 @@ def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name:
     config_path.parent.mkdir(exist_ok=True)
 
     # try using gcloud compute tpu-vm ssh to forward keys
-    logger.info(f"Setting up SSH keys...")
+    logger.info("Setting up SSH keys...")
     gcloud_ssh_cmd = f"gcloud compute tpu-vm ssh {tpu_name} --zone={zone} -- hostname"
     try:
         subprocess.run(
@@ -261,7 +263,7 @@ def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name:
             text=True,
         )
         logger.info("SSH keys set up successfully via gcloud")
-    except subprocess.CalledProcessError as e:
+    except subprocess.CalledProcessError:
         logger.warning("gcloud compute tpu-vm ssh failed to set up SSH keys")
 
     # Check if Google Compute Engine SSH key exists
@@ -417,7 +419,7 @@ def hold_tpu_allocation(
                 username, tpu_name, tpu_type
             )
 
-            logger.info(f"Waiting up to 10 minutes for TPU to be ready...")
+            logger.info("Waiting up to 10 minutes for TPU to be ready...")
             host_info = ray.get(actor.host_info.remote(), timeout=600)
             logger.info("TPU allocated successfully!")
             print(f"Hostname: {host_info['hostname']}")
@@ -446,9 +448,20 @@ def hold_tpu_allocation(
 class Context:
     def __init__(self):
         self.verbose: bool = False
-        self.config_file: Optional[str] = None
-        self.config_obj: Optional[RayClusterConfig] = None
-        self.tpu_name: Optional[str] = None
+        self.config_file: str | None = None
+        self.config_obj: RayClusterConfig | None = None
+        self.tpu_name: str | None = None
+        self.config_data: dict | None = None
+
+
+def _infer_tpu_type_from_config(config_data: dict | None) -> str | None:
+    if not config_data:
+        return None
+
+    try:
+        return config_data["available_node_types"]["tpu_worker"]["node_config"]["acceleratorType"]
+    except KeyError:
+        return None
 
 
 @click.group()
@@ -473,10 +486,12 @@ def cli(ctx, config, cluster, tpu_name, verbose):
 
     if config:
         ctx.obj.config_obj = RayClusterConfig.from_yaml(config)
+        with open(config, "r", encoding="utf-8") as f:
+            ctx.obj.config_data = yaml.safe_load(f)
 
 
 @cli.command("allocate")
-@click.option("--tpu-type", default="v4-8", help="TPU type")
+@click.option("--tpu-type", help="TPU type")
 @click.option("--sync-path", default=".", help="Local path to sync")
 @click.option("--username", help="Username to use for ssh", default=getpass.getuser())
 @click.option("--duration", default=480, help="Allocation duration in minutes")
@@ -491,6 +506,13 @@ def allocate(ctx, tpu_type, sync_path, username, duration):
         username = getpass.getuser()
 
     tpu_name = ctx.obj.tpu_name
+
+    if not tpu_type:
+        inferred_tpu_type = _infer_tpu_type_from_config(ctx.obj.config_data)
+        if inferred_tpu_type:
+            tpu_type = inferred_tpu_type
+        else:
+            raise click.ClickException("Could not infer TPU type from config; please specify --tpu-type.")
 
     if tpu_type not in ["v4-8", "v5p-8"]:
         print(f"Warning: TPU type {tpu_type} may not be supported", file=sys.stderr)
@@ -615,7 +637,6 @@ class FileChangeHandler(FileSystemEventHandler):
             return
 
         # Debounce rapid file changes
-        current_time = time.time()
         if self._timer:
             self._timer.cancel()
 
@@ -629,9 +650,15 @@ class FileChangeHandler(FileSystemEventHandler):
 class RemoteProcessManager:
     """Run a remote process, synchronizing and restarting on demand."""
 
-    def __init__(self, host_alias: str, command_str: str, sync_path: str, env_dict: dict[str, str] = None):
+    def __init__(
+        self,
+        host_alias: str,
+        command_str: str,
+        sync_path: str,
+        env_dict: dict[str, str] | None = None,
+    ):
         self._lock = threading.Lock()
-        self._process: Optional[subprocess.Popen] = None
+        self._process: subprocess.Popen | None = None
         self._command_str = command_str
         self._host_alias = host_alias
         self._sync_path = sync_path
