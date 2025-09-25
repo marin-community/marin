@@ -17,9 +17,10 @@ A simple scaling law experiment (to serve as an example or test script) to predi
 from 5 smaller models.
 """
 
+from thalas import executor_main
+
 from experiments.defaults import default_scaling_law_pred
 from experiments.evals.task_configs import CORE_TASKS
-from marin.execution.executor import executor_main
 
 RUNS = [
     "tootsie-scaling-512-81c36c",

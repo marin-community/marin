@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 from deepdiff import DeepDiff
 
 if TYPE_CHECKING:
-    from marin.execution.executor import InputName
+    from thalas import InputName
 else:
     InputName = Any
 
@@ -63,9 +63,9 @@ def ckpt_path_to_step_name(path: str | InputName) -> str:
 
     If an input name, it expect the InputName's name to be something like "checkpoints/step-{train_step_number}"
     """
-    from marin.execution.executor import InputName
+    from thalas import InputName
 
-    def _get_step(path: str) -> bool:
+    def _get_step(path: str) -> str:
         # make sure it looks like step-{train_step_number}
         g = re.match(r"step-(\d+)/?$", path)
         if g is None:

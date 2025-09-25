@@ -19,8 +19,9 @@ Tokenizes the Dolma 1.7 datasets.
 import os.path
 from dataclasses import dataclass
 
+from thalas import ExecutorStep, executor_main, this_output_path, versioned
+
 from experiments.llama import llama3_tokenizer
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 

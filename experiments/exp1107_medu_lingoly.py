@@ -21,13 +21,14 @@ The benchmark is from: https://huggingface.co/datasets/ambean/lingOly
 
 import copy
 
+from thalas import ExecutorStep, output_path_of, this_output_path
+
 from experiments.datashop.datashop_datasets import datashop_dclm_annotation_subset, datashop_dclm_pretraining_subset
 from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
 from experiments.datashop.default_configs import default_medu_config_kwargs, default_text_generation_config_kwargs
 from experiments.eval_datasets import lingoly
 from experiments.models import get_model_local_path, llama_3_3_70b_instruct
 from marin.datashop.pipeline import CorpusContent
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
 from marin.transform.lingoly.to_dolma import ConvertLingolyToDolmaConfig, convert_lingoly_to_dolma
 
 lingoly_dolma = ExecutorStep(

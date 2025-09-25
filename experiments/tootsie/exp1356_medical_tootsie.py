@@ -23,6 +23,8 @@ Report: https://api.wandb.ai/links/marin-community/qfnxfxc3
 
 from dataclasses import replace
 
+from thalas import executor_main
+
 from experiments.anneal_config import AnnealConfig
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal
@@ -35,7 +37,6 @@ from experiments.midtraining_datasets import (
     pile_pubmed_central_validation_tokenized,
 )
 from experiments.tootsie.exp600_tootsie import phoenix_phase4_checkpoint_for_phase5
-from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.resources import TpuPodConfig
 

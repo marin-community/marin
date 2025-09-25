@@ -45,8 +45,10 @@ Notes
 """
 import logging
 
+from thalas import ExecutorStep, executor_main, this_output_path
+
 from experiments.midtraining_datasets import finemath_3_plus
-from experiments.pretraining_datasets import dclm_baseline, starcoderdata, proofpile_2, dolmino, nemotron_cc
+from experiments.pretraining_datasets import dclm_baseline, dolmino, nemotron_cc, proofpile_2, starcoderdata
 from experiments.train_test_overlap.utils import (
     EVAL_DATASET_STEPS,
     DatasetConfig,
@@ -54,7 +56,6 @@ from experiments.train_test_overlap.utils import (
     UnifiedResources,
     run_all_shards,
 )
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

@@ -18,6 +18,8 @@ Canonical set of evals.
 
 import logging
 
+from thalas import ExecutorStep, InputName, get_executor_step, output_path_of, this_output_path, versioned
+
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
 from experiments.evals.resource_configs import SINGLE_TPU_V4_8, SINGLE_TPU_V6E_8, ResourceConfig
 from experiments.evals.task_configs import (
@@ -34,14 +36,6 @@ from experiments.evals.task_configs import (
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
-from marin.execution.executor import (
-    ExecutorStep,
-    InputName,
-    get_executor_step,
-    output_path_of,
-    this_output_path,
-    versioned,
-)
 
 logger = logging.getLogger(__name__)
 

@@ -17,10 +17,11 @@ Train 1.4B models on Fineweb Edu with different tokenizers.
 https://github.com/marin-community/marin/issues/524
 """
 
+from thalas import executor_main
+
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_1_4b, llama_1_4b_train_config
 from experiments.pretraining_datasets import fineweb_edu
-from marin.execution.executor import executor_main
 
 fineweb_edu_llama3_tokenized = default_tokenize(
     name="fineweb-edu", dataset=fineweb_edu, tokenizer="meta-llama/Meta-Llama-3.1-8B"

@@ -19,9 +19,10 @@ We set z_loss_weight to 1e-4.
 
 import logging
 
+from thalas import executor_main
+
 from experiments.llama import llama_75m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 

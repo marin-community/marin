@@ -21,11 +21,11 @@ Link to issue: https://github.com/marin-community/marin/issues/848
 import dataclasses
 
 from haliax.quantization import QuantizationConfig
+from thalas import executor_main
 
 from experiments.anneal_config import AnnealConfig
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal
-from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.resources import TpuPodConfig
 

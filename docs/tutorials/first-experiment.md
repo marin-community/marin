@@ -59,7 +59,7 @@ tinystories_tokenized = default_tokenize(
 )
 ```
 
-An [`ExecutorStep`](../explanations/executor.md#steps) is the basic unit of work in Marin.
+An `ExecutorStep` is the basic unit of work in Marin. For more details, see the [Thalas executor documentation](https://github.com/marin-community/thalas/blob/main/docs/explanations/executor.md).
 A step defines a piece of work to be done, such as tokenizing a dataset or training a model.
 Each step has a name, a function to execute, and a configuration object.
 The function takes the configuration object and produces some output.
@@ -78,8 +78,8 @@ This class defines basic training configuration that is sufficient for most expe
 
     === "CPU"
         ```python
-        from marin.resources import CpuOnlyConfig
         from experiments.simple_train_config import SimpleTrainConfig
+        from marin.resources import CpuOnlyConfig
 
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
@@ -96,8 +96,8 @@ This class defines basic training configuration that is sufficient for most expe
 
     === "GPU"
         ```python
-        from marin.resources import GpuConfig
         from experiments.simple_train_config import SimpleTrainConfig
+        from marin.resources import GpuConfig
 
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
@@ -114,8 +114,8 @@ This class defines basic training configuration that is sufficient for most expe
 
     === "TPU"
         ```python
-        from marin.resources import TpuPodConfig
         from experiments.simple_train_config import SimpleTrainConfig
+        from marin.resources import TpuPodConfig
 
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
@@ -167,11 +167,11 @@ Let's break this down:
 ### Invoking the Executor
 
 Finally, we need to invoke the executor to run our experiment.
-We do this by calling `executor_main` from `marin.execution.executor`.
+We do this by calling `executor_main` from `thalas`.
 We put this in a `if __name__ == "__main__":`:
 
 ```python
-from marin.execution.executor import executor_main
+from thalas import executor_main
 
 if __name__ == "__main__":
     executor_main(
