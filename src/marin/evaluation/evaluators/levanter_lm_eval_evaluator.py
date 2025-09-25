@@ -86,6 +86,8 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 per_device_eval_parallelism=8,
                 ray=RayConfig(auto_start_cluster=False),
+                tensor_parallel_axes=["mlp", "heads", "kv_head", "vocab"],
+                model_axis_size=4,
             )
 
             model_config = HFCheckpointConverter.from_hf(model_name_or_path).LevConfigClass()
@@ -108,6 +110,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     log_samples=False,
                     max_eval_length=4096,
                     apply_chat_template=model.apply_chat_template,
+                    gen_kwargs=model.generation_params,
                 ),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,

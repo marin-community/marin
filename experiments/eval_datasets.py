@@ -485,6 +485,22 @@ gsm8k_raw = ExecutorStep(
     override_output_path="raw/gsm8k/mainhf",
 )
 
+gsm8k_train = ExecutorStep(
+    name="evaluation/gsm8k-train",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="openai/gsm8k",
+        subsets=["main"],
+        splits=["train"],
+        input_path=gsm8k_raw,
+        hf_path="openai/gsm8k",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("concatenated_qa"),
+        prompt_key="question",
+        answer_text_key="answer",
+    ),
+)
+
 # math dataset raw
 math_raw = ExecutorStep(
     name="raw/hendrycks_math",

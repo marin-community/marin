@@ -87,9 +87,11 @@ CORE_TASKS_PLUS_LEADERBOARD = (
 
 CORE_TASKS_PLUS_MMLU = CORE_TASKS + MMLU_TASKS
 
+GSM8K_COT = EvalTaskConfig(name="gsm8k_cot", num_fewshot=8)
+
 BASE_GENERATION_TASKS = (
     EvalTaskConfig(name="bbh_cot_fewshot", num_fewshot=3),
-    EvalTaskConfig(name="gsm8k_cot", num_fewshot=8),
+    GSM8K_COT,
     EvalTaskConfig(name="nq_open", num_fewshot=0, task_alias="nq_open"),
     EvalTaskConfig(name="triviaqa", num_fewshot=0, task_alias="triviaqa"),
 )
@@ -97,7 +99,7 @@ BASE_GENERATION_TASKS = (
 # Settings are chosen to compare to Olmo2
 KEY_GENERATION_TASKS = (
     EvalTaskConfig(name="ifeval", num_fewshot=0),
-    EvalTaskConfig(name="gsm8k_cot", num_fewshot=8),
+    GSM8K_COT,
     EvalTaskConfig(name="drop", num_fewshot=0),
     EvalTaskConfig(name="humaneval", num_fewshot=10),
     EvalTaskConfig(name="bbh_cot_fewshot", num_fewshot=3, task_alias="bbh"),
@@ -108,6 +110,24 @@ KEY_MULTIPLE_CHOICE_TASKS = (
     EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"),
     EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),
     EvalTaskConfig(name="truthfulqa_mc2", num_fewshot=6, task_alias="truthqa"),
+)
+
+BEYOND_WEB_TASKS = (
+    EvalTaskConfig("arc_easy", 10),  # 10-shot, four-way MCQ questions involving grade 3-9 basic science
+    EvalTaskConfig("arc_challenge", 10),  # a (harder) version of arc_easy
+    EvalTaskConfig("boolq", 10),  # answer yes/no questions based on a passage
+    EvalTaskConfig("commonsense_qa", 10),  # 5-way multiple-choice questions based on common-sense, everyday scenarios
+    EvalTaskConfig("copa", 0),  # use causal reasoning to predict the correct outcome of a given scenario
+    EvalTaskConfig("hellaswag", 10, task_alias="hellaswag_10shot"),  # 4-way MCQ commonsense reasoning dataset
+    MMLU_5_SHOT,
+    EvalTaskConfig("openbookqa", 0),  # 4-way multiple choice question answering task that requires multi-step reasoning
+    EvalTaskConfig("piqa", 10),  # answer questions based on a passage
+    # (requires generation which is not supported in Levanter at the moment)
+    # EvalTaskConfig("squadv2", 10),  # reading comprehension benchmark
+    EvalTaskConfig("winogrande", 0),  # Winograd challenge, extended to more domains)
+    EvalTaskConfig("sciq", 0),
+    EvalTaskConfig("social_iqa", 0),
+    EvalTaskConfig("race", 0, task_alias="race_high_0shot"),
 )
 
 
