@@ -63,7 +63,7 @@ jobs:
           npm install -g pandiff
           python -m pip install --upgrade pip
           pip install "uv>=0.7.19" toml
-          uv sync
+          python -m uv sync
 
       - name: Test with pytest (GCP)
         shell: bash -l {0}
@@ -71,4 +71,4 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           export CI=true
-          CI=true PYTHONPATH=tests:. uv run pytest -m "gcp" --durations=0 --tb=no -vv tests/
+          CI=true PYTHONPATH=tests:. python -m uv run pytest -m "gcp" --durations=0 --tb=no -vv tests/
