@@ -41,7 +41,6 @@ from collections.abc import Callable
 
 import equinox as eqx
 import jax.random as jrandom
-from jaxtyping import PRNGKeyArray
 
 import haliax as hax
 import haliax.nn as hnn
@@ -76,7 +75,7 @@ logger = logging.getLogger("ray")
 
 
 @dataclass(frozen=True)
-class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
+class TransformerConfig(LmConfig["LMHeadModel"]):
     # Core dims
     seq_len: int = 2048
     hidden_dim: int = 4096
@@ -102,7 +101,6 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     qk_norm: LayerNormConfigBase | None = None  # set to RmsNormConfig(...) to enable
 
     gradient_checkpointing: bool | ScanCheckpointPolicy | str = True
-    scan_layers: bool = True
 
     def __post_init__(self):
         assert self.num_heads % self.num_kv_heads == 0, "num_heads must be divisible by num_kv_heads"
@@ -111,8 +109,8 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
 
     # ---- LmConfig API ----
     @property
-    def model_type(self) -> type["HackableLMHeadModel"]:
-        return HackableLMHeadModel
+    def model_type(self) -> type["LMHeadModel"]:
+        return LMHeadModel
 
     Pos = property(lambda self: Axis("position", self.seq_len))
     KeyPos = property(lambda self: self.Pos.alias("key_position"))
@@ -173,7 +171,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
         return int(transformer + token_embedding + head)
 
 
-class HackableMlp(eqx.Module):
+class Mlp(eqx.Module):
     """GLU MLP"""
 
     gate_proj: hnn.Linear
@@ -191,7 +189,7 @@ class HackableMlp(eqx.Module):
             activation_fn = activation_fn.to_fn()
         elif isinstance(activation_fn, str):
             activation_fn = ActivationFunctionEnum(activation_fn).to_fn()
-        return HackableMlp(gate_proj, up_proj, down_proj, activation_fn)
+        return Mlp(gate_proj, up_proj, down_proj, activation_fn)
 
     @named_call
     def __call__(self, x: NamedArray, *, key=None) -> NamedArray:
@@ -200,19 +198,19 @@ class HackableMlp(eqx.Module):
         return self.down_proj(h, key=k_down)
 
 
-class HackableDecoderLayer(eqx.Module):
+class DecoderLayer(eqx.Module):
     """One transformer block."""
 
-    config: HackableTransformerConfig = eqx.field(static=True)
+    config: TransformerConfig = eqx.field(static=True)
     self_attn: Attention | AttentionWithSink
-    mlp: HackableMlp
+    mlp: Mlp
     input_layernorm: hnn.RmsNorm
     post_attention_layernorm: hnn.RmsNorm
     post_attn_layernorm: hnn.RmsNorm | None = None
     post_mlp_layernorm: hnn.RmsNorm | None = None
 
     @staticmethod
-    def init(config: HackableTransformerConfig, *, key) -> "HackableDecoderLayer":
+    def init(config: TransformerConfig, *, key) -> "DecoderLayer":
         k_attn, k_mlp = jrandom.split(key, 2)
         attn_cfg = config.attention_config()
         attn = (
@@ -220,10 +218,10 @@ class HackableDecoderLayer(eqx.Module):
             if config.use_attention_sink
             else Attention.init(attn_cfg, key=k_attn)
         )
-        mlp = HackableMlp.init(config.Embed, config.Mlp, config.activation_function, key=k_mlp, use_bias=config.use_bias)
+        mlp = Mlp.init(config.Embed, config.Mlp, config.activation_function, key=k_mlp, use_bias=config.use_bias)
         ln1 = config.mk_LayerNorm(config.Embed)
         ln2 = config.mk_LayerNorm(config.Embed)
-        return HackableDecoderLayer(config, attn, mlp, ln1, ln2)
+        return DecoderLayer(config, attn, mlp, ln1, ln2)
 
     @named_call
     def __call__(
@@ -248,22 +246,18 @@ class HackableDecoderLayer(eqx.Module):
         return output
 
 
-class HackableTransformer(eqx.Module):
-    config: HackableTransformerConfig = eqx.field(static=True)
-    layers: BlockFoldable[HackableDecoderLayer]
+class Transformer(eqx.Module):
+    config: TransformerConfig = eqx.field(static=True)
+    layers: BlockFoldable[DecoderLayer]
     norm: hnn.RmsNorm
 
     @staticmethod
-    def init(config: HackableTransformerConfig, *, key):
-        S = Stacked
-        if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
-            S = BlockSeq
-        layers = S.init(config.Layers, HackableDecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(
+    def init(config: TransformerConfig, *, key):
+        S = Stacked  # use BlockSeq for non-homogeneous layers
+        layers = S.init(config.Layers, DecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(
             config, key=shaped_rng_split(key, config.num_layers)
         )
-        return HackableTransformer(config, layers, config.mk_LayerNorm(config.Embed))
+        return Transformer(config, layers, config.mk_LayerNorm(config.Embed))
 
     @named_call
     def __call__(
@@ -274,46 +268,35 @@ class HackableTransformer(eqx.Module):
         return self.norm(x)
 
 
-class HackableEmbedding(ModuleWithStateDictSerialization, eqx.Module):
+class Embedding(ModuleWithStateDictSerialization, eqx.Module):
     token_embeddings: hnn.Embedding
     norm: hnn.RmsNorm | None = None
 
     @staticmethod
-    def init(Vocab: Axis, config: HackableTransformerConfig, *, key):
+    def init(Vocab: Axis, config: TransformerConfig, *, key):
         emb = hnn.Embedding.init(Vocab, config.Embed, key=key)
         ln = config.mk_LayerNorm(config.Embed) if config.input_embedding_norm else None
-        return HackableEmbedding(emb, ln)
+        return Embedding(emb, ln)
 
     @property
     def Vocab(self) -> Axis:
         return self.token_embeddings.Vocab
-
-    @property
-    def Embed(self) -> Axis:
-        return self.token_embeddings.Embed
 
     @named_call
     def embed(self, input_ids: NamedArray):
         x = self.token_embeddings(input_ids)
         return self.norm(x) if self.norm is not None else x
 
-    def unembed(self, x: NamedArray):
-        return self.token_embeddings.unembed(x)
 
-    def resize_embeddings(self, new_size: int, key: PRNGKeyArray | None = None):
-        new = self.token_embeddings.resize_embeddings(new_size, key=key)
-        return dataclasses.replace(self, token_embeddings=new)
-
-
-class HackableLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HackableTransformerConfig]):
+class LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[TransformerConfig]):
     """Minimal Llama-like implementation of LmHeadModel"""
 
-    transformer: HackableTransformer
-    embeddings: HackableEmbedding
+    transformer: Transformer
+    embeddings: Embedding
     lm_head: hnn.Linear | None
 
     @property
-    def config(self) -> HackableTransformerConfig:
+    def config(self) -> TransformerConfig:
         return self.transformer.config
 
     @property
@@ -321,16 +304,16 @@ class HackableLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Hackable
         return self.embeddings.Vocab
 
     @classmethod
-    def init(cls, Vocab: Axis, config: HackableTransformerConfig, *, key) -> "HackableLMHeadModel":
+    def init(cls, Vocab: Axis, config: TransformerConfig, *, key) -> "LMHeadModel":
         k_t, k_e = jrandom.split(key, 2)
-        transformer = HackableTransformer.init(config, key=k_t)
-        embeddings = HackableEmbedding.init(Vocab, config, key=k_e)
+        transformer = Transformer.init(config, key=k_t)
+        embeddings = Embedding.init(Vocab, config, key=k_e)
         lm_head = (
             None
             if config.tie_word_embeddings
             else hnn.Linear.init(In=config.Embed, Out=Vocab, key=k_e, use_bias=False, out_first=True)
         )
-        return HackableLMHeadModel(transformer, embeddings, lm_head)
+        return LMHeadModel(transformer, embeddings, lm_head)
 
     def activations(
         self,
@@ -345,16 +328,6 @@ class HackableLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Hackable
     def get_lm_head(self) -> hax.NamedArray:
         return self.embeddings.token_embeddings.weight if self.lm_head is None else self.lm_head.weight
 
-    def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "HackableLMHeadModel":
-        new_V = self.Vocab.resize(new_size)
-        k1, k2 = maybe_rng_split(key, 2)
-        new_emb = self.embeddings.resize_embeddings(new_size, key=k1)
-        if self.lm_head is not None:
-            new_w = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_head = dataclasses.replace(self.lm_head, Out=new_V, weight=new_w)
-            return dataclasses.replace(self, embeddings=new_emb, lm_head=new_head)
-        return dataclasses.replace(self, embeddings=new_emb)
-
 
 # =========================
 # Speedrun sweep definition
@@ -368,7 +341,7 @@ def _get_num_train_steps(param_count: int, batch_size: int, seq_len: int, tpp: i
     return max(1, total_tokens // (batch_size * seq_len))
 
 
-def _size_presets() -> dict[str, HackableTransformerConfig]:
+def _size_presets() -> dict[str, TransformerConfig]:
     base = dict(
         seq_len=4096,
         rope=DefaultRotaryEmbeddingsConfig(),  # e.g., Llama3RotaryEmbeddingsConfig()
@@ -377,16 +350,16 @@ def _size_presets() -> dict[str, HackableTransformerConfig]:
         tie_word_embeddings=False,
     )
     return {
-        "130m": HackableTransformerConfig(
+        "130m": TransformerConfig(
             hidden_dim=512, intermediate_dim=1792, num_layers=6, num_heads=8, num_kv_heads=8, **base
         ),
-        "300m": HackableTransformerConfig(
+        "300m": TransformerConfig(
             hidden_dim=768, intermediate_dim=2688, num_layers=12, num_heads=12, num_kv_heads=12, **base
         ),
-        "520m": HackableTransformerConfig(
+        "520m": TransformerConfig(
             hidden_dim=1024, intermediate_dim=3584, num_layers=24, num_heads=16, num_kv_heads=8, **base
         ),
-        "1_2b": HackableTransformerConfig(
+        "1_2b": TransformerConfig(
             hidden_dim=2048, intermediate_dim=7168, num_layers=16, num_heads=16, num_kv_heads=8, **base
         ),
     }
@@ -511,7 +484,8 @@ if __name__ == "__main__":
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
     steps = []
     for s in sizes:
-        for sink in (False, True):
+        # for sink in (False, True):
+        for sink in (False,):
             name, cfg = build_run(s, sink, use_gpu=use_gpu)
             steps.extend(default_speedrun(name, cfg))
     executor_main(steps=steps, description="Hackable transformer attention-sink sweep")
