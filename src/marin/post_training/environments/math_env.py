@@ -50,6 +50,10 @@ class MathEnv(MarinEnv):
             f"and {len(self.eval_examples)} eval examples."
         )
 
+    def add_instruction(self, math_problem: str) -> str:
+        """Add the standard instruction to a math problem."""
+        return f"{math_problem} {self.INSTRUCTION}"
+
     def step(
         self,
         inference_ctx: InferenceContext,
@@ -97,7 +101,10 @@ class MathEnv(MarinEnv):
         return EnvStep(examples=examples, responses=responses, rewards=rewards, metrics=metrics)
 
     def _compute_rewards(
-        self, examples: list[dict[str, Any]], responses: list[list[dict[str, np.ndarray]]], tokenizer
+        self,
+        examples: list[dict[str, Any]],
+        responses: list[list[dict[str, np.ndarray]]],
+        tokenizer,
     ) -> tuple[np.ndarray, dict[str, float]]:
         """Compute rewards for generated responses."""
         all_rewards = []
@@ -178,46 +185,33 @@ class MathEnv(MarinEnv):
             indices = jax.random.choice(eval_key, len(self.eval_examples), shape=(n_to_sample,), replace=False)
             return [self.eval_examples[int(idx)] for idx in indices]
 
+    def clean_example(self, raw_prompt, raw_answer) -> DataExample:
+        """Clean and process a single example."""
+        # Show the transformation pipeline
+        boxed_answer = last_boxed_only_string(raw_answer)
+        cleaned_answer = normalize_answer(boxed_answer) if boxed_answer else normalize_answer(raw_answer)
+        processed_prompt = self.add_instruction(latex_to_text(raw_prompt))
+
+        return DataExample(
+            raw_prompt=raw_prompt,
+            raw_answer=raw_answer,
+            processed_prompt=processed_prompt,
+            processed_answer=cleaned_answer,
+        )
+
     def training_data(self) -> Iterator[DataExample]:
-        """Stream training data showing transformations."""
         train_dataset = datasets.load_dataset(TRAIN_DATA_SOURCE, trust_remote_code=True)["train"]
 
         for item in train_dataset:
             raw_prompt = item["problem"]
             raw_answer = item["solution"]
 
-            # Show the transformation pipeline
-            boxed_answer = last_boxed_only_string(raw_answer)
-            cleaned_answer = normalize_answer(boxed_answer) if boxed_answer else normalize_answer(raw_answer)
-            processed_prompt = self.add_instruction(latex_to_text(raw_prompt))
-
-            yield DataExample(
-                raw_prompt=raw_prompt,
-                raw_answer=raw_answer,
-                processed_prompt=processed_prompt,
-                processed_answer=cleaned_answer,
-            )
+            yield self.clean_example(raw_prompt, raw_answer)
 
     def eval_data(self) -> Iterator[DataExample]:
-        """Stream eval data showing transformations."""
         test_dataset = datasets.load_dataset(TEST_DATA_SOURCE, trust_remote_code=True)["test"]
 
         for item in test_dataset:
             raw_prompt = item["problem"]
             raw_answer = item["solution"]
-
-            # Show the transformation pipeline
-            boxed_answer = last_boxed_only_string(raw_answer)
-            cleaned_answer = normalize_answer(boxed_answer) if boxed_answer else normalize_answer(raw_answer)
-            processed_prompt = self.add_instruction(raw_prompt)
-
-            yield DataExample(
-                raw_prompt=raw_prompt,
-                raw_answer=raw_answer,
-                processed_prompt=processed_prompt,
-                processed_answer=cleaned_answer,
-            )
-
-    def add_instruction(self, math_problem: str) -> str:
-        """Add the standard instruction to a math problem."""
-        return f"{math_problem} {self.INSTRUCTION}"
+            yield self.clean_example(raw_prompt, raw_answer)
