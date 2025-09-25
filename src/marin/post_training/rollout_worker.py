@@ -161,6 +161,10 @@ class LevanterInferenceContext(InferenceContext):
     def tokenizer(self):
         return self._tokenizer
 
+    @property
+    def base_url(self):
+        return self.inference_server.base_url
+
     def generate(
         self,
         prompts: list[str],
@@ -170,11 +174,8 @@ class LevanterInferenceContext(InferenceContext):
         top_k: int | None = None,
     ) -> list[list[dict]]:
         """Generate responses for a batch of prompts."""
-        host = self.inference_server.config.host
-        port = self.inference_server.config.port
-        base_url = f"http://{host}:{port}/v1"
 
-        client = AsyncOpenAI(base_url=base_url, api_key="marin")
+        client = AsyncOpenAI(base_url=self.inference_server.base_url, api_key="marin")
         all_completions = []
         for prompt in prompts:
             completion = client.chat.completions.create(
