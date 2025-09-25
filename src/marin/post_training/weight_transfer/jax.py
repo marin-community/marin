@@ -39,13 +39,13 @@ from jaxtyping import PyTree
 from ray.actor import ActorHandle
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
-
 from .base import (
     WeightTransferClient,
     WeightTransferClientMetrics,
     WeightTransferConfig,
     WeightTransferServer,
     WeightTransferServerMetrics,
+    get_or_create_actor,
 )
 
 logger = logging.getLogger(__name__)
@@ -162,7 +162,9 @@ class WeightTransferCoordinator:
             out: list[_EnqueuedWeightTransferRequest] = []
             for request in requests:
                 if self.transfer_server_address is None:
-                    raise RuntimeError("Transfer server address not registered. Server must call register_transfer_server() first.")
+                    raise RuntimeError(
+                        "Transfer server address not registered. Server must call register_transfer_server() first."
+                    )
 
                 transfer = WeightTransferSpec(
                     address=self.transfer_server_address,
@@ -321,6 +323,7 @@ def start_transfer_server() -> jax_transfer.TransferServer:
     )
     return server
 
+
 # -- Helpers --
 
 
@@ -344,7 +347,6 @@ def num_bytes(model: PyTree):
     return sum(x.nbytes for x in leaves.values())
 
 
-
 class JAXTransferServer(WeightTransferServer):
     """JAX transfer server-based weight transfer server."""
 
@@ -355,11 +357,7 @@ class JAXTransferServer(WeightTransferServer):
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
 
-        from . import get_or_create_actor
-        self.coordinator = get_or_create_actor(
-            WeightTransferCoordinator,
-            config.coordinator_name
-        )
+        self.coordinator = get_or_create_actor(WeightTransferCoordinator, config.coordinator_name)
 
         # Start transfer server and register its address with coordinator
         self.transfer_server = start_transfer_server()
@@ -370,7 +368,6 @@ class JAXTransferServer(WeightTransferServer):
         self.poll_queue = queue.Queue(maxsize=1)
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="weight_transfer")
 
-        # Metrics tracking
         self.metrics = WeightTransferServerMetrics(start_time=time.time())
 
     def _setup_cpu_transfer(self):
@@ -450,18 +447,13 @@ class JAXTransferClient(WeightTransferClient):
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
 
-        from . import get_or_create_actor
-        self.coordinator = get_or_create_actor(
-            WeightTransferCoordinator,
-            config.coordinator_name
-        )
-        
+        self.coordinator = get_or_create_actor(WeightTransferCoordinator, config.coordinator_name)
+
         # Start transfer server for client (doesn't register address with coordinator)
         self.transfer_server = start_transfer_server()
         self._setup_cpu_transfer()
 
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="weight_transfer")
-        self.current_params_placeholder = None
 
         # Metrics tracking
         self.metrics = WeightTransferClientMetrics(start_time=time.time())
@@ -520,10 +512,6 @@ class JAXTransferClient(WeightTransferClient):
             self.metrics.failed_receives += 1
             logger.error(f"Failed to receive weights: {e}")
             raise
-
-    def set_params_placeholder(self, model):
-        """Set the placeholder params for transfers."""
-        self.current_params_placeholder = model
 
     def cleanup(self) -> None:
         """Cleanup transfer server and thread pool."""

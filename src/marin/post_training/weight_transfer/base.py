@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+import ray
 from jaxtyping import PyTree
 
 
@@ -135,3 +136,36 @@ class WeightTransferClient(ABC):
     def get_metrics(self) -> WeightTransferClientMetrics:
         """Get transfer metrics."""
         return WeightTransferClientMetrics(start_time=time.time())
+
+
+def get_or_create_actor(actor_class, name: str, *args, **kwargs):
+    """Fetch an existing actor reference or create it if it doesn't exist.
+
+    Args:
+        actor_class: Ray remote class (e.g., RayWeightCoordinator, WeightTransferCoordinator)
+        name: Actor name for registration
+        *args: Arguments to pass to actor constructor
+        max_retries: Number of retry attempts
+        **kwargs: Keyword arguments to pass to actor constructor
+
+    Returns:
+        Ray actor handle
+    """
+    max_retries = 5
+
+    for attempt in range(max_retries):
+        try:
+            # Try to get existing actor
+            return ray.get_actor(name)
+        except ValueError:
+            # Actor doesn't exist, try to create it
+            try:
+                return actor_class.options(name=name).remote(*args, **kwargs)
+            except ValueError:
+                # Another process might have created it, wait and retry
+                if attempt < max_retries - 1:
+                    time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+                    continue
+                raise
+
+    raise RuntimeError(f"Failed to get or create actor '{name}' after {max_retries} attempts")

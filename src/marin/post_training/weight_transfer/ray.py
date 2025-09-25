@@ -36,6 +36,7 @@ from .base import (
     WeightTransferConfig,
     WeightTransferServer,
     WeightTransferServerMetrics,
+    get_or_create_actor,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,12 +69,7 @@ class RayRemotingServer(WeightTransferServer):
     def __init__(self, config: WeightTransferConfig):
         self.config = config
 
-        # Create or get Ray coordinator using generic helper
-        from . import get_or_create_actor
-        self.coordinator = get_or_create_actor(
-            RayWeightCoordinator,
-            config.coordinator_name
-        )
+        self.coordinator = get_or_create_actor(RayWeightCoordinator, config.coordinator_name)
 
         self.metrics = WeightTransferServerMetrics(start_time=time.time())
 
@@ -132,12 +128,7 @@ class RayRemotingClient(WeightTransferClient):
     ):
         self.config = config
 
-        # Get existing Ray coordinator using generic helper
-        from . import get_or_create_actor
-        self.coordinator = get_or_create_actor(
-            RayWeightCoordinator,
-            config.coordinator_name
-        )
+        self.coordinator = get_or_create_actor(RayWeightCoordinator, config.coordinator_name)
 
         self.last_weight_id = None
 
