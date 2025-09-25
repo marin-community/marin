@@ -39,7 +39,7 @@ from marin.post_training.weight_transfer import WeightTransferConfig
 
 from .model_utils import load_model_from_checkpoint
 from .replay_buffer import ReplayBuffer, ReplayDataLoader
-from .rollout_storage import JaxRolloutBatch, RolloutBatch, RolloutStorageConfig
+from .rollout_storage import JaxRolloutBatch, RolloutStorageConfig
 
 logger = logging.getLogger(__name__)
 
@@ -195,28 +195,10 @@ class StreamingRolloutLoader:
             if not batch:
                 logger.warning("No batch received from data loader within timeout, retrying...")
                 continue
-
-            named_batch = self._convert_to_named_batch(batch)
             with self.config.device_mesh:
-                named_batch = hax.shard(named_batch, self.config.compute_axis_mapping)
+                sharded_batch = hax.shard(batch, self.config.compute_axis_mapping)
 
-            yield named_batch
-
-    def _convert_to_named_batch(self, batch: RolloutBatch):
-        """Convert numpy arrays to JAX arrays with proper named axes."""
-        jax_batch = batch.to_jax()
-
-        # Add named axes to all fields
-        return JaxRolloutBatch(
-            input_ids=hax.named(jax_batch.input_ids, ("batch", "position")),
-            attention_mask=hax.named(jax_batch.attention_mask, ("batch", "position")),
-            position_ids=hax.named(jax_batch.position_ids, ("batch", "position")),
-            target_ids=hax.named(jax_batch.target_ids, ("batch", "position")),
-            loss_weights=hax.named(jax_batch.loss_weights, ("batch", "position")),
-            loss_masks=hax.named(jax_batch.loss_masks, ("batch", "position")),
-            reference_logprobs=hax.named(jax_batch.reference_logprobs, ("batch", "position")),
-            policy_logprobs=hax.named(jax_batch.policy_logprobs, ("batch", "position")),
-        )
+            yield sharded_batch
 
 
 class StopTrainerException(Exception):

@@ -22,12 +22,25 @@ with balanced sampling across environments and configurable prioritization.
 import logging
 import threading
 import time
+from dataclasses import dataclass
 
+import haliax as hax
+import haliax.tree_util
+import jax
 import numpy as np
 
-from .rollout_storage import RolloutBatch, RolloutReader, TaggedRolloutBatch
+from .rollout_storage import JaxRolloutBatch, RolloutBatch, RolloutReader, TaggedRolloutBatch
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ReplayCounts:
+    usage_count: np.array
+    examples: JaxRolloutBatch
+
+    def __len__(self) -> int:
+        return len(self.examples)
 
 
 class ReplayBuffer:
@@ -36,11 +49,6 @@ class ReplayBuffer:
     It attempts to prioritize recent data while balancing the number of samples from
     each environment. As rollout examples appear, they are folded into a shared
     rollout array which is sampled from to produce training batches.
-
-    TODO:
-
-    * Add back-pressure to reduce over-training when the number of new samples is low.
-      This may be handled by either sampling without replacement or aging buffers out.
     """
 
     def __init__(
@@ -50,6 +58,7 @@ class ReplayBuffer:
         total_processes: int,
         recency_alpha: float,
         capacity: int,
+        max_samples: int = -1,
     ):
         """Initialize replay buffer.
 
@@ -59,31 +68,30 @@ class ReplayBuffer:
             recency_alpha: Power law exponent for recency weighting (higher = more recent bias).
             train_process_id: Identifier for this process. Used to sample across processes.
             num_train_processes: Total number of training processes.
+            max_samples: Maximum number of times an example can be used before being retired.
+
+        A `max_samples` of -1 indicates no limit, 0 or 1 means each example is used at most once.
         """
         self.capacity = capacity
         self.local_batch_size = local_batch_size
         self.recency_alpha = recency_alpha
         self.total_processes = total_processes
         self.process_id = process_id
+        self.max_samples = max_samples
 
-        # Per-environment buffers for balanced sampling - store pure RolloutBatch
-        self.env_buffers: dict[str, RolloutBatch] = {}
+        self.env_buffers: dict[str, ReplayCounts] = {}
         self._lock = threading.Lock()
 
-        # Statistics
         self._total_batches_added = 0
         self._total_batches_sampled = 0
 
         self._rng = np.random.default_rng(seed=process_id + 42)
 
     def add_batches(self, tagged_batches: list[TaggedRolloutBatch]) -> None:
-        """Add tagged batchs to the replay buffer.
+        """Add tagged batchs into the replay buffer.
 
         The batch is added to the buffer corresponding to its environment name.
         If this environment has seen more than `capacity` batches, the oldest batch is discarded.
-
-        Args:
-            tagged_batch: TaggedRolloutBatch to add to the buffer.
         """
 
         # group batches by environment type
@@ -96,17 +104,36 @@ class ReplayBuffer:
 
         with self._lock:
             for env_name, batches in batches_by_env.items():
+                # Convert numpy batches to JAX
+                jax_batches = [batch.to_jax() for batch in batches]
+
                 if env_name not in self.env_buffers:
-                    buffer = RolloutBatch.concat(batches)
-                    self.env_buffers[env_name] = buffer
+                    buffer = hax.tree_util.tree_map(lambda *xs: hax.concatenate("batch", xs), *jax_batches)
+                    usage_counts = np.zeros(len(buffer), dtype=np.int32)
                 else:
-                    buffer = self.env_buffers[env_name]
-                    buffer = RolloutBatch.concat([buffer, *batches])
+                    # Concatenate existing buffer with new batches
+                    existing_buffer = self.env_buffers[env_name].examples
+                    all_batches = [existing_buffer, *jax_batches]
+                    buffer = hax.tree_util.tree_map(lambda *xs: hax.concatenate("batch", xs), *all_batches)
+                    usage_counts = np.concatenate(
+                        [
+                            self.env_buffers[env_name].usage_count,
+                            np.zeros(sum(len(b) for b in batches), dtype=np.int32),
+                        ]
+                    )
 
                 env_size = len(buffer)
                 if env_size > self.capacity:
-                    buffer = buffer.slice(env_size - self.capacity, env_size)
-                self.env_buffers[env_name] = buffer
+                    start_idx = env_size - self.capacity
+                    new_size = self.capacity
+
+                    def _slice(tree, idx: int = start_idx, size: int = new_size):
+                        return hax.tree_util.tree_map(lambda x: hax.slice(x, "batch", start=idx, length=size), tree)
+
+                    buffer = _slice(buffer)
+                    usage_counts = usage_counts[start_idx:]
+
+                self.env_buffers[env_name] = ReplayCounts(usage_count=usage_counts, examples=buffer)
 
                 logger.info(
                     "Added batches to env '%s', new size: %d",
@@ -115,25 +142,37 @@ class ReplayBuffer:
                 )
                 self._total_batches_added += len(batches)
 
-    def sample_training_batch(self) -> RolloutBatch | None:
+    def sample_training_batch(self) -> JaxRolloutBatch | None:
         """Sample a training batch with balanced environment sampling.
 
+        If no samples are available, returns None.
+
+        It is guaranteed that all workers will either return a batch with the same
+        number of examples, or None.
+
+        Note that maximum usage count tracking for examples is approximate and only
+        applies after a full batch is sampled. It is possible with a large batch size
+        and small number of remaining examples for an example to be used more than
+        `max_resamples` times.
+
         Returns:
-            RolloutBatch containing as many examples as possible up to local_batch_size.
+            JaxRolloutBatch containing as many examples as possible up to local_batch_size.
         """
         with self._lock:
-            if len(self.env_buffers) == 0:
-                return None
-
             # We sample first an environment, then an example from that environment.
             # We use a power-law distribution to prioritize recent examples.
             # We don't currently guarantee processes will fetch unique examples
-            # but processes do sample independently.
+            env_buffers: list[ReplayCounts] = [b for b in self.env_buffers.values() if len(b) > 0]
 
-            env_buffers = [b for b in self.env_buffers.values() if len(b) > 0]
+            if not env_buffers:
+                return None
+
+            sample_counts: list[np.ndarray] = [np.zeros(len(b.examples), dtype=np.int32) for b in env_buffers]
             env_count = len(env_buffers)
             env_ids = np.arange(env_count)
             env_sample_weights = []
+
+            # First compute the probability of sampling an example from each environment
             for b in env_buffers:
                 sample_weights = np.arange(len(b)) + 1
                 sample_weights = sample_weights**self.recency_alpha
@@ -142,15 +181,38 @@ class ReplayBuffer:
 
             samples = []
 
+            # Then randomly select an environment & sample from it
             for _ in range(self.local_batch_size):
                 env_idx = self._rng.choice(env_ids)
                 env_buffer = env_buffers[env_idx]
                 buffer_size = len(env_buffer)
                 sample_idx = self._rng.choice(buffer_size, p=env_sample_weights[env_idx])
-                samples.append(env_buffer.slice(sample_idx, sample_idx + 1))
+
+                def _select_example(tree, idx: int = sample_idx):
+                    return hax.tree_util.tree_map(lambda x: hax.slice(x, "batch", start=idx, length=1), tree)
+
+                single_example = _select_example(env_buffer.examples)
+                samples.append(single_example)
+                sample_counts[env_idx][sample_idx] += 1
+
+            # update sample counts and retire overused examples
+            for env_idx, counts in enumerate(sample_counts):
+                env_buffer = env_buffers[env_idx]
+                env_buffer.usage_count += counts
+                if self.max_samples >= 0:
+                    to_keep = env_buffer.usage_count < self.max_samples
+                    if not np.all(to_keep):
+
+                        def _slice(tree, mask: np.ndarray = to_keep):
+                            return jax.tree.map(lambda x: x[mask], tree)
+
+                        kept_examples = _slice(env_buffer.examples, to_keep)
+                        kept_usage = env_buffer.usage_count[to_keep]
+                        env_name = list(self.env_buffers.keys())[env_idx]
+                        self.env_buffers[env_name] = ReplayCounts(usage_count=kept_usage, examples=kept_examples)
 
             self._total_batches_sampled += 1
-            return RolloutBatch.concat(samples)
+            return hax.tree_util.tree_map(lambda *xs: hax.concatenate("batch", xs), *samples)
 
     def size(self) -> int:
         """Get total number of batches across all environments."""
@@ -211,14 +273,14 @@ class ReplayDataLoader:
             self._thread = None
             logger.info("Stopped ReplayDataLoader background thread")
 
-    def get_training_batch(self, timeout: float = 5.0) -> RolloutBatch | None:
+    def get_training_batch(self, timeout: float = 5.0) -> JaxRolloutBatch | None:
         """Get next training batch from replay buffer.
 
         Args:
             timeout: Maximum time to wait for a batch in seconds.
 
         Returns:
-            RolloutBatch if available, None if timeout or no data.
+            JaxRolloutBatch if available, None if timeout or no data.
         """
         start_time = time.time()
         while time.time() - start_time < timeout:
