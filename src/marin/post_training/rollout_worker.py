@@ -66,6 +66,7 @@ class RolloutWorkerConfig:
     rollout_storage: RolloutStorageConfig
     max_input_length: int
     max_output_length: int
+    # TODO(power) Lift these out into SamplingConfig
     pad_token_id: int
     n_prompts_per_step: int
     n_generations: int
