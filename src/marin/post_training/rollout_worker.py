@@ -188,7 +188,6 @@ class LevanterInferenceContext(InferenceContext):
         n_generations: int,
     ) -> list[list[dict]]:
         """Generate responses for a batch of prompts."""
-
         self.inference_server.reload(lambda model: self.model)
 
         # Convert stop tokens to strings for OpenAI API
