@@ -88,6 +88,13 @@ serve = [
   "openai>=1.0.0",
 ]
 
+gcp = [
+    "google-api-python-client>=2.175.0",
+    "google-cloud-storage",
+    "google-cloud-storage-transfer",
+    "google-auth",
+]
+
 [dependency-groups]
 test = [
   "pytest",
@@ -99,6 +106,7 @@ test = [
   "chex>=0.1.86",
   "httpx>=0.28.1",
   "pytest-profiling>=1.8.1",
+  "trackio",
 ]
 
 docs = [

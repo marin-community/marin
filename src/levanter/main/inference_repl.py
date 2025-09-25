@@ -15,6 +15,7 @@ CLI Usage:
 """
 
 import asyncio
+import dataclasses
 import json
 import logging
 import shlex
@@ -24,71 +25,77 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 import equinox as eqx
-import haliax as hax
 import jax.random as jrandom
+import levanter
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
-from prompt_toolkit import prompt
-from prompt_toolkit.completion import WordCompleter
-from prompt_toolkit.history import FileHistory
-from rich.console import Console
-from rich.panel import Panel
-
-import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import (
     ChatCompletionRequest,
     ChatMessage,
-    CompletionRequest,
     InferenceServer,
     InferenceServerConfig,
     _create_chat_completion,
-    _create_completion,
 )
-from levanter.models.llama import LlamaConfig
+from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
+from prompt_toolkit import prompt
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.history import FileHistory
+from rich.console import Console
+from rich.panel import Panel
+from transformers import LlamaConfig
 
 logger = logging.getLogger(__name__)
 console = Console()
 
-# Global state
-server: Optional[InferenceServer] = None
-server_config: InferenceServerConfig = InferenceServerConfig()
-model_name: Optional[str] = None
 
-
-def weight_loader(server, server_config, current_model):
-
-    with (
-        server_config.trainer.device_mesh,
-        hax.axis_mapping(server_config.trainer.compute_axis_mapping),
-    ):
-        with use_cpu_device():
-            key = jrandom.PRNGKey(server_config.seed)
-            vocab_size = len(server.inference_context.tokenizer)
-            Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), server_config.trainer.compute_axis_mapping)
-            model = eqx.filter_eval_shape(server_config.model.build, Vocab, key=key)
-            model = load_checkpoint(model, model, subpath="model")
-            model = server_config.trainer.mp.cast_to_compute(model)
-        return model
+def weight_loader(server, server_config, current_model: LmHeadModel) -> LmHeadModel:
+    with use_cpu_device():
+        key = jrandom.PRNGKey(server_config.seed)
+        vocab_size = len(server.inference_context.tokenizer)
+        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), server_config.trainer.param_axis_mapping)
+        model = eqx.filter_eval_shape(server_config.model.build, Vocab, key=key)
+        model = load_checkpoint(model, model, subpath="model")
+        model = server_config.trainer.mp.cast_to_compute(model)
+    return model
 
 
 @dataclass
 class InferenceReplConfig:
     """Configuration for the inference REPL."""
 
-    checkpoint: Optional[str] = None
+    # Model and training configuration
+    checkpoint: str
+
+    model: Optional[LmConfig] = None
     tokenizer: Optional[str] = None
 
-    # Model and training configuration
-    trainer: TrainerConfig = field(default_factory=TrainerConfig)
-    model: LlamaConfig = field(default_factory=LlamaConfig)
-    service: InferenceEngineConfig = field(
-        default_factory=lambda: InferenceEngineConfig(
-            max_seqs=4, page_size=8, max_pages_per_seq=16, max_queued_tokens=8
+    trainer: TrainerConfig = field(
+        default_factory=lambda: TrainerConfig(
+            model_axis_size=1,
+            tensor_parallel_axes=["mlp", "kv_head"],
+            fsdp_axis="embed",
+            batch_axis="batch",
+        )
+    )
+    server: InferenceServerConfig = field(
+        default_factory=lambda: InferenceServerConfig(
+            model=LlamaConfig(),
+            service=InferenceEngineConfig(
+                max_pages=32,
+                max_seqs=2,
+                page_size=8,
+                max_pages_per_seq=8,
+                max_queued_tokens=4,
+                max_seqs_in_prefill=2,
+                max_prefill_size=64,
+                max_tokens_per_round=16,
+                max_rounds=8,
+            ),
         )
     )
 
@@ -102,22 +109,34 @@ class InferenceReplConfig:
     args: str = ""
 
 
-class Commands:
+class ReplContext:
     """Command handler for both REPL and CLI modes."""
+
+    server: Optional[InferenceServer]
+    model_name: Optional[str]
+    config: InferenceReplConfig
 
     def __init__(self, config: InferenceReplConfig):
         self.config = config
+        self.server = None
+        self.model_name = None
+
         self.commands: Dict[str, Callable] = {
-            "load": self.load_model,
-            "unload": self.unload_model,
+            "load": self.load,
+            "unload": self.unload,
             "chat": self.chat,
-            "complete": self.complete,
             "batch": self.batch,
-            "reload": self.reload,
-            "config": self.show_config,
-            "info": self.info,
             "help": self.show_help,
+            "serve": self.serve,
         }
+
+    def serve(self):
+        if not self.server:
+            console.print("[red]No model loaded. Use 'load' command first[/red]")
+            return
+
+        console.print("[blue]Starting inference server...[/blue]")
+        self.server.serve()
 
     def execute(self, cmd_name: str, *args, **kwargs):
         """Execute a command by name."""
@@ -126,14 +145,8 @@ class Commands:
         else:
             console.print(f"[red]Unknown command: {cmd_name}[/red]")
 
-    def load_model(self, path: str, tokenizer: Optional[str] = None, **kwargs):
+    def load(self, path: str, tokenizer: Optional[str] = None, **kwargs):
         """Load a model from checkpoint or HuggingFace."""
-        global server, server_config, model_name
-
-        # Unload existing model first
-        if server:
-            self.unload_model()
-
         console.print(f"[blue]Loading {path}...[/blue]")
 
         # Use provided tokenizer or fall back to config
@@ -143,62 +156,67 @@ class Commands:
         is_hf_model = not ("://" in path or path.startswith("/") or path.startswith("./") or path.startswith("../"))
 
         if is_hf_model:
-            server_config = InferenceServerConfig(
+            server_config = dataclasses.replace(
+                self.config.server,
+                checkpoint_path=None,
                 hf_checkpoint=RepoRef.from_string(path),
-                tokenizer=path,
-                model=self.config.model,
-                temperature=self.config.temperature,
-                seed=self.config.seed,
-                trainer=self.config.trainer,
-                service=self.config.service,
+                tokenizer=tokenizer,
             )
-            model_name = path
         else:
             if not tokenizer:
                 console.print("[red]Must specify --tokenizer for local checkpoints[/red]")
                 return
-            server_config = InferenceServerConfig(
+            server_config = dataclasses.replace(
+                self.config.server,
                 checkpoint_path=path,
+                hf_checkpoint=None,
                 tokenizer=tokenizer,
-                model=self.config.model,
-                temperature=self.config.temperature,
-                seed=self.config.seed,
-                trainer=self.config.trainer,
-                service=self.config.service,
             )
-            model_name = Path(path).name
 
-        server = InferenceServer.create(server_config)
-        console.print(f"[green]✓ Loaded {model_name}[/green]")
+        if self.server is not None:
 
-    def unload_model(self):
+            def _reload(current_model: LmHeadModel) -> LmHeadModel:
+                return weight_loader(self.server, server_config, current_model)
+
+            self.server.reload(_reload)
+        else:
+            self.server = InferenceServer.create(server_config)
+
+        console.print(f"[green]✓ Loaded {path}[/green]")
+
+    def unload(self):
         """Unload the current model."""
-        global server, server_config, model_name
-
-        if server:
-            console.print(f"[blue]Unloading {model_name}...[/blue]")
-            server.shutdown()
-            server = None
-            server_config = None
-            model_name = None
+        if self.server:
+            console.print(f"[blue]Unloading {self.model_name}...[/blue]")
+            self.server.shutdown()
+            self.server = None
             console.print("[green]✓ Model unloaded[/green]")
         else:
             console.print("[yellow]No model loaded[/yellow]")
 
     def chat(self, message: Optional[str] = None):
         """Chat with the model."""
-        if not server:
+        if not self.server:
             console.print("[red]No model loaded. Use 'load' command first[/red]")
             return
 
         if message:
-            # Single message mode
             messages = [ChatMessage(role="user", content=message)]
-            response = self._run_chat_completion(messages)
-            self._print_completion_response(response)
+            self._run_chat_completion(messages)
         else:
-            # Interactive chat session
             self._run_chat_session()
+
+    def show_help(self):
+        """Show help text."""
+        help_text = """
+[bold cyan]Commands:[/bold cyan]
+  load <path|hf:model>      Load model (e.g., load meta-llama/Llama-3.2-1B)
+  unload                    Unload current model
+  chat [text]               Chat with model (interactive if no text)
+  batch <file.json|json>    Submit batch of requests from JSON
+  help                      Show this help
+        """
+        console.print(Panel(help_text, border_style="blue"))
 
     def _run_chat_session(self):
         """Run interactive chat session with prompt_toolkit."""
@@ -235,53 +253,24 @@ class Commands:
             except (KeyboardInterrupt, EOFError):
                 break
 
-    def complete(self, prompt_text: str):
-        """Complete a text prompt."""
-        if not server:
-            console.print("[red]No model loaded[/red]")
-            return
-
-        request = CompletionRequest(
-            model=model_name or "model",
-            prompt=prompt_text,
-            max_tokens=self.config.max_tokens,
-            temperature=server_config.temperature,
-        )
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            response = loop.run_until_complete(_create_completion(server.inference_context, request))
-
-            self._print_completion_response(response)
-        finally:
-            loop.close()
-
     def batch(self, batch_input: str):
         """Submit a batch of chat completion requests from JSON.
 
         Args:
             batch_input: Either a JSON file path or inline JSON string
         """
-        if not server:
-            console.print("[red]No model loaded[/red]")
-            return
+        # Try to load as file first
+        if Path(batch_input).exists():
+            with open(batch_input, "r") as f:
+                batch_data = json.load(f)
+            console.print(f"[blue]Loaded {len(batch_data)} requests from {batch_input}[/blue]")
+        else:
+            # Try to parse as inline JSON
+            batch_data = json.loads(batch_input)
+            console.print(f"[blue]Parsed {len(batch_data)} requests from inline JSON[/blue]")
 
-        try:
-            # Try to load as file first
-            if Path(batch_input).exists():
-                with open(batch_input, "r") as f:
-                    batch_data = json.load(f)
-                console.print(f"[blue]Loaded {len(batch_data)} requests from {batch_input}[/blue]")
-            else:
-                # Try to parse as inline JSON
-                batch_data = json.loads(batch_input)
-                if not isinstance(batch_data, list):
-                    batch_data = [batch_data]
-                console.print(f"[blue]Parsed {len(batch_data)} requests from inline JSON[/blue]")
-        except (json.JSONDecodeError, FileNotFoundError) as e:
-            console.print(f"[red]Failed to parse batch input: {e}[/red]")
-            return
+        if not isinstance(batch_data, list):
+            batch_data = [batch_data]
 
         # Submit all requests concurrently
         console.print(f"[cyan]Submitting batch of {len(batch_data)} requests...[/cyan]")
@@ -320,127 +309,30 @@ class Commands:
             responses = loop.run_until_complete(submit_batch())
             elapsed = time.time() - start_time
 
-            # Print results
             console.print(f"\n[green]Batch completed in {elapsed:.2f}s[/green]")
-
-            success_count = sum(1 for r in responses if not isinstance(r, Exception))
-            error_count = len(responses) - success_count
-
-            console.print(f"Total Requests: {len(batch_data)}")
-            console.print(f"Successful: {success_count}")
-            console.print(f"Failed: {error_count}")
-            console.print(f"Time: {elapsed:.2f}s")
-            console.print(f"Throughput: {len(batch_data)/elapsed:.2f} req/s")
-
-            # Show all responses and errors
-            console.print("\n[cyan]Results:[/cyan]")
-            for i, resp in enumerate(responses):
-                if isinstance(resp, Exception):
-                    console.print(f"\n[red]Request {i} FAILED:[/red] {resp}")
+            for i, response in enumerate(responses):
+                console.print(f"\n[bold]Response for Request {i + 1}:[/bold]")
+                if isinstance(response, Exception):
+                    console.print(f"[red]Error: {response}[/red]")
                 else:
-                    console.print(f"\n[green]Request {i} SUCCESS:[/green]")
-                    # Show the actual response content
-                    if hasattr(resp, "choices") and resp.choices:
-                        for j, choice in enumerate(resp.choices):
-                            if hasattr(choice, "message"):
-                                content = choice.message.content
-                            else:
-                                content = choice.text if hasattr(choice, "text") else str(choice)
-                            console.print(
-                                f"  Choice {j}: {content[:200]}..."
-                                if len(content) > 200
-                                else f"  Choice {j}: {content}"
-                            )
-
-                    # Show token usage
-                    if hasattr(resp, "usage") and resp.usage:
-                        console.print(
-                            f"  Tokens - Prompt: {resp.usage.prompt_tokens}, Completion: {resp.usage.completion_tokens}"
-                        )
-
+                    self._print_completion_response(response)
         finally:
             loop.close()
-
-    def reload(self, model: str):
-        """Reload model from a new checkpoint."""
-        global server_config
-
-        if not server:
-            console.print("[red]No model loaded to reload[/red]")
-            return
-
-        # Update checkpoint path in config
-        server_config = InferenceServerConfig(
-            hf_checkpoint=None,  # Clear HF checkpoint if reloading from path
-            tokenizer=server_config.tokenizer,
-            model=server_config.model,
-            checkpoint_path=model,
-            temperature=server_config.temperature,
-            seed=server_config.seed,
-            trainer=server_config.trainer,
-            service=server_config.service,
-        )
-
-        console.print(f"[blue]Reloading from {model}...[/blue]")
-
-        server.reload(lambda current_model: weight_loader(server, server_config, current_model))
-        console.print("[green]✓ Model reloaded successfully[/green]")
-
-    def info(self):
-        """Show current model information."""
-        if not server:
-            console.print("[yellow]No model loaded[/yellow]")
-            return
-
-        console.print("[cyan]Model Information:[/cyan]")
-        console.print(f"Model: {model_name or 'Unknown'}")
-        console.print(f"Tokenizer: {str(server_config.tokenizer)}")
-        console.print(f"Vocab Size: {len(server.inference_context.tokenizer)}")
-        console.print(f"Max Sequences: {server_config.service.max_seqs}")
-        console.print(f"Temperature: {server_config.temperature}")
-        console.print(f"Seed: {server_config.seed}")
-        console.print(f"Max Tokens: {self.config.max_tokens}")
-
-    def show_help(self):
-        """Show help text."""
-        help_text = """
-[bold cyan]Commands:[/bold cyan]
-  load <path|hf:model>      Load model (e.g., load meta-llama/Llama-3.2-1B)
-  unload                    Unload current model
-  chat [text]               Chat with model (interactive if no text)
-  complete <text>           Complete text prompt
-  batch <file.json|json>    Submit batch of requests from JSON
-  reload <checkpoint>       Reload from new checkpoint
-  info                      Show model information
-  help                      Show this help
-
-[bold yellow]Direct Input:[/bold yellow]
-  Type text to chat with the model
-        """
-        console.print(Panel(help_text, border_style="blue"))
-
-    def show_config(self, key_value: Optional[str] = None):
-        """Show current configuration."""
-        console.print("[cyan]Current Config:[/cyan]")
-        console.print(f"Checkpoint: {self.config.checkpoint}")
-        console.print(f"Tokenizer: {self.config.tokenizer}")
-        console.print(f"Temperature: {self.config.temperature}")
-        console.print(f"Max Tokens: {self.config.max_tokens}")
 
     def _run_chat_completion(self, messages, print_response=True):
         """Run async chat completion."""
         request = ChatCompletionRequest(
-            model=model_name or "model",
+            model=self.model_name or "model",
             messages=messages,
-            stop=[server.inference_context.tokenizer.eos_token],
+            stop=[self.server.inference_context.tokenizer.eos_token],
             max_tokens=self.config.max_tokens,
-            temperature=server_config.temperature,
+            temperature=self.config.server.temperature,
         )
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            response = loop.run_until_complete(_create_chat_completion(server.inference_context, request))
+            response = loop.run_until_complete(_create_chat_completion(self.server.inference_context, request))
 
             if print_response:
                 self._print_completion_response(response)
@@ -468,18 +360,18 @@ class Commands:
             )
 
 
-def repl_mode(config: InferenceReplConfig, commands: Commands):
+def repl_mode(config: InferenceReplConfig, commands: ReplContext):
     """Run interactive REPL."""
     console.print(
         Panel.fit(
-            "[bold blue]Levanter Inference REPL[/bold blue]\n" "Type [bold]help[/bold] for commands",
+            "[bold blue]Levanter Inference REPL[/bold blue]\nType [bold]help[/bold] for commands",
             border_style="blue",
         )
     )
 
     # Auto-load model if specified
     if config.checkpoint:
-        commands.load_model(config.checkpoint, config.tokenizer)
+        commands.load(config.checkpoint, config.tokenizer)
 
     # Setup prompt_toolkit
     command_names = list(commands.commands.keys()) + ["quit", "exit"]
@@ -521,50 +413,25 @@ def repl_mode(config: InferenceReplConfig, commands: Commands):
             elif cmd == "chat":
                 message = " ".join(args) if args else None
                 commands.execute("chat", message)
-            elif cmd == "complete":
-                if not args:
-                    console.print("[red]Usage: complete <prompt>[/red]")
-                    continue
-                prompt_text = " ".join(args)
-                commands.execute("complete", prompt_text)
-            elif cmd == "batch":
-                if not args:
-                    console.print("[red]Usage: batch <file.json> or batch <inline_json>[/red]")
-                    continue
-                batch_input = " ".join(args)
-                commands.execute("batch", batch_input)
-            elif cmd == "reload":
-                if not args:
-                    console.print("[red]Usage: reload <model>[/red]")
-                    continue
-                commands.execute("reload", args[0])
-            elif cmd == "config":
-                key_value = args[0] if args else None
-                commands.execute("config", key_value)
             elif cmd in commands.commands:
                 commands.execute(cmd)
             else:
-                # Direct input = chat
-                commands.execute("chat", user_input)
-
+                console.print(f"[red]Unknown command: {cmd}[/red]")
         except (KeyboardInterrupt, EOFError):
             break
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]")
 
-    # Cleanup
-    if server:
-        server.shutdown()
     console.print("[blue]Goodbye![/blue]")
 
 
-def cli_mode(config: InferenceReplConfig, commands: Commands):
+def cli_mode(config: InferenceReplConfig, commands: ReplContext):
     """Execute single command from CLI."""
     if not config.command:
         return
 
     if config.checkpoint:
-        commands.load_model(config.checkpoint, config.tokenizer)
+        commands.load(config.checkpoint, config.tokenizer)
     else:
         console.print("[red]No model specified. Use --checkpoint to specify a model.[/red]")
         return
@@ -586,14 +453,10 @@ def cli_mode(config: InferenceReplConfig, commands: Commands):
     else:
         commands.execute(config.command, *config.args)
 
-    # Cleanup
-    if server:
-        server.shutdown()
-
 
 def main(config: InferenceReplConfig):
     """Main entry point."""
-    commands = Commands(config)
+    commands = ReplContext(config)
 
     # Determine mode
     if config.command:

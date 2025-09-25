@@ -15,7 +15,6 @@ import numpy as np
 from levanter.tracker import Tracker, TrackerConfig
 from levanter.tracker.histogram import Histogram
 
-
 pylogger = logging.getLogger(__name__)
 
 if typing.TYPE_CHECKING:
@@ -36,6 +35,10 @@ class TensorboardTracker(Tracker):
         self.writer.add_hparams(hparams, {"dummy": 0})
 
     def log(self, metrics: typing.Mapping[str, Any], *, step, commit=None):
+        # Don't log metrics from non-primary workers.
+        if jax.process_index() != 0:
+            return
+
         del commit
         metrics = _flatten_nested_dict(metrics)
         for k, value in metrics.items():
@@ -59,12 +62,15 @@ class TensorboardTracker(Tracker):
                     bucket_counts=np.concatenate([[0], np.array(value.bucket_counts)]).tolist(),
                     global_step=step,
                 )
-                continue
             elif isinstance(value, str):
                 self.writer.add_text(k, value)
-                continue
-
-            self.writer.add_scalar(k, value, global_step=step)
+            elif isinstance(value, np.ndarray) and np.dtype(value.dtype).kind in ("U", "S", "O"):
+                self.writer.add_text(k, str(value))
+            else:
+                if not np.issubdtype(np.array(value).dtype, np.number):
+                    pylogger.error(f"Unsupported metric type: {type(value)} for key {k}")
+                else:
+                    self.writer.add_scalar(k, value, global_step=step)
 
     def log_summary(self, metrics: dict[str, Any]):
         for k, v in metrics.items():

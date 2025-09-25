@@ -5,10 +5,12 @@ import glob
 import os
 from functools import reduce
 from typing import Any, Callable, Dict, List, Optional, Sequence, TypeVar
+from contextlib import contextmanager
 
 import draccus
 import equinox as eqx
 import jax
+from jax.sharding import Mesh
 import numpy as np
 import pytest
 from chex import assert_trees_all_close
@@ -131,6 +133,7 @@ def has_soundlibs():
     try:
         import librosa  # noqa F401
         import soundfile  # noqa F401
+        import torchcodec  # noqa F401
 
         return True
     except ImportError:
@@ -273,3 +276,15 @@ def _stack_batch_encodings(a: BatchEncoding, b: BatchEncoding) -> BatchEncoding:
             return [x]
 
     return BatchEncoding({k: _ensure_batched(a[k]) + _ensure_batched(b[k]) for k in a.keys()})
+
+
+@contextmanager
+def maybe_mesh():
+    devices = jax.devices()
+    if not devices:
+        yield
+        return
+
+    mesh = Mesh(np.array(devices).reshape((len(devices),)), ("_device",))
+    with mesh:
+        yield

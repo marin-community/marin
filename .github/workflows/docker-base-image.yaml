@@ -44,8 +44,8 @@ jobs:
 
       - name: Build and Push Docker image
         run: |
-          docker buildx build --file docker/tpu/Dockerfile.base --tag ghcr.io/${{ github.repository }}/levanter-base:latest --tag ghcr.io/${{ github.repository }}/levanter-base:${{ env.DATE }} --push .
+          docker buildx build --file docker/tpu/Dockerfile.base --tag ghcr.io/${{ github.repository }}-base:latest --tag ghcr.io/${{ github.repository }}-base:${{ env.DATE }} --push .
 
       - name: Build and Push Incremental Docker image
         run: |
-          docker buildx build --file docker/tpu/Dockerfile.incremental --tag ghcr.io/${{ github.repository }}/levanter-tpu:latest --tag ghcr.io/${{ github.repository }}/levanter-tpu:${{ env.DATE }} --push .
+          docker buildx build --file docker/tpu/Dockerfile.incremental --tag ghcr.io/${{ github.repository }}-tpu:latest --tag ghcr.io/${{ github.repository }}-tpu:${{ env.DATE }} --push .

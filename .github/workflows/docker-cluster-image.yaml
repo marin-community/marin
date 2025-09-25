@@ -44,4 +44,4 @@ jobs:
 
       - name: Build and Push Cluster Docker image
         run: |
-          docker buildx build --file docker/tpu/Dockerfile.cluster --tag ghcr.io/${{ github.repository }}/levanter-cluster:latest --tag ghcr.io/${{ github.repository }}/levanter-cluster:${{ env.DATE }} --push .
+          docker buildx build --file docker/tpu/Dockerfile.cluster --tag ghcr.io/${{ github.repository }}-cluster:latest --tag ghcr.io/${{ github.repository }}-cluster:${{ env.DATE }} --push .
