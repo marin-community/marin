@@ -2,6 +2,7 @@
 
 Logging values and other metadata about a run is a core requirement for any ML framework.
 Until recently, Levanter had a hard dependency on [W&B](https://wandb.ai/site) for tracking such values.
+We now provide a pluggable tracker interface with built‑in support for W&B, Tensorboard, and [Trackio](https://github.com/gradio-app/trackio).
 
 In the latest version, we introduce the [levanter.tracker.Tracker][] interface, which allows you to use any tracking backend you want.
 The interface name is taken from the [HuggingFace Accelerate](https://github.com/huggingface/accelerate/blob/0f2686c8d3e6d949c4b7efa15d7f2dee44f7ce91/src/accelerate/tracking.py#L395)
@@ -96,6 +97,9 @@ TODO: expand this section.
 
 ::: levanter.tracker.wandb.WandbTracker
 
+
+::: levanter.tracker.trackio.TrackioTracker
+
 ::: levanter.tracker.json_logger.JsonLoggerTracker
 
 ### Tracker Config
@@ -107,5 +111,8 @@ TODO: expand this section.
 ::: levanter.tracker.tensorboard.TensorboardConfig
 
 ::: levanter.tracker.wandb.WandbConfig
+
+
+::: levanter.tracker.trackio.TrackioConfig
 
 ::: levanter.tracker.json_logger.JsonLoggerConfig
