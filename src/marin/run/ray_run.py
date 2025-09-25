@@ -286,7 +286,7 @@ def main():
     try:
         if cluster_config:
             with ray_dashboard(cluster_config):
-                asyncio.run(run_job(cluster_config))
+                asyncio.run(run_job())
         else:
             asyncio.run(run_job())
     finally:
@@ -294,13 +294,12 @@ def main():
             logger.info(f"Auto-stopping job {submission_id}...")
             # Open a fresh connection for cleanup
             if cluster_config:
-                with ray_dashboard(cluster_config_for_cleanup):
+                with ray_dashboard(cluster_config):
                     client = make_client()
                     client.stop_job(submission_id)
             else:
                 client = make_client()
                 client.stop_job(submission_id)
-
 
 
 if __name__ == "__main__":
