@@ -1,86 +1,61 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import argparse
 import asyncio
+import getpass
 import json
 import logging
 import os
 import re
 import shlex
+import subprocess
+import time
+from pathlib import Path
 
-import toml
 from ray.job_submission import JobSubmissionClient
 
-from marin.run.vars import ENV_VARS, PIP_DEPS, REMOTE_DASHBOARD_URL
+from marin.cluster.config import find_config_by_region
+from marin.cluster.ray import ray_dashboard
+from marin.run.ray_deps import build_runtime_env_for_packages
+from marin.run.vars import REMOTE_DASHBOARD_URL
 
-# Setup logger
-logger = logging.getLogger("ray")
-
-
-def parse_pip_requirements(line: str) -> list[str]:
-    # The pattern means:
-    #   (?:\[[^\]]*\]|[^,])+
-    #   Match either:
-    #       - a bracketed chunk: [anything but ]]
-    #       - OR any character that isn't a comma
-    #   Repeat 1 or more times.
-    # So each match is all characters up to the next top-level comma.
-    # For example, the input string "numpy==2.0.0,scipy[extras1,extras2],sympy"
-    # is parsed as ["numpy==2.0.0", "scipy[extras1,extras2]", "sympy"]
-    pattern = r"(?:\[[^\]]*\]|[^,])+"
-    return re.findall(pattern, line)
+logger = logging.getLogger(__name__)
 
 
-def generate_pythonpath(base_dir="submodules"):
-    # List to hold all the paths
-    paths = []
+def parse_user_command_line(command: str) -> dict[str, str]:
+    """Extract interesting parts from a user command line."""
+    parts = command.strip().split(" ")
+    entrypoint = None
+    for part in parts:
+        if Path(part).exists() and "/python" not in part:
+            entrypoint = Path(part).name
 
-    if not os.path.exists(base_dir):
-        logger.warning(f"Base directory {base_dir} does not exist.")
-        return ""
+    if parts and entrypoint is None:
+        entrypoint = parts[0]
+    else:
+        entrypoint = "unknown"
 
-    # Iterate through the directories inside submodules
-    for submodule in os.listdir(base_dir):
-        submodule_path = os.path.join(base_dir, submodule)
-
-        # Check if it's a directory
-        if os.path.isdir(submodule_path):
-            # Add both submodule and submodule/src paths
-            paths.append(submodule_path)
-            src_path = os.path.join(submodule_path, "src")
-            if os.path.isdir(src_path):
-                paths.append(src_path)
-
-    # Add "." for the current directory to make sure the imports are working properly
-    # Join the paths with ':'
-    pythonpath = ":".join(paths)
-    return pythonpath
+    return {"entrypoint": entrypoint}
 
 
-def get_dependencies_from_toml(toml_file: str) -> list:
-    """Extract dependencies from the pyproject.toml file and return them as a list."""
-    try:
-        parsed_toml = toml.load(toml_file)
-        dependencies = parsed_toml.get("project", {}).get("dependencies", [])
-        dependencies = _remove_problematic_deps(dependencies)
-        logger.info(f"Dependencies extracted: {dependencies}")
-        return dependencies
-    except FileNotFoundError:
-        logger.error(f"File {toml_file} not found.")
-        return []
-    except toml.TomlDecodeError:
-        logger.error(f"Failed to parse {toml_file}.")
-        return []
-
-
-def _remove_problematic_deps(dependencies: list[str]):
-    out: list[str] = []
-    # remove ray from dependencies. We do this because Ray gets mad if you try to install another version of Ray
-    expr = re.compile(r"^\s*ray([^a-zA-Z0-9_]|$)")
-    for dep in dependencies:
-        if not expr.match(dep):
-            out.append(dep)
-        else:
-            logger.debug(f"Skipping dependency: {dep}")
-    return out
+def generate_submission_id(command: str) -> str:
+    """Generate a nice submission ID based on the inferred experiment."""
+    parsed = parse_user_command_line(command)
+    timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    parts = ["ray-run", getpass.getuser(), parsed["entrypoint"], timestamp]
+    return "-".join(parts)
 
 
 def tpus_per_node(tpu_type: str) -> int:
@@ -96,11 +71,21 @@ def tpus_per_node(tpu_type: str) -> int:
     return chips
 
 
+def make_client() -> JobSubmissionClient:
+    """Create a JobSubmissionClient based on environment variables."""
+    if "RAY_ADDRESS" not in os.environ:
+        client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
+    else:
+        client = JobSubmissionClient()
+    return client
+
+
 async def submit_and_track_job(
     entrypoint: str,
-    dependencies: list,
+    extra: str,
     env_vars: dict,
     no_wait: bool,
+    submission_id: str,
     *,
     entrypoint_num_cpus: float | None = None,
     entrypoint_num_gpus: float | None = None,
@@ -108,26 +93,33 @@ async def submit_and_track_job(
     entrypoint_resources: dict | None = None,
 ):
     """Submit a job to Ray and optionally track logs."""
-
+    client = make_client()
     current_dir = os.getcwd()
-    client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
-    runtime_dict = {
-        "pip": dependencies,
-        "working_dir": current_dir,
-        "env_vars": env_vars,
-        "config": {"setup_timeout_seconds": 1800},
-    }
 
-    if len(dependencies) == 0:
-        del runtime_dict["pip"]
+    # Inject GIT_COMMIT into the environment for logging
+    env_vars["GIT_COMMIT"] = subprocess.getoutput("git rev-parse HEAD")
 
     logger.info(f"Submitting job with entrypoint: {entrypoint}")
-    logger.info(f"Dependencies: {json.dumps(dependencies, indent=4)}")
+    logger.info(f"Extras: {extra}")
     logger.info(f"env_vars: {json.dumps(env_vars, indent=4)}")
 
+    runtime_dict = {
+        "working_dir": current_dir,
+        "config": {"setup_timeout_seconds": 1800},
+        "excludes": [".git", "tests/", "docs/", "**/*.pack"],
+    }
+
+    # add the TPU dependency for cluster jobs.
+    runtime_dict = build_runtime_env_for_packages(extra=[*extra.split(","), "tpu"], env_vars=env_vars) | runtime_dict
+
     logger.info(
-        f"Terminal command: \n" f"ray job submit " f"--runtime-env-json '{json.dumps(runtime_dict)}'" f" -- {entrypoint}"
+        f"Terminal command: \n"
+        f"ray job submit "
+        f"--runtime-env-json '{json.dumps(runtime_dict)}' "
+        f"--submission-id '{submission_id} "
+        f" -- {entrypoint}"
     )
+
     # Submit the job with runtime environment and entrypoint
     submission_id = client.submit_job(
         entrypoint=entrypoint,
@@ -136,9 +128,10 @@ async def submit_and_track_job(
         entrypoint_num_gpus=entrypoint_num_gpus,
         entrypoint_memory=entrypoint_memory,
         entrypoint_resources=entrypoint_resources,
+        submission_id=submission_id,
     )
     logger.info(f"Job submitted with ID: {submission_id}")
-    logger.info(f"Job URL: http://localhost:8265/#/jobs/{submission_id}")
+    logger.info(f"Job URL: {client.get_address()}/#/jobs/{submission_id}")
 
     if no_wait:
         return
@@ -162,7 +155,10 @@ def main():
         "the VALUE will be set to an empty string.",
     )
     parser.add_argument(
-        "--pip_deps", type=parse_pip_requirements, help="List of pip dependencies to " "install before running."
+        "--extra",
+        type=str,
+        default="",
+        help="List of pip dependencies to install before running.",
     )
     parser.add_argument(
         "--entrypoint-num-cpus",
@@ -194,8 +190,13 @@ def main():
         default=None,
         help="TPU type to reserve for the entrypoint (e.g. v4-8)",
     )
-    parser.add_argument("--uv", action="store_true", default=False, help="Prepend 'uv run' to python commands")
-    parser.add_argument("--no-uv", action="store_false", dest="uv", help="Don't prepend 'uv run' to python commands")
+    parser.add_argument(
+        "--cluster",
+        type=str,
+        default=None,
+        help="Cluster name or config file path to submit job to",
+    )
+    parser.add_argument("--auto-stop", action="store_true", help="Automatically stop the cluster on shutdown.")
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
 
     args = parser.parse_args()
@@ -206,10 +207,6 @@ def main():
         logger.error("Command must start with '--'.")
         exit(1)
     full_cmd = full_cmd[2:]
-
-    # Prepend 'uv run' if the command starts with 'python'
-    if args.uv and full_cmd.strip().startswith("python"):
-        full_cmd = f"uv run {full_cmd}"
 
     # Load and merge environment variables from multiple -e options
     env_vars = {}
@@ -243,34 +240,6 @@ def main():
                     exit(1)
                 env_vars[item[0]] = item[1]
 
-    # Now env_vars is a dictionary with the environment variables set using -e
-    user_env_vars = env_vars
-    env_vars = {**ENV_VARS, **user_env_vars}
-
-    # Build PYTHONPATH
-    python_path_parts = []
-    # Prepend 'src' to PYTHONPATH if it's not already set by the user.
-    if "PYTHONPATH" not in user_env_vars:
-        python_path_parts.append("src")
-
-    submodule_paths = generate_pythonpath()
-    if submodule_paths:
-        python_path_parts.append(submodule_paths)
-
-    if "PYTHONPATH" in env_vars:
-        python_path_parts.append(env_vars["PYTHONPATH"])
-
-    env_vars["PYTHONPATH"] = ":".join(filter(None, python_path_parts))
-
-    # Convert pyproject.toml to requirements.txt before submission
-    pyproject_toml = "pyproject.toml"
-    # If we are using the latest docker image then we can skip getting core dependencies from pyproject.toml
-    # As they are already installed inside the cluster
-    dependencies = []
-    dependencies += get_dependencies_from_toml(pyproject_toml)
-    dependencies += PIP_DEPS
-    dependencies += args.pip_deps if args.pip_deps else []
-
     entrypoint_resources = args.entrypoint_resources
     if args.tpu:
         try:
@@ -281,19 +250,56 @@ def main():
         tpu_res = {f"TPU-{args.tpu}-head": 1, "TPU": chips}
         entrypoint_resources = (entrypoint_resources or {}) | tpu_res
 
+    # Resolve cluster config if specified
+    cluster_config = None
+    if args.cluster:
+        if args.cluster.endswith(".yaml") or os.path.exists(args.cluster):
+            cluster_config = args.cluster
+        else:
+            cluster_config = find_config_by_region(args.cluster)
+
     # Submit the job and track it asynchronously
-    asyncio.run(
-        submit_and_track_job(
-            full_cmd,
-            dependencies,
-            env_vars,
-            args.no_wait,
-            entrypoint_num_cpus=args.entrypoint_num_cpus,
-            entrypoint_num_gpus=args.entrypoint_num_gpus,
-            entrypoint_memory=args.entrypoint_memory,
-            entrypoint_resources=entrypoint_resources,
-        )
-    )
+    submission_id = generate_submission_id(full_cmd)
+
+    async def run_job():
+        try:
+            await submit_and_track_job(
+                full_cmd,
+                args.extra,
+                env_vars,
+                args.no_wait,
+                submission_id=submission_id,
+                entrypoint_num_cpus=args.entrypoint_num_cpus,
+                entrypoint_num_gpus=args.entrypoint_num_gpus,
+                entrypoint_memory=args.entrypoint_memory,
+                entrypoint_resources=entrypoint_resources,
+            )
+        except KeyboardInterrupt:
+            pass
+        except asyncio.CancelledError:
+            logger.info("Job tracking cancelled by user.")
+            pass
+        except Exception as e:
+            logger.error(f"Error submitting or tracking job: {e}")
+            raise
+
+    try:
+        if cluster_config:
+            with ray_dashboard(cluster_config):
+                asyncio.run(run_job())
+        else:
+            asyncio.run(run_job())
+    finally:
+        if args.auto_stop:
+            logger.info(f"Auto-stopping job {submission_id}...")
+            # Open a fresh connection for cleanup
+            if cluster_config:
+                with ray_dashboard(cluster_config):
+                    client = make_client()
+                    client.stop_job(submission_id)
+            else:
+                client = make_client()
+                client.stop_job(submission_id)
 
 
 if __name__ == "__main__":

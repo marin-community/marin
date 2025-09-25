@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import glob
 import os
 from collections.abc import Callable
@@ -10,15 +24,7 @@ import ray
 from marin.utils import asdict_excluding, remove_tpu_lockfile_on_exit
 
 
-def setup_module(module):
-    ray.init(namespace="marin")
-
-
-def teardown_module(module):
-    ray.shutdown()
-
-
-def test_remove_tpu_lockfile_on_exit_works_with_ray_remote():
+def test_remove_tpu_lockfile_on_exit_works_with_ray_remote(ray_tpu_cluster):
     @ray.remote
     @remove_tpu_lockfile_on_exit
     def test_fn():

@@ -15,7 +15,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       # install required dependencies
       - name: Install dependencies
@@ -27,9 +27,9 @@ jobs:
       - name: Generate leaderboard data
         run: |
           # Create temporary static directory if it doesn't exist
-          mkdir -p marin/speedrun/static/data
+          mkdir -p src/marin/speedrun/static/data
 
-          python marin/speedrun/create_leaderboard.py
+          python src/marin/speedrun/create_leaderboard.py
           echo "Generated updated runs.json file"
 
       # checkout the Speedrun repo into a separate directory
@@ -52,10 +52,10 @@ jobs:
       
       - name: Sync static files
         run: |
-          # marin/speedrun/static/data that we generate as a temp dir should mirror speedrun-repo/data/
+          # src/marin/speedrun/static/data that we generate as a temp dir should mirror speedrun-repo/data/
           # everything else in speedrun-repo/ should be left as-is
           rm -rf speedrun-repo/data/*
-          cp -r marin/speedrun/static/data/* speedrun-repo/data/
+          cp -r src/marin/speedrun/static/data/* speedrun-repo/data/
           
           # configure and commit changes
           cd speedrun-repo
