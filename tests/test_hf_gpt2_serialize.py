@@ -25,7 +25,7 @@ from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmExample, LmHeadModel, compute_next_token_loss
 from levanter.optim import AdamConfig
 from levanter.utils.tree_utils import inference_mode
-from test_utils import arrays_only, skip_if_no_torch
+from test_utils import arrays_only, skip_if_no_torch, maybe_mesh
 
 
 @skip_if_no_torch
@@ -198,10 +198,10 @@ def test_hf_save_to_fs_spec():
     converter = HFCheckpointConverter(Gpt2Config, "gpt2", HfGpt2Config, ignore_prefix="transformer")
     simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
 
-    converter.save_pretrained(simple_model, "memory://model")
+    with maybe_mesh():
+        converter.save_pretrained(simple_model, "memory://model")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-
         # now copy the model to tmp because loading from memory doesn't work
         fs: AbstractFileSystem = fsspec.filesystem("memory")
         fs.get("model/", f"{tmpdir}/test", recursive=True)
