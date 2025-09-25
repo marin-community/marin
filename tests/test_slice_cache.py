@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import tempfile
 from dataclasses import dataclass
 
@@ -11,7 +25,7 @@ from marin.tokenize.slice_cache import SliceCacheConfig, _do_slice_cache
 from tests.test_utils import skip_in_ci
 
 
-@dataclass
+@dataclass(frozen=True)
 class MockDatasetSource(LmDatasetSourceConfigBase):
     # def __init__(self, cache_dir, num_docs: int, tokens_per_doc: int, tags):
     #     self.num_docs = num_docs

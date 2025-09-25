@@ -1,10 +1,23 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import wandb
-
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 logger = logging.getLogger(__name__)
@@ -98,7 +111,6 @@ def get_all_runs_over_period(
     api = wandb.Api()
 
     try:
-
         # Check if project exists first
         try:
             api.project(entity, project)
@@ -134,11 +146,12 @@ def get_all_runs_over_period(
 
 
 def get_vocab_size_for_tokenizer(tokenizer: str) -> int | None:
-
     logger.info(f"Tokenizer:{tokenizer}")
     if tokenizer == "EleutherAI/gpt-neox-20b":
         vocab_size = 50_257
     elif tokenizer == "meta-llama/Meta-Llama-3.1-8B":
+        vocab_size = 128_256
+    elif tokenizer == "stanford-crfm/marin-tokenizer":
         vocab_size = 128_256
     elif tokenizer == "meta-llama/Llama-2-7b":
         vocab_size = 32_000
@@ -328,7 +341,6 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-
     config = WandbMetricsConfig(entity=WANDB_ENTITY, project=WANDB_PROJECT, num_days=7)
 
     calculate_wandb_metrics(config)
