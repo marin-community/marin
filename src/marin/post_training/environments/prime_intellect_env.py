@@ -19,17 +19,14 @@ https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 import os
 import time
 import logging
-import numpy as np
 import subprocess
-import json
 
-from openai import AsyncOpenAI
 import verifiers as vf
-from verifiers.utils.client_utils import setup_client
 
 from .marin_env import EnvStep, InferenceContext, MarinEnv
 
 logger = logging.getLogger("ray")
+
 
 class PrimeIntellectEnv(MarinEnv):
     """
