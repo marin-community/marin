@@ -231,6 +231,7 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
         self.losses = []
         self.trained_model = None
         self.reference_model = None
+        self.all_steps_seen = []
 
     def _track_training_step(self):
         """Called after each training step."""
@@ -249,6 +250,8 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
             original_configure_hooks(trainer)
 
             def step_tracking_hook(info):
+                current_step = int(info.step)
+                self.all_steps_seen.append(current_step)
                 self._track_training_step()
                 current_loss = float(info.loss)
                 self.losses.append(current_loss)
@@ -541,3 +544,91 @@ def test_full_integration_moar_cats(
     assert inference_runner.weight_transfers >= 1, "Should have at least one weight transfer during long run"
 
     print_model_validation(training_runner.trained_model, DummyTokenizer())
+
+
+@pytest.mark.slow("Integration test with checkpoint restart")
+def test_train_worker_checkpoint_restart(ray_cluster, training_worker_config):
+    """Test that training worker correctly restarts from checkpoint without repeating steps."""
+    from pathlib import Path
+
+    # Phase 1: Initial training run - small number of steps
+    initial_target_steps = 5
+    training_worker_config.trainer.num_train_steps = initial_target_steps
+
+    queue_writer = training_worker_config.rollout_storage.create_writer()
+    tokenizer = DummyTokenizer()
+    batch_size = training_worker_config.trainer.train_batch_size
+
+    with TrainWorkerRunner(training_worker_config) as runner:
+        # Wait for worker to initialize
+        while not runner.worker:
+            time.sleep(0.1)
+
+        # Add some training data
+        for _ in range(5):
+            batch = create_rollout_batch(
+                policy_model=runner.reference_model,
+                reference_model=runner.reference_model,
+                batch_size=batch_size,
+                tokenizer=tokenizer,
+            )
+            queue_writer.write_batch(batch)
+
+        # Wait for completion or timeout
+        start_time = time.time()
+        while runner.alive() and not runner.done.is_set() and time.time() - start_time < 30:
+            time.sleep(0.5)
+
+    first_run_steps = runner.all_steps_seen.copy()
+    last_step_first_run = runner.steps_completed
+
+    # Verify we trained and created checkpoint
+    assert (
+        last_step_first_run >= initial_target_steps
+    ), f"Expected >= {initial_target_steps} steps, got {last_step_first_run}"
+    checkpoint_dir = Path(training_worker_config.trainer.checkpointer.expanded_path("test-0-train"))
+    assert checkpoint_dir.exists(), f"Checkpoint directory {checkpoint_dir} does not exist"
+    checkpoints = list(checkpoint_dir.glob("*"))
+    assert len(checkpoints) > 0, f"No checkpoints found in {checkpoint_dir}"
+
+    print(f"First run completed {last_step_first_run} steps, found {len(checkpoints)} checkpoints")
+
+    # Phase 2: Restart training - should auto-load checkpoint
+    training_worker_config.trainer.num_train_steps = 10  # Continue to step 10
+
+    with TrainWorkerRunner(training_worker_config) as runner:
+        # Wait for worker to initialize
+        while not runner.worker:
+            time.sleep(0.1)
+
+        # Add more training data
+        for _ in range(5):
+            batch = create_rollout_batch(
+                policy_model=runner.reference_model,
+                reference_model=runner.reference_model,
+                batch_size=batch_size,
+                tokenizer=tokenizer,
+            )
+            queue_writer.write_batch(batch)
+
+        # Wait for completion or timeout
+        start_time = time.time()
+        while runner.alive() and not runner.done.is_set() and time.time() - start_time < 30:
+            time.sleep(0.5)
+
+    second_run_steps = runner.all_steps_seen
+
+    # We should never see step 0 in the second run
+    assert 0 not in second_run_steps, f"Step 0 seen in second run! Steps: {second_run_steps}"
+
+    # Second run should start from a checkpoint (step > 1)
+    min_step_second_run = min(second_run_steps)
+    assert min_step_second_run > 1, f"Second run should restart from checkpoint (step > 1), got {min_step_second_run}"
+
+    # Some overlap is expected when resuming from checkpoint, but verify proper restart
+    # The key is that the second run continues beyond where the first run got to
+    max_step_second_run = max(second_run_steps)
+    max_step_first_run = max(first_run_steps) if first_run_steps else 0
+    assert (
+        max_step_second_run > max_step_first_run
+    ), f"Second run should progress beyond first run: first max={max_step_first_run}, second max={max_step_second_run}"

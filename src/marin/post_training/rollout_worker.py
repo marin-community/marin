@@ -297,18 +297,7 @@ class RolloutWorker:
     rollout_writer: RolloutWriter
     _tokenizer: PreTrainedTokenizer
 
-    def __init__(
-        self,
-        config: RolloutWorkerConfig,
-    ):
-        """Initialize inference worker.
-
-        Args:
-            config: Inference worker configuration.
-            coordinator: Coordinator for weight transfer (required for RAY_REMOTING and
-                JAX_TRANSFER_SERVER modes).
-        """
-        # self.tracker = config.trainer.tracker.init(f"{self.config.run_id}-{socket.gethostname()}")
+    def __init__(self, config: RolloutWorkerConfig):
         config.trainer.id = f"{config.run_id}-rollout"
         levanter.initialize(config.trainer)
         self.tracker = levanter.current_tracker()
@@ -324,8 +313,6 @@ class RolloutWorker:
 
         self._environment = load_environment_from_spec(config.environment_spec, tokenizer=self._tokenizer)
 
-        self._build_models()
-
         config.inference_server_config.port = find_open_port()
         self.inference_server = InferenceServer.create(config.inference_server_config)
 
@@ -338,6 +325,7 @@ class RolloutWorker:
         )
 
         self.rollout_writer = config.rollout_storage.create_writer()
+        self._build_models()
 
     def _build_models(self):
         """Build policy and reference models after levanter initialization."""
@@ -362,7 +350,13 @@ class RolloutWorker:
             tokenizer=self._tokenizer,
             key=key,
         )
-        self.policy_model = self.reference_model
+
+        self.policy_model = self.transfer_client.receive_weights(None)
+        if self.policy_model:
+            logger.info("Loaded initial policy model from weight transfer")
+        else:
+            logger.info("Initializing policy model from reference model")
+            self.policy_model = self.reference_model
         logger.info("Loaded/built policy and reference models")
 
     def _start_inference_server(self):
