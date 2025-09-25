@@ -51,10 +51,10 @@ from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
-from typing import Self
 
 import equinox as eqx
 import fsspec
+import haliax as hax
 import jax.numpy as jnp
 import numpy as np
 
@@ -80,14 +80,17 @@ def _get_or_create_queue(queue_name: str) -> "InMemoryRolloutQueue":
 
 
 class JaxRolloutBatch(eqx.Module):
-    input_ids: jnp.ndarray
-    attention_mask: jnp.ndarray
-    position_ids: jnp.ndarray
-    target_ids: jnp.ndarray
-    loss_weights: jnp.ndarray
-    loss_masks: jnp.ndarray
-    reference_logprobs: jnp.ndarray
-    policy_logprobs: jnp.ndarray
+    input_ids: hax.NamedArray
+    attention_mask: hax.NamedArray
+    position_ids: hax.NamedArray
+    target_ids: hax.NamedArray
+    loss_weights: hax.NamedArray
+    loss_masks: hax.NamedArray
+    reference_logprobs: hax.NamedArray
+    policy_logprobs: hax.NamedArray
+
+    def __len__(self) -> int:
+        return len(self.input_ids.array)
 
 
 @dataclass
@@ -106,71 +109,17 @@ class RolloutBatch:
     def __len__(self) -> int:
         return len(self.input_ids)
 
-    def slice(self, start: int, end: int | None = None) -> Self:
-        """Slice batch from start:end."""
-        return RolloutBatch(
-            input_ids=self.input_ids[start:end],
-            attention_mask=self.attention_mask[start:end],
-            position_ids=self.position_ids[start:end],
-            target_ids=self.target_ids[start:end],
-            loss_weights=self.loss_weights[start:end],
-            loss_masks=self.loss_masks[start:end],
-            reference_logprobs=self.reference_logprobs[start:end],
-            policy_logprobs=self.policy_logprobs[start:end],
-        )
-
-    @classmethod
-    def concat(cls, batches: list[Self], axis: int = 0) -> Self:
-        """Concatenate multiple batches along specified axis."""
-        return RolloutBatch(
-            input_ids=np.concatenate([b.input_ids for b in batches], axis=axis),
-            attention_mask=np.concatenate([b.attention_mask for b in batches], axis=axis),
-            position_ids=np.concatenate([b.position_ids for b in batches], axis=axis),
-            target_ids=np.concatenate([b.target_ids for b in batches], axis=axis),
-            loss_weights=np.concatenate([b.loss_weights for b in batches], axis=axis),
-            loss_masks=np.concatenate([b.loss_masks for b in batches], axis=axis),
-            reference_logprobs=np.concatenate([b.reference_logprobs for b in batches], axis=axis),
-            policy_logprobs=np.concatenate([b.policy_logprobs for b in batches], axis=axis),
-        )
-
-    def truncate_sequence(self, max_length: int) -> Self:
-        """Truncate all arrays to max_length along the sequence dimension."""
-        return RolloutBatch(
-            input_ids=self.input_ids[:, :max_length] if self.input_ids.shape[1] > max_length else self.input_ids,
-            attention_mask=(
-                self.attention_mask[:, :max_length] if self.attention_mask.shape[1] > max_length else self.attention_mask
-            ),
-            position_ids=(
-                self.position_ids[:, :max_length] if self.position_ids.shape[1] > max_length else self.position_ids
-            ),
-            target_ids=self.target_ids[:, :max_length] if self.target_ids.shape[1] > max_length else self.target_ids,
-            loss_weights=(
-                self.loss_weights[:, :max_length] if self.loss_weights.shape[1] > max_length else self.loss_weights
-            ),
-            loss_masks=self.loss_masks[:, :max_length] if self.loss_masks.shape[1] > max_length else self.loss_masks,
-            reference_logprobs=(
-                self.reference_logprobs[:, :max_length]
-                if self.reference_logprobs.shape[1] > max_length
-                else self.reference_logprobs
-            ),
-            policy_logprobs=(
-                self.policy_logprobs[:, :max_length]
-                if self.policy_logprobs.shape[1] > max_length
-                else self.policy_logprobs
-            ),
-        )
-
-    def to_jax(self) -> Self:
-        """Convert numpy arrays to JAX arrays."""
+    def to_jax(self) -> JaxRolloutBatch:
+        """Convert numpy arrays to JAX named arrays."""
         return JaxRolloutBatch(
-            input_ids=jnp.array(self.input_ids),
-            attention_mask=jnp.array(self.attention_mask),
-            position_ids=jnp.array(self.position_ids),
-            target_ids=jnp.array(self.target_ids),
-            loss_weights=jnp.array(self.loss_weights),
-            loss_masks=jnp.array(self.loss_masks),
-            reference_logprobs=jnp.array(self.reference_logprobs),
-            policy_logprobs=jnp.array(self.policy_logprobs),
+            input_ids=hax.named(jnp.array(self.input_ids), ("batch", "position")),
+            attention_mask=hax.named(jnp.array(self.attention_mask), ("batch", "position")),
+            position_ids=hax.named(jnp.array(self.position_ids), ("batch", "position")),
+            target_ids=hax.named(jnp.array(self.target_ids), ("batch", "position")),
+            loss_weights=hax.named(jnp.array(self.loss_weights), ("batch", "position")),
+            loss_masks=hax.named(jnp.array(self.loss_masks), ("batch", "position")),
+            reference_logprobs=hax.named(jnp.array(self.reference_logprobs), ("batch", "position")),
+            policy_logprobs=hax.named(jnp.array(self.policy_logprobs), ("batch", "position")),
         )
 
 

@@ -27,6 +27,7 @@ from marin.post_training.rollout_storage import (
     FileRolloutReader,
     FileRolloutWriter,
     InMemoryRolloutQueue,
+    JaxRolloutBatch,
     RolloutBatch,
     TaggedRolloutBatch,
 )
@@ -163,7 +164,7 @@ def test_replay_buffer():
     # Test sampling
     training_batch = replay_buffer.sample_training_batch()
     assert training_batch is not None
-    assert len(training_batch.input_ids) == 4
+    assert len(training_batch) == 4
 
     # Test data loader
     data_loader = ReplayDataLoader(rollout_reader=reader, replay_buffer=replay_buffer, rollout_fetch_interval=0.1)
@@ -211,10 +212,10 @@ def test_replay_buffer_multiprocess_sampling():
         buffer.add_batches([batch])
         sample = buffer.sample_training_batch()
         assert sample is not None
-        assert len(sample.input_ids) == 12
+        assert len(sample) == 12
 
-        # Collect all sampled IDs from this process
-        process_samples = [input_id[0] for input_id in sample.input_ids]
+        # Collect all sampled IDs from this process (convert JAX arrays to int)
+        process_samples = [int(input_id[0]) for input_id in sample.input_ids.array]
         all_samples.extend(process_samples)
 
     # Verify that we got samples (some may overlap due to random sampling)
@@ -245,7 +246,7 @@ def test_replay_buffer_recency_bias():
     for _ in range(100):
         sample = replay_buffer.sample_training_batch()
         if sample is not None:
-            indices = [int(token) - 1000 for token in sample.input_ids[:, 0]]
+            indices = [int(token) - 1000 for token in sample.input_ids.array[:, 0]]
             all_samples.extend(indices)
 
     # With strong recency bias, we should heavily favor high indices
@@ -333,3 +334,261 @@ def test_replay_buffer_capacity_eviction():
 
     # Verify most recent data is kept (batches 2, 3, 4 should remain)
     # This is hard to test directly without exposing internals, but capacity enforcement is verified
+
+
+def test_replay_buffer_max_resamples():
+    """Test that examples are retired after max_resamples uses."""
+    replay_buffer = ReplayBuffer(
+        local_batch_size=2,
+        process_id=0,
+        total_processes=1,
+        recency_alpha=1.0,  # Uniform sampling for predictable behavior
+        capacity=100,
+        max_samples=3,
+    )
+
+    # Create batch with identifiable examples
+    batch = create_test_batch(0, batch_size=4, max_seq_len=16)
+    batch.env_name = "test_env"
+
+    # Set unique identifiers for each example
+    for i in range(4):
+        batch.batch.input_ids[i, 0] = 2000 + i
+
+    replay_buffer.add_batches([batch])
+
+    # Initial size should be 4
+    assert replay_buffer.size() == 4
+
+    # Sample multiple times - with batch size 2, we expect examples to be used multiple times
+    samples_taken = 0
+    max_iterations = 20
+
+    for _ in range(max_iterations):
+        sample = replay_buffer.sample_training_batch()
+        if sample is None:
+            break
+        samples_taken += 1
+
+    # Should have retired all examples due to max_resamples
+    final_size = replay_buffer.size()
+    assert final_size == 0, f"Expected buffer to shrink due to max_resamples, but size remained {final_size}"
+    assert samples_taken > 4, "Should have been able to sample multiple times before retirement"
+
+
+def test_replay_buffer_max_resamples_disabled():
+    """Test that max_resamples=-1 disables retirement."""
+    replay_buffer = ReplayBuffer(
+        local_batch_size=2,
+        process_id=0,
+        total_processes=1,
+        recency_alpha=1.0,
+        capacity=100,
+        max_samples=-1,  # Disabled
+    )
+
+    # Add small batch
+    batch = create_test_batch(0, batch_size=3, max_seq_len=16)
+    batch.env_name = "test_env"
+    replay_buffer.add_batches([batch])
+
+    initial_size = replay_buffer.size()
+    assert initial_size == 3
+
+    # Sample many times - examples should never be retired
+    for _ in range(50):
+        sample = replay_buffer.sample_training_batch()
+        assert sample is not None
+        assert len(sample) == 2  # batch_size
+
+        # Size should remain constant
+        current_size = replay_buffer.size()
+        assert (
+            current_size == initial_size
+        ), f"Buffer size changed from {initial_size} to {current_size} with disabled max_resamples"
+
+
+def test_replay_buffer_max_resamples_multiple_envs():
+    """Test max_resamples with multiple environments."""
+    replay_buffer = ReplayBuffer(
+        local_batch_size=3,
+        process_id=0,
+        total_processes=1,
+        recency_alpha=1.0,
+        capacity=100,
+        max_samples=2,
+    )
+
+    # Add batches from different environments
+    for env_id in range(2):
+        batch = create_test_batch(env_id, batch_size=3, max_seq_len=16)
+        batch.env_name = f"env_{env_id}"
+
+        # Set unique identifiers per environment
+        for i in range(3):
+            batch.batch.input_ids[i, 0] = 3000 + env_id * 100 + i
+
+        replay_buffer.add_batches([batch])
+
+    initial_stats = replay_buffer.get_stats()
+    assert initial_stats["total_size"] == 6
+    assert initial_stats["num_environments"] == 2
+
+    # Sample multiple times
+    for _ in range(15):
+        sample = replay_buffer.sample_training_batch()
+        if sample is None:
+            break
+
+    # Both environments should still exist but may have fewer examples
+    final_stats = replay_buffer.get_stats()
+    assert final_stats["num_environments"] == 2
+    assert final_stats["total_size"] < 6, "Expected some examples to be retired"
+
+    # Each environment should have at least some examples remaining
+    for env_name in ["env_0", "env_1"]:
+        assert env_name in final_stats["env_sizes"]
+        # Due to balanced sampling, both environments should have some data
+
+
+def test_replay_buffer_usage_count_tracking():
+    """Test that usage counts are properly tracked."""
+    replay_buffer = ReplayBuffer(
+        local_batch_size=1,
+        process_id=0,
+        total_processes=1,
+        recency_alpha=1.0,
+        capacity=100,
+        max_samples=5,
+    )
+
+    # Add initial batch
+    batch1 = create_test_batch(0, batch_size=2, max_seq_len=16)
+    batch1.env_name = "test_env"
+    replay_buffer.add_batches([batch1])
+
+    initial_size = replay_buffer.size()
+    assert initial_size == 2
+
+    # Sample a few times (less than max_resamples)
+    for _ in range(3):
+        sample = replay_buffer.sample_training_batch()
+        assert sample is not None
+
+    # Size should remain the same since we haven't hit max_resamples
+    assert replay_buffer.size() == initial_size
+
+    # Add another batch - this should preserve existing usage counts
+    batch2 = create_test_batch(1, batch_size=2, max_seq_len=16)
+    batch2.env_name = "test_env"
+    replay_buffer.add_batches([batch2])
+
+    # Size should increase
+    new_size = replay_buffer.size()
+    assert new_size == 4, f"Expected size 4, got {new_size}"
+
+    # Continue sampling - original examples should eventually be retired
+    samples_remaining = True
+    iterations = 0
+    max_iterations = 30
+
+    while samples_remaining and iterations < max_iterations:
+        sample = replay_buffer.sample_training_batch()
+        if sample is None:
+            samples_remaining = False
+        iterations += 1
+
+        # If size drops below 4, some original examples were retired
+        if replay_buffer.size() < new_size:
+            break
+
+    # Should have retired some of the original examples
+    final_size = replay_buffer.size()
+    assert final_size >= 2, "Should have at least the new batch remaining"
+    assert final_size <= new_size, "Buffer size should not increase"
+
+
+def test_replay_buffer_max_resamples_zero():
+    """Test edge case where max_resamples=0 immediately retires examples."""
+    replay_buffer = ReplayBuffer(
+        local_batch_size=2,
+        process_id=0,
+        total_processes=1,
+        recency_alpha=1.0,
+        capacity=100,
+        max_samples=0,  # Examples retired immediately after first use
+    )
+
+    batch = create_test_batch(0, batch_size=4, max_seq_len=16)
+    batch.env_name = "test_env"
+    replay_buffer.add_batches([batch])
+
+    assert replay_buffer.size() == 4
+
+    # First sample should work
+    sample1 = replay_buffer.sample_training_batch()
+    assert sample1 is not None
+    assert len(sample1) == 2
+
+    # After sampling, used examples should be retired
+    size_after_first_sample = replay_buffer.size()
+    assert (
+        size_after_first_sample <= 2
+    ), f"Expected <= 2 examples after first sample with max_resamples=0, got {size_after_first_sample}"
+
+    # Second sample might work if there are unused examples
+    sample2 = replay_buffer.sample_training_batch()
+    if sample2 is not None:
+        # After this, buffer should be empty or nearly empty
+        final_size = replay_buffer.size()
+        assert final_size == 0, f"Expected empty buffer after max_resamples=0, got size {final_size}"
+
+
+def test_replay_buffer_produces_valid_named_arrays():
+    """Test that the replay buffer produces properly shaped JaxRolloutBatch with NamedArrays."""
+    replay_buffer = ReplayBuffer(
+        local_batch_size=4,
+        process_id=0,
+        total_processes=1,
+        recency_alpha=1.0,
+        capacity=100,
+        max_samples=-1,
+    )
+
+    # Add multiple batches from different environments
+    for env_id in range(2):
+        batch = create_test_batch(env_id, batch_size=6, max_seq_len=16)
+        batch.env_name = f"test_env_{env_id}"
+        replay_buffer.add_batches([batch])
+
+    # Sample a batch
+    sampled_batch = replay_buffer.sample_training_batch()
+    assert sampled_batch is not None
+    assert isinstance(sampled_batch, JaxRolloutBatch)
+
+    # Check that all fields are NamedArrays with correct axes
+    assert hasattr(sampled_batch.input_ids, "axes")
+    assert hasattr(sampled_batch.input_ids, "array")
+    assert sampled_batch.input_ids.axes[0].name == "batch"
+    assert sampled_batch.input_ids.axes[1].name == "position"
+
+    # Check batch size matches what we requested
+    assert len(sampled_batch) == 4
+    assert sampled_batch.input_ids.axes[0].size == 4
+
+    # Verify all fields have consistent batch size
+    for field_name in [
+        "attention_mask",
+        "position_ids",
+        "target_ids",
+        "loss_weights",
+        "loss_masks",
+        "reference_logprobs",
+        "policy_logprobs",
+    ]:
+        field = getattr(sampled_batch, field_name)
+        assert hasattr(field, "axes"), f"Field {field_name} should be a NamedArray"
+        assert field.axes[0].name == "batch", f"Field {field_name} should have batch axis"
+        assert field.axes[0].size == 4, f"Field {field_name} should have batch size 4"
+
+    print("Replay buffer NamedArray output test passed!")
