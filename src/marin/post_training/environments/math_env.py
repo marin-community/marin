@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
+from collections.abc import Iterator
 from typing import Any
 
 import datasets
@@ -21,54 +23,36 @@ from tqdm.auto import tqdm
 
 from marin.post_training.flax.utils import validate_format
 
-from .marin_env import EnvStep, InferenceContext, MarinEnv
-from .math_utils import grade_answer, last_boxed_only_string, remove_boxed
+from .marin_env import DataExample, EnvStep, InferenceContext, MarinEnv
+from .math_utils import grade_answer, last_boxed_only_string, latex_to_text, normalize_answer
+
+TRAIN_DATA_SOURCE = "di-zhang-fdu/MATH12000"
+TEST_DATA_SOURCE = "HuggingFaceH4/MATH-500"
 
 
 class MathEnv(MarinEnv):
     INSTRUCTION: str = (
-        "Show your work in <think> </think> tags. And return the final answer in <answer> </answer> "
-        "tags. Assistant: Let me solve this step by step. <think>"
+        "Return the final answer in <answer> </answer> tags using standard math notation. "
+        + "e.g. <answer>42</answer>, or <answer>1/23</answer>."
     )
 
     def __init__(self, tokenizer, **kwargs):
         self.tokenizer = tokenizer
 
-        # Initialize datasets
-        train_data_source = "di-zhang-fdu/MATH12000"
-        test_data_source = "HuggingFaceH4/MATH-500"
-        train_dataset = datasets.load_dataset(train_data_source, trust_remote_code=True)["train"]
-        test_dataset = datasets.load_dataset(test_data_source, trust_remote_code=True)["test"]
+        self.train_examples = [
+            {"prompt": ex.processed_prompt, "answer": ex.processed_answer} for ex in self.training_data()
+        ]
 
-        # Convert to the format expected by the training code and pre-tokenize
-        self.train_examples = []
-        for item in tqdm(train_dataset, desc="Processing train set"):
-            prompt = self.add_instruction(item["problem"])
-            answer = remove_boxed(last_boxed_only_string(item["solution"]))
-
-            self.train_examples.append(
-                {
-                    "prompt": prompt,
-                    "answer": answer,
-                }
-            )
-
-        self.eval_examples = []
-        for item in tqdm(test_dataset, desc="Processing test set"):
-            prompt = self.add_instruction(item["problem"])
-            answer = remove_boxed(last_boxed_only_string(item["solution"]))
-
-            self.eval_examples.append(
-                {
-                    "prompt": prompt,
-                    "answer": answer,
-                }
-            )
+        self.eval_examples = [{"prompt": ex.processed_prompt, "answer": ex.processed_answer} for ex in self.eval_data()]
 
         print(
             f"Initialized MathEnv with {len(self.train_examples)} train examples "
             f"and {len(self.eval_examples)} eval examples."
         )
+
+    def add_instruction(self, math_problem: str) -> str:
+        """Add the standard instruction to a math problem."""
+        return f"{math_problem} {self.INSTRUCTION}"
 
     def step(
         self,
@@ -117,7 +101,10 @@ class MathEnv(MarinEnv):
         return EnvStep(examples=examples, responses=responses, rewards=rewards, metrics=metrics)
 
     def _compute_rewards(
-        self, examples: list[dict[str, Any]], responses: list[list[dict[str, np.ndarray]]], tokenizer
+        self,
+        examples: list[dict[str, Any]],
+        responses: list[list[dict[str, np.ndarray]]],
+        tokenizer,
     ) -> tuple[np.ndarray, dict[str, float]]:
         """Compute rewards for generated responses."""
         all_rewards = []
@@ -129,27 +116,45 @@ class MathEnv(MarinEnv):
             group_rewards = []
             group_format_rewards = []
             group_correct_rewards = []
-            for inner_response in response:
+            for j, inner_response in enumerate(response):
                 all_lens.append(len(inner_response["tokens"]))
                 decoded_response = tokenizer.decode(inner_response["tokens"], skip_special_tokens=True)
                 validation = validate_format(decoded_response + ">")
+
+                true_answer = examples[i]["answer"].strip()
+
+                # give a weak correct response if the answer is contained anywhere in the response
+                if re.search(rf"\b{re.escape(true_answer)}\b", decoded_response):
+                    weak_correct = 1.0
+                else:
+                    weak_correct = 0.0
+
                 if validation["is_valid"]:
                     grade = grade_answer(validation["answer"], examples[i]["answer"])
                 else:
-                    grade = False
+                    # try the last token to see if we get a hit
+                    splits = decoded_response.split()
+                    if len(splits) > 0:
+                        grade = grade_answer(decoded_response.split()[-1], examples[i]["answer"])
+                    else:
+                        grade = 0.0
 
-                # if random.random() < 1 / 64:
-                #     print("=" * 25)
-                #     print(examples[i]["prompt"])
-                #     print(decoded_response + ">")
-                #     print("=" * 25)
-                #     print("gt answer: ", examples[i]["answer"])
-                #     print("extracted answer: ", validation["answer"])
-                #     print("grade: ", grade)
-                #     print("=" * 25)
+                reward = 0.3 * weak_correct + 0.1 * validation["is_valid"] + 0.8 * grade
 
-                score = float(grade)
-                group_rewards.append(float(score))
+                if i == 0 and j == 0:
+                    print("=" * 25)
+                    print(f"Prompt: {examples[i]['prompt']}")
+                    print(f"Response: {decoded_response}")
+                    print("=" * 25)
+                    print(f"True answer: {examples[i]['answer']}")
+                    print(f"Extracted answer: {validation['answer']}")
+                    print(f"Weak correct: {weak_correct}")
+                    print(f"Valid format: {validation['is_valid']}")
+                    print(f"Grade: {grade}")
+                    print(f"Reward: {reward}")
+                    print("=" * 25)
+
+                group_rewards.append(reward)
                 group_format_rewards.append(float(validation["is_valid"]))
                 group_correct_rewards.append(float(grade))
 
@@ -180,6 +185,33 @@ class MathEnv(MarinEnv):
             indices = jax.random.choice(eval_key, len(self.eval_examples), shape=(n_to_sample,), replace=False)
             return [self.eval_examples[int(idx)] for idx in indices]
 
-    def add_instruction(self, math_problem: str) -> str:
-        """Add the standard instruction to a math problem."""
-        return f"{math_problem} {self.INSTRUCTION}"
+    def clean_example(self, raw_prompt, raw_answer) -> DataExample:
+        """Clean and process a single example."""
+        # Show the transformation pipeline
+        boxed_answer = last_boxed_only_string(raw_answer)
+        cleaned_answer = normalize_answer(boxed_answer) if boxed_answer else normalize_answer(raw_answer)
+        processed_prompt = self.add_instruction(latex_to_text(raw_prompt))
+
+        return DataExample(
+            raw_prompt=raw_prompt,
+            raw_answer=raw_answer,
+            processed_prompt=processed_prompt,
+            processed_answer=cleaned_answer,
+        )
+
+    def training_data(self) -> Iterator[DataExample]:
+        train_dataset = datasets.load_dataset(TRAIN_DATA_SOURCE, trust_remote_code=True)["train"]
+
+        for item in train_dataset:
+            raw_prompt = item["problem"]
+            raw_answer = item["solution"]
+
+            yield self.clean_example(raw_prompt, raw_answer)
+
+    def eval_data(self) -> Iterator[DataExample]:
+        test_dataset = datasets.load_dataset(TEST_DATA_SOURCE, trust_remote_code=True)["test"]
+
+        for item in test_dataset:
+            raw_prompt = item["problem"]
+            raw_answer = item["solution"]
+            yield self.clean_example(raw_prompt, raw_answer)

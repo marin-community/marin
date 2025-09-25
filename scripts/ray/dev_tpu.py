@@ -281,7 +281,6 @@ Host {host_alias}
     HostName {ip_address}
     HostKeyAlias compute.{hostname}
     StrictHostKeyChecking no
-    IdentitiesOnly yes
     CheckHostIP no
     User {username}
 # END_DEV_TPU_{tpu_name.upper()}
