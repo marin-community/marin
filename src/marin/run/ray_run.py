@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import json
@@ -20,11 +22,17 @@ import os
 import re
 import shlex
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 from ray.job_submission import JobSubmissionClient
 
 from marin.run.ray_deps import build_runtime_env_for_packages
 from marin.run.vars import REMOTE_DASHBOARD_URL
+
+if TYPE_CHECKING:  # pragma: no cover - imported only for type checking
+    from levanter.infra.cli_helpers import CliConfig
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +77,179 @@ def tpus_per_node(tpu_type: str) -> int:
     return chips
 
 
+def _load_cli_config() -> "CliConfig" | None:
+    """Load the Levanter CLI configuration if it is available."""
+    try:
+        from levanter.infra import cli_helpers
+    except ImportError:
+        logger.debug("levanter.infra.cli_helpers is not available; skipping .levanter.yaml.")
+        return None
+
+    try:
+        return cli_helpers.load_config()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("Failed to load .levanter.yaml: %s", exc)
+        return None
+
+
+def load_env_vars_from_cli_config(tpu_type: str | None = None) -> dict[str, str]:
+    """Return environment variables defined in `.levanter.yaml`.
+
+    If the configuration defines accelerator specific overrides and a TPU type
+    is provided, those overrides are merged with the base environment.
+    """
+
+    config = _load_cli_config()
+    if config is None:
+        return {}
+
+    try:
+        env = config.env_for_accel(tpu_type) if tpu_type else dict(config.env)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("Failed to resolve accelerator specific env for %s: %s", tpu_type, exc)
+        env = dict(config.env)
+
+    # Filter out unset values and coerce everything to strings for Ray.
+    return {key: str(value) for key, value in env.items() if value is not None}
+
+
+def _collect_gitignore_patterns(working_dir: str) -> list[str]:
+    """Return `.gitignore` patterns relative to ``working_dir``.
+
+    Ray normally respects every `.gitignore` it encounters while walking the
+    directory tree. When we disable that behaviour we must replicate it by
+    collecting the patterns manually and providing them through the runtime
+    environment. Patterns from nested directories are converted to be relative
+    to ``working_dir`` so that Ray's own gitwildmatch handling produces the same
+    results.
+    """
+
+    patterns: list[str] = []
+
+    for current_dir, dirs, _ in os.walk(working_dir):
+        dirs.sort()
+        if ".git" in dirs:
+            dirs.remove(".git")
+
+        gitignore_file = os.path.join(current_dir, ".gitignore")
+        if not os.path.isfile(gitignore_file):
+            continue
+
+        rel_dir = os.path.relpath(current_dir, working_dir)
+        is_root = rel_dir in (".", "")
+        dir_prefix = "" if is_root else rel_dir.replace(os.sep, "/") + "/"
+
+        with open(gitignore_file, "r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.rstrip("\r\n")
+                if not line.strip():
+                    continue
+                if line.lstrip().startswith("#"):
+                    continue
+
+                negated = line.startswith("!")
+                pattern_body = line[1:] if negated else line
+
+                if not pattern_body:
+                    continue
+
+                pattern_body = pattern_body.replace("\\", "/")
+
+                anchored = pattern_body.startswith("/")
+                if anchored:
+                    pattern_body = pattern_body.lstrip("/")
+
+                directory_only = pattern_body.endswith("/")
+                if directory_only:
+                    pattern_body = pattern_body.rstrip("/")
+                    if not pattern_body:
+                        continue
+
+                if is_root:
+                    pattern = f"/{pattern_body}" if anchored else pattern_body
+                else:
+                    if not pattern_body:
+                        continue
+
+                    if anchored or "/" in pattern_body:
+                        pattern = f"{dir_prefix}{pattern_body}"
+                    else:
+                        pattern = f"{dir_prefix}**/{pattern_body}"
+
+                if directory_only:
+                    pattern = pattern.rstrip("/") + "/"
+
+                if negated:
+                    pattern = f"!{pattern}"
+
+                patterns.append(pattern)
+
+    return patterns
+
+
+def maybe_include_levanter_config(runtime_env: dict, working_dir: str) -> tuple[dict, bool]:
+    """Ensure `.levanter.yaml` (or the legacy `.config`) is uploaded with the job.
+
+    Returns the possibly-updated runtime environment and a boolean indicating
+    whether Ray's implicit `.gitignore` handling should be disabled while
+    packaging the runtime environment. When this is ``True`` the caller must set
+    the ``RAY_RUNTIME_ENV_IGNORE_GITIGNORE`` environment variable while
+    submitting the job.
+    """
+
+    present_configs: list[str] = []
+    for filename in (".levanter.yaml", ".config"):
+        abs_path = os.path.join(working_dir, filename)
+        if os.path.isfile(abs_path):
+            present_configs.append(filename)
+
+    if not present_configs:
+        return runtime_env, False
+
+    patterns = _collect_gitignore_patterns(working_dir)
+
+    if patterns:
+        for config_name in present_configs:
+            negated = f"!{config_name}"
+            if negated not in patterns:
+                patterns.append(negated)
+
+        excludes = list(runtime_env.get("excludes", []))
+        for pattern in patterns:
+            if pattern not in excludes:
+                excludes.append(pattern)
+        runtime_env["excludes"] = excludes
+
+        logger.debug(
+            "Applied .gitignore patterns to runtime env excludes and re-included %s.",
+            ", ".join(present_configs),
+        )
+
+        return runtime_env, True
+
+    return runtime_env, False
+
+
+@contextmanager
+def _temporarily_ignore_gitignore(should_ignore: bool) -> Iterator[None]:
+    """Temporarily disable Ray's automatic `.gitignore` handling."""
+
+    if not should_ignore:
+        yield
+        return
+
+    env_var = "RAY_RUNTIME_ENV_IGNORE_GITIGNORE"
+    previous = os.environ.get(env_var)
+    os.environ[env_var] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(env_var, None)
+        else:
+            os.environ[env_var] = previous
+
+
 async def submit_and_track_job(
     entrypoint: str,
     extra: str,
@@ -98,6 +279,7 @@ async def submit_and_track_job(
 
     # add the TPU dependency for cluster jobs.
     runtime_dict = build_runtime_env_for_packages(extra=[*extra.split(","), "tpu"], env_vars=env_vars) | runtime_dict
+    runtime_dict, ignore_gitignore = maybe_include_levanter_config(runtime_dict, current_dir)
 
     logger.info(
         f"Terminal command: \n"
@@ -108,15 +290,16 @@ async def submit_and_track_job(
     )
 
     # Submit the job with runtime environment and entrypoint
-    submission_id = client.submit_job(
-        entrypoint=entrypoint,
-        runtime_env=runtime_dict,
-        entrypoint_num_cpus=entrypoint_num_cpus,
-        entrypoint_num_gpus=entrypoint_num_gpus,
-        entrypoint_memory=entrypoint_memory,
-        entrypoint_resources=entrypoint_resources,
-        submission_id=submission_id,
-    )
+    with _temporarily_ignore_gitignore(ignore_gitignore):
+        submission_id = client.submit_job(
+            entrypoint=entrypoint,
+            runtime_env=runtime_dict,
+            entrypoint_num_cpus=entrypoint_num_cpus,
+            entrypoint_num_gpus=entrypoint_num_gpus,
+            entrypoint_memory=entrypoint_memory,
+            entrypoint_resources=entrypoint_resources,
+            submission_id=submission_id,
+        )
     logger.info(f"Job submitted with ID: {submission_id}")
     logger.info(f"Job URL: http://localhost:8265/#/jobs/{submission_id}")
 
@@ -188,8 +371,8 @@ def main():
         exit(1)
     full_cmd = full_cmd[2:]
 
-    # Load and merge environment variables from multiple -e options
-    env_vars = {}
+    # Load and merge environment variables from configuration and CLI flags
+    env_vars = load_env_vars_from_cli_config(args.tpu)
 
     if args.env_vars:
         for item in args.env_vars:
