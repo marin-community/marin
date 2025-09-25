@@ -23,7 +23,7 @@ import ray
 from jax.sharding import Mesh
 
 try:
-    from marin.post_training.weight_transfer_manager import (
+    from marin.post_training.weight_transfer import (
         RayWeightCoordinator,
         WeightTransferConfig,
         WeightTransferMode,

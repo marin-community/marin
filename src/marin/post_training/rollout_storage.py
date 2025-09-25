@@ -26,12 +26,6 @@ This includes:
 * loss_masks: Masks indicating which tokens contribute to the loss.
 * reference_logprobs: Log probabilities from the reference model.
 
-TODO:
-
-* Handle cleanup of old rollouts
-* Prioritize and slice data across features & time periods
-
-
 A RolloutBatch consists of the model information in addition to:
 
 * Environment name
@@ -56,6 +50,7 @@ import time
 from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass
+from enum import Enum
 from typing import Self
 
 import equinox as eqx
@@ -64,6 +59,24 @@ import jax.numpy as jnp
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+class StorageType(Enum):
+    """Type of rollout storage backend."""
+
+    FILE = "file"
+    IN_MEMORY = "in_memory"
+
+
+# Global registry for named in-memory queues
+_MEMORY_QUEUES: dict[str, "InMemoryRolloutQueue"] = {}
+
+
+def _get_or_create_queue(queue_name: str) -> "InMemoryRolloutQueue":
+    """Get or create a named in-memory queue."""
+    if queue_name not in _MEMORY_QUEUES:
+        _MEMORY_QUEUES[queue_name] = InMemoryRolloutQueue()
+    return _MEMORY_QUEUES[queue_name]
 
 
 class JaxRolloutBatch(eqx.Module):
@@ -175,6 +188,39 @@ class TaggedRolloutBatch:
         return len(self.batch)
 
 
+@dataclass
+class RolloutStorageConfig:
+    """Configuration for rollout storage backend."""
+
+    storage_type: StorageType
+    # For file storage
+    path: str | None = None
+    poll_interval: float = 1.0
+    max_rollout_files: int = 32
+    # For in-memory storage
+    queue_name: str | None = None
+
+    def create_reader(self) -> "RolloutReader":
+        if self.storage_type == StorageType.FILE:
+            if self.path is None:
+                raise ValueError("path must be specified for FILE storage type")
+            return FileRolloutReader(self.path, self.poll_interval)
+        else:
+            if self.queue_name is None:
+                raise ValueError("queue_name must be specified for IN_MEMORY storage type")
+            return _get_or_create_queue(self.queue_name).reader()
+
+    def create_writer(self) -> "RolloutWriter":
+        if self.storage_type == StorageType.FILE:
+            if self.path is None:
+                raise ValueError("path must be specified for FILE storage type")
+            return FileRolloutWriter(self.path, self.max_rollout_files)
+        else:
+            if self.queue_name is None:
+                raise ValueError("queue_name must be specified for IN_MEMORY storage type")
+            return _get_or_create_queue(self.queue_name).writer()
+
+
 class RolloutReader(ABC):
     """Abstract interface for reading rollout batches."""
 
@@ -219,18 +265,15 @@ class FileRolloutReader(RolloutReader):
     def __init__(
         self,
         path: str,
-        batch_prefix: str = "batch_",
         poll_interval: float = 1.0,
     ):
         """Initialize file-based rollout reader.
 
         Args:
             path: Storage directory or GCS bucket
-            batch_prefix: Prefix for batch files.
             poll_interval: Interval in seconds between polls when waiting.
         """
         self.path = path.rstrip("/")
-        self.batch_prefix = batch_prefix
         self.poll_interval = poll_interval
 
         # Create filesystem instance
@@ -244,20 +287,22 @@ class FileRolloutReader(RolloutReader):
 
     def _get_available_files(self) -> list[str]:
         """Get list of available batch files sorted by timestamp."""
-        pattern = f"{self.path}/{self.batch_prefix}*.pkl"
+        pattern = f"{self.path}/*.pkl"
         files = self.fs.glob(pattern)
 
         # Parse and sort files by timestamp
         parsed_files = []
         for file_path in files:
             filename = file_path.split("/")[-1]
-            if filename.startswith(self.batch_prefix) and filename.endswith(".pkl"):
-                # Extract timestamp from filename: batch_TIMESTAMP_hostname_counter.pkl
-                parts = filename[len(self.batch_prefix) : -4].split("_")
-                if len(parts) >= 3:
+            if filename.endswith(".pkl"):
+                # Extract timestamp from filename: timestamp_hostname_counter.pkl
+                parts = filename.split("_")
+                if len(parts) == 3:
                     timestamp_int = int(parts[0])
                     timestamp = timestamp_int / 1000000.0  # Convert back from microseconds
                     parsed_files.append((timestamp, file_path))
+                else:
+                    logger.warning(f"Unexpected filename format: {filename}")
 
         # Sort by timestamp and return file paths
         parsed_files.sort(key=lambda x: x[0])
@@ -265,29 +310,20 @@ class FileRolloutReader(RolloutReader):
 
     def read_batch(self, timeout: float | None = None) -> TaggedRolloutBatch | None:
         """Read a single batch with optional timeout."""
-        start_time = time.time()
-
         while True:
-            # Get all available files
             available_files = self._get_available_files()
-
-            # Find first unread file
             for file_path in available_files:
                 if file_path not in self._read_files:
                     self._read_files.add(file_path)
-                    with self.fs.open(file_path, "rb") as f:
-                        return pickle.load(f)
+                    try:
+                        with self.fs.open(file_path, "rb") as f:
+                            return pickle.load(f)
+                    except Exception as e:
+                        # a file might be deleted while we're trying to read it, or corrupted
+                        logger.error(f"Failed to read rollout file {file_path}: {e}")
+                        continue
 
-            # No new files available
-            if timeout is None or timeout <= 0:
-                return None
-
-            # Check timeout
-            if time.time() - start_time >= timeout:
-                return None
-
-            # Wait before polling again
-            time.sleep(min(self.poll_interval, timeout - (time.time() - start_time)))
+            time.sleep(self.poll_interval)
 
     def read_all_available(self) -> list[TaggedRolloutBatch]:
         """Read all currently available batches without blocking."""
@@ -306,15 +342,13 @@ class FileRolloutReader(RolloutReader):
 class FileRolloutWriter(RolloutWriter):
     """File-based rollout writer using fsspec for various storage backends."""
 
-    def __init__(self, path: str, batch_prefix: str = "batch_", max_rollout_files: int = 32):
+    def __init__(self, path: str, max_rollout_files: int = 32):
         """Initialize file-based rollout writer.
 
         Args:
             path: Storage path (supports local filesystem, GCS, S3, etc.).
-            batch_prefix: Prefix for batch files.
         """
         self.path = path.rstrip("/")
-        self.batch_prefix = batch_prefix
         self.hostname = socket.gethostname()
         self.max_rollout_files = max_rollout_files
 
@@ -337,7 +371,7 @@ class FileRolloutWriter(RolloutWriter):
     def _get_batch_path(self, timestamp: float, counter: int) -> str:
         """Get path for batch with timestamp and hostname."""
         timestamp_int = int(timestamp * 1000000)  # microseconds for ordering
-        return f"{self.path}/{self.batch_prefix}{timestamp_int:020d}_{self.hostname}_{counter:06d}.pkl"
+        return f"{self.path}/{timestamp_int:020d}_{self.hostname}_{counter:06d}.pkl"
 
     def write_batch(self, batch: TaggedRolloutBatch) -> None:
         """Write batch to storage with all required fields."""
