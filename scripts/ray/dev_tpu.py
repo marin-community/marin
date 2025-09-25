@@ -364,9 +364,8 @@ def allocate(ctx, tpu_type, sync_path, username, duration):
         if inferred_tpu_type:
             tpu_type = inferred_tpu_type
         else:
-            tpu_type = "v4-8"
-            logger.warning(
-                "Could not infer TPU type from config; defaulting to %s", tpu_type
+            raise click.ClickException(
+                "Could not infer TPU type from config; please specify --tpu-type."
             )
 
     if tpu_type not in ["v4-8", "v5p-8"]:
