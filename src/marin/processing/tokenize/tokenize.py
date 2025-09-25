@@ -60,6 +60,14 @@ from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size
 logger = logging.getLogger(__name__)
 
 
+@dataclasses.dataclass(frozen=True)
+class HfDatasetSpec:
+    """Specification for a HuggingFace dataset and optional subset name."""
+
+    id: str
+    name: str | None = None
+
+
 class TokenizeConfigBase(abc.ABC):
     """Base class for tokenize configs."""
 
