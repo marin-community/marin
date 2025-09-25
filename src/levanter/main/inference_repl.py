@@ -26,17 +26,9 @@ from typing import Callable, Dict, Optional
 
 import equinox as eqx
 import jax.random as jrandom
+import levanter
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
-from prompt_toolkit import prompt
-from prompt_toolkit.completion import WordCompleter
-from prompt_toolkit.history import FileHistory
-from rich.console import Console
-from rich.panel import Panel
-from submodules.levanter.src.levanter.models.lm_model import LmHeadModel
-from transformers import LlamaConfig
-
-import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.inference.engine import InferenceEngineConfig
@@ -47,9 +39,15 @@ from levanter.inference.openai import (
     InferenceServerConfig,
     _create_chat_completion,
 )
-from levanter.models.lm_model import LmConfig
+from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
+from prompt_toolkit import prompt
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.history import FileHistory
+from rich.console import Console
+from rich.panel import Panel
+from transformers import LlamaConfig
 
 logger = logging.getLogger(__name__)
 console = Console()
