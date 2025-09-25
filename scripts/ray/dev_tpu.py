@@ -62,7 +62,6 @@ import threading
 import time
 import yaml
 
-
 # N.B. We have to import from "src" as we are using the `ray.remote` directly from our `uv run`
 # script instead of launching a driver job. This confuses cloudpickle for some reason.
 from src.marin.cluster import ray as ray_utils
@@ -87,9 +86,7 @@ DEFAULT_ENV_VARS = [
 ]
 
 
-def build_env_dict(
-    env_vars: list[str], extra_env: list[str] | None = None, forward_all: bool = False
-) -> dict[str, str]:
+def build_env_dict(env_vars: list[str], extra_env: list[str] | None = None, forward_all: bool = False) -> dict[str, str]:
     """Build environment variable dictionary for forwarding."""
     # Start with all environment variables if requested, otherwise just defaults
     if forward_all:
@@ -515,9 +512,7 @@ def allocate(ctx, tpu_type, sync_path, username, duration):
         if inferred_tpu_type:
             tpu_type = inferred_tpu_type
         else:
-            raise click.ClickException(
-                "Could not infer TPU type from config; please specify --tpu-type."
-            )
+            raise click.ClickException("Could not infer TPU type from config; please specify --tpu-type.")
 
     if tpu_type not in ["v4-8", "v5p-8"]:
         print(f"Warning: TPU type {tpu_type} may not be supported", file=sys.stderr)
