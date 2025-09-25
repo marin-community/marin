@@ -18,12 +18,13 @@ Based on the parallel computation pattern where attention and MLP are computed s
 """
 
 import logging
+from levanter.optim.cautious import CautiousConfig
 
 from experiments.llama import llama_75m, llama_150m, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.parallel_llama_75m.exp1571_parallel_llama import ParallelLlamaConfig
 from marin.execution.executor import executor_main
-from marin.resources import GpuConfig, TpuPodConfig
+from marin.resources import GpuConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 AUTHOR = Author(
@@ -76,21 +77,21 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
         "75m": 75_000_000,
         "150m": 150_000_000,
         "300m": 300_000_000,
-        "600m": 600_000_000,
+        "520m": 520_000_000,
     }
 
     llama_model_cfgs = {
         "75m": llama_75m,
         "150m": llama_150m,
         "300m": llama_300m,
-        "600m": llama_600m,
+        "520m": llama_600m,
     }
 
     batch_sizes = {
-        "75m": 64,
-        "150m": 64,
-        "300m": 64,
-        "600m": 64,
+        "75m": 128,
+        "150m": 128,
+        "300m": 128,
+        "600m": 128,
     }
 
     # Resource configurations - using GPUs for smaller models, TPUs for larger
@@ -98,29 +99,55 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
         "75m": GpuConfig(gpu_count=1, accelerator_type="H100"),
         "150m": GpuConfig(gpu_count=1, accelerator_type="H100"), 
         "300m": GpuConfig(gpu_count=1, accelerator_type="H100"),
-        "600m": GpuConfig(gpu_count=1, accelerator_type="H100"),
+        "520m": GpuConfig(gpu_count=1, accelerator_type="H100"),
     }
 
-    # Learning rates scaled appropriately for each model size
-    learning_rates = {
-        "75m": 3e-3,
-        "150m": 3e-3,
-        "300m": 3e-3,
-        "600m": 3e-4,  # Lower LR for larger model
+    # Cautious optimizer configs for each size
+    cautious_configs = {
+        "130m": CautiousConfig(
+            learning_rate=0.008,
+            weight_decay=0.1,
+            min_lr_ratio=0.0,
+            warmup=2000,
+            beta1=0.95,
+            beta2=0.98,
+            epsilon=1e-15,
+            max_grad_norm=1,
+        ),
+        "300m": CautiousConfig(
+            learning_rate=0.008,
+            weight_decay=0.1,
+            min_lr_ratio=0.0,
+            warmup=2000,
+            beta1=0.98,
+            beta2=0.98,
+            epsilon=1e-25,
+            max_grad_norm=2,
+        ),
+        "520m": CautiousConfig(
+            learning_rate=0.008,
+            weight_decay=0.1,
+            min_lr_ratio=0.0,
+            warmup=2000,
+            beta1=0.98,
+            beta2=0.98,
+            epsilon=1e-25,
+            max_grad_norm=1,
+        ),
     }
 
     descriptions = {
         "75m": "Parallel Llama ~75M with parallel attention/MLP computation.",
         "150m": "Parallel Llama ~150M with parallel attention/MLP computation.",
         "300m": "Parallel Llama ~300M with parallel attention/MLP computation.",
-        "600m": "Parallel Llama ~600M with parallel attention/MLP computation.",
+        "520m": "Parallel Llama ~520m with parallel attention/MLP computation.",
     }
 
     run_names = {
-        "75m": "parallel_llama_75m_1024",
-        "150m": "parallel_llama_150m_1024",
-        "300m": "parallel_llama_300m_1024",
-        "600m": "parallel_llama_600m_1024",
+        "75m": "parallel_llama_75m",
+        "150m": "parallel_llama_150m",
+        "300m": "parallel_llama_300m",
+        "520m": "parallel_llama_520m",
     }
 
     if size not in param_counts:
@@ -129,7 +156,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     llama_cfg = llama_model_cfgs[size]
     batch_size = batch_sizes[size]
     resource_config = resource_cfgs[size]
-    learning_rate = learning_rates[size]
+    cautious = cautious_configs[size]
     description = descriptions[size]
     run_name = run_names[size]
 
@@ -143,8 +170,8 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
         resource_config,
         train_batch_size=batch_size,
         num_train_steps=num_train_steps,
-        learning_rate=learning_rate,
-        weight_decay=0.1,
+        learning_rate=cautious.learning_rate,
+        optimizer_config=cautious,
         steps_per_eval=2000,
     )
 
@@ -162,7 +189,7 @@ if __name__ == "__main__":
         build_config("75m"),
         build_config("150m"),
         build_config("300m"),
-        build_config("600m"),
+        build_config("520m"),
     ]
 
     steps = []
