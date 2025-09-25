@@ -66,7 +66,7 @@ if __name__ == "__main__":
             # # use causal reasoning to predict the correct outcome of a given scenario
             # EvalTaskConfig("copa", num_fewshot=0, task_alias="copa_0shot"),
             # EvalTaskConfig(name="drop", num_fewshot=0, task_alias="drop_0shot"),
-            # EvalTaskConfig(name="gsm8k_cot", num_fewshot=8, task_alias="gsm8k_cot"),
+            EvalTaskConfig(name="gsm8k_cot", num_fewshot=8, task_alias="gsm8k_cot"),
             # # 4-way multiple choice commonsense reasoning dataset
             EvalTaskConfig("hellaswag", 0, task_alias="hellaswag_0shot"),
             # # 4-way MCQ commonsense reasoning dataset
