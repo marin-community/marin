@@ -54,20 +54,11 @@ def _to_parallel_llama_from_llama(llama_cfg, *, seq_len_override=None) -> Parall
         num_layers=llama_cfg.num_layers,
         num_heads=llama_cfg.num_heads,
         num_kv_heads=llama_cfg.num_kv_heads,
-        head_dim=getattr(llama_cfg, "head_dim", None),
-        use_bias=getattr(llama_cfg, "use_bias", False),
-        use_layer_norm_weight=getattr(llama_cfg, "use_layer_norm_weight", True),
-        rope=llama_cfg.rope,
-        activation_function=llama_cfg.activation_function,
-        initializer_range=llama_cfg.initializer_range,
-        layer_norm_epsilon=llama_cfg.layer_norm_epsilon,
-        tie_word_embeddings=llama_cfg.tie_word_embeddings,
-        upcast_attn=llama_cfg.upcast_attn,
-        attn_backend=llama_cfg.attn_backend,
-        flash_attention_block_size=llama_cfg.flash_attention_block_size,
-        scan_layers=getattr(llama_cfg, "scan_layers", True),
-        gradient_checkpointing=getattr(llama_cfg, "gradient_checkpointing", True),
-        use_parallel_blocks=True,  # Enable parallel computation
+        use_bias=False,
+        use_layer_norm_weight=True,
+        tie_word_embeddings=False,
+        use_parallel_blocks=True,
+        cross_entropy_block_size=32000
     )
     return parallel_llama
 
@@ -172,7 +163,6 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
         num_train_steps=num_train_steps,
         learning_rate=cautious.learning_rate,
         optimizer_config=cautious,
-        steps_per_eval=2000,
     )
 
     cfg = SpeedrunConfig(
@@ -188,8 +178,8 @@ if __name__ == "__main__":
     runs = [
         build_config("75m"),
         build_config("150m"),
-        build_config("300m"),
-        build_config("520m"),
+        # build_config("300m"),
+        # build_config("520m"),
     ]
 
     steps = []
