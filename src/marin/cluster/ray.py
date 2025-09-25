@@ -112,16 +112,25 @@ def run_ray_command(
     if env is None:
         env = os.environ.copy() | {"TERM": "dumb"}
 
-    return subprocess.run(
-        command,
-        stdout=subprocess.PIPE if capture_output else None,
-        stderr=subprocess.PIPE if capture_output else None,
-        text=text,
-        env=env,
-        check=check,
-        timeout=timeout,
-        start_new_session=True,  # Creates new process group to avoid terminal issues
-    )
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE if capture_output else None,
+            stderr=subprocess.PIPE if capture_output else None,
+            text=text,
+            env=env,
+            check=check,
+            timeout=timeout,
+            start_new_session=True,  # Creates new process group to avoid terminal issues
+        )
+        return result
+    except subprocess.CalledProcessError as e:
+        raise RayCommandError(
+            command=command,
+            returncode=e.returncode,
+            stdout=e.stdout or "",
+            stderr=e.stderr or "",
+        ) from e
 
 
 def get_head_ip_from_config(cluster_config: str) -> str:
@@ -193,7 +202,11 @@ def start_ssh_tunnel_to_head(cluster_config: str, head_ip: str) -> DashboardInfo
     ]
 
     logger.info(
-        f"Starting SSH tunnel to {head_ip} with ports: " + f"dashboard={dashboard_port}, ray={gcs_port}, api={api_port}"
+        f"Starting SSH tunnel to {head_ip} with ports: "
+        + f"\ndashboard={dashboard_port}"
+        + f"\nray={gcs_port}"
+        + f"\napi={api_port}"
+        + f"\n View the dashboard at http://localhost:{dashboard_port}"
     )
 
     ssh_process = subprocess.Popen(
@@ -255,7 +268,6 @@ def ray_dashboard(cluster_config: str, ray_init: bool = False) -> Generator[Dash
     # Get head IP and start SSH tunnel
     logger.info(f"Getting head IP for cluster config: {cluster_config}")
     head_ip = get_head_ip_from_config(cluster_config)
-
     dashboard_info = start_ssh_tunnel_to_head(cluster_config, head_ip)
 
     # Set environment variables for Ray CLI and Python API
@@ -272,15 +284,6 @@ def ray_dashboard(cluster_config: str, ray_init: bool = False) -> Generator[Dash
                 runtime_env={"working_dir": "."},
             )
         yield dashboard_info
-    except KeyboardInterrupt:
-        # Reset terminal to sane state after Ctrl+C
-        try:
-            subprocess.run(["stty", "sane"], capture_output=True, timeout=5)
-            subprocess.run(["reset"], capture_output=True, timeout=5)
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
-            logger.debug("Failed to reset terminal state")
-            pass
-        raise
     finally:
         # Restore original environment variables
         if original_ray_address is not None:
@@ -330,7 +333,7 @@ def submit_job(
         cmd.extend(["--working-dir", working_dir])
 
     if runtime_env:
-        cmd.extend(["--runtime-env", json.dumps(runtime_env)])
+        cmd.extend(["--runtime-env-json", json.dumps(runtime_env)])
 
     if resources:
         for resource, amount in resources.items():
@@ -338,7 +341,7 @@ def submit_job(
 
     cmd.extend(["--", entrypoint])
 
-    result = run_ray_command(cmd, timeout=60)
+    result = run_ray_command(cmd, timeout=500, capture_output=False)
     # Extract job ID from output (usually in format "Job submitted with ID: <id>")
     output_lines = result.stdout.strip().split("\n")
     for line in output_lines:
@@ -385,9 +388,11 @@ def resubmit_job(
     raise_errors: bool,
 ) -> None:
     """Resubmit the job using the working directory and runtime environment."""
-    runtime_env_args = ["--runtime-env", json.dumps(runtime_env)] if runtime_env else []
+    runtime_env_args = ["--runtime-env-json", json.dumps(runtime_env)] if runtime_env else []
 
     logger.info(f"Resubmitting job {job_id}...")
+    import shlex
+
     job_array = [
         "ray",
         "job",
@@ -396,13 +401,14 @@ def resubmit_job(
         working_dir,
         *runtime_env_args,
         "--",
-        entrypoint,
+        *shlex.split(entrypoint),
     ]
     job_str = " ".join(job_array)
-    logger.info(f"Submitting the job: {job_str}")
+
+    logger.info(f"Submitting the job: {shlex.quote(job_str)}")
 
     try:
-        run_ray_command(job_array)
+        run_ray_command(job_array, timeout=500, capture_output=False)
         logger.info(f"Successfully resubmitted job {job_id}")
     except RayCommandError as e:
         logger.error(f"Failed to resubmit job {job_id}: {e}")
@@ -690,7 +696,7 @@ def initialize_manual_worker(config_file: str, tpu_name: str) -> None:
     setup_commands = "\n".join(setup_commands)
 
     entry_script_content = f"""#!/bin/bash
-
+set -x
 set -eo pipefail
 
 export BUCKET="{bucket}"
@@ -701,10 +707,10 @@ export BUCKET="{bucket}"
 
 echo 'Checking for head node IP...'
 gcloud compute instances list \\
-  --filter="labels.ray-cluster-name:{cluster_name} AND labels.ray-node-type=head" \\
+  --filter="labels.ray-node-name:ray-{cluster_name}-head AND labels.ray-node-type=head" \\
   --format="value(networkInterfaces[0].networkIP)" > /tmp/head_ip
 
-HEAD_IP=$(cat /tmp/head_ip || true)
+HEAD_IP=$(cat /tmp/head_ip | head -1 | awk '{{print $1}}' || true)
 if [ -z "$HEAD_IP" ]; then
   echo 'Failed to resolve head node IP' >&2
   exit 1

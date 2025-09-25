@@ -25,12 +25,10 @@ Usage:
 from dataclasses import dataclass
 import json
 import logging
-import stat
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 import click
 
@@ -64,8 +62,8 @@ def check_cluster_head_running(config_path: str) -> bool:
 @dataclass
 class Context:
     verbose: bool = False
-    config_file: Optional[str] = None
-    config_obj: Optional[RayClusterConfig] = None
+    config_file: str | None = None
+    config_obj: RayClusterConfig | None = None
 
 
 # Context object to pass global options between commands
@@ -121,14 +119,37 @@ def stop_cluster(ctx):
         print("Error: --config required for cluster commands", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Stopping cluster {config_obj.cluster_name}...")
-    subprocess.run(["ray", "down", "-y", config_path], check=True)
+    _stop_cluster_internal(config_obj, config_path)
     print("Cluster stopped successfully!")
+
+
+def _stop_cluster_internal(config_obj: RayClusterConfig, config_path: str):
+    """Terminate a Ray cluster.
+
+    N.B. We terminate the Ray coordinator node first to avoid restarting any new TPUs while
+    shutting down. We then explicitly shut down the TPU nodes in parallel. Ray serializes this
+    and often times out by default.
+
+    Finally we call ray down to finish up any leftover resources.
+    """
+    print(f"Terminating coordinator node for cluster {config_obj.cluster_name}...")
+    terminated_head = gcp.terminate_head_node(config_obj.cluster_name, config_obj.project_id, config_obj.zone)
+    if terminated_head:
+        print(f"Terminated head node: {terminated_head}")
+
+    print(f"Terminating TPUs for cluster {config_obj.cluster_name} in zone {config_obj.zone}...")
+    terminated_tpus = gcp.terminate_tpus_in_cluster(config_obj.project_id, config_obj.zone, config_obj.cluster_name)
+    if terminated_tpus:
+        print(f"Terminated {len(terminated_tpus)} TPUs")
+
+    print(f"Cleaning up Ray cluster state for {config_obj.cluster_name}...")
+    subprocess.run(["ray", "down", "-y", config_path], check=False)  # check=False since instances may already be gone
 
 
 @cli.command("restart-cluster")
 @click.pass_context
-def restart_cluster(ctx):
+@click.option("--preserve-jobs", help="Whether to preserve jobs during restart", default=True)
+def restart_cluster(ctx, preserve_jobs):
     """Restart cluster with job preservation."""
     config_obj, config_path = ctx.obj.config_obj, ctx.obj.config_file
     if not config_obj or not config_path:
@@ -137,15 +158,24 @@ def restart_cluster(ctx):
 
     print(f"Restarting cluster {config_obj.cluster_name}...")
 
+    if not preserve_jobs:
+        print("Stopping cluster...")
+        _stop_cluster_internal(config_obj, config_path)
+
+        print("Starting cluster...")
+        subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
+        print("Cluster restarted successfully!")
+        return
+
     # Backup jobs
     print("Backing up jobs...")
     with tempfile.TemporaryDirectory() as backup_dir:
         with ray.ray_dashboard(config_path):
             ray.backup_jobs(config_path, backup_dir)
 
-        # Restart cluster
+        # Restart cluster using proper stop sequence
         print("Stopping cluster...")
-        subprocess.run(["ray", "down", "-y", config_path], check=True)
+        _stop_cluster_internal(config_obj, config_path)
 
         print("Starting cluster...")
         subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
@@ -321,7 +351,7 @@ def add_worker(ctx, tpu_type, capacity, name):
 
 
 @cli.command("init-worker")
-@click.option("--name")
+@click.argument("name")
 @click.pass_context
 def init_worker(ctx, name):
     """Initialize Ray on a manual TPU worker."""
