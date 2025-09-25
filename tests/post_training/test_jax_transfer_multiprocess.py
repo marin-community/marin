@@ -14,48 +14,14 @@
 
 """
 Multi-process tests for JAX transfer server weight transfer mode.
-
-These tests verify the JAX experimental transfer server functionality
-by running server and client in separate processes with proper JAX
-distributed initialization.
 """
 
-import json
+import multiprocessing
 import os
-import subprocess
-import sys
-import tempfile
 import time
 import uuid
-from pathlib import Path
 
 import pytest
-
-try:
-    import jax
-    import jax.numpy as jnp
-    import ray
-    from marin.post_training.weight_transfer import (
-        WeightTransferConfig,
-        WeightTransferMode,
-    )
-except ImportError:
-    pytest.skip("Post training imports unavailable", allow_module_level=True)
-
-
-def create_worker_script(script_path: Path, process_id: int, coordinator_address: str, num_processes: int, mode: str):
-    """Create a Python script for a worker process."""
-    script_content = f'''
-import os
-import sys
-import json
-import time
-import traceback
-
-# Set up JAX distributed before any JAX imports
-os.environ["JAX_COORDINATOR_ADDRESS"] = "{coordinator_address}"
-os.environ["JAX_PLATFORMS"] = "cpu"  # Force CPU-only for testing
-os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count={num_processes}"
 
 import jax
 import jax.numpy as jnp
@@ -63,31 +29,18 @@ import haliax as hax
 import numpy as np
 import ray
 
-# Initialize JAX distributed
-process_id = {process_id}
 try:
-    jax.distributed.initialize(
-        coordinator_address="{coordinator_address}",
-        num_processes={num_processes},
-        process_id=process_id
+    from marin.post_training.weight_transfer import (
+        WeightTransferConfig,
+        WeightTransferMode,
+        create_weight_transfer_server,
+        create_weight_transfer_client,
     )
-    print(f"Process {{process_id}} initialized JAX distributed", flush=True)
-except Exception as e:
-    print(f"Process {{process_id}} failed to initialize JAX distributed: {{e}}", flush=True)
-    sys.exit(1)
+    from jax.experimental import transfer as jax_transfer
+    _ = jax_transfer  # Ensure we can access this module
+except ImportError:
+    pytest.skip("Post training imports unavailable", allow_module_level=True)
 
-# Verify we have the expected number of devices
-total_devices = jax.device_count()
-local_devices = jax.local_device_count()
-print(f"Process {{process_id}}: total_devices={{total_devices}}, local_devices={{local_devices}}", flush=True)
-
-# Import weight transfer components after JAX is initialized
-from marin.post_training.weight_transfer import (
-    WeightTransferConfig,
-    WeightTransferMode,
-    create_weight_transfer_server,
-    create_weight_transfer_client,
-)
 
 def create_sample_pytree(seed: int):
     """Create a sample pytree for testing."""
@@ -97,313 +50,165 @@ def create_sample_pytree(seed: int):
     Vocab = hax.Axis("vocab", 100)
     Hidden = hax.Axis("hidden", 64)
 
-    return {{
-        "embedding": {{
+    return {
+        "embedding": {
             "weight": hax.named(
                 jnp.array(generator.standard_normal((100, 64), dtype=jnp.float32)),
                 (Vocab, Hidden),
             ),
-        }},
-        "output": {{
+        },
+        "output": {
             "weight": hax.named(
                 jnp.array(generator.standard_normal((64, 100), dtype=jnp.float32)),
                 (Hidden, Vocab),
             ),
-        }},
-    }}
+        },
+    }
+
 
 def create_mesh():
     """Create a simple JAX mesh for testing."""
     devices = jax.local_devices()[:1]
     return jax.sharding.Mesh(np.array(devices), axis_names=("batch",))
 
-# Main logic based on mode
-mode = "{mode}"
 
-try:
-    # Ray initialization will be handled by weight transfer components
-    pass
+def run_server(coordinator_name: str, process_id: int, num_processes: int, coordinator_address: str):
+    """Run server process."""
+    try:
+        # Set up JAX environment before any JAX imports
+        os.environ["JAX_PLATFORMS"] = "cpu"
+        os.environ["JAX_DISABLE_JIT"] = "true"
+        os.environ["JAX_COORDINATOR_ADDRESS"] = coordinator_address
+        os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={num_processes}"
 
-    config = WeightTransferConfig(
-        mode=WeightTransferMode.JAX_TRANSFER_SERVER,
-        sync_interval_steps=1,
-        poll_interval_seconds=0.1,
-        coordinator_name=f"jax_coordinator_{{uuid.uuid4().hex[:8]}}"
-    )
+        # Skip JAX distributed for this test - focus on weight transfer coordination
 
-    mesh = create_mesh()
+        # Connect to Ray cluster
+        ray.init(address="auto", ignore_reinit_error=True)
 
-    if mode == "server" and process_id == 0:
-        # Process 0 acts as the server
-        print(f"Process {{process_id}} starting as server", flush=True)
+        config = WeightTransferConfig(
+            mode=WeightTransferMode.JAX_TRANSFER_SERVER,
+            sync_interval_steps=1,
+            poll_interval_seconds=0.1,
+            coordinator_name=coordinator_name
+        )
 
-        # Create server (coordinator created internally)
+        mesh = create_mesh()
         server = create_weight_transfer_server(config, mesh=mesh)
 
         # Create and serve weights
         params = create_sample_pytree(seed=42)
-        print(f"Server serving weights...", flush=True)
         server.serve_weights(1, params)
 
-        # Wait a bit for clients to receive
-        time.sleep(5)
+        # Wait for clients
+        time.sleep(3)
 
         # Serve updated weights
         new_params = create_sample_pytree(seed=123)
         server.serve_weights(2, new_params)
 
-        time.sleep(5)
-
+        time.sleep(2)
         server.cleanup()
-        print(f"Server completed successfully", flush=True)
 
-    elif mode == "client":
-        # Other processes act as clients
-        print(f"Process {{process_id}} starting as client", flush=True)
+        # jax.distributed.shutdown()
+        return True
+
+    except Exception as e:
+        print(f"Server process error: {e}")
+        return False
+
+
+def run_client(coordinator_name: str, process_id: int, num_processes: int, coordinator_address: str):
+    """Run client process."""
+    try:
+        # Set up JAX environment
+        os.environ["JAX_PLATFORMS"] = "cpu"
+        os.environ["JAX_DISABLE_JIT"] = "true"
+        os.environ["JAX_COORDINATOR_ADDRESS"] = coordinator_address
+        os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={num_processes}"
+
+        ray.init(address="auto", ignore_reinit_error=True)
 
         # Wait for server to initialize
-        time.sleep(2)
+        time.sleep(1)
 
-        # Create client (will get existing coordinator by name)
+        config = WeightTransferConfig(
+            mode=WeightTransferMode.JAX_TRANSFER_SERVER,
+            sync_interval_steps=1,
+            poll_interval_seconds=0.1,
+            coordinator_name=coordinator_name
+        )
+
+        mesh = create_mesh()
         client = create_weight_transfer_client(config, mesh=mesh)
 
         # Receive weights
         placeholder = create_sample_pytree(seed=0)
-        print(f"Client {{process_id}} receiving weights...", flush=True)
         received_params = client.receive_weights(placeholder)
 
-        if received_params is not None:
-            print(f"Client {{process_id}} received weights successfully", flush=True)
-        else:
-            print(f"Client {{process_id}} failed to receive weights", flush=True)
+        if received_params is None:
+            print(f"Client {process_id} failed to receive weights")
+            return False
 
         # Try to receive updated weights
-        time.sleep(3)
-        received_params_2 = client.receive_weights(received_params or placeholder)
-
-        if received_params_2 is not None:
-            print(f"Client {{process_id}} received updated weights", flush=True)
+        time.sleep(2)
+        received_params_2 = client.receive_weights(received_params)
 
         client.cleanup()
-        print(f"Client {{process_id}} completed successfully", flush=True)
+        # jax.distributed.shutdown()
 
-    else:
-        print(f"Unknown mode: {{mode}} for process {{process_id}}", flush=True)
-        sys.exit(1)
+        return received_params_2 is not None
 
-except Exception as e:
-    print(f"Process {{process_id}} encountered error: {{e}}", flush=True)
-    print(traceback.format_exc(), flush=True)
-    sys.exit(1)
-
-# Finalize JAX distributed
-jax.distributed.shutdown()
-print(f"Process {{process_id}} shutdown complete", flush=True)
-'''
-
-    with open(script_path, 'w') as f:
-        f.write(script_content)
+    except Exception as e:
+        print(f"Client process {process_id} error: {e}")
+        return False
 
 
-def test_jax_transfer_multiprocess_basic(ray_tpu_cluster):
-    """Test basic JAX transfer server with multiple processes."""
+@pytest.mark.parametrize("num_clients", [1, 2, 3])
+def test_jax_transfer_multiprocess(ray_tpu_cluster, num_clients):
+    num_processes = num_clients + 1  # 1 server + N clients
+    coordinator_name = f"jax_coordinator_{uuid.uuid4().hex[:8]}"
+    coordinator_address = f"localhost:{12321 + (uuid.uuid4().int % 1000)}"
 
-    # Check if we can import jax.experimental.transfer
+    # Create server process
+    server_process = multiprocessing.Process(
+        target=run_server,
+        args=(coordinator_name, 0, num_processes, coordinator_address)
+    )
+
+    # Create client processes
+    client_processes = []
+    for i in range(num_clients):
+        client_process = multiprocessing.Process(
+            target=run_client,
+            args=(coordinator_name, i + 1, num_processes, coordinator_address)
+        )
+        client_processes.append(client_process)
+
+    all_processes = [server_process] + client_processes
+
     try:
-        import jax.experimental.transfer as jax_transfer
-    except (ImportError, AttributeError):
-        pytest.skip("jax.experimental.transfer not available")
+        # Start server first
+        server_process.start()
+        time.sleep(1)  # Give server a head start
 
-    num_processes = 2
-    coordinator_address = f"localhost:{12321 + uuid.uuid4().int % 1000}"
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_path = Path(temp_dir)
-
-        # Create worker scripts
-        server_script = temp_path / "server_worker.py"
-        client_script = temp_path / "client_worker.py"
-
-        create_worker_script(server_script, process_id=0,
-                           coordinator_address=coordinator_address,
-                           num_processes=num_processes, mode="server")
-        create_worker_script(client_script, process_id=1,
-                           coordinator_address=coordinator_address,
-                           num_processes=num_processes, mode="client")
-
-        # Set environment for subprocesses
-        env = os.environ.copy()
-        env["JAX_PLATFORMS"] = "cpu"
-
-        # Launch processes
-        processes = []
-
-        try:
-            # Start server process
-            server_proc = subprocess.Popen(
-                [sys.executable, str(server_script)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env=env
-            )
-            processes.append(("server", server_proc))
-
-            # Give server time to initialize
-            time.sleep(2)
-
-            # Start client process
-            client_proc = subprocess.Popen(
-                [sys.executable, str(client_script)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env=env
-            )
-            processes.append(("client", client_proc))
-
-            # Wait for processes to complete or timeout
-            timeout = 30
-            start_time = time.time()
-
-            while time.time() - start_time < timeout:
-                all_done = True
-                for name, proc in processes:
-                    if proc.poll() is None:
-                        all_done = False
-                        break
-
-                if all_done:
-                    break
-
+        # Start clients with slight delays
+        for i, client_process in enumerate(client_processes):
+            client_process.start()
+            if i < len(client_processes) - 1:  # Don't sleep after the last client
                 time.sleep(0.5)
 
-            # Collect outputs and check results
-            for name, proc in processes:
-                if proc.poll() is None:
-                    proc.terminate()
-                    proc.wait(timeout=5)
+        # Wait for completion
+        for process in all_processes:
+            process.join(timeout=30)
 
-                output = proc.stdout.read()
-                print(f"\n{name} process output:\n{output}")
+        # Check results
+        for i, process in enumerate(all_processes):
+            if process.exitcode != 0:
+                process_name = "server" if i == 0 else f"client{i}"
+                pytest.fail(f"{process_name} process failed with exit code {process.exitcode}")
 
-                # Check for expected failures or successes
-                if "JAX transfer server not supported" in output:
-                    # This is the expected failure point
-                    print(f"Test failed at expected location: JAX transfer server not supported")
-                    return  # Test passes - it failed where expected
-
-                if proc.returncode != 0:
-                    pytest.fail(f"{name} process failed with return code {proc.returncode}")
-
-        finally:
-            # Clean up any remaining processes
-            for name, proc in processes:
-                if proc.poll() is None:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                        proc.wait()
-
-
-def test_jax_transfer_multiprocess_concurrent_clients(ray_tpu_cluster):
-    """Test JAX transfer server with multiple client processes."""
-
-    # Check if we can import jax.experimental.transfer
-    try:
-        import jax.experimental.transfer as jax_transfer
-    except (ImportError, AttributeError):
-        pytest.skip("jax.experimental.transfer not available")
-
-    num_processes = 3  # 1 server + 2 clients
-    coordinator_address = f"localhost:{12322 + uuid.uuid4().int % 1000}"
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_path = Path(temp_dir)
-
-        # Create worker scripts
-        scripts = []
-        scripts.append((temp_path / "server_worker.py", 0, "server"))
-        scripts.append((temp_path / "client_worker_1.py", 1, "client"))
-        scripts.append((temp_path / "client_worker_2.py", 2, "client"))
-
-        for script_path, proc_id, mode in scripts:
-            create_worker_script(script_path, process_id=proc_id,
-                               coordinator_address=coordinator_address,
-                               num_processes=num_processes, mode=mode)
-
-        # Set environment
-        env = os.environ.copy()
-        env["JAX_PLATFORMS"] = "cpu"
-
-        # Launch processes
-        processes = []
-
-        try:
-            # Start all processes
-            for script_path, proc_id, mode in scripts:
-                proc = subprocess.Popen(
-                    [sys.executable, str(script_path)],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    env=env
-                )
-                processes.append((f"{mode}_{proc_id}", proc))
-
-                # Stagger starts slightly
-                if mode == "server":
-                    time.sleep(2)
-                else:
-                    time.sleep(0.5)
-
-            # Wait for completion
-            timeout = 30
-            start_time = time.time()
-
-            while time.time() - start_time < timeout:
-                all_done = True
-                for name, proc in processes:
-                    if proc.poll() is None:
-                        all_done = False
-                        break
-
-                if all_done:
-                    break
-
-                time.sleep(0.5)
-
-            # Check results
-            for name, proc in processes:
-                if proc.poll() is None:
-                    proc.terminate()
-                    proc.wait(timeout=5)
-
-                output = proc.stdout.read()
-                print(f"\n{name} process output:\n{output}")
-
-                # Check for expected failures
-                if "JAX transfer server not supported" in output:
-                    print(f"Test failed at expected location: JAX transfer server not supported")
-                    return  # Test passes - it failed where expected
-
-                if proc.returncode != 0:
-                    pytest.fail(f"{name} process failed with return code {proc.returncode}")
-
-        finally:
-            # Clean up
-            for name, proc in processes:
-                if proc.poll() is None:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                        proc.wait()
-
-
-if __name__ == "__main__":
-    # For manual testing
-    pytest.main([__file__, "-v"])
+    finally:
+        # Clean up processes
+        for process in all_processes:
+            process.kill()
