@@ -261,7 +261,7 @@ def main():
     # Submit the job and track it asynchronously
     submission_id = generate_submission_id(full_cmd)
 
-    async def run_job(cluster_config_for_cleanup=None):
+    async def run_job():
         try:
             await submit_and_track_job(
                 full_cmd,
@@ -282,23 +282,25 @@ def main():
         except Exception as e:
             logger.error(f"Error submitting or tracking job: {e}")
             raise
-        finally:
-            if args.auto_stop:
-                logger.info(f"Auto-stopping job {submission_id}...")
-                # Open a fresh connection for cleanup
-                if cluster_config_for_cleanup:
-                    with ray_dashboard(cluster_config_for_cleanup):
-                        client = make_client()
-                        client.stop_job(submission_id)
-                else:
+
+    try:
+        if cluster_config:
+            with ray_dashboard(cluster_config):
+                asyncio.run(run_job(cluster_config))
+        else:
+            asyncio.run(run_job())
+    finally:
+        if args.auto_stop:
+            logger.info(f"Auto-stopping job {submission_id}...")
+            # Open a fresh connection for cleanup
+            if cluster_config:
+                with ray_dashboard(cluster_config_for_cleanup):
                     client = make_client()
                     client.stop_job(submission_id)
+            else:
+                client = make_client()
+                client.stop_job(submission_id)
 
-    if cluster_config:
-        with ray_dashboard(cluster_config):
-            asyncio.run(run_job(cluster_config))
-    else:
-        asyncio.run(run_job())
 
 
 if __name__ == "__main__":
