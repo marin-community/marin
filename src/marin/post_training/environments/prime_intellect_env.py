@@ -119,7 +119,11 @@ def eval_environment(
 
     logger.info(f"Starting evaluation with model: {model}")
     logger.info(
-        f"Configuration: num_examples={num_examples}, rollouts_per_example={rollouts_per_example}, max_concurrent={max_concurrent}"
+        f"Configuration: num_examples={num_examples}, \
+            rollouts_per_example={rollouts_per_example}, \
+            max_concurrent={max_concurrent}, \
+            max_tokens={max_tokens}, \
+            temperature={temperature}"
     )
     start_time = time.time()
     results = vf_env.evaluate(
