@@ -1,6 +1,18 @@
 # Autoscaling Cluster for Marin Data Processing
-In Marin, we use GCP TPUs (provided by TRC) to do all of our work, including non-training tasks.
-We maintain several Ray clusters across multiple GCP regions. Key clusters include `marin-us-central2` (v4), `marin-us-west4` and `marin-eu-west4` (v5e), `marin-us-east1` and `marin-us-east5` (v6e), and `marin-us-central1` (v5p). There are also dedicated vLLM clusters for serving.
+In Marin, we use GCP TPUs (provided by TRC) to do all of our work, including
+non-training tasks. We maintain several Ray clusters across multiple GCP
+regions. The primary TPU data-processing clusters are:
+
+- `marin-us-central2` (v4)
+- `marin-us-west4` (v5e)
+- `marin-eu-west4` (v5e)
+- `marin-us-east1` (v6e)
+- `marin-us-east5` (v6e)
+- `marin-us-central1` (v5p)
+
+We also run dedicated vLLM clusters for serving workloads. The instructions in
+this guide focus on the shared data-processing clusters, but the operational
+principles carry over to the serving clusters as well.
 
 It is important to understand that almost all of our compute is preemptible. This means that the VMs can be shut down at
 any time by Google, and we will lose all data on them. We have to design our jobs to be able to handle this, and we have
