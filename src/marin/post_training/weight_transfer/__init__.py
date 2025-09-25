@@ -60,32 +60,10 @@ except (ImportError, AttributeError):
     start_transfer_server = None
 
 
-def create_coordinator(mode: WeightTransferMode, name: str):
-    """Create coordinator based on transfer mode.
-
-    Args:
-        mode: The weight transfer mode
-        name: Unique name for the coordinator
-
-    Returns:
-        Ray actor handle for coordinator, or None if not needed
-    """
-    if mode == WeightTransferMode.RAY_REMOTING:
-        return RayWeightCoordinator.options(name=name).remote()
-    elif mode == WeightTransferMode.JAX_TRANSFER_SERVER:
-        if not JAX_TRANSFER_AVAILABLE:
-            raise RuntimeError("JAX transfer server not available")
-        transfer_server = start_transfer_server()
-        return instantiate_coordinator(transfer_server, name=name)
-    else:
-        return None  # GCS_CHECKPOINT doesn't need coordinator
-
-
 def create_weight_transfer_server(
     config: WeightTransferConfig,
     mesh: Mesh | None = None,
     axis_mapping: ResourceMapping | None = None,
-    coordinator=None,
 ) -> WeightTransferServer:
     """Factory function to create appropriate transfer server for Levanter models.
 
@@ -100,10 +78,11 @@ def create_weight_transfer_server(
     """
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
         raise RuntimeError("JAX transfer server not supported for Levanter models")
+        transfer_server = start_transfer_server()
+        return instantiate_coordinator(transfer_server, name=name)
 
     elif config.mode == WeightTransferMode.RAY_REMOTING:
-        if coordinator is None:
-            raise ValueError("Coordinator required for Ray remoting")
+        coordinator = RayWeightCoordinator.options(name=name).remote()
         return RayRemotingServer(config, coordinator)
 
     # Default to GCS checkpoint mode
@@ -118,7 +97,6 @@ def create_weight_transfer_client(
     config: WeightTransferConfig,
     mesh: Mesh | None = None,
     axis_mapping: ResourceMapping | None = None,
-    coordinator=None,
 ) -> WeightTransferClient:
     """Factory function to create appropriate transfer client for Levanter models.
 
@@ -127,7 +105,6 @@ def create_weight_transfer_client(
         mesh: JAX mesh for distributed computation (optional)
         axis_mapping: Levanter axis mapping for sharding (optional)
         target_model: Target parameter structure for reconstructing NamedArrays (optional)
-        coordinator: Ray coordinator for distributed modes (required for RAY_REMOTING)
 
     Returns:
         WeightTransferClient instance
@@ -138,11 +115,10 @@ def create_weight_transfer_client(
         config.mode = WeightTransferMode.GCS_CHECKPOINT
 
     elif config.mode == WeightTransferMode.RAY_REMOTING:
-        if coordinator is None:
-            raise ValueError("Coordinator required for Ray remoting")
+        coordinator = RayWeightCoordinator.options(name="ray_weight_coordinator").remote()
         return RayRemotingClient(
             config,
-            coordinator,
+            coordinator=coordinator,
         )
 
     # Default to GCS checkpoint mode
