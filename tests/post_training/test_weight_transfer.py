@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+
 os.environ["JAX_PLATFORMS"] = "cpu"  # Force CPU-only for testing
 
 import tempfile
@@ -37,6 +38,20 @@ except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 
 import uuid
+
+try:
+    import jax.experimental.transfer
+
+    TRANSFER_TYPES = [
+        WeightTransferMode.RAY_REMOTING,
+        WeightTransferMode.GCS_CHECKPOINT,
+        WeightTransferMode.JAX_TRANSFER_SERVER,
+    ]
+except (ImportError, AttributeError):
+    TRANSFER_TYPES = [
+        WeightTransferMode.RAY_REMOTING,
+        WeightTransferMode.GCS_CHECKPOINT,
+    ]
 
 
 def create_sample_pytree(seed: int):
@@ -110,15 +125,7 @@ def create_mesh(devices=None):
     return Mesh(np.array(devices), axis_names=("batch",))
 
 
-
-
-@pytest.fixture(
-    params=[
-        WeightTransferMode.RAY_REMOTING,
-        WeightTransferMode.GCS_CHECKPOINT,
-        WeightTransferMode.JAX_TRANSFER_SERVER,
-    ]
-)
+@pytest.fixture(params=TRANSFER_TYPES)
 def transfer_mode(request):
     """Parametrized weight transfer mode."""
     return request.param
@@ -130,7 +137,7 @@ def sample_params():
     return create_sample_pytree(seed=42)
 
 
-def create_test_weight_transfer_pair(weight_transfer_config, params_structure=None):
+def create_test_weight_transfer_pair(weight_transfer_config):
     """Helper function to create server/client pairs for testing with simplified Levanter API."""
     # Set unique coordinator name for distributed modes
     if weight_transfer_config.mode in [
@@ -242,7 +249,7 @@ def test_ray_coordinator_no_weights_initially(ray_tpu_cluster):
 
 def test_basic_weight_transfer(ray_tpu_cluster, weight_transfer_config, sample_params):
     """Test basic weight transfer from server to client."""
-    server, client = create_test_weight_transfer_pair(weight_transfer_config, params_structure=sample_params)
+    server, client = create_test_weight_transfer_pair(weight_transfer_config)
 
     # Serve weights
     server.serve_weights(1, sample_params)
@@ -275,7 +282,7 @@ def test_basic_weight_transfer(ray_tpu_cluster, weight_transfer_config, sample_p
 
 def test_multiple_weight_updates(ray_tpu_cluster, weight_transfer_config, sample_params):
     """Test multiple sequential weight updates."""
-    server, client = create_test_weight_transfer_pair(weight_transfer_config, params_structure=sample_params)
+    server, client = create_test_weight_transfer_pair(weight_transfer_config)
 
     # First weight transfer
     server.serve_weights(1, sample_params)
@@ -305,7 +312,7 @@ def test_multiple_weight_updates(ray_tpu_cluster, weight_transfer_config, sample
 
 def test_client_no_new_weights(ray_tpu_cluster, weight_transfer_config, sample_params):
     """Test client behavior when no new weights are available."""
-    server, client = create_test_weight_transfer_pair(weight_transfer_config, params_structure=sample_params)
+    server, client = create_test_weight_transfer_pair(weight_transfer_config)
 
     # Serve weights
     server.serve_weights(1, sample_params)
@@ -326,15 +333,13 @@ def test_client_no_new_weights(ray_tpu_cluster, weight_transfer_config, sample_p
 def test_concurrent_clients(ray_tpu_cluster, weight_transfer_config, sample_params):
     """Test multiple clients receiving weights concurrently (Ray remoting only)."""
 
-    server, client_1 = create_test_weight_transfer_pair(weight_transfer_config, params_structure=sample_params)
+    server, client_1 = create_test_weight_transfer_pair(weight_transfer_config)
 
-    coordinator = getattr(client_1, "coordinator", None)
     mesh = create_mesh()
     client_2 = create_weight_transfer_client(
         config=weight_transfer_config,
         mesh=mesh,
         axis_mapping=None,
-        coordinator=coordinator,
     )
 
     try:
@@ -374,7 +379,7 @@ def test_with_mesh_sharding(ray_tpu_cluster, weight_transfer_config, sample_para
 
     shard_fns = jax.tree.map(create_shard_fn, params_sharding_rules)
 
-    server, client = create_test_weight_transfer_pair(weight_transfer_config, params_structure=sample_params)
+    server, client = create_test_weight_transfer_pair(weight_transfer_config)
 
     # For Ray remoting mode, update the client's shard functions
     if weight_transfer_config.mode == WeightTransferMode.RAY_REMOTING:
@@ -413,7 +418,7 @@ def test_jax_numpy_conversion(ray_tpu_cluster, weight_transfer_config):
         "bias": jnp.array([0.1, 0.2]),
     }
 
-    server, client = create_test_weight_transfer_pair(weight_transfer_config, params_structure=jax_params)
+    server, client = create_test_weight_transfer_pair(weight_transfer_config)
 
     try:
         # Transfer weights
@@ -435,7 +440,7 @@ def test_jax_numpy_conversion(ray_tpu_cluster, weight_transfer_config):
 
 def test_cleanup(ray_tpu_cluster, weight_transfer_config, sample_params):
     """Test proper cleanup of server and client resources."""
-    server, client = create_test_weight_transfer_pair(weight_transfer_config, params_structure=sample_params)
+    server, client = create_test_weight_transfer_pair(weight_transfer_config)
 
     # Do a basic transfer
     server.serve_weights(1, sample_params)

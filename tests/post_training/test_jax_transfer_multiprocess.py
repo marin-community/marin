@@ -21,24 +21,25 @@ import os
 import time
 import uuid
 
-import pytest
-
+import haliax as hax
 import jax
 import jax.numpy as jnp
-import haliax as hax
 import numpy as np
+import pytest
 import ray
 
 try:
+    from jax.experimental import transfer as jax_transfer
+
     from marin.post_training.weight_transfer import (
         WeightTransferConfig,
         WeightTransferMode,
-        create_weight_transfer_server,
         create_weight_transfer_client,
+        create_weight_transfer_server,
     )
-    from jax.experimental import transfer as jax_transfer
+
     _ = jax_transfer  # Ensure we can access this module
-except ImportError:
+except (ImportError, AttributeError):
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 
 
@@ -90,7 +91,7 @@ def run_server(coordinator_name: str, process_id: int, num_processes: int, coord
             mode=WeightTransferMode.JAX_TRANSFER_SERVER,
             sync_interval_steps=1,
             poll_interval_seconds=0.1,
-            coordinator_name=coordinator_name
+            coordinator_name=coordinator_name,
         )
 
         mesh = create_mesh()
@@ -136,7 +137,7 @@ def run_client(coordinator_name: str, process_id: int, num_processes: int, coord
             mode=WeightTransferMode.JAX_TRANSFER_SERVER,
             sync_interval_steps=1,
             poll_interval_seconds=0.1,
-            coordinator_name=coordinator_name
+            coordinator_name=coordinator_name,
         )
 
         mesh = create_mesh()
@@ -172,20 +173,18 @@ def test_jax_transfer_multiprocess(ray_tpu_cluster, num_clients):
 
     # Create server process
     server_process = multiprocessing.Process(
-        target=run_server,
-        args=(coordinator_name, 0, num_processes, coordinator_address)
+        target=run_server, args=(coordinator_name, 0, num_processes, coordinator_address)
     )
 
     # Create client processes
     client_processes = []
     for i in range(num_clients):
         client_process = multiprocessing.Process(
-            target=run_client,
-            args=(coordinator_name, i + 1, num_processes, coordinator_address)
+            target=run_client, args=(coordinator_name, i + 1, num_processes, coordinator_address)
         )
         client_processes.append(client_process)
 
-    all_processes = [server_process] + client_processes
+    all_processes = [server_process, *client_processes]
 
     try:
         # Start server first
