@@ -55,7 +55,7 @@ from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.py_utils import set_global_rng_seeds
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request as GenRequest
 from levanter.inference.jit_scheduler import SeqDecodingParams
-
+from levanter.inference.utils import INVALID
 
 try:
     from lm_eval import evaluator
@@ -487,12 +487,12 @@ class LevanterHarnessLM(TemplateLM):
         # Tokenize prompts and compute capacity needs
         prompt_token_lists: list[list[int]] = self.tok_encode(context, add_special_tokens=False)
 
-        # Truncate from left if needed to fit model eval length, accounting for generation tokens
-        max_eval_len = self.EvalPos.size
+        # Truncate from left if needed to fit model max length, accounting for generation tokens
+        max_length = self.EvalPos.size
         for i, (toks, gen_kwargs) in enumerate(zip(prompt_token_lists, processed_kwargs_list)):
             # Reserve space for generation tokens
             max_gen_toks = gen_kwargs["max_gen_toks"]
-            max_ctx_len = max_eval_len - max_gen_toks
+            max_ctx_len = max_length - max_gen_toks
             
             if len(toks) > max_ctx_len:
                 overflow = len(toks) - max_ctx_len
@@ -525,13 +525,12 @@ class LevanterHarnessLM(TemplateLM):
                     if all_stop_tokens:
                         # Find the maximum length for padding
                         max_len = max(len(tokens) for tokens in all_stop_tokens)
-                        # Left pad all sequences to the same length with pad_token_id
-                        pad_token_id = self.tokenizer.pad_token_id
+                        # Left pad all sequences to the same length
                         padded_tokens = []
                         for tokens in all_stop_tokens:
-                            # Left pad with pad_token_id
+                            # Left pad
                             padding_needed = max_len - len(tokens)
-                            padded = [pad_token_id] * padding_needed + tokens
+                            padded = [INVALID] * padding_needed + tokens
                             padded_tokens.append(padded)
                         
                         # Convert to named array with proper dimensions
@@ -572,7 +571,7 @@ class LevanterHarnessLM(TemplateLM):
             compute_dtype=jnp.bfloat16,
             max_queued_tokens=256,
             max_seqs_in_prefill=16,
-            max_prefill_size=max_eval_len,
+            max_prefill_size=max_length,
         )
 
         engine = InferenceEngine.from_model_with_config(
@@ -615,9 +614,6 @@ class LevanterHarnessLM(TemplateLM):
         outputs: list[str] = []
         output_idx = 0
         for i, (toks, gen_kwargs) in enumerate(zip(prompt_token_lists, processed_kwargs_list)):
-            # Decode the prompt for storage
-            prompt_text = self.tokenizer.decode(toks, skip_special_tokens=True)
-            
             # Consume one sequence output per request
             if output_idx < len(result.tokens):
                 full_tokens = result.tokens[output_idx]
@@ -640,6 +636,8 @@ class LevanterHarnessLM(TemplateLM):
             current_task = getattr(self, '_current_task', 'generation_task')
             if current_task not in self.sample_outputs:
                 self.sample_outputs[current_task] = []
+            # Decode the prompt for storage
+            prompt_text = self.tokenizer.decode(toks, skip_special_tokens=False)
             self.sample_outputs[current_task].append({
                 "prompt": prompt_text,
                 "generation": text,
@@ -735,7 +733,7 @@ class TaskConfig:
 class LmEvalHarnessConfig:
     task_spec: list[TaskConfig | str]
     max_examples: int | None = None
-    max_eval_length: int | None = None
+    max_length: int | None = None
     log_samples: bool = False
     bootstrap_iters: int = 0
     apply_chat_template: bool = False
@@ -931,12 +929,12 @@ def _actually_run_eval_harness(
 
     """
     max_examples = config.max_examples
-    max_eval_length = config.max_eval_length
+    max_length = config.max_length
 
-    EvalPos = model.Pos if max_eval_length is None else model.Pos.resize(max_eval_length)
+    EvalPos = model.Pos if max_length is None else model.Pos.resize(max_length)
     num_parameters = levanter.utils.jax_utils.parameter_count(model)
     logger.info(
-        f"Evaluating with max eval length {EvalPos.size} and batch size {EvalBatch.size}. There are"
+        f"Evaluating with max length {EvalPos.size} and batch size {EvalBatch.size}. There are"
         f" {num_parameters} parameters in the model."
     )
     logger.info("Running eval harness...")
@@ -1194,7 +1192,7 @@ def _adjust_config(task_dict, fewshot_random_seed=0):
 
 
 def _iterate_tokenized_requests(
-    requests: list[Instance], tokenizer: HfTokenizer, max_len: int, batch_size: int
+    requests: list[Instance], tokenizer: HfTokenizer, max_length: int, batch_size: int
 ) -> Iterator[PromptCompletion]:
     """
     Tokenize the requests and yield them as PromptCompletions, for packing into LmExamples.
@@ -1222,11 +1220,11 @@ def _iterate_tokenized_requests(
 
             context_enc_len = len(context_enc)
 
-            if len(all_enc) > max_len:
+            if len(all_enc) > max_length:
                 logger.warning(f"Request {i} is too long. Truncating.")
                 # Truncate from the left
-                context_enc_len = len(context_enc) - (len(all_enc) - max_len)
-                all_enc = all_enc[-max_len:]
+                context_enc_len = len(context_enc) - (len(all_enc) - max_length)
+                all_enc = all_enc[-max_length:]
                 if context_enc_len < 0:
                     context_enc_len = 0
                     logger.warning("Prompt length is negative after truncation. Setting to 0.")
