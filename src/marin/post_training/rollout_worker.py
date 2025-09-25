@@ -27,6 +27,7 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any, cast
+from functools import cached_property
 
 import haliax as hax
 import jax
@@ -175,6 +176,11 @@ class LevanterInferenceContext(InferenceContext):
     def tokenizer(self):
         return self._tokenizer
 
+    @cached_property
+    def client(self):
+        base_url = f"http://{self.inference_server.config.host}:{self.inference_server.config.port}/v1"
+        return AsyncOpenAI(base_url=base_url, api_key="marin")
+
     def generate(
         self,
         prompts: list[str],
@@ -182,18 +188,12 @@ class LevanterInferenceContext(InferenceContext):
         n_generations: int,
     ) -> list[list[dict]]:
         """Generate responses for a batch of prompts."""
-        host = self.inference_server.config.host
-        port = self.inference_server.config.port
-        base_url = f"http://{host}:{port}/v1"
-
         self.inference_server.reload(lambda model: self.model)
 
         # Convert stop tokens to strings for OpenAI API
         stop_strings = None
         if self._stop_tokens is not None:
             stop_strings = [self._tokenizer.decode([token]) for token in self._stop_tokens]
-
-        client = AsyncOpenAI(base_url=base_url, api_key="marin")
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -202,7 +202,7 @@ class LevanterInferenceContext(InferenceContext):
             batch_completions = []
 
             for prompt in batch_prompts:
-                completion = client.chat.completions.create(
+                completion = self.client.chat.completions.create(
                     model=getattr(self.inference_server.config, "model_name", "test-model"),
                     messages=[{"role": "user", "content": prompt}],
                     logprobs=True,
