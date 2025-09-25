@@ -77,6 +77,7 @@ class WeightTransferConfig:
     # Common settings
     sync_interval_steps: int = 100
     poll_interval_seconds: float = 30.0
+    coordinator_name: str = "weight_transfer_coordinator"
 
     # RAY_REMOTING and JAX_TRANSFER_SERVER specific
     transfer_timeout: float = 120.0

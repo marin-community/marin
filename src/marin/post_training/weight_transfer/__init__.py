@@ -37,27 +37,50 @@ from .checkpoint import GCSCheckpointClient, GCSCheckpointServer
 from .ray import RayRemotingClient, RayRemotingServer, RayWeightCoordinator
 
 try:
-    from .jax import JAXTransferClient, JAXTransferServer
+    from .jax import JAXTransferClient, JAXTransferServer, WeightTransferCoordinator
 except (ImportError, AttributeError):
     JAXTransferClient = None
     JAXTransferServer = None
+    WeightTransferCoordinator = None
 
 logger = logging.getLogger(__name__)
 
 # Check if JAX transfer is available
-try:
-    from ..jax_weight_transfer import (
-        WeightTransferCoordinator,
-        instantiate_coordinator,
-        start_transfer_server,
-    )
+JAX_TRANSFER_AVAILABLE = JAXTransferClient is not None and JAXTransferServer is not None
 
-    JAX_TRANSFER_AVAILABLE = True
-except (ImportError, AttributeError):
-    JAX_TRANSFER_AVAILABLE = False
-    WeightTransferCoordinator = None
-    instantiate_coordinator = None
-    start_transfer_server = None
+
+def get_or_create_actor(actor_class, name: str, *args, max_retries: int = 3, **kwargs):
+    """Generic helper to get existing Ray actor or create new one with retry logic.
+
+    Args:
+        actor_class: Ray remote class (e.g., RayWeightCoordinator, WeightTransferCoordinator)
+        name: Actor name for registration
+        *args: Arguments to pass to actor constructor
+        max_retries: Number of retry attempts
+        **kwargs: Keyword arguments to pass to actor constructor
+
+    Returns:
+        Ray actor handle
+    """
+    import time
+    import ray
+
+    for attempt in range(max_retries):
+        try:
+            # Try to get existing actor
+            return ray.get_actor(name)
+        except ValueError:
+            # Actor doesn't exist, try to create it
+            try:
+                return actor_class.options(name=name).remote(*args, **kwargs)
+            except ValueError:
+                # Another process might have created it, wait and retry
+                if attempt < max_retries - 1:
+                    time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+                    continue
+                raise
+
+    raise RuntimeError(f"Failed to get or create actor '{name}' after {max_retries} attempts")
 
 
 def create_weight_transfer_server(
@@ -71,19 +94,15 @@ def create_weight_transfer_server(
         config: Weight transfer configuration
         mesh: JAX mesh for distributed computation (optional)
         axis_mapping: Levanter axis mapping for sharding (optional)
-        coordinator: Ray coordinator for distributed modes (required for RAY_REMOTING)
 
     Returns:
         WeightTransferServer instance
     """
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
-        raise RuntimeError("JAX transfer server not supported for Levanter models")
-        transfer_server = start_transfer_server()
-        return instantiate_coordinator(transfer_server, name=name)
+        return JAXTransferServer(config, mesh, axis_mapping)
 
     elif config.mode == WeightTransferMode.RAY_REMOTING:
-        coordinator = RayWeightCoordinator.options(name=name).remote()
-        return RayRemotingServer(config, coordinator)
+        return RayRemotingServer(config)
 
     # Default to GCS checkpoint mode
     return GCSCheckpointServer(
@@ -104,22 +123,15 @@ def create_weight_transfer_client(
         config: Weight transfer configuration
         mesh: JAX mesh for distributed computation (optional)
         axis_mapping: Levanter axis mapping for sharding (optional)
-        target_model: Target parameter structure for reconstructing NamedArrays (optional)
 
     Returns:
         WeightTransferClient instance
     """
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
-        # JAX transfer server is currently not supported with Levanter models
-        logger.warning("JAX transfer server not supported, falling back to GCS checkpoints")
-        config.mode = WeightTransferMode.GCS_CHECKPOINT
+        return JAXTransferClient(config, mesh, axis_mapping)
 
     elif config.mode == WeightTransferMode.RAY_REMOTING:
-        coordinator = RayWeightCoordinator.options(name="ray_weight_coordinator").remote()
-        return RayRemotingClient(
-            config,
-            coordinator=coordinator,
-        )
+        return RayRemotingClient(config)
 
     # Default to GCS checkpoint mode
     return GCSCheckpointClient(
@@ -143,7 +155,8 @@ __all__ = [
     "WeightTransferMode",
     "WeightTransferServer",
     "WeightTransferServerMetrics",
-    "create_coordinator",
+    "WeightTransferCoordinator",
+    "get_or_create_actor",
     "create_weight_transfer_client",
     "create_weight_transfer_server",
 ]
