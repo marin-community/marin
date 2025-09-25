@@ -13,32 +13,41 @@
 # limitations under the License.
 
 """
-Coordinator for managing weight transfers during RL. Actual transfers are handled by JAX's transfer server.
-This module is responsible for:
-- scheduling weight transfers
-- polling for weight transfers
-- reporting that weight transfers are complete
-- waiting for weight transfers to complete
+JAX transfer server-based weight transfer implementation.
+
+This module provides weight transfer using JAX's native transfer server for
+high-performance communication between training and inference workers.
 """
 
 import asyncio
 import logging
+import queue
 import socket
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Any
 
 import jax
 import jax.experimental.transfer as jax_transfer
+import numpy as np
 import ray
 import ray.runtime_context
 from haliax.jax_utils import is_jax_array_like
+from jax.sharding import Mesh
 from jaxtyping import PyTree
 from ray.actor import ActorHandle
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
-logger = logging.getLogger(__name__)
+from .base import (
+    WeightTransferClient,
+    WeightTransferClientMetrics,
+    WeightTransferConfig,
+    WeightTransferServer,
+    WeightTransferServerMetrics,
+)
 
-# -- Types --
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -195,7 +204,10 @@ class WeightTransferCoordinator:
 
 
 async def process_weight_transfers(
-    transfer_server: jax_transfer.TransferServer, coordinator: ActorHandle, latest_weight_id: int, latest_weights: PyTree
+    transfer_server: jax_transfer.TransferServer,
+    coordinator: ActorHandle,
+    latest_weight_id: int,
+    latest_weights: PyTree,
 ):
     """
     For the *server* to call. Polls for weight transfers and blocks until they are complete.
@@ -274,22 +286,6 @@ async def receive_weight_transfers(
     )
 
 
-def instantiate_coordinator(server: jax_transfer.TransferServer, name: str | None = None):
-    """
-    Instantiates the WeightTransferCoordinator on the current node.
-    If a name is provided, the actor will be named, allowing it to be looked up with ray.get_actor(name).
-    """
-    options = {
-        "num_cpus": 0,
-        "scheduling_strategy": this_node_affinity_strategy(),
-    }
-
-    if name:
-        options["name"] = name
-
-    return WeightTransferCoordinator.options(**options).remote(server.address())  # type: ignore
-
-
 def start_transfer_server() -> jax_transfer.TransferServer:
     ip = get_local_ip_from_hostname()
     backend_client = jax.devices()[0].client
@@ -323,7 +319,187 @@ def num_bytes(model: PyTree):
     return sum(x.nbytes for x in leaves.values())
 
 
-def do_transfer(spec: WeightTransferSpec, client_transfer_server: jax_transfer.TransferServer, placeholder: PyTree):
+def do_transfer(
+    spec: WeightTransferSpec,
+    client_transfer_server: jax_transfer.TransferServer,
+    placeholder: PyTree,
+):
     # TODO: JAX doesn't expose any kind of timeout mechanism
     connection = client_transfer_server.connect(spec.address)
     return connection.pull(spec.transfer_uuid, placeholder)
+
+
+class JAXTransferServer(WeightTransferServer):
+    """JAX transfer server-based weight transfer server."""
+
+    coordinator: WeightTransferCoordinator
+
+    def __init__(self, config: WeightTransferConfig, mesh, coordinator, params_sharding_rules=None):
+        self.config = config
+        self.mesh = mesh
+        self.params_sharding_rules = params_sharding_rules
+        self.coordinator = coordinator
+
+        # Start transfer server
+        self.transfer_server = start_transfer_server()
+        self._setup_cpu_transfer()
+
+        # Single-item queue for polling
+        self.poll_queue = queue.Queue(maxsize=1)
+        self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="weight_transfer")
+
+        # Metrics tracking
+        self.metrics = WeightTransferServerMetrics(start_time=time.time())
+
+    def _setup_cpu_transfer(self):
+        """Setup CPU mesh for transfers."""
+        try:
+            cpu_devices = jax.devices("cpu")
+            if cpu_devices:
+                self.cpu_mesh = Mesh(np.array(cpu_devices[:1]), axis_names=("cpu",))
+                logger.info(f"Setup CPU mesh with {len(cpu_devices)} devices")
+            else:
+                raise RuntimeError("No CPU devices found, cannot perform weight transfer")
+        except Exception as e:
+            raise RuntimeError(f"Failed to setup CPU mesh: {e}") from e
+
+    def _transfer_to_cpu(self, model) -> PyTree:
+        """Transfer params to CPU devices."""
+        try:
+            with self.cpu_mesh:
+                cpu_devices = jax.devices("cpu")
+                return jax.device_put(model, cpu_devices[0])
+        except Exception as e:
+            logger.warning(f"Failed to transfer to CPU: {e}, using original params")
+            return model
+
+    def serve_weights(self, weight_id: int, model) -> None:
+        """Serve weights with CPU transfer and threading."""
+        self.metrics.total_transfers += 1
+
+        def _serve_in_thread():
+            try:
+                cpu_params = self._transfer_to_cpu(model)
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    result = loop.run_until_complete(
+                        process_weight_transfers(self.transfer_server, self.coordinator, weight_id, cpu_params)
+                    )
+                    logger.info(f"Processed {result} weight transfers for weight_id {weight_id}")
+
+                    # Update metrics
+                    self.metrics.successful_transfers += 1
+
+                    return result
+                finally:
+                    loop.close()
+            except Exception as e:
+                logger.error(f"Error serving weights {weight_id}: {e}")
+                self.metrics.failed_transfers += 1
+                return 0
+
+        # Use single-item queue - drop old requests if training runs ahead
+        try:
+            self.poll_queue.put_nowait((weight_id, model))
+        except queue.Full:
+            old_item = self.poll_queue.get_nowait()
+            logger.info(f"Dropping old weight transfer {old_item[0]} for new {weight_id}")
+            self.poll_queue.put_nowait((weight_id, model))
+
+        _ = self.executor.submit(_serve_in_thread)
+
+    def cleanup(self) -> None:
+        """Cleanup transfer server and thread pool."""
+        logger.info("Cleaning up JAX transfer server")
+        self.executor.shutdown(wait=True)
+        self.transfer_server = None
+
+    def get_metrics(self) -> WeightTransferServerMetrics:
+        """Get transfer metrics."""
+        return self.metrics
+
+
+class JAXTransferClient(WeightTransferClient):
+    """JAX transfer server-based weight transfer client."""
+
+    def __init__(self, config: WeightTransferConfig, mesh, coordinator, params_sharding_rules=None):
+        self.config = config
+        self.mesh = mesh
+        self.params_sharding_rules = params_sharding_rules
+        self.coordinator = coordinator
+
+        # Start transfer server
+        self.transfer_server = start_transfer_server()
+        self._setup_cpu_transfer()
+
+        self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="weight_transfer")
+        self.current_params_placeholder = None
+
+        # Metrics tracking
+        self.metrics = WeightTransferClientMetrics(start_time=time.time())
+
+    def _setup_cpu_transfer(self):
+        """Setup CPU mesh for transfers."""
+        try:
+            cpu_devices = jax.devices("cpu")
+            if cpu_devices:
+                self.cpu_mesh = Mesh(np.array(cpu_devices[:1]), axis_names=("cpu",))
+                logger.info(f"Setup CPU mesh with {len(cpu_devices)} devices")
+            else:
+                raise RuntimeError("No CPU devices found, cannot perform weight transfer")
+        except Exception as e:
+            raise RuntimeError(f"Failed to setup CPU mesh: {e}") from e
+
+    def _transfer_from_cpu(self, model) -> PyTree:
+        """Transfer params from CPU back to TPU."""
+        return self.mesh.shard(model, self.params_sharding_rules)
+
+    def receive_weights(self, old_model: PyTree) -> Any:
+        """Receive weights with CPU transfer."""
+        self.metrics.total_polls += 1
+
+        def _receive_in_thread():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                cpu_params, metadata = loop.run_until_complete(
+                    receive_weight_transfers(self.coordinator, self.transfer_server, self.current_params_placeholder)
+                )
+
+                # Transfer back from CPU
+                tpu_params = self._transfer_from_cpu(cpu_params)
+
+                return tpu_params, metadata
+            finally:
+                loop.close()
+
+        try:
+            future = self.executor.submit(_receive_in_thread)
+            params, metadata = future.result(timeout=self.config.transfer_timeout)
+
+            if params is not None and metadata is not None:
+                # Update metrics
+                self.metrics.successful_receives += 1
+                return params
+
+            return None
+
+        except Exception as e:
+            self.metrics.failed_receives += 1
+            logger.error(f"Failed to receive weights: {e}")
+            raise
+
+    def set_params_placeholder(self, model):
+        """Set the placeholder params for transfers."""
+        self.current_params_placeholder = model
+
+    def cleanup(self) -> None:
+        """Cleanup transfer server and thread pool."""
+        logger.info("Cleaning up JAX transfer client")
+        self.executor.shutdown(wait=True)
+        self.transfer_server = None
+
+    def get_metrics(self) -> WeightTransferClientMetrics:
+        """Get transfer metrics."""
+        return self.metrics
