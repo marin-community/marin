@@ -20,6 +20,7 @@ and writes the rollout data to files for training workers to consume.
 """
 
 import asyncio
+from functools import cached_property
 import logging
 import os
 import socket
@@ -161,9 +162,9 @@ class LevanterInferenceContext(InferenceContext):
     def tokenizer(self):
         return self._tokenizer
 
-    @property
-    def base_url(self):
-        return self.inference_server.base_url
+    @cached_property
+    def client(self):
+        return AsyncOpenAI(base_url=self.inference_server.base_url, api_key="marin")
 
     def generate(
         self,
@@ -175,10 +176,9 @@ class LevanterInferenceContext(InferenceContext):
     ) -> list[list[dict]]:
         """Generate responses for a batch of prompts."""
 
-        client = AsyncOpenAI(base_url=self.inference_server.base_url, api_key="marin")
         all_completions = []
         for prompt in prompts:
-            completion = client.chat.completions.create(
+            completion = self.client.chat.completions.create(
                 model=getattr(self.inference_server.config, "model_name", "test-model"),
                 messages=[{"role": "user", "content": prompt}],
                 logprobs=True,
