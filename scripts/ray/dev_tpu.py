@@ -268,25 +268,19 @@ def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name:
     gce_key_path = Path.home() / ".ssh" / "google_compute_engine"
     if not gce_key_path.exists():
         logger.warning(f"Google Compute Engine SSH key not found at {gce_key_path}")
-        logger.warning("You may need to run 'gcloud compute ssh' first to set up SSH keys")
+        logger.warning("SSH may fail if your key isn't available on the VM.")
+        logger.warning("You can add it at https://console.cloud.google.com/compute/metadata?resourceTab=sshkeys")
 
     host_alias = f"dev-tpu-{tpu_name}"
-
-    Path("~/.ssh/control").expanduser().mkdir(parents=True, exist_ok=True)
 
     ssh_config_entry = f"""
 # BEGIN_DEV_TPU_{tpu_name.upper()}
 Host {host_alias}
     HostName {ip_address}
-    IdentityFile ~/.ssh/google_compute_engine
-    UserKnownHostsFile ~/.ssh/google_compute_known_hosts
     HostKeyAlias compute.{hostname}
     StrictHostKeyChecking no
     IdentitiesOnly yes
     CheckHostIP no
-    ControlPath ~/.ssh/control/%h-%p-%r
-    ControlMaster auto
-    ControlPersist 10s
     User {username}
 # END_DEV_TPU_{tpu_name.upper()}
 """
@@ -425,18 +419,21 @@ def hold_tpu_allocation(
 
             logger.info(f"Waiting up to 10 minutes for TPU to be ready...")
             host_info = ray.get(actor.host_info.remote(), timeout=600)
+            logger.info("TPU allocated successfully!")
+            print(f"Hostname: {host_info['hostname']}")
+            print(f"IP Address: {host_info['ip_address']}")
+            print(f"TPU name: {tpu_name}")
 
             logger.info("Setting up SSH configuration")
             add_ssh_host_config(host_info["hostname"], host_info["ip_address"], username, tpu_name, zone=zone)
 
             logger.info("Syncing environment")
-            sync_to_remote(f"dev-tpu-{tpu_name}", sync_path)
-            setup_remote_environment(f"dev-tpu-{tpu_name}")
+            try:
+                sync_to_remote(f"dev-tpu-{tpu_name}", sync_path)
+                setup_remote_environment(f"dev-tpu-{tpu_name}")
+            except Exception as e:
+                logger.warning(f"Environment setup failed, keeping TPU allocation alive. {e}")
 
-            print("TPU allocated successfully!")
-            print(f"Hostname: {host_info['hostname']}")
-            print(f"IP Address: {host_info['ip_address']}")
-            print(f"TPU name: {tpu_name}")
             print(f"SSH alias: dev-tpu-{tpu_name}")
             yield host_info
         except Exception as e:
