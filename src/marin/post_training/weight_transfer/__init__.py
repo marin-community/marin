@@ -99,9 +99,7 @@ def create_weight_transfer_server(
         WeightTransferServer instance
     """
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
-        # JAX transfer server is currently not supported with Levanter models
-        logger.warning("JAX transfer server not yet supported with Levanter models, falling back to GCS checkpoints")
-        config.mode = WeightTransferMode.GCS_CHECKPOINT
+        raise RuntimeError("JAX transfer server not supported for Levanter models")
 
     elif config.mode == WeightTransferMode.RAY_REMOTING:
         if coordinator is None:

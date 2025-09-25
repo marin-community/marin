@@ -199,7 +199,8 @@ def rl_train(name: str) -> ExecutorStep:
 
     inference_server_config = InferenceServerConfig(
         model=model_config,
-        trainer=trainer_config,
+        # Turn on tensor parallelism for inference
+        trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=4),
         hf_checkpoint=MODEL_CHECKPOINT,
         tokenizer=MODEL_TOKENIZER,
         temperature=1.0,

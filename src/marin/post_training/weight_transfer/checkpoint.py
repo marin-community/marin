@@ -21,6 +21,7 @@ saving to and loading from GCS (or other filesystems supported by fsspec).
 
 import logging
 import os
+import threading
 import time
 from collections import deque
 from typing import Any
@@ -41,6 +42,14 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _rm_thread(path: str) -> None:
+    try:
+        fs, _ = fsspec.core.url_to_fs(path)
+        fs.rm(path, recursive=True)
+    except Exception as e:
+        logger.error(f"Failed to delete old checkpoint at {path}: {e}", exc_info=True)
 
 
 class GCSCheckpointServer(WeightTransferServer):
@@ -72,11 +81,9 @@ class GCSCheckpointServer(WeightTransferServer):
                 if jax.process_index() == 0:  # Only delete from coordinator
                     logger.info(f"Cleaning up old checkpoint at weight_id {old_weight_id} ({old_path})...")
                     fs, _ = fsspec.core.url_to_fs(old_path)
-                    try:
-                        if fs.exists(old_path):
-                            fs.rm(old_path, recursive=True)
-                    except Exception:
-                        logger.warning(f"Failed to delete old checkpoint {old_path}", exc_info=True)
+                    # Dispatch deletion to a separate thread to avoid blocking
+                    if fs.exists(old_path):
+                        threading.Thread(target=_rm_thread, args=(old_path,), daemon=True).start()
 
             logger.info(f"Saving checkpoint at weight_id {weight_id}...")
 
