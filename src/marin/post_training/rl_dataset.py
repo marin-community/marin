@@ -20,8 +20,6 @@ import jax.numpy as jnp
 import numpy as np
 from transformers import AutoTokenizer
 
-from marin.post_training.environments.prime_intellect_env import PrimeIntellectEnv
-
 from .environments.marin_env import EnvStep
 
 
@@ -424,8 +422,6 @@ def create_dataset_from_environment(
     pad_token_id: int,
     mode: str = "train",
     temperature: float = 1.0,
-    env_id: str | None = None,
-    env_args: dict | None = None,
 ) -> tuple["RLDataset", dict[str, float]]:
     """Create RLDataset by stepping through the environment.
 

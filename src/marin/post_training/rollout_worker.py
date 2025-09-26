@@ -87,10 +87,6 @@ class RolloutWorkerConfig:
     # Initial checkpoint for the reference model (auto-detects HF repo vs local path)
     initial_checkpoint: str | None = None
 
-    # Environment ID and args for PrimeIntellectEnv
-    env_id: str | None = None
-    env_args: dict | None = None
-
 
 def compute_model_logprobs(
     model,
@@ -426,8 +422,6 @@ class RolloutWorker:
                 pad_token_id=self.config.pad_token_id,
                 mode="train",
                 temperature=self.config.temperature,
-                env_id=self.config.env_id,
-                env_args=self.config.env_args,
             )
         barrier_sync()
 
