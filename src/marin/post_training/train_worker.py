@@ -222,8 +222,8 @@ class ReplayBufferConfig:
     alpha: float = 3.0
     """Recency bias for sampling, higher values favor newer examples."""
 
-    max_samples: int = 1
-    """Maximum number of times an example can be sampled before removal."""
+    max_samples: int = 4
+    """Maximum number of times to use an example before retiring."""
 
 
 @dataclass
@@ -277,12 +277,12 @@ class TrainWorker:
         self.rollout_reader = config.rollout_storage.create_reader()
 
         self.replay_buffer = ReplayBuffer(
+            process_id=jax.process_index(),
+            total_processes=jax.process_count(),
             capacity=config.replay_buffer.capacity,
             local_batch_size=config.trainer.train_batch_size,
             recency_alpha=config.replay_buffer.alpha,
             max_samples=config.replay_buffer.max_samples,
-            process_id=jax.process_index(),
-            total_processes=jax.process_count(),
         )
         self.data_loader = ReplayDataLoader(
             rollout_reader=self.rollout_reader,
@@ -332,7 +332,7 @@ class TrainWorker:
         optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
         def _loss_function(model, batch, key):
-            return rloo_loss_with_importance_sampling(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.5)
+            return rloo_loss_with_importance_sampling(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=1.0)
             # return ppo_loss(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.5)
 
         with (

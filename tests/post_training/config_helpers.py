@@ -47,6 +47,7 @@ from marin.post_training.rollout_storage import (
 from marin.post_training.rollout_worker import RolloutWorkerConfig, compute_model_logprobs
 from marin.post_training.train_worker import ReplayBufferConfig, TrainWorkerConfig
 from marin.post_training.weight_transfer import WeightTransferConfig
+from marin.post_training.weight_transfer.base import WeightTransferMode
 
 
 class DummyTokenizer:
@@ -173,6 +174,14 @@ def create_nano_optimizer_config() -> AdamConfig:
     )
 
 
+def create_weight_transfer_config():
+    return WeightTransferConfig(
+        mode=WeightTransferMode.ARROW_FLIGHT,
+        sync_interval_steps=1,
+        poll_interval_seconds=1,
+    )
+
+
 def create_nano_training_worker_config(
     rollout_storage: RolloutStorageConfig, output_dir: str | Path
 ) -> TrainWorkerConfig:
@@ -183,18 +192,14 @@ def create_nano_training_worker_config(
         model=create_nano_llama_config(),
         trainer=create_nano_trainer_config(output_dir),
         optimizer=create_nano_optimizer_config(),
+        weight_transfer=create_weight_transfer_config(),
         replay_buffer=ReplayBufferConfig(
             capacity=2048,
             alpha=3.0,
+            max_samples=4,
         ),
         # disable KL since we're training from scratch
         kl_coef=0.0,
-        weight_transfer=WeightTransferConfig(
-            sync_interval_steps=10,
-            poll_interval_seconds=1,
-            checkpoint_dir=str(Path(output_dir) / "policy_checkpoints"),
-            max_checkpoints=5,
-        ),
     )
 
 
@@ -262,12 +267,7 @@ def create_nano_rollout_worker_config(
         temperature=1.0,
         log_freq=1,
         max_rollouts=1000,
-        weight_transfer=WeightTransferConfig(
-            sync_interval_steps=10,
-            poll_interval_seconds=1,
-            checkpoint_dir=Path(output_dir) / "policy_checkpoints",
-            max_checkpoints=5,
-        ),
+        weight_transfer=create_weight_transfer_config(),
     )
 
 
