@@ -37,55 +37,22 @@ from .checkpoint import GCSCheckpointClient, GCSCheckpointServer
 from .ray import RayRemotingClient, RayRemotingServer, RayWeightCoordinator
 
 try:
-    from .jax import JAXTransferClient, JAXTransferServer
+    from .jax import JAXTransferClient, JAXTransferServer, WeightTransferCoordinator
 except (ImportError, AttributeError):
     JAXTransferClient = None
     JAXTransferServer = None
+    WeightTransferCoordinator = None
 
 logger = logging.getLogger(__name__)
 
 # Check if JAX transfer is available
-try:
-    from ..jax_weight_transfer import (
-        WeightTransferCoordinator,
-        instantiate_coordinator,
-        start_transfer_server,
-    )
-
-    JAX_TRANSFER_AVAILABLE = True
-except (ImportError, AttributeError):
-    JAX_TRANSFER_AVAILABLE = False
-    WeightTransferCoordinator = None
-    instantiate_coordinator = None
-    start_transfer_server = None
-
-
-def create_coordinator(mode: WeightTransferMode, name: str):
-    """Create coordinator based on transfer mode.
-
-    Args:
-        mode: The weight transfer mode
-        name: Unique name for the coordinator
-
-    Returns:
-        Ray actor handle for coordinator, or None if not needed
-    """
-    if mode == WeightTransferMode.RAY_REMOTING:
-        return RayWeightCoordinator.options(name=name).remote()
-    elif mode == WeightTransferMode.JAX_TRANSFER_SERVER:
-        if not JAX_TRANSFER_AVAILABLE:
-            raise RuntimeError("JAX transfer server not available")
-        transfer_server = start_transfer_server()
-        return instantiate_coordinator(transfer_server, name=name)
-    else:
-        return None  # GCS_CHECKPOINT doesn't need coordinator
+JAX_TRANSFER_AVAILABLE = JAXTransferClient is not None and JAXTransferServer is not None
 
 
 def create_weight_transfer_server(
     config: WeightTransferConfig,
     mesh: Mesh | None = None,
     axis_mapping: ResourceMapping | None = None,
-    coordinator=None,
 ) -> WeightTransferServer:
     """Factory function to create appropriate transfer server for Levanter models.
 
@@ -93,18 +60,15 @@ def create_weight_transfer_server(
         config: Weight transfer configuration
         mesh: JAX mesh for distributed computation (optional)
         axis_mapping: Levanter axis mapping for sharding (optional)
-        coordinator: Ray coordinator for distributed modes (required for RAY_REMOTING)
 
     Returns:
         WeightTransferServer instance
     """
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
-        raise RuntimeError("JAX transfer server not supported for Levanter models")
+        return JAXTransferServer(config, mesh, axis_mapping)
 
     elif config.mode == WeightTransferMode.RAY_REMOTING:
-        if coordinator is None:
-            raise ValueError("Coordinator required for Ray remoting")
-        return RayRemotingServer(config, coordinator)
+        return RayRemotingServer(config)
 
     # Default to GCS checkpoint mode
     return GCSCheckpointServer(
@@ -118,7 +82,6 @@ def create_weight_transfer_client(
     config: WeightTransferConfig,
     mesh: Mesh | None = None,
     axis_mapping: ResourceMapping | None = None,
-    coordinator=None,
 ) -> WeightTransferClient:
     """Factory function to create appropriate transfer client for Levanter models.
 
@@ -126,24 +89,15 @@ def create_weight_transfer_client(
         config: Weight transfer configuration
         mesh: JAX mesh for distributed computation (optional)
         axis_mapping: Levanter axis mapping for sharding (optional)
-        target_model: Target parameter structure for reconstructing NamedArrays (optional)
-        coordinator: Ray coordinator for distributed modes (required for RAY_REMOTING)
 
     Returns:
         WeightTransferClient instance
     """
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
-        # JAX transfer server is currently not supported with Levanter models
-        logger.warning("JAX transfer server not supported, falling back to GCS checkpoints")
-        config.mode = WeightTransferMode.GCS_CHECKPOINT
+        return JAXTransferClient(config, mesh, axis_mapping)
 
     elif config.mode == WeightTransferMode.RAY_REMOTING:
-        if coordinator is None:
-            raise ValueError("Coordinator required for Ray remoting")
-        return RayRemotingClient(
-            config,
-            coordinator,
-        )
+        return RayRemotingClient(config)
 
     # Default to GCS checkpoint mode
     return GCSCheckpointClient(
@@ -164,10 +118,11 @@ __all__ = [
     "WeightTransferClient",
     "WeightTransferClientMetrics",
     "WeightTransferConfig",
+    "WeightTransferCoordinator",
     "WeightTransferMode",
     "WeightTransferServer",
     "WeightTransferServerMetrics",
-    "create_coordinator",
     "create_weight_transfer_client",
     "create_weight_transfer_server",
+    "get_or_create_actor",
 ]
