@@ -99,7 +99,7 @@ class PrimeIntellectEnv(MarinEnv):
 
         start_time = time.time()
         result = vf_env.evaluate(
-            client=inference_ctx.make_client(),
+            client=inference_ctx.openai_client(),
             model=inference_ctx.model,
             sampling_args=sampling_args,
             num_examples=num_examples,
