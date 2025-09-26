@@ -45,6 +45,7 @@ from .base import (
     WeightTransferConfig,
     WeightTransferServer,
     WeightTransferServerMetrics,
+    get_or_create_actor,
 )
 
 logger = logging.getLogger(__name__)
@@ -110,8 +111,8 @@ class WeightTransferCoordinator:
     _latest_weight_id: int | None
     _pending_completion: dict[int, asyncio.Event]  # transfer_uuid -> event
 
-    def __init__(self, address: str):
-        self.address = address
+    def __init__(self):
+        self.transfer_server_address = None  # Actual JAX transfer server address
         self._requested_transfers = []
         self._lock = asyncio.Lock()
         self._latest_weight_id = None
@@ -123,6 +124,20 @@ class WeightTransferCoordinator:
         Returns the latest weight ID that has been transferred.
         """
         return self._latest_weight_id
+
+    def get_transfer_info(self) -> tuple[int | None, str | None]:
+        """
+        Returns the latest weight ID and transfer server address without blocking.
+        Returns (None, None) if no weights are available or server not registered.
+        """
+        return self._latest_weight_id, self.transfer_server_address
+
+    def register_transfer_server(self, transfer_server_address: str):
+        """
+        Register the actual JAX transfer server address with the coordinator.
+        Called by the server when it starts up.
+        """
+        self.transfer_server_address = transfer_server_address
 
     async def schedule_weight_transfer(self) -> WeightTransferSpec:
         """
@@ -153,8 +168,13 @@ class WeightTransferCoordinator:
 
             out: list[_EnqueuedWeightTransferRequest] = []
             for request in requests:
+                if self.transfer_server_address is None:
+                    raise RuntimeError(
+                        "Transfer server address not registered. Server must call register_transfer_server() first."
+                    )
+
                 transfer = WeightTransferSpec(
-                    address=self.address,
+                    address=self.transfer_server_address,
                     transfer_uuid=request.uuid,
                     weight_id=latest_weight_id,
                     time_start=request.time_start,
@@ -269,12 +289,23 @@ async def receive_weight_transfers(
     """
     Asks the coordinator to schedule a weight transfer for this client, and blocks until the transfer is complete.
     """
+    if placeholder is None:
+        raise ValueError("Placeholder model cannot be None.")
+
     transfer_info: WeightTransferSpec = await coordinator.schedule_weight_transfer.remote()  # type: ignore
     total_bytes = num_bytes(placeholder)
 
-    out = do_transfer(transfer_info, client_server, placeholder)
-    # TODO: this should be pushed into a thread to avoid blocking the event loop
-    out = jax.block_until_ready(out)
+    try:
+        connection = client_server.connect(transfer_info.address)
+        out = connection.pull(transfer_info.transfer_uuid, placeholder)
+        if out is None:
+            raise RuntimeError(f"Transfer failed: received None from server at {transfer_info.address}")
+
+        # TODO: this should be pushed into a thread to avoid blocking the event loop
+        out = jax.block_until_ready(out)
+    except Exception as e:
+        await coordinator.report_transfer_finished.remote(transfer_info.transfer_uuid)  # type: ignore
+        raise RuntimeError(f"JAX transfer failed from {transfer_info.address}: {e}") from e
 
     await coordinator.report_transfer_finished.remote(transfer_info.transfer_uuid)  # type: ignore
 
@@ -287,13 +318,17 @@ async def receive_weight_transfers(
 
 
 def start_transfer_server() -> jax_transfer.TransferServer:
+    """Start JAX transfer server."""
     ip = get_local_ip_from_hostname()
     backend_client = jax.devices()[0].client
-    return jax_transfer.start_transfer_server(
+
+    # Use random port binding for proper network resource management
+    server = jax_transfer.start_transfer_server(
         backend_client,
-        f"{ip}:0",  # bind to the local IP address
+        f"{ip}:0",  # Random port binding
         [f"{ip}:0"] * jax.device_count(),
     )
+    return server
 
 
 # -- Helpers --
@@ -319,36 +354,27 @@ def num_bytes(model: PyTree):
     return sum(x.nbytes for x in leaves.values())
 
 
-def do_transfer(
-    spec: WeightTransferSpec,
-    client_transfer_server: jax_transfer.TransferServer,
-    placeholder: PyTree,
-):
-    # TODO: JAX doesn't expose any kind of timeout mechanism
-    connection = client_transfer_server.connect(spec.address)
-    return connection.pull(spec.transfer_uuid, placeholder)
-
-
 class JAXTransferServer(WeightTransferServer):
     """JAX transfer server-based weight transfer server."""
 
     coordinator: WeightTransferCoordinator
 
-    def __init__(self, config: WeightTransferConfig, mesh, coordinator, params_sharding_rules=None):
+    def __init__(self, config: WeightTransferConfig, mesh, params_sharding_rules=None):
         self.config = config
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
-        self.coordinator = coordinator
 
-        # Start transfer server
+        self.coordinator = get_or_create_actor(WeightTransferCoordinator, config.coordinator_name)
+
+        # Start transfer server and register its address with coordinator
         self.transfer_server = start_transfer_server()
+        self.coordinator.register_transfer_server.remote(self.transfer_server.address())
         self._setup_cpu_transfer()
 
         # Single-item queue for polling
         self.poll_queue = queue.Queue(maxsize=1)
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="weight_transfer")
 
-        # Metrics tracking
         self.metrics = WeightTransferServerMetrics(start_time=time.time())
 
     def _setup_cpu_transfer(self):
@@ -423,18 +449,20 @@ class JAXTransferServer(WeightTransferServer):
 class JAXTransferClient(WeightTransferClient):
     """JAX transfer server-based weight transfer client."""
 
-    def __init__(self, config: WeightTransferConfig, mesh, coordinator, params_sharding_rules=None):
+    def __init__(self, config: WeightTransferConfig, mesh, params_sharding_rules=None):
         self.config = config
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
-        self.coordinator = coordinator
 
-        # Start transfer server
+        self.coordinator = get_or_create_actor(WeightTransferCoordinator, config.coordinator_name)
+
+        # Start transfer server for client (doesn't register address with coordinator)
         self.transfer_server = start_transfer_server()
         self._setup_cpu_transfer()
 
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="weight_transfer")
-        self.current_params_placeholder = None
+
+        self._last_received_weight_id: int = -1
 
         # Metrics tracking
         self.metrics = WeightTransferClientMetrics(start_time=time.time())
@@ -452,35 +480,61 @@ class JAXTransferClient(WeightTransferClient):
             raise RuntimeError(f"Failed to setup CPU mesh: {e}") from e
 
     def _transfer_from_cpu(self, model) -> PyTree:
-        """Transfer params from CPU back to TPU."""
-        return self.mesh.shard(model, self.params_sharding_rules)
+        """Transfer params from CPU back to target devices."""
+        if self.params_sharding_rules is not None:
+            return jax.device_put(model, self.params_sharding_rules)
+        else:
+            # Use default device placement
+            return jax.device_put(model, jax.devices()[0])
 
     def receive_weights(self, old_model: PyTree) -> Any:
         """Receive weights with CPU transfer."""
         self.metrics.total_polls += 1
 
+        # First check if new weights are available without blocking
+        try:
+            latest_weight_id, server_address = ray.get(self.coordinator.get_transfer_info.remote())
+            logger.info(
+                "Current weight id %s, Latest weight ID: %s, Server address: %s",
+                self._last_received_weight_id,
+                latest_weight_id,
+                server_address,
+            )
+
+            # Early exit if no weights available or no new weights
+            if latest_weight_id is None or server_address is None:
+                return None
+
+            if latest_weight_id <= self._last_received_weight_id:
+                return None
+        except Exception as e:
+            logger.error(f"Failed to check transfer info: {e}")
+            self.metrics.failed_receives += 1
+            return None
+
         def _receive_in_thread():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
+                logger.info("Receiving weight transfers from server at %s", server_address)
                 cpu_params, metadata = loop.run_until_complete(
-                    receive_weight_transfers(self.coordinator, self.transfer_server, self.current_params_placeholder)
+                    receive_weight_transfers(self.coordinator, self.transfer_server, old_model)
                 )
 
-                # Transfer back from CPU
                 tpu_params = self._transfer_from_cpu(cpu_params)
-
                 return tpu_params, metadata
             finally:
                 loop.close()
 
         try:
+            logger.info("Fetching new weights, current=%s, latest=%s", self._last_received_weight_id, latest_weight_id)
             future = self.executor.submit(_receive_in_thread)
             params, metadata = future.result(timeout=self.config.transfer_timeout)
 
             if params is not None and metadata is not None:
-                # Update metrics
+                # Update metrics and track received weight ID
                 self.metrics.successful_receives += 1
+                self._last_received_weight_id = metadata.weight_id
                 return params
 
             return None
@@ -488,11 +542,7 @@ class JAXTransferClient(WeightTransferClient):
         except Exception as e:
             self.metrics.failed_receives += 1
             logger.error(f"Failed to receive weights: {e}")
-            raise
-
-    def set_params_placeholder(self, model):
-        """Set the placeholder params for transfers."""
-        self.current_params_placeholder = model
+            return None
 
     def cleanup(self) -> None:
         """Cleanup transfer server and thread pool."""

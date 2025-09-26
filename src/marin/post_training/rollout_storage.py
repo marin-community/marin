@@ -55,6 +55,7 @@ from enum import Enum
 import equinox as eqx
 import fsspec
 import haliax as hax
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -80,17 +81,30 @@ def _get_or_create_queue(queue_name: str) -> "InMemoryRolloutQueue":
 
 
 class JaxRolloutBatch(eqx.Module):
-    input_ids: hax.NamedArray
-    attention_mask: hax.NamedArray
-    position_ids: hax.NamedArray
-    target_ids: hax.NamedArray
-    loss_weights: hax.NamedArray
-    loss_masks: hax.NamedArray
-    reference_logprobs: hax.NamedArray
-    policy_logprobs: hax.NamedArray
+    input_ids: jax.Array
+    attention_mask: jax.Array
+    position_ids: jax.Array
+    target_ids: jax.Array
+    loss_weights: jax.Array
+    loss_masks: jax.Array
+    reference_logprobs: jax.Array
+    policy_logprobs: jax.Array
 
     def __len__(self) -> int:
-        return len(self.input_ids.array)
+        return len(self.input_ids)
+
+    def as_named(self) -> dict:
+        """Convert to dict with NamedArrays for model input."""
+        return {
+            "input_ids": hax.named(self.input_ids, ("batch", "position")),
+            "attention_mask": hax.named(self.attention_mask, ("batch", "position")),
+            "position_ids": hax.named(self.position_ids, ("batch", "position")),
+            "target_ids": hax.named(self.target_ids, ("batch", "position")),
+            "loss_weights": hax.named(self.loss_weights, ("batch", "position")),
+            "loss_masks": hax.named(self.loss_masks, ("batch", "position")),
+            "reference_logprobs": hax.named(self.reference_logprobs, ("batch", "position")),
+            "policy_logprobs": hax.named(self.policy_logprobs, ("batch", "position")),
+        }
 
 
 @dataclass
@@ -110,16 +124,16 @@ class RolloutBatch:
         return len(self.input_ids)
 
     def to_jax(self) -> JaxRolloutBatch:
-        """Convert numpy arrays to JAX named arrays."""
+        """Convert numpy arrays to JAX arrays."""
         return JaxRolloutBatch(
-            input_ids=hax.named(jnp.array(self.input_ids), ("batch", "position")),
-            attention_mask=hax.named(jnp.array(self.attention_mask), ("batch", "position")),
-            position_ids=hax.named(jnp.array(self.position_ids), ("batch", "position")),
-            target_ids=hax.named(jnp.array(self.target_ids), ("batch", "position")),
-            loss_weights=hax.named(jnp.array(self.loss_weights), ("batch", "position")),
-            loss_masks=hax.named(jnp.array(self.loss_masks), ("batch", "position")),
-            reference_logprobs=hax.named(jnp.array(self.reference_logprobs), ("batch", "position")),
-            policy_logprobs=hax.named(jnp.array(self.policy_logprobs), ("batch", "position")),
+            input_ids=jnp.array(self.input_ids),
+            attention_mask=jnp.array(self.attention_mask),
+            position_ids=jnp.array(self.position_ids),
+            target_ids=jnp.array(self.target_ids),
+            loss_weights=jnp.array(self.loss_weights),
+            loss_masks=jnp.array(self.loss_masks),
+            reference_logprobs=jnp.array(self.reference_logprobs),
+            policy_logprobs=jnp.array(self.policy_logprobs),
         )
 
 

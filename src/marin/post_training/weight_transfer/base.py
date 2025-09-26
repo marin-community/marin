@@ -19,6 +19,7 @@ This module provides the core abstractions and configurations used by all
 weight transfer implementations.
 """
 
+import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -26,6 +27,8 @@ from enum import Enum
 from typing import Any
 
 from jaxtyping import PyTree
+
+logger = logging.getLogger(__name__)
 
 
 class WeightTransferMode(Enum):
@@ -77,9 +80,9 @@ class WeightTransferConfig:
     # Common settings
     sync_interval_steps: int = 100
     poll_interval_seconds: float = 30.0
+    coordinator_name: str = "weight_transfer_coordinator"
 
-    # RAY_REMOTING and JAX_TRANSFER_SERVER specific
-    transfer_timeout: float = 120.0
+    transfer_timeout: float = 5.0
 
     # GCS Checkpoint specific
     checkpoint_dir: str = ""
@@ -134,3 +137,36 @@ class WeightTransferClient(ABC):
     def get_metrics(self) -> WeightTransferClientMetrics:
         """Get transfer metrics."""
         return WeightTransferClientMetrics(start_time=time.time())
+
+
+def get_or_create_actor(actor_class, name: str, *args, **kwargs):
+    """Fetch an existing actor reference or create it if it doesn't exist.
+
+    Args:
+        actor_class: Ray remote class (e.g., RayWeightCoordinator, WeightTransferCoordinator)
+        name: Actor name for registration
+        *args: Arguments to pass to actor constructor
+        max_retries: Number of retry attempts
+        **kwargs: Keyword arguments to pass to actor constructor
+
+    Returns:
+        Ray actor handle
+    """
+    max_retries = 5
+
+    for attempt in range(max_retries):
+        logger.info("Retrieving or creating actor '%s' (attempt %d)", name, attempt + 1)
+        try:
+            return actor_class.options(name=name, get_if_exists=True).remote(*args, **kwargs)
+        except ValueError:
+            # Another process might have created it, wait and retry
+            if attempt < max_retries - 1:
+                retry_timeout = 0.1 * (attempt**2)
+                logger.info(
+                    "Actor '%s' not found, retrying in %.2f seconds (attempt %d)", name, retry_timeout, attempt + 1
+                )
+                time.sleep(retry_timeout)
+                continue
+            raise
+
+    raise RuntimeError(f"Failed to get or create actor '{name}' after {max_retries} attempts")

@@ -27,7 +27,6 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any, cast
-from functools import cached_property
 
 import haliax as hax
 import jax
@@ -176,8 +175,7 @@ class LevanterInferenceContext(InferenceContext):
     def tokenizer(self):
         return self._tokenizer
 
-    @cached_property
-    def client(self):
+    def openai_client(self):
         base_url = f"http://{self.inference_server.config.host}:{self.inference_server.config.port}/v1"
         return AsyncOpenAI(base_url=base_url, api_key="marin")
 
@@ -197,12 +195,13 @@ class LevanterInferenceContext(InferenceContext):
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        client = self.openai_client()
 
         def _process_batch(batch_prompts: list[str]) -> list[list[dict]]:
             batch_completions = []
 
             for prompt in batch_prompts:
-                completion = self.client.chat.completions.create(
+                completion = client.chat.completions.create(
                     model=getattr(self.inference_server.config, "model_name", "test-model"),
                     messages=[{"role": "user", "content": prompt}],
                     logprobs=True,
@@ -243,6 +242,8 @@ class LevanterInferenceContext(InferenceContext):
             batch_prompts = prompts[i : i + batch_size]
             batch_results = _process_batch(batch_prompts)
             all_results.extend(batch_results)
+
+        loop.run_until_complete(client.close())
 
         loop.close()
         return all_results
@@ -351,7 +352,9 @@ class RolloutWorker:
             key=key,
         )
 
-        self.policy_model = self.transfer_client.receive_weights(None)
+        # N.B. Jax weight transfer requires a shape tree in order to serialize/deserialize weights
+        shape_tree = hax.tree_util.tree_map(lambda x: x.shape, self.reference_model)
+        self.policy_model = self.transfer_client.receive_weights(shape_tree)
         if self.policy_model:
             logger.info("Loaded initial policy model from weight transfer")
         else:

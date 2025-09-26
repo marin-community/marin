@@ -29,9 +29,9 @@ from levanter.distributed import RayConfig
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.infra.ray_tpu import run_on_pod_ray
-from levanter.models.qwen import Qwen3Config
+from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
-from levanter.tracker.tensorboard import TensorboardConfig
+from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from ray.runtime_env import RuntimeEnv
 from transformers import AutoConfig, AutoTokenizer
@@ -44,7 +44,7 @@ from marin.execution.executor import (
 from marin.post_training.rollout_storage import RolloutStorageConfig, StorageType
 from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.post_training.train_worker import ReplayBufferConfig, TrainWorker, TrainWorkerConfig
-from marin.post_training.weight_transfer import WeightTransferConfig
+from marin.post_training.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.resources import TpuPodConfig
 from marin.training.training import (
     _add_run_env_variables,
@@ -54,11 +54,11 @@ from marin.utils import remove_tpu_lockfile_on_exit
 logger = logging.getLogger(__name__)
 
 ENVIRONMENT_SPEC = "math"
-# MODEL_NAME = "meta-llama/Llama-3.2-8B-Instruct"
+MODEL_NAME = "meta-llama/Llama-3.2-1B"
 # MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 # MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
-MODEL_TYPE = "qwen3"
+# MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
+MODEL_TYPE = "llama"
 WANDB_PROJECT = f"rl_testing_{MODEL_NAME.split('/')[-1].lower()}"
 MODEL_TOKENIZER = MODEL_NAME
 MODEL_CHECKPOINT = MODEL_NAME
@@ -81,7 +81,7 @@ class RLTrainConfig:
     train_worker_config: TrainWorkerConfig
     inference_tpu_type: str
     train_tpu_type: str
-    num_inference_workers: int = 1
+    num_inference_workers: int = 4
     num_train_slices: int = 1
 
 
@@ -92,6 +92,7 @@ def run_rl_training_on_pod(config: RLTrainConfig):
     """
     env = {}
     env = _add_run_env_variables(env)
+    env["EQX_ON_ERROR"] = "nan"
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
         marin_prefix = os.environ.get("MARIN_PREFIX")
@@ -167,14 +168,17 @@ def run_rl_training_on_pod(config: RLTrainConfig):
 
 def rl_train(name: str) -> ExecutorStep:
     hf_config = AutoConfig.from_pretrained(MODEL_NAME)
-    config = Qwen3Config.from_hf_config(hf_config)
+    config = LlamaConfig.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
     model_config = dataclasses.replace(config, seq_len=MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS, tokenizer=MODEL_TOKENIZER)
 
     trainer_config = TrainerConfig(
-        tracker=TensorboardConfig(
-            logdir=OutputName("tblogs"),
+        tracker=WandbConfig(
+            project="marin_rl_testing",
+            name=name,
+            tags=["rl", "math", MODEL_NAME.split("/")[-1]],
+            # logdir=OutputName("tblogs"),
         ),
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         train_batch_size=256,
@@ -184,7 +188,7 @@ def rl_train(name: str) -> ExecutorStep:
             base_path=OutputName("checkpoints"),
             save_interval=datetime.timedelta(seconds=600),
         ),
-        tensor_parallel_axes=["mlp", "kv_head"],
+        tensor_parallel_axes=["mlp", "heads"],
         fsdp_axis="embed",
         batch_axis="batch",
         ray=RayConfig(auto_start_cluster=False),
@@ -200,7 +204,7 @@ def rl_train(name: str) -> ExecutorStep:
     inference_server_config = InferenceServerConfig(
         model=model_config,
         # Turn on tensor parallelism for inference
-        trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=4),
+        trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=["mlp", "kv_head"]),
         hf_checkpoint=MODEL_CHECKPOINT,
         tokenizer=MODEL_TOKENIZER,
         temperature=1.0,
@@ -217,10 +221,12 @@ def rl_train(name: str) -> ExecutorStep:
         path=OutputName("rollouts"),
     )
     weight_transfer = WeightTransferConfig(
-        sync_interval_steps=25,
-        poll_interval_seconds=10,
+        # mode=WeightTransferMode.JAX_TRANSFER_SERVER,
+        mode=WeightTransferMode.GCS_CHECKPOINT,
+        sync_interval_steps=4,
         checkpoint_dir=OutputName("policy_checkpoints"),
         max_checkpoints=5,
+        # coordinator_name="rl_weight_transfer_coordinator",
     )
 
     train_worker = TrainWorkerConfig(
@@ -232,6 +238,8 @@ def rl_train(name: str) -> ExecutorStep:
         replay_buffer=ReplayBufferConfig(
             capacity=4096,
             alpha=3,
+            # Don't allow resampling.
+            max_samples=1,
         ),
         kl_coef=0.001,
         initial_checkpoint=MODEL_NAME,
@@ -279,12 +287,12 @@ def rl_train(name: str) -> ExecutorStep:
 
 
 def main():
-    import time
-
-    nonce = int(time.time())
+    if os.getenv("CI", None) is not None:
+        logger.info("Skipping experiment execution on CI environment, needs HF access.")
+        return
 
     experiments = [
-        rl_train(name=f"qwen3-math-rl-test-{nonce}"),
+        rl_train(name="llama-1b-math-rl-test"),
     ]
 
     executor_main(
