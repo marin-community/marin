@@ -507,8 +507,8 @@ class LevanterHarnessLM(TemplateLM):
             for key, value in self.generation_kwargs.items():
                 processed_gen_kwargs.setdefault(key, value)
             
-            # Standardize kwargs using our modify_gen_kwargs method
-            processed_gen_kwargs = self.modify_gen_kwargs(processed_gen_kwargs)
+            # Standardize kwargs using our _modify_gen_kwargs method
+            processed_gen_kwargs = self._modify_gen_kwargs(processed_gen_kwargs)
             processed_kwargs_list.append(processed_gen_kwargs)
 
         # Tokenize prompts and compute capacity needs
@@ -675,7 +675,7 @@ class LevanterHarnessLM(TemplateLM):
         return outputs
 
     @staticmethod
-    def modify_gen_kwargs(kwargs: dict) -> dict:
+    def _modify_gen_kwargs(kwargs: dict) -> dict:
         """
         Modify generation kwargs to standardize parameters, similar to vLLM implementation.
         """
