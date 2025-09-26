@@ -46,7 +46,8 @@ except (ImportError, AttributeError):
         WeightTransferMode.GCS_CHECKPOINT,
     ]
 
-pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping slow tests on CI")
+if os.environ.get("CI"):
+    pytest.skip("Skipping slow tests on CI", allow_module_level=True)
 
 
 def create_sample_pytree(seed: int):

@@ -30,7 +30,8 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping slow multiprocess tests on CI")
+if os.environ.get("CI"):
+    pytest.skip("Skipping slow multiprocess tests on CI", allow_module_level=True)
 
 try:
     from jax.experimental import transfer as jax_transfer
