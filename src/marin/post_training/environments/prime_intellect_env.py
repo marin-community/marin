@@ -45,16 +45,14 @@ class PrimeIntellectEnv(MarinEnv):
         self.env_id = kwargs.get("env_id", None)
         self.env_args = kwargs.get("env_args", None)
 
-        assert (
-            self.env_id is not None
-        ), (
-            "env_id is required for PrimeIntellectEnv, pass it as an keyword argument or in the environment spec like: "
+        assert self.env_id is not None, (
+            "env_id is required for PrimeIntellectEnv, pass it as"
+            "an keyword argument or in the environment spec like: "
             "prime_intellect:env_id=primeintellect/gsm8k,env_args={num_train_examples=-1,num_eval_examples=-1}"
         )
-        assert (
-            self.env_args is not None
-        ), (
-            "env_args is required for PrimeIntellectEnv, pass it as an keyword argument or in the environment spec like: "
+        assert self.env_args is not None, (
+            "env_args is required for PrimeIntellectEnv, pass it as"
+            "an keyword argument or in the environment spec like: "
             "prime_intellect:env_id=primeintellect/gsm8k,env_args={num_train_examples=-1,num_eval_examples=-1}"
         )
 
@@ -116,20 +114,24 @@ class PrimeIntellectEnv(MarinEnv):
                 temperature={temperature}"
         )
 
+        inputs = None
         if mode == "train":
             assert vf_env.dataset is not None, f"Train Dataset is not set for environment {env_id}"
-            vf_env.eval_dataset = None
+            inputs = vf_env.get_dataset(n=n_examples)
         else:
             assert vf_env.eval_dataset is not None, f"Eval dataset is not set for environment {env_id}"
-            vf_env.dataset = None
+            inputs = vf_env.get_eval_dataset(n=n_examples)
+
+        assert inputs is not None, "No dataset found"
+        if n_generations > 1:
+            inputs = inputs.repeat(n_generations)
 
         start_time = time.time()
-        result = vf_env.evaluate(
-            client=inference_ctx.openai_client(),
+        result = vf_env.generate(
+            dataset=inputs,
+            client=inference_ctx.client,
             model=inference_ctx.model,
             sampling_args=sampling_args,
-            num_examples=n_examples,
-            rollouts_per_example=n_generations,
             max_concurrent=self.max_concurrent,
         )
 
