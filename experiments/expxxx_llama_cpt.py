@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from dataclasses import dataclass, field
 from levanter.models.llama import LlamaConfig
 from levanter.data.text import TextLmDatasetFormat
@@ -16,11 +30,11 @@ from experiments.midtrain_sweep import (
 )
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
-from experiments.evals.resource_configs import SINGLE_TPU_V4_8, SINGLE_TPU_V5p_8_FULL
+from experiments.evals.resource_configs import SINGLE_TPU_V4_8, SINGLE_TPU_V5p_8_FULL, SINGLE_TPU_V4_8_FULL
 from marin.resources import TpuPodConfig
 from marin.execution.executor import executor_main, output_path_of, ExecutorStep
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
-from experiments.models import llama_3_1_8b_instruct
+from experiments.models import llama_3_2_1b as gcs_llama_3_2_1b
 from experiments.eval_datasets import gsm8k_train
 from experiments.defaults import default_tokenize
 
@@ -281,6 +295,8 @@ class AblationConfig:
     """Whether to finetune the model on the format of the test task."""
     pretraining_ratios: list[float] = field(default_factory=lambda: [0.50, 0.60, 0.70, 0.80, 0.90, 1.00])
     """Ratio of pretraining mix during the first stage."""
+    experiment_name_suffix: str = ""
+    """Suffix to add to the experiment name."""
 
 
 gsm8k_train_tokenized = default_tokenize(
@@ -316,14 +332,15 @@ def _get_experiment_name(config: AblationConfig, pretraining_ratio: float, midtr
 
     model_name = config.base_model.split("/")[-1]
     if not config.do_finetuning:  # No finetuning, don't add mcq or qa
-        return f"{model_name}-{config.midtrain_mixture_name}-control-{pretraining_ratio}-{midtraining_ratio}"
+        return f"{model_name}-{config.midtrain_mixture_name}-control- \
+            {pretraining_ratio}-{midtraining_ratio}{config.experiment_name_suffix}"
 
     wandb_run_name = f"{model_name}-{config.midtrain_mixture_name}-then"
     if to_add_mcq:
         wandb_run_name += "-mcq"
     if to_add_qa:
         wandb_run_name += "-qa"
-    return f"{wandb_run_name}-{pretraining_ratio}-{midtraining_ratio}"
+    return f"{wandb_run_name}-{pretraining_ratio}-{midtraining_ratio}{config.experiment_name_suffix}"
 
 
 def _get_wandb_tags(config: AblationConfig, pretraining_ratio: float, midtraining_ratio: float) -> list[str]:
@@ -386,6 +403,7 @@ def default_ablations(config: AblationConfig) -> list[ExecutorStep]:
                 weights={"pretrain": pretraining_ratio, "midtrain": midtraining_ratio},
             )
 
+        num_total_tokens = config.num_mixture_tokens + config.num_finetuning_tokens
         anneal_step = default_anneal(
             name=_get_experiment_name(config, pretraining_ratio, midtraining_ratio),
             anneal_config=AnnealConfig(
@@ -394,7 +412,7 @@ def default_ablations(config: AblationConfig) -> list[ExecutorStep]:
                 weight_decay=config.weight_decay,
                 warmup=config.warmup,
                 train_batch_size=config.batch_size,
-                num_anneal_training_tokens=config.num_mixture_tokens,
+                num_anneal_training_tokens=num_total_tokens,
                 resources=config.tpu_pod_config,
                 wandb_tags=_get_wandb_tags(config, pretraining_ratio, midtraining_ratio),
                 initialize_from_hf=config.base_model,
@@ -407,8 +425,14 @@ def default_ablations(config: AblationConfig) -> list[ExecutorStep]:
             model_name=expt_name,
             model_path=anneal_step,
             evals=config.eval_tasks,
-            resource_config=SINGLE_TPU_V4_8,
+            resource_config=SINGLE_TPU_V4_8_FULL,
             wandb_tags=_get_wandb_tags(config, pretraining_ratio, midtraining_ratio),
+            generation_params={
+                "max_gen_toks": 1024,
+                "temperature": 0.0,
+                "n": 1,
+                "seed": 42,
+            },
         )
 
         steps.append(eval_step)
@@ -580,6 +604,7 @@ gsm8k_finemath_with_finetuning = default_ablations(
         # eval_tasks=[EvalTaskConfig("gsm8k_loss", num_fewshot=8, task_alias="gsm8k_loss_8shot")],
         eval_tasks=[GSM8K_COT],
         do_finetuning=True,
+        experiment_name_suffix="-fix-ft",
     )
 )
 
@@ -597,8 +622,9 @@ gsm8k_finemath_without_finetuning = default_ablations(
 
 # last_finetune_step = gsm8k_finemath_with_finetuning[-1]
 test_gsm8k_step = evaluate_levanter_lm_evaluation_harness(
-    model_name="test-llama-1b-gsm8k",
-    model_path=llama_3_1_8b_instruct,
+    model_name="test-llama-1b-gsm8k-base-v3",
+    # model_path=llama_3_1_8b_instruct,
+    model_path=gcs_llama_3_2_1b,
     # evals=eval_tasks,
     evals=[GSM8K_COT],
     # evals=[EvalTaskConfig("gsm8k_loss", num_fewshot=8, task_alias="gsm8k_loss_8shot")],
@@ -626,6 +652,6 @@ if __name__ == "__main__":
         # steps=eval_steps,
         # steps=microanneal_steps,
         # steps=fixed_microanneal_steps,
-        # steps=gsm8k_finemath_with_finetuning + gsm8k_finemath_without_finetuning,
-        steps=[test_gsm8k_step],
+        steps=gsm8k_finemath_with_finetuning + gsm8k_finemath_without_finetuning,
+        # steps=[test_gsm8k_step],
     )

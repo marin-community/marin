@@ -264,6 +264,7 @@ def evaluate_levanter_lm_evaluation_harness(
             wandb_tags=versioned(wandb_tags),
             generation_params=versioned(generation_params),
         ),
+        pip_dependency_groups=["eval"],
     )
 
 

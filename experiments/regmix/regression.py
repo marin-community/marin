@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import argparse
 import os
 
@@ -45,11 +59,16 @@ def main():
         help="Fallback tags to accept if some required tags are missing (repeatable)",
     )
     parser.add_argument("--name_contains", default="llama-130m-regmix-v3")
-    parser.add_argument("--test_size", type=float, default=0.10)
+    parser.add_argument("--test_size", type=float, default=0.50)
     parser.add_argument(
         "--grid_search",
         action="store_true",
         help="Run a simple grid search over key LightGBM hyperparameters using the validation split",
+    )
+    parser.add_argument(
+        "--save_dir",
+        default=os.path.join("experiments", "regmix", "plots"),
+        help="Directory to save figures",
     )
     args = parser.parse_args()
 
@@ -98,17 +117,20 @@ def main():
     best_valid_r2 = float("-inf")
 
     if args.grid_search:
-        # Keep the grid compact to avoid explosion, focusing on impactful knobs
+        # Tighter model capacity and stronger regularization to combat overfitting.
+        # Use larger n_estimators together with early stopping so training can stop early.
         param_grid = {
-            "learning_rate": [0.02, 0.05, 0.1],
-            "num_leaves": [16, 31],
-            "max_depth": [4, 6],
-            "min_child_samples": [5, 20],
-            "reg_alpha": [0.0, 1.0],
-            "reg_lambda": [0.0, 1.0],
-            "subsample": [0.8, 1.0],
-            "colsample_bytree": [0.8, 1.0],
-            "n_estimators": [400, 700],
+            "learning_rate": [0.01, 0.02, 0.05],
+            "num_leaves": [8, 16],
+            "max_depth": [3, 4, 5],
+            "min_child_samples": [20, 50, 100],
+            "reg_alpha": [0.0, 1.0, 5.0, 10.0],
+            "reg_lambda": [0.0, 1.0, 5.0, 10.0],
+            "min_split_gain": [0.0, 0.1, 0.2],
+            "subsample": [0.5, 0.7, 0.9],
+            "subsample_freq": [1],
+            "colsample_bytree": [0.5, 0.7, 0.9],
+            "n_estimators": [1500, 2500],
         }
 
         keys = list(param_grid.keys())
@@ -129,6 +151,7 @@ def main():
                 y_train,
                 eval_set=[(X_valid, y_valid)],
                 eval_metric="l2",
+                callbacks=[lgb.early_stopping(100, verbose=False)],
             )
 
             best_iter = getattr(candidate, "best_iteration_", None)
@@ -150,51 +173,90 @@ def main():
             for k in sorted(best_params.keys()):
                 print(f"    {k} = {best_params[k]}")
     else:
+        params = {
+            "task": "train",
+            "boosting_type": "gbdt",
+            "objective": "regression",
+            "metric": ["l1", "l2"],
+            "num_iterations": 1000,
+            "seed": 42,
+            "learning_rate": 1e-2,
+            "verbosity": -1,
+        }
         model = lgb.LGBMRegressor(
-            n_estimators=500,
-            learning_rate=0.05,
-            max_depth=4,
-            num_leaves=16,
-            min_child_samples=5,  # at least 5 samples per leaf
-            reg_alpha=1.0,  # L1 regularization
-            reg_lambda=1.0,  # L2 regularization
-            subsample=0.8,
-            colsample_bytree=0.8,
-            random_state=42,
-            n_jobs=-1,
+            **params,
         )
         model.fit(
             X_train,
             y_train,
             eval_set=[(X_valid, y_valid)],
             eval_metric="l2",
-            # callbacks=[lgb.early_stopping(20)],
+            callbacks=[lgb.early_stopping(3, verbose=False)],
         )
 
     # Report metrics
     from sklearn.metrics import mean_squared_error, r2_score
+    from scipy.stats import spearmanr
 
     train_pred = model.predict(X_train, num_iteration=getattr(model, "best_iteration_", None))
     train_rmse = float(np.sqrt(mean_squared_error(y_train, train_pred)))
     train_r2 = float(r2_score(y_train, train_pred))
+    train_spearman = float(spearmanr(y_train, train_pred).correlation)
     print(f"Train RMSE: {train_rmse:.6f}")
     print(f"Train R2:   {train_r2:.6f}")
+    print(f"Train Spearman: {train_spearman:.6f}")
 
     best_iter = getattr(model, "best_iteration_", None)
     y_pred = model.predict(X_valid, num_iteration=best_iter)
     rmse = float(np.sqrt(mean_squared_error(y_valid, y_pred)))
     r2 = float(r2_score(y_valid, y_pred))
+    spearman = float(spearmanr(y_valid, y_pred).correlation)
 
     print(f"Metric: {args.metric_slug}")
     if best_iter is not None:
         print(f"Best iteration: {best_iter}")
     print(f"Valid RMSE: {rmse:.6f}")
     print(f"Valid R2:   {r2:.6f}")
-
+    print(f"Valid Spearman: {spearman:.6f}")
     # Feature importances
     importances = model.feature_importances_
     for key, imp in zip(MIXTURE_TAG_KEYS, importances, strict=False):
         print(f"{key}: {imp}")
+
+    # Plots: predicted vs actual with linear regression fit
+    import matplotlib.pyplot as plt
+    from sklearn.linear_model import LinearRegression
+
+    os.makedirs(args.save_dir, exist_ok=True)
+
+    def plot_pred_vs_actual(x_pred: np.ndarray, y_true: np.ndarray, split: str):
+        # Fit y_true = a * x_pred + b
+        x_reshaped = x_pred.reshape(-1, 1)
+        reg = LinearRegression().fit(x_reshaped, y_true)
+        a = float(reg.coef_[0])
+        b = float(reg.intercept_)
+        # Pearson correlation r between prediction and actual
+        r = float(spearmanr(x_pred, y_true).correlation)
+
+        x_line = np.linspace(float(x_pred.min()), float(x_pred.max()), 200)
+        y_line = a * x_line + b
+
+        fig, ax = plt.subplots(figsize=(6, 5))
+        ax.scatter(x_pred, y_true, s=18, alpha=0.6)
+        ax.plot(x_line, y_line, color="red", linewidth=2, label=f"y = {a:.3f}x + {b:.3f}  (r={r:.3f})")
+        ax.set_xlabel("Predicted value")
+        ax.set_ylabel("Actual value")
+        ax.set_title(f"Predicted vs Actual ({split}) • metric={args.metric_slug}")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        out_path = os.path.join(args.save_dir, f"pred_vs_actual_{args.metric_slug}_{split}.png")
+        fig.savefig(out_path, dpi=200)
+        plt.close(fig)
+        print(f"Saved {out_path}")
+
+    plot_pred_vs_actual(train_pred, y_train, split="train")
+    plot_pred_vs_actual(y_pred, y_valid, split="valid")
 
 
 if __name__ == "__main__":

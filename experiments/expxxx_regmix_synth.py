@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import math
 import random
 
@@ -195,6 +209,10 @@ def _trial_steps(
     return steps
 
 
+def chunk_steps(steps):
+    return [steps[i : i + 120] for i in range(0, len(steps), 120)]
+
+
 if __name__ == "__main__":
     trials = _trial_steps(
         num_trials=200,
@@ -204,4 +222,6 @@ if __name__ == "__main__":
         log_uniform=False,
         seed=20250922,
     )
-    executor_main(steps=trials)
+
+    for chunk_step in chunk_steps(trials):
+        executor_main(steps=chunk_step)
