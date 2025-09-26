@@ -135,6 +135,9 @@ def _parse_tpu_type(tpe: str) -> tuple[str, int]:
     except ValueError:
         raise ValueError(f"Invalid chip count in TPU type: {tpe}")
 
+    if family == "v4" or family == "v5p":
+        return family, chip_count // 2
+
     return family, chip_count
 
 
