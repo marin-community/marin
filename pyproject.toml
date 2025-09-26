@@ -324,3 +324,6 @@ log_cli_level = "INFO"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'"
 ]
+
+# pytest-xdist defaults
+dist = "worksteal"
