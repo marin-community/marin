@@ -12,11 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-
-os.environ["JAX_PLATFORMS"] = "cpu"  # Force CPU-only for testing
-
 import tempfile
+import uuid
 
 import haliax as hax
 import jax
@@ -26,18 +23,13 @@ import pytest
 import ray
 from jax.sharding import Mesh
 
-try:
-    from marin.post_training.weight_transfer import (
-        RayWeightCoordinator,
-        WeightTransferConfig,
-        WeightTransferMode,
-        create_weight_transfer_client,
-        create_weight_transfer_server,
-    )
-except ImportError:
-    pytest.skip("Post training imports unavailable", allow_module_level=True)
-
-import uuid
+from marin.post_training.weight_transfer import (
+    RayWeightCoordinator,
+    WeightTransferConfig,
+    WeightTransferMode,
+    create_weight_transfer_client,
+    create_weight_transfer_server,
+)
 
 try:
     import jax.experimental.transfer
