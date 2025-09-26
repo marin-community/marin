@@ -26,12 +26,6 @@ This includes:
 * loss_masks: Masks indicating which tokens contribute to the loss.
 * reference_logprobs: Log probabilities from the reference model.
 
-TODO:
-
-* Handle cleanup of old rollouts
-* Prioritize and slice data across features & time periods
-
-
 A RolloutBatch consists of the model information in addition to:
 
 * Environment name
@@ -56,25 +50,47 @@ import time
 from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass
-from typing import Self
+from enum import Enum
 
 import equinox as eqx
 import fsspec
+import haliax as hax
 import jax.numpy as jnp
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
+class StorageType(Enum):
+    """Type of rollout storage backend."""
+
+    FILE = "file"
+    IN_MEMORY = "in_memory"
+
+
+# Global registry for named in-memory queues
+_MEMORY_QUEUES: dict[str, "InMemoryRolloutQueue"] = {}
+
+
+def _get_or_create_queue(queue_name: str) -> "InMemoryRolloutQueue":
+    """Get or create a named in-memory queue."""
+    if queue_name not in _MEMORY_QUEUES:
+        _MEMORY_QUEUES[queue_name] = InMemoryRolloutQueue()
+    return _MEMORY_QUEUES[queue_name]
+
+
 class JaxRolloutBatch(eqx.Module):
-    input_ids: jnp.ndarray
-    attention_mask: jnp.ndarray
-    position_ids: jnp.ndarray
-    target_ids: jnp.ndarray
-    loss_weights: jnp.ndarray
-    loss_masks: jnp.ndarray
-    reference_logprobs: jnp.ndarray
-    policy_logprobs: jnp.ndarray
+    input_ids: hax.NamedArray
+    attention_mask: hax.NamedArray
+    position_ids: hax.NamedArray
+    target_ids: hax.NamedArray
+    loss_weights: hax.NamedArray
+    loss_masks: hax.NamedArray
+    reference_logprobs: hax.NamedArray
+    policy_logprobs: hax.NamedArray
+
+    def __len__(self) -> int:
+        return len(self.input_ids.array)
 
 
 @dataclass
@@ -93,71 +109,17 @@ class RolloutBatch:
     def __len__(self) -> int:
         return len(self.input_ids)
 
-    def slice(self, start: int, end: int | None = None) -> Self:
-        """Slice batch from start:end."""
-        return RolloutBatch(
-            input_ids=self.input_ids[start:end],
-            attention_mask=self.attention_mask[start:end],
-            position_ids=self.position_ids[start:end],
-            target_ids=self.target_ids[start:end],
-            loss_weights=self.loss_weights[start:end],
-            loss_masks=self.loss_masks[start:end],
-            reference_logprobs=self.reference_logprobs[start:end],
-            policy_logprobs=self.policy_logprobs[start:end],
-        )
-
-    @classmethod
-    def concat(cls, batches: list[Self], axis: int = 0) -> Self:
-        """Concatenate multiple batches along specified axis."""
-        return RolloutBatch(
-            input_ids=np.concatenate([b.input_ids for b in batches], axis=axis),
-            attention_mask=np.concatenate([b.attention_mask for b in batches], axis=axis),
-            position_ids=np.concatenate([b.position_ids for b in batches], axis=axis),
-            target_ids=np.concatenate([b.target_ids for b in batches], axis=axis),
-            loss_weights=np.concatenate([b.loss_weights for b in batches], axis=axis),
-            loss_masks=np.concatenate([b.loss_masks for b in batches], axis=axis),
-            reference_logprobs=np.concatenate([b.reference_logprobs for b in batches], axis=axis),
-            policy_logprobs=np.concatenate([b.policy_logprobs for b in batches], axis=axis),
-        )
-
-    def truncate_sequence(self, max_length: int) -> Self:
-        """Truncate all arrays to max_length along the sequence dimension."""
-        return RolloutBatch(
-            input_ids=self.input_ids[:, :max_length] if self.input_ids.shape[1] > max_length else self.input_ids,
-            attention_mask=(
-                self.attention_mask[:, :max_length] if self.attention_mask.shape[1] > max_length else self.attention_mask
-            ),
-            position_ids=(
-                self.position_ids[:, :max_length] if self.position_ids.shape[1] > max_length else self.position_ids
-            ),
-            target_ids=self.target_ids[:, :max_length] if self.target_ids.shape[1] > max_length else self.target_ids,
-            loss_weights=(
-                self.loss_weights[:, :max_length] if self.loss_weights.shape[1] > max_length else self.loss_weights
-            ),
-            loss_masks=self.loss_masks[:, :max_length] if self.loss_masks.shape[1] > max_length else self.loss_masks,
-            reference_logprobs=(
-                self.reference_logprobs[:, :max_length]
-                if self.reference_logprobs.shape[1] > max_length
-                else self.reference_logprobs
-            ),
-            policy_logprobs=(
-                self.policy_logprobs[:, :max_length]
-                if self.policy_logprobs.shape[1] > max_length
-                else self.policy_logprobs
-            ),
-        )
-
-    def to_jax(self) -> Self:
-        """Convert numpy arrays to JAX arrays."""
+    def to_jax(self) -> JaxRolloutBatch:
+        """Convert numpy arrays to JAX named arrays."""
         return JaxRolloutBatch(
-            input_ids=jnp.array(self.input_ids),
-            attention_mask=jnp.array(self.attention_mask),
-            position_ids=jnp.array(self.position_ids),
-            target_ids=jnp.array(self.target_ids),
-            loss_weights=jnp.array(self.loss_weights),
-            loss_masks=jnp.array(self.loss_masks),
-            reference_logprobs=jnp.array(self.reference_logprobs),
-            policy_logprobs=jnp.array(self.policy_logprobs),
+            input_ids=hax.named(jnp.array(self.input_ids), ("batch", "position")),
+            attention_mask=hax.named(jnp.array(self.attention_mask), ("batch", "position")),
+            position_ids=hax.named(jnp.array(self.position_ids), ("batch", "position")),
+            target_ids=hax.named(jnp.array(self.target_ids), ("batch", "position")),
+            loss_weights=hax.named(jnp.array(self.loss_weights), ("batch", "position")),
+            loss_masks=hax.named(jnp.array(self.loss_masks), ("batch", "position")),
+            reference_logprobs=hax.named(jnp.array(self.reference_logprobs), ("batch", "position")),
+            policy_logprobs=hax.named(jnp.array(self.policy_logprobs), ("batch", "position")),
         )
 
 
@@ -173,6 +135,39 @@ class TaggedRolloutBatch:
 
     def __len__(self) -> int:
         return len(self.batch)
+
+
+@dataclass
+class RolloutStorageConfig:
+    """Configuration for rollout storage backend."""
+
+    storage_type: StorageType
+    # For file storage
+    path: str | None = None
+    poll_interval: float = 1.0
+    max_rollout_files: int = 32
+    # For in-memory storage
+    queue_name: str | None = None
+
+    def create_reader(self) -> "RolloutReader":
+        if self.storage_type == StorageType.FILE:
+            if self.path is None:
+                raise ValueError("path must be specified for FILE storage type")
+            return FileRolloutReader(self.path, self.poll_interval)
+        else:
+            if self.queue_name is None:
+                raise ValueError("queue_name must be specified for IN_MEMORY storage type")
+            return _get_or_create_queue(self.queue_name).reader()
+
+    def create_writer(self) -> "RolloutWriter":
+        if self.storage_type == StorageType.FILE:
+            if self.path is None:
+                raise ValueError("path must be specified for FILE storage type")
+            return FileRolloutWriter(self.path, self.max_rollout_files)
+        else:
+            if self.queue_name is None:
+                raise ValueError("queue_name must be specified for IN_MEMORY storage type")
+            return _get_or_create_queue(self.queue_name).writer()
 
 
 class RolloutReader(ABC):
@@ -219,18 +214,15 @@ class FileRolloutReader(RolloutReader):
     def __init__(
         self,
         path: str,
-        batch_prefix: str = "batch_",
         poll_interval: float = 1.0,
     ):
         """Initialize file-based rollout reader.
 
         Args:
             path: Storage directory or GCS bucket
-            batch_prefix: Prefix for batch files.
             poll_interval: Interval in seconds between polls when waiting.
         """
         self.path = path.rstrip("/")
-        self.batch_prefix = batch_prefix
         self.poll_interval = poll_interval
 
         # Create filesystem instance
@@ -244,20 +236,22 @@ class FileRolloutReader(RolloutReader):
 
     def _get_available_files(self) -> list[str]:
         """Get list of available batch files sorted by timestamp."""
-        pattern = f"{self.path}/{self.batch_prefix}*.pkl"
+        pattern = f"{self.path}/*.pkl"
         files = self.fs.glob(pattern)
 
         # Parse and sort files by timestamp
         parsed_files = []
         for file_path in files:
             filename = file_path.split("/")[-1]
-            if filename.startswith(self.batch_prefix) and filename.endswith(".pkl"):
-                # Extract timestamp from filename: batch_TIMESTAMP_hostname_counter.pkl
-                parts = filename[len(self.batch_prefix) : -4].split("_")
-                if len(parts) >= 3:
+            if filename.endswith(".pkl"):
+                # Extract timestamp from filename: timestamp_hostname_counter.pkl
+                parts = filename.split("_")
+                if len(parts) == 3:
                     timestamp_int = int(parts[0])
                     timestamp = timestamp_int / 1000000.0  # Convert back from microseconds
                     parsed_files.append((timestamp, file_path))
+                else:
+                    logger.warning(f"Unexpected filename format: {filename}")
 
         # Sort by timestamp and return file paths
         parsed_files.sort(key=lambda x: x[0])
@@ -265,29 +259,20 @@ class FileRolloutReader(RolloutReader):
 
     def read_batch(self, timeout: float | None = None) -> TaggedRolloutBatch | None:
         """Read a single batch with optional timeout."""
-        start_time = time.time()
-
         while True:
-            # Get all available files
             available_files = self._get_available_files()
-
-            # Find first unread file
             for file_path in available_files:
                 if file_path not in self._read_files:
                     self._read_files.add(file_path)
-                    with self.fs.open(file_path, "rb") as f:
-                        return pickle.load(f)
+                    try:
+                        with self.fs.open(file_path, "rb") as f:
+                            return pickle.load(f)
+                    except Exception as e:
+                        # a file might be deleted while we're trying to read it, or corrupted
+                        logger.error(f"Failed to read rollout file {file_path}: {e}")
+                        continue
 
-            # No new files available
-            if timeout is None or timeout <= 0:
-                return None
-
-            # Check timeout
-            if time.time() - start_time >= timeout:
-                return None
-
-            # Wait before polling again
-            time.sleep(min(self.poll_interval, timeout - (time.time() - start_time)))
+            time.sleep(self.poll_interval)
 
     def read_all_available(self) -> list[TaggedRolloutBatch]:
         """Read all currently available batches without blocking."""
@@ -306,15 +291,13 @@ class FileRolloutReader(RolloutReader):
 class FileRolloutWriter(RolloutWriter):
     """File-based rollout writer using fsspec for various storage backends."""
 
-    def __init__(self, path: str, batch_prefix: str = "batch_", max_rollout_files: int = 32):
+    def __init__(self, path: str, max_rollout_files: int = 32):
         """Initialize file-based rollout writer.
 
         Args:
             path: Storage path (supports local filesystem, GCS, S3, etc.).
-            batch_prefix: Prefix for batch files.
         """
         self.path = path.rstrip("/")
-        self.batch_prefix = batch_prefix
         self.hostname = socket.gethostname()
         self.max_rollout_files = max_rollout_files
 
@@ -337,7 +320,7 @@ class FileRolloutWriter(RolloutWriter):
     def _get_batch_path(self, timestamp: float, counter: int) -> str:
         """Get path for batch with timestamp and hostname."""
         timestamp_int = int(timestamp * 1000000)  # microseconds for ordering
-        return f"{self.path}/{self.batch_prefix}{timestamp_int:020d}_{self.hostname}_{counter:06d}.pkl"
+        return f"{self.path}/{timestamp_int:020d}_{self.hostname}_{counter:06d}.pkl"
 
     def write_batch(self, batch: TaggedRolloutBatch) -> None:
         """Write batch to storage with all required fields."""
