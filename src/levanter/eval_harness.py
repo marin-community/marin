@@ -477,6 +477,13 @@ class LevanterHarnessLM(TemplateLM):
         raise NotImplementedError()
 
     def generate_until(self, requests) -> List[str]:
+        # Error out on multihost JAX - Engine doesn't support it yet
+        if jax.process_count() > 1:
+            raise NotImplementedError(
+                "InferenceEngine does not yet support multihost JAX. "
+                "Please use a single host for generation tasks."
+            )
+        
         # print(f'len(requests)={len(requests)}')
 
         # Implement simple generation using InferenceEngine.
