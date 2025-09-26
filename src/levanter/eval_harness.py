@@ -443,6 +443,18 @@ class LevanterHarnessLM(TemplateLM):
         add_special_tokens: bool = False,
         truncation: bool = False,
     ) -> Union[List[int], List[List[int]]]:
+        """
+        Tokenize a string or list of strings.
+        
+        Args:
+            string: The string(s) to tokenize.
+            left_truncate_len: If provided, left-truncate the encoded tokens to this length.
+            add_special_tokens: Whether to add special tokens during tokenization.
+            truncation: Whether to enable tokenizer truncation.
+            
+        Returns:
+            Token IDs as a list (for single string) or list of lists (for multiple strings).
+        """
         if not add_special_tokens:
             add_special_tokens = False
         encoding: Union[List[List[int]], List[int]] = self.tokenizer(
