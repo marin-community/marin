@@ -39,11 +39,19 @@ Usage:
 
 """
 
+
+from collections.abc import Generator
+from contextlib import contextmanager
+from pathlib import Path
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
 import atexit
+import click
 import getpass
 import logging
-
 import os
+import ray
 import re
 import shlex
 import signal
@@ -52,21 +60,12 @@ import sys
 import tempfile
 import threading
 import time
-from contextlib import contextmanager
-from pathlib import Path
-from typing import Generator, Optional
-
-import click
-import ray
-from draccus import wrap
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
+import yaml
 
 # N.B. We have to import from "src" as we are using the `ray.remote` directly from our `uv run`
 # script instead of launching a driver job. This confuses cloudpickle for some reason.
 from src.marin.cluster import ray as ray_utils
 from src.marin.cluster.config import RayClusterConfig, find_config_by_region
-from src.marin.run.vars import LIBTPU_INIT_ARGS
 from src.marin.utils import _hacky_remove_tpu_lockfile
 
 logger = logging.getLogger(__name__)
@@ -87,7 +86,7 @@ DEFAULT_ENV_VARS = [
 ]
 
 
-def build_env_dict(env_vars: list[str], extra_env: list[str] = None, forward_all: bool = False) -> dict[str, str]:
+def build_env_dict(env_vars: list[str], extra_env: list[str] | None = None, forward_all: bool = False) -> dict[str, str]:
     """Build environment variable dictionary for forwarding."""
     # Start with all environment variables if requested, otherwise just defaults
     if forward_all:
@@ -98,15 +97,12 @@ def build_env_dict(env_vars: list[str], extra_env: list[str] = None, forward_all
             if value := os.environ.get(var):
                 env_dict[var] = value
 
-    if "LIBTPU_INIT_ARGS" not in env_dict:
-        env_dict["LIBTPU_INIT_ARGS"] = LIBTPU_INIT_ARGS
-
     CONFIG_FILES = [".levanter.yaml", ".marin.yaml", ".config"]
     for config_file in CONFIG_FILES:
         if os.path.exists(config_file):
             logger.info(f"Injecting environment variables from {config_file}")
             try:
-                config_yaml = yaml.safe_loads(open(config_file).read())
+                config_yaml = yaml.safe_load(open(config_file).read())
             except Exception as e:
                 logger.warning(f"Failed to load config from environment {e}")
 
@@ -143,7 +139,10 @@ def build_env_string(env_dict: dict[str, str]) -> str:
 
 
 def build_ssh_command(
-    host_alias: str, command: str, env_dict: dict[str, str] = None, working_dir: str = "marin"
+    host_alias: str,
+    command: str,
+    env_dict: dict[str, str] | None = None,
+    working_dir: str = "marin",
 ) -> list[str]:
     """Build SSH command with proper cleanup and environment forwarding.
 
@@ -248,34 +247,41 @@ class TPUAllocationActor:
         _hacky_remove_tpu_lockfile()
 
 
-def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name: str) -> None:
+def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name: str, zone: str) -> None:
     """Add SSH host configuration."""
     config_path = Path.home() / ".ssh" / "config"
     config_path.parent.mkdir(exist_ok=True)
+
+    # try using gcloud compute tpu-vm ssh to forward keys
+    logger.info("Setting up SSH keys...")
+    gcloud_ssh_cmd = f"gcloud compute tpu-vm ssh {tpu_name} --zone={zone} -- hostname"
+    try:
+        subprocess.run(
+            shlex.split(gcloud_ssh_cmd),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        logger.info("SSH keys set up successfully via gcloud")
+    except subprocess.CalledProcessError:
+        logger.warning("gcloud compute tpu-vm ssh failed to set up SSH keys")
 
     # Check if Google Compute Engine SSH key exists
     gce_key_path = Path.home() / ".ssh" / "google_compute_engine"
     if not gce_key_path.exists():
         logger.warning(f"Google Compute Engine SSH key not found at {gce_key_path}")
-        logger.warning("You may need to run 'gcloud compute ssh' first to set up SSH keys")
+        logger.warning("SSH may fail if your key isn't available on the VM.")
+        logger.warning("You can add it at https://console.cloud.google.com/compute/metadata?resourceTab=sshkeys")
 
     host_alias = f"dev-tpu-{tpu_name}"
-
-    Path("~/.ssh/control").expanduser().mkdir(parents=True, exist_ok=True)
 
     ssh_config_entry = f"""
 # BEGIN_DEV_TPU_{tpu_name.upper()}
 Host {host_alias}
     HostName {ip_address}
-    IdentityFile ~/.ssh/google_compute_engine
-    UserKnownHostsFile ~/.ssh/google_compute_known_hosts
     HostKeyAlias compute.{hostname}
     StrictHostKeyChecking no
-    IdentitiesOnly yes
     CheckHostIP no
-    ControlPath ~/.ssh/control/%h-%p-%r
-    ControlMaster auto
-    ControlPersist 10s
     User {username}
 # END_DEV_TPU_{tpu_name.upper()}
 """
@@ -399,45 +405,62 @@ def hold_tpu_allocation(
 
     Uses a Ray actor to manage the TPU allocation lifecycle.
     """
-    logger.info(f"START_TPU_{tpu_name.upper()}: Beginning TPU allocation")
+    logger.info(f"{tpu_name}: Beginning TPU allocation")
 
     actor = None
+    config_obj = yaml.safe_load(open(config_file).read())
+    zone = config_obj["provider"]["availability_zone"]
 
-    try:
-        with ray_utils.ray_dashboard(config_file, ray_init=True):
+    with ray_utils.ray_dashboard(config_file, ray_init=True):
+        try:
             logger.info(f"Creating TPU allocation actor for {tpu_name}")
             actor = ray.remote(resources={"TPU": 4, f"TPU-{tpu_type}-head": 1})(TPUAllocationActor).remote(
                 username, tpu_name, tpu_type
             )
 
-            logger.info(f"Waiting up to 10 minutes for TPU to be ready...")
-            allocation_info = ray.get(actor.host_info.remote(), timeout=600)
+            logger.info("Waiting up to 10 minutes for TPU to be ready...")
+            host_info = ray.get(actor.host_info.remote(), timeout=600)
+            logger.info("TPU allocated successfully!")
+            print(f"Hostname: {host_info['hostname']}")
+            print(f"IP Address: {host_info['ip_address']}")
+            print(f"TPU name: {tpu_name}")
 
             logger.info("Setting up SSH configuration")
-            add_ssh_host_config(allocation_info["hostname"], allocation_info["ip_address"], username, tpu_name)
+            add_ssh_host_config(host_info["hostname"], host_info["ip_address"], username, tpu_name, zone=zone)
 
             logger.info("Syncing environment")
-            sync_to_remote(f"dev-tpu-{tpu_name}", sync_path)
-            setup_remote_environment(f"dev-tpu-{tpu_name}")
+            try:
+                sync_to_remote(f"dev-tpu-{tpu_name}", sync_path)
+                setup_remote_environment(f"dev-tpu-{tpu_name}")
+            except Exception as e:
+                logger.warning(f"Environment setup failed, keeping TPU allocation alive. {e}")
 
-            print("TPU allocated successfully!")
-            print(f"Hostname: {allocation_info['hostname']}")
-            print(f"IP Address: {allocation_info['ip_address']}")
-            print(f"TPU name: {tpu_name}")
             print(f"SSH alias: dev-tpu-{tpu_name}")
-            yield allocation_info
-    finally:
-        remove_ssh_host_config(tpu_name)
-        if actor:
-            ray.kill(actor)
+            yield host_info
+        except Exception as e:
+            logger.error(f"Error during TPU allocation or setup: {e}", exc_info=True)
+            raise
+        finally:
+            remove_ssh_host_config(tpu_name)
 
 
 class Context:
     def __init__(self):
         self.verbose: bool = False
-        self.config_file: Optional[str] = None
-        self.config_obj: Optional[RayClusterConfig] = None
-        self.tpu_name: Optional[str] = None
+        self.config_file: str | None = None
+        self.config_obj: RayClusterConfig | None = None
+        self.tpu_name: str | None = None
+        self.config_data: dict | None = None
+
+
+def _infer_tpu_type_from_config(config_data: dict | None) -> str | None:
+    if not config_data:
+        return None
+
+    try:
+        return config_data["available_node_types"]["tpu_worker"]["node_config"]["acceleratorType"]
+    except KeyError:
+        return None
 
 
 @click.group()
@@ -462,10 +485,12 @@ def cli(ctx, config, cluster, tpu_name, verbose):
 
     if config:
         ctx.obj.config_obj = RayClusterConfig.from_yaml(config)
+        with open(config, "r", encoding="utf-8") as f:
+            ctx.obj.config_data = yaml.safe_load(f)
 
 
 @cli.command("allocate")
-@click.option("--tpu-type", default="v4-8", help="TPU type")
+@click.option("--tpu-type", help="TPU type")
 @click.option("--sync-path", default=".", help="Local path to sync")
 @click.option("--username", help="Username to use for ssh", default=getpass.getuser())
 @click.option("--duration", default=480, help="Allocation duration in minutes")
@@ -480,6 +505,13 @@ def allocate(ctx, tpu_type, sync_path, username, duration):
         username = getpass.getuser()
 
     tpu_name = ctx.obj.tpu_name
+
+    if not tpu_type:
+        inferred_tpu_type = _infer_tpu_type_from_config(ctx.obj.config_data)
+        if inferred_tpu_type:
+            tpu_type = inferred_tpu_type
+        else:
+            raise click.ClickException("Could not infer TPU type from config; please specify --tpu-type.")
 
     if tpu_type not in ["v4-8", "v5p-8"]:
         print(f"Warning: TPU type {tpu_type} may not be supported", file=sys.stderr)
@@ -521,6 +553,19 @@ def connect(ctx, username):
     print(f"Connecting to {host_alias}...")
     cmd = shlex.quote(f"source $HOME/.local/bin/env && cd marin && {env_string} exec bash")
     subprocess.run(["ssh", host_alias, "-t", "bash", "-c", cmd])
+
+
+@cli.command("setup_env")
+@click.option("--username", help="Username to use for ssh", default=getpass.getuser())
+@click.option("--sync-path", default=".", help="Local path to sync")
+@click.pass_context
+def setup_env(ctx, username, sync_path):
+    """Set up the remote environment on the development TPU."""
+    if not username:
+        username = getpass.getuser()
+    tpu_name = ctx.obj.tpu_name
+    host_alias = f"dev-tpu-{tpu_name}"
+    setup_remote_environment(host_alias)
 
 
 @cli.command("execute", context_settings={"ignore_unknown_options": True})
@@ -604,7 +649,6 @@ class FileChangeHandler(FileSystemEventHandler):
             return
 
         # Debounce rapid file changes
-        current_time = time.time()
         if self._timer:
             self._timer.cancel()
 
@@ -618,9 +662,15 @@ class FileChangeHandler(FileSystemEventHandler):
 class RemoteProcessManager:
     """Run a remote process, synchronizing and restarting on demand."""
 
-    def __init__(self, host_alias: str, command_str: str, sync_path: str, env_dict: dict[str, str] = None):
+    def __init__(
+        self,
+        host_alias: str,
+        command_str: str,
+        sync_path: str,
+        env_dict: dict[str, str] | None = None,
+    ):
         self._lock = threading.Lock()
-        self._process: Optional[subprocess.Popen] = None
+        self._process: subprocess.Popen | None = None
         self._command_str = command_str
         self._host_alias = host_alias
         self._sync_path = sync_path
