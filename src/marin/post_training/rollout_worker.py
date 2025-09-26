@@ -175,7 +175,8 @@ class LevanterInferenceContext(InferenceContext):
     def tokenizer(self):
         return self._tokenizer
 
-    def openai_client(self):
+    @property
+    def client(self):
         base_url = f"http://{self.inference_server.config.host}:{self.inference_server.config.port}/v1"
         return AsyncOpenAI(base_url=base_url, api_key="marin")
 
@@ -195,13 +196,12 @@ class LevanterInferenceContext(InferenceContext):
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        client = self.openai_client()
 
         def _process_batch(batch_prompts: list[str]) -> list[list[dict]]:
             batch_completions = []
 
             for prompt in batch_prompts:
-                completion = client.chat.completions.create(
+                completion = self.client.chat.completions.create(
                     model=getattr(self.inference_server.config, "model_name", "test-model"),
                     messages=[{"role": "user", "content": prompt}],
                     logprobs=True,
@@ -243,7 +243,7 @@ class LevanterInferenceContext(InferenceContext):
             batch_results = _process_batch(batch_prompts)
             all_results.extend(batch_results)
 
-        loop.run_until_complete(client.close())
+        loop.run_until_complete(self.client.close())
 
         loop.close()
         return all_results

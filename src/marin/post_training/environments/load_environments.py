@@ -27,6 +27,7 @@ from .olym_math_env import OlymMathEnv
 from .olympiad_bench_env import OlympiadBenchEnv
 from .open_math_reasoning_env import OpenMathReasoningEnv
 from .orz_env import ORZEnv
+from .prime_intellect_env import PrimeIntellectEnv
 from .svamp_env import SVAMPEnv
 
 try:
@@ -46,6 +47,7 @@ ENVIRONMENT_NAME_TO_CLASS = {
     "open_math_reasoning": OpenMathReasoningEnv,
     "orz": ORZEnv,
     "svamp": SVAMPEnv,
+    "prime_intellect": PrimeIntellectEnv,
 }
 
 if SWEBenchEnv is not None:
