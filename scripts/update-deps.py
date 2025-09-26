@@ -15,7 +15,7 @@
 
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["tomli-w"]
+# dependencies = ["tomli-w", "packaging"]
 # ///
 """
 Update and pin dependencies to their current versions.
@@ -125,10 +125,8 @@ def strip_versions_from_pyproject():
         tomli_w.dump(data, f)
 
 
-def get_versions_from_export():
-    """Get package versions from uv export."""
-    output = run_command_output(["uv", "export", "--format", "requirements.txt"])
-
+def parse_export_output(output):
+    """Parse uv export output and extract package versions."""
     versions = {}
     for line in output.split("\n"):
         if "==" in line and not line.startswith(("#", "-e")):
@@ -139,7 +137,63 @@ def get_versions_from_export():
                 if "[" in name:
                     name = name.split("[")[0]
                 versions[name.lower().replace("-", "_")] = version
+    return versions
 
+
+def merge_versions(target_versions, new_versions):
+    """Merge new versions into target, keeping the lowest version for conflicts."""
+    from packaging import version
+
+    for pkg_name, new_version in new_versions.items():
+        if pkg_name in target_versions:
+            existing_version = target_versions[pkg_name]
+            try:
+                # Keep the lowest version
+                if version.parse(new_version) < version.parse(existing_version):
+                    target_versions[pkg_name] = new_version
+            except Exception:
+                # If version parsing fails, keep the existing one
+                pass
+        else:
+            target_versions[pkg_name] = new_version
+
+
+def get_versions_from_export():
+    """Get package versions from uv export, including all extras and groups."""
+    versions = {}
+
+    # Read pyproject.toml to get extras and groups
+    with open("pyproject.toml", "rb") as f:
+        data = tomllib.load(f)
+
+    # Get base dependencies with no default groups to avoid conflicts
+    print("  Exporting base dependencies...")
+    output = run_command_output(["uv", "export", "--no-default-groups", "--format", "requirements.txt"])
+    merge_versions(versions, parse_export_output(output))
+
+    # Export each extra individually (no default groups to avoid conflicts)
+    if "project" in data and "optional-dependencies" in data["project"]:
+        for extra_name in data["project"]["optional-dependencies"]:
+            print(f"  Exporting extra '{extra_name}'...")
+            try:
+                output = run_command_output(
+                    ["uv", "export", "--no-default-groups", "--extra", extra_name, "--format", "requirements.txt"]
+                )
+                merge_versions(versions, parse_export_output(output))
+            except Exception as e:
+                print(f"    Warning: Failed to export extra '{extra_name}': {e}")
+
+    # Export each dependency group individually
+    if "dependency-groups" in data:
+        for group_name in data["dependency-groups"]:
+            print(f"  Exporting group '{group_name}'...")
+            try:
+                output = run_command_output(["uv", "export", "--only-group", group_name, "--format", "requirements.txt"])
+                merge_versions(versions, parse_export_output(output))
+            except Exception as e:
+                print(f"    Warning: Failed to export group '{group_name}': {e}")
+
+    print(f"  Found {len(versions)} unique packages")
     return versions
 
 
