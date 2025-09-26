@@ -44,8 +44,7 @@ from marin.execution.executor import (
 from marin.post_training.rollout_storage import RolloutStorageConfig, StorageType
 from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.post_training.train_worker import ReplayBufferConfig, TrainWorker, TrainWorkerConfig
-from marin.post_training.weight_transfer import WeightTransferConfig
-from marin.post_training.weight_transfer.base import WeightTransferMode
+from marin.post_training.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.resources import TpuPodConfig
 from marin.training.training import (
     _add_run_env_variables,
@@ -219,12 +218,12 @@ def rl_train(name: str) -> ExecutorStep:
         path=OutputName("rollouts"),
     )
     weight_transfer = WeightTransferConfig(
-        mode=WeightTransferMode.JAX_TRANSFER_SERVER,
-        sync_interval_steps=25,
-        poll_interval_seconds=10,
+        # mode=WeightTransferMode.JAX_TRANSFER_SERVER,
+        mode=WeightTransferMode.GCS_CHECKPOINT,
+        sync_interval_steps=4,
+        checkpoint_dir=OutputName("policy_checkpoints"),
+        max_checkpoints=5,
         coordinator_name="rl_weight_transfer_coordinator",
-        # checkpoint_dir=OutputName("policy_checkpoints"),
-        # max_checkpoints=5,
     )
 
     train_worker = TrainWorkerConfig(
@@ -236,6 +235,8 @@ def rl_train(name: str) -> ExecutorStep:
         replay_buffer=ReplayBufferConfig(
             capacity=4096,
             alpha=3,
+            # Don't allow resampling.
+            max_samples=1,
         ),
         kl_coef=0.001,
         initial_checkpoint=MODEL_NAME,

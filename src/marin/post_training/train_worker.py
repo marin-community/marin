@@ -217,6 +217,9 @@ class ReplayBufferConfig:
     alpha: float = 3.0
     """Recency bias for sampling, higher values favor newer examples."""
 
+    max_samples: int = 1
+    """Maximum number of times an example can be sampled before removal."""
+
 
 @dataclass
 class TrainWorkerConfig:
@@ -273,6 +276,7 @@ class TrainWorker:
             capacity=config.replay_buffer.capacity,
             local_batch_size=config.trainer.train_batch_size,
             recency_alpha=config.replay_buffer.alpha,
+            max_samples=config.replay_buffer.max_samples,
             process_id=jax.process_index(),
             total_processes=jax.process_count(),
         )
