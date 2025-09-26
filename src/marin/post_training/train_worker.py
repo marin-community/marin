@@ -39,47 +39,44 @@ from marin.post_training.weight_transfer import WeightTransferConfig
 
 from .model_utils import load_model_from_checkpoint
 from .replay_buffer import ReplayBuffer, ReplayDataLoader
-from .rollout_storage import JaxRolloutBatch, RolloutStorageConfig
+from .rollout_storage import RolloutStorageConfig
 
 logger = logging.getLogger(__name__)
 
 
 def ppo_loss(
     model: LmHeadModel,
-    batch: JaxRolloutBatch,
+    batch: dict[str, hax.NamedArray],
     *,
     key: jax.Array | None,
     kl_coef: float,
     clip_epsilon: float,
 ) -> jax.Array:
     """Compute PPO-style loss with RLOO advantages."""
-    # Create named arrays for model input
-    named_inputs = batch.as_named()
-
     model_output = model(
-        input_ids=named_inputs["input_ids"],
-        attn_mask=named_inputs["attention_mask"],
-        pos_ids=named_inputs["position_ids"],
+        input_ids=batch["input_ids"],
+        attn_mask=batch["attention_mask"],
+        pos_ids=batch["position_ids"],
         key=key,
     )
 
     logits = model_output.array.astype(jnp.float32)
 
-    token_ce_loss = softmax_cross_entropy_with_integer_labels(logits, batch.target_ids)
+    token_ce_loss = softmax_cross_entropy_with_integer_labels(logits, batch["target_ids"])
     current_logprobs = -token_ce_loss
 
     # Get the old policy's log probs (from the worker policy that collected the data)
-    old_logprobs = batch.policy_logprobs
+    old_logprobs = batch["policy_logprobs"].array
 
     # Compute importance sampling ratio exp(log π_current - log π_old)
     log_ratio = current_logprobs - old_logprobs
     ratio = jnp.exp(log_ratio)
 
     # RLOO advantages (returned from the worker, and smeared across tokens)
-    advantages = batch.loss_weights
+    advantages = batch["loss_weights"].array
 
     # Get the mask for valid tokens (e.g., excluding padding)
-    mask = batch.loss_masks
+    mask = batch["loss_masks"].array
 
     # PPO objective with clipping
     # We want to maximize advantage-weighted log probs, so we minimize the negative
@@ -101,7 +98,7 @@ def ppo_loss(
 
     # KL penalty from reference policy (optional regularization)
     # KL(π_current || π_ref) ≈ π_current * (log π_current - log π_ref)
-    reference_logprobs = batch.reference_logprobs
+    reference_logprobs = batch["reference_logprobs"].array
     kl_div = jnp.exp(current_logprobs) * (current_logprobs - reference_logprobs)
     kl_loss = jnp.sum(kl_div * mask) / jnp.maximum(jnp.sum(mask), 1.0)
 
@@ -112,7 +109,7 @@ def ppo_loss(
 
 def rloo_loss_with_importance_sampling(
     model: LmHeadModel,
-    batch: JaxRolloutBatch,
+    batch: dict[str, hax.NamedArray],
     *,
     key: jax.Array | None,
     kl_coef: float,
@@ -129,24 +126,21 @@ def rloo_loss_with_importance_sampling(
         Tuple of (loss, aux_metrics)
     """
     # Get logits from current policy
-    # Create named arrays for model input
-    named_inputs = batch.as_named()
-
     model_output = model(
-        input_ids=named_inputs["input_ids"],
-        attn_mask=named_inputs["attention_mask"],
-        pos_ids=named_inputs["position_ids"],
+        input_ids=batch["input_ids"],
+        attn_mask=batch["attention_mask"],
+        pos_ids=batch["position_ids"],
         key=key,
     )
 
     logits = model_output
 
     logits_array = logits.array
-    target_ids_array = batch.target_ids
-    policy_logprobs_array = batch.policy_logprobs
-    loss_weights_array = batch.loss_weights
-    loss_masks_array = batch.loss_masks
-    reference_logprobs_array = batch.reference_logprobs
+    target_ids_array = batch["target_ids"].array
+    policy_logprobs_array = batch["policy_logprobs"].array
+    loss_weights_array = batch["loss_weights"].array
+    loss_masks_array = batch["loss_masks"].array
+    reference_logprobs_array = batch["reference_logprobs"].array
 
     logits_array = logits_array.astype(jnp.float32)
     token_loss = softmax_cross_entropy_with_integer_labels(logits_array, target_ids_array)
@@ -163,7 +157,7 @@ def rloo_loss_with_importance_sampling(
     # ratio = jnp.clip(ratio, min=0.8, max=1.2)
 
     # RLOO loss with importance sampling
-    # batch.loss_weights contains RLOO advantages: r_i - mean(r_j for j≠i)
+    # batch["loss_weights"] contains RLOO advantages: r_i - mean(r_j for j≠i)
     weighted_loss = -ratio * loss_weights_array * loss_masks_array
     reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)
 
@@ -201,6 +195,9 @@ class StreamingRolloutLoader:
             if not batch:
                 logger.warning("No batch received from data loader within timeout, retrying...")
                 continue
+
+            # Convert to to a dict of `hax.NamedArray`s and shard
+            batch = batch.as_named()
             with self.config.device_mesh:
                 sharded_batch = hax.shard(batch, self.config.compute_axis_mapping)
 
