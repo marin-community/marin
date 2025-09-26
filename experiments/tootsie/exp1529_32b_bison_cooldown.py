@@ -41,7 +41,7 @@ from experiments.tootsie.exp600_tootsie import phase_3_tokenized, starling_compo
 from marin.execution import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
-from experiments.evals.resource_configs import SINGLE_TPU_V4_16
+from experiments.evals.resource_configs import SINGLE_TPU_V4_16, SINGLE_TPU_V4_8
 
 PHASE_3_START = 160_000
 PHASE_3_END = 192_000  # 20% of Training for Cooldown

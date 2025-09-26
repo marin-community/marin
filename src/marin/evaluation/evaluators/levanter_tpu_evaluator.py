@@ -41,8 +41,11 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         downloaded_path: str | None = model.ensure_downloaded(
             local_path=os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
         )
+
+        print(f"IN TPU: {downloaded_path}")
         # Use the model name if a path is not specified (e.g., for Hugging Face models)
         model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
+
         return model_name_or_path
 
     @staticmethod
