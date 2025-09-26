@@ -28,7 +28,7 @@ except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 
 
-pytestmark = pytest.mark.skipif(os.environ.get("CI"))
+pytestmark = pytest.mark.skipif(os.environ.get("CI") is not None, reason="GCS tests are skipped on CI")
 
 
 @pytest.fixture
