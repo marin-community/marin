@@ -107,7 +107,7 @@ class _LmEvalHarnessWorker:
     """
 
     def __init__(
-        self, EvalBatch, EvalPos, model, axis_resources, tokenizer, mp, max_packed_segments, max_gen_toks=256,
+        self, EvalBatch, EvalPos, model, axis_resources, tokenizer, mp, max_packed_segments, generation_kwargs=None,
     ):
         self.tokenizer = tokenizer
         self.max_packed_segments = max_packed_segments
@@ -117,7 +117,13 @@ class _LmEvalHarnessWorker:
         self.axis_resources = axis_resources
         self.mp = mp
         self.max_packed_segments = max_packed_segments
-        self._max_gen_toks = max_gen_toks
+        self._generation_kwargs = generation_kwargs or {
+            "max_gen_toks": 256,
+            "temperature": 0.0,
+            "n": 1,
+            "seed": None,
+            "max_length": None
+        }
 
         self._dummy_batch = _make_dummy_batch(EvalBatch, EvalPos)
 
@@ -174,6 +180,11 @@ class _LmEvalHarnessWorker:
         self._jit_loglikelihood = hax.named_jit(
             _eval_loglikelihood, axis_resources=axis_resources, out_axis_resources={}
         )
+
+    @property
+    def max_gen_toks(self) -> int:
+        """Backward compatibility property for max_gen_toks."""
+        return self._generation_kwargs.get("max_gen_toks", 256)
 
     def make_harness_lm(self):
         if jax.process_index() == 0:
@@ -296,7 +307,12 @@ class LevanterHarnessLM(TemplateLM):
 
     @property
     def max_gen_toks(self):
-        return self.leader._max_gen_toks
+        return self.leader.max_gen_toks
+    
+    @property
+    def generation_kwargs(self):
+        """Get the generation kwargs from the worker."""
+        return self.leader._generation_kwargs
 
     def apply_chat_template(self, chat_history: list[dict], **kwargs) -> str:
         """
@@ -475,10 +491,9 @@ class LevanterHarnessLM(TemplateLM):
             # Copy and process generation kwargs
             processed_gen_kwargs = gen_kwargs.copy()
 
-            # Apply defaults and standardize parameters
-            processed_gen_kwargs.setdefault("max_gen_toks", self.max_gen_toks)
-            processed_gen_kwargs.setdefault("temperature", 0.0)
-            processed_gen_kwargs.setdefault("n", 1)
+            # Apply defaults from generation_kwargs (user config) first
+            for key, value in self.generation_kwargs.items():
+                processed_gen_kwargs.setdefault(key, value)
             
             # Standardize kwargs using our modify_gen_kwargs method
             processed_gen_kwargs = self.modify_gen_kwargs(processed_gen_kwargs)
@@ -653,30 +668,40 @@ class LevanterHarnessLM(TemplateLM):
         Modify generation kwargs to standardize parameters, similar to vLLM implementation.
         """
         # Handle temperature
-        kwargs["temperature"] = kwargs.get("temperature", 0.0)
+        if "temperature" in kwargs and kwargs["temperature"] is not None:
+            kwargs["temperature"] = max(0.0, float(kwargs["temperature"]))
+        else:
+            kwargs.setdefault("temperature", 0.0)
         
         # Handle do_sample parameter like vLLM does
         do_sample = kwargs.pop("do_sample", None)
-        if do_sample is False and "temperature" not in kwargs:
+        if do_sample is False and kwargs["temperature"] == 0.0:
             logger.debug(
-                "Got `do_sample=False` and no temperature value, setting temperature to 0.0"
+                "Got `do_sample=False` with temperature 0.0, ensuring deterministic sampling"
             )
-            kwargs["temperature"] = 0.0
-        
-        # Ensure temperature is a float and within valid range
-        kwargs["temperature"] = max(0.0, float(kwargs["temperature"]))
         
         # Handle max_gen_toks parameter
-        if "max_gen_toks" in kwargs:
+        if "max_gen_toks" in kwargs and kwargs["max_gen_toks"] is not None:
             kwargs["max_gen_toks"] = int(kwargs["max_gen_toks"])
+        else:
+            kwargs.setdefault("max_gen_toks", 256)
+            
+        
+        # Handle n generations parameter
+        if "n" in kwargs and kwargs["n"] is not None:
+            kwargs["n"] = int(kwargs["n"])
+        else:
+            kwargs.setdefault("n", 1)
             
         # Handle seed parameter  
         if "seed" in kwargs and kwargs["seed"] is not None:
             kwargs["seed"] = int(kwargs["seed"])
+        # Note: seed can remain None, which is valid
         
-        # Handle n generations parameter
-        if "n" in kwargs:
-            kwargs["n"] = int(kwargs["n"])
+        # Handle max_length parameter
+        if "max_length" in kwargs and kwargs["max_length"] is not None:
+            kwargs["max_length"] = int(kwargs["max_length"])
+        # Note: max_length can remain None, which means use model default
             
         return kwargs
 
@@ -738,7 +763,39 @@ class LmEvalHarnessConfig:
     bootstrap_iters: int = 0
     apply_chat_template: bool = False
     fewshot_as_multiturn: bool = False
-    max_gen_toks: int = 256
+    generation_kwargs: dict = dataclasses.field(default_factory=lambda: {
+        "max_gen_toks": 256,
+        "temperature": 0.0,
+        "n": 1,
+        "seed": None,
+        "max_length": None
+    })
+    """
+    Default generation parameters for text generation tasks.
+    
+    Supported parameters:
+    - max_gen_toks: Maximum number of tokens to generate (default: 256)
+    - temperature: Sampling temperature, 0.0 for deterministic (default: 0.0)
+    - n: Number of completions to generate per prompt (default: 1)
+    - seed: Random seed for generation, None for random (default: None)
+    - max_length: Maximum sequence length including prompt, None uses model default (default: None)
+    
+    These can be overridden on a per-request basis by the evaluation harness.
+    """
+    
+    @property
+    def max_gen_toks(self) -> int:
+        """Backward compatibility property for max_gen_toks."""
+        return self.generation_kwargs.get("max_gen_toks", 256)
+    
+    def get_effective_max_length(self) -> int | None:
+        """Get the effective max_length, preferring generation_kwargs over the top-level field."""
+        # Prefer max_length from generation_kwargs if set
+        gen_max_length = self.generation_kwargs.get("max_length")
+        if gen_max_length is not None:
+            return gen_max_length
+        # Fall back to top-level max_length field for backward compatibility
+        return self.max_length
 
     def to_task_spec(self) -> list[str | dict]:
         return [task.to_dict() if isinstance(task, TaskConfig) else task for task in self.task_spec]
@@ -929,7 +986,7 @@ def _actually_run_eval_harness(
 
     """
     max_examples = config.max_examples
-    max_length = config.max_length
+    max_length = config.get_effective_max_length()
 
     EvalPos = model.Pos if max_length is None else model.Pos.resize(max_length)
     num_parameters = levanter.utils.jax_utils.parameter_count(model)
@@ -947,7 +1004,7 @@ def _actually_run_eval_harness(
         tokenizer,
         mp,
         max_packed_segments=64,
-        max_gen_toks=config.max_gen_toks,
+        generation_kwargs=config.generation_kwargs,
     )
 
     if jax.process_index() == 0:
