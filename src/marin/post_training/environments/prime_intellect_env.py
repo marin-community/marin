@@ -58,6 +58,7 @@ class PrimeIntellectEnv(MarinEnv):
         env_args: dict,
         num_examples: int,
         rollouts_per_example: int,
+        mode: str = "eval",
         inference_ctx: InferenceContext | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
@@ -69,6 +70,7 @@ class PrimeIntellectEnv(MarinEnv):
         Args:
             env_id: The ID of the environment to evaluate
             env_args: The arguments to use for the environment
+            mode: The mode to use for the environment
             inference_ctx: The inference context
             temperature: The temperature to use for the model
             max_tokens: The maximum number of tokens to use for the model
@@ -96,6 +98,13 @@ class PrimeIntellectEnv(MarinEnv):
                 max_tokens={max_tokens}, \
                 temperature={temperature}"
         )
+
+        if mode == "train":
+            assert vf_env.dataset is not None, f"Train Dataset is not set for environment {env_id}"
+            vf_env.eval_dataset = None
+        else:
+            assert vf_env.eval_dataset is not None, f"Eval dataset is not set for environment {env_id}"
+            vf_env.dataset = None
 
         start_time = time.time()
         result = vf_env.evaluate(
