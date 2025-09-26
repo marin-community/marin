@@ -196,6 +196,7 @@ def create_nano_training_worker_config(
         replay_buffer=ReplayBufferConfig(
             capacity=2048,
             alpha=3.0,
+            max_samples=4,
         ),
         # disable KL since we're training from scratch
         kl_coef=0.0,

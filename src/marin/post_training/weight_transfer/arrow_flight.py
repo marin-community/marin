@@ -211,6 +211,8 @@ class MarinFlightServer(flight.FlightServerBase):
     def store_weights(self, weight_id: int, record_batch: pa.RecordBatch) -> None:
         """Store weights in the server."""
         with self._lock:
+            # remove all other weights
+            self.weights_store.clear()
             self.weights_store[weight_id] = record_batch
             self.latest_weight_id = weight_id
             logger.info(f"Stored weights for weight_id {weight_id}")

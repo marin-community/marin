@@ -282,15 +282,7 @@ class TrainWorker:
             capacity=config.replay_buffer.capacity,
             local_batch_size=config.trainer.train_batch_size,
             recency_alpha=config.replay_buffer.alpha,
-<<<<<<< HEAD
             max_samples=config.replay_buffer.max_samples,
-            process_id=jax.process_index(),
-            total_processes=jax.process_count(),
-||||||| parent of 72c0f9e3 (bad eval, bad)
-            process_id=jax.process_index(),
-            total_processes=jax.process_count(),
-=======
->>>>>>> 72c0f9e3 (bad eval, bad)
         )
         self.data_loader = ReplayDataLoader(
             rollout_reader=self.rollout_reader,
@@ -340,7 +332,7 @@ class TrainWorker:
         optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
         def _loss_function(model, batch, key):
-            return rloo_loss_with_importance_sampling(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.5)
+            return rloo_loss_with_importance_sampling(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=1.0)
             # return ppo_loss(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.5)
 
         with (
