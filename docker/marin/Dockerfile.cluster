@@ -45,6 +45,9 @@ RUN sudo rm -rf /var/lib/apt/lists/* \
       zlib1g-dev \
  && sudo rm -rf /var/lib/apt/lists/*
 
+# Install ffmpeg
+RUN sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
 # Setup gcsfuse repository and install
 RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
 RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
