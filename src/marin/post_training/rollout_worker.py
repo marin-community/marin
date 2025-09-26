@@ -27,7 +27,6 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any, cast
-from functools import cached_property
 
 import haliax as hax
 import jax
@@ -176,8 +175,7 @@ class LevanterInferenceContext(InferenceContext):
     def tokenizer(self):
         return self._tokenizer
 
-    @cached_property
-    def client(self):
+    def make_client(self):
         base_url = f"http://{self.inference_server.config.host}:{self.inference_server.config.port}/v1"
         return AsyncOpenAI(base_url=base_url, api_key="marin")
 
@@ -197,6 +195,7 @@ class LevanterInferenceContext(InferenceContext):
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        client = self.make_client()
 
         def _process_batch(batch_prompts: list[str]) -> list[list[dict]]:
             batch_completions = []
