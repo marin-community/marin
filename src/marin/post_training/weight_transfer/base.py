@@ -19,14 +19,16 @@ This module provides the core abstractions and configurations used by all
 weight transfer implementations.
 """
 
+import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-import ray
 from jaxtyping import PyTree
+
+logger = logging.getLogger(__name__)
 
 
 class WeightTransferMode(Enum):
@@ -154,17 +156,16 @@ def get_or_create_actor(actor_class, name: str, *args, **kwargs):
 
     for attempt in range(max_retries):
         try:
-            # Try to get existing actor
-            return ray.get_actor(name)
+            return actor_class.options(name=name, get_if_exists=True).remote(*args, **kwargs)
         except ValueError:
-            # Actor doesn't exist, try to create it
-            try:
-                return actor_class.options(name=name).remote(*args, **kwargs)
-            except ValueError:
-                # Another process might have created it, wait and retry
-                if attempt < max_retries - 1:
-                    time.sleep(0.1 * (attempt + 1))  # Exponential backoff
-                    continue
-                raise
+            # Another process might have created it, wait and retry
+            if attempt < max_retries - 1:
+                retry_timeout = 0.1 * (attempt**2)
+                logger.info(
+                    "Actor '%s' not found, retrying in %.2f seconds (attempt %d)", name, retry_timeout, attempt + 1
+                )
+                time.sleep(retry_timeout)
+                continue
+            raise
 
     raise RuntimeError(f"Failed to get or create actor '{name}' after {max_retries} attempts")
