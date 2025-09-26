@@ -27,6 +27,8 @@ from experiments.tootsie.exp600_tootsie import phase_3_tokenized, starling_compo
 from marin.execution import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
+from experiments.evals.resource_configs import SINGLE_TPU_V4_16
+
 PHASE_3_START = 160_000
 PHASE_3_END = 192_000  # 20% of Training for Cooldown
 
@@ -168,6 +170,9 @@ tootsie_32b_cooldown_bison_flat = default_train(
 
 if __name__ == "__main__":
     executor_main(
-        [tootsie_32b_cooldown_bison, *default_base_eval(tootsie_32b_cooldown_bison)],
+        [
+            tootsie_32b_cooldown_bison,
+            *default_base_eval(tootsie_32b_cooldown_bison, resource_config=SINGLE_TPU_V4_16, run_generation_evals=False),
+        ],
         description="Cooldown the 32B Qwen model on bison mixture",
     )
