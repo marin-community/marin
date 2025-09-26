@@ -35,33 +35,23 @@ import tomli_w
 from pathlib import Path
 
 
-def run_command(cmd, check=True):
+def run_command(cmd):
     """Run a shell command."""
     print(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, check=check)
+    result = subprocess.run(cmd)
     return result.returncode == 0
 
 
 def run_command_output(cmd):
     """Run a shell command and return output."""
     print(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Command failed with exit code {e.returncode}")
+        print(f"stderr: {e.stderr}")
+        sys.exit(1)
     return result.stdout
-
-
-def export_constraints():
-    """Export current lock as constraints."""
-    output = run_command_output(["uv", "export", "--format", "requirements.txt"])
-
-    constraints = []
-    for line in output.split("\n"):
-        if "==" in line and not line.startswith(("#", "-e")):
-            # Parse: package==version \
-            pkg_spec = line.split("\\")[0].strip()
-            if "==" in pkg_spec:
-                constraints.append(pkg_spec)
-
-    return constraints
 
 
 def strip_version_spec(dep_spec):
@@ -217,25 +207,21 @@ def main():
         print("Error: pyproject.toml not found in current directory")
         sys.exit(1)
 
-    try:
-        print("Step 1: Exporting current constraints...")
-        constraints = export_constraints()
-        Path("constraints.txt").write_text("\\n".join(constraints))
-        print(f"  Exported {len(constraints)} package constraints")
+    # Use current Python version for tight version constraint
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
 
-        print("\\nStep 2: Stripping version specs from pyproject.toml...")
+    try:
+        print("Stripping versions and updating dependencies...")
         strip_versions_from_pyproject()
 
-        print("\\nStep 3: Running uv lock --upgrade...")
-        if not run_command(["uv", "lock", "--upgrade"]):
-            raise subprocess.CalledProcessError(1, "uv lock failed")
+        print(f"\\nRunning uv lock --upgrade with Python {python_version}...")
+        run_command(["uv", "lock", "--upgrade", "-p", f"python{python_version}"])
 
-        print("\\nStep 4: Pinning versions in pyproject.toml...")
+        print("\\nPinning versions in pyproject.toml...")
         pin_versions_in_pyproject()
 
-        print("\\nStep 5: Final lock to verify consistency...")
-        if not run_command(["uv", "lock"]):
-            raise subprocess.CalledProcessError(1, "final uv lock failed")
+        print("\\nFinal lock ...")
+        run_command(["uv", "lock", "-p", f"python{python_version}"])
 
         print("\\n✓ Successfully updated and pinned dependencies!")
         print("\\nTo review changes: git diff pyproject.toml uv.lock")
@@ -245,11 +231,6 @@ def main():
         print(f"\\nError: {e}")
         print("Use 'git checkout -- pyproject.toml uv.lock' to revert changes")
         sys.exit(1)
-
-    finally:
-        # Cleanup
-        if Path("constraints.txt").exists():
-            Path("constraints.txt").unlink()
 
 
 if __name__ == "__main__":
