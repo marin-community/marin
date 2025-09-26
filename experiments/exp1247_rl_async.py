@@ -31,7 +31,7 @@ from levanter.inference.openai import InferenceServerConfig
 from levanter.infra.ray_tpu import run_on_pod_ray
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
-from levanter.tracker.tensorboard import TensorboardConfig
+from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from ray.runtime_env import RuntimeEnv
 from transformers import AutoConfig, AutoTokenizer
@@ -174,8 +174,11 @@ def rl_train(name: str) -> ExecutorStep:
     model_config = dataclasses.replace(config, seq_len=MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS, tokenizer=MODEL_TOKENIZER)
 
     trainer_config = TrainerConfig(
-        tracker=TensorboardConfig(
-            logdir=OutputName("tblogs"),
+        tracker=WandbConfig(
+            project="marin_rl_testing",
+            name=name,
+            tags=["rl", "math", MODEL_NAME.split("/")[-1]],
+            # logdir=OutputName("tblogs"),
         ),
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         train_batch_size=256,
@@ -223,7 +226,7 @@ def rl_train(name: str) -> ExecutorStep:
         sync_interval_steps=4,
         checkpoint_dir=OutputName("policy_checkpoints"),
         max_checkpoints=5,
-        coordinator_name="rl_weight_transfer_coordinator",
+        # coordinator_name="rl_weight_transfer_coordinator",
     )
 
     train_worker = TrainWorkerConfig(

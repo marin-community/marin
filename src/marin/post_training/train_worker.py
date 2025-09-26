@@ -255,7 +255,6 @@ class TrainWorker:
 
         Args:
             config: Training worker configuration with Levanter components.
-            coordinator: Coordinator for weight transfer.
         """
 
         print("Run id: ", config.run_id)
