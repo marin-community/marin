@@ -45,6 +45,7 @@ try:
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 
+pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping integration tests on CI environment")
 
 logger = logging.getLogger(__name__)
 

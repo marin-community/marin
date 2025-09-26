@@ -16,10 +16,10 @@
 Environment Wrapper for the Environments Hub by Prime-Intellect, which contains a collection of environments.
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
-import os
-import time
 import logging
+import os
 import subprocess
+import time
 from typing import ClassVar
 
 import verifiers as vf
@@ -99,7 +99,7 @@ class PrimeIntellectEnv(MarinEnv):
 
         start_time = time.time()
         result = vf_env.evaluate(
-            client=inference_ctx.client,
+            client=inference_ctx.make_client(),
             model=inference_ctx.model,
             sampling_args=sampling_args,
             num_examples=num_examples,
