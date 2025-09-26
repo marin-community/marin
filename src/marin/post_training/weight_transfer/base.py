@@ -35,6 +35,7 @@ class WeightTransferMode(Enum):
     GCS_CHECKPOINT = "gcs_checkpoint"
     JAX_TRANSFER_SERVER = "jax_transfer_server"
     RAY_REMOTING = "ray_remoting"
+    ARROW_FLIGHT = "arrow_flight"
 
 
 @dataclass
@@ -87,6 +88,12 @@ class WeightTransferConfig:
     # GCS Checkpoint specific
     checkpoint_dir: str = ""
     max_checkpoints: int | None = 5
+
+    # Arrow Flight specific
+    flight_host: str = "0.0.0.0"
+    flight_port: int = 0  # 0 = auto-assign
+    flight_batch_size: int = 1024 * 1024 * 100  # 100MB chunks
+    flight_use_tls: bool = False
 
 
 class WeightTransferServer(ABC):
