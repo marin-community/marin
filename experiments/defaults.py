@@ -63,6 +63,7 @@ from marin.execution.executor import (
     unwrap_versioned_value,
 )
 from marin.processing.tokenize import (
+    HfDatasetSpec,
     TokenizeConfig,
     TokenizerStep,
     add_validation_sets_to_mixture,
@@ -120,7 +121,7 @@ def default_download(
 
 def default_tokenize(
     name: str,
-    dataset: InputName | ExecutorStep | str,
+    dataset: InputName | ExecutorStep | str | HfDatasetSpec,
     tokenizer: str,
     options: CacheOptions | None = None,
     format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa
@@ -133,8 +134,9 @@ def default_tokenize(
     Args:
         name: The name of the tokenized dataset. This is used to form the output path for the executor step.
             `tokenized/` will be prepended to the name.
-        dataset:  The dataset to tokenize. This can be an InputName, ExecutorStep, or a string as a
-            path to the dataset or a HuggingFace dataset ID.
+        dataset:  The dataset to tokenize. This can be an InputName, ExecutorStep, a string as a
+            path to the dataset or a HuggingFace dataset ID, or ``HfDatasetSpec`` to specify a
+            dataset with a particular subset name.
         tokenizer: string HuggingFace tokenizer name. Should be the same as you intend to use in the tokenizer
             spec for the training run.
         options: CacheOptions to use for tokenization. You typically don't need to set this.
@@ -148,7 +150,15 @@ def default_tokenize(
     """
 
     # sniff out if it's a HuggingFace dataset
-    if isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
+    if isinstance(dataset, HfDatasetSpec):
+        config = HfTokenizeConfig(
+            id=dataset.id,
+            name=dataset.name,
+            cache_path=this_output_path(),
+            tokenizer=ensure_versioned(tokenizer),
+            format=format,
+        )
+    elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
         config = HfTokenizeConfig(
             id=dataset,
             cache_path=this_output_path(),

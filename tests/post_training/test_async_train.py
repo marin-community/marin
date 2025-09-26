@@ -19,6 +19,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -29,7 +30,8 @@ import ray
 
 try:
     from marin.post_training.rollout_storage import (
-        InMemoryRolloutQueue,
+        RolloutStorageConfig,
+        StorageType,
     )
     from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
     from marin.post_training.train_worker import TrainWorker, TrainWorkerConfig
@@ -43,6 +45,7 @@ try:
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 
+pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping integration tests on CI environment")
 
 logger = logging.getLogger(__name__)
 
@@ -65,23 +68,22 @@ def temp_checkpoint_dir(tmp_path):
 
 
 @pytest.fixture
-def training_worker_config(tmp_path):
-    """Create minimal training worker configuration for testing."""
-    rollout_queue = InMemoryRolloutQueue()
-    rollout_reader = rollout_queue.reader()
-    return create_nano_training_worker_config(rollout_reader, tmp_path)
+def rollout_storage_config():
+    """Create in-memory storage config for testing."""
+    test_id = uuid.uuid4().hex[:8]
+    return RolloutStorageConfig(storage_type=StorageType.IN_MEMORY, queue_name=f"test_{test_id}")
 
 
 @pytest.fixture
-def rollout_worker_config(tmp_path):
-    """Create minimal inference worker configuration for testing."""
-    rollout_queue = InMemoryRolloutQueue()
-    rollout_writer = rollout_queue.writer()
+def training_worker_config(tmp_path, rollout_storage_config):
+    """Create minimal training worker configuration for testing."""
+    return create_nano_training_worker_config(rollout_storage_config, tmp_path)
 
-    return create_nano_rollout_worker_config(
-        tmp_path,
-        rollout_writer,
-    )
+
+@pytest.fixture
+def rollout_worker_config(tmp_path, rollout_storage_config):
+    """Create minimal inference worker configuration for testing."""
+    return create_nano_rollout_worker_config(tmp_path, rollout_storage_config)
 
 
 def _print_worker_status(elapsed, inference_runner, training_runner):
@@ -229,11 +231,8 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
         self.steps_completed = 0
         self.losses = []
         self.trained_model = None
-
-    @property
-    def reference_model(self):
-        """Access reference model from the training worker."""
-        return self.worker.reference_model if self.worker else None
+        self.reference_model = None
+        self.all_steps_seen = []
 
     def _track_training_step(self):
         """Called after each training step."""
@@ -243,6 +242,8 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
         """Create and run the training worker with tracking hooks."""
         self.worker = TrainWorker(config=self.training_worker_config)
 
+        self.reference_model = self.trained_model = jax.device_get(self.worker.reference_model)
+
         # Override _configure_training_hooks to inject our tracking hooks
         original_configure_hooks = self.worker._configure_training_hooks
 
@@ -250,6 +251,8 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
             original_configure_hooks(trainer)
 
             def step_tracking_hook(info):
+                current_step = int(info.step)
+                self.all_steps_seen.append(current_step)
                 self._track_training_step()
                 current_loss = float(info.loss)
                 self.losses.append(current_loss)
@@ -269,9 +272,8 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
 @pytest.mark.slow("Integration test.")
 def test_rollout_worker(rollout_worker_config: RolloutWorkerConfig):
     """Test inference worker generates rollouts to in-memory queue."""
-    # Use the rollout writer's queue from the inference worker config
-    rollout_writer = rollout_worker_config.rollout_writer
-    queue_reader = rollout_writer._queue.reader()
+    # Use the rollout storage config to create reader for checking results
+    queue_reader = rollout_worker_config.rollout_storage.create_reader()
 
     # Get coordinator for GCS mode only
     # coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
@@ -301,8 +303,8 @@ def test_rollout_worker(rollout_worker_config: RolloutWorkerConfig):
 @pytest.mark.slow("Integration test.")
 def test_train_worker(ray_cluster, training_worker_config: TrainWorkerConfig):
     """Test training worker processes rollout batch and creates checkpoint."""
-    rollout_reader = training_worker_config.rollout_reader
-    queue_writer = rollout_reader._queue.writer()
+    # Use the rollout storage config to create writer for sending test data
+    queue_writer = training_worker_config.rollout_storage.create_writer()
 
     batch_size = training_worker_config.trainer.train_batch_size
     tokenizer = DummyTokenizer()
@@ -341,11 +343,7 @@ def test_inference_and_training_workers(
 ):
     """Test inference & training workers running together with checkpoint updates."""
 
-    # Use in-memory rollout queue
-    rollout_queue = InMemoryRolloutQueue()
-
-    rollout_worker_config.rollout_writer = rollout_queue.writer()
-    training_worker_config.rollout_reader = rollout_queue.reader()
+    # The workers already use the same storage config from the fixtures, so they'll automatically share data
 
     rollout_worker_config.max_rollouts = 10
     training_worker_config.trainer.num_train_steps = 10
@@ -438,8 +436,8 @@ def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_conf
     This test validates that the training worker can process rollout batches
     with varying rewards and learn to prefer high-reward (cat-heavy) responses.
     """
-    rollout_reader = training_worker_config.rollout_reader
-    queue_writer = rollout_reader._queue.writer()
+    # Use the rollout storage config to create writer for sending test data
+    queue_writer = training_worker_config.rollout_storage.create_writer()
 
     batch_size = training_worker_config.trainer.train_batch_size
     tokenizer = DummyTokenizer()
@@ -496,9 +494,7 @@ def test_full_integration_moar_cats(
     rollout_worker_config,
 ):
     """Long-running test to validate environment objective improves over time."""
-    rollout_queue = InMemoryRolloutQueue()
-    rollout_worker_config.rollout_writer = rollout_queue.writer()
-    training_worker_config.rollout_reader = rollout_queue.reader()
+    # The workers already use the same storage config from the fixtures, so they'll automatically share data
 
     metrics_history = []
     with TrainWorkerRunner(training_worker_config) as training_runner:
@@ -549,3 +545,91 @@ def test_full_integration_moar_cats(
     assert inference_runner.weight_transfers >= 1, "Should have at least one weight transfer during long run"
 
     print_model_validation(training_runner.trained_model, DummyTokenizer())
+
+
+@pytest.mark.slow("Integration test with checkpoint restart")
+def test_train_worker_checkpoint_restart(ray_cluster, training_worker_config):
+    """Test that training worker correctly restarts from checkpoint without repeating steps."""
+    from pathlib import Path
+
+    # Phase 1: Initial training run - small number of steps
+    initial_target_steps = 5
+    training_worker_config.trainer.num_train_steps = initial_target_steps
+
+    queue_writer = training_worker_config.rollout_storage.create_writer()
+    tokenizer = DummyTokenizer()
+    batch_size = training_worker_config.trainer.train_batch_size
+
+    with TrainWorkerRunner(training_worker_config) as runner:
+        # Wait for worker to initialize
+        while not runner.worker:
+            time.sleep(0.1)
+
+        # Add some training data
+        for _ in range(5):
+            batch = create_rollout_batch(
+                policy_model=runner.reference_model,
+                reference_model=runner.reference_model,
+                batch_size=batch_size,
+                tokenizer=tokenizer,
+            )
+            queue_writer.write_batch(batch)
+
+        # Wait for completion or timeout
+        start_time = time.time()
+        while runner.alive() and not runner.done.is_set() and time.time() - start_time < 30:
+            time.sleep(0.5)
+
+    first_run_steps = runner.all_steps_seen.copy()
+    last_step_first_run = runner.steps_completed
+
+    # Verify we trained and created checkpoint
+    assert (
+        last_step_first_run >= initial_target_steps
+    ), f"Expected >= {initial_target_steps} steps, got {last_step_first_run}"
+    checkpoint_dir = Path(training_worker_config.trainer.checkpointer.expanded_path("test-0-train"))
+    assert checkpoint_dir.exists(), f"Checkpoint directory {checkpoint_dir} does not exist"
+    checkpoints = list(checkpoint_dir.glob("*"))
+    assert len(checkpoints) > 0, f"No checkpoints found in {checkpoint_dir}"
+
+    print(f"First run completed {last_step_first_run} steps, found {len(checkpoints)} checkpoints")
+
+    # Phase 2: Restart training - should auto-load checkpoint
+    training_worker_config.trainer.num_train_steps = 10  # Continue to step 10
+
+    with TrainWorkerRunner(training_worker_config) as runner:
+        # Wait for worker to initialize
+        while not runner.worker:
+            time.sleep(0.1)
+
+        # Add more training data
+        for _ in range(5):
+            batch = create_rollout_batch(
+                policy_model=runner.reference_model,
+                reference_model=runner.reference_model,
+                batch_size=batch_size,
+                tokenizer=tokenizer,
+            )
+            queue_writer.write_batch(batch)
+
+        # Wait for completion or timeout
+        start_time = time.time()
+        while runner.alive() and not runner.done.is_set() and time.time() - start_time < 30:
+            time.sleep(0.5)
+
+    second_run_steps = runner.all_steps_seen
+
+    # We should never see step 0 in the second run
+    assert 0 not in second_run_steps, f"Step 0 seen in second run! Steps: {second_run_steps}"
+
+    # Second run should start from a checkpoint (step > 1)
+    min_step_second_run = min(second_run_steps)
+    assert min_step_second_run > 1, f"Second run should restart from checkpoint (step > 1), got {min_step_second_run}"
+
+    # Some overlap is expected when resuming from checkpoint, but verify proper restart
+    # The key is that the second run continues beyond where the first run got to
+    max_step_second_run = max(second_run_steps)
+    max_step_first_run = max(first_run_steps) if first_run_steps else 0
+    assert (
+        max_step_second_run > max_step_first_run
+    ), f"Second run should progress beyond first run: first max={max_step_first_run}, second max={max_step_second_run}"

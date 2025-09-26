@@ -21,7 +21,6 @@ Call grade_answer(given_answer: str, ground_truth: str).
 import re
 
 import sympy
-from pylatexenc import latex2text
 from sympy.parsing import sympy_parser
 
 
@@ -34,7 +33,8 @@ def normalize_answer(answer: str | None) -> str | None:
         m = re.search("^\\\\text\\{(?P<text>.+?)\\}$", answer)
         if m is not None:
             answer = m.group("text").strip()
-        return _strip_string(answer)
+        stripped = _strip_string(answer)
+        return _normalize(remove_boxed(stripped))
     except BaseException:
         return answer
 
@@ -201,20 +201,151 @@ def _sympy_parse(expr: str):
     )
 
 
-def _parse_latex(expr: str) -> str:
-    """Attempts to parse latex to an expression sympy can read."""
+def latex_to_text(expr: str) -> str:
+    """Simple regex-based LaTeX to text converter for math expressions."""
+    if not expr:
+        return expr
+
+    # Remove ASY (Asymptote) code blocks first
+    expr = re.sub(r"\[asy\].*?\[/asy\]", "", expr, flags=re.DOTALL)
+
+    # Handle dots notation first
+    expr = expr.replace("\\dotsb", "...")
+    expr = expr.replace("\\dots", "...")
+    expr = expr.replace("\\ldots", "...")
+    expr = expr.replace("\\cdots", "...")
+
+    # Handle \tfrac and \dfrac first
     expr = expr.replace("\\tfrac", "\\frac")
     expr = expr.replace("\\dfrac", "\\frac")
-    expr = expr.replace("\\frac", " \\frac")  # Play nice with mixed numbers.
-    expr = latex2text.LatexNodes2Text().latex_to_text(expr)
 
-    # Replace the specific characters that this parser uses.
+    # Sum, product, and integral notation - do this before subscript/superscript processing
+    expr = re.sub(r"\\sum\s*_{[^}]*}\s*\^{[^}]*}", "sum", expr)
+    expr = re.sub(r"\\sum\s*_{[^}]*}", "sum", expr)
+    expr = re.sub(r"\\sum\s*\^{[^}]*}", "sum", expr)
+    expr = expr.replace("\\sum", "sum")
+
+    expr = re.sub(r"\\prod\s*_{[^}]*}\s*\^{[^}]*}", "prod", expr)
+    expr = re.sub(r"\\prod\s*_{[^}]*}", "prod", expr)
+    expr = re.sub(r"\\prod\s*\^{[^}]*}", "prod", expr)
+    expr = expr.replace("\\prod", "prod")
+
+    expr = re.sub(r"\\int\s*_{[^}]*}\s*\^{[^}]*}", "integral", expr)
+    expr = re.sub(r"\\int\s*_{[^}]*}", "integral", expr)
+    expr = re.sub(r"\\int\s*\^{[^}]*}", "integral", expr)
+    expr = expr.replace("\\int", "integral")
+
+    # Handle complete fractions: \frac{a}{b} -> (a)/(b)
+    expr = re.sub(r"\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}", r"(\1)/(\2)", expr)
+
+    # Handle incomplete fractions: \frac{a} -> (a)/
+    expr = re.sub(r"\\frac\s*\{([^{}]*)\}(?!\s*\{)", r"(\1)/", expr)
+
+    # Handle bare fractions: \frac a b -> (a)/(b)
+    expr = re.sub(r"\\frac\s+(\S+)\s+(\S+)", r"(\1)/(\2)", expr)
+
+    # Clean up malformed \frac cases
+    expr = re.sub(r"\\frac\s*\{[^}]*\}\s*\{[^}]*$", "", expr)  # \frac{x}{ incomplete
+    expr = re.sub(r"\\frac\s*\{[^}]*$", "", expr)  # \frac{ incomplete
+    expr = re.sub(r"\\frac\b", "", expr)  # bare \frac
+
+    # Square roots: \sqrt{x} -> sqrt(x)
+    expr = re.sub(r"\\sqrt\s*\{([^{}]*)\}", r"sqrt(\1)", expr)
+    expr = re.sub(r"\\sqrt\s*(\S+)", r"sqrt(\1)", expr)  # \sqrt x -> sqrt(x)
+
+    # Powers: x^{n} -> x**(n) or x^n -> x**n
+    expr = re.sub(r"\^{([^{}]*)}", r"**(\1)", expr)
+    expr = re.sub(r"\^(\w+)", r"**\1", expr)
+
+    # Subscripts (often just remove for sympy): x_{1} -> x_1
+    expr = re.sub(r"_{([^{}]*)}", r"_\1", expr)
+
+    # Remove \text{} wrappers
+    expr = re.sub(r"\\text\s*\{([^{}]*)\}", r"\1", expr)
+
+    # Remove math font commands (bold, calligraphic, blackboard bold, etc.)
+    expr = re.sub(r"\\mathbf\s*\{([^{}]*)\}", r"\1", expr)
+    expr = re.sub(r"\\mathcal\s*\{([^{}]*)\}", r"\1", expr)
+    expr = re.sub(r"\\mathbb\s*\{([^{}]*)\}", r"\1", expr)
+    expr = re.sub(r"\\mathrm\s*\{([^{}]*)\}", r"\1", expr)
+    expr = re.sub(r"\\mathit\s*\{([^{}]*)\}", r"\1", expr)
+    expr = re.sub(r"\\mathsf\s*\{([^{}]*)\}", r"\1", expr)
+    expr = re.sub(r"\\mathtt\s*\{([^{}]*)\}", r"\1", expr)
+
+    # Remove \left and \right (they're just sizing hints)
+    expr = expr.replace("\\left", "")
+    expr = expr.replace("\\right", "")
+
+    # Greek letters and symbols
+    expr = expr.replace("\\alpha", "alpha")
+    expr = expr.replace("\\beta", "beta")
+    expr = expr.replace("\\gamma", "gamma")
+    expr = expr.replace("\\delta", "delta")
+    expr = expr.replace("\\theta", "theta")
+    expr = expr.replace("\\lambda", "lambda")
+    expr = expr.replace("\\mu", "mu")
+    expr = expr.replace("\\pi", "pi")
+    expr = expr.replace("\\sigma", "sigma")
+    expr = expr.replace("\\tau", "tau")
+    expr = expr.replace("\\phi", "phi")
+    expr = expr.replace("\\omega", "omega")
+
+    # Math operators
+    expr = expr.replace("\\cdot", "*")
+    expr = expr.replace("\\times", "*")
+    expr = expr.replace("\\div", "/")
+    expr = expr.replace("\\pm", "+-")
+    expr = expr.replace("\\mp", "-+")
+
+    # Special functions
+    expr = expr.replace("\\sin", "sin")
+    expr = expr.replace("\\cos", "cos")
+    expr = expr.replace("\\tan", "tan")
+    expr = expr.replace("\\log", "log")
+    expr = expr.replace("\\ln", "ln")
+    expr = expr.replace("\\exp", "exp")
+
+    # Special values - sympy uses 'oo' for infinity
+    expr = expr.replace("\\infty", "oo")
+    expr = expr.replace("\\infinity", "oo")
+
+    # Remove common spacing commands
+    expr = expr.replace("\\,", " ")
+    expr = expr.replace("\\:", " ")
+    expr = expr.replace("\\;", " ")
+    expr = expr.replace("\\!", "")
+    expr = expr.replace("\\quad", " ")
+    expr = expr.replace("\\qquad", " ")
+
+    # Remove display style commands
+    expr = expr.replace("\\displaystyle", "")
+
+    # Handle matrix environments - convert to simple bracket notation
+    # \begin{matrix}...\end{matrix} -> [...]
+    expr = re.sub(r"\\begin\{matrix\}(.*?)\\end\{matrix\}", r"[\1]", expr, flags=re.DOTALL)
+    expr = re.sub(r"\\begin\{pmatrix\}(.*?)\\end\{pmatrix\}", r"[\1]", expr, flags=re.DOTALL)
+    expr = re.sub(r"\\begin\{bmatrix\}(.*?)\\end\{bmatrix\}", r"[\1]", expr, flags=re.DOTALL)
+    expr = re.sub(r"\\begin\{vmatrix\}(.*?)\\end\{vmatrix\}", r"[\1]", expr, flags=re.DOTALL)
+    expr = re.sub(r"\\begin\{Vmatrix\}(.*?)\\end\{Vmatrix\}", r"[\1]", expr, flags=re.DOTALL)
+
+    # Handle other \begin{} \end{} environments by removing them
+    expr = re.sub(r"\\begin\{[^}]*\}", "", expr)
+    expr = re.sub(r"\\end\{[^}]*\}", "", expr)
+
+    # Replace Unicode symbols that might come from other processing
     expr = expr.replace("√", "sqrt")
     expr = expr.replace("π", "pi")
-    expr = expr.replace("∞", "inf")
+    expr = expr.replace("∞", "oo")
     expr = expr.replace("∪", "U")  # noqa: RUF001
     expr = expr.replace("·", "*")
     expr = expr.replace("×", "*")  # noqa: RUF001
+
+    # Clean up: remove backslashes that might be left
+    # Be careful here - only remove isolated backslashes
+    expr = re.sub(r"\\(?![a-zA-Z])", "", expr)
+
+    # Clean up multiple spaces
+    expr = re.sub(r"\s+", " ", expr)
 
     return expr.strip()
 
@@ -324,9 +455,17 @@ def _normalize(expr: str) -> str:
         expr = str(round(float(expr)))
     if "\\" in expr:
         try:
-            expr = _parse_latex(expr)
+            expr = latex_to_text(expr)
         except BaseException:
             pass
+
+    # Handle malformed expressions like "192sqrt(14)25" -> "192*sqrt(14)/25"
+    # Pattern: number + function + number -> number * function / number
+    expr = re.sub(r"(\d+)(sqrt|sin|cos|tan|log|ln|exp)(\([^)]*\))(\d+)", r"\1*\2\3/\4", expr)
+
+    # Handle cases where numbers are adjacent to functions without operators
+    expr = re.sub(r"(\d+)(sqrt|sin|cos|tan|log|ln|exp)(\([^)]*\))", r"\1*\2\3", expr)
+    expr = re.sub(r"(sqrt|sin|cos|tan|log|ln|exp)(\([^)]*\))(\d+)", r"\1\2*\3", expr)
 
     # edge case with mixed numbers and negative signs
     expr = re.sub("- *", "-", expr)
@@ -414,15 +553,8 @@ def grade_answer(given_answer: str, ground_truth: str) -> bool:
     if given_answer is None:
         return False
 
-    ground_truth_normalized_mathd = normalize_answer(ground_truth)
-    given_answer_normalized_mathd = normalize_answer(given_answer)
-
-    # be at least as lenient as mathd
-    if ground_truth_normalized_mathd == given_answer_normalized_mathd:
-        return True
-
-    ground_truth_normalized = _normalize(ground_truth)
-    given_normalized = _normalize(given_answer)
+    ground_truth_normalized = normalize_answer(ground_truth)
+    given_normalized = normalize_answer(given_answer)
 
     if ground_truth_normalized is None:
         return False

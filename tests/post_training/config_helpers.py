@@ -39,10 +39,14 @@ from marin.post_training.rl_dataset import (
     compute_rloo_advantages_for_group,
     prepare_training_batch,
 )
-from marin.post_training.rollout_storage import RolloutBatch, TaggedRolloutBatch
+from marin.post_training.rollout_storage import (
+    RolloutBatch,
+    RolloutStorageConfig,
+    TaggedRolloutBatch,
+)
 from marin.post_training.rollout_worker import RolloutWorkerConfig, compute_model_logprobs
 from marin.post_training.train_worker import ReplayBufferConfig, TrainWorkerConfig
-from marin.post_training.weight_transfer_manager import WeightTransferConfig
+from marin.post_training.weight_transfer import WeightTransferConfig
 
 
 class DummyTokenizer:
@@ -150,12 +154,12 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
         steps_per_eval=1,
         checkpointer=CheckpointerConfig(
             base_path=Path(output_dir) / "checkpoints",
-            save_interval=datetime.timedelta(seconds=10),
+            save_interval=datetime.timedelta(seconds=1),
         ),
-        tensor_parallel_axes=["mlp", "heads"],
+        tensor_parallel_axes=["mlp", "kv_heads"],
         fsdp_axis="embed",
         batch_axis="batch",
-        ray=RayConfig(auto_start_cluster=False),  # Don't auto-start Ray in tests
+        ray=RayConfig(auto_start_cluster=False),
     )
 
 
@@ -163,29 +167,32 @@ def create_nano_optimizer_config() -> AdamConfig:
     """Create a minimal AdamConfig for testing."""
     return AdamConfig(
         learning_rate=1e-3,
-        weight_decay=0.01,
+        weight_decay=0.00,
         warmup=0.0,
         lr_schedule="constant",
     )
 
 
-def create_nano_training_worker_config(rollout_reader, output_dir: str | Path) -> TrainWorkerConfig:
+def create_nano_training_worker_config(
+    rollout_storage: RolloutStorageConfig, output_dir: str | Path
+) -> TrainWorkerConfig:
     """Create a minimal TrainWorkerConfig for testing."""
     return TrainWorkerConfig(
-        rollout_reader=rollout_reader,
+        run_id="test-0",
+        rollout_storage=rollout_storage,
         model=create_nano_llama_config(),
         trainer=create_nano_trainer_config(output_dir),
         optimizer=create_nano_optimizer_config(),
         replay_buffer=ReplayBufferConfig(
-            capacity=256,
-            alpha=4.0,
+            capacity=2048,
+            alpha=3.0,
         ),
         # disable KL since we're training from scratch
         kl_coef=0.0,
         weight_transfer=WeightTransferConfig(
             sync_interval_steps=10,
             poll_interval_seconds=1,
-            checkpoint_dir=Path(output_dir) / "policy_checkpoints",
+            checkpoint_dir=str(Path(output_dir) / "policy_checkpoints"),
             max_checkpoints=5,
         ),
     )
@@ -215,21 +222,23 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
     # Save a dummy checkpoint with the model at the correct subpath
     # We need to wrap it in a dict with 'model' key for the checkpoint format
     checkpoint_data = {"model": model}
-    save_checkpoint(checkpoint_data, step=0, checkpoint_path=checkpoint_dir / "step-0")
+    save_checkpoint(checkpoint_data, step=0, checkpoint_path=str(checkpoint_dir / "step-0"))
 
     return InferenceServerConfig(
         model=model_config,
         trainer=create_nano_trainer_config(output_dir),
         tokenizer=DummyTokenizer(),
         service=InferenceEngineConfig(
-            max_seqs=8, page_size=8, max_pages_per_seq=8, max_queued_tokens=8, enable_logprobs=True
+            max_seqs=8, page_size=8, max_pages_per_seq=32, max_queued_tokens=8, enable_logprobs=True
         ),
         temperature=1.0,
         checkpoint_path=str(checkpoint_dir / "step-0"),
     )
 
 
-def create_nano_rollout_worker_config(output_dir: str, rollout_writer, environment=None) -> RolloutWorkerConfig:
+def create_nano_rollout_worker_config(
+    output_dir: str, rollout_storage: RolloutStorageConfig, environment=None
+) -> RolloutWorkerConfig:
     """Create a minimal RolloutWorkerConfig for testing."""
     model_config = create_nano_llama_config()
     inference_server_config = create_test_inference_server_config(model_config, output_dir)
@@ -239,15 +248,16 @@ def create_nano_rollout_worker_config(output_dir: str, rollout_writer, environme
         environment = create_mock_environment(tokenizer=DummyTokenizer())
 
     return RolloutWorkerConfig(
+        run_id="test-0",
         trainer=create_nano_trainer_config(output_dir),
         inference_server_config=inference_server_config,
         model=model_config,
         environment_spec="mock:task_type=cats",
-        rollout_writer=rollout_writer,
-        max_input_length=32,
-        max_output_length=32,
+        rollout_storage=rollout_storage,
+        max_input_length=8,
+        max_output_length=8,
         pad_token_id=0,
-        n_prompts_per_step=2,
+        n_prompts_per_step=4,
         n_generations=4,
         temperature=1.0,
         log_freq=1,
