@@ -195,8 +195,6 @@ class LevanterInferenceContext(InferenceContext):
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        client = self.make_client()
-
         client = self.openai_client()
 
         def _process_batch(batch_prompts: list[str]) -> list[list[dict]]:

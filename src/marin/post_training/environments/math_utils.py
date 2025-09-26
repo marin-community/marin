@@ -142,9 +142,7 @@ def normalize_answer(answer: str | None) -> str | None:
                 answer = content
 
         # Extract from boxed if present
-        boxed = extract_boxed(answer)
-        if boxed:
-            answer = boxed
+        answer = extract_boxed(answer)
 
         # Process LaTeX structures
         answer = remove_latex_formatting(answer)
@@ -366,7 +364,7 @@ def extract_boxed(text: str) -> str | None:
     # Try \\boxed{content} first
     last_pos = text.rfind("\\boxed")
     if last_pos == -1:
-        return None
+        return text
 
     # Check if it's followed by a brace
     check_pos = last_pos + 6
@@ -382,7 +380,7 @@ def extract_boxed(text: str) -> str | None:
         dollar_pos = content.find("$")
         return content[:dollar_pos] if dollar_pos >= 0 else content
 
-    return None
+    return text
 
 
 def _strip_string(string):
@@ -688,6 +686,9 @@ def should_allow_eval(expr: str):
 
 
 def are_equal_under_sympy(ground_truth_normalized: str, given_normalized: str):
+    if not given_normalized:
+        return False
+
     are_equal = False
     try:
         expr = f"({ground_truth_normalized})-({given_normalized})"
@@ -730,6 +731,7 @@ def grade_answer(given_answer: str, ground_truth: str) -> bool:
     if given_answer is None:
         return False
 
+    logger.info(f"Grading given_answer: '{given_answer}' vs ground_truth: '{ground_truth}'")
     ground_truth_normalized = normalize_answer(ground_truth)
     given_normalized = normalize_answer(given_answer)
 
@@ -790,29 +792,27 @@ def remove_boxed(s):
     return s
 
 
-def last_boxed_only_string(string):
+def last_boxed_only_string(value):
     """Extract the last \\boxed{} content as a full string."""
-    idx = string.rfind("\\boxed")
-    if idx < 0:
-        idx = string.rfind("\\fbox")
-        if idx < 0:
-            return None
+    idx = value.rfind("\\boxed")
+    if idx == -1:
+        return value
 
     # Handle \\boxed content (space-separated)
-    if string[idx:].startswith("\\boxed "):
-        content = string[idx + 7 :]
+    if value[idx:].startswith("\\boxed "):
+        content = value[idx + 7 :]
         dollar_pos = content.find("$")
         content = content[:dollar_pos] if dollar_pos >= 0 else content
         return "\\boxed " + content
 
     # Handle \\boxed{content}
     brace_pos = idx + 6  # len("\\boxed")
-    while brace_pos < len(string) and string[brace_pos] in " \t":
+    while brace_pos < len(value) and value[brace_pos] in " \t":
         brace_pos += 1
 
-    if brace_pos < len(string) and string[brace_pos] == "{":
-        end_pos = find_matching_brace(string, brace_pos)
+    if brace_pos < len(value) and value[brace_pos] == "{":
+        end_pos = find_matching_brace(value, brace_pos)
         if end_pos is not None:
-            return string[idx : end_pos + 1]
+            return value[idx : end_pos + 1]
 
     return None
