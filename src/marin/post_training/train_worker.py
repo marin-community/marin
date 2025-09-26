@@ -62,7 +62,7 @@ def ppo_loss(
 
     logits = model_output.array.astype(jnp.float32)
 
-    token_ce_loss = softmax_cross_entropy_with_integer_labels(logits, batch["target_ids"])
+    token_ce_loss = softmax_cross_entropy_with_integer_labels(logits, batch["target_ids"].array)
     current_logprobs = -token_ce_loss
 
     # Get the old policy's log probs (from the worker policy that collected the data)
@@ -113,6 +113,7 @@ def rloo_loss_with_importance_sampling(
     *,
     key: jax.Array | None,
     kl_coef: float,
+    clip_epsilon: float,
 ) -> jax.Array:
     """Compute RLOO (Reward Leave-One-Out) loss with importance sampling for off-policy data.
 
@@ -121,6 +122,7 @@ def rloo_loss_with_importance_sampling(
         batch: JaxRolloutBatch containing rollout data with RLOO advantages
         key: JAX random key for dropout
         kl_coef: Coefficient for KL regularization
+        clip_epsilon: Clipping epsilon for importance sampling ratio
 
     Returns:
         Tuple of (loss, aux_metrics)
@@ -154,7 +156,7 @@ def rloo_loss_with_importance_sampling(
 
     # N.B. This should be enabled, but we seem to be training far enough
     # off of policy that we're not learning anything when we clip.
-    # ratio = jnp.clip(ratio, min=0.8, max=1.2)
+    ratio = jnp.clip(ratio, min=1.0 - clip_epsilon, max=1.0 + clip_epsilon)
 
     # RLOO loss with importance sampling
     # batch["loss_weights"] contains RLOO advantages: r_i - mean(r_j for j≠i)
@@ -330,7 +332,8 @@ class TrainWorker:
         optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
         def _loss_function(model, batch, key):
-            return rloo_loss_with_importance_sampling(model, batch, key=key, kl_coef=config.kl_coef)
+            return rloo_loss_with_importance_sampling(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.5)
+            # return ppo_loss(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.5)
 
         with (
             config.trainer.device_mesh,
