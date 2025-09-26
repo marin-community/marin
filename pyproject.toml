@@ -315,6 +315,8 @@ packages = ["src/marin", "experiments"]
 
 [tool.pytest.ini_options]
 timeout = 300
+# Make sure we timeout before CI kills us
+session-timeout=500
 filterwarnings = ["ignore::DeprecationWarning"]
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
@@ -322,3 +324,6 @@ log_cli_level = "INFO"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'"
 ]
+
+# pytest-xdist defaults
+dist = "worksteal"
