@@ -201,7 +201,7 @@ class LevanterInferenceContext(InferenceContext):
             batch_completions = []
 
             for prompt in batch_prompts:
-                completion = self.client.chat.completions.create(
+                completion = client.chat.completions.create(
                     model=getattr(self.inference_server.config, "model_name", "test-model"),
                     messages=[{"role": "user", "content": prompt}],
                     logprobs=True,
