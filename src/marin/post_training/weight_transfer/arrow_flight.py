@@ -71,13 +71,13 @@ def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> pa.RecordBatch:
         # Convert to numpy if needed and serialize to bytes
         array_np = np.asarray(array)
         param_data.append(array_np.tobytes())
-        param_shapes.append(str(array_np.shape))
+        param_shapes.append(list(array_np.shape))
         param_dtypes.append(str(array_np.dtype))
 
     # Create Arrow arrays
     names_array = pa.array(param_names, type=pa.string())
     data_array = pa.array(param_data, type=pa.binary())
-    shapes_array = pa.array(param_shapes, type=pa.string())
+    shapes_array = pa.array(param_shapes, type=pa.list_(pa.int64()))
     dtypes_array = pa.array(param_dtypes, type=pa.string())
 
     # Create schema with metadata
@@ -85,7 +85,7 @@ def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> pa.RecordBatch:
         [
             pa.field("param_names", pa.string()),
             pa.field("param_data", pa.binary()),
-            pa.field("param_shapes", pa.string()),
+            pa.field("param_shapes", pa.list_(pa.int64())),
             pa.field("param_dtypes", pa.string()),
         ],
         metadata={"weight_id": str(weight_id), "timestamp": str(time.time()), "num_params": str(len(state_dict))},
@@ -113,9 +113,8 @@ def deserialize_arrow_to_pytree(record_batch: pa.RecordBatch, target_model: PyTr
 
     # Reconstruct state dict
     state_dict = {}
-    for name, data, shape_str, dtype_str in zip(param_names, param_data, param_shapes, param_dtypes, strict=True):
-        # Parse shape and dtype
-        shape = eval(shape_str)
+    for name, data, shape, dtype_str in zip(param_names, param_data, param_shapes, param_dtypes, strict=True):
+        # Parse dtype (shape is already a list of ints)
         dtype = np.dtype(dtype_str)
 
         # Reconstruct array from bytes
