@@ -244,6 +244,8 @@ class LevanterInferenceContext(InferenceContext):
             batch_results = _process_batch(batch_prompts)
             all_results.extend(batch_results)
 
+        loop.run_until_complete(client.close())
+
         loop.close()
         return all_results
 
@@ -351,7 +353,9 @@ class RolloutWorker:
             key=key,
         )
 
-        self.policy_model = self.transfer_client.receive_weights(None)
+        # N.B. Jax weight transfer requires a shape tree in order to serialize/deserialize weights
+        shape_tree = hax.tree_util.tree_map(lambda x: x.shape, self.reference_model)
+        self.policy_model = self.transfer_client.receive_weights(shape_tree)
         if self.policy_model:
             logger.info("Loaded initial policy model from weight transfer")
         else:

@@ -80,8 +80,7 @@ class WeightTransferConfig:
     poll_interval_seconds: float = 30.0
     coordinator_name: str = "weight_transfer_coordinator"
 
-    # RAY_REMOTING and JAX_TRANSFER_SERVER specific
-    transfer_timeout: float = 120.0
+    transfer_timeout: float = 5.0
 
     # GCS Checkpoint specific
     checkpoint_dir: str = ""

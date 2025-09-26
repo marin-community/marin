@@ -125,6 +125,13 @@ class WeightTransferCoordinator:
         """
         return self._latest_weight_id
 
+    def get_transfer_info(self) -> tuple[int | None, str | None]:
+        """
+        Returns the latest weight ID and transfer server address without blocking.
+        Returns (None, None) if no weights are available or server not registered.
+        """
+        return self._latest_weight_id, self.transfer_server_address
+
     def register_transfer_server(self, transfer_server_address: str):
         """
         Register the actual JAX transfer server address with the coordinator.
@@ -455,6 +462,9 @@ class JAXTransferClient(WeightTransferClient):
 
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="weight_transfer")
 
+        # Track last received weight ID to avoid redundant transfers
+        self._last_received_weight_id: int | None = None
+
         # Metrics tracking
         self.metrics = WeightTransferClientMetrics(start_time=time.time())
 
@@ -482,6 +492,22 @@ class JAXTransferClient(WeightTransferClient):
         """Receive weights with CPU transfer."""
         self.metrics.total_polls += 1
 
+        # First check if new weights are available without blocking
+        try:
+            latest_weight_id, server_address = ray.get(self.coordinator.get_transfer_info.remote())
+
+            # Early exit if no weights available or no new weights
+            if latest_weight_id is None or server_address is None:
+                return None
+
+            if self._last_received_weight_id is not None and latest_weight_id <= self._last_received_weight_id:
+                return None
+
+        except Exception as e:
+            logger.error(f"Failed to check transfer info: {e}")
+            self.metrics.failed_receives += 1
+            return None
+
         def _receive_in_thread():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -502,8 +528,9 @@ class JAXTransferClient(WeightTransferClient):
             params, metadata = future.result(timeout=self.config.transfer_timeout)
 
             if params is not None and metadata is not None:
-                # Update metrics
+                # Update metrics and track received weight ID
                 self.metrics.successful_receives += 1
+                self._last_received_weight_id = metadata.weight_id
                 return params
 
             return None
@@ -511,7 +538,7 @@ class JAXTransferClient(WeightTransferClient):
         except Exception as e:
             self.metrics.failed_receives += 1
             logger.error(f"Failed to receive weights: {e}")
-            raise
+            return None
 
     def cleanup(self) -> None:
         """Cleanup transfer server and thread pool."""
