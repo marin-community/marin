@@ -446,29 +446,14 @@ def create_dataset_from_environment(
         RLDataset and metrics dictionary
     """
     # Step environment with policy context
-    if isinstance(environment, PrimeIntellectEnv):
-        assert env_id is not None, "env_id is required for PrimeIntellectEnv"
-        assert env_args is not None, "env_args is required for PrimeIntellectEnv"
-        env_step = environment.step(
-            env_id=env_id,
-            env_args=env_args,
-            inference_ctx=policy_ctx,
-            rollouts_per_example=n_generations,
-            num_examples=n_examples,
-            mode=mode,
-            temperature=temperature,
-            max_tokens=max_output_length,
-            max_concurrent=32,
-        )
-    else:
-        env_step = environment.step(
-            inference_ctx=policy_ctx,
-            n_examples=n_examples,
-            prng_key=prng_key,
-            mode=mode,
-            n_generations=n_generations,
-            temperature=temperature,
-        )
+    env_step = environment.step(
+        inference_ctx=policy_ctx,
+        n_examples=n_examples,
+        prng_key=prng_key,
+        mode=mode,
+        n_generations=n_generations,
+        temperature=temperature,
+    )
 
     # Create dataset from environment step
     dataset = RLDataset.from_env_step(

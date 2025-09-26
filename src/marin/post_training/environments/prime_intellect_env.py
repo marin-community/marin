@@ -20,6 +20,8 @@ import os
 import time
 import logging
 import subprocess
+import jax
+import json
 from typing import ClassVar
 
 import verifiers as vf
@@ -36,10 +38,21 @@ class PrimeIntellectEnv(MarinEnv):
 
     ENVS: ClassVar[dict[str, vf.Environment]] = {}
 
-    def __init__(self, tokenizer, output_dir_path: str, **kwargs):
+    def __init__(self, tokenizer, output_dir_path: str,max_tokens: int = 1024, max_concurrent: int = 32, **kwargs):
         self.tokenizer = tokenizer
         self._output_dir_path: str = os.path.join(output_dir_path)
         os.makedirs(self._output_dir_path, exist_ok=True)
+
+        self.env_id = kwargs.get("env_id", None)
+        self.env_args = kwargs.get("env_args", None)
+
+        assert self.env_id is not None, "env_id is required for PrimeIntellectEnv, pass it as an keyword argument or in the environment spec like: prime_intellect:env_id=primeintellect/gsm8k,env_args={num_train_examples=-1,num_eval_examples=-1}"
+        assert self.env_args is not None, "env_args is required for PrimeIntellectEnv, pass it as an keyword argument or in the environment spec like: prime_intellect:env_id=primeintellect/gsm8k,env_args={num_train_examples=-1,num_eval_examples=-1}"
+
+        self.env_args = json.loads(self.env_args)
+
+        self.max_tokens = kwargs.get("max_tokens", 1024)
+        self.max_concurrent = kwargs.get("max_concurrent", 32)
 
     def load_prime_intellect_env(self, env_id: str, env_args: dict) -> vf.Environment:
         """
@@ -54,48 +67,43 @@ class PrimeIntellectEnv(MarinEnv):
 
     def step(
         self,
-        env_id: str,
-        env_args: dict,
-        num_examples: int,
-        rollouts_per_example: int,
-        mode: str = "eval",
-        inference_ctx: InferenceContext | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        max_concurrent: int = 32,
+        inference_ctx: InferenceContext,
+        n_examples: int,
+        prng_key,
+        mode: str = "train",
+        n_generations: int = 1,
+        temperature: float = 1.0,
     ) -> EnvStep:
         """
         Sample problems and generate responses using the model.
 
         Args:
-            env_id: The ID of the environment to evaluate
-            env_args: The arguments to use for the environment
-            mode: The mode to use for the environment
             inference_ctx: The inference context
+            n_examples: The number of examples to use for the model
+            prng_key: The PRNG key to use for the model
+            mode: The mode to use for the environment
+            n_generations: The number of generations to use for the model
             temperature: The temperature to use for the model
-            max_tokens: The maximum number of tokens to use for the model
-            num_examples: The number of examples to use for the model
-            rollouts_per_example: The number of rollouts to use for the model
-            max_concurrent: The maximum number of concurrent requests to use for the model
         """
-        # Download the environment
-        subprocess.run(["prime", "env", "install", env_id])
-        env_id = env_id.split("/", 1)[-1]
 
-        vf_env = self.load_prime_intellect_env(env_id, env_args)
+        # Download the environment
+        subprocess.run(["prime", "env", "install", self.env_id])
+        env_id = self.env_id.split("/", 1)[-1]
+
+        vf_env = self.load_prime_intellect_env(env_id, self.env_args)
 
         sampling_args: dict = {}
-        if max_tokens is not None:
-            sampling_args["max_tokens"] = max_tokens
+        if self.max_tokens is not None:
+            sampling_args["max_tokens"] = self.max_tokens
         if temperature is not None:
             sampling_args["temperature"] = temperature
 
         logger.info(f"Starting evaluation with model: {inference_ctx.model}")
         logger.info(
-            f"Configuration: num_examples={num_examples}, \
-                rollouts_per_example={rollouts_per_example}, \
-                max_concurrent={max_concurrent}, \
-                max_tokens={max_tokens}, \
+            f"Configuration: num_examples={n_examples}, \
+                n_generations={n_generations}, \
+                max_concurrent={self.max_concurrent}, \
+                max_tokens={self.max_tokens}, \
                 temperature={temperature}"
         )
 
@@ -111,9 +119,9 @@ class PrimeIntellectEnv(MarinEnv):
             client=inference_ctx.client,
             model=inference_ctx.model,
             sampling_args=sampling_args,
-            num_examples=num_examples,
-            rollouts_per_example=rollouts_per_example,
-            max_concurrent=max_concurrent,
+            num_examples=n_examples,
+            rollouts_per_example=n_generations,
+            max_concurrent=self.max_concurrent,
         )
 
         end_time = time.time()

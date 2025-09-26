@@ -53,7 +53,7 @@ from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
-ENVIRONMENT_SPEC = "prime_intellect"
+ENVIRONMENT_SPEC = "prime_intellect:env_id=primeintellect/gsm8k,env_args={num_train_examples=-1,num_eval_examples=-1}"
 # MODEL_NAME = "meta-llama/Llama-3.2-8B-Instruct"
 # MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 # MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
