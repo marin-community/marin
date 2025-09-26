@@ -735,7 +735,7 @@ def grade_answer(given_answer: str, ground_truth: str) -> bool:
     ground_truth_normalized = normalize_answer(ground_truth)
     given_normalized = normalize_answer(given_answer)
 
-    if ground_truth_normalized is None:
+    if (not ground_truth_normalized) or (not given_normalized):
         return False
 
     if ground_truth_normalized == given_normalized:
