@@ -31,7 +31,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
     """For `Evaluator`s that runs inference with Levanter (primarily Lm Eval Harness) on TPUs."""
 
     # Where to store checkpoints, cache inference results, etc.
-    CACHE_PATH: str = "/tmp/levanter-lm-eval"
+    CACHE_PATH: str = "/opt/gcsfuse_mount/tmp/levanter-lm-eval"
 
     @staticmethod
     def download_model(model: ModelConfig) -> str:

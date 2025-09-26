@@ -143,5 +143,5 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             # Clean up resources
             self.cleanup(model)
 
-            if os.path.exists(LevanterTpuEvaluator.CACHE_PATH):
+            if os.path.exists(LevanterTpuEvaluator.CACHE_PATH) and "gcsfuse" not in LevanterTpuEvaluator.CACHE_PATH:
                 shutil.rmtree(LevanterTpuEvaluator.CACHE_PATH)
