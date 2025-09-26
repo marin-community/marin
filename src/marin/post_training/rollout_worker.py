@@ -175,7 +175,7 @@ class LevanterInferenceContext(InferenceContext):
     def tokenizer(self):
         return self._tokenizer
 
-    def make_client(self):
+    def openai_client(self):
         base_url = f"http://{self.inference_server.config.host}:{self.inference_server.config.port}/v1"
         return AsyncOpenAI(base_url=base_url, api_key="marin")
 
@@ -195,7 +195,7 @@ class LevanterInferenceContext(InferenceContext):
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        client = self.make_client()
+        client = self.openai_client()
 
         def _process_batch(batch_prompts: list[str]) -> list[list[dict]]:
             batch_completions = []
