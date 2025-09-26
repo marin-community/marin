@@ -593,7 +593,7 @@ class LevanterHarnessLM(TemplateLM):
                 num_stop_tokens = stop_tokens.shape['position']
                 max_stop_seqs = max(max_stop_seqs, num_stop_seqs)
                 max_stop_tokens = max(max_stop_tokens, num_stop_tokens)
-        
+
         # Taken from: config/sampler/sample_llama8b.yaml
         engine_cfg = InferenceEngineConfig(
             max_stop_seqs=max_stop_seqs,
@@ -694,10 +694,16 @@ class LevanterHarnessLM(TemplateLM):
         
         # Handle do_sample parameter like vLLM does
         do_sample = kwargs.pop("do_sample", None)
-        if do_sample is False and kwargs["temperature"] == 0.0:
-            logger.debug(
-                "Got `do_sample=False` with temperature 0.0, ensuring deterministic sampling"
-            )
+        if do_sample is False:
+            if kwargs["temperature"] == 0.0:
+                logger.debug(
+                    "Got `do_sample=False` with temperature 0.0, ensuring deterministic sampling"
+                )
+            elif kwargs["temperature"] > 0.0:
+                raise ValueError(
+                    f"Conflicting parameters: do_sample=False but temperature={kwargs['temperature']} > 0.0. "
+                    f"For deterministic sampling, set temperature=0.0 or remove do_sample=False."
+                )
         
         # Handle max_gen_toks parameter
         if "max_gen_toks" in kwargs and kwargs["max_gen_toks"] is not None:
