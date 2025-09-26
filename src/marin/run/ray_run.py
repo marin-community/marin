@@ -36,11 +36,12 @@ logger = logging.getLogger(__name__)
 
 def parse_user_command_line(command: str) -> dict[str, str]:
     """Extract interesting parts from a user command line."""
-    parts = command.strip().split(" ")
+    parts = command.strip().split()
     entrypoint = None
     for part in parts:
         if Path(part).exists() and "/python" not in part:
-            entrypoint = Path(part).name
+            entrypoint = Path(part).name.split(".")[0]
+            return {"entrypoint": entrypoint}
 
     if parts and entrypoint is None:
         entrypoint = parts[0]
