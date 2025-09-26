@@ -53,30 +53,33 @@ def ppo_loss(
     clip_epsilon: float,
 ) -> jax.Array:
     """Compute PPO-style loss with RLOO advantages."""
+    # Create named arrays for model input
+    named_inputs = batch.as_named()
+
     model_output = model(
-        input_ids=batch.input_ids,
-        attn_mask=batch.attention_mask,
-        pos_ids=batch.position_ids,
+        input_ids=named_inputs["input_ids"],
+        attn_mask=named_inputs["attention_mask"],
+        pos_ids=named_inputs["position_ids"],
         key=key,
     )
 
     logits = model_output.array.astype(jnp.float32)
 
-    token_ce_loss = softmax_cross_entropy_with_integer_labels(logits, batch.target_ids.array)
+    token_ce_loss = softmax_cross_entropy_with_integer_labels(logits, batch.target_ids)
     current_logprobs = -token_ce_loss
 
     # Get the old policy's log probs (from the worker policy that collected the data)
-    old_logprobs = batch.policy_logprobs.array
+    old_logprobs = batch.policy_logprobs
 
     # Compute importance sampling ratio exp(log π_current - log π_old)
     log_ratio = current_logprobs - old_logprobs
     ratio = jnp.exp(log_ratio)
 
     # RLOO advantages (returned from the worker, and smeared across tokens)
-    advantages = batch.loss_weights.array
+    advantages = batch.loss_weights
 
     # Get the mask for valid tokens (e.g., excluding padding)
-    mask = batch.loss_masks.array
+    mask = batch.loss_masks
 
     # PPO objective with clipping
     # We want to maximize advantage-weighted log probs, so we minimize the negative
@@ -98,7 +101,7 @@ def ppo_loss(
 
     # KL penalty from reference policy (optional regularization)
     # KL(π_current || π_ref) ≈ π_current * (log π_current - log π_ref)
-    reference_logprobs = batch.reference_logprobs.array
+    reference_logprobs = batch.reference_logprobs
     kl_div = jnp.exp(current_logprobs) * (current_logprobs - reference_logprobs)
     kl_loss = jnp.sum(kl_div * mask) / jnp.maximum(jnp.sum(mask), 1.0)
 
@@ -126,21 +129,24 @@ def rloo_loss_with_importance_sampling(
         Tuple of (loss, aux_metrics)
     """
     # Get logits from current policy
+    # Create named arrays for model input
+    named_inputs = batch.as_named()
+
     model_output = model(
-        input_ids=batch.input_ids,
-        attn_mask=batch.attention_mask,
-        pos_ids=batch.position_ids,
+        input_ids=named_inputs["input_ids"],
+        attn_mask=named_inputs["attention_mask"],
+        pos_ids=named_inputs["position_ids"],
         key=key,
     )
 
     logits = model_output
 
     logits_array = logits.array
-    target_ids_array = batch.target_ids.array
-    policy_logprobs_array = batch.policy_logprobs.array
-    loss_weights_array = batch.loss_weights.array
-    loss_masks_array = batch.loss_masks.array
-    reference_logprobs_array = batch.reference_logprobs.array
+    target_ids_array = batch.target_ids
+    policy_logprobs_array = batch.policy_logprobs
+    loss_weights_array = batch.loss_weights
+    loss_masks_array = batch.loss_masks
+    reference_logprobs_array = batch.reference_logprobs
 
     logits_array = logits_array.astype(jnp.float32)
     token_loss = softmax_cross_entropy_with_integer_labels(logits_array, target_ids_array)

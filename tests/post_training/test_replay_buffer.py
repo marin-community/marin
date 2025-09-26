@@ -215,7 +215,7 @@ def test_replay_buffer_multiprocess_sampling():
         assert len(sample) == 12
 
         # Collect all sampled IDs from this process (convert JAX arrays to int)
-        process_samples = [int(input_id[0]) for input_id in sample.input_ids.array]
+        process_samples = [int(input_id[0]) for input_id in sample.input_ids]
         all_samples.extend(process_samples)
 
     # Verify that we got samples (some may overlap due to random sampling)
@@ -246,7 +246,7 @@ def test_replay_buffer_recency_bias():
     for _ in range(100):
         sample = replay_buffer.sample_training_batch()
         if sample is not None:
-            indices = [int(token) - 1000 for token in sample.input_ids.array[:, 0]]
+            indices = [int(token) - 1000 for token in sample.input_ids[:, 0]]
             all_samples.extend(indices)
 
     # With strong recency bias, we should heavily favor high indices
@@ -545,7 +545,7 @@ def test_replay_buffer_max_resamples_zero():
 
 
 def test_replay_buffer_produces_valid_named_arrays():
-    """Test that the replay buffer produces properly shaped JaxRolloutBatch with NamedArrays."""
+    """Test that replay buffer returns valid JAX arrays and can convert to NamedArrays."""
     replay_buffer = ReplayBuffer(
         local_batch_size=4,
         process_id=0,
@@ -566,15 +566,15 @@ def test_replay_buffer_produces_valid_named_arrays():
     assert sampled_batch is not None
     assert isinstance(sampled_batch, JaxRolloutBatch)
 
-    # Check that all fields are NamedArrays with correct axes
-    assert hasattr(sampled_batch.input_ids, "axes")
-    assert hasattr(sampled_batch.input_ids, "array")
-    assert sampled_batch.input_ids.axes[0].name == "batch"
-    assert sampled_batch.input_ids.axes[1].name == "position"
+    # Check that all fields are raw JAX arrays
+    import jax.numpy as jnp
+
+    assert isinstance(sampled_batch.input_ids, jnp.ndarray)
+    assert sampled_batch.input_ids.shape[0] == 4  # batch size
+    assert sampled_batch.input_ids.shape[1] == 16  # sequence length
 
     # Check batch size matches what we requested
     assert len(sampled_batch) == 4
-    assert sampled_batch.input_ids.axes[0].size == 4
 
     # Verify all fields have consistent batch size
     for field_name in [
@@ -587,8 +587,97 @@ def test_replay_buffer_produces_valid_named_arrays():
         "policy_logprobs",
     ]:
         field = getattr(sampled_batch, field_name)
-        assert hasattr(field, "axes"), f"Field {field_name} should be a NamedArray"
-        assert field.axes[0].name == "batch", f"Field {field_name} should have batch axis"
-        assert field.axes[0].size == 4, f"Field {field_name} should have batch size 4"
+        assert isinstance(field, jnp.ndarray), f"Field {field_name} should be a JAX array"
+        assert field.shape[0] == 4, f"Field {field_name} should have batch size 4"
 
-    print("Replay buffer NamedArray output test passed!")
+    # Test that as_named() works correctly
+    named_batch = sampled_batch.as_named()
+    assert isinstance(named_batch, dict)
+    assert "input_ids" in named_batch
+
+    # Check that named version has proper axes
+    named_input_ids = named_batch["input_ids"]
+    assert hasattr(named_input_ids, "axes")
+    assert named_input_ids.axes[0].name == "batch"
+    assert named_input_ids.axes[1].name == "position"
+    assert named_input_ids.axes[0].size == 4
+
+    print("Replay buffer JAX array output test passed!")
+
+
+def test_replay_buffer_empty_existing_buffer():
+    """Test adding batches to environment with zero-length existing buffer."""
+    replay_buffer = ReplayBuffer(
+        local_batch_size=2,
+        process_id=0,
+        total_processes=1,
+        recency_alpha=1.0,
+        capacity=100,
+        max_samples=1,  # Force examples to be retired quickly
+    )
+
+    # Add initial batch
+    batch1 = create_test_batch(0, batch_size=3, max_seq_len=16)
+    batch1.env_name = "test_env"
+    replay_buffer.add_batches([batch1])
+
+    assert replay_buffer.size() == 3
+
+    # Sample until buffer is empty due to max_samples=1
+    while replay_buffer.size() > 0:
+        sample = replay_buffer.sample_training_batch()
+        if sample is None:
+            break
+
+    # Verify buffer is now empty for this environment
+    assert replay_buffer.size() == 0
+    stats = replay_buffer.get_stats()
+    assert stats["total_size"] == 0
+
+    # Add new batch to same environment - this should work with empty existing buffer
+    batch2 = create_test_batch(1, batch_size=2, max_seq_len=16)
+    batch2.env_name = "test_env"  # Same environment as before
+    replay_buffer.add_batches([batch2])
+
+    # Verify the new batch was added successfully
+    assert replay_buffer.size() == 2
+    stats = replay_buffer.get_stats()
+    assert stats["total_size"] == 2
+    assert stats["env_sizes"]["test_env"] == 2
+
+    # Should be able to sample from the new batch
+    sample = replay_buffer.sample_training_batch()
+    assert sample is not None
+    assert len(sample) == 2
+
+
+def test_replay_buffer_mixed_batch_sizes_concatenation_works():
+    """Test that mixed batch sizes work correctly with our JAX refactor."""
+    # Create replay buffer
+    replay_buffer = ReplayBuffer(
+        local_batch_size=4,
+        process_id=0,
+        total_processes=1,
+        recency_alpha=1.0,
+        capacity=100,
+        max_samples=-1,
+    )
+
+    # Add initial batch with batch_size=64
+    batch1 = create_test_batch(0, batch_size=64, max_seq_len=255)
+    batch1.env_name = "test_env"
+    replay_buffer.add_batches([batch1])
+
+    # Add small batch with different batch_size=1
+    batch2 = create_test_batch(1, batch_size=1, max_seq_len=255)
+    batch2.env_name = "test_env"
+
+    # This should work now with our JAX refactor (no more NamedArray shape issues)
+    replay_buffer.add_batches([batch2])
+
+    # Should be able to sample successfully
+    sample = replay_buffer.sample_training_batch()
+    assert sample is not None
+    assert len(sample) == 4  # local_batch_size
+
+    print("Mixed batch sizes concatenation works correctly!")

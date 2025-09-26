@@ -18,11 +18,14 @@ Answer checker API that uses sympy to simplify expressions and check for equalit
 Call grade_answer(given_answer: str, ground_truth: str).
 """
 
+import logging
 import re
 from collections.abc import Callable
 
 import sympy
 from sympy.parsing import sympy_parser
+
+logger = logging.getLogger(__name__)
 
 
 # Core LaTeX processing helpers
@@ -159,7 +162,8 @@ def normalize_answer(answer: str | None) -> str | None:
         answer = _normalize(answer)
 
         return answer
-    except BaseException:
+    except Exception as e:
+        logger.warning(f"Normalization failed for answer '{answer}': {e}")
         return answer
 
 
