@@ -33,6 +33,7 @@ from .base import (
     WeightTransferServer,
     WeightTransferServerMetrics,
 )
+from .arrow_flight import ArrowFlightClient, ArrowFlightCoordinator, ArrowFlightServer
 from .checkpoint import GCSCheckpointClient, GCSCheckpointServer
 from .ray import RayRemotingClient, RayRemotingServer, RayWeightCoordinator
 
@@ -70,6 +71,9 @@ def create_weight_transfer_server(
     elif config.mode == WeightTransferMode.RAY_REMOTING:
         return RayRemotingServer(config)
 
+    elif config.mode == WeightTransferMode.ARROW_FLIGHT:
+        return ArrowFlightServer(config, mesh, axis_mapping)
+
     # Default to GCS checkpoint mode
     return GCSCheckpointServer(
         config,
@@ -99,6 +103,9 @@ def create_weight_transfer_client(
     elif config.mode == WeightTransferMode.RAY_REMOTING:
         return RayRemotingClient(config)
 
+    elif config.mode == WeightTransferMode.ARROW_FLIGHT:
+        return ArrowFlightClient(config, mesh, axis_mapping)
+
     # Default to GCS checkpoint mode
     return GCSCheckpointClient(
         config,
@@ -108,6 +115,9 @@ def create_weight_transfer_client(
 
 
 __all__ = [
+    "ArrowFlightClient",
+    "ArrowFlightCoordinator",
+    "ArrowFlightServer",
     "GCSCheckpointClient",
     "GCSCheckpointServer",
     "JAXTransferClient",

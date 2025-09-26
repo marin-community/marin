@@ -31,6 +31,7 @@ from levanter.inference.openai import InferenceServerConfig
 from levanter.infra.ray_tpu import run_on_pod_ray
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
+from levanter.tracker.tensorboard import TensorboardConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from ray.runtime_env import RuntimeEnv
@@ -173,12 +174,16 @@ def rl_train(name: str) -> ExecutorStep:
     # Adjust the max sequence length of the model to reduce memory usage.
     model_config = dataclasses.replace(config, seq_len=MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS, tokenizer=MODEL_TOKENIZER)
 
+    _ = WandbConfig
+
     trainer_config = TrainerConfig(
-        tracker=WandbConfig(
-            project="marin_rl_testing",
-            name=name,
-            tags=["rl", "math", MODEL_NAME.split("/")[-1]],
-            # logdir=OutputName("tblogs"),
+        # tracker=WandbConfig(
+        #     project="marin_rl_testing",
+        #     name=name,
+        #     tags=["rl", "math", MODEL_NAME.split("/")[-1]],
+        # ),
+        tracker=TensorboardConfig(
+            logdir=OutputName("tblogs"),
         ),
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         train_batch_size=256,
@@ -222,11 +227,9 @@ def rl_train(name: str) -> ExecutorStep:
     )
     weight_transfer = WeightTransferConfig(
         # mode=WeightTransferMode.JAX_TRANSFER_SERVER,
-        mode=WeightTransferMode.GCS_CHECKPOINT,
-        sync_interval_steps=4,
-        checkpoint_dir=OutputName("policy_checkpoints"),
-        max_checkpoints=5,
-        # coordinator_name="rl_weight_transfer_coordinator",
+        mode=WeightTransferMode.ARROW_FLIGHT,
+        sync_interval_steps=1,
+        poll_interval_seconds=1,
     )
 
     train_worker = TrainWorkerConfig(
@@ -292,7 +295,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test"),
+        rl_train(name="llama-1b-math-rl-test-001"),
     ]
 
     executor_main(

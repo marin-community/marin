@@ -39,11 +39,13 @@ try:
         WeightTransferMode.RAY_REMOTING,
         WeightTransferMode.GCS_CHECKPOINT,
         WeightTransferMode.JAX_TRANSFER_SERVER,
+        WeightTransferMode.ARROW_FLIGHT,
     ]
 except (ImportError, AttributeError):
     TRANSFER_TYPES = [
         WeightTransferMode.RAY_REMOTING,
         WeightTransferMode.GCS_CHECKPOINT,
+        WeightTransferMode.ARROW_FLIGHT,
     ]
 
 if os.environ.get("CI"):
