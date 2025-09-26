@@ -24,9 +24,8 @@ import threading
 import time
 from dataclasses import dataclass
 
-import haliax as hax
-import haliax.tree_util
 import jax
+import jax.numpy as jnp
 import numpy as np
 
 from .rollout_storage import JaxRolloutBatch, RolloutBatch, RolloutReader, TaggedRolloutBatch
@@ -36,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ReplayCounts:
-    usage_count: np.array
+    usage_count: np.ndarray
     examples: JaxRolloutBatch
 
     def __len__(self) -> int:
@@ -108,13 +107,16 @@ class ReplayBuffer:
                 jax_batches = [batch.to_jax() for batch in batches]
 
                 if env_name not in self.env_buffers:
-                    buffer = hax.tree_util.tree_map(lambda *xs: hax.concatenate("batch", xs), *jax_batches)
+                    buffer = jax.tree.map(lambda *xs: jnp.concatenate(xs, axis=0), *jax_batches)
                     usage_counts = np.zeros(len(buffer), dtype=np.int32)
                 else:
                     # Concatenate existing buffer with new batches
                     existing_buffer = self.env_buffers[env_name].examples
-                    all_batches = [existing_buffer, *jax_batches]
-                    buffer = hax.tree_util.tree_map(lambda *xs: hax.concatenate("batch", xs), *all_batches)
+                    if len(existing_buffer) > 0:
+                        all_batches = [existing_buffer, *jax_batches]
+                    else:
+                        all_batches = jax_batches
+                    buffer = jax.tree.map(lambda *xs: jnp.concatenate(xs, axis=0), *all_batches)
                     usage_counts = np.concatenate(
                         [
                             self.env_buffers[env_name].usage_count,
@@ -128,7 +130,7 @@ class ReplayBuffer:
                     new_size = self.capacity
 
                     def _slice(tree, idx: int = start_idx, size: int = new_size):
-                        return hax.tree_util.tree_map(lambda x: hax.slice(x, "batch", start=idx, length=size), tree)
+                        return jax.tree.map(lambda x: x[idx : idx + size], tree)
 
                     buffer = _slice(buffer)
                     usage_counts = usage_counts[start_idx:]
@@ -189,7 +191,7 @@ class ReplayBuffer:
                 sample_idx = self._rng.choice(buffer_size, p=env_sample_weights[env_idx])
 
                 def _select_example(tree, idx: int = sample_idx):
-                    return hax.tree_util.tree_map(lambda x: hax.slice(x, "batch", start=idx, length=1), tree)
+                    return jax.tree.map(lambda x: x[idx : idx + 1], tree)
 
                 single_example = _select_example(env_buffer.examples)
                 samples.append(single_example)
@@ -212,7 +214,7 @@ class ReplayBuffer:
                         self.env_buffers[env_name] = ReplayCounts(usage_count=kept_usage, examples=kept_examples)
 
             self._total_batches_sampled += 1
-            return hax.tree_util.tree_map(lambda *xs: hax.concatenate("batch", xs), *samples)
+            return jax.tree.map(lambda *xs: jnp.concatenate(xs, axis=0), *samples)
 
     def size(self) -> int:
         """Get total number of batches across all environments."""
