@@ -436,7 +436,7 @@ class LevanterHarnessLM(TemplateLM):
         return result
 
 
-    def _tok_encode(
+    def tok_encode(
         self,
         string: Union[str, List[str]],
         left_truncate_len: int = None,
@@ -519,7 +519,7 @@ class LevanterHarnessLM(TemplateLM):
             processed_kwargs_list.append(processed_gen_kwargs)
 
         # Tokenize prompts and compute capacity needs
-        prompt_token_lists: list[list[int]] = self._tok_encode(context, add_special_tokens=False)
+        prompt_token_lists: list[list[int]] = self.tok_encode(context, add_special_tokens=False)
 
         # Truncate from left if needed to fit model max length, accounting for generation tokens
         max_length = self.EvalPos.size
@@ -552,7 +552,7 @@ class LevanterHarnessLM(TemplateLM):
                     # Tokenize all stop sequences
                     all_stop_tokens = []
                     for stop_seq in processed_until:
-                        stop_ids_list = self._tok_encode(stop_seq, add_special_tokens=False)
+                        stop_ids_list = self.tok_encode(stop_seq, add_special_tokens=False)
                         if len(stop_ids_list) > 0:
                             all_stop_tokens.append(stop_ids_list)
                     
