@@ -138,13 +138,6 @@ def export_environment_prompts(
     total_generations = sum(req.get("n", 1) for req in requests)
     logger.info(f"Total generations that will be made: {total_generations}")
 
-    # Show sample request
-    if requests:
-        logger.info("Sample request (first one):")
-        sample = requests[0].copy()
-        sample.pop("_metadata", None)  # Remove metadata for display
-        print(json.dumps(sample, indent=2))
-
 
 if __name__ == "__main__":
     export_environment_prompts()
