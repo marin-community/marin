@@ -283,6 +283,10 @@ def rl_train(name: str) -> ExecutorStep:
 
 
 def main():
+    if os.getenv("CI", None) is not None:
+        logger.info("Skipping experiment execution on CI environment, needs HF access.")
+        return
+
     experiments = [
         rl_train(name="llama-1b-math-rl-test"),
     ]
