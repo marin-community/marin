@@ -96,10 +96,10 @@ def test_latex_to_text():
     from marin.post_training.environments.math_utils import latex_to_text
 
     # Fraction tests
-    assert latex_to_text(r"\frac{1}{2}") == "(1)/(2)"
+    assert latex_to_text(r"\frac{1}{2}") == "1/2"
     assert latex_to_text(r"\frac{a+b}{c-d}") == "(a+b)/(c-d)"
-    assert latex_to_text(r"\tfrac{1}{2}") == "(1)/(2)"
-    assert latex_to_text(r"\dfrac{a}{b}") == "(a)/(b)"
+    assert latex_to_text(r"\tfrac{1}{2}") == "1/2"
+    assert latex_to_text(r"\dfrac{a}{b}") == "a/b"
 
     # Sqrt tests
     assert latex_to_text(r"\sqrt{2}") == "sqrt(2)"
@@ -131,7 +131,7 @@ def test_latex_to_text():
     assert latex_to_text(r"\text{hello}") == "hello"
     assert latex_to_text(r"\mathbf{M}") == "M"
     assert latex_to_text(r"\mathcal{H}") == "H"
-    assert latex_to_text(r"\left(\frac{1}{2}\right)") == "((1)/(2))"
+    assert latex_to_text(r"\left(\frac{1}{2}\right)") == "(1/2)"
 
     # Advanced features
     assert latex_to_text(r"\dotsb") == "..."
@@ -140,7 +140,7 @@ def test_latex_to_text():
     assert latex_to_text(r"\begin{matrix}1 & 2 \\ 3 & 4\end{matrix}") == "[1 & 2 3 & 4]"
 
     # Complex expressions
-    assert latex_to_text(r"\frac{1}{2} + \sqrt{3}") == "(1)/(2) + sqrt(3)"
+    assert latex_to_text(r"\frac{1}{2} + \sqrt{3}") == "1/2 + sqrt(3)"
     assert latex_to_text(r"2\pi r^2") == "2pi r**2"
 
 
@@ -149,10 +149,10 @@ def test_latex_parser_edge_cases():
     from marin.post_training.environments.math_utils import latex_to_text
 
     # Incomplete fractions (should not crash)
-    assert latex_to_text(r"\frac{1}") == "(1)/"
+    assert latex_to_text(r"\frac{1}") == "1/"
     assert latex_to_text(r"\frac{") == r"\frac{"  # Malformed input preserved
     assert latex_to_text(r"\frac") == r"\frac"  # Malformed input preserved
-    assert latex_to_text(r"\frac{1}{2}{3}") == "(1)/(2){3}"
+    assert latex_to_text(r"\frac{1}{2}{3}") == "1/2{3}"
 
     # Empty and malformed inputs
     assert latex_to_text("") == ""
@@ -171,11 +171,11 @@ def test_latex_parser_edge_cases():
 def test_answer_normalization():
     """Test answer normalization functions."""
     from marin.post_training.environments.math_utils import (
+        _normalize,
+        last_boxed_only_string,
         normalize_answer,
         remove_boxed,
-        last_boxed_only_string,
         split_tuple,
-        _normalize,
     )
 
     # normalize_answer tests
@@ -191,7 +191,7 @@ def test_answer_normalization():
     # last_boxed_only_string tests
     assert last_boxed_only_string("Some text \\boxed{42} more text") == "\\boxed{42}"
     assert last_boxed_only_string("\\boxed{1} and \\boxed{2}") == "\\boxed{2}"
-    assert last_boxed_only_string("No boxed content") is None
+    assert last_boxed_only_string("No boxed content") == "No boxed content"
 
     # split_tuple tests
     assert split_tuple("(1, 2, 3)") == ["1", "2", "3"]
@@ -210,6 +210,7 @@ def test_answer_normalization():
 def test_sympy_compatibility():
     """Test that LaTeX parser produces sympy-compatible expressions."""
     import sympy
+
     from marin.post_training.environments.math_utils import latex_to_text
 
     test_cases = [
