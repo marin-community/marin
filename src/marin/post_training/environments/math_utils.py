@@ -152,6 +152,9 @@ def normalize_answer(answer: str | None) -> str | None:
         # Normalize numbers
         answer = normalize_number_format(answer)
 
+        # Remove redundant parentheses
+        answer = remove_redundant_parens(answer)
+
         # Final normalization using existing logic
         answer = _normalize(answer)
 
@@ -173,9 +176,25 @@ def process_latex_fractions(text: str) -> str:
 
     def frac_replacer(args: list[str]) -> str:
         if len(args) >= 2:
-            return f"({args[0]})/({args[1]})"
+            # Only add parentheses if arguments contain operators or spaces
+            # Simple numbers like "7", "25" don't need parentheses
+            num = args[0]
+            den = args[1]
+
+            # Check if numerator needs parentheses (contains operators/spaces/multiple terms)
+            if re.search(r"[+\-*\s]|sqrt|sin|cos|tan|log|pi", num) or "," in num:
+                num = f"({num})"
+
+            # Check if denominator needs parentheses
+            if re.search(r"[+\-*\s]|sqrt|sin|cos|tan|log|pi", den) or "," in den:
+                den = f"({den})"
+
+            return f"{num}/{den}"
         elif len(args) == 1:
-            return f"({args[0]})/"
+            num = args[0]
+            if re.search(r"[+\-*\s]|sqrt|sin|cos|tan|log|pi", num) or "," in num:
+                num = f"({num})"
+            return f"{num}/"
         return "\\frac"
 
     return replace_latex_command(text, "frac", frac_replacer, max_args=2)
@@ -324,6 +343,20 @@ def normalize_number_format(text: str) -> str:
     return text
 
 
+def remove_redundant_parens(text: str) -> str:
+    """Remove redundant parentheses around simple numbers and expressions."""
+    # Handle mixed numbers first: 11(2)/(3) -> 11+2/3
+    text = re.sub(r"(\d+)\((\d+)\)/\((\d+)\)", r"\1+\2/\3", text)
+
+    # Remove parens around simple fractions: (5)/(3) -> 5/3
+    text = re.sub(r"\((\d+)\)/\((\d+)\)", r"\1/\2", text)
+
+    # Remove parens around standalone numbers
+    text = re.sub(r"(?<![a-zA-Z()])\((\d+(?:\.\d+)?)\)(?![a-zA-Z()])", r"\1", text)
+
+    return text
+
+
 def extract_boxed(text: str) -> str | None:
     """Extract content from last \\boxed{} or \\boxed."""
     # Try \\boxed{content} first
@@ -366,9 +399,6 @@ def _strip_string(string):
     string = string.replace("dfrac", "frac")
     # print(string)
 
-    # remove \left and \right
-    string = string.replace("\\left", "")
-    string = string.replace("\\right", "")
     # print(string)
 
     # Remove circ (degrees)
@@ -399,15 +429,8 @@ def _strip_string(string):
         if len(string.split("=")[0]) <= 2:
             string = string.split("=")[1]
 
-    # fix sqrt3 --> sqrt{3}
-    string = _fix_sqrt(string)
-
     # remove spaces
     string = string.replace(" ", "")
-
-    # \frac1b or \frac12 --> \frac{1}{b} and \frac{1}{2}, etc.
-    # Even works with \frac1{72} (but not \frac{72}1). Also does a/b --> \\frac{a}{b}
-    string = _fix_fracs(string)
 
     # manually change 0.5 --> \frac{1}{2}
     if string == "0.5":
@@ -570,11 +593,6 @@ def _normalize(expr: str) -> str:
     if expr is None:
         return None
 
-    # Remove enclosing `\text{}`.
-    m = re.search("^\\\\text\\{(?P<text>.+?)\\}$", expr)
-    if m is not None:
-        expr = m.group("text")
-
     expr = expr.replace("\\%", "%")
     expr = expr.replace("\\$", "$")
     expr = expr.replace("$", "")
@@ -613,11 +631,6 @@ def _normalize(expr: str) -> str:
     expr = re.sub(",\\\\! *", "", expr)
     if _is_float(expr) and _is_int(float(expr)):
         expr = str(round(float(expr)))
-    if "\\" in expr:
-        try:
-            expr = latex_to_text(expr)
-        except BaseException:
-            pass
 
     # Handle malformed expressions like "192sqrt(14)25" -> "192*sqrt(14)/25"
     # Pattern: number + function + number -> number * function / number
