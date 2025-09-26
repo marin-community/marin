@@ -885,9 +885,15 @@ class Executor:
 
         # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
         # import pdb; pdb.set_trace()
-        executor_version_str = json.dumps(
-            list(map(asdict_without_description, self.step_infos)), sort_keys=True, cls=CustomJsonEncoder
-        )
+        dict_infos = []
+        for json_info in self.step_infos:
+            dict_infos.append(asdict_without_description(json_info))
+
+        dict_json = []
+        for json_info in dict_infos:
+            dict_json.append(json.dumps(json_info, sort_keys=True, cls=CustomJsonEncoder))
+
+        executor_version_str = "\n".join(dict_json)
         executor_version_hash = hashlib.md5(executor_version_str.encode()).hexdigest()[:6]
         name = os.path.basename(self.executor_info.caller_path).replace(".py", "")
         self.executor_info_path = os.path.join(
@@ -902,11 +908,11 @@ class Executor:
         logger.info(self.get_experiment_url())
         logger.info("")
         # Write out info for each step
-        for step, info in zip(self.steps, self.step_infos, strict=True):
+        for step, json_info in zip(self.steps, dict_json, strict=True):
             info_path = _get_info_path(self.output_paths[step])
             fsspec_utils.mkdirs(os.path.dirname(info_path))
             with fsspec.open(info_path, "w") as f:
-                print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
+                print(json_info, file=f)
 
         # Write out info for the entire execution
         fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
