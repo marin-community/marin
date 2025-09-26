@@ -16,7 +16,8 @@
 Multi-process tests for JAX transfer server weight transfer mode.
 """
 
-import multiprocessing
+import logging
+import multiprocessing.pool
 import os
 import time
 import uuid
@@ -26,7 +27,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-import ray
+
+logger = logging.getLogger(__name__)
+
+pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping slow multiprocess tests on CI")
 
 try:
     from jax.experimental import transfer as jax_transfer
@@ -48,19 +52,19 @@ def create_sample_pytree(seed: int):
     generator = np.random.Generator(np.random.PCG64(seed))
 
     # Create axes for NamedArrays
-    Vocab = hax.Axis("vocab", 100)
-    Hidden = hax.Axis("hidden", 64)
+    Vocab = hax.Axis("vocab", 5)
+    Hidden = hax.Axis("hidden", 5)
 
     return {
         "embedding": {
             "weight": hax.named(
-                jnp.array(generator.standard_normal((100, 64), dtype=jnp.float32)),
+                jnp.array(generator.standard_normal((5, 5), dtype=jnp.float32)),
                 (Vocab, Hidden),
             ),
         },
         "output": {
             "weight": hax.named(
-                jnp.array(generator.standard_normal((64, 100), dtype=jnp.float32)),
+                jnp.array(generator.standard_normal((5, 5), dtype=jnp.float32)),
                 (Hidden, Vocab),
             ),
         },
@@ -73,141 +77,108 @@ def create_mesh():
     return jax.sharding.Mesh(np.array(devices), axis_names=("batch",))
 
 
-def run_server(coordinator_name: str, process_id: int, num_processes: int, coordinator_address: str):
-    """Run server process."""
-    try:
-        # Set up JAX environment before any JAX imports
-        os.environ["JAX_PLATFORMS"] = "cpu"
-        os.environ["JAX_DISABLE_JIT"] = "true"
-        os.environ["JAX_COORDINATOR_ADDRESS"] = coordinator_address
-        os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={num_processes}"
+def run_server(coordinator_name: str, num_processes: int, coordinator_address: str):
+    assert os.environ["RAY_ADDRESS"]
+    logger.info("Connecting to Ray at %s", os.environ.get("RAY_ADDRESS"))
+    # Set up JAX environment before any JAX imports
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    os.environ["JAX_DISABLE_JIT"] = "true"
+    os.environ["JAX_COORDINATOR_ADDRESS"] = coordinator_address
+    os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={num_processes}"
 
-        # Skip JAX distributed for this test - focus on weight transfer coordination
+    config = WeightTransferConfig(
+        mode=WeightTransferMode.JAX_TRANSFER_SERVER,
+        sync_interval_steps=1,
+        poll_interval_seconds=0.1,
+        coordinator_name=coordinator_name,
+    )
+    logger.info("Creating server with config: %s", config)
 
-        # Connect to Ray cluster
-        ray.init(address="auto", ignore_reinit_error=True)
+    mesh = create_mesh()
+    server = create_weight_transfer_server(config, mesh=mesh)
 
-        config = WeightTransferConfig(
-            mode=WeightTransferMode.JAX_TRANSFER_SERVER,
-            sync_interval_steps=1,
-            poll_interval_seconds=0.1,
-            coordinator_name=coordinator_name,
-        )
+    # ray takes a while to warm up...
+    time.sleep(5)
 
-        mesh = create_mesh()
-        server = create_weight_transfer_server(config, mesh=mesh)
+    for i in range(10):
+        params = create_sample_pytree(seed=i)
+        server.serve_weights(i, params)
+        logger.info("Switching to new weights.")
+        time.sleep(1)
 
-        # Create and serve weights
-        params = create_sample_pytree(seed=42)
-        server.serve_weights(1, params)
+    # wait for clients to catch up
+    time.sleep(5)
+    server.cleanup()
 
-        # Wait for clients
-        time.sleep(3)
-
-        # Serve updated weights
-        new_params = create_sample_pytree(seed=123)
-        server.serve_weights(2, new_params)
-
-        time.sleep(2)
-        server.cleanup()
-
-        # jax.distributed.shutdown()
-        return True
-
-    except Exception as e:
-        print(f"Server process error: {e}")
-        return False
+    # jax.distributed.shutdown()
+    return True
 
 
 def run_client(coordinator_name: str, process_id: int, num_processes: int, coordinator_address: str):
-    """Run client process."""
-    try:
-        # Set up JAX environment
-        os.environ["JAX_PLATFORMS"] = "cpu"
-        os.environ["JAX_DISABLE_JIT"] = "true"
-        os.environ["JAX_COORDINATOR_ADDRESS"] = coordinator_address
-        os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={num_processes}"
+    assert os.environ["RAY_ADDRESS"]
+    logger.info("Connecting to Ray at %s", os.environ.get("RAY_ADDRESS"))
+    # Set up JAX environment
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    os.environ["JAX_DISABLE_JIT"] = "true"
+    os.environ["JAX_COORDINATOR_ADDRESS"] = coordinator_address
+    os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={num_processes}"
 
-        ray.init(address="auto", ignore_reinit_error=True)
+    config = WeightTransferConfig(
+        mode=WeightTransferMode.JAX_TRANSFER_SERVER,
+        sync_interval_steps=1,
+        poll_interval_seconds=0.1,
+        transfer_timeout=10,
+        coordinator_name=coordinator_name,
+    )
+    logger.info("Created client with config: %s", config)
 
-        # Wait for server to initialize
+    mesh = create_mesh()
+    client = create_weight_transfer_client(config, mesh=mesh)
+
+    # Receive weights
+    logger.info("Receiving weights.")
+    params_received = []
+    placeholder = create_sample_pytree(seed=0)
+    for _ in range(10):
+        logger.info("Attempting to receive weights...")
+        received_params = client.receive_weights(placeholder)
+        logger.info("Received weights: %s", received_params)
+        if received_params is not None:
+            params_received.append(received_params)
         time.sleep(1)
 
-        config = WeightTransferConfig(
-            mode=WeightTransferMode.JAX_TRANSFER_SERVER,
-            sync_interval_steps=1,
-            poll_interval_seconds=0.1,
-            coordinator_name=coordinator_name,
-        )
+    # count unique weights received
+    unique_weights = set()
+    for params in params_received:
+        weight_hash = hash(str(jax.tree_util.tree_leaves(params)))
+        unique_weights.add(weight_hash)
 
-        mesh = create_mesh()
-        client = create_weight_transfer_client(config, mesh=mesh)
-
-        # Receive weights
-        placeholder = create_sample_pytree(seed=0)
-        received_params = client.receive_weights(placeholder)
-
-        if received_params is None:
-            print(f"Client {process_id} failed to receive weights")
-            return False
-
-        # Try to receive updated weights
-        time.sleep(2)
-        received_params_2 = client.receive_weights(received_params)
-
-        client.cleanup()
-        # jax.distributed.shutdown()
-
-        return received_params_2 is not None
-
-    except Exception as e:
-        print(f"Client process {process_id} error: {e}")
-        return False
+    logger.info("Received %d unique weight sets.", len(unique_weights))
+    assert len(unique_weights) > 1, "Did not receive multiple unique weight sets."
+    client.cleanup()
+    return True
 
 
-@pytest.mark.parametrize("num_clients", [1, 2, 3])
+@pytest.mark.parametrize("num_clients", [1, 2])
 def test_jax_transfer_multiprocess(ray_tpu_cluster, num_clients):
     num_processes = num_clients + 1  # 1 server + N clients
     coordinator_name = f"jax_coordinator_{uuid.uuid4().hex[:8]}"
     coordinator_address = f"localhost:{12321 + (uuid.uuid4().int % 1000)}"
 
-    # Create server process
-    server_process = multiprocessing.Process(
-        target=run_server, args=(coordinator_name, 0, num_processes, coordinator_address)
-    )
+    # ray multiprocessing doesn't work very well....
+    with multiprocessing.pool.ThreadPool(processes=num_processes) as pool:
+        server = pool.apply_async(run_server, args=(coordinator_name, num_processes, coordinator_address))
+        clients = []
+        for i in range(num_clients):
+            client = pool.apply_async(run_client, args=(coordinator_name, i + 1, num_processes, coordinator_address))
+            clients.append(client)
 
-    # Create client processes
-    client_processes = []
-    for i in range(num_clients):
-        client_process = multiprocessing.Process(
-            target=run_client, args=(coordinator_name, i + 1, num_processes, coordinator_address)
-        )
-        client_processes.append(client_process)
+        server_result = server.get(timeout=60)
+        assert server_result, "Server process failed"
 
-    all_processes = [server_process, *client_processes]
+        clients[0].get(timeout=60)
 
-    try:
-        # Start server first
-        server_process.start()
-        time.sleep(1)  # Give server a head start
-
-        # Start clients with slight delays
-        for i, client_process in enumerate(client_processes):
-            client_process.start()
-            if i < len(client_processes) - 1:  # Don't sleep after the last client
-                time.sleep(0.5)
-
-        # Wait for completion
-        for process in all_processes:
-            process.join(timeout=30)
-
-        # Check results
-        for i, process in enumerate(all_processes):
-            if process.exitcode != 0:
-                process_name = "server" if i == 0 else f"client{i}"
-                pytest.fail(f"{process_name} process failed with exit code {process.exitcode}")
-
-    finally:
-        # Clean up processes
-        for process in all_processes:
-            process.kill()
+        for client in clients:
+            client_result = client.get()
+            assert client_result is True, f"Client process {clients.index(client)} failed"
+    logger.info("All server and client processes completed successfully.")

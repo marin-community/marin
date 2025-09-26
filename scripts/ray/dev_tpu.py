@@ -555,6 +555,19 @@ def connect(ctx, username):
     subprocess.run(["ssh", host_alias, "-t", "bash", "-c", cmd])
 
 
+@cli.command("setup_env")
+@click.option("--username", help="Username to use for ssh", default=getpass.getuser())
+@click.option("--sync-path", default=".", help="Local path to sync")
+@click.pass_context
+def setup_env(ctx, username, sync_path):
+    """Set up the remote environment on the development TPU."""
+    if not username:
+        username = getpass.getuser()
+    tpu_name = ctx.obj.tpu_name
+    host_alias = f"dev-tpu-{tpu_name}"
+    setup_remote_environment(host_alias)
+
+
 @cli.command("execute", context_settings={"ignore_unknown_options": True})
 @click.argument("command", nargs=-1, required=True)
 @click.option("--username", help="Username to use for ssh", default=getpass.getuser())

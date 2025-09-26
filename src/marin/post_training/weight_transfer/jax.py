@@ -462,8 +462,7 @@ class JAXTransferClient(WeightTransferClient):
 
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="weight_transfer")
 
-        # Track last received weight ID to avoid redundant transfers
-        self._last_received_weight_id: int | None = None
+        self._last_received_weight_id: int = -1
 
         # Metrics tracking
         self.metrics = WeightTransferClientMetrics(start_time=time.time())
@@ -495,14 +494,19 @@ class JAXTransferClient(WeightTransferClient):
         # First check if new weights are available without blocking
         try:
             latest_weight_id, server_address = ray.get(self.coordinator.get_transfer_info.remote())
+            logger.info(
+                "Current weight id %s, Latest weight ID: %s, Server address: %s",
+                self._last_received_weight_id,
+                latest_weight_id,
+                server_address,
+            )
 
             # Early exit if no weights available or no new weights
             if latest_weight_id is None or server_address is None:
                 return None
 
-            if self._last_received_weight_id is not None and latest_weight_id <= self._last_received_weight_id:
+            if latest_weight_id <= self._last_received_weight_id:
                 return None
-
         except Exception as e:
             logger.error(f"Failed to check transfer info: {e}")
             self.metrics.failed_receives += 1
@@ -512,18 +516,18 @@ class JAXTransferClient(WeightTransferClient):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
+                logger.info("Receiving weight transfers from server at %s", server_address)
                 cpu_params, metadata = loop.run_until_complete(
                     receive_weight_transfers(self.coordinator, self.transfer_server, old_model)
                 )
 
-                # Transfer back from CPU
                 tpu_params = self._transfer_from_cpu(cpu_params)
-
                 return tpu_params, metadata
             finally:
                 loop.close()
 
         try:
+            logger.info("Fetching new weights, current=%s, latest=%s", self._last_received_weight_id, latest_weight_id)
             future = self.executor.submit(_receive_in_thread)
             params, metadata = future.result(timeout=self.config.transfer_timeout)
 
