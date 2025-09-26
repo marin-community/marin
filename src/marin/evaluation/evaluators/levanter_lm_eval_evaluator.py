@@ -74,25 +74,30 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
         try:
             # Download the model from GCS or HuggingFace
+            print("before download")
             model_name_or_path: str = self.download_model(model)
+            print(f"in lm_eval: {model_name_or_path}")
             name = model.name + "_lmeval_" + "-".join([eval_task.name for eval_task in evals])
+            print(name)
             logger.info(f"WandB Run Name: {name}")
             logger.info(f"Running eval harness on model: {model_name_or_path}")
-
+            print("after wandb log")
             # NOTE(chris): Before, the batch size was 16, but this is too large for the 8B model.
             # In the future, we should make this user-configurable.
             trainer_config = TrainerConfig(
                 tracker=WandbConfig(project="marin", tags=wandb_tags, name=name),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
-                per_device_eval_parallelism=8,
+                per_device_eval_parallelism=1,
                 ray=RayConfig(auto_start_cluster=False),
             )
+            print("after trainer?")
 
             model_config = HFCheckpointConverter.from_hf(model_name_or_path).LevConfigClass()
 
             # convert to the config that Levanter's eval_harness expects
             tasks = convert_to_levanter_task_config(evals)
             logger.info(f"Tasks: {tasks}")
+            print("converted tasks")
 
             model_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.path)
 
@@ -101,6 +106,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             logger.info(f"Model name: {model.name}")
             logger.info(f"model_name_or_path: {model_name_or_path}")
 
+            print("starting harness")
             eval_config = eval_harness.EvalHarnessMainConfig(
                 eval_harness=eval_harness.LmEvalHarnessConfig(
                     task_spec=tasks,
@@ -117,6 +123,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             )
 
             results = eval_harness.run_eval_harness_main(eval_config)
+            print("finished harness")
 
             try:
                 # add a results.json to output path
@@ -143,5 +150,5 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             # Clean up resources
             self.cleanup(model)
 
-            if os.path.exists(LevanterTpuEvaluator.CACHE_PATH):
+            if os.path.exists(LevanterTpuEvaluator.CACHE_PATH) and "gcsfuse" not in LevanterTpuEvaluator.CACHE_PATH:
                 shutil.rmtree(LevanterTpuEvaluator.CACHE_PATH)

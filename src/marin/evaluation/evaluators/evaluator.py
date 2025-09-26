@@ -79,13 +79,12 @@ class ModelConfig:
 
     def destroy(self) -> None:
         """Deletes the model checkpoint."""
-        if self.path and os.path.exists(self.path):
+        if self.path and os.path.exists(self.path) and "gcsfuse" not in self.path:
             shutil.rmtree(self.path, ignore_errors=True)
             print(f"Deleted local checkpoint at {self.path}.")
 
 
 class Evaluator(ABC):
-
     _pip_packages: ClassVar[list[Dependency]]
     _py_modules: ClassVar[list[Dependency]]
 
