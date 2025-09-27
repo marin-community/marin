@@ -21,7 +21,6 @@ high-performance distributed communication between training and inference worker
 
 import dataclasses
 import logging
-import time
 
 import jax
 import ray
@@ -70,7 +69,7 @@ class RayRemotingServer(WeightTransferServer):
 
         self.coordinator = get_or_create_actor(RayWeightCoordinator, config.coordinator_name)
 
-        self.metrics = WeightTransferServerMetrics(start_time=time.time())
+        self.metrics = WeightTransferServerMetrics()
 
     def serve_weights(self, weight_id: int, model) -> None:
         self.metrics.total_transfers += 1
@@ -119,7 +118,7 @@ class RayRemotingClient(WeightTransferClient):
         self.last_weight_id = None
 
         # Metrics tracking
-        self.metrics = WeightTransferClientMetrics(start_time=time.time())
+        self.metrics = WeightTransferClientMetrics()
 
     def receive_weights(self, old_model: PyTree = None) -> PyTree | None:
         """Receive weights from Ray object store and reconstruct as Levanter model."""

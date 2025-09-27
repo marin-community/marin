@@ -23,7 +23,6 @@ import dataclasses
 import logging
 import os
 import threading
-import time
 from collections import deque
 from typing import Any
 
@@ -66,7 +65,7 @@ class GCSCheckpointServer(WeightTransferServer):
         self.checkpoint_queue = deque()
         self.axis_mapping = axis_mapping
         self.mesh = mesh
-        self.metrics = WeightTransferServerMetrics(start_time=time.time())
+        self.metrics = WeightTransferServerMetrics()
 
     def serve_weights(self, weight_id: int, model: PyTree) -> None:
         """Save checkpoint using Levanter's checkpoint system."""
@@ -124,7 +123,7 @@ class GCSCheckpointClient(WeightTransferClient):
         self.axis_mapping = axis_mapping
         self.mesh = mesh
         self.latest_checkpoint_path = None
-        self.metrics = WeightTransferClientMetrics(start_time=time.time())
+        self.metrics = WeightTransferClientMetrics()
 
     def receive_weights(self, old_model: PyTree) -> Any:
         """Load latest checkpoint using Levanter's checkpoint system."""
