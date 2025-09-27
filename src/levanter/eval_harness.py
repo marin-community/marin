@@ -121,8 +121,7 @@ class _LmEvalHarnessWorker:
             "max_gen_toks": 256,
             "temperature": 0.0,
             "n": 1,
-            "seed": None,
-            "max_length": None
+            "seed": None
         }
 
         self._dummy_batch = _make_dummy_batch(EvalBatch, EvalPos)
@@ -723,11 +722,6 @@ class LevanterHarnessLM(TemplateLM):
             kwargs["seed"] = int(kwargs["seed"])
         # Note: seed can remain None, which is valid
         
-        # Handle max_length parameter
-        if "max_length" in kwargs and kwargs["max_length"] is not None:
-            kwargs["max_length"] = int(kwargs["max_length"])
-        # Note: max_length can remain None, which means use model default
-            
         return kwargs
 
 
@@ -792,8 +786,7 @@ class LmEvalHarnessConfig:
         "max_gen_toks": 256,
         "temperature": 0.0,
         "n": 1,
-        "seed": None,
-        "max_length": None
+        "seed": None
     })
     """
     Default generation parameters for text generation tasks.
@@ -803,7 +796,6 @@ class LmEvalHarnessConfig:
     - temperature: Sampling temperature, 0.0 for deterministic (default: 0.0)
     - n: Number of completions to generate per prompt (default: 1)
     - seed: Random seed for generation, None for random (default: None)
-    - max_length: Maximum sequence length including prompt, None uses model default (default: None)
     
     These can be overridden on a per-request basis by the evaluation harness.
     """
@@ -812,15 +804,6 @@ class LmEvalHarnessConfig:
     def max_gen_toks(self) -> int:
         """Backward compatibility property for max_gen_toks."""
         return self.generation_kwargs.get("max_gen_toks", 256)
-    
-    def get_effective_max_length(self) -> int | None:
-        """Get the effective max_length, preferring generation_kwargs over the top-level field."""
-        # Prefer max_length from generation_kwargs if set
-        gen_max_length = self.generation_kwargs.get("max_length")
-        if gen_max_length is not None:
-            return gen_max_length
-        # Fall back to top-level max_length field for backward compatibility
-        return self.max_length
 
     def to_task_spec(self) -> list[str | dict]:
         return [task.to_dict() if isinstance(task, TaskConfig) else task for task in self.task_spec]
@@ -1011,7 +994,7 @@ def _actually_run_eval_harness(
 
     """
     max_examples = config.max_examples
-    max_length = config.get_effective_max_length()
+    max_length = config.max_length
 
     EvalPos = model.Pos if max_length is None else model.Pos.resize(max_length)
     num_parameters = levanter.utils.jax_utils.parameter_count(model)

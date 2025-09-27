@@ -1,6 +1,6 @@
 eval_harness:
  task_spec: ["gsm8k"]
- max_eval_length: 2048
+ max_length: 2048
 #  max_examples: 1
 tokenizer: meta-llama/Meta-Llama-3-8B
 model:

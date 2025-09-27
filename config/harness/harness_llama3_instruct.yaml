@@ -5,10 +5,10 @@ eval_harness:
  fewshot_as_multiturn: true
  generation_kwargs:
    max_gen_toks: 1024
-   max_length: 4096
    temperature: 0.0
    n: 1
    seed: 42
+ max_length: 4096
 #  max_examples: 10
 tokenizer: meta-llama/Meta-Llama-3.1-8B-Instruct
 model:
