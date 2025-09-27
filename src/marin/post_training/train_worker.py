@@ -332,7 +332,7 @@ class TrainWorker:
         optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
         def _loss_function(model, batch, key):
-            return rloo_loss_with_importance_sampling(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=1.0)
+            return rloo_loss_with_importance_sampling(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.4)
             # return ppo_loss(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.5)
 
         with (

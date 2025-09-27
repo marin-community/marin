@@ -20,6 +20,7 @@ high-performance communication between training and inference workers.
 """
 
 import asyncio
+import dataclasses
 import logging
 import queue
 import socket
@@ -441,9 +442,8 @@ class JAXTransferServer(WeightTransferServer):
         self.executor.shutdown(wait=True)
         self.transfer_server = None
 
-    def get_metrics(self) -> WeightTransferServerMetrics:
-        """Get transfer metrics."""
-        return self.metrics
+    def get_metrics(self) -> dict:
+        return dataclasses.asdict(self.metrics)
 
 
 class JAXTransferClient(WeightTransferClient):
@@ -550,6 +550,5 @@ class JAXTransferClient(WeightTransferClient):
         self.executor.shutdown(wait=True)
         self.transfer_server = None
 
-    def get_metrics(self) -> WeightTransferClientMetrics:
-        """Get transfer metrics."""
-        return self.metrics
+    def get_metrics(self) -> dict:
+        return dataclasses.asdict(self.metrics)

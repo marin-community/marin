@@ -442,6 +442,7 @@ class RolloutWorker:
     def _sync_weights(self):
         logger.info("Checking for new weights...")
         weights = self.transfer_client.receive_weights(self.policy_model)
+
         if weights:
             logger.info("Received new weights for policy model")
             self.policy_model = weights
@@ -498,6 +499,7 @@ class RolloutWorker:
                 if self.config.log_freq > 0 and step % self.config.log_freq == 0:
                     log_metrics = {"step": step}
                     log_metrics.update(jax.device_get(metrics))
+                    log_metrics.update(self.transfer_client.get_metrics())
                     log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
                     logger.info(f"Logging metrics at step {step}... {log_metrics}")
                     self.tracker.log(log_metrics, step=step)

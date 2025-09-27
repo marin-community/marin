@@ -19,6 +19,7 @@ This module provides weight transfer using Ray's object store for
 high-performance distributed communication between training and inference workers.
 """
 
+import dataclasses
 import logging
 import time
 
@@ -102,9 +103,8 @@ class RayRemotingServer(WeightTransferServer):
     def cleanup(self) -> None:
         pass
 
-    def get_metrics(self) -> WeightTransferServerMetrics:
-        """Get transfer metrics."""
-        return self.metrics
+    def get_metrics(self) -> dict:
+        return dataclasses.asdict(self.metrics)
 
 
 class RayRemotingClient(WeightTransferClient):
@@ -155,6 +155,5 @@ class RayRemotingClient(WeightTransferClient):
         """No cleanup needed for Ray remoting client."""
         pass
 
-    def get_metrics(self) -> WeightTransferClientMetrics:
-        """Get transfer metrics."""
-        return self.metrics
+    def get_metrics(self) -> dict:
+        return dataclasses.asdict(self.metrics)

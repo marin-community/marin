@@ -19,6 +19,7 @@ This module provides weight transfer using Levanter's checkpoint system for
 saving to and loading from GCS (or other filesystems supported by fsspec).
 """
 
+import dataclasses
 import logging
 import os
 import threading
@@ -106,9 +107,8 @@ class GCSCheckpointServer(WeightTransferServer):
         """No cleanup needed for GCS checkpoints."""
         pass
 
-    def get_metrics(self) -> WeightTransferServerMetrics:
-        """Get transfer metrics."""
-        return self.metrics
+    def get_metrics(self) -> dict:
+        return dataclasses.asdict(self.metrics)
 
 
 class GCSCheckpointClient(WeightTransferClient):
@@ -187,6 +187,5 @@ class GCSCheckpointClient(WeightTransferClient):
         """No cleanup needed for GCS checkpoints."""
         pass
 
-    def get_metrics(self) -> WeightTransferClientMetrics:
-        """Get transfer metrics."""
-        return self.metrics
+    def get_metrics(self) -> dict:
+        return dataclasses.asdict(self.metrics)
