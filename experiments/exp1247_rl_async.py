@@ -186,7 +186,7 @@ def rl_train(name: str) -> ExecutorStep:
             logdir=OutputName("tblogs"),
         ),
         mp=jmp.get_policy("p=f32,c=bfloat16"),
-        train_batch_size=256,
+        train_batch_size=8,
         num_train_steps=50000,
         steps_per_eval=100,
         checkpointer=CheckpointerConfig(
@@ -209,7 +209,7 @@ def rl_train(name: str) -> ExecutorStep:
     inference_server_config = InferenceServerConfig(
         model=model_config,
         # Turn on tensor parallelism for inference
-        trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=["mlp", "kv_head"]),
+        trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=4),
         hf_checkpoint=MODEL_CHECKPOINT,
         tokenizer=MODEL_TOKENIZER,
         temperature=1.0,
@@ -275,7 +275,7 @@ def rl_train(name: str) -> ExecutorStep:
         rollout_worker_config=rollout_worker,
         train_worker_config=train_worker,
         inference_tpu_type="v5litepod-4",
-        train_tpu_type="v5litepod-128",
+        train_tpu_type="v5litepod-4",
         num_inference_workers=1,
         num_train_slices=1,
     )
@@ -295,7 +295,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-001"),
+        rl_train(name="llama-1b-math-rl-test-003"),
     ]
 
     executor_main(
