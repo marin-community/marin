@@ -398,7 +398,6 @@ class ArrowFlightClient(WeightTransferClient):
 
             # Read the record batches
             table = flight_reader.read_all()
-            print(table.schema)
             print(table.schema.metadata)
             # Use the actual weight ID from the server, not the requested one
             received_weight_id = int(table.schema.metadata[b"weight_id"].decode("utf-8"))
