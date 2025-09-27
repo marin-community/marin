@@ -376,7 +376,7 @@ class JAXTransferServer(WeightTransferServer):
         self.poll_queue = queue.Queue(maxsize=1)
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="weight_transfer")
 
-        self.metrics = WeightTransferServerMetrics(start_time=time.time())
+        self.metrics = WeightTransferServerMetrics()
 
     def _setup_cpu_transfer(self):
         """Setup CPU mesh for transfers."""
@@ -465,7 +465,7 @@ class JAXTransferClient(WeightTransferClient):
         self._last_received_weight_id: int = -1
 
         # Metrics tracking
-        self.metrics = WeightTransferClientMetrics(start_time=time.time())
+        self.metrics = WeightTransferClientMetrics()
 
     def _setup_cpu_transfer(self):
         """Setup CPU mesh for transfers."""

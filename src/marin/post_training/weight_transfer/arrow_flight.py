@@ -285,7 +285,7 @@ class ArrowFlightServer(WeightTransferServer):
         self.coordinator = get_or_create_actor(ArrowFlightCoordinator, config.coordinator_name)
         ray.get(self.coordinator.register_server.remote(actual_host, actual_port))
 
-        self.metrics = WeightTransferServerMetrics(start_time=time.time())
+        self.metrics = WeightTransferServerMetrics()
 
     def serve_weights(self, weight_id: int, model: PyTree) -> None:
         """Serve weights via Arrow Flight using Haliax state_dict serialization."""
@@ -347,7 +347,7 @@ class ArrowFlightClient(WeightTransferClient):
         self.flight_client = None
         self.server_location = None
 
-        self.metrics = WeightTransferClientMetrics(start_time=time.time())
+        self.metrics = WeightTransferClientMetrics()
 
     def _connect_to_server(self) -> bool:
         """Connect to the Arrow Flight server."""
