@@ -186,7 +186,7 @@ def rl_train(name: str) -> ExecutorStep:
             logdir=OutputName("tblogs"),
         ),
         mp=jmp.get_policy("p=f32,c=bfloat16"),
-        train_batch_size=256,
+        train_batch_size=8,
         num_train_steps=50000,
         steps_per_eval=100,
         checkpointer=CheckpointerConfig(
@@ -275,7 +275,7 @@ def rl_train(name: str) -> ExecutorStep:
         rollout_worker_config=rollout_worker,
         train_worker_config=train_worker,
         inference_tpu_type="v5litepod-4",
-        train_tpu_type="v5litepod-128",
+        train_tpu_type="v5litepod-4",
         num_inference_workers=1,
         num_train_slices=1,
     )
