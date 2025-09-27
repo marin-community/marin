@@ -19,12 +19,14 @@ This module provides weight transfer using Apache Arrow Flight RPC for
 high-performance binary communication between training and inference workers.
 """
 
+import dataclasses
 import logging
 import socket
 import threading
 import time
 from collections.abc import Sequence
 
+import haliax as hax
 import haliax.state_dict as hsd
 import jax
 import numpy as np
@@ -392,20 +394,30 @@ class ArrowFlightClient(WeightTransferClient):
             if latest_weight_id is None or latest_weight_id == self.last_weight_id:
                 return None
 
+            start_time = time.time()
+
             # Request weights from Flight server
             ticket = flight.Ticket(str(latest_weight_id).encode("utf-8"))
             flight_reader = self.flight_client.do_get(ticket)
 
             # Read the record batches
             table = flight_reader.read_all()
+
+            fetch_time = time.time() - start_time
             print(table.schema.metadata)
+
             # Use the actual weight ID from the server, not the requested one
             received_weight_id = int(table.schema.metadata[b"weight_id"].decode("utf-8"))
 
-            # Convert back to model using state_dict
-            model = deserialize_arrow_to_pytree(table, old_model)
+            # Convert back to model using state_dict on the CPU device
+            with self.mesh, hax.axis_mapping(self.axis_mapping):
+                model = deserialize_arrow_to_pytree(table, old_model)
+
+            decode_time = time.time() - start_time - fetch_time
 
             self.metrics.successful_receives += 1
+            self.metrics.fetch_times.append(fetch_time)
+            self.metrics.decode_times.append(decode_time)
             self.last_weight_id = received_weight_id
 
             logger.info(f"Received weights for weight_id {received_weight_id} via Arrow Flight")
@@ -425,6 +437,5 @@ class ArrowFlightClient(WeightTransferClient):
             except Exception as e:
                 logger.warning(f"Error during Arrow Flight client cleanup: {e}")
 
-    def get_metrics(self) -> WeightTransferClientMetrics:
-        """Get transfer metrics."""
-        return self.metrics
+    def get_metrics(self) -> dict:
+        return dataclasses.asdict(self.metrics)

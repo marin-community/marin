@@ -22,7 +22,7 @@ weight transfer implementations.
 import logging
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -62,6 +62,8 @@ class WeightTransferClientMetrics:
     successful_receives: int = 0
     failed_receives: int = 0
     start_time: float = 0.0
+    fetch_times: list[float] = field(default_factory=list)
+    decode_times: list[float] = field(default_factory=list)
 
     @property
     def poll_rate(self) -> float:
@@ -115,8 +117,7 @@ class WeightTransferServer(ABC):
         pass
 
     @abstractmethod
-    def get_metrics(self) -> WeightTransferServerMetrics:
-        """Get transfer metrics."""
+    def get_metrics(self) -> dict:
         pass
 
 
@@ -141,9 +142,9 @@ class WeightTransferClient(ABC):
         """Cleanup resources."""
         pass
 
-    def get_metrics(self) -> WeightTransferClientMetrics:
-        """Get transfer metrics."""
-        return WeightTransferClientMetrics(start_time=time.time())
+    @abstractmethod
+    def get_metrics(self) -> dict:
+        pass
 
 
 def get_or_create_actor(actor_class, name: str, *args, **kwargs):
