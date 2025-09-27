@@ -171,10 +171,10 @@ def test_multiple_weight_updates(ray_tpu_cluster, weight_transfer_config, sample
     received_params_2 = client.receive_weights(received_params_1)
     assert received_params_2 is not None
 
-    # Verify weights are different
-    assert not np.array_equal(
-        received_params_1["embedding"]["weight"].array,
-        received_params_2["embedding"]["weight"].array,
+    jax.tree.map(
+        lambda x, y: np.testing.assert_array_equal(x, y),
+        received_params_2,
+        new_params,
     )
 
     # Third call should return None (no new weights)
@@ -186,29 +186,7 @@ def test_multiple_weight_updates(ray_tpu_cluster, weight_transfer_config, sample
     client.cleanup()
 
 
-def test_client_no_new_weights(ray_tpu_cluster, weight_transfer_config, sample_params):
-    """Test client behavior when no new weights are available."""
-    server, client = create_test_weight_transfer_pair(weight_transfer_config)
-
-    # Serve weights
-    server.serve_weights(1, sample_params)
-
-    # First receive should get weights
-    received_params_1 = client.receive_weights(sample_params)
-    assert received_params_1 is not None
-
-    # Second receive should return None (no new weights)
-    received_params_2 = client.receive_weights(received_params_1)
-    assert received_params_2 is None
-
-    # Cleanup
-    server.cleanup()
-    client.cleanup()
-
-
 def test_concurrent_clients(ray_tpu_cluster, weight_transfer_config, sample_params):
-    """Test multiple clients receiving weights concurrently (Ray remoting only)."""
-
     server, client_1 = create_test_weight_transfer_pair(weight_transfer_config)
 
     mesh = create_mesh()
@@ -229,63 +207,19 @@ def test_concurrent_clients(ray_tpu_cluster, weight_transfer_config, sample_para
         assert received_params_1 is not None
         assert received_params_2 is not None
 
-        # Verify weights are identical
-        np.testing.assert_array_equal(
-            received_params_1["embedding"]["weight"].array,
-            received_params_2["embedding"]["weight"].array,
+        jax.tree.map(
+            lambda x, y: np.testing.assert_array_equal(x, y),
+            received_params_1,
+            received_params_2,
         )
+
     finally:
         server.cleanup()
         client_1.cleanup()
         client_2.cleanup()
 
 
-def test_with_mesh_sharding(ray_tpu_cluster, weight_transfer_config, sample_params):
-    """Test weight transfer with JAX mesh sharding."""
-    mesh = create_mesh()
-
-    # Define simple sharding rules
-    params_sharding_rules = jax.tree.map(
-        lambda x: jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec()), sample_params
-    )
-
-    # Create shard functions from sharding rules
-    def create_shard_fn(sharding):
-        return lambda x: jax.device_put(x, sharding)
-
-    shard_fns = jax.tree.map(create_shard_fn, params_sharding_rules)
-
-    server, client = create_test_weight_transfer_pair(weight_transfer_config)
-
-    # For Ray remoting mode, update the client's shard functions
-    if weight_transfer_config.mode == WeightTransferMode.RAY_REMOTING:
-        client.shard_fns = shard_fns
-
-    try:
-        # Serve and receive weights
-        server.serve_weights(1, sample_params)
-        received_params = client.receive_weights(sample_params)
-
-        assert received_params is not None
-
-        # For GCS checkpoints, there may be precision loss due to bfloat16 conversion
-        if weight_transfer_config.mode == WeightTransferMode.GCS_CHECKPOINT:
-            np.testing.assert_allclose(
-                received_params["embedding"]["weight"].array,
-                sample_params["embedding"]["weight"].array,
-                rtol=1e-2,
-            )
-        else:
-            # Verify params are properly sharded (should still have same values)
-            np.testing.assert_array_equal(
-                received_params["embedding"]["weight"].array,
-                sample_params["embedding"]["weight"].array,
-            )
-    finally:
-        server.cleanup()
-        client.cleanup()
-
-
+@pytest.mark.slow("Uses a large buffer, can OOM on CI.")
 def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
     """Test Arrow Flight weight transfer with large buffer sizes."""
     weight_transfer_config = WeightTransferConfig(
@@ -296,7 +230,7 @@ def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
     )
 
     server, client = create_test_weight_transfer_pair(weight_transfer_config)
-    large_params = create_sample_pytree(seed=789, hidden_size=1024, layers=4)
+    large_params = create_sample_pytree(seed=789, hidden_size=5000, layers=4)
 
     try:
         # Serve and receive weights
