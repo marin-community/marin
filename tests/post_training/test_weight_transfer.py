@@ -16,9 +16,9 @@ import os
 import tempfile
 import uuid
 
+import equinox as eqx
 import haliax as hax
 import jax
-import jax.numpy as jnp
 import numpy as np
 import pytest
 import ray
@@ -52,68 +52,38 @@ if os.environ.get("CI"):
     pytest.skip("Skipping slow tests on CI", allow_module_level=True)
 
 
-def create_sample_pytree(seed: int):
-    """Create a sample pytree representing Levanter model parameters."""
+class TestModule(eqx.Module):
+    embedding: eqx.nn.Embedding
+    layers: list[eqx.Module]
+
+
+def create_sample_pytree(
+    seed: int,
+    vocab_size: int = 1000,
+    hidden_size: int = 32,
+    layers: int = 2,
+) -> eqx.Module:
+    """Create a sample eqx module pytree with random weights for testing."""
     generator = np.random.Generator(np.random.PCG64(seed))
 
-    # Create axes for NamedArrays
-    Vocab = hax.Axis("vocab", 1000)
-    Hidden = hax.Axis("hidden", 512)
-    HiddenOut = hax.Axis("hidden_out", 512)
-    FF = hax.Axis("ff", 2048)
-
-    return {
-        "embedding": {
-            "weight": hax.named(
-                jnp.array(generator.standard_normal((1000, 512), dtype=jnp.float32)),
-                (Vocab, Hidden),
-            ),
-        },
-        "layers": {
-            "0": {
-                "attention": {
-                    "query": {
-                        "weight": hax.named(
-                            jnp.array(generator.standard_normal((512, 512), dtype=jnp.float32)),
-                            (Hidden, HiddenOut),
-                        )
-                    },
-                    "key": {
-                        "weight": hax.named(
-                            jnp.array(generator.standard_normal((512, 512), dtype=jnp.float32)),
-                            (Hidden, HiddenOut),
-                        )
-                    },
-                    "value": {
-                        "weight": hax.named(
-                            jnp.array(generator.standard_normal((512, 512), dtype=jnp.float32)),
-                            (Hidden, HiddenOut),
-                        )
-                    },
-                },
-                "feed_forward": {
-                    "linear1": {
-                        "weight": hax.named(
-                            jnp.array(generator.standard_normal((512, 2048), dtype=jnp.float32)),
-                            (Hidden, FF),
-                        )
-                    },
-                    "linear2": {
-                        "weight": hax.named(
-                            jnp.array(generator.standard_normal((2048, 512), dtype=jnp.float32)),
-                            (FF, Hidden),
-                        )
-                    },
-                },
-            },
-        },
-        "output": {
-            "weight": hax.named(
-                jnp.array(generator.standard_normal((512, 1000), dtype=jnp.float32)),
-                (Hidden, Vocab),
-            ),
-        },
-    }
+    Vocab = hax.Axis("vocab", vocab_size)
+    Hidden = hax.Axis("hidden", hidden_size)
+    Layers = hax.Axis("layers", layers)
+    return TestModule(
+        embedding=hax.named(
+            generator.normal(size=(Vocab.size, Hidden.size)).astype(np.float32),
+            (Vocab, Hidden),
+        ),
+        layers=[
+            eqx.nn.Linear(
+                in_features=Hidden.size,
+                out_features=Hidden.size,
+                key=jax.random.PRNGKey(seed + i),
+                use_bias=True,
+            )
+            for i in range(Layers.size)
+        ],
+    )
 
 
 def create_mesh(devices=None):
@@ -326,14 +296,7 @@ def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
     )
 
     server, client = create_test_weight_transfer_pair(weight_transfer_config)
-
-    D = 500
-    large_params = {
-        "large_matrix": hax.named(
-            jnp.arange(D * D * D).reshape(D, D, D).astype(jnp.float32),
-            (hax.Axis("a", D), hax.Axis("b", D), hax.Axis("c", D)),
-        )
-    }
+    large_params = create_sample_pytree(seed=789, hidden_size=1024, layers=4)
 
     try:
         # Serve and receive weights
@@ -341,12 +304,13 @@ def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
         received_params = client.receive_weights(large_params)
 
         assert received_params is not None
+        assert isinstance(received_params, eqx.Module)
 
-        # Verify the large matrix is correctly transferred
-        np.testing.assert_array_equal(
-            received_params["large_matrix"].array,
-            large_params["large_matrix"].array,
-        )
+        # walk the pytree and verify all arrays match
+        def assert_arrays_equal(x, y):
+            np.testing.assert_array_equal(x, y)
+
+        jax.tree.map(assert_arrays_equal, large_params, received_params)
     finally:
         server.cleanup()
         client.cleanup()

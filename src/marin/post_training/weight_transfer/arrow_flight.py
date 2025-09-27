@@ -61,8 +61,8 @@ def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> tuple[pa.Schema,
     Returns:
         pa.Schema, List of Arrow RecordBatch containing serialized state dict data
     """
-    # Convert model to state dict using Haliax's torch-compatible format
-    state_dict = hsd.to_torch_compatible_state_dict(model)
+    # Convert model to state dict using Haliax's numpy-compatible format
+    state_dict = hsd.to_numpy_state_dict(model)
     batches = []
     schema = pa.schema(
         [
@@ -76,17 +76,24 @@ def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> tuple[pa.Schema,
         metadata={"weight_id": str(weight_id), "timestamp": str(time.time()), "num_params": str(len(state_dict))},
     )
 
-    max_size = 10 * 1000 * 1000
-    for name, array in state_dict.items():
-        data = np.asarray(array).tobytes()
-        splits = list(np.array_split(np.frombuffer(data, dtype=np.uint8), max(1, len(data) // max_size)))
+    # split arrays across elements to ensure no single array exceeds Arrow limits
+    # and numpy doesn't complain about splitting inside element boundaries
+    max_elements = 32 * 1000 * 1000
+    for name, value in state_dict.items():
+        if not isinstance(value, np.ndarray):
+            # scalar, wrap as array and unwrap on receive
+            value = np.array(value)
+
+        data = value.ravel()
+        splits = list(np.array_split(data, max(1, len(data) // max_elements)))
         for i, split in enumerate(splits):
+            block = split.tobytes()
             batch = pa.RecordBatch.from_arrays(
                 [
                     pa.array([name], type=pa.string()),
-                    pa.array([split.tobytes()], type=pa.large_binary()),
-                    pa.array([list(np.asarray(array).shape)], type=pa.list_(pa.int64())),
-                    pa.array([str(np.asarray(array).dtype)], type=pa.string()),
+                    pa.array([block], type=pa.large_binary()),
+                    pa.array([list(np.asarray(value).shape)], type=pa.list_(pa.int64())),
+                    pa.array([str(np.asarray(value).dtype)], type=pa.string()),
                     pa.array([i], type=pa.int64()),
                     pa.array([len(splits)], type=pa.int64()),
                 ],
@@ -125,13 +132,21 @@ def deserialize_arrow_to_pytree(batches: pa.Table, target_model: PyTree) -> PyTr
 
     # now coerce arrays to correct shapes and dtypes
     for name in state_dict.keys():
-        parts = [np.frombuffer(part.to_pylist()[0], dtype=np.byte) for part in state_dict[name]]
-        array_np = np.concatenate(parts)
-        array_np = array_np.view(dtypes[name]).reshape(shapes[name])
-        state_dict[name] = array_np
+        shape = shapes[name]
+        dtype = dtypes[name]
+        if len(shape) == 0:
+            # scalar
+            array_np = np.frombuffer(state_dict[name][0].to_pylist()[0], dtype=dtype)
+            state_dict[name] = array_np.item()
+        else:
+            parts = [np.frombuffer(part.to_pylist()[0], dtype=np.byte) for part in state_dict[name]]
+            array_np = np.concatenate(parts)
+            array_np = array_np.view(dtypes[name]).reshape(shapes[name])
+            state_dict[name] = array_np
 
     # Use Haliax to reconstruct the model with proper structure
-    return hsd.from_torch_compatible_state_dict(target_model, state_dict)
+    print(state_dict.keys())
+    return hsd.from_state_dict(target_model, state_dict)
 
 
 @ray.remote(num_cpus=0)
@@ -189,7 +204,8 @@ class MarinFlightServer(flight.FlightServerBase):
 
             with self._lock:
                 if weight_id not in self.weights_store:
-                    raise flight.FlightNotFoundError(f"Weight ID {weight_id} not found")
+                    logger.warning(f"Requested weight_id {weight_id} not found in store, returning latest.")
+                    weight_id = self.latest_weight_id
 
                 (schema, batches) = self.weights_store[weight_id]
 
@@ -378,15 +394,19 @@ class ArrowFlightClient(WeightTransferClient):
             flight_reader = self.flight_client.do_get(ticket)
 
             # Read the record batches
-            batches = flight_reader.read_all()
+            table = flight_reader.read_all()
+            print(table.schema)
+            print(table.schema.metadata)
+            # Use the actual weight ID from the server, not the requested one
+            received_weight_id = int(table.schema.metadata[b"weight_id"].decode("utf-8"))
 
             # Convert back to model using state_dict
-            model = deserialize_arrow_to_pytree(batches, old_model)
+            model = deserialize_arrow_to_pytree(table, old_model)
 
             self.metrics.successful_receives += 1
-            self.last_weight_id = latest_weight_id
+            self.last_weight_id = received_weight_id
 
-            logger.info(f"Received weights for weight_id {latest_weight_id} via Arrow Flight")
+            logger.info(f"Received weights for weight_id {received_weight_id} via Arrow Flight")
 
             return model
 
