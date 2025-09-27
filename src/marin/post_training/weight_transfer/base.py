@@ -56,6 +56,7 @@ class WeightTransferClientMetrics:
     failed_receives: int = 0
     fetch_time: float = 0
     decode_time: float = 0
+    poll_time: float = 0
 
 
 @dataclass

@@ -245,6 +245,8 @@ def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
             assert received_params is not None
             assert isinstance(received_params, eqx.Module)
 
+            print(client.get_metrics())
+
         # walk the pytree and verify all arrays match
         def assert_arrays_equal(x, y):
             np.testing.assert_array_equal(x, y)
@@ -253,3 +255,14 @@ def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
     finally:
         server.cleanup()
         client.cleanup()
+
+
+if __name__ == "__main__":
+    # log to stderr
+    import logging
+    import sys
+
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    cluster = ray.init("local")
+    test_arrow_flight_with_large_buffer(ray_tpu_cluster=cluster)

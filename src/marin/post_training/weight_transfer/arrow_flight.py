@@ -29,6 +29,7 @@ from collections.abc import Sequence
 import haliax as hax
 import haliax.state_dict as hsd
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
@@ -54,6 +55,33 @@ logger = logging.getLogger(__name__)
 MAX_ELEMENTS_PER_RECORD = 32 * 1000 * 1000
 
 
+def _create_binary_array(buffer_data: bytes) -> pa.Array:
+    """Create a PyArrow binary array from buffer data."""
+    block = pa.py_buffer(buffer_data)
+    return pa.Array.from_buffers(
+        pa.large_binary(),
+        1,  # length
+        [None, pa.array([0, len(block)], type=pa.int64()).buffers()[1], block],
+    )
+
+
+def _create_record_batch(
+    schema: pa.Schema, name: str, binary_array: pa.Array, shape: tuple, dtype: str, part_idx: int, total_parts: int
+) -> pa.RecordBatch:
+    """Create a RecordBatch with the standard schema."""
+    return pa.RecordBatch.from_arrays(
+        [
+            pa.array([name], type=pa.string()),
+            pa.array(binary_array, type=pa.large_binary()),
+            pa.array([list(shape)], type=pa.list_(pa.int64())),
+            pa.array([str(dtype)], type=pa.string()),
+            pa.array([part_idx], type=pa.int64()),
+            pa.array([total_parts], type=pa.int64()),
+        ],
+        schema=schema,
+    )
+
+
 def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> tuple[pa.Schema, Sequence[pa.RecordBatch]]:
     """Convert model to Arrow RecordBatch using Haliax state_dict for efficient transfer.
 
@@ -67,8 +95,8 @@ def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> tuple[pa.Schema,
     Returns:
         pa.Schema, List of Arrow RecordBatch containing serialized state dict data
     """
-    # Convert model to state dict using Haliax's numpy-compatible format
-    state_dict = hsd.to_numpy_state_dict(model)
+    # Convert model to state dict using Haliax's JAX array format
+    state_dict = hsd.to_state_dict(model)
     batches = []
     schema = pa.schema(
         [
@@ -82,35 +110,46 @@ def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> tuple[pa.Schema,
         metadata={"weight_id": str(weight_id), "timestamp": str(time.time()), "num_params": str(len(state_dict))},
     )
 
-    # split arrays across elements to ensure no single array exceeds Arrow limits
-    # and numpy doesn't complain about splitting inside element boundaries
-    for name, value in state_dict.items():
-        if not isinstance(value, np.ndarray):
-            # scalar, wrap as array and unwrap on receive
-            value = np.array(value)
+    # make a thread pool for big arrays
+    import concurrent.futures
 
-        data = value.ravel()
-        splits = list(np.array_split(data, max(1, len(data) // MAX_ELEMENTS_PER_RECORD)))
-        for i, split in enumerate(splits):
-            block = pa.py_buffer(split.view("b"))  # view as bytes
-            binary_array = pa.Array.from_buffers(
-                pa.large_binary(),
-                1,  # length
-                [None, pa.array([0, len(block)], type=pa.int64()).buffers()[1], block],
-            )
-            batch = pa.RecordBatch.from_arrays(
-                [
-                    pa.array([name], type=pa.string()),
-                    pa.array(binary_array, type=pa.large_binary()),
-                    pa.array([list(np.asarray(value).shape)], type=pa.list_(pa.int64())),
-                    pa.array([str(np.asarray(value).dtype)], type=pa.string()),
-                    pa.array([i], type=pa.int64()),
-                    pa.array([len(splits)], type=pa.int64()),
-                ],
-                schema=schema,
-            )
-            batches.append(batch)
+    # serialize directly from JAX array buffers
+    pool = concurrent.futures.ThreadPoolExecutor()
+    with pool:
+        for name, value in state_dict.items():
+            value = jax.device_get(value)
+            shape = value.shape
+            is_scalar = len(shape) == 0
+            dtype = value.dtype
 
+            # Handle splitting for large arrays
+            if is_scalar:
+                splits = [value]
+                total_parts = 1
+            else:
+                flat_data = value.ravel()
+                splits = list(jnp.array_split(flat_data, max(1, len(flat_data) // MAX_ELEMENTS_PER_RECORD)))
+                total_parts = len(splits)
+
+            # Create batches for each split
+            for i, split in enumerate(splits):
+                buffer_data = split.tobytes()
+                binary_array = _create_binary_array(buffer_data)
+
+                def _task(
+                    schema=schema,
+                    name=name,
+                    binary_array=binary_array,
+                    shape=shape,
+                    dtype=dtype,
+                    i=i,
+                    total_parts=total_parts,
+                ):
+                    return _create_record_batch(schema, name, binary_array, shape, dtype, i, total_parts)
+
+                batches.append(pool.submit(_task))
+    # Wait for all tasks to complete and collect results
+    batches = [batch.result() for batch in batches]
     return schema, batches
 
 
@@ -133,7 +172,7 @@ def deserialize_arrow_to_pytree(reader: pa.RecordBatchReader, target_model: PyTr
         shapes[name] = shape
         dtypes[name] = dtype
 
-    # Coerce arrays to correct shapes and dtypes
+    # Coerce arrays to correct shapes and dtypes, construct JAX arrays directly
     for name in state_dict.keys():
         shape = shapes[name]
         dtype = dtypes[name]
@@ -142,16 +181,16 @@ def deserialize_arrow_to_pytree(reader: pa.RecordBatchReader, target_model: PyTr
             # scalar - get buffer directly
             buffer = state_dict[name][0].as_buffer()
             array_np = np.frombuffer(buffer, dtype=dtype)
-            state_dict[name] = array_np.item()
+            state_dict[name] = jax.numpy.asarray(array_np.item())
         else:
             # Get buffers directly without converting to Python lists
             buffers = [part.as_buffer() for part in state_dict[name]]
             parts = [np.frombuffer(buf, dtype=np.uint8) for buf in buffers]
             array_np = np.concatenate(parts)
             array_np = array_np.view(dtype).reshape(shape)
-            state_dict[name] = array_np
+            # Convert to JAX array directly
+            state_dict[name] = jax.numpy.asarray(array_np)
 
-    print(state_dict.keys())
     return hsd.from_state_dict(target_model, state_dict)
 
 
@@ -369,8 +408,8 @@ class ArrowFlightClient(WeightTransferClient):
 
             return True
 
-        except Exception as e:
-            logger.warning(f"Failed to connect to Arrow Flight server: {e}")
+        except Exception:
+            logger.warning("Failed to connect to Arrow Flight server.", exc_info=True)
             return False
 
     def receive_weights(self, old_model: PyTree = None) -> PyTree | None:
@@ -389,35 +428,43 @@ class ArrowFlightClient(WeightTransferClient):
             if not self._connect_to_server():
                 return None
 
+            start_time = time.time()
             # Get latest weight info
             _server_location, latest_weight_id = ray.get(self.coordinator.get_server_info.remote())
 
             if latest_weight_id is None or latest_weight_id == self.last_weight_id:
                 return None
 
-            start_time = time.time()
+            poll_time = time.time()
 
             # Request weights from Flight server
             ticket = flight.Ticket(str(latest_weight_id).encode("utf-8"))
-            flight_reader = self.flight_client.do_get(ticket)
+            read_options = pa.ipc.IpcReadOptions(
+                ensure_alignment=pa.ipc.Alignment.DataTypeSpecific, use_threads=True, ensure_native_endian=True
+            )
+
+            call_options = pa.flight.FlightCallOptions(read_options=read_options)
+
+            flight_reader = self.flight_client.do_get(ticket, options=call_options)
 
             reader = flight_reader.to_reader()
 
-            fetch_time = time.time() - start_time
+            fetch_time = time.time()
             print(reader.schema.metadata)
 
             # Use the actual weight ID from the server, not the requested one
             received_weight_id = int(reader.schema.metadata[b"weight_id"].decode("utf-8"))
 
-            # Convert back to model using state_dict on the CPU device
+            # Convert back to model using state_dict and move to target device
             with self.mesh, hax.axis_mapping(self.axis_mapping):
                 model = deserialize_arrow_to_pytree(reader, old_model)
 
-            decode_time = time.time() - start_time - fetch_time
+            decode_time = time.time()
 
             self.metrics.successful_receives += 1
-            self.metrics.fetch_time = fetch_time
-            self.metrics.decode_time = decode_time
+            self.metrics.poll_time = poll_time - start_time
+            self.metrics.fetch_time = fetch_time - poll_time
+            self.metrics.decode_time = decode_time - fetch_time
             self.last_weight_id = received_weight_id
 
             logger.info(f"Received weights for weight_id {received_weight_id} via Arrow Flight")
