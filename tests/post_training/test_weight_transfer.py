@@ -117,7 +117,11 @@ def create_test_weight_transfer_pair(weight_transfer_config):
 
     # Create simple mesh and axis mapping for testing
     mesh = create_mesh()
-    axis_mapping = None  # Use default Levanter sharding
+    axis_mapping = {
+        "vocab": None,
+        "hidden": None,
+        "layers": None,
+    }
 
     server = create_weight_transfer_server(
         config=weight_transfer_config,
@@ -189,11 +193,10 @@ def test_multiple_weight_updates(ray_tpu_cluster, weight_transfer_config, sample
 def test_concurrent_clients(ray_tpu_cluster, weight_transfer_config, sample_params):
     server, client_1 = create_test_weight_transfer_pair(weight_transfer_config)
 
-    mesh = create_mesh()
     client_2 = create_weight_transfer_client(
         config=weight_transfer_config,
-        mesh=mesh,
-        axis_mapping=None,
+        mesh=client_1.mesh,
+        axis_mapping=client_1.axis_mapping,
     )
 
     try:
@@ -222,6 +225,7 @@ def test_concurrent_clients(ray_tpu_cluster, weight_transfer_config, sample_para
 @pytest.mark.slow("Uses a large buffer, can OOM on CI.")
 def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
     """Test Arrow Flight weight transfer with large buffer sizes."""
+
     weight_transfer_config = WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
@@ -233,12 +237,13 @@ def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
     large_params = create_sample_pytree(seed=789, hidden_size=5000, layers=4)
 
     try:
-        # Serve and receive weights
-        server.serve_weights(1, large_params)
-        received_params = client.receive_weights(large_params)
+        for i in range(100):
+            print(i)
+            server.serve_weights(i, large_params)
+            received_params = client.receive_weights(large_params)
 
-        assert received_params is not None
-        assert isinstance(received_params, eqx.Module)
+            assert received_params is not None
+            assert isinstance(received_params, eqx.Module)
 
         # walk the pytree and verify all arrays match
         def assert_arrays_equal(x, y):

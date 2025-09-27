@@ -92,11 +92,16 @@ def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> tuple[pa.Schema,
         data = value.ravel()
         splits = list(np.array_split(data, max(1, len(data) // MAX_ELEMENTS_PER_RECORD)))
         for i, split in enumerate(splits):
-            block = split.tobytes()
+            block = pa.py_buffer(split.view("b"))  # view as bytes
+            binary_array = pa.Array.from_buffers(
+                pa.large_binary(),
+                1,  # length
+                [None, pa.array([0, len(block)], type=pa.int64()).buffers()[1], block],
+            )
             batch = pa.RecordBatch.from_arrays(
                 [
                     pa.array([name], type=pa.string()),
-                    pa.array([block], type=pa.large_binary()),
+                    pa.array(binary_array, type=pa.large_binary()),
                     pa.array([list(np.asarray(value).shape)], type=pa.list_(pa.int64())),
                     pa.array([str(np.asarray(value).dtype)], type=pa.string()),
                     pa.array([i], type=pa.int64()),
@@ -109,47 +114,43 @@ def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> tuple[pa.Schema,
     return schema, batches
 
 
-def deserialize_arrow_to_pytree(batches: pa.Table, target_model: PyTree) -> PyTree:
-    """Convert Arrow RecordBatch back to model using Haliax state_dict.
-
-    Args:
-        batches: Arrow RecordBatch containing serialized state dict data
-        target_model: Target model template to preserve structure and NamedArray axes
-
-    Returns:
-        Reconstructed model with updated weights
-    """
-
-    # Reconstruct state dict
+def deserialize_arrow_to_pytree(reader: pa.RecordBatchReader, target_model: PyTree) -> PyTree:
+    """Convert Arrow RecordBatch back to model using Haliax state_dict."""
     state_dict = {}
     shapes = {}
     dtypes = {}
-    for batch in batches.to_batches():
-        name = batch.column("name").to_pylist()[0]
-        data = batch.column("data")
+
+    for batch in reader:
+        name = batch.column("name")[0].as_py()
+        data = batch.column("data")[0]
+
         if name not in state_dict:
             state_dict[name] = []
         state_dict[name].append(data)
-        shape = tuple(batch.column("shape").to_pylist()[0])
-        dtype = batch.column("dtype").to_pylist()[0]
+
+        shape = tuple(batch.column("shape")[0].as_py())
+        dtype = batch.column("dtype")[0].as_py()
         shapes[name] = shape
         dtypes[name] = dtype
 
-    # now coerce arrays to correct shapes and dtypes
+    # Coerce arrays to correct shapes and dtypes
     for name in state_dict.keys():
         shape = shapes[name]
         dtype = dtypes[name]
+
         if len(shape) == 0:
-            # scalar
-            array_np = np.frombuffer(state_dict[name][0].to_pylist()[0], dtype=dtype)
+            # scalar - get buffer directly
+            buffer = state_dict[name][0].as_buffer()
+            array_np = np.frombuffer(buffer, dtype=dtype)
             state_dict[name] = array_np.item()
         else:
-            parts = [np.frombuffer(part.to_pylist()[0], dtype=np.byte) for part in state_dict[name]]
+            # Get buffers directly without converting to Python lists
+            buffers = [part.as_buffer() for part in state_dict[name]]
+            parts = [np.frombuffer(buf, dtype=np.uint8) for buf in buffers]
             array_np = np.concatenate(parts)
-            array_np = array_np.view(dtypes[name]).reshape(shapes[name])
+            array_np = array_np.view(dtype).reshape(shape)
             state_dict[name] = array_np
 
-    # Use Haliax to reconstruct the model with proper structure
     print(state_dict.keys())
     return hsd.from_state_dict(target_model, state_dict)
 
@@ -400,18 +401,17 @@ class ArrowFlightClient(WeightTransferClient):
             ticket = flight.Ticket(str(latest_weight_id).encode("utf-8"))
             flight_reader = self.flight_client.do_get(ticket)
 
-            # Read the record batches
-            table = flight_reader.read_all()
+            reader = flight_reader.to_reader()
 
             fetch_time = time.time() - start_time
-            print(table.schema.metadata)
+            print(reader.schema.metadata)
 
             # Use the actual weight ID from the server, not the requested one
-            received_weight_id = int(table.schema.metadata[b"weight_id"].decode("utf-8"))
+            received_weight_id = int(reader.schema.metadata[b"weight_id"].decode("utf-8"))
 
             # Convert back to model using state_dict on the CPU device
             with self.mesh, hax.axis_mapping(self.axis_mapping):
-                model = deserialize_arrow_to_pytree(table, old_model)
+                model = deserialize_arrow_to_pytree(reader, old_model)
 
             decode_time = time.time() - start_time - fetch_time
 
