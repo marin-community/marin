@@ -472,6 +472,52 @@ class LevanterHarnessLM(TemplateLM):
 
         return encoding
 
+    def _process_and_tokenize_stop_sequences(
+        self, until: Optional[List[str]], eos: str
+    ) -> Optional[NamedArray]:
+        """
+        Process and tokenize stop sequences for generation.
+        
+        Args:
+            until: List of stop sequences, if any
+            eos: End-of-sequence token string
+            
+        Returns:
+            NamedArray with tokenized stop sequences, or None if no valid stop sequences
+        """
+        if not until:
+            return None
+            
+        # Process stop sequences to ensure EOS is included
+        processed_until = handle_stop_sequences(until, eos=eos)
+        
+        if not processed_until:
+            return None
+            
+        # Tokenize all stop sequences
+        all_stop_tokens = []
+        for stop_seq in processed_until:
+            stop_ids_list = self.tok_encode(stop_seq, add_special_tokens=False)
+            if len(stop_ids_list) > 0:
+                all_stop_tokens.append(stop_ids_list)
+        
+        if not all_stop_tokens:
+            return None
+            
+        # Find the maximum length for padding
+        max_len = max(len(tokens) for tokens in all_stop_tokens)
+        
+        # Left pad all sequences to the same length
+        padded_tokens = []
+        for tokens in all_stop_tokens:
+            padding_needed = max_len - len(tokens)
+            padded = [INVALID] * padding_needed + tokens
+            padded_tokens.append(padded)
+        
+        # Convert to named array with proper dimensions
+        stop_tokens_array = jnp.asarray(padded_tokens, dtype=jnp.int32)
+        return haliax.named(stop_tokens_array, ("stop_seq", "position"))
+
     def loglikelihood_rolling(self, requests) -> List[Tuple[float]]:
         raise NotImplementedError()
 
@@ -538,47 +584,9 @@ class LevanterHarnessLM(TemplateLM):
         
         # Process stop sequences and tokenize them for each request
         for gen_kwargs in processed_kwargs_list:
-            until = gen_kwargs.get("until")
-            # print(f'{until=}')
-            if until:
-                # Process stop sequences to ensure EOS is included
-                processed_until = handle_stop_sequences(until, eos=eos)
-                gen_kwargs["until"] = processed_until  # Update the kwargs with processed stops
-                # print(f'{processed_until=}')
-                
-                # Tokenize all stop sequences for this request
-                if processed_until:
-                    # Tokenize all stop sequences
-                    all_stop_tokens = []
-                    for stop_seq in processed_until:
-                        stop_ids_list = self.tok_encode(stop_seq, add_special_tokens=False)
-                        if len(stop_ids_list) > 0:
-                            all_stop_tokens.append(stop_ids_list)
-                    
-                    if all_stop_tokens:
-                        # Find the maximum length for padding
-                        max_len = max(len(tokens) for tokens in all_stop_tokens)
-                        # Left pad all sequences to the same length
-                        padded_tokens = []
-                        for tokens in all_stop_tokens:
-                            # Left pad
-                            padding_needed = max_len - len(tokens)
-                            padded = [INVALID] * padding_needed + tokens
-                            padded_tokens.append(padded)
-                        
-                        # Convert to named array with proper dimensions
-                        stop_tokens_array = jnp.asarray(padded_tokens, dtype=jnp.int32)
-                        stop_tokens = haliax.named(
-                            stop_tokens_array, 
-                            ("stop_seq", "position")
-                        )
-                        gen_kwargs["stop_tokens"] = stop_tokens
-                    else:
-                        gen_kwargs["stop_tokens"] = None
-                else:
-                    gen_kwargs["stop_tokens"] = None
-            else:
-                gen_kwargs["stop_tokens"] = None
+            gen_kwargs["stop_tokens"] = self._process_and_tokenize_stop_sequences(
+                gen_kwargs.get("until"), eos
+            )
 
         # Calculate max stop sequences and tokens from all requests
         max_stop_seqs = 4
