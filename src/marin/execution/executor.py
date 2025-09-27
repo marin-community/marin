@@ -137,6 +137,13 @@ T_co = TypeVar("T_co", covariant=True)
 ExecutorFunction = Callable | ray.remote_function.RemoteFunction | None
 
 
+def asdict_without_description(obj: dataclass) -> dict[str, Any]:
+    """Return the `asdict` of an object, but remove the `description` field, because it doesn't affect the semantics."""
+    d = asdict(obj)
+    d.pop("description", None)
+    return d
+
+
 @dataclass(frozen=True)
 class ExecutorStep(Generic[ConfigT]):
     """
@@ -344,6 +351,14 @@ class ExecutorStepInfo:
     output_path: str
     """`executor.output_paths[step]`."""
 
+    @cached_property
+    def cached_dict(self) -> dict[str, Any]:
+        return asdict_without_description(self)
+
+    @cached_property
+    def cached_json(self) -> str:
+        return json.dumps(self.cached_dict, sort_keys=True, cls=CustomJsonEncoder)
+
 
 @dataclass(frozen=True)
 class ExecutorInfo:
@@ -360,6 +375,23 @@ class ExecutorInfo:
     prefix: str
     description: str | None
     steps: list[ExecutorStepInfo]
+
+    @cached_property
+    def cached_dict(self) -> dict[str, Any]:
+        return {
+            "ray_job_id": self.ray_job_id,
+            "git_commit": self.git_commit,
+            "caller_path": self.caller_path,
+            "created_date": self.created_date,
+            "user": self.user,
+            "prefix": self.prefix,
+            "description": self.description,
+            "steps": [step.cached_dict for step in self.steps],
+        }
+
+    @cached_property
+    def cached_json(self) -> str:
+        return json.dumps(self.cached_dict, sort_keys=True, cls=CustomJsonEncoder)
 
 
 def _get_info_path(output_path: str) -> str:
@@ -886,7 +918,7 @@ class Executor:
         # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
         # import pdb; pdb.set_trace()
         executor_version_str = json.dumps(
-            list(map(asdict_without_description, self.step_infos)), sort_keys=True, cls=CustomJsonEncoder
+            list([info.cached_dict for info in self.step_infos]), sort_keys=True, cls=CustomJsonEncoder
         )
         executor_version_hash = hashlib.md5(executor_version_str.encode()).hexdigest()[:6]
         name = os.path.basename(self.executor_info.caller_path).replace(".py", "")
@@ -906,24 +938,17 @@ class Executor:
             info_path = _get_info_path(self.output_paths[step])
             fsspec_utils.mkdirs(os.path.dirname(info_path))
             with fsspec.open(info_path, "w") as f:
-                print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
+                print(info.cached_json, file=f)
 
         # Write out info for the entire execution
         fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
         with fsspec.open(self.executor_info_path, "w") as f:
-            print(json.dumps(asdict(self.executor_info), indent=2, cls=CustomJsonEncoder), file=f)
+            print(self.executor_info.cached_json, file=f)
 
     # caching saves ~10% off some tests
     @cached_property
     def _dry_run_result(self):
         return ray.put(None)
-
-
-def asdict_without_description(obj: dataclass) -> dict[str, Any]:
-    """Return the `asdict` of an object, but remove the `description` field, because it doesn't affect the semantics."""
-    d = asdict(obj)
-    d.pop("description", None)
-    return d
 
 
 def _get_ray_status(current_owner_task_id: str | None) -> str | None:
