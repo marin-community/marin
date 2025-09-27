@@ -416,8 +416,8 @@ class ArrowFlightClient(WeightTransferClient):
             decode_time = time.time() - start_time - fetch_time
 
             self.metrics.successful_receives += 1
-            self.metrics.fetch_times.append(fetch_time)
-            self.metrics.decode_times.append(decode_time)
+            self.metrics.fetch_time = fetch_time
+            self.metrics.decode_time = decode_time
             self.last_weight_id = received_weight_id
 
             logger.info(f"Received weights for weight_id {received_weight_id} via Arrow Flight")
