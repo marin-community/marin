@@ -22,7 +22,7 @@ weight transfer implementations.
 import logging
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -45,13 +45,6 @@ class WeightTransferServerMetrics:
     total_transfers: int = 0
     successful_transfers: int = 0
     failed_transfers: int = 0
-    start_time: float = 0.0
-
-    @property
-    def transfer_rate(self) -> float:
-        """Transfers per second."""
-        elapsed = time.time() - self.start_time
-        return self.successful_transfers / max(elapsed, 1.0)
 
 
 @dataclass
@@ -61,20 +54,8 @@ class WeightTransferClientMetrics:
     total_polls: int = 0
     successful_receives: int = 0
     failed_receives: int = 0
-    start_time: float = 0.0
-    fetch_times: list[float] = field(default_factory=list)
-    decode_times: list[float] = field(default_factory=list)
-
-    @property
-    def poll_rate(self) -> float:
-        """Polls per second."""
-        elapsed = time.time() - self.start_time
-        return self.total_polls / max(elapsed, 1.0)
-
-    @property
-    def success_rate(self) -> float:
-        """Ratio of successful receives to total polls."""
-        return self.successful_receives / max(self.total_polls, 1)
+    fetch_time: float = 0
+    decode_time: float = 0
 
 
 @dataclass
