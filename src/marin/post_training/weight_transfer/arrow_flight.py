@@ -47,6 +47,10 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
+# The maximum number of array elements in a single Arrow RecordBatch.
+# Larger arrays are chunked into multiple RecordBatches to avoid hitting Arrow limits.
+MAX_ELEMENTS_PER_RECORD = 32 * 1000 * 1000
+
 
 def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> tuple[pa.Schema, Sequence[pa.RecordBatch]]:
     """Convert model to Arrow RecordBatch using Haliax state_dict for efficient transfer.
@@ -78,14 +82,13 @@ def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> tuple[pa.Schema,
 
     # split arrays across elements to ensure no single array exceeds Arrow limits
     # and numpy doesn't complain about splitting inside element boundaries
-    max_elements = 32 * 1000 * 1000
     for name, value in state_dict.items():
         if not isinstance(value, np.ndarray):
             # scalar, wrap as array and unwrap on receive
             value = np.array(value)
 
         data = value.ravel()
-        splits = list(np.array_split(data, max(1, len(data) // max_elements)))
+        splits = list(np.array_split(data, max(1, len(data) // MAX_ELEMENTS_PER_RECORD)))
         for i, split in enumerate(splits):
             block = split.tobytes()
             batch = pa.RecordBatch.from_arrays(
