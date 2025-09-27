@@ -23,6 +23,7 @@ import logging
 import socket
 import threading
 import time
+from collections.abc import Sequence
 
 import haliax.state_dict as hsd
 import jax
@@ -47,78 +48,86 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 
-def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> pa.RecordBatch:
+def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> tuple[pa.Schema, Sequence[pa.RecordBatch]]:
     """Convert model to Arrow RecordBatch using Haliax state_dict for efficient transfer.
 
     Args:
         model: Haliax/Equinox model or PyTree
         weight_id: Unique identifier for this weight version
 
+    Large arrays are split into multiple RecordBatches if needed to avoid hitting the Arrow
+    2GB limit.
+
     Returns:
-        Arrow RecordBatch containing serialized state dict data
+        pa.Schema, List of Arrow RecordBatch containing serialized state dict data
     """
     # Convert model to state dict using Haliax's torch-compatible format
     state_dict = hsd.to_torch_compatible_state_dict(model)
-
-    # Prepare data for Arrow RecordBatch
-    param_names = []
-    param_data = []
-    param_shapes = []
-    param_dtypes = []
-
-    for name, array in state_dict.items():
-        param_names.append(name)
-        # Convert to numpy if needed and serialize to bytes
-        array_np = np.asarray(array)
-        param_data.append(array_np.tobytes())
-        param_shapes.append(list(array_np.shape))
-        param_dtypes.append(str(array_np.dtype))
-
-    # Create Arrow arrays
-    names_array = pa.array(param_names, type=pa.string())
-    data_array = pa.array(param_data, type=pa.binary())
-    shapes_array = pa.array(param_shapes, type=pa.list_(pa.int64()))
-    dtypes_array = pa.array(param_dtypes, type=pa.string())
-
-    # Create schema with metadata
+    batches = []
     schema = pa.schema(
         [
-            pa.field("param_names", pa.string()),
-            pa.field("param_data", pa.binary()),
-            pa.field("param_shapes", pa.list_(pa.int64())),
-            pa.field("param_dtypes", pa.string()),
+            pa.field("name", pa.string()),
+            pa.field("data", pa.large_binary()),
+            pa.field("shape", pa.list_(pa.int64())),
+            pa.field("dtype", pa.string()),
+            pa.field("idx", pa.int64()),
+            pa.field("count", pa.int64()),
         ],
         metadata={"weight_id": str(weight_id), "timestamp": str(time.time()), "num_params": str(len(state_dict))},
     )
 
-    # Create RecordBatch
-    return pa.RecordBatch.from_arrays([names_array, data_array, shapes_array, dtypes_array], schema=schema)
+    max_size = 10 * 1000 * 1000
+    for name, array in state_dict.items():
+        data = np.asarray(array).tobytes()
+        splits = list(np.array_split(np.frombuffer(data, dtype=np.uint8), max(1, len(data) // max_size)))
+        for i, split in enumerate(splits):
+            batch = pa.RecordBatch.from_arrays(
+                [
+                    pa.array([name], type=pa.string()),
+                    pa.array([split.tobytes()], type=pa.large_binary()),
+                    pa.array([list(np.asarray(array).shape)], type=pa.list_(pa.int64())),
+                    pa.array([str(np.asarray(array).dtype)], type=pa.string()),
+                    pa.array([i], type=pa.int64()),
+                    pa.array([len(splits)], type=pa.int64()),
+                ],
+                schema=schema,
+            )
+            batches.append(batch)
+
+    return schema, batches
 
 
-def deserialize_arrow_to_pytree(record_batch: pa.RecordBatch, target_model: PyTree) -> PyTree:
+def deserialize_arrow_to_pytree(batches: pa.Table, target_model: PyTree) -> PyTree:
     """Convert Arrow RecordBatch back to model using Haliax state_dict.
 
     Args:
-        record_batch: Arrow RecordBatch containing serialized state dict data
+        batches: Arrow RecordBatch containing serialized state dict data
         target_model: Target model template to preserve structure and NamedArray axes
 
     Returns:
         Reconstructed model with updated weights
     """
-    # Extract parameter data from Arrow RecordBatch
-    param_names = record_batch.column("param_names").to_pylist()
-    param_data = record_batch.column("param_data").to_pylist()
-    param_shapes = record_batch.column("param_shapes").to_pylist()
-    param_dtypes = record_batch.column("param_dtypes").to_pylist()
 
     # Reconstruct state dict
     state_dict = {}
-    for name, data, shape, dtype_str in zip(param_names, param_data, param_shapes, param_dtypes, strict=True):
-        # Parse dtype (shape is already a list of ints)
-        dtype = np.dtype(dtype_str)
+    shapes = {}
+    dtypes = {}
+    for batch in batches.to_batches():
+        name = batch.column("name").to_pylist()[0]
+        data = batch.column("data")
+        if name not in state_dict:
+            state_dict[name] = []
+        state_dict[name].append(data)
+        shape = tuple(batch.column("shape").to_pylist()[0])
+        dtype = batch.column("dtype").to_pylist()[0]
+        shapes[name] = shape
+        dtypes[name] = dtype
 
-        # Reconstruct array from bytes
-        array_np = np.frombuffer(data, dtype=dtype).reshape(shape)
+    # now coerce arrays to correct shapes and dtypes
+    for name in state_dict.keys():
+        parts = [np.frombuffer(part.to_pylist()[0], dtype=np.byte) for part in state_dict[name]]
+        array_np = np.concatenate(parts)
+        array_np = array_np.view(dtypes[name]).reshape(shapes[name])
         state_dict[name] = array_np
 
     # Use Haliax to reconstruct the model with proper structure
@@ -155,10 +164,12 @@ class ArrowFlightCoordinator:
 class MarinFlightServer(flight.FlightServerBase):
     """Arrow Flight server for serving model weights."""
 
+    weights_store: dict[int, tuple[pa.Schema, Sequence[pa.RecordBatch]]]
+
     def __init__(self, location: str, config: WeightTransferConfig):
         super().__init__(location)
         self.config = config
-        self.weights_store = {}  # weight_id -> RecordBatch
+        self.weights_store = {}
         self.latest_weight_id = None
         self._lock = threading.Lock()
         self._location = location
@@ -180,13 +191,9 @@ class MarinFlightServer(flight.FlightServerBase):
                 if weight_id not in self.weights_store:
                     raise flight.FlightNotFoundError(f"Weight ID {weight_id} not found")
 
-                record_batch = self.weights_store[weight_id]
+                (schema, batches) = self.weights_store[weight_id]
 
-            # Create a generator that yields the record batch
-            def generate_batches():
-                yield record_batch
-
-            return flight.GeneratorStream(record_batch.schema, generate_batches())
+            return flight.GeneratorStream(schema, batches)
 
         except Exception as e:
             logger.error(f"Error in do_get: {e}")
@@ -197,23 +204,25 @@ class MarinFlightServer(flight.FlightServerBase):
         with self._lock:
             for weight_id in self.weights_store.keys():
                 descriptor = flight.FlightDescriptor.for_command(str(weight_id))
+                schema = self.weights_store[weight_id].schema
+                batches = self.weights_store[weight_id].batches
 
                 # Create flight info
                 info = flight.FlightInfo(
-                    schema=self.weights_store[weight_id].schema,
+                    schema=schema,
                     descriptor=descriptor,
                     endpoints=[flight.FlightEndpoint(str(weight_id), [self.location])],
-                    total_records=1,
-                    total_bytes=self.weights_store[weight_id].nbytes,
+                    total_records=len(batches),
+                    total_bytes=sum(batch.nbytes for batch in batches),
                 )
                 yield info
 
-    def store_weights(self, weight_id: int, record_batch: pa.RecordBatch) -> None:
+    def store_weights(self, weight_id: int, schema: pa.Schema, batches: pa.RecordBatch) -> None:
         """Store weights in the server."""
         with self._lock:
             # remove all other weights
             self.weights_store.clear()
-            self.weights_store[weight_id] = record_batch
+            self.weights_store[weight_id] = (schema, batches)
             self.latest_weight_id = weight_id
             logger.info(f"Stored weights for weight_id {weight_id}")
 
@@ -267,10 +276,10 @@ class ArrowFlightServer(WeightTransferServer):
 
             if jax.process_index() == 0:
                 # Convert model to Arrow RecordBatch
-                record_batch = serialize_pytree_to_arrow(model, weight_id)
+                schema, batches = serialize_pytree_to_arrow(model, weight_id)
 
                 # Store in Flight server
-                self.flight_server.store_weights(weight_id, record_batch)
+                self.flight_server.store_weights(weight_id, schema, batches)
 
                 # Update coordinator
                 ray.get(self.coordinator.update_weight_id.remote(weight_id))
@@ -368,11 +377,11 @@ class ArrowFlightClient(WeightTransferClient):
             ticket = flight.Ticket(str(latest_weight_id).encode("utf-8"))
             flight_reader = self.flight_client.do_get(ticket)
 
-            # Read the record batch
-            record_batch = flight_reader.read_all()
+            # Read the record batches
+            batches = flight_reader.read_all()
 
             # Convert back to model using state_dict
-            model = deserialize_arrow_to_pytree(record_batch, old_model)
+            model = deserialize_arrow_to_pytree(batches, old_model)
 
             self.metrics.successful_receives += 1
             self.last_weight_id = latest_weight_id

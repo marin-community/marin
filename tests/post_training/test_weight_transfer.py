@@ -314,3 +314,39 @@ def test_with_mesh_sharding(ray_tpu_cluster, weight_transfer_config, sample_para
     finally:
         server.cleanup()
         client.cleanup()
+
+
+def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
+    """Test Arrow Flight weight transfer with large buffer sizes."""
+    weight_transfer_config = WeightTransferConfig(
+        mode=WeightTransferMode.ARROW_FLIGHT,
+        sync_interval_steps=1,
+        poll_interval_seconds=0.1,
+        checkpoint_dir=tempfile.mkdtemp(),
+    )
+
+    server, client = create_test_weight_transfer_pair(weight_transfer_config)
+
+    D = 500
+    large_params = {
+        "large_matrix": hax.named(
+            jnp.arange(D * D * D).reshape(D, D, D).astype(jnp.float32),
+            (hax.Axis("a", D), hax.Axis("b", D), hax.Axis("c", D)),
+        )
+    }
+
+    try:
+        # Serve and receive weights
+        server.serve_weights(1, large_params)
+        received_params = client.receive_weights(large_params)
+
+        assert received_params is not None
+
+        # Verify the large matrix is correctly transferred
+        np.testing.assert_array_equal(
+            received_params["large_matrix"].array,
+            large_params["large_matrix"].array,
+        )
+    finally:
+        server.cleanup()
+        client.cleanup()
