@@ -475,7 +475,6 @@ class Trainer:
             rl_dataset, dataset_metrics = create_dataset_from_environment(
                 environment=environment,
                 policy_ctx=policy_ctx,
-                reference_ctx=reference_ctx,
                 n_examples=self.config.hyperparameters.n_prompts_per_step,
                 prng_key=subrng,
                 n_generations=self.config.generation_config.n_generations,

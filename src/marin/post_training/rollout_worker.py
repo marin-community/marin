@@ -293,7 +293,6 @@ class RolloutWorker:
     _server_thread: threading.Thread
     inference_server: InferenceServer
     policy_model: Any
-    reference_model: Any
     transfer_client: weight_transfer.WeightTransferClient
     rollout_writer: RolloutWriter
     _tokenizer: PreTrainedTokenizer
@@ -329,18 +328,18 @@ class RolloutWorker:
         self._build_models()
 
     def _build_models(self):
-        """Build policy and reference models after levanter initialization."""
+        """Build policy model after levanter initialization."""
 
         if self.config.initial_checkpoint is not None:
-            logger.info(f"Loading initial reference model from checkpoint: {self.config.initial_checkpoint}")
+            logger.info(f"Loading initial policy model from checkpoint: {self.config.initial_checkpoint}")
         else:
-            logger.info("Building new reference model from scratch")
+            logger.info("Building new policy model from scratch")
 
         key = jrandom.PRNGKey(42)
         vocab_size = self._tokenizer.vocab_size
         Vocab = hax.Axis("vocab", vocab_size)
 
-        self.reference_model = load_model_from_checkpoint(
+        initial_model = load_model_from_checkpoint(
             checkpoint=self.config.initial_checkpoint,
             model_config=self.config.model,
             trainer_config=self.config.trainer,
@@ -353,14 +352,14 @@ class RolloutWorker:
         )
 
         # N.B. Jax weight transfer requires a shape tree in order to serialize/deserialize weights
-        shape_tree = hax.tree_util.tree_map(lambda x: x.shape, self.reference_model)
+        shape_tree = hax.tree_util.tree_map(lambda x: x.shape, initial_model)
         self.policy_model = self.transfer_client.receive_weights(shape_tree)
         if self.policy_model:
             logger.info("Loaded initial policy model from weight transfer")
         else:
-            logger.info("Initializing policy model from reference model")
-            self.policy_model = self.reference_model
-        logger.info("Loaded/built policy and reference models")
+            logger.info("Initializing policy model from initial checkpoint")
+            self.policy_model = initial_model
+        logger.info("Loaded/built policy model")
 
     def _start_inference_server(self):
         """Start the inference server in a background thread."""
@@ -393,16 +392,9 @@ class RolloutWorker:
         """Generate a set of rollout batches from the environment."""
         barrier_sync()
 
-        # Create Levanter inference contexts
+        # Create Levanter inference context for policy model
         policy_ctx = LevanterInferenceContext(
             self.policy_model,
-            tokenizer=self._tokenizer,
-            inference_server=self.inference_server,
-            max_tokens=self.config.max_input_length + self.config.max_output_length,
-            stop_tokens=self.config.stop_tokens,
-        )
-        reference_ctx = LevanterInferenceContext(
-            self.reference_model,
             tokenizer=self._tokenizer,
             inference_server=self.inference_server,
             max_tokens=self.config.max_input_length + self.config.max_output_length,
@@ -416,7 +408,6 @@ class RolloutWorker:
             rl_dataset, dataset_metrics = create_dataset_from_environment(
                 environment=self._environment,
                 policy_ctx=policy_ctx,
-                reference_ctx=reference_ctx,
                 n_examples=self.config.n_prompts_per_step,
                 prng_key=rng,
                 n_generations=self.config.n_generations,
@@ -484,7 +475,6 @@ class RolloutWorker:
                         target_ids=batch_data["target_ids"],
                         loss_weights=batch_data["loss_weights"],
                         loss_masks=batch_data["loss_masks"],
-                        reference_logprobs=batch_data["reference_logprobs"],
                         policy_logprobs=batch_data["policy_logprobs"],
                     ),
                     env_name=self.config.environment_spec,

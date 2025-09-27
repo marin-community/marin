@@ -44,7 +44,6 @@ def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16) -> T
             target_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
             loss_weights=np.ones((batch_size, max_seq_len), dtype=np.float32),
             loss_masks=np.ones((batch_size, max_seq_len), dtype=np.float32),
-            reference_logprobs=rng.standard_normal((batch_size, max_seq_len)).astype(np.float32),
             policy_logprobs=rng.standard_normal((batch_size, max_seq_len)).astype(np.float32),
         ),
         env_name=f"test_env_{idx}",
@@ -583,7 +582,6 @@ def test_replay_buffer_produces_valid_named_arrays():
         "target_ids",
         "loss_weights",
         "loss_masks",
-        "reference_logprobs",
         "policy_logprobs",
     ]:
         field = getattr(sampled_batch, field_name)

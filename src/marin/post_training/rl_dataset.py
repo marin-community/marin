@@ -40,7 +40,6 @@ class RLDataset:
             data_items: Dictionary containing processed training data with keys:
                 - returns: Advantage values for each token position
                 - policy_logprobs: Log probabilities from the policy model
-                - reference_logprobs: Log probabilities from the reference model
                 - prompt_tokens: Tokenized prompts
                 - prompt_masks: Attention masks for prompts
                 - output_tokens: Tokenized outputs
@@ -63,7 +62,6 @@ class RLDataset:
         expected_keys = {
             "returns",
             "policy_logprobs",
-            "reference_logprobs",
             "prompt_tokens",
             "prompt_masks",
             "output_tokens",
@@ -88,7 +86,7 @@ class RLDataset:
     def from_env_step(
         cls,
         env_step: EnvStep,
-        reference_ctx,
+        tokenizer,
         max_input_length: int,
         max_output_length: int,
         pad_token_id: int,
@@ -98,7 +96,7 @@ class RLDataset:
 
         Args:
             env_step: Environment step containing examples, samples, and rewards
-            reference_ctx: Reference model context with tokenizer and logprobs function
+            tokenizer: Tokenizer for encoding prompts
             max_input_length: Maximum input sequence length
             max_output_length: Maximum output sequence length
             pad_token_id: ID of the padding token
@@ -110,9 +108,6 @@ class RLDataset:
         examples = env_step.examples
         responses = env_step.responses
         rewards = env_step.rewards
-
-        # Get tokenizer from reference context
-        tokenizer = reference_ctx.tokenizer
 
         # Prepare data to compute reference logprobs
         batch_items = []
@@ -145,24 +140,19 @@ class RLDataset:
         all_answer_masks = np.concatenate([item["answer_attention_mask"] for item in batch_items])
         all_policy_logprobs = np.concatenate([item["answer_logprobs"] for item in batch_items])
 
-        # Compute reference logprobs using reference context (context handles batching internally)
-        reference_logprobs = reference_ctx.compute_logprobs(
-            all_prompt_tokens,
-            all_prompt_masks,
-            all_answer_tokens,
-            all_answer_masks,
-        )
+        # Use zeros as placeholder for reference logprobs (will be computed in train worker)
+        all_reference_logprobs = np.zeros_like(all_policy_logprobs)
 
         # Split back into lists for consistency with rest of function
-        all_reference_logprobs = [reference_logprobs[i] for i in range(len(batch_items))]
         all_logprobs = [all_policy_logprobs[i] for i in range(len(batch_items))]
+        reference_logprobs_list = [all_reference_logprobs[i] for i in range(len(batch_items))]
         output_masks_list = [all_answer_masks[i] for i in range(len(batch_items))]
         output_tokens_list = [all_answer_tokens[i] for i in range(len(batch_items))]
         prompt_tokens_list = [all_prompt_tokens[i] for i in range(len(batch_items))]
         prompt_masks_list = [all_prompt_masks[i] for i in range(len(batch_items))]
 
         # Stack all arrays
-        all_reference_logprobs = np.stack(all_reference_logprobs, axis=0)
+        all_reference_logprobs = np.stack(reference_logprobs_list, axis=0)
         all_logprobs = np.stack(all_logprobs, axis=0)
         output_masks = np.stack(output_masks_list, axis=0)
         output_tokens = np.stack(output_tokens_list, axis=0)
@@ -272,8 +262,8 @@ class RLDataset:
             output_tokens=examples["output_tokens"],
             output_masks=examples["output_masks"],
             loss_weights=examples["returns"],
-            reference_logprobs=examples["reference_logprobs"],
             policy_logprobs=examples["policy_logprobs"],
+            reference_logprobs=examples["reference_logprobs"],
         )
 
 
@@ -306,8 +296,8 @@ def prepare_training_batch(
     output_tokens: np.ndarray,
     output_masks: np.ndarray,
     loss_weights: np.ndarray,
-    reference_logprobs: np.ndarray,
     policy_logprobs: np.ndarray,
+    reference_logprobs: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """Prepare training batch from prompt/output components for RLOO training.
 
@@ -321,8 +311,8 @@ def prepare_training_batch(
         output_tokens: (batch_size, max_output_length) tokenized model outputs
         output_masks: (batch_size, max_output_length) attention masks for outputs
         loss_weights: (batch_size, max_output_length) advantage values for each output token
-        reference_logprobs: (batch_size, max_output_length) log probs from reference model
         policy_logprobs: (batch_size, max_output_length) log probs from policy model
+        reference_logprobs: (batch_size, max_output_length) log probs from reference model, or None
 
     Returns:
         Dictionary containing processed batch ready for language model training:
@@ -338,6 +328,10 @@ def prepare_training_batch(
 
         Where seq_len = max_input_length + max_output_length
     """
+    # Handle missing reference logprobs
+    if reference_logprobs is None:
+        reference_logprobs = np.zeros_like(policy_logprobs)
+
     # Concatenate prompt and output tokens
     full_tokens = np.concatenate((prompt_tokens, output_tokens), axis=1)
     full_attention_mask = np.concatenate((prompt_masks, output_masks), axis=1)
@@ -413,7 +407,6 @@ def prepare_training_batch(
 def create_dataset_from_environment(
     environment,
     policy_ctx,
-    reference_ctx,
     n_examples: int,
     prng_key,
     n_generations: int,
@@ -428,7 +421,6 @@ def create_dataset_from_environment(
     Args:
         environment: Environment to step through
         policy_ctx: Context wrapping policy model (includes tokenizer, params, etc.)
-        reference_ctx: Context wrapping reference model
         n_examples: Number of examples to process
         prng_key: Random key for sampling
         n_generations: Number of generations per example
@@ -454,7 +446,7 @@ def create_dataset_from_environment(
     # Create dataset from environment step
     dataset = RLDataset.from_env_step(
         env_step=env_step,
-        reference_ctx=reference_ctx,
+        tokenizer=policy_ctx.tokenizer,
         max_input_length=max_input_length,
         max_output_length=max_output_length,
         pad_token_id=pad_token_id,

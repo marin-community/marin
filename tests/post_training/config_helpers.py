@@ -483,13 +483,8 @@ def create_rollout_batch(
         response_masks,
     )
 
-    reference_logprobs = compute_model_logprobs(
-        reference_model,
-        prompt_tokens,
-        prompt_masks,
-        response_tokens,
-        response_masks,
-    )
+    # Reference logprobs will be computed in train worker during migration
+    reference_logprobs = np.zeros_like(policy_logprobs)
 
     # Compute rewards and advantages
     rewards = np.array([compute_cats_reward(response) for _, response in examples], dtype=np.float32)
@@ -517,7 +512,6 @@ def create_rollout_batch(
         target_ids=batch_data["target_ids"],
         loss_weights=batch_data["loss_weights"],
         loss_masks=batch_data["loss_masks"],
-        reference_logprobs=batch_data["reference_logprobs"],
         policy_logprobs=batch_data["policy_logprobs"],
     )
 
