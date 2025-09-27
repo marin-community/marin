@@ -19,7 +19,7 @@ This configuration uses proper 75M model dimensions suitable for H100 GPU traini
 
 import logging
 
-from experiments.speedrun.parallel_llama_75m.exp1571_parallel_llama import ParallelLlamaConfig
+from experiments.speedrun.parallel_llama.exp1571_parallel_llama import ParallelLlamaConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.resources import GpuConfig

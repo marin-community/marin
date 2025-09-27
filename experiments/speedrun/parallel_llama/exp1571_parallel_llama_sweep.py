@@ -22,7 +22,7 @@ from levanter.optim.cautious import CautiousConfig
 
 from experiments.llama import llama_75m, llama_150m, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.speedrun.parallel_llama_75m.exp1571_parallel_llama import ParallelLlamaConfig
+from experiments.speedrun.parallel_llama.exp1571_parallel_llama import ParallelLlamaConfig
 from marin.execution.executor import executor_main
 from marin.resources import GpuConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
@@ -95,7 +95,17 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     # Cautious optimizer configs for each size
     cautious_configs = {
-        "130m": CautiousConfig(
+        "75m": CautiousConfig(
+            learning_rate=0.008,
+            weight_decay=0.1,
+            min_lr_ratio=0.0,
+            warmup=2000,
+            beta1=0.95,
+            beta2=0.98,
+            epsilon=1e-15,
+            max_grad_norm=1,
+        ),
+        "150m": CautiousConfig(
             learning_rate=0.008,
             weight_decay=0.1,
             min_lr_ratio=0.0,
@@ -135,10 +145,10 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     }
 
     run_names = {
-        "75m": "parallel_llama_75m",
-        "150m": "parallel_llama_150m",
-        "300m": "parallel_llama_300m",
-        "520m": "parallel_llama_520m",
+        "75m": "parallel_llama_75m_1024",
+        "150m": "parallel_llama_150m_1024",
+        "300m": "parallel_llama_300m_1024",
+        "520m": "parallel_llama_520m_1024",
     }
 
     if size not in param_counts:
