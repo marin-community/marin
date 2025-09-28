@@ -191,7 +191,11 @@ def deserialize_arrow_to_pytree(reader: pa.RecordBatchReader, target_model: PyTr
             # Convert to JAX array directly
             state_dict[name] = jax.numpy.asarray(array_np)
 
-    return hsd.from_state_dict(target_model, state_dict)
+    @jax.jit(donate_argnums=0)
+    def update_model(old_model, new_state_dict):
+        return hsd.from_state_dict(old_model, new_state_dict)
+
+    return update_model(target_model, state_dict)
 
 
 @ray.remote(num_cpus=0)
