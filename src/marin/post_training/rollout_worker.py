@@ -49,105 +49,14 @@ from . import weight_transfer
 from .model_utils import load_model_from_checkpoint
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .rollout_types import (
-    NewRollout,
-    NewRolloutBatch,
-    NewRolloutGroup,
-    NewRolloutMetadata,
+    Rollout,
     RolloutBatch,
-    TaggedRolloutBatch,
+    RolloutGroup,
+    RolloutMetadata,
 )
 from .weight_transfer import WeightTransferConfig
 
 logger = logging.getLogger(__name__)
-
-
-def _create_training_batch(
-    new_batch: NewRolloutBatch, max_input_length: int, max_output_length: int, pad_token_id: int
-) -> TaggedRolloutBatch:
-    """Convert rollout groups to training batches with RLOO advantages."""
-
-    input_ids = []
-    attention_masks = []
-    position_ids = []
-    target_ids = []
-    loss_weights = []
-    loss_masks = []
-    policy_logprobs = []
-
-    for group in new_batch.groups:
-        advantages = group.compute_rloo_advantages()
-
-        for rollout_idx, rollout in enumerate(group.rollouts):
-            full_tokens = np.concatenate([rollout.prompt_tokens, rollout.response_tokens])
-            full_mask = np.ones([len(full_tokens)])
-            full_position_ids = np.maximum(np.cumsum(full_mask) - 1, 0)
-
-            # Prepare input/target sequences (shifted for next-token prediction)
-            input_tokens = full_tokens[:-1]
-            input_attention_mask = full_mask[:-1]
-            target_tokens = full_tokens[1:]
-
-            # Create loss masks (only compute loss on response tokens)
-            loss_mask = np.concatenate(
-                [
-                    np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
-                    np.ones(len(rollout.response_tokens), dtype=np.float32),
-                ]
-            )
-
-            # Create loss weights (RLOO advantages repeated for each token)
-            advantage_value = advantages[rollout_idx]
-            loss_weight = np.concatenate(
-                [
-                    np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
-                    np.full_like(rollout.response_tokens, advantage_value, dtype=np.float32),
-                ]
-            )
-
-            # Extract policy logprobs (no reference logprobs needed anymore)
-            policy_logprob = np.concatenate(
-                [
-                    np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
-                    rollout.response_logprobs.astype(np.float32),
-                ]
-            )
-
-            full_position_ids = full_position_ids[:-1]
-
-            def _trim_and_pad(ary):
-                max_seq_len = max_input_length + max_output_length
-                ary = ary[:max_seq_len]
-                ary = np.pad(
-                    ary,
-                    (0, max_seq_len - len(ary)),
-                    mode="constant",
-                    constant_values=pad_token_id if ary.dtype == np.int32 else 0,
-                )
-                return ary
-
-            input_ids.append(_trim_and_pad(input_tokens))
-            attention_masks.append(_trim_and_pad(input_attention_mask))
-            position_ids.append(_trim_and_pad(full_position_ids))
-            target_ids.append(_trim_and_pad(target_tokens))
-            loss_weights.append(_trim_and_pad(loss_weight))
-            loss_masks.append(_trim_and_pad(loss_mask))
-            policy_logprobs.append(_trim_and_pad(policy_logprob))
-
-    return TaggedRolloutBatch(
-        batch=RolloutBatch(
-            input_ids=np.stack(input_ids, axis=0),
-            attention_mask=np.stack(attention_masks, axis=0),
-            position_ids=np.stack(position_ids, axis=0),
-            target_ids=np.stack(target_ids, axis=0),
-            loss_weights=np.stack(loss_weights, axis=0),
-            loss_masks=np.stack(loss_masks, axis=0),
-            policy_logprobs=np.stack(policy_logprobs, axis=0),
-        ),
-        env_name="",
-        worker_id=f"{socket.gethostname()}_{os.getpid()}",
-        timestamp=time.time(),
-        rollout_id=f"{group.key}_response_{rollout_idx}",
-    )
 
 
 @dataclass
@@ -450,7 +359,7 @@ class RolloutWorker:
         if self.inference_server:
             self.inference_server.shutdown()
 
-    def _generate_rollout_batch(self, rng) -> tuple[NewRolloutBatch, dict]:
+    def _generate_rollout_batch(self, rng) -> tuple[RolloutBatch, dict]:
         """Generate rollout batches directly from environment without using rl_dataset."""
         barrier_sync()
 
@@ -476,16 +385,16 @@ class RolloutWorker:
                 temperature=self.config.temperature,
             )
 
-        rollout_groups: list[NewRolloutGroup] = []
+        rollout_groups: list[RolloutGroup] = []
         for i, response in enumerate(env_step.responses):
             rewards = env_step.rewards[i]
-            group = NewRolloutGroup(key=f"example_{i}", rollouts=[])
+            group = RolloutGroup(key=f"example_{i}", rollouts=[])
             prompt = env_step.examples[i]["prompt"]
             # answer = env_step.examples[i]["answer"]
             prompt_tokens = self._tokenizer.encode(prompt, add_special_tokens=True)[-self.config.max_input_length :]
 
             for j in range(len(response)):
-                rollout = NewRollout(
+                rollout = Rollout(
                     env_name=self.config.environment_spec,
                     env_example_id=f"example_{i}",
                     prompt_tokens=prompt_tokens,
@@ -497,9 +406,9 @@ class RolloutWorker:
                 group.rollouts.append(rollout)
             rollout_groups.append(group)
 
-        rollout_batch = NewRolloutBatch(
+        rollout_batch = RolloutBatch(
             groups=rollout_groups,
-            metadata=NewRolloutMetadata(worker_id=f"{socket.gethostname()}_{os.getpid()}", timestamp=time.time()),
+            metadata=RolloutMetadata(worker_id=f"{socket.gethostname()}_{os.getpid()}", timestamp=time.time()),
         )
 
         barrier_sync()

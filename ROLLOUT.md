@@ -83,8 +83,15 @@ hands off to replay buffer
 You always test with:
 
 ```
+uv run pytest tests/post_training/test_replay_buffer.py
+uv run pytest tests/post_training/test_rollout_storage.py
 uv run pytest tests/post_training/test_async_train.py::test_full_integration_moar_cats -o log_cli_level=WARNING
 ```
+
+# coding
+
+Leave submodules/ alone
+Commit src/ & tests/ after major changes.
 
 # Testable steps
 
@@ -114,6 +121,8 @@ compute rloo award on rollout worker still. DONE
 
 step 5
 
+DONE
+
 serialize in NEW format: update rollout storage
 move new -> old format conversion into replay_buffer.py
 restore into old format before storing in the replay buffer
@@ -122,8 +131,11 @@ VALIDATE with test_async_traing
 
 step 6
 
-replay_buffer stores NEW FORMAT
-rloo award assignment occurs on the replay buffer
+DONE
+
+replay_buffer now stores NEW FORMAT
+replay_buffer stores _INDIVIDUAL_ rollout examples and tracks usage counts for each
+rloo award assignment occurs on ingestion into the ReplayBuffer
 replay_buffer computes a "training_batch" dictionary at sample generation time
 reuse logic from NEW -> OLD conversion
 

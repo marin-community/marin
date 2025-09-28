@@ -35,14 +35,10 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from marin.post_training.environments.mock_env import MockEnv
-from marin.post_training.rl_dataset import (
-    compute_rloo_advantages_for_group,
-    prepare_training_batch,
-)
 from marin.post_training.rollout_storage import (
     RolloutStorageConfig,
 )
-from marin.post_training.rollout_types import RolloutBatch, TaggedRolloutBatch
+from marin.post_training.rollout_types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
 from marin.post_training.rollout_worker import RolloutWorkerConfig, compute_model_logprobs
 from marin.post_training.train_worker import ReplayBufferConfig, TrainWorkerConfig
 from marin.post_training.weight_transfer import WeightTransferConfig
@@ -413,7 +409,7 @@ def create_rollout_batch(
     max_output_length: int = 16,
     pad_token_id: int = 0,
     worker_id: str = "test_worker",
-) -> TaggedRolloutBatch:
+) -> RolloutBatch:
     """Create a rollout batch with cat-themed examples using real model logprob computation.
 
     Args:
@@ -426,12 +422,12 @@ def create_rollout_batch(
         worker_id: Worker identifier
 
     Returns:
-        TaggedRolloutBatch with cat-themed data and real computed logprobs
+        RolloutBatch with cat-themed data and real computed logprobs
     """
     if tokenizer is None:
         tokenizer = DummyTokenizer()
 
-    # Generate synthetic prompt/response examples (like the original function)
+    # Generate synthetic prompt/response examples
     prompts = [
         "i like cats, give me moar cats",
         "do you like cats?",
@@ -446,7 +442,6 @@ def create_rollout_batch(
 
     for _ in range(batch_size):
         prompt = rng.choice(prompts)
-        # Generate positive or negative responses
         if rng.random() < 0.5:
             response = " ".join(rng.choice(positive_words, size=rng.integers(1, 8)))
         else:
@@ -466,7 +461,7 @@ def create_rollout_batch(
         )
         encoded_examples.append(encoded)
 
-    # Stack arrays
+    # Stack arrays for logprob computation
     prompt_tokens = np.stack([ex["prompt_tokens"] for ex in encoded_examples])
     prompt_masks = np.stack([ex["prompt_attention_mask"] for ex in encoded_examples])
     response_tokens = np.stack([ex["response_tokens"] for ex in encoded_examples])
@@ -480,43 +475,35 @@ def create_rollout_batch(
         response_masks,
     )
 
-    # Compute rewards and advantages
-    rewards = np.array([compute_cats_reward(response) for _, response in examples], dtype=np.float32)
+    # Create individual rollouts
+    rollouts = []
+    for i, ((_prompt_text, response_text), encoded_ex) in enumerate(zip(examples, encoded_examples, strict=False)):
+        episode_reward = compute_cats_reward(response_text)
 
-    advantages = compute_rloo_advantages_for_group(rewards)
+        # Extract individual arrays (remove batch dimension)
+        individual_prompt = encoded_ex["prompt_tokens"][prompt_masks[i] == 1]
+        individual_response = encoded_ex["response_tokens"][response_masks[i] == 1]
+        individual_logprobs = policy_logprobs[i][response_masks[i] == 1]
 
-    # Create loss weights (repeat advantages for each token position)
-    loss_weights = np.repeat(advantages[..., None], max_output_length, axis=1)
+        # Token rewards (simple: use episode reward for all response tokens)
+        token_rewards = np.full(len(individual_response), episode_reward, dtype=np.float32)
 
-    batch_data = prepare_training_batch(
-        prompt_tokens=prompt_tokens,
-        prompt_masks=prompt_masks,
-        output_tokens=response_tokens,
-        output_masks=response_masks,
-        loss_weights=loss_weights,
-        policy_logprobs=policy_logprobs,
-        # ignored
-        reference_logprobs=np.zeros_like(policy_logprobs),
-    )
+        rollout = Rollout(
+            env_name="mock:task_type=cats",
+            env_example_id=f"cats_example_{i}",
+            prompt_tokens=individual_prompt,
+            response_tokens=individual_response,
+            response_logprobs=individual_logprobs,
+            token_rewards=token_rewards,
+            episode_reward=episode_reward,
+        )
+        rollouts.append(rollout)
 
-    # Create RolloutBatch from the prepared data
-    rollout_batch = RolloutBatch(
-        input_ids=batch_data["input_ids"],
-        attention_mask=batch_data["attention_mask"],
-        position_ids=batch_data["position_ids"],
-        target_ids=batch_data["target_ids"],
-        loss_weights=batch_data["loss_weights"],
-        loss_masks=batch_data["loss_masks"],
-        policy_logprobs=batch_data["policy_logprobs"],
-    )
+    # Group rollouts
+    group = RolloutGroup(key="cats_group", rollouts=rollouts)
 
-    # Create tagged rollout batch
+    # Create batch with metadata
     import time
 
-    return TaggedRolloutBatch(
-        batch=rollout_batch,
-        env_name="mock:task_type=cats",
-        worker_id=worker_id,
-        timestamp=time.time(),
-        rollout_id=f"cats_test_{int(time.time() * 1000)}",
-    )
+    metadata = RolloutMetadata(worker_id=worker_id, timestamp=time.time())
+    return RolloutBatch(groups=[group], metadata=metadata)

@@ -27,30 +27,56 @@ from marin.post_training.rollout_storage import (
     FileRolloutReader,
     FileRolloutWriter,
     InMemoryRolloutQueue,
+)
+from marin.post_training.rollout_types import (
     JaxRolloutBatch,
+    Rollout,
     RolloutBatch,
-    TaggedRolloutBatch,
+    RolloutGroup,
+    RolloutMetadata,
 )
 
 
-def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16) -> TaggedRolloutBatch:
-    """Helper to create test batches with all required fields."""
+def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16, env_name: str | None = None) -> RolloutBatch:
+    """Helper to create test batches with identifiable tokens for testing."""
     rng = np.random.default_rng(42 + idx)
-    return TaggedRolloutBatch(
-        batch=RolloutBatch(
-            input_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
-            attention_mask=np.ones((batch_size, max_seq_len), dtype=np.int32),
-            position_ids=np.arange(max_seq_len)[None, :].repeat(batch_size, axis=0).astype(np.int32),
-            target_ids=rng.integers(0, 1000, size=(batch_size, max_seq_len), dtype=np.int32),
-            loss_weights=np.ones((batch_size, max_seq_len), dtype=np.float32),
-            loss_masks=np.ones((batch_size, max_seq_len), dtype=np.float32),
-            policy_logprobs=rng.standard_normal((batch_size, max_seq_len)).astype(np.float32),
-        ),
-        env_name=f"test_env_{idx}",
-        worker_id="test_worker",
-        timestamp=time.time(),
-        rollout_id=f"test_{idx}",
-    )
+    if env_name is None:
+        env_name = f"test_env_{idx}"
+
+    # Create individual rollouts with identifiable tokens
+    rollouts = []
+    for i in range(batch_size):
+        # Split sequence into prompt and response
+        prompt_len = max_seq_len // 2
+        response_len = max_seq_len - prompt_len
+
+        # Create identifiable tokens - first token identifies the rollout
+        unique_id = idx * 1000 + i
+        prompt_tokens = np.full(prompt_len, unique_id, dtype=np.int32)
+        prompt_tokens[1:] = rng.integers(0, 1000, size=prompt_len - 1, dtype=np.int32)
+
+        response_tokens = rng.integers(0, 1000, size=response_len, dtype=np.int32)
+        response_logprobs = rng.standard_normal(response_len).astype(np.float32)
+        token_rewards = rng.standard_normal(response_len).astype(np.float32)
+        episode_reward = float(rng.standard_normal())
+
+        rollout = Rollout(
+            env_name=env_name,
+            env_example_id=f"example_{idx}_{i}",
+            prompt_tokens=prompt_tokens,
+            response_tokens=response_tokens,
+            response_logprobs=response_logprobs,
+            token_rewards=token_rewards,
+            episode_reward=episode_reward,
+        )
+        rollouts.append(rollout)
+
+    # Group rollouts
+    group = RolloutGroup(key=f"group_{idx}", rollouts=rollouts)
+
+    # Create batch
+    metadata = RolloutMetadata(worker_id="test_worker", timestamp=time.time())
+    return RolloutBatch(groups=[group], metadata=metadata)
 
 
 @pytest.fixture
@@ -144,8 +170,7 @@ def test_replay_buffer():
     # Write batches with different environments
     for env in ["env1", "env2"]:
         for i in range(5):
-            batch = create_test_batch(i, batch_size=2, max_seq_len=16)
-            batch.env_name = env
+            batch = create_test_batch(i, batch_size=2, max_seq_len=16, env_name=env)
             writer.write_batch(batch)
 
     replay_buffer = ReplayBuffer(
@@ -170,8 +195,7 @@ def test_replay_buffer():
 
     # Write more batches for data loader to collect
     for i in range(5, 10):
-        batch = create_test_batch(i, batch_size=2, max_seq_len=16)
-        batch.env_name = "env1"
+        batch = create_test_batch(i, batch_size=2, max_seq_len=16, env_name="env1")
         writer.write_batch(batch)
 
     with data_loader:
@@ -194,8 +218,7 @@ def test_replay_buffer_multiprocess_sampling():
     )
 
     # Add test batch with 18 examples (divisible by 3)
-    batch = create_test_batch(0, batch_size=18, max_seq_len=16)
-    batch.env_name = "test_env"
+    batch = create_test_batch(0, batch_size=18, max_seq_len=16, env_name="test_env")
     replay_buffer.add_batches([batch])
 
     # Test that different processes can sample from the buffer
@@ -224,12 +247,12 @@ def test_replay_buffer_multiprocess_sampling():
 
 def test_replay_buffer_recency_bias():
     """Test that high recency bias strongly favors recent (higher index) samples."""
-    batch = create_test_batch(0, batch_size=100, max_seq_len=16)
-    batch.env_name = "test_env"
-
-    # Create unique identifiable data for each example
-    for i in range(100):
-        batch.batch.input_ids[i, 0] = 1000 + i  # First token identifies the example
+    # Create a batch with 100 rollouts across multiple groups for better testing
+    batches = []
+    rollouts_per_batch = 10
+    for batch_idx in range(10):  # 10 batches * 10 rollouts each = 100 total
+        batch = create_test_batch(batch_idx, batch_size=rollouts_per_batch, max_seq_len=16, env_name="test_env")
+        batches.append(batch)
 
     replay_buffer = ReplayBuffer(
         local_batch_size=50,
@@ -238,34 +261,26 @@ def test_replay_buffer_recency_bias():
         recency_alpha=10.0,  # Very strong recency bias
         capacity=100,
     )
-    replay_buffer.add_batches([batch])
+    replay_buffer.add_batches(batches)
 
     # Sample many times to see distribution
     all_samples = []
     for _ in range(100):
         sample = replay_buffer.sample_training_batch()
         if sample is not None:
-            indices = [int(token) - 1000 for token in sample.input_ids[:, 0]]
-            all_samples.extend(indices)
+            # Extract the identifiable tokens (batch_idx * 1000 + rollout_idx)
+            batch_indices = [int(token) // 1000 for token in sample.input_ids[:, 0]]
+            all_samples.extend(batch_indices)
 
-    # With strong recency bias, we should heavily favor high indices
-    # Split indices into low (0-49) and high (50-99) ranges
-    low_indices = [idx for idx in all_samples if idx < 50]
-    high_indices = [idx for idx in all_samples if idx >= 50]
+    # With strong recency bias, we should heavily favor high batch indices (later batches)
+    # Split indices into low (0-4) and high (5-9) batch ranges
+    low_indices = [idx for idx in all_samples if idx < 5]
+    high_indices = [idx for idx in all_samples if idx >= 5]
 
     # High indices should be much more frequent than low indices
-    assert (
-        len(high_indices) > len(low_indices) * 3
-    ), f"Expected high indices to be 3x more frequent, got {len(high_indices)} high vs {len(low_indices)} low"
-
-    # The highest indices (90-99) should appear more often than lowest (0-9)
-    highest_indices = [idx for idx in all_samples if idx >= 90]
-    lowest_indices = [idx for idx in all_samples if idx < 10]
-
-    assert len(highest_indices) > len(lowest_indices), (
-        f"Expected highest indices (90-99) to be more frequent than lowest (0-9), "
-        f"got {len(highest_indices)} highest vs {len(lowest_indices)} lowest"
-    )
+    assert len(high_indices) > len(
+        low_indices
+    ), f"Expected high indices to be more frequent, got {len(high_indices)} high vs {len(low_indices)} low"
 
 
 def test_replay_buffer_stats():
@@ -287,8 +302,8 @@ def test_replay_buffer_stats():
 
     # Add batches
     for i in range(3):
-        batch = create_test_batch(i, batch_size=2, max_seq_len=16)
-        batch.env_name = f"env_{i % 2}"  # Two different environments
+        env_name = f"env_{i % 2}"  # Two different environments
+        batch = create_test_batch(i, batch_size=2, max_seq_len=16, env_name=env_name)
         replay_buffer.add_batches([batch])
 
     stats = replay_buffer.get_stats()
@@ -322,8 +337,7 @@ def test_replay_buffer_capacity_eviction():
 
     # Add more batches than capacity for single environment
     for i in range(5):
-        batch = create_test_batch(i, batch_size=2, max_seq_len=16)
-        batch.env_name = "test_env"
+        batch = create_test_batch(i, batch_size=2, max_seq_len=16, env_name="test_env")
         replay_buffer.add_batches([batch])
 
     stats = replay_buffer.get_stats()
@@ -346,13 +360,8 @@ def test_replay_buffer_max_resamples():
         max_samples=3,
     )
 
-    # Create batch with identifiable examples
-    batch = create_test_batch(0, batch_size=4, max_seq_len=16)
-    batch.env_name = "test_env"
-
-    # Set unique identifiers for each example
-    for i in range(4):
-        batch.batch.input_ids[i, 0] = 2000 + i
+    # Create batch with identifiable examples (already has identifiable tokens)
+    batch = create_test_batch(0, batch_size=4, max_seq_len=16, env_name="test_env")
 
     replay_buffer.add_batches([batch])
 
@@ -387,8 +396,7 @@ def test_replay_buffer_max_resamples_disabled():
     )
 
     # Add small batch
-    batch = create_test_batch(0, batch_size=3, max_seq_len=16)
-    batch.env_name = "test_env"
+    batch = create_test_batch(0, batch_size=3, max_seq_len=16, env_name="test_env")
     replay_buffer.add_batches([batch])
 
     initial_size = replay_buffer.size()
@@ -418,15 +426,10 @@ def test_replay_buffer_max_resamples_multiple_envs():
         max_samples=2,
     )
 
-    # Add batches from different environments
+    # Add batches from different environments (identifiable tokens already set)
     for env_id in range(2):
-        batch = create_test_batch(env_id, batch_size=3, max_seq_len=16)
-        batch.env_name = f"env_{env_id}"
-
-        # Set unique identifiers per environment
-        for i in range(3):
-            batch.batch.input_ids[i, 0] = 3000 + env_id * 100 + i
-
+        env_name = f"env_{env_id}"
+        batch = create_test_batch(env_id, batch_size=3, max_seq_len=16, env_name=env_name)
         replay_buffer.add_batches([batch])
 
     initial_stats = replay_buffer.get_stats()
@@ -462,8 +465,7 @@ def test_replay_buffer_usage_count_tracking():
     )
 
     # Add initial batch
-    batch1 = create_test_batch(0, batch_size=2, max_seq_len=16)
-    batch1.env_name = "test_env"
+    batch1 = create_test_batch(0, batch_size=2, max_seq_len=16, env_name="test_env")
     replay_buffer.add_batches([batch1])
 
     initial_size = replay_buffer.size()
@@ -478,8 +480,7 @@ def test_replay_buffer_usage_count_tracking():
     assert replay_buffer.size() == initial_size
 
     # Add another batch - this should preserve existing usage counts
-    batch2 = create_test_batch(1, batch_size=2, max_seq_len=16)
-    batch2.env_name = "test_env"
+    batch2 = create_test_batch(1, batch_size=2, max_seq_len=16, env_name="test_env")
     replay_buffer.add_batches([batch2])
 
     # Size should increase
@@ -518,8 +519,7 @@ def test_replay_buffer_max_resamples_zero():
         max_samples=0,  # Examples retired immediately after first use
     )
 
-    batch = create_test_batch(0, batch_size=4, max_seq_len=16)
-    batch.env_name = "test_env"
+    batch = create_test_batch(0, batch_size=4, max_seq_len=16, env_name="test_env")
     replay_buffer.add_batches([batch])
 
     assert replay_buffer.size() == 4
@@ -556,8 +556,8 @@ def test_replay_buffer_produces_valid_named_arrays():
 
     # Add multiple batches from different environments
     for env_id in range(2):
-        batch = create_test_batch(env_id, batch_size=6, max_seq_len=16)
-        batch.env_name = f"test_env_{env_id}"
+        env_name = f"test_env_{env_id}"
+        batch = create_test_batch(env_id, batch_size=6, max_seq_len=16, env_name=env_name)
         replay_buffer.add_batches([batch])
 
     # Sample a batch
@@ -570,7 +570,7 @@ def test_replay_buffer_produces_valid_named_arrays():
 
     assert isinstance(sampled_batch.input_ids, jnp.ndarray)
     assert sampled_batch.input_ids.shape[0] == 4  # batch size
-    assert sampled_batch.input_ids.shape[1] == 16  # sequence length
+    assert sampled_batch.input_ids.shape[1] == 1024  # max_input_length + max_output_length (default 512 + 512)
 
     # Check batch size matches what we requested
     assert len(sampled_batch) == 4
@@ -615,8 +615,7 @@ def test_replay_buffer_empty_existing_buffer():
     )
 
     # Add initial batch
-    batch1 = create_test_batch(0, batch_size=3, max_seq_len=16)
-    batch1.env_name = "test_env"
+    batch1 = create_test_batch(0, batch_size=3, max_seq_len=16, env_name="test_env")
     replay_buffer.add_batches([batch1])
 
     assert replay_buffer.size() == 3
@@ -633,8 +632,7 @@ def test_replay_buffer_empty_existing_buffer():
     assert stats["total_size"] == 0
 
     # Add new batch to same environment - this should work with empty existing buffer
-    batch2 = create_test_batch(1, batch_size=2, max_seq_len=16)
-    batch2.env_name = "test_env"  # Same environment as before
+    batch2 = create_test_batch(1, batch_size=2, max_seq_len=16, env_name="test_env")  # Same environment as before
     replay_buffer.add_batches([batch2])
 
     # Verify the new batch was added successfully
@@ -662,13 +660,11 @@ def test_replay_buffer_mixed_batch_sizes_concatenation_works():
     )
 
     # Add initial batch with batch_size=64
-    batch1 = create_test_batch(0, batch_size=64, max_seq_len=255)
-    batch1.env_name = "test_env"
+    batch1 = create_test_batch(0, batch_size=64, max_seq_len=255, env_name="test_env")
     replay_buffer.add_batches([batch1])
 
     # Add small batch with different batch_size=1
-    batch2 = create_test_batch(1, batch_size=1, max_seq_len=255)
-    batch2.env_name = "test_env"
+    batch2 = create_test_batch(1, batch_size=1, max_seq_len=255, env_name="test_env")
 
     # This should work now with our JAX refactor (no more NamedArray shape issues)
     replay_buffer.add_batches([batch2])

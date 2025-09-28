@@ -24,112 +24,98 @@ import threading
 import time
 from dataclasses import dataclass
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 
 from .rollout_storage import RolloutReader
-from .rollout_types import JaxRolloutBatch, NewRolloutBatch, RolloutBatch, TaggedRolloutBatch
+from .rollout_types import JaxRolloutBatch, Rollout, RolloutBatch
 
 logger = logging.getLogger(__name__)
 
 
-def _create_training_batch(
-    new_batch: NewRolloutBatch, max_input_length: int, max_output_length: int, pad_token_id: int
-) -> TaggedRolloutBatch:
-    """Convert rollout groups to training batches with RLOO advantages."""
+def _trim_and_pad(ary, max_input_length: int, max_output_length: int, pad_token_id: int):
+    """Trim and pad array to max sequence length."""
+    max_seq_len = max_input_length + max_output_length
+    ary = ary[:max_seq_len]
+    ary = np.pad(
+        ary,
+        (0, max_seq_len - len(ary)),
+        mode="constant",
+        constant_values=pad_token_id if ary.dtype == np.int32 else 0,
+    )
+    return ary
 
-    input_ids = []
-    attention_masks = []
-    position_ids = []
-    target_ids = []
-    loss_weights = []
-    loss_masks = []
-    policy_logprobs = []
 
-    for group in new_batch.groups:
-        advantages = group.compute_rloo_advantages()
+def _convert_to_training_format(
+    rollout: Rollout, advantage: float, max_input_length: int, max_output_length: int, pad_token_id: int
+) -> dict:
+    """Convert a single rollout to training format with advantage."""
+    full_tokens = np.concatenate([rollout.prompt_tokens, rollout.response_tokens])
+    full_mask = np.ones(len(full_tokens))
+    full_position_ids = np.maximum(np.cumsum(full_mask) - 1, 0)
 
-        for rollout_idx, rollout in enumerate(group.rollouts):
-            full_tokens = np.concatenate([rollout.prompt_tokens, rollout.response_tokens])
-            full_mask = np.ones([len(full_tokens)])
-            full_position_ids = np.maximum(np.cumsum(full_mask) - 1, 0)
+    # Shifted for next-token prediction
+    input_tokens = full_tokens[:-1]
+    input_attention_mask = full_mask[:-1]
+    target_tokens = full_tokens[1:]
+    position_ids = full_position_ids[:-1]
 
-            # Prepare input/target sequences (shifted for next-token prediction)
-            input_tokens = full_tokens[:-1]
-            input_attention_mask = full_mask[:-1]
-            target_tokens = full_tokens[1:]
+    # Loss mask (only on response tokens)
+    loss_mask = np.concatenate(
+        [
+            np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
+            np.ones(len(rollout.response_tokens), dtype=np.float32),
+        ]
+    )
 
-            # Create loss masks (only compute loss on response tokens)
-            loss_mask = np.concatenate(
-                [
-                    np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
-                    np.ones(len(rollout.response_tokens), dtype=np.float32),
-                ]
-            )
+    # Loss weights (advantage for all response tokens)
+    loss_weight = np.concatenate(
+        [
+            np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
+            np.full(len(rollout.response_tokens), advantage, dtype=np.float32),
+        ]
+    )
 
-            # Create loss weights (RLOO advantages repeated for each token)
-            advantage_value = advantages[rollout_idx]
-            loss_weight = np.concatenate(
-                [
-                    np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
-                    np.full_like(rollout.response_tokens, advantage_value, dtype=np.float32),
-                ]
-            )
+    # Policy logprobs
+    policy_logprob = np.concatenate(
+        [np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32), rollout.response_logprobs.astype(np.float32)]
+    )
 
-            # Extract policy logprobs (no reference logprobs needed anymore)
-            policy_logprob = np.concatenate(
-                [
-                    np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
-                    rollout.response_logprobs.astype(np.float32),
-                ]
-            )
+    return {
+        "input_ids": _trim_and_pad(input_tokens, max_input_length, max_output_length, pad_token_id),
+        "attention_mask": _trim_and_pad(input_attention_mask, max_input_length, max_output_length, pad_token_id),
+        "position_ids": _trim_and_pad(position_ids, max_input_length, max_output_length, pad_token_id),
+        "target_ids": _trim_and_pad(target_tokens, max_input_length, max_output_length, pad_token_id),
+        "loss_weights": _trim_and_pad(loss_weight, max_input_length, max_output_length, pad_token_id),
+        "loss_masks": _trim_and_pad(loss_mask, max_input_length, max_output_length, pad_token_id),
+        "policy_logprobs": _trim_and_pad(policy_logprob, max_input_length, max_output_length, pad_token_id),
+    }
 
-            full_position_ids = full_position_ids[:-1]
 
-            def _trim_and_pad(ary):
-                max_seq_len = max_input_length + max_output_length
-                ary = ary[:max_seq_len]
-                ary = np.pad(
-                    ary,
-                    (0, max_seq_len - len(ary)),
-                    mode="constant",
-                    constant_values=pad_token_id if ary.dtype == np.int32 else 0,
-                )
-                return ary
+def _stack_training_examples(examples: list[dict]) -> JaxRolloutBatch:
+    """Stack training examples into a JAX batch."""
+    stacked = {}
+    for key in examples[0].keys():
+        stacked[key] = jnp.stack([ex[key] for ex in examples], axis=0)
 
-            input_ids.append(_trim_and_pad(input_tokens))
-            attention_masks.append(_trim_and_pad(input_attention_mask))
-            position_ids.append(_trim_and_pad(full_position_ids))
-            target_ids.append(_trim_and_pad(target_tokens))
-            loss_weights.append(_trim_and_pad(loss_weight))
-            loss_masks.append(_trim_and_pad(loss_mask))
-            policy_logprobs.append(_trim_and_pad(policy_logprob))
-
-    return TaggedRolloutBatch(
-        batch=RolloutBatch(
-            input_ids=np.stack(input_ids, axis=0),
-            attention_mask=np.stack(attention_masks, axis=0),
-            position_ids=np.stack(position_ids, axis=0),
-            target_ids=np.stack(target_ids, axis=0),
-            loss_weights=np.stack(loss_weights, axis=0),
-            loss_masks=np.stack(loss_masks, axis=0),
-            policy_logprobs=np.stack(policy_logprobs, axis=0),
-        ),
-        env_name="",
-        worker_id=new_batch.metadata.worker_id,
-        timestamp=new_batch.metadata.timestamp,
-        rollout_id="converted_batch",
+    return JaxRolloutBatch(
+        input_ids=stacked["input_ids"],
+        attention_mask=stacked["attention_mask"],
+        position_ids=stacked["position_ids"],
+        target_ids=stacked["target_ids"],
+        loss_weights=stacked["loss_weights"],
+        loss_masks=stacked["loss_masks"],
+        policy_logprobs=stacked["policy_logprobs"],
     )
 
 
 @dataclass
-class ReplayCounts:
-    usage_count: np.ndarray
-    examples: JaxRolloutBatch
+class IndividualRollout:
+    """Single rollout with precomputed RLOO advantage."""
 
-    def __len__(self) -> int:
-        return len(self.examples)
+    rollout: Rollout
+    advantage: float
+    usage_count: int = 0
 
 
 class ReplayBuffer:
@@ -177,7 +163,7 @@ class ReplayBuffer:
         self.max_output_length = max_output_length
         self.pad_token_id = pad_token_id
 
-        self.env_buffers: dict[str, ReplayCounts] = {}
+        self.rollout_storage: dict[str, list[IndividualRollout]] = {}
         self._lock = threading.Lock()
 
         self._total_batches_added = 0
@@ -185,158 +171,108 @@ class ReplayBuffer:
 
         self._rng = np.random.default_rng(seed=process_id + 42)
 
-    def add_batches(self, new_batches: list[NewRolloutBatch]) -> None:
+    def _retire_overused_rollouts(self):
+        """Remove rollouts that exceeded max_samples usage."""
+        if self.max_samples < 0:
+            return
+
+        for env_name in self.rollout_storage:
+            rollouts = self.rollout_storage[env_name]
+            # Keep only rollouts under usage limit
+            self.rollout_storage[env_name] = [r for r in rollouts if r.usage_count < self.max_samples]
+
+    def add_batches(self, new_batches: list[RolloutBatch]) -> None:
         """Add new rollout batches into the replay buffer.
 
-        The batches are converted to the old format and added to the buffer corresponding
-        to their environment name. If this environment has seen more than `capacity` batches,
-        the oldest batch is discarded.
+        Computes RLOO advantages at ingestion and stores individual rollouts
+        with their precomputed advantages and usage tracking.
         """
-
-        # Convert new format to old format
-        tagged_batches = []
-        for new_batch in new_batches:
-            tagged_batch = _create_training_batch(
-                new_batch, self.max_input_length, self.max_output_length, self.pad_token_id
-            )
-            tagged_batches.append(tagged_batch)
-
-        # group batches by environment type
-        batches_by_env: dict[str, list[RolloutBatch]] = {}
-        for tagged_batch in tagged_batches:
-            env_name = tagged_batch.env_name
-            if env_name not in batches_by_env:
-                batches_by_env[env_name] = []
-            batches_by_env[env_name].append(tagged_batch.batch)
-
         with self._lock:
-            for env_name, batches in batches_by_env.items():
-                # Convert numpy batches to JAX
-                jax_batches = [batch.to_jax() for batch in batches]
+            for batch in new_batches:
+                for group in batch.groups:
+                    # Compute RLOO advantages for the group
+                    advantages = group.compute_rloo_advantages()
 
-                if env_name not in self.env_buffers:
-                    buffer = jax.tree.map(lambda *xs: jnp.concatenate(xs, axis=0), *jax_batches)
-                    usage_counts = np.zeros(len(buffer), dtype=np.int32)
-                else:
-                    # Concatenate existing buffer with new batches
-                    existing_buffer = self.env_buffers[env_name].examples
-                    if len(existing_buffer) > 0:
-                        all_batches = [existing_buffer, *jax_batches]
-                    else:
-                        all_batches = jax_batches
-                    buffer = jax.tree.map(lambda *xs: jnp.concatenate(xs, axis=0), *all_batches)
-                    usage_counts = np.concatenate(
-                        [
-                            self.env_buffers[env_name].usage_count,
-                            np.zeros(sum(len(b) for b in batches), dtype=np.int32),
-                        ]
-                    )
+                    # Store each rollout individually with its advantage
+                    for rollout, advantage in zip(group.rollouts, advantages, strict=False):
+                        individual = IndividualRollout(rollout=rollout, advantage=advantage, usage_count=0)
 
-                env_size = len(buffer)
-                if env_size > self.capacity:
-                    start_idx = env_size - self.capacity
-                    new_size = self.capacity
+                        env_name = rollout.env_name
+                        if env_name not in self.rollout_storage:
+                            self.rollout_storage[env_name] = []
 
-                    def _slice(tree, idx: int = start_idx, size: int = new_size):
-                        return jax.tree.map(lambda x: x[idx : idx + size], tree)
+                        self.rollout_storage[env_name].append(individual)
 
-                    buffer = _slice(buffer)
-                    usage_counts = usage_counts[start_idx:]
+                        # Apply capacity limit per environment (keep most recent)
+                        if len(self.rollout_storage[env_name]) > self.capacity:
+                            self.rollout_storage[env_name] = self.rollout_storage[env_name][-self.capacity :]
 
-                self.env_buffers[env_name] = ReplayCounts(usage_count=usage_counts, examples=buffer)
-
-                logger.info(
-                    "Added batches to env '%s', new size: %d",
-                    env_name,
-                    len(self.env_buffers[env_name]),
-                )
-                self._total_batches_added += len(batches)
+                logger.info("Added batch with %d groups to replay buffer", len(batch.groups))
+                self._total_batches_added += 1
 
     def sample_training_batch(self) -> JaxRolloutBatch | None:
-        """Sample a training batch with balanced environment sampling.
+        """Sample a training batch from individual rollouts with balanced environment sampling.
 
         If no samples are available, returns None.
-
-        It is guaranteed that all workers will either return a batch with the same
-        number of examples, or None.
-
-        Note that maximum usage count tracking for examples is approximate and only
-        applies after a full batch is sampled. It is possible with a large batch size
-        and small number of remaining examples for an example to be used more than
-        `max_resamples` times.
 
         Returns:
             JaxRolloutBatch containing as many examples as possible up to local_batch_size.
         """
         with self._lock:
-            # We sample first an environment, then an example from that environment.
-            # We use a power-law distribution to prioritize recent examples.
-            # We don't currently guarantee processes will fetch unique examples
-            env_buffers: list[ReplayCounts] = [b for b in self.env_buffers.values() if len(b) > 0]
-
-            if not env_buffers:
+            # Get all environments with rollouts
+            env_names = [name for name, rollouts in self.rollout_storage.items() if rollouts]
+            if not env_names:
                 return None
 
-            sample_counts: list[np.ndarray] = [np.zeros(len(b.examples), dtype=np.int32) for b in env_buffers]
-            env_count = len(env_buffers)
-            env_ids = np.arange(env_count)
-            env_sample_weights = []
-
-            # First compute the probability of sampling an example from each environment
-            for b in env_buffers:
-                sample_weights = np.arange(len(b)) + 1
-                sample_weights = sample_weights**self.recency_alpha
-                sample_weights = sample_weights / sample_weights.sum()
-                env_sample_weights.append(sample_weights)
-
-            samples = []
-
-            # Then randomly select an environment & sample from it
+            # Sample individual rollouts
+            sampled = []
             for _ in range(self.local_batch_size):
-                env_idx = self._rng.choice(env_ids)
-                env_buffer = env_buffers[env_idx]
-                buffer_size = len(env_buffer)
-                sample_idx = self._rng.choice(buffer_size, p=env_sample_weights[env_idx])
+                # Select environment (balanced sampling)
+                env_name = self._rng.choice(env_names)
+                rollouts = self.rollout_storage[env_name]
 
-                def _select_example(tree, idx: int = sample_idx):
-                    return jax.tree.map(lambda x: x[idx : idx + 1], tree)
+                # Compute recency weights
+                weights = np.arange(len(rollouts)) + 1
+                weights = weights**self.recency_alpha
+                weights = weights / weights.sum()
 
-                single_example = _select_example(env_buffer.examples)
-                samples.append(single_example)
-                sample_counts[env_idx][sample_idx] += 1
+                # Sample rollout index
+                idx = self._rng.choice(len(rollouts), p=weights)
+                individual = rollouts[idx]
 
-            # update sample counts and retire overused examples
-            for env_idx, counts in enumerate(sample_counts):
-                env_buffer = env_buffers[env_idx]
-                env_buffer.usage_count += counts
-                if self.max_samples >= 0:
-                    to_keep = env_buffer.usage_count < self.max_samples
-                    if not np.all(to_keep):
+                # Convert to training format with precomputed advantage
+                training_example = _convert_to_training_format(
+                    individual.rollout,
+                    individual.advantage,
+                    self.max_input_length,
+                    self.max_output_length,
+                    self.pad_token_id,
+                )
+                sampled.append(training_example)
 
-                        def _slice(tree, mask: np.ndarray = to_keep):
-                            return jax.tree.map(lambda x: x[mask], tree)
+                # Update usage count
+                individual.usage_count += 1
 
-                        kept_examples = _slice(env_buffer.examples, to_keep)
-                        kept_usage = env_buffer.usage_count[to_keep]
-                        env_name = list(self.env_buffers.keys())[env_idx]
-                        self.env_buffers[env_name] = ReplayCounts(usage_count=kept_usage, examples=kept_examples)
+            # Retire overused rollouts
+            self._retire_overused_rollouts()
 
+            # Stack into batch
             self._total_batches_sampled += 1
-            return jax.tree.map(lambda *xs: jnp.concatenate(xs, axis=0), *samples)
+            return _stack_training_examples(sampled)
 
     def size(self) -> int:
-        """Get total number of batches across all environments."""
+        """Get total number of rollouts across all environments."""
         with self._lock:
-            return sum(len(buffer) for buffer in self.env_buffers.values())
+            return sum(len(rollouts) for rollouts in self.rollout_storage.values())
 
     def get_stats(self) -> dict:
         """Get buffer statistics for monitoring."""
         with self._lock:
-            env_sizes = {env: len(buffer) for env, buffer in self.env_buffers.items()}
+            env_sizes = {env: len(rollouts) for env, rollouts in self.rollout_storage.items()}
             return {
                 "total_size": sum(env_sizes.values()),
                 "env_sizes": env_sizes,
-                "num_environments": len(self.env_buffers),
+                "num_environments": len(self.rollout_storage),
                 "total_batches_added": self._total_batches_added,
                 "total_batches_sampled": self._total_batches_sampled,
             }
