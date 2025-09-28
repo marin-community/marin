@@ -28,7 +28,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from .rollout_storage import JaxRolloutBatch, RolloutBatch, RolloutReader, TaggedRolloutBatch
+from .rollout_storage import RolloutReader
+from .rollout_types import JaxRolloutBatch, RolloutBatch, TaggedRolloutBatch
 
 logger = logging.getLogger(__name__)
 

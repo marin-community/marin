@@ -40,10 +40,9 @@ from marin.post_training.rl_dataset import (
     prepare_training_batch,
 )
 from marin.post_training.rollout_storage import (
-    RolloutBatch,
     RolloutStorageConfig,
-    TaggedRolloutBatch,
 )
+from marin.post_training.rollout_types import RolloutBatch, TaggedRolloutBatch
 from marin.post_training.rollout_worker import RolloutWorkerConfig, compute_model_logprobs
 from marin.post_training.train_worker import ReplayBufferConfig, TrainWorkerConfig
 from marin.post_training.weight_transfer import WeightTransferConfig
