@@ -450,7 +450,7 @@ class RolloutWorker:
         if self.inference_server:
             self.inference_server.shutdown()
 
-    def _generate_rollout_batch(self, rng) -> tuple[TaggedRolloutBatch, dict]:
+    def _generate_rollout_batch(self, rng) -> tuple[NewRolloutBatch, dict]:
         """Generate rollout batches directly from environment without using rl_dataset."""
         barrier_sync()
 
@@ -502,9 +502,6 @@ class RolloutWorker:
             metadata=NewRolloutMetadata(worker_id=f"{socket.gethostname()}_{os.getpid()}", timestamp=time.time()),
         )
 
-        rollout_batch = _create_training_batch(
-            rollout_batch, self.config.max_input_length, self.config.max_output_length, self.config.pad_token_id
-        )
         barrier_sync()
         return rollout_batch, env_step.metrics
 

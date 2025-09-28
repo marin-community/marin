@@ -306,6 +306,9 @@ class TrainWorker:
             local_batch_size=config.trainer.train_batch_size,
             recency_alpha=config.replay_buffer.alpha,
             max_samples=config.replay_buffer.max_samples,
+            max_input_length=getattr(config.model, "seq_len", 512),
+            max_output_length=getattr(config.model, "seq_len", 512),
+            pad_token_id=getattr(self.tokenizer, "pad_token_id", 0) or 0,
         )
         self.data_loader = ReplayDataLoader(
             rollout_reader=self.rollout_reader,

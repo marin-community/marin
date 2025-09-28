@@ -29,9 +29,98 @@ import jax.numpy as jnp
 import numpy as np
 
 from .rollout_storage import RolloutReader
-from .rollout_types import JaxRolloutBatch, RolloutBatch, TaggedRolloutBatch
+from .rollout_types import JaxRolloutBatch, NewRolloutBatch, RolloutBatch, TaggedRolloutBatch
 
 logger = logging.getLogger(__name__)
+
+
+def _create_training_batch(
+    new_batch: NewRolloutBatch, max_input_length: int, max_output_length: int, pad_token_id: int
+) -> TaggedRolloutBatch:
+    """Convert rollout groups to training batches with RLOO advantages."""
+
+    input_ids = []
+    attention_masks = []
+    position_ids = []
+    target_ids = []
+    loss_weights = []
+    loss_masks = []
+    policy_logprobs = []
+
+    for group in new_batch.groups:
+        advantages = group.compute_rloo_advantages()
+
+        for rollout_idx, rollout in enumerate(group.rollouts):
+            full_tokens = np.concatenate([rollout.prompt_tokens, rollout.response_tokens])
+            full_mask = np.ones([len(full_tokens)])
+            full_position_ids = np.maximum(np.cumsum(full_mask) - 1, 0)
+
+            # Prepare input/target sequences (shifted for next-token prediction)
+            input_tokens = full_tokens[:-1]
+            input_attention_mask = full_mask[:-1]
+            target_tokens = full_tokens[1:]
+
+            # Create loss masks (only compute loss on response tokens)
+            loss_mask = np.concatenate(
+                [
+                    np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
+                    np.ones(len(rollout.response_tokens), dtype=np.float32),
+                ]
+            )
+
+            # Create loss weights (RLOO advantages repeated for each token)
+            advantage_value = advantages[rollout_idx]
+            loss_weight = np.concatenate(
+                [
+                    np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
+                    np.full_like(rollout.response_tokens, advantage_value, dtype=np.float32),
+                ]
+            )
+
+            # Extract policy logprobs (no reference logprobs needed anymore)
+            policy_logprob = np.concatenate(
+                [
+                    np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
+                    rollout.response_logprobs.astype(np.float32),
+                ]
+            )
+
+            full_position_ids = full_position_ids[:-1]
+
+            def _trim_and_pad(ary):
+                max_seq_len = max_input_length + max_output_length
+                ary = ary[:max_seq_len]
+                ary = np.pad(
+                    ary,
+                    (0, max_seq_len - len(ary)),
+                    mode="constant",
+                    constant_values=pad_token_id if ary.dtype == np.int32 else 0,
+                )
+                return ary
+
+            input_ids.append(_trim_and_pad(input_tokens))
+            attention_masks.append(_trim_and_pad(input_attention_mask))
+            position_ids.append(_trim_and_pad(full_position_ids))
+            target_ids.append(_trim_and_pad(target_tokens))
+            loss_weights.append(_trim_and_pad(loss_weight))
+            loss_masks.append(_trim_and_pad(loss_mask))
+            policy_logprobs.append(_trim_and_pad(policy_logprob))
+
+    return TaggedRolloutBatch(
+        batch=RolloutBatch(
+            input_ids=np.stack(input_ids, axis=0),
+            attention_mask=np.stack(attention_masks, axis=0),
+            position_ids=np.stack(position_ids, axis=0),
+            target_ids=np.stack(target_ids, axis=0),
+            loss_weights=np.stack(loss_weights, axis=0),
+            loss_masks=np.stack(loss_masks, axis=0),
+            policy_logprobs=np.stack(policy_logprobs, axis=0),
+        ),
+        env_name="",
+        worker_id=new_batch.metadata.worker_id,
+        timestamp=new_batch.metadata.timestamp,
+        rollout_id="converted_batch",
+    )
 
 
 @dataclass
@@ -59,6 +148,9 @@ class ReplayBuffer:
         recency_alpha: float,
         capacity: int,
         max_samples: int = -1,
+        max_input_length: int = 512,
+        max_output_length: int = 512,
+        pad_token_id: int = 0,
     ):
         """Initialize replay buffer.
 
@@ -69,6 +161,9 @@ class ReplayBuffer:
             train_process_id: Identifier for this process. Used to sample across processes.
             num_train_processes: Total number of training processes.
             max_samples: Maximum number of times an example can be used before being retired.
+            max_input_length: Maximum input sequence length for padding.
+            max_output_length: Maximum output sequence length for padding.
+            pad_token_id: Token ID to use for padding.
 
         A `max_samples` of -1 indicates no limit, 0 or 1 means each example is used at most once.
         """
@@ -78,6 +173,9 @@ class ReplayBuffer:
         self.total_processes = total_processes
         self.process_id = process_id
         self.max_samples = max_samples
+        self.max_input_length = max_input_length
+        self.max_output_length = max_output_length
+        self.pad_token_id = pad_token_id
 
         self.env_buffers: dict[str, ReplayCounts] = {}
         self._lock = threading.Lock()
@@ -87,12 +185,21 @@ class ReplayBuffer:
 
         self._rng = np.random.default_rng(seed=process_id + 42)
 
-    def add_batches(self, tagged_batches: list[TaggedRolloutBatch]) -> None:
-        """Add tagged batchs into the replay buffer.
+    def add_batches(self, new_batches: list[NewRolloutBatch]) -> None:
+        """Add new rollout batches into the replay buffer.
 
-        The batch is added to the buffer corresponding to its environment name.
-        If this environment has seen more than `capacity` batches, the oldest batch is discarded.
+        The batches are converted to the old format and added to the buffer corresponding
+        to their environment name. If this environment has seen more than `capacity` batches,
+        the oldest batch is discarded.
         """
+
+        # Convert new format to old format
+        tagged_batches = []
+        for new_batch in new_batches:
+            tagged_batch = _create_training_batch(
+                new_batch, self.max_input_length, self.max_output_length, self.pad_token_id
+            )
+            tagged_batches.append(tagged_batch)
 
         # group batches by environment type
         batches_by_env: dict[str, list[RolloutBatch]] = {}

@@ -53,7 +53,7 @@ from enum import Enum
 
 import fsspec
 
-from .rollout_types import TaggedRolloutBatch
+from .rollout_types import NewRolloutBatch
 
 logger = logging.getLogger(__name__)
 
@@ -113,19 +113,19 @@ class RolloutReader(ABC):
     """Abstract interface for reading rollout batches."""
 
     @abstractmethod
-    def read_batch(self, timeout: float | None = None) -> TaggedRolloutBatch | None:
+    def read_batch(self, timeout: float | None = None) -> NewRolloutBatch | None:
         """Read a single batch with optional timeout.
 
         Args:
             timeout: Maximum time to wait in seconds. None means no wait.
 
         Returns:
-            TaggedRolloutBatch if available, None if timeout or no batches.
+            NewRolloutBatch if available, None if timeout or no batches.
         """
         pass
 
     @abstractmethod
-    def read_all_available(self) -> list[TaggedRolloutBatch]:
+    def read_all_available(self) -> list[NewRolloutBatch]:
         """Read all currently available batches without blocking.
 
         Returns:
@@ -138,11 +138,11 @@ class RolloutWriter(ABC):
     """Abstract interface for writing rollout batches."""
 
     @abstractmethod
-    def write_batch(self, batch: TaggedRolloutBatch) -> None:
+    def write_batch(self, batch: NewRolloutBatch) -> None:
         """Write a batch.
 
         Args:
-            batch: TaggedRolloutBatch to write.
+            batch: NewRolloutBatch to write.
         """
         pass
 
@@ -196,7 +196,7 @@ class FileRolloutReader(RolloutReader):
         parsed_files.sort(key=lambda x: x[0])
         return [file_path for _, file_path in parsed_files]
 
-    def read_batch(self, timeout: float | None = None) -> TaggedRolloutBatch | None:
+    def read_batch(self, timeout: float | None = None) -> NewRolloutBatch | None:
         """Read a single batch with optional timeout."""
         while True:
             available_files = self._get_available_files()
@@ -213,7 +213,7 @@ class FileRolloutReader(RolloutReader):
 
             time.sleep(self.poll_interval)
 
-    def read_all_available(self) -> list[TaggedRolloutBatch]:
+    def read_all_available(self) -> list[NewRolloutBatch]:
         """Read all currently available batches without blocking."""
         batches = []
         available_files = self._get_available_files()
@@ -261,7 +261,7 @@ class FileRolloutWriter(RolloutWriter):
         timestamp_int = int(timestamp * 1000000)  # microseconds for ordering
         return f"{self.path}/{timestamp_int:020d}_{self.hostname}_{counter:06d}.pkl"
 
-    def write_batch(self, batch: TaggedRolloutBatch) -> None:
+    def write_batch(self, batch: NewRolloutBatch) -> None:
         """Write batch to storage with all required fields."""
         timestamp = time.time()
 
@@ -297,7 +297,7 @@ class InMemoryRolloutQueue:
     """In-memory rollout queue for testing and development."""
 
     def __init__(self):
-        self._queue: list[TaggedRolloutBatch] = []
+        self._queue: list[NewRolloutBatch] = []
         self._lock = threading.Lock()
 
     def reader(self) -> "InMemoryRolloutReader":
@@ -321,7 +321,7 @@ class InMemoryRolloutReader(RolloutReader):
         self._queue = queue
         self._read_index = 0
 
-    def read_batch(self, timeout: float | None = None) -> TaggedRolloutBatch | None:
+    def read_batch(self, timeout: float | None = None) -> NewRolloutBatch | None:
         """Read a single batch with optional timeout."""
         start_time = time.time()
 
@@ -343,7 +343,7 @@ class InMemoryRolloutReader(RolloutReader):
             # Wait a bit before checking again
             time.sleep(min(0.01, timeout - (time.time() - start_time)))
 
-    def read_all_available(self) -> list[TaggedRolloutBatch]:
+    def read_all_available(self) -> list[NewRolloutBatch]:
         """Read all currently available batches without blocking."""
         with self._queue._lock:
             batches = self._queue._queue[self._read_index :]
@@ -357,7 +357,7 @@ class InMemoryRolloutWriter(RolloutWriter):
     def __init__(self, queue: InMemoryRolloutQueue):
         self._queue = queue
 
-    def write_batch(self, batch: TaggedRolloutBatch) -> None:
+    def write_batch(self, batch: NewRolloutBatch) -> None:
         """Write batch to memory queue."""
         with self._queue._lock:
             self._queue._queue.append(batch)
