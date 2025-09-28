@@ -43,21 +43,111 @@ from optax import softmax_cross_entropy_with_integer_labels
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from marin.post_training.environments.load_environments import load_environment_from_spec
-from marin.post_training.environments.marin_env import InferenceContext
+from marin.post_training.environments.marin_env import EnvResponse, InferenceContext
 
 from . import weight_transfer
 from .model_utils import load_model_from_checkpoint
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .rollout_types import (
-    ResponseSample,
+    NewRollout,
+    NewRolloutBatch,
+    NewRolloutGroup,
+    NewRolloutMetadata,
     RolloutBatch,
-    RolloutGroup,
-    RolloutItem,
     TaggedRolloutBatch,
 )
 from .weight_transfer import WeightTransferConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _create_training_batch(
+    new_batch: NewRolloutBatch, max_input_length: int, max_output_length: int, pad_token_id: int
+) -> TaggedRolloutBatch:
+    """Convert rollout groups to training batches with RLOO advantages."""
+
+    input_ids = []
+    attention_masks = []
+    position_ids = []
+    target_ids = []
+    loss_weights = []
+    loss_masks = []
+    policy_logprobs = []
+
+    for group in new_batch.groups:
+        advantages = group.compute_rloo_advantages()
+
+        for rollout_idx, rollout in enumerate(group.rollouts):
+            full_tokens = np.concatenate([rollout.prompt_tokens, rollout.response_tokens])
+            full_mask = np.ones([len(full_tokens)])
+            full_position_ids = np.maximum(np.cumsum(full_mask) - 1, 0)
+
+            # Prepare input/target sequences (shifted for next-token prediction)
+            input_tokens = full_tokens[:-1]
+            input_attention_mask = full_mask[:-1]
+            target_tokens = full_tokens[1:]
+
+            # Create loss masks (only compute loss on response tokens)
+            loss_mask = np.concatenate(
+                [
+                    np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
+                    np.ones(len(rollout.response_tokens), dtype=np.float32),
+                ]
+            )
+
+            # Create loss weights (RLOO advantages repeated for each token)
+            advantage_value = advantages[rollout_idx]
+            loss_weight = np.concatenate(
+                [
+                    np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
+                    np.full_like(rollout.response_tokens, advantage_value, dtype=np.float32),
+                ]
+            )
+
+            # Extract policy logprobs (no reference logprobs needed anymore)
+            policy_logprob = np.concatenate(
+                [
+                    np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
+                    rollout.response_logprobs.astype(np.float32),
+                ]
+            )
+
+            full_position_ids = full_position_ids[:-1]
+
+            def _trim_and_pad(ary):
+                max_seq_len = max_input_length + max_output_length
+                ary = ary[:max_seq_len]
+                ary = np.pad(
+                    ary,
+                    (0, max_seq_len - len(ary)),
+                    mode="constant",
+                    constant_values=pad_token_id if ary.dtype == np.int32 else 0,
+                )
+                return ary
+
+            input_ids.append(_trim_and_pad(input_tokens))
+            attention_masks.append(_trim_and_pad(input_attention_mask))
+            position_ids.append(_trim_and_pad(full_position_ids))
+            target_ids.append(_trim_and_pad(target_tokens))
+            loss_weights.append(_trim_and_pad(loss_weight))
+            loss_masks.append(_trim_and_pad(loss_mask))
+            policy_logprobs.append(_trim_and_pad(policy_logprob))
+
+    return TaggedRolloutBatch(
+        batch=RolloutBatch(
+            input_ids=np.stack(input_ids, axis=0),
+            attention_mask=np.stack(attention_masks, axis=0),
+            position_ids=np.stack(position_ids, axis=0),
+            target_ids=np.stack(target_ids, axis=0),
+            loss_weights=np.stack(loss_weights, axis=0),
+            loss_masks=np.stack(loss_masks, axis=0),
+            policy_logprobs=np.stack(policy_logprobs, axis=0),
+        ),
+        env_name="",
+        worker_id=f"{socket.gethostname()}_{os.getpid()}",
+        timestamp=time.time(),
+        rollout_id=f"{group.key}_response_{rollout_idx}",
+    )
 
 
 @dataclass
@@ -191,7 +281,7 @@ class LevanterInferenceContext(InferenceContext):
         prompts: list[str],
         temperature: float,
         n_generations: int,
-    ) -> list[list[dict]]:
+    ) -> list[list[EnvResponse]]:
         """Generate responses for a batch of prompts."""
         self.inference_server.reload(lambda model: self.model)
 
@@ -226,7 +316,7 @@ class LevanterInferenceContext(InferenceContext):
             for completion in completions:
                 if isinstance(completion, Exception):
                     logger.error(f"Error during generation: {completion}")
-                    prompt_results = [{"tokens": [], "logprobs": []} for _ in range(n_generations)]
+                    prompt_results = [{"tokens": np.array([]), "logprobs": np.array([])} for _ in range(n_generations)]
                     batch_results.append(prompt_results)
                     continue
 
@@ -235,7 +325,7 @@ class LevanterInferenceContext(InferenceContext):
                     content = choice.message.content
                     tokens = self.tokenizer.encode(content)
                     logprobs = [t.logprob for t in choice.logprobs.content]
-                    prompt_results.append({"tokens": tokens, "logprobs": logprobs})
+                    prompt_results.append({"tokens": np.array(tokens), "logprobs": np.array(logprobs)})
                 batch_results.append(prompt_results)
             return batch_results
 
@@ -254,39 +344,6 @@ class LevanterInferenceContext(InferenceContext):
 
         loop.close()
         return all_results
-
-    def compute_logprobs(
-        self,
-        input_tokens: np.ndarray,
-        input_attention_mask: np.ndarray,
-        target_tokens: np.ndarray,
-        target_attention_mask: np.ndarray,
-    ) -> np.ndarray:
-        """Compute log probabilities for given input/target pairs."""
-        self.inference_server.unload()
-
-        # break into batches of size 8 to avoid OOM
-        input_batches = np.array_split(input_tokens, 8)
-        input_attention_batches = np.array_split(input_attention_mask, 8)
-        target_batches = np.array_split(target_tokens, 8)
-        target_attention_batches = np.array_split(target_attention_mask, 8)
-        logprobs_list = []
-        for ib, iam, tb, tam in zip(
-            input_batches,
-            input_attention_batches,
-            target_batches,
-            target_attention_batches,
-            strict=True,
-        ):
-            logprobs_batch = compute_model_logprobs(
-                self.model,
-                ib,
-                iam,
-                tb,
-                tam,
-            )
-            logprobs_list.append(logprobs_batch)
-        return np.concatenate(logprobs_list, axis=0)
 
 
 class RolloutWorker:
@@ -397,7 +454,7 @@ class RolloutWorker:
         """Generate rollout batches directly from environment without using rl_dataset."""
         barrier_sync()
 
-        # Create policy inference context only (no reference needed anymore)
+        # Create policy inference context for sampling from the inference server
         policy_ctx = LevanterInferenceContext(
             self.policy_model,
             tokenizer=self._tokenizer,
@@ -410,7 +467,6 @@ class RolloutWorker:
             self.config.trainer.device_mesh,
             hax.axis_mapping(self.config.trainer.compute_axis_mapping),
         ):
-            # Step the environment directly
             env_step = self._environment.step(
                 inference_ctx=policy_ctx,
                 n_examples=self.config.n_prompts_per_step,
@@ -420,147 +476,37 @@ class RolloutWorker:
                 temperature=self.config.temperature,
             )
 
-            rollout_groups = self._build_rollout_groups(env_step)
-            rollout_batch = self._create_training_batch(rollout_groups)
+        rollout_groups: list[NewRolloutGroup] = []
+        for i, response in enumerate(env_step.responses):
+            rewards = env_step.rewards[i]
+            group = NewRolloutGroup(key=f"example_{i}", rollouts=[])
+            prompt = env_step.examples[i]["prompt"]
+            # answer = env_step.examples[i]["answer"]
+            prompt_tokens = self._tokenizer.encode(prompt, add_special_tokens=True)[-self.config.max_input_length :]
 
-        barrier_sync()
-        return rollout_batch, env_step.metrics
-
-    def _build_rollout_groups(self, env_step) -> list[RolloutGroup]:
-        """Build rollout groups from environment step."""
-        rollout_groups = []
-
-        for i, example in enumerate(env_step.examples):
-            rollouts = []
-            for j, response in enumerate(env_step.responses[i]):
-                # Tokenize prompt (only once per group)
-                prompt_tokens = self._tokenizer.encode(example["prompt"], add_special_tokens=True)[
-                    -self.config.max_input_length :
-                ]
-                prompt_mask = np.ones(len(prompt_tokens), dtype=np.int32)
-
-                # Pad prompt to max length
-                prompt_tokens = np.pad(
-                    prompt_tokens,
-                    (self.config.max_input_length - len(prompt_tokens), 0),
-                    constant_values=self.config.pad_token_id,
-                )
-                prompt_mask = np.pad(
-                    prompt_mask, (self.config.max_input_length - len(prompt_mask), 0), constant_values=0
-                )
-
-                # Process response
-                response_tokens = response["tokens"][: self.config.max_output_length]
-                response_mask = np.ones(len(response_tokens), dtype=np.int32)
-                response_logprobs = response["logprobs"][: self.config.max_output_length]
-
-                # Pad response to max length
-                response_tokens = np.pad(
-                    response_tokens,
-                    (0, self.config.max_output_length - len(response_tokens)),
-                    constant_values=self.config.pad_token_id,
-                )
-                response_mask = np.pad(
-                    response_mask, (0, self.config.max_output_length - len(response_mask)), constant_values=0
-                )
-                response_logprobs = np.pad(
-                    response_logprobs, (0, self.config.max_output_length - len(response_logprobs)), constant_values=0.0
-                )
-
-                rollout = RolloutItem(
-                    prompt=example["prompt"],
+            for j in range(len(response)):
+                rollout = NewRollout(
+                    env_name=self.config.environment_spec,
+                    env_example_id=f"example_{i}",
                     prompt_tokens=prompt_tokens,
-                    prompt_mask=prompt_mask,
-                    response=ResponseSample(tokens=response_tokens, logprobs=response_logprobs),
-                    response_mask=response_mask,
-                    reward=env_step.rewards[i, j],
-                    metadata={"example_id": i, "response_id": j},
+                    response_tokens=response[j]["tokens"],
+                    response_logprobs=response[j]["logprobs"],
+                    token_rewards=[rewards[j]] * len(response[j]["tokens"]),
+                    episode_reward=rewards[j],
                 )
-                rollouts.append(rollout)
-
-            group = RolloutGroup(prompt_key=f"example_{i}", rollouts=rollouts)
+                group.rollouts.append(rollout)
             rollout_groups.append(group)
 
-        return rollout_groups
-
-    def _create_training_batch(self, rollout_groups: list[RolloutGroup]) -> TaggedRolloutBatch:
-        """Convert rollout groups to training batches with RLOO advantages."""
-
-        input_ids = []
-        attention_masks = []
-        position_ids = []
-        target_ids = []
-        loss_weights = []
-        loss_masks = []
-        policy_logprobs = []
-
-        for group in rollout_groups:
-            # Compute RLOO advantages for this group
-            advantages = group.compute_rloo_advantages()
-
-            # Create training batch for each rollout in the group
-            for rollout_idx, rollout in enumerate(group.rollouts):
-                # Prepare concatenated sequences for language modeling
-                full_tokens = np.concatenate([rollout.prompt_tokens, rollout.response.tokens])
-                full_attention_mask = np.concatenate([rollout.prompt_mask, rollout.response_mask])
-
-                # Create position IDs
-                full_position_ids = np.maximum(np.cumsum(full_attention_mask) - 1, 0)
-
-                # Prepare input/target sequences (shifted for next-token prediction)
-                input_tokens = full_tokens[:-1]
-                input_attention_mask = full_attention_mask[:-1]
-                target_tokens = full_tokens[1:]
-
-                # Create loss masks (only compute loss on response tokens)
-                loss_mask = np.concatenate(
-                    [
-                        np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
-                        rollout.response_mask.astype(np.float32),
-                    ]
-                )
-
-                # Create loss weights (RLOO advantages repeated for each token)
-                advantage_value = advantages[rollout_idx]
-                loss_weight = np.concatenate(
-                    [
-                        np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
-                        np.full_like(rollout.response_mask, advantage_value, dtype=np.float32),
-                    ]
-                )
-
-                # Extract policy logprobs (no reference logprobs needed anymore)
-                policy_logprob = np.concatenate(
-                    [
-                        np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
-                        rollout.response.logprobs.astype(np.float32),
-                    ]
-                )
-
-                input_ids.append(input_tokens)
-                attention_masks.append(input_attention_mask)
-                position_ids.append(full_position_ids[:-1])
-                target_ids.append(target_tokens)
-                loss_weights.append(loss_weight)
-                loss_masks.append(loss_mask)
-                policy_logprobs.append(policy_logprob)
-
-        # Create tagged batch
-        return TaggedRolloutBatch(
-            batch=RolloutBatch(
-                input_ids=np.stack(input_ids, axis=0),
-                attention_mask=np.stack(attention_masks, axis=0),
-                position_ids=np.stack(position_ids, axis=0),
-                target_ids=np.stack(target_ids, axis=0),
-                loss_weights=np.stack(loss_weights, axis=0),
-                loss_masks=np.stack(loss_masks, axis=0),
-                policy_logprobs=np.stack(policy_logprobs, axis=0),
-            ),
-            env_name=self.config.environment_spec,
-            worker_id=f"{socket.gethostname()}_{os.getpid()}",
-            timestamp=time.time(),
-            rollout_id=f"{group.prompt_key}_response_{rollout_idx}",
+        rollout_batch = NewRolloutBatch(
+            groups=rollout_groups,
+            metadata=NewRolloutMetadata(worker_id=f"{socket.gethostname()}_{os.getpid()}", timestamp=time.time()),
         )
+
+        rollout_batch = _create_training_batch(
+            rollout_batch, self.config.max_input_length, self.config.max_output_length, self.config.pad_token_id
+        )
+        barrier_sync()
+        return rollout_batch, env_step.metrics
 
     def _sync_weights(self):
         logger.info("Checking for new weights...")

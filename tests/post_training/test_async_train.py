@@ -389,7 +389,7 @@ def test_inference_and_training_workers(
     assert inference_runner.rollouts_generated > 0, "Should have generated at least one rollout"
 
 
-def print_model_validation(model, tokenizer):
+def validate_model(model, tokenizer) -> dict[str, str]:
     print("\n" + "=" * 60)
     print("Testing trained model responses:")
     print("=" * 60)
@@ -426,6 +426,19 @@ def print_model_validation(model, tokenizer):
             print(f"  ✓ Contains {cat_count} cat references!")
         else:
             print("  - No cat references found")
+
+    # at least responses should have cats, we should have at least 10 total
+    cat_count = 0
+    cat_response_count = 0
+    for response in texts:
+        cat_count += response.lower().count("cat")
+        if response.lower().count("cat") > 0:
+            cat_response_count += 1
+
+    assert cat_response_count >= 3, f"Expected at least 3 cat responses, got {cat_response_count}"
+    assert cat_count >= 10, f"Expected at least 10 cat references, got {cat_count}"
+
+    return {prompt: response for prompt, response in zip(test_prompts, texts, strict=True)}
 
 
 @pytest.mark.slow("Integration test with training loop")
@@ -479,7 +492,7 @@ def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_conf
     print(f"  - Final loss: {runner.losses[-1]:.4f}")
 
     # Test the trained model with example prompts
-    print_model_validation(runner.trained_model, DummyTokenizer())
+    validate_model(runner.trained_model, DummyTokenizer())
 
 
 @pytest.mark.slow("Long-running integration test.")
@@ -540,7 +553,7 @@ def test_full_integration_moar_cats(
     # Validate weight transfers occur
     assert inference_runner.weight_transfers >= 1, "Should have at least one weight transfer during long run"
 
-    print_model_validation(training_runner.trained_model, DummyTokenizer())
+    validate_model(training_runner.trained_model, DummyTokenizer())
 
 
 @pytest.mark.slow("Integration test with checkpoint restart")

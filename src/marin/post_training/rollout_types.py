@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Any
 
 import equinox as eqx
 import haliax as hax
@@ -22,37 +21,23 @@ import jax.numpy as jnp
 import numpy as np
 
 
-@dataclass
-class ResponseSample:
-    """Single response generated for a prompt."""
-
-    tokens: np.ndarray  # Generated token ids
-    logprobs: np.ndarray  # Log probabilities from policy model
-
-
-@dataclass
-class RolloutItem:
-    """Single rollout item containing prompt, response, and reward."""
-
-    prompt: str
-    prompt_tokens: np.ndarray
-    prompt_mask: np.ndarray
-    response: ResponseSample
-    response_mask: np.ndarray
-    reward: float  # Single scalar reward for this response
-    metadata: dict[str, Any]  # Environment-specific metadata
+class NewRollout(eqx.Module):
+    env_name: str
+    env_example_id: str
+    prompt_tokens: jax.Array
+    response_tokens: jax.Array
+    response_logprobs: jax.Array
+    token_rewards: jax.Array
+    episode_reward: float
 
 
-@dataclass
-class RolloutGroup:
-    """Group of rollouts for the same prompt (for RLOO/GRPO)."""
-
-    prompt_key: str  # Unique identifier for this prompt
-    rollouts: list[RolloutItem]
+class NewRolloutGroup(eqx.Module):
+    key: str
+    rollouts: list[NewRollout]
 
     def compute_rloo_advantages(self) -> np.ndarray:
         """Compute RLOO advantages for this group."""
-        rewards = np.array([r.reward for r in self.rollouts])
+        rewards = np.array([r.episode_reward for r in self.rollouts])
         n = len(rewards)
         if n <= 1:
             return np.zeros_like(rewards)
@@ -67,29 +52,15 @@ class RolloutGroup:
         return advantages
 
 
-class NewRollout(eqx.Module):
-    env_name: str
-    env_example_id: str
-    prompt_tokens: jax.Array
-    output_tokens: jax.Array
-    token_rewards: jax.Array
-    episode_reward: float
-
-
-class NewRolloutGroup(eqx.Module):
-    key: str
-    rollouts: list[NewRollout]
-
-
 @dataclass
-class RolloutMetadata:
+class NewRolloutMetadata:
     worker_id: str
     timestamp: float
 
 
 class NewRolloutBatch(eqx.Module):
     groups: list[NewRolloutGroup]
-    metadata: RolloutMetadata
+    metadata: NewRolloutMetadata
 
 
 class JaxRolloutBatch(eqx.Module):
