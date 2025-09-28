@@ -25,6 +25,7 @@ import socket
 import threading
 import time
 from collections.abc import Sequence
+from functools import partial
 
 import haliax as hax
 import haliax.state_dict as hsd
@@ -153,6 +154,11 @@ def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> tuple[pa.Schema,
     return schema, batches
 
 
+@partial(jax.jit, donate_argnums=0)
+def update_model(old_model, new_state_dict):
+    return hsd.from_state_dict(old_model, new_state_dict)
+
+
 def deserialize_arrow_to_pytree(reader: pa.RecordBatchReader, target_model: PyTree) -> PyTree:
     """Convert Arrow RecordBatch back to model using Haliax state_dict."""
     state_dict = {}
@@ -190,10 +196,6 @@ def deserialize_arrow_to_pytree(reader: pa.RecordBatchReader, target_model: PyTr
             array_np = array_np.view(dtype).reshape(shape)
             # Convert to JAX array directly
             state_dict[name] = jax.numpy.asarray(array_np)
-
-    @jax.jit(donate_argnums=0)
-    def update_model(old_model, new_state_dict):
-        return hsd.from_state_dict(old_model, new_state_dict)
 
     return update_model(target_model, state_dict)
 
