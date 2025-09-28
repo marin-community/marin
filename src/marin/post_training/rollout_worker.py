@@ -352,9 +352,7 @@ class RolloutWorker:
             key=key,
         )
 
-        # N.B. Jax weight transfer requires a shape tree in order to serialize/deserialize weights
-        shape_tree = hax.tree_util.tree_map(lambda x: x.shape, self.reference_model)
-        self.policy_model = self.transfer_client.receive_weights(shape_tree)
+        self.policy_model = self.transfer_client.receive_weights(self.reference_model)
         if self.policy_model:
             logger.info("Loaded initial policy model from weight transfer")
         else:
@@ -442,6 +440,7 @@ class RolloutWorker:
     def _sync_weights(self):
         logger.info("Checking for new weights...")
         weights = self.transfer_client.receive_weights(self.policy_model)
+
         if weights:
             logger.info("Received new weights for policy model")
             self.policy_model = weights
@@ -498,6 +497,7 @@ class RolloutWorker:
                 if self.config.log_freq > 0 and step % self.config.log_freq == 0:
                     log_metrics = {"step": step}
                     log_metrics.update(jax.device_get(metrics))
+                    log_metrics.update(self.transfer_client.get_metrics())
                     log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
                     logger.info(f"Logging metrics at step {step}... {log_metrics}")
                     self.tracker.log(log_metrics, step=step)
