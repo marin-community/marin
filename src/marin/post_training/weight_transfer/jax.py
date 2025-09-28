@@ -20,6 +20,7 @@ high-performance communication between training and inference workers.
 """
 
 import asyncio
+import dataclasses
 import logging
 import queue
 import socket
@@ -375,7 +376,7 @@ class JAXTransferServer(WeightTransferServer):
         self.poll_queue = queue.Queue(maxsize=1)
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="weight_transfer")
 
-        self.metrics = WeightTransferServerMetrics(start_time=time.time())
+        self.metrics = WeightTransferServerMetrics()
 
     def _setup_cpu_transfer(self):
         """Setup CPU mesh for transfers."""
@@ -441,9 +442,8 @@ class JAXTransferServer(WeightTransferServer):
         self.executor.shutdown(wait=True)
         self.transfer_server = None
 
-    def get_metrics(self) -> WeightTransferServerMetrics:
-        """Get transfer metrics."""
-        return self.metrics
+    def get_metrics(self) -> dict:
+        return dataclasses.asdict(self.metrics)
 
 
 class JAXTransferClient(WeightTransferClient):
@@ -465,7 +465,7 @@ class JAXTransferClient(WeightTransferClient):
         self._last_received_weight_id: int = -1
 
         # Metrics tracking
-        self.metrics = WeightTransferClientMetrics(start_time=time.time())
+        self.metrics = WeightTransferClientMetrics()
 
     def _setup_cpu_transfer(self):
         """Setup CPU mesh for transfers."""
@@ -550,6 +550,5 @@ class JAXTransferClient(WeightTransferClient):
         self.executor.shutdown(wait=True)
         self.transfer_server = None
 
-    def get_metrics(self) -> WeightTransferClientMetrics:
-        """Get transfer metrics."""
-        return self.metrics
+    def get_metrics(self) -> dict:
+        return dataclasses.asdict(self.metrics)
