@@ -243,7 +243,6 @@ class MarinFlightServer(flight.FlightServerBase):
     def do_get(self, context, ticket):
         """Serve weight data to inference workers."""
         try:
-            # Parse ticket to get weight ID
             ticket_data = ticket.ticket.decode("utf-8")
             weight_id = int(ticket_data)
 

@@ -82,11 +82,10 @@ class RLTrainConfig:
     train_worker_config: TrainWorkerConfig
     inference_tpu_type: str
     train_tpu_type: str
-    num_inference_workers: int = 4
-    num_train_slices: int = 1
+    num_inference_workers: int
+    num_train_slices: int
 
 
-@ray.remote
 def run_rl_training_on_pod(config: RLTrainConfig):
     """
     Run async RL training with separate inference and training workers.
@@ -108,29 +107,22 @@ def run_rl_training_on_pod(config: RLTrainConfig):
     runtime_env = RuntimeEnv()
 
     train_pod_config = TpuPodConfig(tpu_type=config.train_tpu_type, runtime_env=runtime_env)
+    rollout_pod_config = TpuPodConfig(tpu_type=config.inference_tpu_type, runtime_env=runtime_env)
+
+    rollout_hw_config = rollout_pod_config.with_env_vars(env)
     train_hw_config = train_pod_config.with_env_vars(env)
 
-    train_kwargs = train_hw_config.as_remote_kwargs()
-    train_kwargs["max_calls"] = 1
+    train_kwargs = dict(max_calls=1, **train_hw_config.as_remote_kwargs())
+    rollout_kwargs = dict(max_calls=1, **rollout_hw_config.as_remote_kwargs())
 
     @ray.remote(**train_kwargs)
     def train_worker_task():
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-            # Print jax & TPU configuration
-            import jax
-
-            logging.error(f"JAX configuration: {jax.__version__}")
             worker = TrainWorker(
                 config=config.train_worker_config,
             )
             worker.train()
-
-    rollout_pod_config = TpuPodConfig(tpu_type=config.inference_tpu_type, runtime_env=runtime_env)
-    rollout_hw_config = rollout_pod_config.with_env_vars(env)
-
-    rollout_kwargs = rollout_hw_config.as_remote_kwargs()
-    rollout_kwargs["max_calls"] = 1
 
     @ray.remote(**rollout_kwargs)
     def inference_worker_task():
@@ -142,6 +134,7 @@ def run_rl_training_on_pod(config: RLTrainConfig):
             worker.run()
 
     train_tasks = []
+    logger.info("Running train worker on TPU type: %s", config.train_tpu_type)
     train_tasks.append(
         run_on_pod_ray.remote(
             train_worker_task,
@@ -154,6 +147,7 @@ def run_rl_training_on_pod(config: RLTrainConfig):
 
     inference_tasks = []
     for _ in range(config.num_inference_workers):
+        logger.info("Running inference worker on TPU type: %s", config.inference_tpu_type)
         inference_tasks.append(
             run_on_pod_ray.remote(
                 inference_worker_task,
@@ -276,7 +270,7 @@ def rl_train(name: str) -> ExecutorStep:
         train_worker_config=train_worker,
         inference_tpu_type="v5litepod-4",
         train_tpu_type="v5litepod-4",
-        num_inference_workers=1,
+        num_inference_workers=4,
         num_train_slices=1,
     )
 
@@ -295,7 +289,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-004"),
+        rl_train(name="llama-1b-math-rl-test-005"),
     ]
 
     executor_main(

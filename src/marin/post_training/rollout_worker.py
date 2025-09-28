@@ -352,9 +352,7 @@ class RolloutWorker:
             key=key,
         )
 
-        # N.B. Jax weight transfer requires a shape tree in order to serialize/deserialize weights
-        shape_tree = hax.tree_util.tree_map(lambda x: x.shape, self.reference_model)
-        self.policy_model = self.transfer_client.receive_weights(shape_tree)
+        self.policy_model = self.transfer_client.receive_weights(self.reference_model)
         if self.policy_model:
             logger.info("Loaded initial policy model from weight transfer")
         else:
