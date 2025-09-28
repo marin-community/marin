@@ -106,8 +106,7 @@ class CpuOnlyConfig(ResourceConfig):
             logger.info(f"Using user-provided device FLOPS override: {self.device_flops_override} for CPU")
             return self.device_flops_override
         raise NotImplementedError(
-            "CPU FLOPS are not available by default. "
-            "Please provide a device_flops_override to use a CPU with speedrun."
+            "CPU FLOPS are not available by default. Please provide a device_flops_override to use a CPU with speedrun."
         )
 
     def total_device_count(self) -> int:
@@ -220,8 +219,7 @@ class TpuPodConfig(ResourceConfig):
         """Get the peak FLOPs/s for *each* device of the given TPU type."""
         if self.device_flops_override is not None:
             logger.info(
-                f"Using user-provided device FLOPS override: "
-                f"{self.device_flops_override} for TPU type {self.tpu_type}"
+                f"Using user-provided device FLOPS override: {self.device_flops_override} for TPU type {self.tpu_type}"
             )
             return self.device_flops_override
 

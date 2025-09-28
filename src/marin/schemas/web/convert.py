@@ -83,7 +83,6 @@ DEFAULT_KEEP_INLINE_IMAGES_IN = ["li", "p", "td", "th", "h1", "h2", "h3", "h4", 
 @dataclass(frozen=True)
 @ExtractionConfig.register_subclass("markdownify")
 class HtmlToMarkdownConfig(ExtractionConfig):
-
     include_images: bool = True
     include_links: bool = True
 

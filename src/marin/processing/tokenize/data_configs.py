@@ -166,9 +166,7 @@ def interpolate_mixture_configs(
     tokenizer = mixtures[0].tokenizer
     for mixture in mixtures:
         if mixture.tokenizer != tokenizer and not _are_tokenizers_equivalent(mixture.tokenizer, tokenizer):
-            raise ValueError(
-                "All mixtures must have the same tokenizer, but got:" f" {mixture.tokenizer} vs {tokenizer}"
-            )
+            raise ValueError(f"All mixtures must have the same tokenizer, but got: {mixture.tokenizer} vs {tokenizer}")
 
         if mixture.shuffle != mixtures[0].shuffle:
             raise ValueError("All mixtures must have the same shuffle policy")

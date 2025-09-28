@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from marin.download.huggingface.download import DownloadConfig, download
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """
@@ -24,10 +24,11 @@ Downloads the following datasets
 # download mmlu dataset
 mmlu_download_step = ExecutorStep(
     name="raw/cais/mmlu",
-    fn=download,
+    fn=download_hf,
     config=DownloadConfig(
-        hf_dataset_id="cais/mmlu",
-        revision=versioned("c30699e"),
+        hf_dataset_id="open-qa/ScienceQA",
+        revision="9ba8911",
+        hf_urls_glob=["**/*.json"],
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),

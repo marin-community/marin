@@ -56,6 +56,7 @@ python marin/run/ray_run.py \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/yield_statistics.json.gz
 ```
 """  # noqa: E501
+
 import json
 import logging
 import math
@@ -615,7 +616,6 @@ def get_shard_yield(
         examples_scores,
         strict=True,
     ):
-
         passes_all_filters = (
             example_url_filter_result is True
             and example_langid_filter_result is True
@@ -735,7 +735,7 @@ def filter_and_yield(cfg: GetCrawlYieldConfig):
             while shard_indices_for_text_extraction and len(unfinished) < MAX_CONCURRENT_TEXT_EXTRACTION_TASKS:
                 submit_shard_text_extraction_task(shard_indices_for_text_extraction.pop())
 
-    logger.info(f"Total URLs: {total_urls}\n" f"Total URLs fetched: {total_urls_fetched}\n")
+    logger.info(f"Total URLs: {total_urls}\nTotal URLs fetched: {total_urls_fetched}\n")
 
     # Run the quality classifier on the extracted text
     unfinished = []

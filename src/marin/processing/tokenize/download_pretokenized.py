@@ -29,10 +29,7 @@ from levanter.data.text import (
 )
 from levanter.store.cache import CacheOptions
 
-from marin.download.huggingface.download import DownloadConfig as HfDownloadConfig
-from marin.download.huggingface.download_hf import (
-    download_hf as hf_download_logic,
-)
+from marin.download.huggingface.download_hf import DownloadConfig as HfDownloadConfig, download_hf
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName, ensure_versioned
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
@@ -148,7 +145,7 @@ def _actually_download_pretokenized_cache(
         )
 
         # Execute the download
-        hf_download_logic(download_op_config)
+        download_hf(download_op_config)
 
         logger.info(f"Successfully downloaded pretokenized cache to '{cfg.cache_path}'.")
 

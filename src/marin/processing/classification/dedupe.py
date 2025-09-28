@@ -363,7 +363,6 @@ def copy_files_out(local_base_dir, output_path, attribute_name, debug: bool = Fa
 
 @cached_or_construct_output(success_suffix="SUCCESS")
 def copy_file_out(input_file_path, output_file_path, debug: bool = False):
-
     # Ensure the output directory exists
     output_file_dir = os.path.dirname(output_file_path)
     fsspec_mkdirs(output_file_dir)
@@ -592,7 +591,6 @@ def do_dedup(
     for root, _, files in os.walk(attr_dir):
         for file in files:
             if file.endswith(".jsonl.gz.tmp"):
-
                 old_path = os.path.join(root, file)
                 new_path = old_path.rsplit(".tmp", 1)[0]
                 os.rename(old_path, new_path)
@@ -853,7 +851,6 @@ def _run_train_test_overlap(config: DedupeConfig):
     if not config.ngram:
         raise ValueError("ngram config is required in TRAIN_TEST_OVERLAP mode")
     with tempfile.TemporaryDirectory(dir=config.temp_dir, prefix="marin_dedupe_") as tmpdir:
-
         # Handle single or multiple ngram_lengths
         ngram_lengths = (
             config.ngram.ngram_length if isinstance(config.ngram.ngram_length, list) else [config.ngram.ngram_length]

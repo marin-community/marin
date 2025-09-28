@@ -221,6 +221,5 @@ def validate(cfg: ValidationConfig) -> None:
 
 
 if __name__ == "__main__":
-
     # Launch Validation Jobs
     validate()

@@ -288,7 +288,7 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
             except (ValueError, TypeError):
                 logger.info(
                     f"""Invalid macro_avg_acc for run {run_id}:
-                    {metrics['lm_eval/averages/macro_avg_acc']}. Skipping accuracy metric."""
+                    {metrics["lm_eval/averages/macro_avg_acc"]}. Skipping accuracy metric."""
                 )
     # Add best metrics to final metrics
     for scale, data in best_metrics_per_scale.items():

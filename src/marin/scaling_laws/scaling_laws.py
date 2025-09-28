@@ -153,7 +153,7 @@ def log_and_create_report(
     run = wandb.init(
         project=wandb_project,
         entity=wandb_entity,
-        name=f"""Scaling Law Report: {pred_run_id if pred_run_id else 'projection'}-{scaling_law_config.name}""",
+        name=f"""Scaling Law Report: {pred_run_id if pred_run_id else "projection"}-{scaling_law_config.name}""",
         tags=["scaling_laws"],
         config={
             "input_runs": input_run_ids,

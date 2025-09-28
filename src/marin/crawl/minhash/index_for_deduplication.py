@@ -52,6 +52,7 @@ gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_minhash_index/buckets/
 ```
 """  # noqa: E501
+
 import json
 import logging
 from dataclasses import dataclass

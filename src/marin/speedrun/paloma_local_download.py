@@ -19,8 +19,7 @@ https://huggingface.co/datasets/allenai/paloma
 """
 
 from experiments.paloma import paloma_tokenized
-from marin.download import HfDownloadConfig
-from marin.download.huggingface.download_hf import download_hf
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
@@ -28,7 +27,7 @@ llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 paloma_speedrun = ExecutorStep(
     name="raw/paloma-speedrun",
     fn=download_hf,
-    config=HfDownloadConfig(
+    config=DownloadConfig(
         hf_dataset_id=versioned("allenai/paloma"),
         revision=versioned("65cd6fc"),
         gcs_output_path=this_output_path(),

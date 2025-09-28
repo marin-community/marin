@@ -111,7 +111,7 @@ class SpeedrunConfig:
 
         # model size
         model_size = self.model_config.total_trainable_params(self.vocab_size)
-        logger.info(f"Model size: {model_size/1e6:.2f} million parameters")
+        logger.info(f"Model size: {model_size / 1e6:.2f} million parameters")
 
     def compute_model_flops(self) -> float:
         # TODO (Nikil): make this a helper and handle edge-cases
@@ -137,8 +137,8 @@ class SpeedrunConfig:
         logger.info(
             f"""
 The rough estimated compute (calculated as (total model FLOPs / Assumed MFU)) for your run is probably between:
-      * {estimated_model_flops/0.5:.2e} FLOPs assuming an MFU of 0.5, and
-      * {estimated_model_flops/0.2:.2e} FLOPs assuming an MFU of 0.2.
+      * {estimated_model_flops / 0.5:.2e} FLOPs assuming an MFU of 0.5, and
+      * {estimated_model_flops / 0.2:.2e} FLOPs assuming an MFU of 0.2.
 
 This is calculated based on assumed MFU values and can be used as a rough estimate to guide your config/training setup.
 """.strip()

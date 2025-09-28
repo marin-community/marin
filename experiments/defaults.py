@@ -52,8 +52,7 @@ from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.download.huggingface.download import DownloadConfig
-from marin.download.huggingface.download_hf import download_hf
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -398,7 +397,7 @@ def default_train(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a {compute_num_parameters(model_config, vocab_size) :,} parameter model for "
+            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
             f"{train_config.num_train_steps} (steps) * "
             f"{train_config.train_batch_size} (batch_size) * "
             f"{model_config.seq_len} (seq_len) "
@@ -599,17 +598,26 @@ def _prepare_data_config(
 
 
 def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig) -> str:
-    match tokenized:
-        case LMMixtureDatasetConfig(tokenizer=tokenizer):
-            pass
-        case ExecutorStep(config=config) if isinstance(config, TokenizeConfigBase):
+    if isinstance(tokenized, LMMixtureDatasetConfig):
+        tokenizer = tokenized.tokenizer
+    elif isinstance(tokenized, ExecutorStep):
+        config = tokenized.config
+        if isinstance(config, TokenizeConfigBase):
             tokenizer = config.tokenizer
-        case ExecutorStep(config=HfTokenizeConfig(tokenizer=tokenizer)):
-            pass
-        case InputName(step=ExecutorStep(config)) if isinstance(config, TokenizeConfigBase):
+        elif isinstance(config, HfTokenizeConfig):
             tokenizer = config.tokenizer
-        case _:
+        else:
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
+    elif isinstance(tokenized, InputName) and isinstance(tokenized.step, ExecutorStep):
+        step_config = tokenized.step.config
+        if isinstance(step_config, TokenizeConfigBase):
+            tokenizer = step_config.tokenizer
+        elif isinstance(step_config, HfTokenizeConfig):
+            tokenizer = step_config.tokenizer
+        else:
+            raise ValueError(f"Could not determine tokenizer from {tokenized}")
+    else:
+        raise ValueError(f"Could not determine tokenizer from {tokenized}")
 
     return tokenizer
 

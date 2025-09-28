@@ -26,7 +26,7 @@ from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
 from experiments.defaults import default_sft, default_tokenize
 from experiments.llama import llama_8b
 from experiments.tootsie.exp916_tootsie_spoonbill_cooldown import spoonbill_zloss_tulu3_sft_config
-from marin.download.huggingface.download import DownloadConfig, download
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.resources import TpuPodConfig
 
@@ -43,7 +43,7 @@ swe_smith_sft_config = dataclasses.replace(
 
 swe_smith_trajectories = ExecutorStep(
     name="raw/SWE-bench/SWE-smith-trajectories",
-    fn=download,
+    fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="SWE-bench/SWE-smith-trajectories",
         revision=versioned("f6b6d7e"),

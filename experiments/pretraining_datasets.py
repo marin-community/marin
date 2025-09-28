@@ -12,100 +12,66 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from marin.download.huggingface.download import DownloadConfig, download
+from experiments.defaults import default_download
+from marin.download.huggingface.download_hf import DownloadConfig
 from marin.download.huggingface.download_gated_manual import download_and_upload_to_store
 from marin.download.huggingface.download_hf import download_hf
 from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
 from marin.execution.executor import ExecutorStep, this_output_path
 
-# TODO: remove download and download_and_upload_to_store. Instead use default_download instead
-fineweb = ExecutorStep(
+fineweb = default_download(
     name="raw/fineweb",
-    fn=download,
-    config=DownloadConfig(
-        hf_dataset_id="HuggingFaceFW/fineweb",
-        revision="cd85054",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
+    hf_dataset_id="HuggingFaceFW/fineweb",
+    revision="cd85054",
     override_output_path="raw/fineweb",
 )
 
-fineweb_edu = ExecutorStep(
+fineweb_edu = default_download(
     name="raw/fineweb-edu",
-    fn=download,
-    config=DownloadConfig(
-        hf_dataset_id="HuggingFaceFW/fineweb-edu",
-        revision="3c452cb",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
+    hf_dataset_id="HuggingFaceFW/fineweb-edu",
+    revision="3c452cb",
     override_output_path="raw/fineweb-edu-c2beb4",
 ).cd("3c452cb/huggingface.co/datasets/HuggingFaceFW/fineweb-edu/resolve/3c452cb")
 
-slimpajama = ExecutorStep(
+slimpajama = default_download(
     name="raw/SlimPajama-627B",
-    fn=download,
-    config=DownloadConfig(
-        hf_dataset_id="cerebras/SlimPajama-627B",
-        revision="2d0accd",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
+    hf_dataset_id="cerebras/SlimPajama-627B",
+    revision="2d0accd",
     override_output_path="raw/SlimPajama-627B-262830",
 ).cd("2d0accd/huggingface.co/datasets/cerebras/SlimPajama-627B/resolve/2d0accd")
 
-slimpajama_6b = ExecutorStep(
+slimpajama_6b = default_download(
     name="raw/SlimPajama-6B",
-    fn=download,
-    config=DownloadConfig(
-        hf_dataset_id="DKYoon/SlimPajama-6B",
-        revision="b5f90f4",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
+    hf_dataset_id="DKYoon/SlimPajama-6B",
+    revision="b5f90f4",
     override_output_path="raw/SlimPajama-6B-be35b7",
 ).cd("b5f90f4/huggingface.co/datasets/DKYoon/SlimPajama-6B/resolve/b5f90f4")
 
-dolma = ExecutorStep(
+dolma = default_download(
     name="raw/dolma",
-    fn=download,
-    config=DownloadConfig(
-        hf_dataset_id="allenai/dolma",
-        revision="7f48140",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
+    hf_dataset_id="allenai/dolma",
+    revision="7f48140",
     override_output_path="raw/dolma",
 )
 
 
-dclm_baseline_wrong = ExecutorStep(
+dclm_baseline_wrong = default_download(
     name="raw/dclm-baseline-1.0",
-    fn=download,
-    config=DownloadConfig(
-        hf_dataset_id="mlfoundations/dclm-baseline-1.0",
-        revision="a3b142c",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        timeout=24 * 60 * 60,
-    ),
+    hf_dataset_id="mlfoundations/dclm-baseline-1.0",
+    revision="a3b142c",
     override_output_path="raw/dclm_WRONG_20250211/",
+    timeout=24 * 60 * 60,
 )
 
 
-dclm_baseline = ExecutorStep(
+dclm_baseline = default_download(
     name="raw/dclm-baseline-1.0",
-    fn=download,
-    config=DownloadConfig(
-        hf_dataset_id="mlfoundations/dclm-baseline-1.0",
-        revision="a3b142c",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        timeout=24 * 60 * 60,
-    ),
+    hf_dataset_id="mlfoundations/dclm-baseline-1.0",
+    revision="a3b142c",
     override_output_path="raw/dclm",
+    timeout=24 * 60 * 60,
 ).cd("a3b142c")
+
 
 the_stack_dedup = ExecutorStep(
     name="raw/the-stack-dedup",
@@ -119,27 +85,18 @@ the_stack_dedup = ExecutorStep(
     override_output_path="raw/the-stack-dedup-4ba450",
 ).cd("17cad72")
 
-proofpile_2 = ExecutorStep(
+proofpile_2 = default_download(
     name="raw/proof-pile-2",
-    fn=download,
-    config=DownloadConfig(
-        hf_dataset_id="EleutherAI/proof-pile-2",
-        revision="901a927",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
+    hf_dataset_id="EleutherAI/proof-pile-2",
+    revision="901a927",
     override_output_path="raw/proof-pile-2-f1b1d8",
 ).cd("901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927")
 
-the_pile_openwebtext2 = ExecutorStep(
+
+the_pile_openwebtext2 = default_download(
     name="raw/the_pile_openwebtext2",
-    fn=download,
-    config=DownloadConfig(
-        hf_dataset_id="vietgpt/the_pile_openwebtext2",
-        revision="1de27c6",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
+    hf_dataset_id="vietgpt/the_pile_openwebtext2",
+    revision="1de27c6",
     override_output_path="raw/the_pile_openwebtext2",
 ).cd("1de27c6/huggingface.co/datasets/vietgpt/the_pile_openwebtext2/resolve/1de27c6")
 

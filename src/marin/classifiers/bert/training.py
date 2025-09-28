@@ -178,14 +178,14 @@ def _mp_fn(
     logger.info("Training Label Counts (label_id -> count):")
     for label_id, count in sorted(train_label_counts.items()):
         label_name = class_label_feature.int2str(label_id)
-        logger.info(f"  {label_id} ({label_name}): {count} ({count/len(dataset['train']):.2%})")
+        logger.info(f"  {label_id} ({label_name}): {count} ({count / len(dataset['train']):.2%})")
 
     # Print val label distribution
     val_label_counts = Counter(dataset["val"]["label"])
     logger.info("Validation Label Counts (label_id -> count):")
     for label_id, count in sorted(val_label_counts.items()):
         label_name = class_label_feature.int2str(label_id)
-        logger.info(f"  {label_id} ({label_name}): {count} ({count/len(dataset['val']):.2%})")
+        logger.info(f"  {label_id} ({label_name}): {count} ({count / len(dataset['val']):.2%})")
 
     tokenizer = AutoTokenizer.from_pretrained(hf_model)
     model = AutoModelForSequenceClassification.from_pretrained(

@@ -18,8 +18,10 @@ A script to download a HuggingFace dataset and upload it to a specified fsspec p
 using HfFileSystem for direct streaming of data transfer.
 """
 
+import dataclasses
 import logging
 import os
+from dataclasses import dataclass
 
 import fsspec
 import ray
@@ -27,11 +29,41 @@ from huggingface_hub import HfFileSystem
 from tqdm_loggable.tqdm_logging import tqdm_logging
 
 from marin.core.runtime import simple_backpressure
-from marin.download.huggingface.download import DownloadConfig
+from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
 
 # Set up logging
 logger = logging.getLogger("ray")
+
+
+@dataclass(frozen=True)
+class DownloadConfig:
+    # fmt: off
+
+    # HuggingFace Dataset Parameters
+    hf_dataset_id: str  # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
+
+    revision: str  # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
+    hf_urls_glob: list[str] = dataclasses.field(default_factory=list)
+    # List of Glob Patterns to Match Files in HF Dataset, If empty we get all the files in a hf repo
+
+    gcs_output_path: str = THIS_OUTPUT_PATH
+    """
+    Path to store raw data in persistent storage (e.g. gs://$BUCKET/...).
+    This works with any fsspec-compatible path, but for backwards compatibility, we call it gcs_output_path.
+    """
+
+    # Additional Output Parameters
+    hf_repo_type_prefix: str = (
+        "datasets"  # The repo_type_prefix is datasets/ for datasets,
+        # spaces/ for spaces, and models do not need a prefix in the URL.
+    )
+
+    # fmt: on
+    wait_for_completion: bool = True  # if True, will block until job completes
+    timeout: int = 1800  # Maximum time to wait for job completion (in seconds)
+    poll_interval: int = 10  # Time to wait between polling job status (in seconds)
+    public_gcs_path: str | None = None  # Retained for backward compatibility; unused in streaming path
 
 
 def ensure_fsspec_path_writable(output_path: str) -> None:

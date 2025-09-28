@@ -305,7 +305,7 @@ def upload_gcs_to_hf(cfg: UploadConfig) -> None:
 
             for i, (full_path, step_number) in enumerate(all_step_dirs):
                 version_name = extract_version_from_path(full_path)
-                logger.info(f"\nCheckpoint {i+1}/{len(all_step_dirs)}:")
+                logger.info(f"\nCheckpoint {i + 1}/{len(all_step_dirs)}:")
                 logger.info(f"  Source: {full_path}")
                 logger.info(f"  Target repo: {cfg.hf_repo_id}")
                 logger.info(f"  Revision: {version_name}")

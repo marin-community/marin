@@ -56,6 +56,7 @@ python marin/run/ray_run.py \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/yield_statistics.json.gz
 ```
 """  # noqa: E501
+
 import atexit
 import hashlib
 import json
@@ -652,9 +653,7 @@ def filter_and_yield(cfg: GetCrawlYieldConfig):
         ]
 
     logger.info(
-        f"Total URLs: {total_urls}\n"
-        f"Total URLs fetched: {total_urls_fetched}\n"
-        f"Total URLs passing: {total_urls_passing}\n"
+        f"Total URLs: {total_urls}\nTotal URLs fetched: {total_urls_fetched}\nTotal URLs passing: {total_urls_passing}\n"
     )
     with fsspec.open(cfg.statistics_output_path, "w", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(

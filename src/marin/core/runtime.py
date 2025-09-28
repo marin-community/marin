@@ -195,7 +195,12 @@ def map_files_in_directory(
     if isinstance(func, ray.remote_function.RemoteFunction):
         # If the function is a ray.remote function, then execute it in parallel
         responses = simple_backpressure(
-            func, iter(file_pairs), task_config.max_in_flight, fetch_local=True, *args, **kwargs  # noqa: B026
+            func,
+            iter(file_pairs),
+            task_config.max_in_flight,
+            True,
+            *args,
+            **kwargs,
         )
         return responses
     else:

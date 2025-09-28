@@ -87,7 +87,6 @@ class MeduDatasetOutputProcessor(DatasetOutputProcessor):
 
     @staticmethod
     def extract_score(text: str) -> int:
-
         # Match "Final Score: " followed by one of the score options
         match = re.search(r"Final Score:\s*(Great|Good|Okay|Poor|Useless)", text)
         if match:
@@ -107,7 +106,6 @@ class FinalScoreZeroToFiveDatasetOutputProcessor(DatasetOutputProcessor):
 
     @staticmethod
     def extract_score(text: str) -> int:
-
         # Match "Final score: " followed by a number from 0 to 5
         match = re.search(r"Final score:\s*([0-5])", text, re.IGNORECASE)
         if match:

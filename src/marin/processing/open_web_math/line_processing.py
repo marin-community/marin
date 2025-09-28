@@ -16,6 +16,7 @@
 """
 This file was taken from https://github.com/keirp/OpenWebMath
 """
+
 import os
 import re
 

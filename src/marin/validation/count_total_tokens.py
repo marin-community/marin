@@ -76,7 +76,6 @@ def process_file(input_filename: str, tokenizer_name: str):
 
 
 def count_total_tokens(input_path: str, tokenizer_name: str, filetype: str) -> int:
-
     responses = []
     tokens = 0
     input_paths = fsspec_glob(os.path.join(input_path, f"**/*.{filetype}"))

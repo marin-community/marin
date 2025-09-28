@@ -26,8 +26,9 @@ import ray
 import os
 
 from marin.core.runtime import cached_or_construct_output
-from marin.download import HfDownloadConfig, download_hf_gated_manual
 from experiments.llama import llama3_tokenizer
+from marin.download import download_hf_gated_manual
+from marin.download.huggingface.download_hf import DownloadConfig
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -40,7 +41,7 @@ lima = (
     ExecutorStep(
         name="raw/lima",
         fn=download_hf_gated_manual,
-        config=HfDownloadConfig(
+        config=DownloadConfig(
             hf_dataset_id=versioned("GAIR/lima"),
             revision=versioned("68958e9"),
             gcs_output_path=this_output_path(),

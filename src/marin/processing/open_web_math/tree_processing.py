@@ -16,6 +16,7 @@
 """
 This file was taken from https://github.com/keirp/OpenWebMath
 """
+
 from resiliparse.parse.html import DOMCollection
 from tabulate import tabulate
 

@@ -31,7 +31,7 @@ Reference Issue: https://github.com/marin-community/marin/issues/579
 
 import logging
 
-from marin.download.ar5iv.download import DownloadConfig, download
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
 from marin.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump
@@ -56,28 +56,34 @@ ARXIV_BLACKLISTED_SELECTORS = [
 # we already have the dataset in GCS, so we use the GCS path.
 ar5iv_no_problem_raw = ExecutorStep(
     name="raw/ar5iv/ar5iv-04-2024-no-problem",
-    fn=download,
+    fn=download_hf,
     config=DownloadConfig(
-        input_path="gs://marin-us-central2/raw/ar5iv/v04.2024/ar5iv-04-2024-no-problem.zip",
-        output_path=this_output_path(),
+        hf_dataset_id="HuggingFaceFW/ar5iv",
+        revision="v04.2024",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
     ),
 )
 
 ar5iv_warnings_raw = ExecutorStep(
     name="raw/ar5iv/ar5iv-04-2024-warning",
-    fn=download,
+    fn=download_hf,
     config=DownloadConfig(
-        input_path="gs://marin-us-central2/raw/ar5iv/v04.2024/ar5iv-04-2024-warnings.zip",
-        output_path=this_output_path(),
+        hf_dataset_id="HuggingFaceFW/ar5iv",
+        revision="v04.2024",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
     ),
 )
 
 ar5iv_errors_raw = ExecutorStep(
     name="raw/ar5iv/ar5iv-04-2024-errors",
-    fn=download,
+    fn=download_hf,
     config=DownloadConfig(
-        input_path="gs://marin-us-central2/raw/ar5iv/v04.2024/ar5iv-04-2024-errors.zip",
-        output_path=this_output_path(),
+        hf_dataset_id="HuggingFaceFW/ar5iv",
+        revision="v04.2024",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
     ),
 )
 
@@ -169,15 +175,14 @@ def get_ar5iv_section_omission_steps(dataset: str) -> list[ExecutorStep]:
     """
 
     input_path = None
-    match dataset:
-        case "no-problem":
-            input_path = ar5iv_no_problem_raw_202404
-        case "warnings":
-            input_path = ar5iv_warnings_raw_202404
-        case "errors":
-            input_path = ar5iv_errors_raw_202404
-        case _:
-            raise ValueError(f"Unknown dataset: {dataset}")
+    if dataset == "no-problem":
+        input_path = ar5iv_no_problem_raw_202404
+    elif dataset == "warnings":
+        input_path = ar5iv_warnings_raw_202404
+    elif dataset == "errors":
+        input_path = ar5iv_errors_raw_202404
+    else:
+        raise ValueError(f"Unknown dataset: {dataset}")
 
     steps = []
 

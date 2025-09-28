@@ -26,7 +26,7 @@ passed to Markdownify to producing Markdown text that has less noise.
 Reference Issue: https://github.com/marin-community/marin/issues/575
 """
 
-from marin.download.wikipedia.download import DownloadConfig, download
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
 from marin.transform.wikipedia.transform_wikipedia import WikiExtractionConfig, process_wiki_dump
@@ -61,15 +61,13 @@ WIKI_BLACKLISTED_SELECTORS = [
 # Download the Wikipedia HTML dump
 wikipedia_dump_raw = ExecutorStep(
     name="raw/wikipedia",
-    fn=download,
+    fn=download_hf,
     config=DownloadConfig(
-        input_urls=versioned(
-            [
-                "https://dumps.wikimedia.org/other/enterprise_html/runs/20241201/enwiki-NS0-20241201-ENTERPRISE-HTML.json.tar.gz",
-            ]
-        ),
-        revision=versioned("20241201"),
-        output_path=this_output_path(),
+        hf_dataset_id="wikimedia/wikipedia",
+        revision="20230601.en",
+        hf_urls_glob=["**/20230601.en.jsonl"],
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
     ),
     pip_dependency_groups=["download_transform"],
 )

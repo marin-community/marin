@@ -78,6 +78,7 @@ python marin/run/ray_run.py \
         --shards_per_batch 100
 ```
 """  # noqa: E501
+
 import itertools
 import logging
 import os
@@ -130,7 +131,6 @@ def deduplicate_shard(
     shard_path_batch: str,
     shard_output_path_batch: str,
 ) -> list[tuple[int, int]]:
-
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     assert len(shard_path_batch) == len(shard_output_path_batch)
     logger.info(f"shard paths: {shard_path_batch}")
@@ -155,7 +155,6 @@ def deduplicate_shard(
 
     # If there are incomplete shard paths, process them
     if incomplete_shard_paths_with_output_paths:
-
         # Load the bloom filter from GCS, retrying up to three times.
         max_tries = 3
         bloom_filter = None
@@ -200,13 +199,13 @@ def deduplicate_shard(
             logger.info(f"Done deduplicating examples in {shard_path}")
 
             logger.info(
-                f"Writing {len(deduplicated_examples)} deduplicated examples for " f"{shard_path} to {shard_output_path}"
+                f"Writing {len(deduplicated_examples)} deduplicated examples for {shard_path} to {shard_output_path}"
             )
             with fsspec.open(shard_output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
                 for example in deduplicated_examples:
                     fout.write(orjson.dumps(example).decode() + "\n")
             logger.info(
-                f"Wrote {len(deduplicated_examples)} deduplicated examples for " f"{shard_path} to {shard_output_path}"
+                f"Wrote {len(deduplicated_examples)} deduplicated examples for {shard_path} to {shard_output_path}"
             )
 
             logger.info(f"Writing success file for {shard_path} at {shard_output_path + '.SUCCESS'}")
@@ -316,7 +315,7 @@ def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConf
                     pbar.update(1)
                     logger.info(
                         f"So far, found {num_outlinks} total outlinks, {num_deduplicated_outlinks} of "
-                        f"which do not occur in the CC ({num_deduplicated_outlinks/num_outlinks})"
+                        f"which do not occur in the CC ({num_deduplicated_outlinks / num_outlinks})"
                     )
             except Exception as e:
                 logger.exception(f"Error processing shard: {e}")
@@ -329,7 +328,7 @@ def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConf
 
     logger.info(
         f"In total, found {num_outlinks} total outlinks, {num_deduplicated_outlinks} of which "
-        f"do not occur in the CC ({num_deduplicated_outlinks/(num_outlinks + 1e-10):.1%})"
+        f"do not occur in the CC ({num_deduplicated_outlinks / (num_outlinks + 1e-10):.1%})"
     )
 
 

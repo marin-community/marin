@@ -36,7 +36,7 @@ import fsspec
 from huggingface_hub import HfApi, hf_hub_download
 from tqdm_loggable.auto import tqdm
 
-from marin.download.huggingface.download import DownloadConfig
+from marin.download.huggingface.download_hf import DownloadConfig
 from marin.utilities.validation_utils import write_provenance_json
 
 # Set up logging
@@ -66,7 +66,7 @@ def download_and_upload_to_store(cfg: DownloadConfig) -> None:
     logging.basicConfig(level=logging.INFO)
 
     logging.warning(
-        "DEPRECATED: This function is deprecated and will be removed in a future release." "Consider using download_hf"
+        "DEPRECATED: This function is deprecated and will be removed in a future release.Consider using download_hf"
     )
 
     # Parse the output path and get the file system

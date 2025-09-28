@@ -47,8 +47,8 @@ def fetch_page_from_cc(records):
     result = bytearray()
     for record in records:
         offset, length = int(record["offset"]), int(record["length"])
-        s3_url = f'https://data.commoncrawl.org/{record["filename"]}'
-        response = requests.get(s3_url, headers={"Range": f"bytes={offset}-{offset+length-1}"})
+        s3_url = f"https://data.commoncrawl.org/{record['filename']}"
+        response = requests.get(s3_url, headers={"Range": f"bytes={offset}-{offset + length - 1}"})
         if response.status_code == 206:
             with io.BytesIO(response.content) as stream:
                 i = 0

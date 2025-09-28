@@ -17,6 +17,7 @@
 This file is a lightly-modified version of:
 https://github.com/keirp/OpenWebMath/blob/main/filtering/filter_dataset.py
 """
+
 import re
 
 BAD_URLS = [
@@ -53,7 +54,7 @@ BAD_URLS = [
     "vo.astronet.ru",
     "homainstallationen.at",
     "/author/",
-    "/authors/" "/serials/" "read.dukeupress.edu",
+    "/authors//serials/read.dukeupress.edu",
     "thewikipost.org",
     "is.tuebingen.mpg.de",
     "discourse.darkjedibrotherhood.com",

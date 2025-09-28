@@ -20,7 +20,8 @@ https://huggingface.co/datasets/allenai/paloma
 
 import os.path
 
-from marin.download import HfDownloadConfig, download_hf_gated_manual
+from marin.download import download_hf_gated_manual
+from marin.download.huggingface.download_hf import DownloadConfig
 
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
@@ -56,7 +57,7 @@ paloma = (
     ExecutorStep(
         name="raw/paloma",
         fn=download_hf_gated_manual,
-        config=HfDownloadConfig(
+        config=DownloadConfig(
             hf_dataset_id=versioned("allenai/paloma"),
             revision=versioned("65cd6fc"),
             gcs_output_path=this_output_path(),

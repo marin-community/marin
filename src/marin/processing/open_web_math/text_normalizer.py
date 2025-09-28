@@ -23,6 +23,7 @@
 """
 This file was taken from https://github.com/keirp/OpenWebMath
 """
+
 import re
 import unicodedata
 
@@ -88,7 +89,7 @@ def strip_accents(line: str) -> str:
 
 
 # Build a regex matching all control characters.
-NON_PRINTING_CHARS_RE = re.compile(f"[{''.join(map(chr, list(range(0,32)) + list(range(127,160))))}]")
+NON_PRINTING_CHARS_RE = re.compile(f"[{''.join(map(chr, list(range(0, 32)) + list(range(127, 160))))}]")
 DIGIT_RE = re.compile(r"\d")
 PUNCT_OR_NON_PRINTING_CHARS_RE = re.compile((UNICODE_PUNCT_RE.pattern + NON_PRINTING_CHARS_RE.pattern).replace("][", ""))
 

@@ -68,6 +68,7 @@ python marin/run/ray_run.py \
 ```
 
 """  # noqa: E501
+
 import json
 import logging
 import math
@@ -239,7 +240,7 @@ def write_sharded_examples(sharded_examples: list[list[Outlink]], output_prefix:
         shard_dicts = [asdict(ex) for ex in shard]
 
         logger.info(
-            f"Writing shard {shard_idx+1}/{len(sharded_examples)} to {shard_filename} " f"({len(shard_dicts)} outlinks)"
+            f"Writing shard {shard_idx + 1}/{len(sharded_examples)} to {shard_filename} ({len(shard_dicts)} outlinks)"
         )
         table = pa.Table.from_pylist(shard_dicts)
         with fsspec.open(shard_filename, "wb", block_size=1 * 1024 * 1024 * 1024) as fout:
@@ -250,7 +251,7 @@ def write_sharded_examples(sharded_examples: list[list[Outlink]], output_prefix:
 
     logger.info(f"Wrote {total_written} outlinks in total.")
     logger.info(f"Largest shards by count: {shard_stats.most_common(3)}")
-    logger.info(f"Smallest shards by count: {shard_stats.most_common()[:-3-1:-1]}")
+    logger.info(f"Smallest shards by count: {shard_stats.most_common()[: -3 - 1 : -1]}")
 
 
 @draccus.wrap()

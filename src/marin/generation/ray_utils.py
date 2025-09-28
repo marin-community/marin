@@ -20,7 +20,6 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 def scheduling_strategy_fn(
     tensor_parallel_size: int, strategy: str, tpu_type: str, include_head_in_scheduling_strategy: bool
 ):
-
     # One bundle per tensor parallel worker
     tpus_and_cpus = [{"TPU": 1, "CPU": 1}] * tensor_parallel_size
     tpu_head = [{f"{tpu_type}-head": 1}]
