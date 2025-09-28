@@ -36,7 +36,7 @@ To edit this file for your speedrun:
   1) Copy and rename the file in your location under experiments.speedrun
   2) Make changes to the architecture or configurations
   3) Add your author information
-  4) Submit
+  4) Submit (see "How to run" above)
 """
 
 import sys
@@ -528,7 +528,7 @@ if __name__ == "__main__":
 
     sizes = ["130m", "300m", "520m", "1_2b"]
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
-    sink = False
+    sink = True
     steps = []
     for s in sizes:
         name, cfg = build_run(s, sink, use_gpu=use_gpu)

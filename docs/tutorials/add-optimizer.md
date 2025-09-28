@@ -27,7 +27,7 @@ In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs
         max_grad_norm: float | None = 1.0
     ```
 
-    `OptimizerConfig` has a number of fields that are common to all optimizer; these include `weight_decay`, `learning_rate`, `lr_schedule`, `min_lr_ratio`, `warmup`, `decay`, `rewarmup`, `cycles`, and `cycle_length`. You can find documentation for the OptimizerConfig class, along with further details about the fields [here](https://levanter.readthedocs.io/en/latest/reference/Configuration/#standard-options).
+    `OptimizerConfig` has a number of fields that are common to all optimizers; these include `weight_decay`, `learning_rate`, `lr_schedule`, `min_lr_ratio`, `warmup`, `decay`, `rewarmup`, `cycles`, and `cycle_length`. You can find documentation for the OptimizerConfig class, along with further details about the fields [here](https://levanter.readthedocs.io/en/latest/reference/Configuration/#standard-options).
 
 3. Implement the `build()` method to define the optimizer's update rule. This method should return an Optax optimizer. Optax allows you to define components that are gradient transformations, and then chain them together to obtain a final gradient update rule.
 
@@ -135,6 +135,12 @@ Here's an example of a speedrun configuration that leverages `AdamaxConfig`:
 
 ```python
 speedrun_config = SpeedrunConfig(
+    author=Author(
+        name="...",
+        affiliation="...",
+        url="...",
+    ),
+    description="75M parameter model with Adamax optimizer",
     model_config=llama_75m,
     train_config=SimpleTrainConfig(
         TpuPodConfig(tpu_type="v4-128"),
@@ -143,18 +149,14 @@ speedrun_config = SpeedrunConfig(
         learning_rate=3e-3,
         weight_decay=0.0,
         steps_per_eval=2000,
-        steps_per_task_eval=2000,
         optimizer_config=AdamaxConfig(),
-    ),
-    hardware_config=HardwareConfig(
-        device_type="v4-128",
-        num_devices=64,
-        device_flops=275e12,  # from https://cloud.google.com/tpu/docs/v4
     ),
 )
 
+speedrun_config.print_run_info()
+
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("75M_llama_adamax", speedrun_config))
+    executor_main(steps=default_speedrun("llama_75m_adamax", speedrun_config))
 ```
 
 🎉 That’s it! You can now define new optimizers in this manner and train models using them, all within Marin. For optimizers that are widely useful or “standard,” consider submitting a pull request to Levanter.
