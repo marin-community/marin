@@ -41,6 +41,16 @@ from levanter.utils.ray_utils import ser_exc_info
 logger = logging.getLogger("ray")
 
 
+def _get_current_tpu_pod_type() -> str:
+    """Return the TPU pod type for the current node across Ray versions."""
+
+    if hasattr(TPUAcceleratorManager, "_get_current_node_tpu_pod_type"):
+        return TPUAcceleratorManager._get_current_node_tpu_pod_type()
+    if hasattr(TPUAcceleratorManager, "get_current_node_tpu_pod_type"):
+        return TPUAcceleratorManager.get_current_node_tpu_pod_type()
+    raise AttributeError("TPUAcceleratorManager is missing TPU pod type helpers")
+
+
 # CF https://gist.github.com/allenwang28/e3400b9e9212b50aa1cda55ebeccea60
 # CF: https://github.com/AI-Hypercomputer/ray-tpu/blob/main/src/ray_tpu.py
 
@@ -570,7 +580,7 @@ class SliceActor(ResourcePoolManager[TPUHostInfo]):
 
     def get_info(self) -> SliceInfo:
         pod_name = ray.util.accelerators.tpu.get_current_pod_name()
-        tpe = TPUAcceleratorManager._get_current_node_tpu_pod_type()
+        tpe = _get_current_tpu_pod_type()
 
         config = get_tpu_config(tpe)
 
