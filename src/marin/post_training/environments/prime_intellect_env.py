@@ -16,11 +16,10 @@
 Environment Wrapper for the Environments Hub by Prime-Intellect, which contains a collection of environments.
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
-import os
 import time
 import logging
 import subprocess
-import json
+from ast import literal_eval
 from typing import ClassVar
 
 import verifiers as vf
@@ -37,10 +36,8 @@ class PrimeIntellectEnv(MarinEnv):
 
     ENVS: ClassVar[dict[str, vf.Environment]] = {}
 
-    def __init__(self, tokenizer, output_dir_path: str, max_tokens: int = 1024, max_concurrent: int = 32, **kwargs):
+    def __init__(self, tokenizer, max_tokens: int = 1024, max_concurrent: int = 32, **kwargs):
         self.tokenizer = tokenizer
-        self._output_dir_path: str = os.path.join(output_dir_path)
-        os.makedirs(self._output_dir_path, exist_ok=True)
 
         self.env_id = kwargs.get("env_id", None)
         self.env_args = kwargs.get("env_args", None)
@@ -48,15 +45,15 @@ class PrimeIntellectEnv(MarinEnv):
         assert self.env_id is not None, (
             "env_id is required for PrimeIntellectEnv, pass it as"
             "an keyword argument or in the environment spec like: "
-            "prime_intellect:env_id=primeintellect/gsm8k,env_args={num_train_examples=-1,num_eval_examples=-1}"
+            "prime_intellect:env_id=primeintellect/gsm8k,env_args={num_train_examples:-1,num_eval_examples:-1}"
         )
         assert self.env_args is not None, (
             "env_args is required for PrimeIntellectEnv, pass it as"
             "an keyword argument or in the environment spec like: "
-            "prime_intellect:env_id=primeintellect/gsm8k,env_args={num_train_examples=-1,num_eval_examples=-1}"
+            "prime_intellect:env_id=primeintellect/gsm8k,env_args={num_train_examples:-1,num_eval_examples:-1}"
         )
 
-        self.env_args = json.loads(self.env_args)
+        self.env_args = literal_eval(self.env_args)
 
         self.max_tokens = kwargs.get("max_tokens", 1024)
         self.max_concurrent = kwargs.get("max_concurrent", 32)

@@ -72,6 +72,7 @@ def str_to_val(v: str) -> Any:
 def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer) -> MarinEnv:
     """
     Instantiate an environment from a spec string like 'OlymMathEnv:difficulty=easy,language=en'
+    or 'prime_intellect:env_id=primeintellect/gsm8k,env_args={num_train_examples=-1,num_eval_examples=-1}'
     """
     cls_name, _, arg_str = spec.partition(":")
     if cls_name not in ENVIRONMENT_NAME_TO_CLASS:
@@ -79,12 +80,47 @@ def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer) -> MarinEnv:
 
     env_cls = ENVIRONMENT_NAME_TO_CLASS[cls_name]
     kwargs: dict[str, Any] = {}
+    
     if arg_str:
-        for pair in arg_str.split(","):
-            if not pair.strip():
+        # Parse arguments respecting nested structures like {}, [], ()
+        pairs = []
+        current = []
+        depth = 0
+        
+        for char in arg_str:
+            if char in '{[(':
+                depth += 1
+                current.append(char)
+            elif char in '}])':
+                depth -= 1
+                current.append(char)
+            elif char == ',' and depth == 0:
+                # Split at comma only when not inside nested structures
+                if current:
+                    pairs.append(''.join(current))
+                    current = []
+            else:
+                current.append(char)
+        
+        # Don't forget the last pair
+        if current:
+            pairs.append(''.join(current))
+        
+        for pair in pairs:
+            pair = pair.strip()
+            if not pair:
                 continue
-            key, value = map(str.strip, pair.split("="))
-            kwargs[key] = str_to_val(value)
+            if '=' not in pair:
+                raise ValueError(f"Invalid key-value pair in spec: '{pair}'")
+            key, value = map(str.strip, pair.split("=", 1))
+            
+            # Special handling for JSON-like values
+            if value.startswith('{') and value.endswith('}'):
+                # Keep as string - prime_intellect_env.py will parse it
+                kwargs[key] = value
+            else:
+                kwargs[key] = str_to_val(value)
+    
     return env_cls(tokenizer=tokenizer, **kwargs)
 
 

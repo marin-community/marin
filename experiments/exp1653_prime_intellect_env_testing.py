@@ -20,6 +20,7 @@ import dataclasses
 import datetime
 import logging
 import os
+import re
 from dataclasses import dataclass
 
 import jmp
@@ -53,7 +54,7 @@ from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
-ENVIRONMENT_SPEC = "prime_intellect:env_id=primeintellect/gsm8k,env_args={num_train_examples=-1,num_eval_examples=-1}"
+ENVIRONMENT_SPEC = "prime_intellect:env_id=primeintellect/gsm8k,env_args={'num_train_examples':-1,'num_eval_examples':-1}"
 # MODEL_NAME = "meta-llama/Llama-3.2-8B-Instruct"
 # MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 # MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
@@ -64,7 +65,9 @@ MODEL_TOKENIZER = MODEL_NAME
 MODEL_CHECKPOINT = MODEL_NAME
 MAX_INPUT_TOKENS = 128
 MAX_OUTPUT_TOKENS = 128
-RUN_ID = f"test-{MODEL_NAME.split('/')[-1]}-{ENVIRONMENT_SPEC.replace(':', '_').replace('=', '_')}"
+# Sanitize the run_id to be filesystem-safe
+SANITIZED_ENV = re.sub(r'[^a-zA-Z0-9_\-]', '_', ENVIRONMENT_SPEC)
+RUN_ID = f"test-{MODEL_NAME.split('/')[-1]}-{SANITIZED_ENV}"
 
 
 def stop_tokens(tokenizer_name: str):
@@ -117,6 +120,10 @@ def run_rl_training_on_pod(config: RLTrainConfig):
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
             # Print jax & TPU configuration
             import jax
+            
+            # Ensure logs directory exists for the run_id
+            log_dir = os.path.join("logs", config.train_worker_config.run_id)
+            os.makedirs(log_dir, exist_ok=True)
 
             logging.error(f"JAX configuration: {jax.__version__}")
             worker = TrainWorker(
@@ -134,6 +141,11 @@ def run_rl_training_on_pod(config: RLTrainConfig):
     def inference_worker_task():
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+            
+            # Ensure logs directory exists for the run_id
+            log_dir = os.path.join("logs", config.rollout_worker_config.run_id)
+            os.makedirs(log_dir, exist_ok=True)
+            
             worker = RolloutWorker(
                 config=config.rollout_worker_config,
             )
@@ -177,12 +189,12 @@ def rl_train(name: str) -> ExecutorStep:
             logdir=OutputName("tblogs"),
         ),
         mp=jmp.get_policy("p=f32,c=bfloat16"),
-        train_batch_size=256,
-        num_train_steps=50000,
-        steps_per_eval=100,
+        train_batch_size=8,
+        num_train_steps=10,  # Minimal steps for testing
+        steps_per_eval=5,
         checkpointer=CheckpointerConfig(
             base_path=OutputName("checkpoints"),
-            save_interval=datetime.timedelta(seconds=600),
+            save_interval=datetime.timedelta(seconds=3600),  # Save less frequently
         ),
         tensor_parallel_axes=["mlp", "kv_head"],
         fsdp_axis="embed",
@@ -200,7 +212,7 @@ def rl_train(name: str) -> ExecutorStep:
     inference_server_config = InferenceServerConfig(
         model=model_config,
         # Turn on tensor parallelism for inference
-        trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=4),
+        trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=["mlp", "kv_head"]),
         hf_checkpoint=MODEL_CHECKPOINT,
         tokenizer=MODEL_TOKENIZER,
         temperature=1.0,
@@ -248,18 +260,16 @@ def rl_train(name: str) -> ExecutorStep:
         max_input_length=MAX_INPUT_TOKENS,
         max_output_length=MAX_OUTPUT_TOKENS,
         pad_token_id=(tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id),
-        n_prompts_per_step=16,
-        n_generations=4,
+        n_prompts_per_step=2,  # Minimal prompts
+        n_generations=1,  # Single generation
         temperature=0.7,
-        log_freq=5,
-        max_rollouts=100000,
+        log_freq=1,  # Log every step
+        max_rollouts=10,  # Only 10 rollouts for test
         stop_tokens=stop_tokens(MODEL_TOKENIZER),
         initial_checkpoint=MODEL_NAME,
         weight_transfer=weight_transfer,
         rollout_storage=rollout_storage,
         run_id=RUN_ID,
-        env_id="primeintellect/gsm8k",
-        env_args={"num_train_examples": -1, "num_eval_examples": -1},
     )
 
     config = RLTrainConfig(
