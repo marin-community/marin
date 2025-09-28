@@ -398,7 +398,7 @@ def default_train(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a {compute_num_parameters(model_config, vocab_size) :,} parameter model for "
+            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
             f"{train_config.num_train_steps} (steps) * "
             f"{train_config.train_batch_size} (batch_size) * "
             f"{model_config.seq_len} (seq_len) "
