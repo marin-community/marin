@@ -24,7 +24,6 @@ This includes:
 * target_ids: The target token IDs for computing loss.
 * loss_weights: Weights for each token in the loss computation.
 * loss_masks: Masks indicating which tokens contribute to the loss.
-* reference_logprobs: Log probabilities from the reference model.
 
 A RolloutBatch consists of the model information in addition to:
 
@@ -87,7 +86,6 @@ class JaxRolloutBatch(eqx.Module):
     target_ids: jax.Array
     loss_weights: jax.Array
     loss_masks: jax.Array
-    reference_logprobs: jax.Array
     policy_logprobs: jax.Array
 
     def __len__(self) -> int:
@@ -102,7 +100,6 @@ class JaxRolloutBatch(eqx.Module):
             "target_ids": hax.named(self.target_ids, ("batch", "position")),
             "loss_weights": hax.named(self.loss_weights, ("batch", "position")),
             "loss_masks": hax.named(self.loss_masks, ("batch", "position")),
-            "reference_logprobs": hax.named(self.reference_logprobs, ("batch", "position")),
             "policy_logprobs": hax.named(self.policy_logprobs, ("batch", "position")),
         }
 
@@ -117,7 +114,6 @@ class RolloutBatch:
     target_ids: np.ndarray
     loss_weights: np.ndarray
     loss_masks: np.ndarray
-    reference_logprobs: np.ndarray
     policy_logprobs: np.ndarray
 
     def __len__(self) -> int:
@@ -132,7 +128,6 @@ class RolloutBatch:
             target_ids=jnp.array(self.target_ids),
             loss_weights=jnp.array(self.loss_weights),
             loss_masks=jnp.array(self.loss_masks),
-            reference_logprobs=jnp.array(self.reference_logprobs),
             policy_logprobs=jnp.array(self.policy_logprobs),
         )
 

@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 def ppo_loss(
     model: LmHeadModel,
+    reference_model: LmHeadModel,
     batch: dict[str, hax.NamedArray],
     *,
     key: jax.Array | None,
@@ -53,6 +54,13 @@ def ppo_loss(
     clip_epsilon: float,
 ) -> jax.Array:
     """Compute PPO-style loss with RLOO advantages."""
+    reference_output = reference_model(
+        input_ids=batch["input_ids"],
+        attn_mask=batch["attention_mask"],
+        pos_ids=batch["position_ids"],
+        key=key,
+    )
+
     model_output = model(
         input_ids=batch["input_ids"],
         attn_mask=batch["attention_mask"],
@@ -62,7 +70,13 @@ def ppo_loss(
 
     logits = model_output.array.astype(jnp.float32)
 
-    token_ce_loss = softmax_cross_entropy_with_integer_labels(logits, batch["target_ids"].array)
+    target_ids_array = batch["target_ids"].array
+
+    reference_logits = reference_output.array
+    reference_logits_array = reference_logits.astype(jnp.float32)
+    reference_logprobs_array = -softmax_cross_entropy_with_integer_labels(reference_logits_array, target_ids_array)
+
+    token_ce_loss = softmax_cross_entropy_with_integer_labels(logits, target_ids_array)
     current_logprobs = -token_ce_loss
 
     # Get the old policy's log probs (from the worker policy that collected the data)
@@ -98,8 +112,7 @@ def ppo_loss(
 
     # KL penalty from reference policy (optional regularization)
     # KL(π_current || π_ref) ≈ π_current * (log π_current - log π_ref)
-    reference_logprobs = batch["reference_logprobs"].array
-    kl_div = jnp.exp(current_logprobs) * (current_logprobs - reference_logprobs)
+    kl_div = jnp.exp(current_logprobs) * (current_logprobs - reference_logprobs_array)
     kl_loss = jnp.sum(kl_div * mask) / jnp.maximum(jnp.sum(mask), 1.0)
 
     # Total loss
@@ -109,6 +122,7 @@ def ppo_loss(
 
 def rloo_loss_with_importance_sampling(
     model: LmHeadModel,
+    reference_model: LmHeadModel,
     batch: dict[str, hax.NamedArray],
     *,
     key: jax.Array | None,
@@ -127,6 +141,11 @@ def rloo_loss_with_importance_sampling(
     Returns:
         Tuple of (loss, aux_metrics)
     """
+    target_ids_array = batch["target_ids"].array
+    policy_logprobs_array = batch["policy_logprobs"].array
+    loss_weights_array = batch["loss_weights"].array
+    loss_masks_array = batch["loss_masks"].array
+
     # Get logits from current policy
     model_output = model(
         input_ids=batch["input_ids"],
@@ -135,15 +154,19 @@ def rloo_loss_with_importance_sampling(
         key=key,
     )
 
+    reference_output = reference_model(
+        input_ids=batch["input_ids"],
+        attn_mask=batch["attention_mask"],
+        pos_ids=batch["position_ids"],
+        key=key,
+    )
+
+    reference_logits = reference_output.array
+    reference_logits_array = reference_logits.astype(jnp.float32)
+    reference_logprobs_array = -softmax_cross_entropy_with_integer_labels(reference_logits_array, target_ids_array)
+
     logits = model_output
-
     logits_array = logits.array
-    target_ids_array = batch["target_ids"].array
-    policy_logprobs_array = batch["policy_logprobs"].array
-    loss_weights_array = batch["loss_weights"].array
-    loss_masks_array = batch["loss_masks"].array
-    reference_logprobs_array = batch["reference_logprobs"].array
-
     logits_array = logits_array.astype(jnp.float32)
     token_loss = softmax_cross_entropy_with_integer_labels(logits_array, target_ids_array)
 
@@ -310,19 +333,19 @@ class TrainWorker:
         else:
             logger.info("Building new model from scratch")
 
-        initial_model = load_model_from_checkpoint(
-            checkpoint=config.initial_checkpoint,
-            model_config=config.model,
-            trainer_config=config.trainer,
-            vocab_axis=Vocab,
-            tokenizer=self.tokenizer,
-            mesh=config.trainer.device_mesh,
-            axis_mapping=self.config.trainer.parameter_axis_mapping,
-            key=model_key,
-        )
+        def _load_model():
+            return load_model_from_checkpoint(
+                checkpoint=config.initial_checkpoint,
+                model_config=config.model,
+                trainer_config=config.trainer,
+                vocab_axis=Vocab,
+                tokenizer=self.tokenizer,
+                mesh=config.trainer.device_mesh,
+                axis_mapping=self.config.trainer.parameter_axis_mapping,
+                key=model_key,
+            )
 
-        # Reference model is the frozen initial model (for KL regularization)
-        self.reference_model = initial_model
+        self.reference_model = _load_model()
 
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
@@ -333,7 +356,9 @@ class TrainWorker:
 
         @jax.jit
         def _loss_function(model, batch, key):
-            return rloo_loss_with_importance_sampling(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.4)
+            return rloo_loss_with_importance_sampling(
+                model, self.reference_model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=5
+            )
             # return ppo_loss(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.5)
 
         with (

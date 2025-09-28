@@ -87,6 +87,7 @@ class RolloutWorkerConfig:
     initial_checkpoint: str | None = None
 
 
+@jax.jit
 def compute_model_logprobs(
     model,
     input_tokens: np.ndarray,
@@ -483,7 +484,6 @@ class RolloutWorker:
                         target_ids=batch_data["target_ids"],
                         loss_weights=batch_data["loss_weights"],
                         loss_masks=batch_data["loss_masks"],
-                        reference_logprobs=batch_data["reference_logprobs"],
                         policy_logprobs=batch_data["policy_logprobs"],
                     ),
                     env_name=self.config.environment_spec,

@@ -317,7 +317,6 @@ def test_train_worker(ray_cluster, training_worker_config: TrainWorkerConfig):
         for _ in range(5):
             batch = create_rollout_batch(
                 policy_model=runner.reference_model,
-                reference_model=runner.reference_model,
                 batch_size=batch_size,
                 tokenizer=tokenizer,
             )
@@ -436,13 +435,12 @@ def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_conf
     This test validates that the training worker can process rollout batches
     with varying rewards and learn to prefer high-reward (cat-heavy) responses.
     """
-    # Use the rollout storage config to create writer for sending test data
+    target_steps = 100
     queue_writer = training_worker_config.rollout_storage.create_writer()
-
+    training_worker_config.trainer.num_train_steps = target_steps
     batch_size = training_worker_config.trainer.train_batch_size
     tokenizer = DummyTokenizer()
 
-    target_steps = 1000
     with TrainWorkerRunner(training_worker_config) as runner:
         # Wait for worker to initialize and models to be available
         while not runner.worker:
@@ -451,19 +449,17 @@ def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_conf
         # create an initial batch to prime the trainer
         batch = create_rollout_batch(
             policy_model=runner.reference_model,
-            reference_model=runner.reference_model,
             batch_size=batch_size,
             tokenizer=tokenizer,
         )
         queue_writer.write_batch(batch)
 
-        while not runner.done.is_set() and runner.steps_completed < target_steps:
+        while not runner.done.is_set():
             if not runner.trained_model:
                 logger.warning("Waiting for trained model to be available...")
             else:
                 batch = create_rollout_batch(
                     policy_model=runner.trained_model,
-                    reference_model=runner.reference_model,
                     batch_size=batch_size,
                     tokenizer=tokenizer,
                 )
@@ -471,10 +467,8 @@ def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_conf
             time.sleep(1)
 
     assert all(not np.isnan(loss) for loss in runner.losses), "Loss should not be NaN"
-    # assert all(loss < 100.0 for loss in runner.losses), (
-    #     f"Loss should be reasonable, got {runner.losses}"
-    # )
-
+    assert all(loss < 10.0 for loss in runner.losses), f"Loss should be reasonable, got {runner.losses}"
+    #
     checkpoint_dir = str(training_worker_config.trainer.checkpointer.base_path)
     checkpoint_created = os.path.exists(checkpoint_dir) and len(os.listdir(checkpoint_dir)) > 0
     assert checkpoint_created, "Training worker should create checkpoint after processing batches"
@@ -496,6 +490,8 @@ def test_full_integration_moar_cats(
     """Long-running test to validate environment objective improves over time."""
     # The workers already use the same storage config from the fixtures, so they'll automatically share data
 
+    target_steps = 100
+    training_worker_config.trainer.num_train_steps = target_steps
     metrics_history = []
     with TrainWorkerRunner(training_worker_config) as training_runner:
         time.sleep(1)
@@ -569,7 +565,6 @@ def test_train_worker_checkpoint_restart(ray_cluster, training_worker_config):
         for _ in range(5):
             batch = create_rollout_batch(
                 policy_model=runner.reference_model,
-                reference_model=runner.reference_model,
                 batch_size=batch_size,
                 tokenizer=tokenizer,
             )
@@ -606,7 +601,6 @@ def test_train_worker_checkpoint_restart(ray_cluster, training_worker_config):
         for _ in range(5):
             batch = create_rollout_batch(
                 policy_model=runner.reference_model,
-                reference_model=runner.reference_model,
                 batch_size=batch_size,
                 tokenizer=tokenizer,
             )

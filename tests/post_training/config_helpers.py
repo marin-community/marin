@@ -155,7 +155,7 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
         steps_per_eval=1,
         checkpointer=CheckpointerConfig(
             base_path=Path(output_dir) / "checkpoints",
-            save_interval=datetime.timedelta(seconds=1),
+            save_interval=datetime.timedelta(seconds=10),
         ),
         tensor_parallel_axes=["mlp", "kv_heads"],
         fsdp_axis="embed",
@@ -408,7 +408,6 @@ def compute_cats_reward(response: str) -> float:
 
 def create_rollout_batch(
     policy_model,
-    reference_model,
     batch_size: int,
     tokenizer=None,
     max_input_length: int = 16,
@@ -420,7 +419,6 @@ def create_rollout_batch(
 
     Args:
         policy_model: Policy model for logprob computation
-        reference_model: Reference model for logprob computation
         batch_size: Number of examples in the batch
         tokenizer: Tokenizer to use (defaults to DummyTokenizer)
         max_input_length: Maximum input sequence length
@@ -483,14 +481,6 @@ def create_rollout_batch(
         response_masks,
     )
 
-    reference_logprobs = compute_model_logprobs(
-        reference_model,
-        prompt_tokens,
-        prompt_masks,
-        response_tokens,
-        response_masks,
-    )
-
     # Compute rewards and advantages
     rewards = np.array([compute_cats_reward(response) for _, response in examples], dtype=np.float32)
 
@@ -505,8 +495,9 @@ def create_rollout_batch(
         output_tokens=response_tokens,
         output_masks=response_masks,
         loss_weights=loss_weights,
-        reference_logprobs=reference_logprobs,
         policy_logprobs=policy_logprobs,
+        # ignored
+        reference_logprobs=np.zeros_like(policy_logprobs),
     )
 
     # Create RolloutBatch from the prepared data
@@ -517,7 +508,6 @@ def create_rollout_batch(
         target_ids=batch_data["target_ids"],
         loss_weights=batch_data["loss_weights"],
         loss_masks=batch_data["loss_masks"],
-        reference_logprobs=batch_data["reference_logprobs"],
         policy_logprobs=batch_data["policy_logprobs"],
     )
 
