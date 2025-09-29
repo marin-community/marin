@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 import equinox as eqx
+import haliax
 import jax
-from jax.sharding import Mesh
 
 from haliax import Axis
 
@@ -17,6 +17,7 @@ from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, load_tokenizer, HFCompatConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import is_inexact_arrayish, local_cpu_mesh
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ConvertLmConfig:
+    trainer: TrainerConfig
     checkpoint_path: str
     output_dir: str
     upload_to_hf: Optional[RepoRef] = None  # if specified, attempt to upload this checkpoint to the hf hub
@@ -57,7 +59,9 @@ def main(config: ConvertLmConfig):
     if config.use_cpu:
         exit_stack.enter_context(local_cpu_mesh())
     else:
-        exit_stack.enter_context(Mesh(jax.local_devices(), "dev"))
+        # exit_stack.enter_context(Mesh(jax.local_devices(), "dev"))
+        exit_stack.enter_context(config.trainer.device_mesh)
+        exit_stack.enter_context(haliax.axis_mapping(config.trainer.parameter_axis_mapping))
 
     with exit_stack:
         model: LmHeadModel = eqx.filter_eval_shape(config.model.build, Vocab, key=key)

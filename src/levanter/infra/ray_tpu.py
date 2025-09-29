@@ -12,7 +12,7 @@ import time
 from abc import ABC, abstractmethod
 from asyncio import QueueEmpty
 from dataclasses import dataclass
-from typing import Callable, Generic, Optional, Sequence, TypeVar
+from typing import Callable, Generic, List, Optional, Sequence, TypeVar
 
 import draccus
 import mergedeep
@@ -37,6 +37,19 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from levanter.infra.docker import make_docker_run_command
 from levanter.utils.ray_utils import ser_exc_info
+
+logger = logging.getLogger("ray")
+
+
+def _get_current_tpu_pod_type() -> str:
+    """Return the TPU pod type for the current node across Ray versions."""
+
+    if hasattr(TPUAcceleratorManager, "_get_current_node_tpu_pod_type"):
+        return TPUAcceleratorManager._get_current_node_tpu_pod_type()
+    if hasattr(TPUAcceleratorManager, "get_current_node_tpu_pod_type"):
+        return TPUAcceleratorManager.get_current_node_tpu_pod_type()
+    raise AttributeError("TPUAcceleratorManager is missing TPU pod type helpers")
+
 
 # CF https://gist.github.com/allenwang28/e3400b9e9212b50aa1cda55ebeccea60
 # CF: https://github.com/AI-Hypercomputer/ray-tpu/blob/main/src/ray_tpu.py
@@ -91,65 +104,78 @@ from levanter.utils.ray_utils import ser_exc_info
 # TODO: look into https://github.com/jax-ml/jax/blob/main/jax/experimental/transfer.py to see if we
 #  can avoid crashing (probably doing some kind of diloco thing) Or we just go full parameter server
 
-# Note: TPU configurations are complicated. The number of chips per host is
+
+# TPU configurations are complicated. The number of chips per host is
 # always the same for a particular generation, but the number of VMs per host
 # can vary based on the pod size.
 #
-# We define a mapping to handle these oddities.
-# TPU configuration table: tpu_type -> (chips_per_vm, chips_to_vms_fn)
-# See docs here: https://cloud.google.com/tpu/docs/v6e
-#
-# Note that even more confusingly, Google sometimes refers to TPU cores
-# as chips and vice-versa.
-TPU_CONFIGURATIONS = {
-    "v4": (4, lambda chips: max(1, chips // 4)),
-    # v5p always uses VMs = Hosts, with 4 chips per host.
-    "v5p": (4, lambda chips: max(1, chips // 4)),
-    # v5 and v6 transition from 8 chips per VM for "serving" instances
-    # to 4 chips per VM for larger pods. The number of chips per host
-    # remains 8 in all cases.
-    "v5litepod-1": (1, lambda _: 1),
-    "v5litepod-2": (2, lambda _: 1),
-    "v5litepod-4": (4, lambda _: 1),
-    "v5litepod-8": (8, lambda _: 1),
-    "v5litepod": (4, lambda chips: max(1, chips // 4)),
-    "v6e-1": (1, lambda _: 1),
-    "v6e-2": (2, lambda _: 1),
-    "v6e-4": (4, lambda _: 1),
-    "v6e-8": (8, lambda _: 1),
-    "v6e": (4, lambda chips: max(1, chips // 4)),
-}
-
-logger = logging.getLogger("ray")
+# Even more confusingly, Google sometimes refers to TPU cores
+# as chips and vice-versa: v4 and v5p topologies refer to "core", but
+# v5e and v6e topologies refer to "chips". It's doubly confusing as some
+# topologies split 2 VMs per host, while others do not. We just write them
+# all down here.
+@dataclass(frozen=True)
+class TPUConfig:
+    name: str
+    chip_count: int
+    host_count: int
+    vm_count: int
+    chips_per_vm: int
 
 
-def _parse_tpu_type(tpe: str) -> tuple[str, int]:
-    """Parse TPU type string to extract family and chip count."""
-    parts = tpe.split("-")
-    if len(parts) < 2:
-        raise ValueError(f"Invalid TPU type: {tpe}")
+TPU_CONFIGS: List[TPUConfig] = [
+    # https://cloud.google.com/tpu/docs/v4
+    TPUConfig("v4-8", 4, 1, 1, 4),
+    TPUConfig("v4-16", 8, 2, 2, 4),
+    TPUConfig("v4-32", 16, 4, 4, 4),
+    TPUConfig("v4-64", 32, 8, 8, 4),
+    TPUConfig("v4-128", 64, 16, 16, 4),
+    TPUConfig("v4-256", 128, 32, 32, 4),
+    TPUConfig("v4-512", 256, 64, 64, 4),
+    TPUConfig("v4-1024", 512, 128, 128, 4),
+    TPUConfig("v4-2048", 1024, 256, 256, 4),
+    TPUConfig("v4-4096", 2048, 512, 512, 4),
+    # https://cloud.google.com/tpu/docs/v5e
+    TPUConfig("v5litepod-1", 1, 1, 1, 1),
+    TPUConfig("v5litepod-2", 2, 1, 1, 2),
+    TPUConfig("v5litepod-4", 4, 1, 1, 4),
+    TPUConfig("v5litepod-8", 8, 1, 1, 8),
+    TPUConfig("v5litepod-16", 16, 2, 4, 4),
+    TPUConfig("v5litepod-32", 32, 4, 8, 4),
+    TPUConfig("v5litepod-64", 64, 8, 16, 4),
+    TPUConfig("v5litepod-128", 128, 16, 32, 4),
+    TPUConfig("v5litepod-256", 256, 32, 64, 4),
+    # https://cloud.google.com/tpu/docs/v5p
+    TPUConfig("v5p-8", 4, 1, 1, 4),
+    TPUConfig("v5p-16", 8, 2, 2, 4),
+    TPUConfig("v5p-32", 16, 4, 4, 4),
+    TPUConfig("v5p-64", 32, 8, 8, 4),
+    TPUConfig("v5p-128", 64, 16, 16, 4),
+    TPUConfig("v5p-256", 128, 32, 32, 4),
+    TPUConfig("v5p-512", 256, 64, 64, 4),
+    TPUConfig("v5p-1024", 512, 128, 128, 4),
+    TPUConfig("v5p-2048", 1024, 256, 256, 4),
+    TPUConfig("v5p-4096", 2048, 512, 512, 4),
+    TPUConfig("v5p-8192", 4096, 1024, 1024, 4),
+    TPUConfig("v5p-12288", 6144, 1536, 1536, 4),
+    # https://cloud.google.com/tpu/docs/v6e
+    TPUConfig("v6e-1", 1, 1, 1, 1),
+    TPUConfig("v6e-4", 4, 1, 1, 4),
+    TPUConfig("v6e-8", 8, 1, 1, 8),
+    TPUConfig("v6e-16", 16, 4, 4, 4),
+    TPUConfig("v6e-32", 32, 8, 8, 4),
+    TPUConfig("v6e-64", 64, 16, 16, 4),
+    TPUConfig("v6e-128", 128, 32, 32, 4),
+    TPUConfig("v6e-256", 256, 64, 64, 4),
+]
 
-    family = parts[0]
-    try:
-        chip_count = int(parts[1])
-    except ValueError:
-        raise ValueError(f"Invalid chip count in TPU type: {tpe}")
 
-    return family, chip_count
-
-
-def _get_tpu_config(tpe: str, family: str) -> tuple[int, Callable[[int], int]]:
-    """Get TPU configuration for the given type."""
-    if tpe in TPU_CONFIGURATIONS:
-        return TPU_CONFIGURATIONS[tpe]
-
-    # Fall back to family default
-    if family in TPU_CONFIGURATIONS:
-        return TPU_CONFIGURATIONS[family]
-
-    # Unknown TPU type - use conservative defaults
-    logger.warning(f"Unknown TPU type {tpe}, using default configuration")
-    return (4, lambda chips: max(1, chips // 4))
+def get_tpu_config(tpu_type: str) -> TPUConfig:
+    """Get TPU configuration by type name."""
+    for config in TPU_CONFIGS:
+        if config.name == tpu_type:
+            return config
+    raise ValueError(f"Unknown TPU type: {tpu_type}")
 
 
 # My kingdom for ADTs
@@ -554,21 +580,21 @@ class SliceActor(ResourcePoolManager[TPUHostInfo]):
 
     def get_info(self) -> SliceInfo:
         pod_name = ray.util.accelerators.tpu.get_current_pod_name()
-        tpe = TPUAcceleratorManager._get_current_node_tpu_pod_type()
-        tpu_family, chip_count = _parse_tpu_type(tpe)
-        chips_per_vm, chips_to_vms = _get_tpu_config(tpe, tpu_family)
-        num_vms = chips_to_vms(chip_count)
+        tpe = _get_current_tpu_pod_type()
+
+        config = get_tpu_config(tpe)
+
         ip_address = socket.gethostbyname(socket.gethostname())
 
-        logger.info(f"TPU type: {tpe}, chips: {chip_count}, VMs: {num_vms}, chips/VM: {chips_per_vm}")
+        logger.info(f"TPU type: {tpe}, {config}")
 
         self._slice_info = SliceInfo(
             slice_name=pod_name,
-            num_vms=num_vms,
-            num_tpus_per_vm=chips_per_vm,
+            num_vms=config.vm_count,
+            num_tpus_per_vm=config.chips_per_vm,
             ip_address=ip_address,
         )
-        self._scale_actor_pool(num_vms)
+        self._scale_actor_pool(config.vm_count)
         return self._slice_info
 
     def run_remote_fn(self, remote_fn: RemoteFunction, runtime_env: dict) -> list[ray.ObjectRef]:
