@@ -88,6 +88,10 @@ serve = [
   "openai>=1.0.0",
 ]
 
+lm_eval = [
+  "lm-eval",
+]
+
 gcp = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
