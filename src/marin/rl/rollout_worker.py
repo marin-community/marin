@@ -41,9 +41,9 @@ from openai import AsyncOpenAI
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from marin.post_training.environments.load_environments import load_environment_from_spec
-from marin.post_training.environments.marin_env import EnvResponse, InferenceContext
+from marin.rl.environments.marin_env import EnvResponse, InferenceContext
 
-from .model_utils import load_model_from_checkpoint
+from marin.post_training.model_utils import load_model_from_checkpoint
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .rollout_types import (
     Rollout,

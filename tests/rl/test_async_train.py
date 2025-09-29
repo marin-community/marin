@@ -28,13 +28,13 @@ import numpy as np
 import pytest
 import ray
 
-from marin.post_training.rollout_storage import (
+from marin.rl.rollout_storage import (
     RolloutStorageConfig,
     StorageType,
 )
-from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
-from marin.post_training.train_worker import TrainWorker, TrainWorkerConfig
-from tests.post_training.config_helpers import (
+from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
+from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
+from tests.rl.config_helpers import (
     DummyTokenizer,
     create_nano_rollout_worker_config,
     create_nano_training_worker_config,

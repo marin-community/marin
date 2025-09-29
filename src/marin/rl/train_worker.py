@@ -32,10 +32,10 @@ from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from transformers import AutoTokenizer
 
-from marin.post_training import weight_transfer
-from marin.post_training.weight_transfer import WeightTransferConfig
+from marin.rl import weight_transfer
+from marin.rl.weight_transfer import WeightTransferConfig
 
-from .model_utils import load_model_from_checkpoint
+from marin.post_training.model_utils import load_model_from_checkpoint
 from .replay_buffer import ReplayBuffer, ReplayDataLoader
 from .rl_losses import rloo_loss_with_importance_sampling
 from .rollout_storage import RolloutStorageConfig
