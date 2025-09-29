@@ -183,15 +183,9 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
 
     def _create_and_run_worker(self):
         """Create and run the rollout worker with tracking hooks."""
-        from unittest.mock import patch
-
-        from tests.post_training.config_helpers import DummyTokenizer
-
-        with patch("levanter.inference.openai.load_tokenizer") as mock_load:
-            mock_load.return_value = DummyTokenizer()
-            self.worker = RolloutWorker(
-                config=self.rollout_worker_config,
-            )
+        self.worker = RolloutWorker(
+            config=self.rollout_worker_config,
+        )
 
         _sync_weights_original = self.worker._sync_weights
 
@@ -207,6 +201,8 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
 
         def counting_generate_batch(rng):
             batch_data, metrics = original_generate_batch(rng)
+            if batch_data is None:
+                return None, None
             self._track_rollout_generation()
             # Add metadata about rollout
             metrics["rollout_number"] = self.rollouts_generated

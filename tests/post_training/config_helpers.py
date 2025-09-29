@@ -266,33 +266,13 @@ def create_mock_environment(tokenizer=None):
 
 
 def create_test_inference_server_config(model_config: LlamaConfig, output_dir: str | Path):
-    from levanter.checkpoint import save_checkpoint
-
-    vocab_size = DummyTokenizer().vocab_size
-
-    # Create a dummy checkpoint so the server can load
-    checkpoint_dir = Path(output_dir) / "test_checkpoint"
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-
-    # Create minimal model for checkpoint with our test vocab size
-    key = jrandom.PRNGKey(42)
-    Vocab = hax.Axis("vocab", vocab_size)
-    model = model_config.build(Vocab, key=key)
-
-    # Save a dummy checkpoint with the model at the correct subpath
-    # We need to wrap it in a dict with 'model' key for the checkpoint format
-    checkpoint_data = {"model": model}
-    save_checkpoint(checkpoint_data, step=0, checkpoint_path=str(checkpoint_dir / "step-0"))
-
     return InferenceServerConfig(
-        model=model_config,
         trainer=create_nano_trainer_config(output_dir),
         tokenizer=DummyTokenizer(),
         service=InferenceEngineConfig(
             max_seqs=8, page_size=8, max_pages_per_seq=32, max_queued_tokens=8, enable_logprobs=True
         ),
         temperature=1.0,
-        checkpoint_path=str(checkpoint_dir / "step-0"),
     )
 
 

@@ -199,11 +199,11 @@ class RolloutWorker:
     training job via a rollout queue.
     """
 
-    _server_thread: threading.Thread
-    inference_server: InferenceServer
-    policy_model: Any
-    transfer_client: WeightTransferClient
-    rollout_writer: RolloutWriter
+    _inference_thread: threading.Thread
+    _inference_server: InferenceServer
+    _policy_model: Any
+    _transfer_client: WeightTransferClient
+    _rollout_writer: RolloutWriter
     _tokenizer: PreTrainedTokenizer
 
     def __init__(self, config: RolloutWorkerConfig):
@@ -215,6 +215,7 @@ class RolloutWorker:
         self._shutdown_complete = threading.Event()
         self._shutdown_condition = threading.Condition()
 
+        # for testing, we accept a tokenizer instance or a string
         if isinstance(self.config.model.tokenizer, str):
             self._tokenizer = AutoTokenizer.from_pretrained(self.config.model.tokenizer)
         else:
@@ -222,20 +223,22 @@ class RolloutWorker:
 
         self._environment = load_environment_from_spec(config.environment_spec, tokenizer=self._tokenizer)
 
-        config.inference_server_config.port = find_open_port()
-        self.inference_server = InferenceServer.create(config.inference_server_config)
-
-        self._start_inference_server()
-
         logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
-        self.transfer_client = create_weight_transfer_client(
+        self._transfer_client = create_weight_transfer_client(
             config.weight_transfer,
             mesh=self.config.trainer.device_mesh,
             axis_mapping=self.config.trainer.compute_axis_mapping,
         )
 
-        self.rollout_writer = config.rollout_storage.create_writer()
+        self._rollout_writer = config.rollout_storage.create_writer()
         self._build_models()
+        self._inference_server = InferenceServer.create(
+            config.inference_server_config,
+            model=self._policy_model,
+            tokenizer=self._tokenizer,
+        )
+        self._inference_thread = threading.Thread(target=lambda: self._inference_server.serve(), daemon=True)
+        self._inference_thread.start()
 
     def _build_models(self):
         """Build policy model after levanter initialization."""
@@ -261,27 +264,13 @@ class RolloutWorker:
             key=key,
         )
 
-        self.policy_model = self.transfer_client.receive_weights(initial_model)
-        if self.policy_model:
+        self._policy_model = self._transfer_client.receive_weights(initial_model)
+        if self._policy_model:
             logger.info("Loaded initial policy model from weight transfer")
         else:
             logger.info("Initializing policy model from initial checkpoint")
-            self.policy_model = initial_model
+            self._policy_model = initial_model
         logger.info("Loaded/built policy model")
-
-    def _start_inference_server(self):
-        """Start the inference server in a background thread."""
-
-        def run_server():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(self.inference_server.serve_async())
-            except Exception as e:
-                logger.error(f"Inference server error: {e}")
-
-        self._server_thread = threading.Thread(target=run_server, daemon=True)
-        self._server_thread.start()
 
     def stop(self):
         """Stop the inference worker loop and server."""
@@ -293,17 +282,17 @@ class RolloutWorker:
         self._shutdown_complete.wait()
 
         # Now shutdown the inference server
-        if self.inference_server:
-            self.inference_server.shutdown()
+        if self._inference_server:
+            self._inference_server.shutdown()
 
-    def _generate_rollout_batch(self, rng) -> tuple[RolloutBatch, dict]:
+    def _generate_rollout_batch(self, rng) -> tuple[RolloutBatch | None, dict | None]:
         """Generate rollout batches directly from environment without using rl_dataset."""
         barrier_sync()
 
         # Create policy inference context for sampling from the inference server
         policy_ctx = LevanterInferenceContext(
             tokenizer=self._tokenizer,
-            inference_server=self.inference_server,
+            inference_server=self._inference_server,
             max_tokens=self.config.max_input_length + self.config.max_output_length,
             stop_tokens=self.config.stop_tokens,
         )
@@ -333,14 +322,21 @@ class RolloutWorker:
                 rollout = Rollout(
                     env_name=self.config.environment_spec,
                     env_example_id=f"example_{i}",
-                    prompt_tokens=prompt_tokens,
-                    response_tokens=response[j]["tokens"],
+                    prompt_tokens=np.array(prompt_tokens, dtype=np.int32),
+                    response_tokens=np.array(response[j]["tokens"], dtype=np.int32),
                     response_logprobs=response[j]["logprobs"],
-                    token_rewards=[rewards[j]] * len(response[j]["tokens"]),
+                    token_rewards=np.array([rewards[j]] * len(response[j]["tokens"]), dtype=np.float32),
                     episode_reward=rewards[j],
                 )
                 group.rollouts.append(rollout)
-            rollout_groups.append(group)
+
+            # ignore empty groups
+            if len(group.rollouts) > 0:
+                rollout_groups.append(group)
+
+        if len(rollout_groups) == 0:
+            logger.warning("No valid rollouts generated in this batch, retrying...")
+            return None, None
 
         rollout_batch = RolloutBatch(
             groups=rollout_groups,
@@ -352,12 +348,12 @@ class RolloutWorker:
 
     def _sync_weights(self):
         logger.info("Checking for new weights...")
-        weights = self.transfer_client.receive_weights(self.policy_model)
+        weights = self._transfer_client.receive_weights(self._policy_model)
 
         if weights:
             logger.info("Received new weights for policy model")
-            self.policy_model = weights
-            self.inference_server.reload(lambda model: self.policy_model)
+            self._policy_model = weights
+            self._inference_server.reload(lambda model: self._policy_model)
             return weights
         else:
             logger.info("No new weights available for policy model")
@@ -386,14 +382,16 @@ class RolloutWorker:
             rng, input_rng = jax.random.split(rng)
             logger.info("Generating rollout batch...")
             rollout_batch, metrics = self._generate_rollout_batch(input_rng)
+            if rollout_batch is None:
+                continue
             step += 1
-            self.rollout_writer.write_batch(rollout_batch)
+            self._rollout_writer.write_batch(rollout_batch)
 
             if jax.process_index() == 0:
                 if self.config.log_freq > 0 and step % self.config.log_freq == 0:
                     log_metrics = {"step": step}
                     log_metrics.update(jax.device_get(metrics))
-                    log_metrics.update(self.transfer_client.get_metrics())
+                    log_metrics.update(self._transfer_client.get_metrics())
                     log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
                     logger.info(f"Logging metrics at step {step}... {log_metrics}")
                     self.tracker.log(log_metrics, step=step)

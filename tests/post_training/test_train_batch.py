@@ -48,7 +48,7 @@ def create_test_rollout(
 def test_trim_exact_length_no_change():
     """Test that array of exact length is unchanged."""
     ary = np.array([1, 2, 3, 4, 5], dtype=np.int32)
-    result = train_batch.trim_and_pad(ary, max_input_length=3, max_output_length=2, pad_token_id=999)
+    result = train_batch.trim_and_pad(ary, max_seq_len=5, pad_token_id=999)
 
     np.testing.assert_array_equal(result, ary)
 
@@ -56,7 +56,7 @@ def test_trim_exact_length_no_change():
 def test_float_array_padding():
     """Test padding behavior with float arrays."""
     ary = np.array([1.0, 2.0], dtype=np.float32)
-    result = train_batch.trim_and_pad(ary, max_input_length=2, max_output_length=2, pad_token_id=999)
+    result = train_batch.trim_and_pad(ary, max_seq_len=4, pad_token_id=999)
 
     expected = np.array([1.0, 2.0, 0.0, 0.0], dtype=np.float32)  # Float arrays pad with 0
     np.testing.assert_array_equal(result, expected)
@@ -165,12 +165,12 @@ def test_single_rollout_batch_creation():
 
     # Should have batch size 1
     assert len(batch) == 1
-    assert batch.input_ids.shape[0] == 1
+    assert batch.input_ids.axis_size("batch") == 1
 
     # Check that advantage was applied correctly
     # Loss weights should have the advantage value for response tokens
-    expected_advantage_positions = batch.loss_masks[0] == 1.0
-    advantage_values = batch.loss_weights[0][expected_advantage_positions]
+    expected_advantage_positions = batch.loss_masks.array[0] == 1.0
+    advantage_values = batch.loss_weights.array[0][expected_advantage_positions]
     np.testing.assert_array_equal(advantage_values, np.full(advantage_values.shape, 1.5))
 
 
@@ -187,13 +187,13 @@ def test_multiple_rollouts_batch_creation():
 
     # Should have batch size 3
     assert len(batch) == 3
-    assert batch.input_ids.shape[0] == 3
+    assert batch.input_ids.axis_size("batch") == 3
 
     # Check that each rollout has its own advantage applied
     for i in range(3):
         expected_advantage = float(i) * 0.5
-        advantage_positions = batch.loss_masks[i] == 1.0
-        advantage_values = batch.loss_weights[i][advantage_positions]
+        advantage_positions = batch.loss_masks.array[i] == 1.0
+        advantage_values = batch.loss_weights.array[i][advantage_positions]
         np.testing.assert_array_equal(advantage_values, np.full(advantage_values.shape, expected_advantage))
 
 
@@ -211,11 +211,30 @@ def test_padding_consistency():
     batch = train_batch.create_training_batch_from_rollouts(individual_rollouts, 8, 8, 999)
 
     # All sequences should have the same length after padding
-    assert batch.input_ids.shape[1] == 16  # max_input_length + max_output_length
-    assert batch.attention_mask.shape[1] == 16
-    assert batch.target_ids.shape[1] == 16
+    assert batch.input_ids.axis_size("position") == 16  # max_input_length + max_output_length
+    assert batch.attention_mask.axis_size("position") == 16
+    assert batch.target_ids.axis_size("position") == 16
 
     # Check that padding tokens are present where expected
     # For the shortest rollout (prompt_len=3, response_len=1, total=4, shifted=3)
     # Positions 3 and beyond should be padded
-    assert batch.input_ids[2, 4] == 999  # Padding should be present
+    assert batch.input_ids.array[2, 4] == 999  # Padding should be present
+
+
+def test_batch_dtypes():
+    """Test that training batch arrays have correct dtypes."""
+    rollout = create_test_rollout(prompt_len=4, response_len=3)
+    individual = RolloutWithAdvantage(rollout=rollout, advantage=1.5)
+
+    batch = train_batch.create_training_batch_from_rollouts([individual], 8, 8, 0)
+
+    # Token IDs and position IDs should be integers
+    assert batch.input_ids.array.dtype == np.int32
+    assert batch.target_ids.array.dtype == np.int32
+    assert batch.position_ids.array.dtype == np.int32
+    assert batch.attention_mask.array.dtype == np.int32
+
+    # Loss weights, masks, and logprobs should be floats
+    assert batch.loss_weights.array.dtype == np.float32
+    assert batch.loss_masks.array.dtype == np.float32
+    assert batch.policy_logprobs.array.dtype == np.float32

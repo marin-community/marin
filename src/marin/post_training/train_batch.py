@@ -58,8 +58,8 @@ def convert_rollout_to_training_format(
         Dictionary containing training-ready arrays for the rollout
     """
     full_tokens = np.concatenate([rollout.prompt_tokens, rollout.response_tokens])
-    full_mask = np.ones(len(full_tokens))
-    full_position_ids = np.maximum(np.cumsum(full_mask) - 1, 0)
+    full_mask = np.ones(len(full_tokens), dtype=np.int32)
+    full_position_ids = np.maximum(np.cumsum(full_mask) - 1, 0).astype(np.int32)
 
     # Shifted for next-token prediction
     input_tokens = full_tokens[:-1]
@@ -83,7 +83,6 @@ def convert_rollout_to_training_format(
         ]
     )
 
-    # Policy logprobs
     policy_logprob = np.concatenate(
         [np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32), rollout.response_logprobs.astype(np.float32)]
     )

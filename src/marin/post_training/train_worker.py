@@ -125,7 +125,6 @@ class StreamingRolloutLoader:
             batch = create_training_batch_from_rollouts(
                 rollouts, self.config.max_input_length, self.config.max_output_length, self.config.pad_token_id
             )
-
             # shard onto the device mesh
             with self.config.trainer.device_mesh:
                 sharded_batch = hax.shard(batch, self.config.trainer.compute_axis_mapping)
@@ -227,7 +226,6 @@ class TrainWorker:
         config = self.config
         optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-        @jax.jit
         def _loss_function(model, batch, key):
             return rloo_loss_with_importance_sampling(
                 model, self.reference_model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=10

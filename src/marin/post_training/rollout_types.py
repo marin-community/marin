@@ -81,4 +81,4 @@ class TrainingBatch(eqx.Module):
     policy_logprobs: ht.Float[NamedArray, "batch position"]
 
     def __len__(self) -> int:
-        return len(self.input_ids)
+        return self.input_ids.axis_size("batch")

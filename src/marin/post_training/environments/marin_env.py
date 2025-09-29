@@ -85,32 +85,13 @@ class InferenceContext(Protocol):
         """Return the tokenizer."""
         ...
 
-    def generate(
-        self,
-        prompts: list[str],
-        temperature: float = 1.0,
-        n_generations: int = 1,
-    ) -> list[list[EnvResponse]]:
+    def generate(self, prompts: list[str], temperature: float, n_generations: int) -> list[list[EnvResponse]]:
         """Generate responses for a batch of prompts.
 
         Returns:
             List of lists where outer list corresponds to prompts and
             inner list contains n_generations responses per prompt.
             Each response is an EnvResponse.
-        """
-        ...
-
-    def compute_logprobs(
-        self,
-        input_tokens: np.ndarray,
-        input_attention_mask: np.ndarray,
-        target_tokens: np.ndarray,
-        target_attention_mask: np.ndarray,
-    ) -> np.ndarray:
-        """Compute log probabilities for given input/target pairs.
-
-        Returns:
-            Log probabilities for target tokens
         """
         ...
 
