@@ -158,6 +158,7 @@ def profile_ctx(
     path: str,
     create_perfetto_link: bool = False,
     *,
+    device_profile: bool = True,
     host_profile: bool = False,
     host_profile_basename: str = "host_profile",
     host_profile_topn: int = 0,
@@ -171,6 +172,10 @@ def profile_ctx(
         path: Filesystem path where the profile trace will be written.
         create_perfetto_link: If True, process 0 creates a Perfetto link and we
             print periodic messages while waiting for trace finalization.
+        device_profile: If True, enables device profiling (default: True).
+        host_profile: If True, enables host profiling using cProfile (default: False).
+        host_profile_basename: Base name for host profile files (default: "host_profile").
+        host_profile_topn: If > 0, generates a human-readable text summary of the
 
     Notes:
         - Only process 0 creates the Perfetto link when ``create_perfetto_link`` is True.
@@ -186,7 +191,8 @@ def profile_ctx(
     except Exception:
         pass
 
-    jax.profiler.start_trace(path, create_perfetto_link=_create_perfetto_link, create_perfetto_trace=True)
+    if device_profile:
+        jax.profiler.start_trace(path, create_perfetto_link=_create_perfetto_link, create_perfetto_trace=True)
 
     event = None
     pr = None
@@ -233,7 +239,8 @@ def profile_ctx(
         else:
             logger.info("Stopping profiler.")
 
-        jax.profiler.stop_trace()
+        if device_profile:
+            jax.profiler.stop_trace()
 
         if event is not None:
             event.set()

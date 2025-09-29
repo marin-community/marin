@@ -44,6 +44,7 @@ class SampleLmConfig:
     engine: InferenceEngineConfig = field(default_factory=InferenceEngineConfig)
 
     prompts: list[str] | str | tuple[str, ...] = (
+        "What is the square root of 17?",
         "Four score and seven years ago, our",
         # "On the first day of Christmas, my true love gave to me",
         "In a hole in the ground there lived a hobbit, not a nasty, dirty, wet hole",

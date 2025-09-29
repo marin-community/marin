@@ -1,5 +1,5 @@
-hf_checkpoint: "meta-llama/Llama-3.1-8B"
-tokenizer: "meta-llama/Llama-3.1-8B"
+hf_checkpoint: "meta-llama/Llama-3.1-8B-Instruct"
+tokenizer: "meta-llama/Llama-3.1-8B-Instruct"
 n_rounds: 1
 profile: true
 trainer:

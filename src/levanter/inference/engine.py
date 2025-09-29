@@ -662,7 +662,7 @@ class InferenceEngine:
         self.model = model
         self.tokenizer = tokenizer
         self.sampler = sampler
-        self.gen_state: GenState = GenState(cache=cache, decode_state=decode_state)
+        self.gen_state: GenState = hax.named_jit(GenState)(cache=cache, decode_state=decode_state)
         self._initial_decode_state = decode_state
         # Impute max_prefill_size if not set
         if config.max_prefill_size is None:

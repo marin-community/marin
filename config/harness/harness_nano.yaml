@@ -30,4 +30,3 @@ trainer:
   model_axis_size: 4
   fsdp_axis: "embed"
   batch_axis: "batch"
-
