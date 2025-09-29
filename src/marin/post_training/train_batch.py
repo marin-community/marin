@@ -23,8 +23,7 @@ import haliax as hax
 import jax.numpy as jnp
 import numpy as np
 
-from .replay_buffer import RolloutWithCount
-from .rollout_types import Rollout, TrainingBatch
+from .rollout_types import Rollout, RolloutWithAdvantage, TrainingBatch
 
 
 def trim_and_pad(ary: np.ndarray, max_input_length: int, max_output_length: int, pad_token_id: int) -> np.ndarray:
@@ -98,7 +97,7 @@ def convert_rollout_to_training_format(
 
 
 def create_training_batch_from_rollouts(
-    individual_rollouts: list[RolloutWithCount], max_input_length: int, max_output_length: int, pad_token_id: int
+    individual_rollouts: list[RolloutWithAdvantage], max_input_length: int, max_output_length: int, pad_token_id: int
 ) -> TrainingBatch:
     """Create a training batch from a list of individual rollouts.
 

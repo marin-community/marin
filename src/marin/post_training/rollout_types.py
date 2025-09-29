@@ -63,6 +63,14 @@ class RolloutBatch(eqx.Module):
     metadata: RolloutMetadata
 
 
+@dataclass
+class RolloutWithAdvantage:
+    """A rollout paired with its computed advantage."""
+
+    rollout: Rollout
+    advantage: np.ndarray
+
+
 class TrainingBatch(eqx.Module):
     input_ids: ht.Int[NamedArray, "batch position"]
     attention_mask: ht.Int[NamedArray, "batch position"]

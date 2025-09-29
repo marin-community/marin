@@ -28,7 +28,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .rollout_storage import RolloutReader
-from .rollout_types import Rollout, RolloutBatch
+from .rollout_types import RolloutBatch, RolloutWithAdvantage
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +36,9 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class RolloutWithCount:
+class RolloutWithCount(RolloutWithAdvantage):
     """Single rollout with precomputed RLOO advantage & usage count tracking."""
 
-    rollout: Rollout
-    advantage: float
     usage_count: int = 0
 
 

@@ -18,8 +18,7 @@ import numpy as np
 import pytest
 
 from marin.post_training import train_batch
-from marin.post_training.replay_buffer import RolloutWithCount
-from marin.post_training.rollout_types import Rollout
+from marin.post_training.rollout_types import Rollout, RolloutWithAdvantage
 
 
 def create_test_rollout(
@@ -160,7 +159,7 @@ def test_empty_rollouts_raises_error():
 def test_single_rollout_batch_creation():
     """Test creating batch from single rollout."""
     rollout = create_test_rollout()
-    individual = RolloutWithCount(rollout=rollout, advantage=1.5, usage_count=0)
+    individual = RolloutWithAdvantage(rollout=rollout, advantage=1.5)
 
     batch = train_batch.create_training_batch_from_rollouts([individual], 8, 8, 0)
 
@@ -181,7 +180,7 @@ def test_multiple_rollouts_batch_creation():
     for i in range(3):
         rollout = create_test_rollout(unique_id=i, episode_reward=float(i))
         advantage = float(i) * 0.5
-        individual = RolloutWithCount(rollout=rollout, advantage=advantage, usage_count=0)
+        individual = RolloutWithAdvantage(rollout=rollout, advantage=advantage)
         individual_rollouts.append(individual)
 
     batch = train_batch.create_training_batch_from_rollouts(individual_rollouts, 8, 8, 0)
@@ -207,7 +206,7 @@ def test_padding_consistency():
         create_test_rollout(prompt_len=3, response_len=1, unique_id=3),
     ]
 
-    individual_rollouts = [RolloutWithCount(rollout=rollout, advantage=1.0, usage_count=0) for rollout in rollouts]
+    individual_rollouts = [RolloutWithAdvantage(rollout=rollout, advantage=1.0) for rollout in rollouts]
 
     batch = train_batch.create_training_batch_from_rollouts(individual_rollouts, 8, 8, 999)
 
