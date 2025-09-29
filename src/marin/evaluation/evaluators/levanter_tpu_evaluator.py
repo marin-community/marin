@@ -78,7 +78,6 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         return build_runtime_env_for_packages(
             extra=["eval"],
             env_vars={
-                "HF_DATASETS_TRUST_REMOTE_CODE": "1",
                 "TOKENIZERS_PARALLELISM": "false",
             },
         )
