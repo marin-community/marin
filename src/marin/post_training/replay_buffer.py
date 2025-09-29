@@ -22,12 +22,24 @@ with balanced sampling across environments and configurable prioritization.
 import logging
 import threading
 import time
+from collections import defaultdict
+from dataclasses import dataclass
 
 import numpy as np
 
-from .rollout_storage import RolloutBatch, RolloutReader, TaggedRolloutBatch
+from .rollout_storage import RolloutReader
+from .rollout_types import RolloutBatch, RolloutWithAdvantage
 
 logger = logging.getLogger(__name__)
+
+# TODO(power) - move advantage calculation and separate it from count
+
+
+@dataclass
+class RolloutWithCount(RolloutWithAdvantage):
+    """Single rollout with precomputed RLOO advantage & usage count tracking."""
+
+    usage_count: int = 0
 
 
 class ReplayBuffer:
@@ -36,11 +48,6 @@ class ReplayBuffer:
     It attempts to prioritize recent data while balancing the number of samples from
     each environment. As rollout examples appear, they are folded into a shared
     rollout array which is sampled from to produce training batches.
-
-    TODO:
-
-    * Add back-pressure to reduce over-training when the number of new samples is low.
-      This may be handled by either sampling without replacement or aging buffers out.
     """
 
     def __init__(
@@ -50,6 +57,7 @@ class ReplayBuffer:
         total_processes: int,
         recency_alpha: float,
         capacity: int,
+        max_samples: int = -1,
     ):
         """Initialize replay buffer.
 
@@ -59,112 +67,116 @@ class ReplayBuffer:
             recency_alpha: Power law exponent for recency weighting (higher = more recent bias).
             train_process_id: Identifier for this process. Used to sample across processes.
             num_train_processes: Total number of training processes.
+            max_samples: Maximum number of times an example can be used before being retired.
+
+        A `max_samples` of -1 indicates no limit, 0 or 1 means each example is used at most once.
         """
         self.capacity = capacity
         self.local_batch_size = local_batch_size
         self.recency_alpha = recency_alpha
         self.total_processes = total_processes
         self.process_id = process_id
+        self.max_samples = max_samples
 
-        # Per-environment buffers for balanced sampling - store pure RolloutBatch
-        self.env_buffers: dict[str, RolloutBatch] = {}
+        self.rollout_storage: dict[str, list[RolloutWithCount]] = {}
         self._lock = threading.Lock()
 
-        # Statistics
         self._total_batches_added = 0
         self._total_batches_sampled = 0
 
         self._rng = np.random.default_rng(seed=process_id + 42)
 
-    def add_batches(self, tagged_batches: list[TaggedRolloutBatch]) -> None:
-        """Add tagged batchs to the replay buffer.
+    def _retire_overused_rollouts(self):
+        """Remove rollouts that exceeded max_samples usage."""
+        if self.max_samples < 0:
+            return
 
-        The batch is added to the buffer corresponding to its environment name.
-        If this environment has seen more than `capacity` batches, the oldest batch is discarded.
+        for env_name in self.rollout_storage:
+            rollouts = self.rollout_storage[env_name]
+            # Keep only rollouts under usage limit
+            self.rollout_storage[env_name] = [r for r in rollouts if r.usage_count < self.max_samples]
 
-        Args:
-            tagged_batch: TaggedRolloutBatch to add to the buffer.
+    def add_batches(self, new_batches: list[RolloutBatch]) -> None:
+        """Add new rollout batches into the replay buffer.
+
+        Computes RLOO advantages at ingestion and stores individual rollouts
+        with their precomputed advantages and usage tracking.
         """
-
-        # group batches by environment type
-        batches_by_env: dict[str, list[RolloutBatch]] = {}
-        for tagged_batch in tagged_batches:
-            env_name = tagged_batch.env_name
-            if env_name not in batches_by_env:
-                batches_by_env[env_name] = []
-            batches_by_env[env_name].append(tagged_batch.batch)
+        env_examples: dict[str, list[RolloutWithCount]] = defaultdict(list)
+        for batch in new_batches:
+            self._total_batches_added += 1
+            for group in batch.groups:
+                # Compute RLOO advantages for the group
+                advantages = group.compute_rloo_advantages()
+                for rollout, advantage in zip(group.rollouts, advantages, strict=True):
+                    individual = RolloutWithCount(rollout=rollout, advantage=advantage, usage_count=0)
+                    env_examples[rollout.env_name].append(individual)
 
         with self._lock:
-            for env_name, batches in batches_by_env.items():
-                if env_name not in self.env_buffers:
-                    buffer = RolloutBatch.concat(batches)
-                    self.env_buffers[env_name] = buffer
+            for env_name, examples in env_examples.items():
+                if env_name in self.rollout_storage:
+                    self.rollout_storage[env_name].extend(examples)
                 else:
-                    buffer = self.env_buffers[env_name]
-                    buffer = RolloutBatch.concat([buffer, *batches])
+                    self.rollout_storage[env_name] = examples
 
-                env_size = len(buffer)
-                if env_size > self.capacity:
-                    buffer = buffer.slice(env_size - self.capacity, env_size)
-                self.env_buffers[env_name] = buffer
+            if len(self.rollout_storage[env_name]) > self.capacity:
+                self.rollout_storage[env_name] = self.rollout_storage[env_name][-self.capacity :]
 
-                logger.info(
-                    "Added batches to env '%s', new size: %d",
-                    env_name,
-                    len(self.env_buffers[env_name]),
-                )
-                self._total_batches_added += len(batches)
+    def sample_rollouts(self) -> list[RolloutWithCount] | None:
+        """Sample individual rollouts with balanced environment sampling.
 
-    def sample_training_batch(self) -> RolloutBatch | None:
-        """Sample a training batch with balanced environment sampling.
+        If no samples are available, returns None.
 
         Returns:
-            RolloutBatch containing as many examples as possible up to local_batch_size.
+            List of IndividualRollout objects up to local_batch_size.
         """
         with self._lock:
-            if len(self.env_buffers) == 0:
+            # Get all environments with rollouts
+            env_names = [name for name, rollouts in self.rollout_storage.items() if rollouts]
+            if not env_names:
                 return None
 
-            # We sample first an environment, then an example from that environment.
-            # We use a power-law distribution to prioritize recent examples.
-            # We don't currently guarantee processes will fetch unique examples
-            # but processes do sample independently.
-
-            env_buffers = [b for b in self.env_buffers.values() if len(b) > 0]
-            env_count = len(env_buffers)
-            env_ids = np.arange(env_count)
-            env_sample_weights = []
-            for b in env_buffers:
-                sample_weights = np.arange(len(b)) + 1
-                sample_weights = sample_weights**self.recency_alpha
-                sample_weights = sample_weights / sample_weights.sum()
-                env_sample_weights.append(sample_weights)
-
-            samples = []
-
+            # Sample individual rollouts
+            sampled = []
             for _ in range(self.local_batch_size):
-                env_idx = self._rng.choice(env_ids)
-                env_buffer = env_buffers[env_idx]
-                buffer_size = len(env_buffer)
-                sample_idx = self._rng.choice(buffer_size, p=env_sample_weights[env_idx])
-                samples.append(env_buffer.slice(sample_idx, sample_idx + 1))
+                # Select environment (balanced sampling)
+                env_name = self._rng.choice(env_names)
+                rollouts = self.rollout_storage[env_name]
 
+                # Compute recency weights
+                weights = np.arange(len(rollouts)) + 1
+                weights = weights**self.recency_alpha
+                weights = weights / weights.sum()
+
+                # Sample rollout index
+                idx = self._rng.choice(len(rollouts), p=weights)
+                individual = rollouts[idx]
+
+                sampled.append(individual)
+
+                # Update usage count
+                individual.usage_count += 1
+
+            # Retire overused rollouts
+            self._retire_overused_rollouts()
+
+            # Update stats
             self._total_batches_sampled += 1
-            return RolloutBatch.concat(samples)
+            return sampled
 
     def size(self) -> int:
-        """Get total number of batches across all environments."""
+        """Get total number of rollouts across all environments."""
         with self._lock:
-            return sum(len(buffer) for buffer in self.env_buffers.values())
+            return sum(len(rollouts) for rollouts in self.rollout_storage.values())
 
     def get_stats(self) -> dict:
         """Get buffer statistics for monitoring."""
         with self._lock:
-            env_sizes = {env: len(buffer) for env, buffer in self.env_buffers.items()}
+            env_sizes = {env: len(rollouts) for env, rollouts in self.rollout_storage.items()}
             return {
                 "total_size": sum(env_sizes.values()),
                 "env_sizes": env_sizes,
-                "num_environments": len(self.env_buffers),
+                "num_environments": len(self.rollout_storage),
                 "total_batches_added": self._total_batches_added,
                 "total_batches_sampled": self._total_batches_sampled,
             }
@@ -211,20 +223,20 @@ class ReplayDataLoader:
             self._thread = None
             logger.info("Stopped ReplayDataLoader background thread")
 
-    def get_training_batch(self, timeout: float = 5.0) -> RolloutBatch | None:
-        """Get next training batch from replay buffer.
+    def get_rollouts(self, timeout: float = 5.0) -> list[RolloutWithCount] | None:
+        """Get next batch of rollouts from replay buffer.
 
         Args:
-            timeout: Maximum time to wait for a batch in seconds.
+            timeout: Maximum time to wait for rollouts in seconds.
 
         Returns:
-            RolloutBatch if available, None if timeout or no data.
+            List of IndividualRollout if available, None if timeout or no data.
         """
         start_time = time.time()
         while time.time() - start_time < timeout:
-            batch = self.replay_buffer.sample_training_batch()
-            if batch is not None:
-                return batch
+            rollouts = self.replay_buffer.sample_rollouts()
+            if rollouts is not None:
+                return rollouts
             time.sleep(0.1)
         return None
 

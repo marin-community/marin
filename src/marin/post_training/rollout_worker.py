@@ -30,26 +30,28 @@ from typing import Any, cast
 
 import haliax as hax
 import jax
-import jax.numpy as jnp
 import jax.random as jrandom
 import levanter
 import numpy as np
-from levanter.compat.hf_checkpoints import RepoRef
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
-from levanter.models.llama import LlamaConfig
+from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
 from openai import AsyncOpenAI
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from marin.post_training.environments.load_environments import load_environment_from_spec
-from marin.post_training.environments.marin_env import InferenceContext
+from marin.post_training.environments.marin_env import EnvResponse, InferenceContext
 
-from . import weight_transfer_manager
-from .model_utils import load_model_from_checkpoint_or_hf
-from .rl_dataset import create_dataset_from_environment
-from .rollout_storage import RolloutBatch, RolloutWriter, TaggedRolloutBatch
-from .weight_transfer_manager import WeightTransferConfig
+from .model_utils import load_model_from_checkpoint
+from .rollout_storage import RolloutStorageConfig, RolloutWriter
+from .rollout_types import (
+    Rollout,
+    RolloutBatch,
+    RolloutGroup,
+    RolloutMetadata,
+)
+from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_weight_transfer_client
 
 logger = logging.getLogger(__name__)
 
@@ -60,80 +62,31 @@ class RolloutWorkerConfig:
 
     inference_server_config: InferenceServerConfig
 
-    # used for initialization
     trainer: TrainerConfig
-    model: LlamaConfig
+    model: LmConfig
     environment_spec: str
-    rollout_writer: RolloutWriter
+    rollout_storage: RolloutStorageConfig
     max_input_length: int
     max_output_length: int
+    # TODO(power) Lift these out into SamplingConfig
     pad_token_id: int
     n_prompts_per_step: int
     n_generations: int
     temperature: float
     log_freq: int
     weight_transfer: WeightTransferConfig
+
+    run_id: str
+    """Run ID to pass into the tracker. (unclear why this can't be passed directly)"""
+
     max_rollouts: int | None = None
+    """Maximum number of rollouts to generate before stopping. Defaults to running forever."""
 
-    # Initial checkpoints for the reference model, either a string path or HF repo
-    initial_checkpoint_hf: RepoRef | None = None
-    initial_checkpoint_levanter: str | None = None
+    stop_tokens: list[int] | None = None
+    """List of stop tokens to supply when performing auto-regression."""
 
-
-def compute_model_logprobs(
-    model,
-    input_tokens: np.ndarray,
-    input_attention_mask: np.ndarray,
-    target_tokens: np.ndarray,
-    target_attention_mask: np.ndarray,
-) -> np.ndarray:
-    """Compute log probabilities for target tokens.
-
-    N.B. This does not compute full log-probs, just the log-probs of the target
-    tokens themselves.
-
-    Args:
-        model: Haliax model to use for computation
-        input_tokens: (batch_size, input_length) input token IDs
-        input_attention_mask: (batch_size, input_length) attention mask for input
-        target_tokens: (batch_size, target_length) target token IDs
-        target_attention_mask: (batch_size, target_length) attention mask for target
-
-    Returns:
-        np.ndarray: (batch_size, target_length) log probabilities for target tokens
-    """
-    # Concatenate input and target tokens
-    full_tokens = jnp.concatenate([input_tokens, target_tokens], axis=1)
-    full_attention_mask = jnp.concatenate([input_attention_mask, target_attention_mask], axis=1)
-    full_position_ids = jnp.maximum(jnp.cumsum(full_attention_mask, axis=1) - 1, 0)
-
-    # Convert to Haliax named arrays
-    Batch = hax.Axis("batch", full_tokens.shape[0])
-    SeqLen = hax.Axis("position", full_tokens.shape[1])
-
-    tokens_named = hax.named(full_tokens, (Batch, SeqLen))
-    attn_mask_named = hax.named(full_attention_mask.astype(jnp.bool_), (Batch, SeqLen))
-    position_ids_named = hax.named(full_position_ids, (Batch, SeqLen))
-
-    # Compute logits using the model
-    input_tokens_named = tokens_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
-    input_mask_named = attn_mask_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
-    input_position_ids_named = position_ids_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
-
-    # Run forward pass through the model
-    logits = model(
-        input_tokens_named, attn_mask=input_mask_named, pos_ids=input_position_ids_named
-    )  # Shape: (batch, seq_len-1, vocab_size)
-
-    from optax import softmax_cross_entropy_with_integer_labels
-
-    # Extract logits corresponding to target positions
-    logits_array = logits.array[:, input_tokens.shape[1] - 1 :]
-
-    logprobs = -softmax_cross_entropy_with_integer_labels(
-        logits_array.astype(jnp.float32), target_tokens.astype(jnp.int32)
-    )
-    return logprobs
+    # Initial checkpoint for the reference model (auto-detects HF repo vs local path)
+    initial_checkpoint: str | None = None
 
 
 def find_open_port() -> int:
@@ -146,81 +99,94 @@ def find_open_port() -> int:
 class LevanterInferenceContext(InferenceContext):
     """Context that uses Levanter model and inference server."""
 
-    model: Any
     inference_server: InferenceServer
     max_tokens: int
     _tokenizer: Any
+    _stop_tokens: list[int] | None = None
 
-    def __init__(self, model, tokenizer, inference_server: InferenceServer, max_tokens: int):
-        self.model = model
+    def __init__(
+        self,
+        tokenizer,
+        stop_tokens: list[int] | None,
+        inference_server: InferenceServer,
+        max_tokens: int,
+    ):
         self.inference_server = inference_server
         self.max_tokens = max_tokens
         self._tokenizer = tokenizer
+        self._stop_tokens = stop_tokens
 
     @property
     def tokenizer(self):
         return self._tokenizer
 
+    def openai_client(self):
+        base_url = f"http://{self.inference_server.config.host}:{self.inference_server.config.port}/v1"
+        return AsyncOpenAI(base_url=base_url, api_key="marin")
+
     def generate(
         self,
         prompts: list[str],
-        temperature: float = 1.0,
-        n_generations: int = 1,
-        top_p: float | None = None,
-        top_k: int | None = None,
-    ) -> list[list[dict]]:
+        temperature: float,
+        n_generations: int,
+    ) -> list[list[EnvResponse]]:
         """Generate responses for a batch of prompts."""
-        host = self.inference_server.config.host
-        port = self.inference_server.config.port
-        base_url = f"http://{host}:{port}/v1"
+        stop_strings = None
+        if self._stop_tokens is not None:
+            stop_strings = [self._tokenizer.decode([token]) for token in self._stop_tokens]
 
-        client = AsyncOpenAI(base_url=base_url, api_key="marin")
-        all_completions = []
-        for prompt in prompts:
-            completion = client.chat.completions.create(
-                model=getattr(self.inference_server.config, "model_name", "test-model"),
-                messages=[{"role": "user", "content": prompt}],
-                logprobs=True,
-                max_tokens=self.max_tokens,
-                temperature=temperature,
-                n=n_generations,
-                top_p=top_p,
-                extra_body={"top_k": top_k} if top_k is not None else None,
-            )
-            all_completions.append(completion)
-
-        # run all completions in a thread and await the result.
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        completions = loop.run_until_complete(asyncio.gather(*all_completions))
-        loop.close()
+        client = self.openai_client()
 
+        def _process_batch(batch_prompts: list[str]) -> list[list[dict]]:
+            batch_completions = []
+
+            for prompt in batch_prompts:
+                completion = client.chat.completions.create(
+                    model=getattr(self.inference_server.config, "model_name", "test-model"),
+                    messages=[{"role": "user", "content": prompt}],
+                    logprobs=True,
+                    max_tokens=self.max_tokens,
+                    temperature=temperature,
+                    n=n_generations,
+                    stop=stop_strings,
+                    timeout=30,
+                )
+                batch_completions.append(completion)
+
+            completions = loop.run_until_complete(asyncio.gather(*batch_completions, return_exceptions=True))
+
+            batch_results = []
+            for completion in completions:
+                prompt_results = []
+                # drop responses that failed.
+                if isinstance(completion, Exception):
+                    logger.error(f"Error during generation: {completion}")
+                else:
+                    for choice in completion.choices:
+                        content = choice.message.content
+                        tokens = self.tokenizer.encode(content)
+                        logprobs = [t.logprob for t in choice.logprobs.content]
+                        prompt_results.append(EnvResponse(tokens=np.array(tokens), logprobs=np.array(logprobs)))
+                batch_results.append(prompt_results)
+            return batch_results
+
+        # Process prompts in batches to limit concurrent requests
+        # Each prompt with n_generations counts as n_generations requests
+        max_concurrent_requests = 8
+        batch_size = max(1, max_concurrent_requests // n_generations)
         all_results = []
-        for completion in completions:
-            prompt_results = []
-            for choice in completion.choices:
-                content = choice.message.content
-                tokens = self.tokenizer.encode(content)
-                logprobs = [t.logprob for t in choice.logprobs.content]
-                prompt_results.append({"tokens": tokens, "logprobs": logprobs})
-            all_results.append(prompt_results)
-        return all_results
 
-    def compute_logprobs(
-        self,
-        input_tokens: np.ndarray,
-        input_attention_mask: np.ndarray,
-        target_tokens: np.ndarray,
-        target_attention_mask: np.ndarray,
-    ) -> np.ndarray:
-        """Compute log probabilities for given input/target pairs."""
-        return compute_model_logprobs(
-            self.model,
-            input_tokens,
-            input_attention_mask,
-            target_tokens,
-            target_attention_mask,
-        )
+        for i in range(0, len(prompts), batch_size):
+            batch_prompts = prompts[i : i + batch_size]
+            batch_results = _process_batch(batch_prompts)
+            all_results.extend(batch_results)
+
+        loop.run_until_complete(client.close())
+
+        loop.close()
+        return all_results
 
 
 class RolloutWorker:
@@ -231,30 +197,23 @@ class RolloutWorker:
     training job via a rollout queue.
     """
 
-    _server_thread: threading.Thread
-    inference_server: InferenceServer
-    policy_model: Any
-    reference_model: Any
-    transfer_client: weight_transfer_manager.WeightTransferClient
+    _inference_thread: threading.Thread
+    _inference_server: InferenceServer
+    _policy_model: Any
+    _transfer_client: WeightTransferClient
+    _rollout_writer: RolloutWriter
     _tokenizer: PreTrainedTokenizer
 
-    def __init__(
-        self,
-        config: RolloutWorkerConfig,
-    ):
-        """Initialize inference worker.
-
-        Args:
-            config: Inference worker configuration.
-            coordinator: Coordinator for weight transfer (required for RAY_REMOTING and
-                JAX_TRANSFER_SERVER modes).
-        """
+    def __init__(self, config: RolloutWorkerConfig):
+        config.trainer.id = f"{config.run_id}-rollout"
         levanter.initialize(config.trainer)
+        self.tracker = levanter.current_tracker()
         self.config = config
         self._running = True
         self._shutdown_complete = threading.Event()
         self._shutdown_condition = threading.Condition()
 
+        # for testing, we accept a tokenizer instance or a string
         if isinstance(self.config.model.tokenizer, str):
             self._tokenizer = AutoTokenizer.from_pretrained(self.config.model.tokenizer)
         else:
@@ -262,60 +221,54 @@ class RolloutWorker:
 
         self._environment = load_environment_from_spec(config.environment_spec, tokenizer=self._tokenizer)
 
-        self._build_models()
-
-        config.inference_server_config.port = find_open_port()
-        self.inference_server = InferenceServer.create(config.inference_server_config)
-        self._start_inference_server()
-
-        self.transfer_client = weight_transfer_manager.create_weight_transfer_client(
+        logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
+        self._transfer_client = create_weight_transfer_client(
             config.weight_transfer,
             mesh=self.config.trainer.device_mesh,
             axis_mapping=self.config.trainer.compute_axis_mapping,
         )
 
-    def _build_models(self):
-        """Build policy and reference models after levanter initialization."""
+        self._rollout_writer = config.rollout_storage.create_writer()
+        self._build_models()
+        self._inference_server = InferenceServer.create(
+            config.inference_server_config,
+            model=self._policy_model,
+            tokenizer=self._tokenizer,
+        )
+        self._inference_thread = threading.Thread(target=lambda: self._inference_server.serve(), daemon=True)
+        self._inference_thread.start()
 
-        if self.config.initial_checkpoint_hf is not None or self.config.initial_checkpoint_levanter is not None:
-            logger.info("Loading initial reference model from checkpoint...")
-            self.reference_model = load_model_from_checkpoint_or_hf(
-                model_config=self.config.model,
-                trainer_config=self.config.trainer,
-                vocab_axis=hax.Axis("vocab", self._tokenizer.vocab_size),
-                tokenizer=self._tokenizer,
-                levanter_checkpoint_path=self.config.initial_checkpoint_levanter,
-                hf_checkpoint=self.config.initial_checkpoint_hf,
-                key=jrandom.PRNGKey(42),
-            )
-            self.policy_model = self.reference_model
-            logger.info("Loaded initial reference model from checkpoint")
+    def _build_models(self):
+        """Build policy model after levanter initialization."""
+
+        if self.config.initial_checkpoint is not None:
+            logger.info(f"Loading initial policy model from checkpoint: {self.config.initial_checkpoint}")
+        else:
+            logger.info("Building new policy model from scratch")
 
         key = jrandom.PRNGKey(42)
         vocab_size = self._tokenizer.vocab_size
         Vocab = hax.Axis("vocab", vocab_size)
 
-        with (
-            self.config.trainer.device_mesh,
-            hax.axis_mapping(self.config.trainer.compute_axis_mapping),
-        ):
-            self.policy_model = self.reference_model = self.config.model.build(Vocab, key=key)
+        initial_model = load_model_from_checkpoint(
+            checkpoint=self.config.initial_checkpoint,
+            model_config=self.config.model,
+            trainer_config=self.config.trainer,
+            mesh=self.config.trainer.device_mesh,
+            # use the compute axis mapping for inference
+            axis_mapping=self.config.trainer.compute_axis_mapping,
+            vocab_axis=Vocab,
+            tokenizer=self._tokenizer,
+            key=key,
+        )
 
-        logger.info("Built policy and reference models after levanter initialization")
-
-    def _start_inference_server(self):
-        """Start the inference server in a background thread."""
-
-        def run_server():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(self.inference_server.serve_async())
-            except Exception as e:
-                logger.error(f"Inference server error: {e}")
-
-        self._server_thread = threading.Thread(target=run_server, daemon=True)
-        self._server_thread.start()
+        self._policy_model = self._transfer_client.receive_weights(initial_model)
+        if self._policy_model:
+            logger.info("Loaded initial policy model from weight transfer")
+        else:
+            logger.info("Initializing policy model from initial checkpoint")
+            self._policy_model = initial_model
+        logger.info("Loaded/built policy model")
 
     def stop(self):
         """Stop the inference worker loop and server."""
@@ -327,65 +280,78 @@ class RolloutWorker:
         self._shutdown_complete.wait()
 
         # Now shutdown the inference server
-        if self.inference_server:
-            self.inference_server.shutdown()
+        if self._inference_server:
+            self._inference_server.shutdown()
 
-    def _generate_rollout_batch(self, rng) -> tuple[list[dict], dict]:
-        """Generate a set of rollout batches from the environment."""
+    def _generate_rollout_batch(self, rng) -> tuple[RolloutBatch | None, dict | None]:
+        """Generate rollout batches directly from environment without using rl_dataset."""
         barrier_sync()
 
-        # Create Levanter inference contexts
+        # Create policy inference context for sampling from the inference server
         policy_ctx = LevanterInferenceContext(
-            self.policy_model,
             tokenizer=self._tokenizer,
-            inference_server=self.inference_server,
-            max_tokens=self.config.max_output_length,
-        )
-        reference_ctx = LevanterInferenceContext(
-            self.reference_model,
-            tokenizer=self._tokenizer,
-            inference_server=self.inference_server,
-            max_tokens=self.config.max_output_length,
+            inference_server=self._inference_server,
+            max_tokens=self.config.max_input_length + self.config.max_output_length,
+            stop_tokens=self.config.stop_tokens,
         )
 
         with (
             self.config.trainer.device_mesh,
             hax.axis_mapping(self.config.trainer.compute_axis_mapping),
         ):
-            rl_dataset, dataset_metrics = create_dataset_from_environment(
-                environment=self._environment,
-                policy_ctx=policy_ctx,
-                reference_ctx=reference_ctx,
+            env_step = self._environment.step(
+                inference_ctx=policy_ctx,
                 n_examples=self.config.n_prompts_per_step,
                 prng_key=rng,
-                n_generations=self.config.n_generations,
-                max_input_length=self.config.max_input_length,
-                max_output_length=self.config.max_output_length,
-                pad_token_id=self.config.pad_token_id,
                 mode="train",
+                n_generations=self.config.n_generations,
                 temperature=self.config.temperature,
             )
-        barrier_sync()
 
-        return (
-            list(
-                rl_dataset.iterate_batches(
-                    batch_size=self.config.n_generations * self.config.n_prompts_per_step,
-                    shuffle=True,
-                    loop=False,
+        rollout_groups: list[RolloutGroup] = []
+        for i, response in enumerate(env_step.responses):
+            rewards = env_step.rewards[i]
+            group = RolloutGroup(key=f"example_{i}", rollouts=[])
+            prompt = env_step.examples[i]["prompt"]
+            # answer = env_step.examples[i]["answer"]
+            prompt_tokens = self._tokenizer.encode(prompt, add_special_tokens=True)[-self.config.max_input_length :]
+
+            for j in range(len(response)):
+                rollout = Rollout(
+                    env_name=self.config.environment_spec,
+                    env_example_id=f"example_{i}",
+                    prompt_tokens=np.array(prompt_tokens, dtype=np.int32),
+                    response_tokens=np.array(response[j]["tokens"], dtype=np.int32),
+                    response_logprobs=response[j]["logprobs"],
+                    token_rewards=np.array([rewards[j]] * len(response[j]["tokens"]), dtype=np.float32),
+                    episode_reward=rewards[j],
                 )
-            ),
-            dataset_metrics,
+                group.rollouts.append(rollout)
+
+            # ignore empty groups
+            if len(group.rollouts) > 0:
+                rollout_groups.append(group)
+
+        if len(rollout_groups) == 0:
+            logger.warning("No valid rollouts generated in this batch, retrying...")
+            return None, None
+
+        rollout_batch = RolloutBatch(
+            groups=rollout_groups,
+            metadata=RolloutMetadata(worker_id=f"{socket.gethostname()}_{os.getpid()}", timestamp=time.time()),
         )
+
+        barrier_sync()
+        return rollout_batch, env_step.metrics
 
     def _sync_weights(self):
         logger.info("Checking for new weights...")
-        weights = self.transfer_client.receive_weights(self.policy_model)
+        weights = self._transfer_client.receive_weights(self._policy_model)
+
         if weights:
             logger.info("Received new weights for policy model")
-
-            self.policy_model = weights
-            self.inference_server.reload(lambda model: self.policy_model)
+            self._policy_model = weights
+            self._inference_server.reload(lambda model: self._policy_model)
             return weights
         else:
             logger.info("No new weights available for policy model")
@@ -395,7 +361,6 @@ class RolloutWorker:
         """Main inference worker loop."""
         logger.info("Starting inference worker...")
 
-        rollouts_generated = 0
         step = 0
         rng = jax.random.PRNGKey(0)
 
@@ -404,7 +369,7 @@ class RolloutWorker:
         while self._running:
             barrier_sync()
 
-            if self.config.max_rollouts is not None and rollouts_generated >= self.config.max_rollouts:
+            if self.config.max_rollouts is not None and step >= self.config.max_rollouts:
                 logger.info(f"Reached max rollouts ({self.config.max_rollouts}), stopping")
                 break
 
@@ -413,36 +378,22 @@ class RolloutWorker:
                 last_weight_check = time.time()
 
             rng, input_rng = jax.random.split(rng)
-            rollout_batches, metrics = self._generate_rollout_batch(input_rng)
-            for batch_data in rollout_batches:
-                step += 1
+            logger.info("Generating rollout batch...")
+            rollout_batch, metrics = self._generate_rollout_batch(input_rng)
+            if rollout_batch is None:
+                continue
+            step += 1
+            self._rollout_writer.write_batch(rollout_batch)
 
+            if jax.process_index() == 0:
                 if self.config.log_freq > 0 and step % self.config.log_freq == 0:
                     log_metrics = {"step": step}
                     log_metrics.update(jax.device_get(metrics))
+                    log_metrics.update(self._transfer_client.get_metrics())
                     log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
                     logger.info(f"Logging metrics at step {step}... {log_metrics}")
+                    self.tracker.log(log_metrics, step=step)
 
-                rollout_batch = TaggedRolloutBatch(
-                    batch=RolloutBatch(
-                        input_ids=batch_data["input_ids"],
-                        attention_mask=batch_data["attention_mask"],
-                        position_ids=batch_data["position_ids"],
-                        target_ids=batch_data["target_ids"],
-                        loss_weights=batch_data["loss_weights"],
-                        loss_masks=batch_data["loss_masks"],
-                        reference_logprobs=batch_data["reference_logprobs"],
-                        policy_logprobs=batch_data["policy_logprobs"],
-                    ),
-                    env_name=self.config.environment_spec,
-                    worker_id=f"{socket.gethostname()}_{os.getpid()}",
-                    timestamp=time.time(),
-                    rollout_id=f"{socket.gethostname()}_{int(time.time() * 1000000)}_{step}",
-                )
-                self.config.rollout_writer.write_batch(rollout_batch)
-                rollouts_generated += 1
-            logger.info(f"Generating rollout batch {rollouts_generated}")
-
-        logger.info(f"Inference worker completed after generating {rollouts_generated} rollouts")
+        logger.info(f"Inference worker completed after generating {step} rollouts")
         barrier_sync()
         self._shutdown_complete.set()

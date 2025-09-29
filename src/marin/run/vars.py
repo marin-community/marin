@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+<<<<<<< HEAD
 # Environment variables that we want to set in Ray
 ENV_VARS = {
     "TPU_MIN_LOG_LEVEL": "3",
@@ -34,4 +35,6 @@ ENV_VARS = {
 
 PIP_DEPS = []
 
+=======
+>>>>>>> origin/main
 REMOTE_DASHBOARD_URL = "http://127.0.0.1:8265"
