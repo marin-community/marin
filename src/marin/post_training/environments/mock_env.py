@@ -15,15 +15,27 @@
 """Mock environment for testing RL training without external dependencies."""
 
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from typing import Any, ClassVar, Protocol
 
 import jax
 import numpy as np
 
-from .marin_env import DataExample, EnvStep, InferenceContext, MarinEnv
+from .marin_env import EnvResponse, EnvStep, InferenceContext, MarinEnv
 
 NUM_TRAIN_EXAMPLES = 1000
 NUM_EVAL_EXAMPLES = 100
+
+
+@dataclass
+class MockEnvExample:
+    """Single data example with transformations for debugging."""
+
+    raw_prompt: str
+    raw_answer: str
+    processed_prompt: str
+    processed_answer: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class Task(Protocol):
@@ -250,10 +262,10 @@ class MockEnv(MarinEnv):
 
         return EnvStep(examples=examples, responses=responses, rewards=rewards, metrics=metrics)
 
-    def training_data(self) -> Iterator[DataExample]:
+    def training_data(self) -> Iterator[MockEnvExample]:
         """Stream training data."""
         for example in self.train_examples:
-            yield DataExample(
+            yield MockEnvExample(
                 raw_prompt=example["prompt"],
                 raw_answer=example["answer"],
                 processed_prompt=example["prompt"],  # MockEnv doesn't transform
@@ -261,10 +273,10 @@ class MockEnv(MarinEnv):
                 metadata={"task_type": self.task_type},
             )
 
-    def eval_data(self) -> Iterator[DataExample]:
+    def eval_data(self) -> Iterator[MockEnvExample]:
         """Stream evaluation data."""
         for example in self.eval_examples:
-            yield DataExample(
+            yield MockEnvExample(
                 raw_prompt=example["prompt"],
                 raw_answer=example["answer"],
                 processed_prompt=example["prompt"],  # MockEnv doesn't transform
@@ -277,7 +289,7 @@ class MockEnv(MarinEnv):
         return self.eval_examples[:n_examples]
 
     def _compute_rewards(
-        self, examples: list[dict], responses: list[list[dict[str, Any]]], tokenizer
+        self, examples: list[MockEnvExample], responses: list[list[EnvResponse]], tokenizer
     ) -> tuple[np.ndarray, dict]:
         """Compute rewards for generated responses."""
         n_examples = len(examples)

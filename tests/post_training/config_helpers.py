@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import haliax as hax
+import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import jmp
@@ -33,18 +34,14 @@ from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from optax import softmax_cross_entropy_with_integer_labels
 
 from marin.post_training.environments.mock_env import MockEnv
-from marin.post_training.rl_dataset import (
-    compute_rloo_advantages_for_group,
-    prepare_training_batch,
-)
 from marin.post_training.rollout_storage import (
-    RolloutBatch,
     RolloutStorageConfig,
-    TaggedRolloutBatch,
 )
-from marin.post_training.rollout_worker import RolloutWorkerConfig, compute_model_logprobs
+from marin.post_training.rollout_types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
+from marin.post_training.rollout_worker import RolloutWorkerConfig
 from marin.post_training.train_worker import ReplayBufferConfig, TrainWorkerConfig
 from marin.post_training.weight_transfer import WeightTransferConfig
 from marin.post_training.weight_transfer.base import WeightTransferMode
@@ -125,6 +122,61 @@ class DummyTokenizer:
         return self.vocab_size
 
 
+@jax.jit
+def compute_model_logprobs(
+    model,
+    input_tokens: np.ndarray,
+    input_attention_mask: np.ndarray,
+    target_tokens: np.ndarray,
+    target_attention_mask: np.ndarray,
+) -> np.ndarray:
+    """Compute log probabilities for target tokens.
+
+    N.B. This does not compute full log-probs, just the log-probs of the target
+    tokens themselves.
+
+    Args:
+        model: Haliax model to use for computation
+        input_tokens: (batch_size, input_length) input token IDs
+        input_attention_mask: (batch_size, input_length) attention mask for input
+        target_tokens: (batch_size, target_length) target token IDs
+        target_attention_mask: (batch_size, target_length) attention mask for target
+
+    Returns:
+        np.ndarray: (batch_size, target_length) log probabilities for target tokens
+    """
+    # Concatenate input and target tokens
+    full_tokens = jnp.concatenate([input_tokens, target_tokens], axis=1)
+    full_attention_mask = jnp.concatenate([input_attention_mask, target_attention_mask], axis=1)
+    full_position_ids = jnp.maximum(jnp.cumsum(full_attention_mask, axis=1) - 1, 0)
+
+    # Convert to Haliax named arrays
+    Batch = hax.Axis("batch", full_tokens.shape[0])
+    SeqLen = hax.Axis("position", full_tokens.shape[1])
+
+    tokens_named = hax.named(full_tokens, (Batch, SeqLen))
+    attn_mask_named = hax.named(full_attention_mask.astype(jnp.bool_), (Batch, SeqLen))
+    position_ids_named = hax.named(full_position_ids, (Batch, SeqLen))
+
+    # Compute logits using the model
+    input_tokens_named = tokens_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
+    input_mask_named = attn_mask_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
+    input_position_ids_named = position_ids_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
+
+    # Run forward pass through the model
+    logits = model(
+        input_tokens_named, attn_mask=input_mask_named, pos_ids=input_position_ids_named
+    )  # Shape: (batch, seq_len-1, vocab_size)
+
+    # Extract logits corresponding to target positions
+    logits_array = logits.array[:, input_tokens.shape[1] - 1 :]
+
+    logprobs = -softmax_cross_entropy_with_integer_labels(
+        logits_array.astype(jnp.float32), target_tokens.astype(jnp.int32)
+    )
+    return logprobs
+
+
 @pytest.fixture
 def test_output_dir(tmp_path):
     """Pytest fixture for providing a temporary output directory."""
@@ -155,7 +207,7 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
         steps_per_eval=1,
         checkpointer=CheckpointerConfig(
             base_path=Path(output_dir) / "checkpoints",
-            save_interval=datetime.timedelta(seconds=1),
+            save_interval=datetime.timedelta(seconds=10),
         ),
         tensor_parallel_axes=["mlp", "kv_heads"],
         fsdp_axis="embed",
@@ -193,6 +245,9 @@ def create_nano_training_worker_config(
         trainer=create_nano_trainer_config(output_dir),
         optimizer=create_nano_optimizer_config(),
         weight_transfer=create_weight_transfer_config(),
+        max_input_length=16,
+        max_output_length=16,
+        pad_token_id=0,
         replay_buffer=ReplayBufferConfig(
             capacity=2048,
             alpha=3.0,
@@ -211,33 +266,13 @@ def create_mock_environment(tokenizer=None):
 
 
 def create_test_inference_server_config(model_config: LlamaConfig, output_dir: str | Path):
-    from levanter.checkpoint import save_checkpoint
-
-    vocab_size = DummyTokenizer().vocab_size
-
-    # Create a dummy checkpoint so the server can load
-    checkpoint_dir = Path(output_dir) / "test_checkpoint"
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-
-    # Create minimal model for checkpoint with our test vocab size
-    key = jrandom.PRNGKey(42)
-    Vocab = hax.Axis("vocab", vocab_size)
-    model = model_config.build(Vocab, key=key)
-
-    # Save a dummy checkpoint with the model at the correct subpath
-    # We need to wrap it in a dict with 'model' key for the checkpoint format
-    checkpoint_data = {"model": model}
-    save_checkpoint(checkpoint_data, step=0, checkpoint_path=str(checkpoint_dir / "step-0"))
-
     return InferenceServerConfig(
-        model=model_config,
         trainer=create_nano_trainer_config(output_dir),
         tokenizer=DummyTokenizer(),
         service=InferenceEngineConfig(
             max_seqs=8, page_size=8, max_pages_per_seq=32, max_queued_tokens=8, enable_logprobs=True
         ),
         temperature=1.0,
-        checkpoint_path=str(checkpoint_dir / "step-0"),
     )
 
 
@@ -348,6 +383,20 @@ def run_inference_with_engine(
     return result.tokens, generated_texts
 
 
+def compute_cats_reward(response: str) -> float:
+    """Compute reward for cat-themed responses using MoarCatsTask logic.
+
+    Args:
+        response: Generated response text
+
+    Returns:
+        Reward score based on cat content
+    """
+    num_cats = response.lower().count("cat")
+    love_cats = response.lower().count("love cats")
+    return (num_cats + (10 * love_cats)) / (1 + len(response))
+
+
 def encode_prompt_and_response(
     prompt: str,
     response: str,
@@ -392,35 +441,19 @@ def encode_prompt_and_response(
     }
 
 
-def compute_cats_reward(response: str) -> float:
-    """Compute reward for cat-themed responses using MoarCatsTask logic.
-
-    Args:
-        response: Generated response text
-
-    Returns:
-        Reward score based on cat content
-    """
-    num_cats = response.lower().count("cat")
-    love_cats = response.lower().count("love cats")
-    return (num_cats + (10 * love_cats)) / (1 + len(response))
-
-
 def create_rollout_batch(
     policy_model,
-    reference_model,
     batch_size: int,
     tokenizer=None,
     max_input_length: int = 16,
     max_output_length: int = 16,
     pad_token_id: int = 0,
     worker_id: str = "test_worker",
-) -> TaggedRolloutBatch:
+) -> RolloutBatch:
     """Create a rollout batch with cat-themed examples using real model logprob computation.
 
     Args:
         policy_model: Policy model for logprob computation
-        reference_model: Reference model for logprob computation
         batch_size: Number of examples in the batch
         tokenizer: Tokenizer to use (defaults to DummyTokenizer)
         max_input_length: Maximum input sequence length
@@ -429,12 +462,12 @@ def create_rollout_batch(
         worker_id: Worker identifier
 
     Returns:
-        TaggedRolloutBatch with cat-themed data and real computed logprobs
+        RolloutBatch with cat-themed data and real computed logprobs
     """
     if tokenizer is None:
         tokenizer = DummyTokenizer()
 
-    # Generate synthetic prompt/response examples (like the original function)
+    # Generate synthetic prompt/response examples
     prompts = [
         "i like cats, give me moar cats",
         "do you like cats?",
@@ -449,7 +482,6 @@ def create_rollout_batch(
 
     for _ in range(batch_size):
         prompt = rng.choice(prompts)
-        # Generate positive or negative responses
         if rng.random() < 0.5:
             response = " ".join(rng.choice(positive_words, size=rng.integers(1, 8)))
         else:
@@ -469,7 +501,7 @@ def create_rollout_batch(
         )
         encoded_examples.append(encoded)
 
-    # Stack arrays
+    # Stack arrays for logprob computation
     prompt_tokens = np.stack([ex["prompt_tokens"] for ex in encoded_examples])
     prompt_masks = np.stack([ex["prompt_attention_mask"] for ex in encoded_examples])
     response_tokens = np.stack([ex["response_tokens"] for ex in encoded_examples])
@@ -483,51 +515,37 @@ def create_rollout_batch(
         response_masks,
     )
 
-    reference_logprobs = compute_model_logprobs(
-        reference_model,
-        prompt_tokens,
-        prompt_masks,
-        response_tokens,
-        response_masks,
-    )
+    # Create individual rollouts
+    rollouts = []
+    for i in range(len(examples)):
+        prompt_text, response_text = examples[i]
+        encoded_ex = encoded_examples[i]
+        episode_reward = compute_cats_reward(response_text)
 
-    # Compute rewards and advantages
-    rewards = np.array([compute_cats_reward(response) for _, response in examples], dtype=np.float32)
+        # Extract individual arrays (remove batch dimension)
+        individual_prompt = encoded_ex["prompt_tokens"][prompt_masks[i] == 1]
+        individual_response = encoded_ex["response_tokens"][response_masks[i] == 1]
+        individual_logprobs = policy_logprobs[i][response_masks[i] == 1]
 
-    advantages = compute_rloo_advantages_for_group(rewards)
+        # Token rewards (simple: use episode reward for all response tokens)
+        token_rewards = np.full(len(individual_response), episode_reward, dtype=np.float32)
 
-    # Create loss weights (repeat advantages for each token position)
-    loss_weights = np.repeat(advantages[..., None], max_output_length, axis=1)
+        rollout = Rollout(
+            env_name="mock:task_type=cats",
+            env_example_id=f"cats_example_{i}",
+            prompt_tokens=individual_prompt,
+            response_tokens=individual_response,
+            response_logprobs=individual_logprobs,
+            token_rewards=token_rewards,
+            episode_reward=episode_reward,
+        )
+        rollouts.append(rollout)
 
-    batch_data = prepare_training_batch(
-        prompt_tokens=prompt_tokens,
-        prompt_masks=prompt_masks,
-        output_tokens=response_tokens,
-        output_masks=response_masks,
-        loss_weights=loss_weights,
-        reference_logprobs=reference_logprobs,
-        policy_logprobs=policy_logprobs,
-    )
+    # Group rollouts
+    group = RolloutGroup(key="cats_group", rollouts=rollouts)
 
-    # Create RolloutBatch from the prepared data
-    rollout_batch = RolloutBatch(
-        input_ids=batch_data["input_ids"],
-        attention_mask=batch_data["attention_mask"],
-        position_ids=batch_data["position_ids"],
-        target_ids=batch_data["target_ids"],
-        loss_weights=batch_data["loss_weights"],
-        loss_masks=batch_data["loss_masks"],
-        reference_logprobs=batch_data["reference_logprobs"],
-        policy_logprobs=batch_data["policy_logprobs"],
-    )
-
-    # Create tagged rollout batch
+    # Create batch with metadata
     import time
 
-    return TaggedRolloutBatch(
-        batch=rollout_batch,
-        env_name="mock:task_type=cats",
-        worker_id=worker_id,
-        timestamp=time.time(),
-        rollout_id=f"cats_test_{int(time.time() * 1000)}",
-    )
+    metadata = RolloutMetadata(worker_id=worker_id, timestamp=time.time())
+    return RolloutBatch(groups=[group], metadata=metadata)
