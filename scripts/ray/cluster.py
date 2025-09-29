@@ -362,23 +362,6 @@ def init_worker(ctx, name):
     print("Worker initialized successfully!")
 
 
-@cli.command("open-dashboard")
-@click.pass_context
-def open_dashboard(ctx):
-    """Open Ray dashboard in browser."""
-
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)) as conn:
-        dashboard_url = conn.get_dashboard_url()
-        print(f"Ray dashboard is running at: {dashboard_url}")
-        print("Press Ctrl+C to stop the dashboard.")
-        # Keep the context manager alive until interrupted
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("Stopping Ray dashboard...")
-
-
 @cli.command("dashboard")
 @click.option("--port", default=9999, help="Proxy dashboard port")
 @click.pass_context
