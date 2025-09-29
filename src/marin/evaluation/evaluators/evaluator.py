@@ -16,7 +16,6 @@ import os
 import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import ClassVar
 
 from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -85,9 +84,6 @@ class ModelConfig:
 
 
 class Evaluator(ABC):
-
-    _pip_packages: ClassVar[list[Dependency]]
-    _py_modules: ClassVar[list[Dependency]]
 
     def _get_scheduling_strategy(self, resource_config: ResourceConfig | None):
         if resource_config is None:
