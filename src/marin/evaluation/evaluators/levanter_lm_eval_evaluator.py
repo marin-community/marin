@@ -35,6 +35,14 @@ from marin.run.ray_deps import build_runtime_env_for_packages
 logger = logging.getLogger(__name__)
 
 
+"""
+Note: to use this class, you will need to pass an additional flag `--extra eval` to ray_run.
+This will ensure that the correct dependencies are installed at launch time.
+
+e.g.,  
+`python src/marin/run/ray_run.py --no_wait --extra eval -- python script.py`
+"""
+
 class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
     """For `Evaluator`s that runs inference with Levanter's Lm Eval Harness on TPUs."""
 
@@ -50,7 +58,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 "immutabledict",
                 "jax[tpu]",
                 "langdetect",
-                "lm-eval",
+                "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@chiheem/merge_upstream",
                 "math-verify", # Required by lm-eval[math]
                 "ray==2.45",
                 "statsmodels==0.14.4",
@@ -116,7 +124,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     task_spec=tasks,
                     max_examples=max_eval_instances,
                     log_samples=False,
-                    max_eval_length=4096,
+                    max_length=4096,
                 ),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,
