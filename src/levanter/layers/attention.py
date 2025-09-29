@@ -1601,6 +1601,7 @@ class Attention(eqx.Module):
 
         return attn_output, kv_cache
 
+    @named_call
     def _compute_qkv(
         self,
         x: NamedArray,
@@ -1666,6 +1667,7 @@ class KvPageCache(eqx.Module):
         )
         return KvPageCache(kv_pages)
 
+    @named_call
     def update(
         self,
         batch_info: PageBatchInfo,
@@ -1705,6 +1707,7 @@ class KvPageCache(eqx.Module):
         return dataclasses.replace(self, kv_pages=new_k)
 
 
+@named_call
 def ragged_paged_attention(
     q: NamedArray,  # [Tok, KVHeads, QHeadsPerGroup, HeadSize]
     kv_pages: NamedArray,  # [Page, PageSize, 2 * KVHeads, HeadDim]

@@ -107,7 +107,15 @@ class _LmEvalHarnessWorker:
     """
 
     def __init__(
-        self, EvalBatch, EvalPos, model, axis_resources, tokenizer, mp, max_packed_segments, generation_kwargs=None,
+        self,
+        EvalBatch,
+        EvalPos,
+        model,
+        axis_resources,
+        tokenizer,
+        mp,
+        max_packed_segments,
+        generation_kwargs=None,
     ):
         self.tokenizer = tokenizer
         self.max_packed_segments = max_packed_segments
@@ -117,12 +125,7 @@ class _LmEvalHarnessWorker:
         self.axis_resources = axis_resources
         self.mp = mp
         self.max_packed_segments = max_packed_segments
-        self._generation_kwargs = generation_kwargs or {
-            "max_gen_toks": 256,
-            "temperature": 0.0,
-            "n": 1,
-            "seed": None
-        }
+        self._generation_kwargs = generation_kwargs or {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
 
         self._dummy_batch = _make_dummy_batch(EvalBatch, EvalPos)
 
@@ -277,37 +280,37 @@ class LevanterHarnessLM(TemplateLM):
     @property
     def tokenizer_name(self) -> str:
         """Return a string identifier for the tokenizer/chat template."""
-        if hasattr(self.tokenizer, 'name_or_path'):
+        if hasattr(self.tokenizer, "name_or_path"):
             return self.tokenizer.name_or_path
-        elif hasattr(self.tokenizer, 'model_name'):
+        elif hasattr(self.tokenizer, "model_name"):
             return self.tokenizer.model_name
         else:
             return "unknown_tokenizer"
 
     def chat_template(self, chat_template: str | None = None) -> str | None:
         """
-        Return the chat template for this model. 
-        
+        Return the chat template for this model.
+
         Args:
             chat_template: Optional override for chat template
-            
+
         Returns:
             The chat template string, or None if not available
         """
         if chat_template is not None:
             return chat_template
-        
+
         # Try to get the chat template from the tokenizer
-        if hasattr(self.tokenizer, 'chat_template') and self.tokenizer.chat_template is not None:
+        if hasattr(self.tokenizer, "chat_template") and self.tokenizer.chat_template is not None:
             return self.tokenizer.chat_template
-        
+
         # If no chat template is available, return None
         return None
 
     @property
     def max_gen_toks(self):
         return self.leader.max_gen_toks
-    
+
     @property
     def generation_kwargs(self):
         """Get the generation kwargs from the worker."""
@@ -316,19 +319,19 @@ class LevanterHarnessLM(TemplateLM):
     def apply_chat_template(self, chat_history: list[dict], **kwargs) -> str:
         """
         Apply chat template to format a conversation history.
-        
+
         Args:
             chat_history: List of messages in the format [{"role": "user", "content": "..."}, ...]
             **kwargs: Additional arguments to pass to the tokenizer's apply_chat_template method
-            
+
         Returns:
             Formatted string ready for tokenization
         """
         return self.tokenizer.apply_chat_template(
             chat_history,
             tokenize=False,
-            add_generation_prompt=kwargs.get('add_generation_prompt', True),
-            **{k: v for k, v in kwargs.items() if k != 'add_generation_prompt'}
+            add_generation_prompt=kwargs.get("add_generation_prompt", True),
+            **{k: v for k, v in kwargs.items() if k != "add_generation_prompt"},
         )
 
     @property
@@ -364,21 +367,21 @@ class LevanterHarnessLM(TemplateLM):
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
         # Store prompt-continuation pairs for output logging
-        current_task = getattr(self, '_current_task', 'loglikelihood_task')
+        current_task = getattr(self, "_current_task", "loglikelihood_task")
         if current_task not in self.sample_outputs:
             self.sample_outputs[current_task] = []
-        
+
         for request in requests:
             prompt = request.args[0]
             continuation = request.args[1]
-            self.sample_outputs[current_task].append({
-                "prompt": prompt,
-                "generation": continuation  # For loglikelihood, the "generation" is the continuation being evaluated
-            })
+            self.sample_outputs[current_task].append(
+                {
+                    "prompt": prompt,
+                    "generation": continuation,  # For loglikelihood, the "generation" is the continuation being evaluated
+                }
+            )
 
-        packed = _pack_requests(
-            requests, self.tokenizer, self.EvalPos, self.leader.max_packed_segments
-        )
+        packed = _pack_requests(requests, self.tokenizer, self.EvalPos, self.leader.max_packed_segments)
         packed_iterator = stack_batches(iter(packed), self.EvalPos, self.EvalBatch)
         packed_iterator = BackgroundIterator(packed_iterator, max_capacity=1024)
 
@@ -434,23 +437,22 @@ class LevanterHarnessLM(TemplateLM):
 
         return result
 
-
     def tok_encode(
         self,
         string: Union[str, List[str]],
-        left_truncate_len: int = None,
+        left_truncate_len: int | None = None,
         add_special_tokens: bool = False,
         truncation: bool = False,
     ) -> Union[List[int], List[List[int]]]:
         """
         Tokenize a string or list of strings.
-        
+
         Args:
             string: The string(s) to tokenize.
             left_truncate_len: If provided, left-truncate the encoded tokens to this length.
             add_special_tokens: Whether to add special tokens during tokenization.
             truncation: Whether to enable tokenizer truncation.
-            
+
         Returns:
             Token IDs as a list (for single string) or list of lists (for multiple strings).
         """
@@ -466,54 +468,52 @@ class LevanterHarnessLM(TemplateLM):
         # left-truncate the encoded context to be at most `left_truncate_len` tokens long
         if left_truncate_len:
             if not isinstance(string, str):
-                encoding = [enc[-left_truncate_len:] for enc in encoding]
+                encoding = [enc[-left_truncate_len:] for enc in encoding]  # type: ignore
             else:
                 encoding = encoding[-left_truncate_len:]
 
         return encoding
 
-    def _process_and_tokenize_stop_sequences(
-        self, until: Optional[List[str]], eos: str
-    ) -> Optional[NamedArray]:
+    def _process_and_tokenize_stop_sequences(self, until: Optional[List[str]], eos: str) -> Optional[NamedArray]:
         """
         Process and tokenize stop sequences for generation.
-        
+
         Args:
             until: List of stop sequences, if any
             eos: End-of-sequence token string
-            
+
         Returns:
             NamedArray with tokenized stop sequences, or None if no valid stop sequences
         """
         if not until:
             return None
-            
+
         # Process stop sequences to ensure EOS is included
         processed_until = handle_stop_sequences(until, eos=eos)
-        
+
         if not processed_until:
             return None
-            
+
         # Tokenize all stop sequences
         all_stop_tokens = []
         for stop_seq in processed_until:
             stop_ids_list = self.tok_encode(stop_seq, add_special_tokens=False)
             if len(stop_ids_list) > 0:
                 all_stop_tokens.append(stop_ids_list)
-        
+
         if not all_stop_tokens:
             return None
-            
+
         # Find the maximum length for padding
         max_len = max(len(tokens) for tokens in all_stop_tokens)
-        
+
         # Left pad all sequences to the same length
         padded_tokens = []
         for tokens in all_stop_tokens:
             padding_needed = max_len - len(tokens)
             padded = [INVALID] * padding_needed + tokens
             padded_tokens.append(padded)
-        
+
         # Convert to named array with proper dimensions
         stop_tokens_array = jnp.asarray(padded_tokens, dtype=jnp.int32)
         return haliax.named(stop_tokens_array, ("stop_seq", "position"))
@@ -525,10 +525,9 @@ class LevanterHarnessLM(TemplateLM):
         # Error out on multihost JAX - Engine doesn't support it yet
         if jax.process_count() > 1:
             raise NotImplementedError(
-                "InferenceEngine does not yet support multihost JAX. "
-                "Please use a single host for generation tasks."
+                "InferenceEngine does not yet support multihost JAX. " "Please use a single host for generation tasks."
             )
-        
+
         # print(f'len(requests)={len(requests)}')
 
         # Implement simple generation using InferenceEngine.
@@ -551,20 +550,20 @@ class LevanterHarnessLM(TemplateLM):
 
         for i, gen_kwargs in enumerate(all_gen_kwargs):
             # print(f'{gen_kwargs=}')
-            
+
             # Copy and process generation kwargs
             processed_gen_kwargs = gen_kwargs.copy()
 
             # Apply defaults from generation_kwargs (user config) first
             for key, value in self.generation_kwargs.items():
                 processed_gen_kwargs.setdefault(key, value)
-            
+
             # Standardize kwargs using our _modify_gen_kwargs method
             processed_gen_kwargs = self._modify_gen_kwargs(processed_gen_kwargs)
             processed_kwargs_list.append(processed_gen_kwargs)
 
         # Tokenize prompts and compute capacity needs
-        prompt_token_lists: list[list[int]] = self.tok_encode(context, add_special_tokens=False)
+        prompt_token_lists: list[list[int]] = self.tok_encode(context, add_special_tokens=False)  # type: ignore
 
         # Truncate from left if needed to fit model max length, accounting for generation tokens
         max_length = self.EvalPos.size
@@ -572,7 +571,7 @@ class LevanterHarnessLM(TemplateLM):
             # Reserve space for generation tokens
             max_gen_toks = gen_kwargs["max_gen_toks"]
             max_ctx_len = max_length - max_gen_toks
-            
+
             if len(toks) > max_ctx_len:
                 overflow = len(toks) - max_ctx_len
                 logger.warning(f"Prompt {i} too long ({len(toks)}). Truncating left by {overflow}.")
@@ -581,23 +580,21 @@ class LevanterHarnessLM(TemplateLM):
         # Process stop sequences for each request individually
         # Get EOS token for stop sequence handling
         eos = self.tokenizer.decode(self.eot_token_id)
-        
+
         # Process stop sequences and tokenize them for each request
         for gen_kwargs in processed_kwargs_list:
-            gen_kwargs["stop_tokens"] = self._process_and_tokenize_stop_sequences(
-                gen_kwargs.get("until"), eos
-            )
+            gen_kwargs["stop_tokens"] = self._process_and_tokenize_stop_sequences(gen_kwargs.get("until"), eos)
 
         # Calculate max stop sequences and tokens from all requests
         max_stop_seqs = 4
         max_stop_tokens = 16
-        
+
         for gen_kwargs in processed_kwargs_list:
             stop_tokens = gen_kwargs.get("stop_tokens")
             if stop_tokens is not None:
                 # stop_tokens is a NamedArray with shape (stop_seq, position)
-                num_stop_seqs = stop_tokens.shape['stop_seq']
-                num_stop_tokens = stop_tokens.shape['position']
+                num_stop_seqs = stop_tokens.shape["stop_seq"]
+                num_stop_tokens = stop_tokens.shape["position"]
                 max_stop_seqs = max(max_stop_seqs, num_stop_seqs)
                 max_stop_tokens = max(max_stop_tokens, num_stop_tokens)
 
@@ -631,7 +628,7 @@ class LevanterHarnessLM(TemplateLM):
             stop_tokens = gen_kwargs.get("stop_tokens")
             # print(f'{temperature=}')
             # print(f'{stop_tokens=}')
-            
+
             # Create sequence decoding parameters
             seq_params = SeqDecodingParams(
                 max_num_tokens=jnp.array(len(toks) + max_gen_toks, dtype=jnp.int32),
@@ -660,30 +657,30 @@ class LevanterHarnessLM(TemplateLM):
                 full_tokens = result.tokens[output_idx]
                 # Engine tokens are generated tokens only (prompt not included)
                 text = self.tokenizer.decode(full_tokens, skip_special_tokens=True)
-                
+
                 # Post-process the generated text using the imported utility function
                 text = postprocess_generated_text(
-                    text,
-                    gen_kwargs.get("until"),
-                    None  # think_end_token - could be made configurable if needed
+                    text, gen_kwargs.get("until"), None  # think_end_token - could be made configurable if needed
                 )
                 outputs.append(text)
                 output_idx += 1  # consume one generation per request
             else:
                 text = ""
                 outputs.append(text)
-            
+
             # Store prompt and generation for output logging
-            current_task = getattr(self, '_current_task', 'generation_task')
+            current_task = getattr(self, "_current_task", "generation_task")
             if current_task not in self.sample_outputs:
                 self.sample_outputs[current_task] = []
             # Decode the prompt for storage
             prompt_text = self.tokenizer.decode(toks, skip_special_tokens=False)
-            self.sample_outputs[current_task].append({
-                "prompt": prompt_text,
-                "generation": text,
-            })
-        
+            self.sample_outputs[current_task].append(
+                {
+                    "prompt": prompt_text,
+                    "generation": text,
+                }
+            )
+
         # print(f'{outputs=}')
 
         return outputs
@@ -698,40 +695,36 @@ class LevanterHarnessLM(TemplateLM):
             kwargs["temperature"] = max(0.0, float(kwargs["temperature"]))
         else:
             kwargs.setdefault("temperature", 0.0)
-        
+
         # Handle do_sample parameter like vLLM does
         do_sample = kwargs.pop("do_sample", None)
         if do_sample is False:
             if kwargs["temperature"] == 0.0:
-                logger.debug(
-                    "Got `do_sample=False` with temperature 0.0, ensuring deterministic sampling"
-                )
+                logger.debug("Got `do_sample=False` with temperature 0.0, ensuring deterministic sampling")
             elif kwargs["temperature"] > 0.0:
                 raise ValueError(
                     f"Conflicting parameters: do_sample=False but temperature={kwargs['temperature']} > 0.0. "
                     f"For deterministic sampling, set temperature=0.0 or remove do_sample=False."
                 )
-        
+
         # Handle max_gen_toks parameter
         if "max_gen_toks" in kwargs and kwargs["max_gen_toks"] is not None:
             kwargs["max_gen_toks"] = int(kwargs["max_gen_toks"])
         else:
             kwargs.setdefault("max_gen_toks", 256)
-            
-        
+
         # Handle n generations parameter
         if "n" in kwargs and kwargs["n"] is not None:
             kwargs["n"] = int(kwargs["n"])
         else:
             kwargs.setdefault("n", 1)
-            
-        # Handle seed parameter  
+
+        # Handle seed parameter
         if "seed" in kwargs and kwargs["seed"] is not None:
             kwargs["seed"] = int(kwargs["seed"])
         # Note: seed can remain None, which is valid
-        
-        return kwargs
 
+        return kwargs
 
 
 @dataclass(frozen=True)
@@ -790,24 +783,21 @@ class LmEvalHarnessConfig:
     bootstrap_iters: int = 0
     apply_chat_template: bool = False
     fewshot_as_multiturn: bool = False
-    generation_kwargs: dict = dataclasses.field(default_factory=lambda: {
-        "max_gen_toks": 256,
-        "temperature": 0.0,
-        "n": 1,
-        "seed": None
-    })
+    generation_kwargs: dict = dataclasses.field(
+        default_factory=lambda: {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
+    )
     """
     Default generation parameters for text generation tasks.
-    
+
     Supported parameters:
     - max_gen_toks: Maximum number of tokens to generate (default: 256)
     - temperature: Sampling temperature, 0.0 for deterministic (default: 0.0)
     - n: Number of completions to generate per prompt (default: 1)
     - seed: Random seed for generation, None for random (default: None)
-    
+
     These can be overridden on a per-request basis by the evaluation harness.
     """
-    
+
     @property
     def max_gen_toks(self) -> int:
         """Backward compatibility property for max_gen_toks."""
@@ -1029,10 +1019,10 @@ def _actually_run_eval_harness(
 
         # eval_harness only sets seeds in simple_evaluate, which we can't use (I think?)
         tasks_to_run = _adjust_config(tasks_to_run, 0)
-        
+
         # Clear any previous sample outputs
         harness.clear_sample_outputs()
-        
+
         with set_global_rng_seeds(0):
             outputs = evaluator.evaluate(
                 harness,
@@ -1043,12 +1033,12 @@ def _actually_run_eval_harness(
                 apply_chat_template=config.apply_chat_template,
                 fewshot_as_multiturn=config.fewshot_as_multiturn,
             )
-            
+
         worker.stop()
 
         averages = _compute_averages(outputs)
         outputs["averages"] = averages
-        
+
         # Get the collected sample outputs and add them to the results
         sample_outputs = harness.get_sample_outputs()
         if sample_outputs:
@@ -1310,9 +1300,7 @@ def _pack_requests(
     Pos: hax.Axis,
     max_pack_size: int,
 ) -> list[LmExample]:
-    packed_iterator = _iterate_tokenized_requests(
-        requests, tokenizer, Pos.size, batch_size=128
-    )
+    packed_iterator = _iterate_tokenized_requests(requests, tokenizer, Pos.size, batch_size=128)
     # TODO: use a better packing algorithm?
     return greedy_pack_prompt_completions(
         Pos,
@@ -1335,4 +1323,3 @@ def _make_dummy_batch(EvalBatch, EvalPos):
 if __name__ == "__main__":
     levanter.config.main(run_eval_harness_main)()
     print("Done", flush=True)
-

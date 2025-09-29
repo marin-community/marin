@@ -14,4 +14,3 @@ trainer:
   mp: p=bfloat16,c=bfloat16
   tensor_parallel_axes: ["mlp", "heads", "kv_head", "vocab"]
   model_axis_size: 4
-
