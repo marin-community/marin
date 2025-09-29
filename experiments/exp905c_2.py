@@ -8,13 +8,14 @@ from marin.evaluation.run import evaluate
 from marin.execution.executor import this_output_path
 from experiments.evals.resource_configs import ResourceConfig
 
-resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v6e-4", strategy="STRICT_PACK")
+resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v6e-8", strategy="STRICT_PACK")
 
 """
 Note for people trying to do evals:
 - The difference between evaluate_lm_evaluation_harness and evaluate_levanter_lm_evaluation_harness is that the latter uses the vLLM engine and the former uses the Levanter engine.
 - The levanter engine can only compute loglikelihoods and not completions. So, we have to use use lm_evaluation_harness for typical evals.
 
+** We get OOM errors with the 8B model on v6e-4. **
 """
 
 
