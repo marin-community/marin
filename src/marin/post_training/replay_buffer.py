@@ -22,96 +22,22 @@ with balanced sampling across environments and configurable prioritization.
 import logging
 import threading
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 
-import jax.numpy as jnp
 import numpy as np
 
 from .rollout_storage import RolloutReader
-from .rollout_types import JaxRolloutBatch, Rollout, RolloutBatch
+from .rollout_types import Rollout, RolloutBatch
 
 logger = logging.getLogger(__name__)
 
-
-def _trim_and_pad(ary, max_input_length: int, max_output_length: int, pad_token_id: int):
-    """Trim and pad array to max sequence length."""
-    max_seq_len = max_input_length + max_output_length
-    ary = ary[:max_seq_len]
-    ary = np.pad(
-        ary,
-        (0, max_seq_len - len(ary)),
-        mode="constant",
-        constant_values=pad_token_id if ary.dtype == np.int32 else 0,
-    )
-    return ary
-
-
-def _convert_to_training_format(
-    rollout: Rollout, advantage: float, max_input_length: int, max_output_length: int, pad_token_id: int
-) -> dict:
-    """Convert a single rollout to training format with advantage."""
-    full_tokens = np.concatenate([rollout.prompt_tokens, rollout.response_tokens])
-    full_mask = np.ones(len(full_tokens))
-    full_position_ids = np.maximum(np.cumsum(full_mask) - 1, 0)
-
-    # Shifted for next-token prediction
-    input_tokens = full_tokens[:-1]
-    input_attention_mask = full_mask[:-1]
-    target_tokens = full_tokens[1:]
-    position_ids = full_position_ids[:-1]
-
-    # Loss mask (only on response tokens)
-    loss_mask = np.concatenate(
-        [
-            np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
-            np.ones(len(rollout.response_tokens), dtype=np.float32),
-        ]
-    )
-
-    # Loss weights (advantage for all response tokens)
-    loss_weight = np.concatenate(
-        [
-            np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
-            np.full(len(rollout.response_tokens), advantage, dtype=np.float32),
-        ]
-    )
-
-    # Policy logprobs
-    policy_logprob = np.concatenate(
-        [np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32), rollout.response_logprobs.astype(np.float32)]
-    )
-
-    return {
-        "input_ids": _trim_and_pad(input_tokens, max_input_length, max_output_length, pad_token_id),
-        "attention_mask": _trim_and_pad(input_attention_mask, max_input_length, max_output_length, pad_token_id),
-        "position_ids": _trim_and_pad(position_ids, max_input_length, max_output_length, pad_token_id),
-        "target_ids": _trim_and_pad(target_tokens, max_input_length, max_output_length, pad_token_id),
-        "loss_weights": _trim_and_pad(loss_weight, max_input_length, max_output_length, pad_token_id),
-        "loss_masks": _trim_and_pad(loss_mask, max_input_length, max_output_length, pad_token_id),
-        "policy_logprobs": _trim_and_pad(policy_logprob, max_input_length, max_output_length, pad_token_id),
-    }
-
-
-def _stack_training_examples(examples: list[dict]) -> JaxRolloutBatch:
-    """Stack training examples into a JAX batch."""
-    stacked = {}
-    for key in examples[0].keys():
-        stacked[key] = jnp.stack([ex[key] for ex in examples], axis=0)
-
-    return JaxRolloutBatch(
-        input_ids=stacked["input_ids"],
-        attention_mask=stacked["attention_mask"],
-        position_ids=stacked["position_ids"],
-        target_ids=stacked["target_ids"],
-        loss_weights=stacked["loss_weights"],
-        loss_masks=stacked["loss_masks"],
-        policy_logprobs=stacked["policy_logprobs"],
-    )
+# TODO(power) - move advantage calculation and separate it from count
 
 
 @dataclass
-class IndividualRollout:
-    """Single rollout with precomputed RLOO advantage."""
+class RolloutWithCount:
+    """Single rollout with precomputed RLOO advantage & usage count tracking."""
 
     rollout: Rollout
     advantage: float
@@ -163,7 +89,7 @@ class ReplayBuffer:
         self.max_output_length = max_output_length
         self.pad_token_id = pad_token_id
 
-        self.rollout_storage: dict[str, list[IndividualRollout]] = {}
+        self.rollout_storage: dict[str, list[RolloutWithCount]] = {}
         self._lock = threading.Lock()
 
         self._total_batches_added = 0
@@ -187,36 +113,33 @@ class ReplayBuffer:
         Computes RLOO advantages at ingestion and stores individual rollouts
         with their precomputed advantages and usage tracking.
         """
+        env_examples: dict[str, list[RolloutWithCount]] = defaultdict(list)
+        for batch in new_batches:
+            self._total_batches_added += 1
+            for group in batch.groups:
+                # Compute RLOO advantages for the group
+                advantages = group.compute_rloo_advantages()
+                for rollout, advantage in zip(group.rollouts, advantages, strict=False):
+                    individual = RolloutWithCount(rollout=rollout, advantage=advantage, usage_count=0)
+                    env_examples[rollout.env_name].append(individual)
+
         with self._lock:
-            for batch in new_batches:
-                for group in batch.groups:
-                    # Compute RLOO advantages for the group
-                    advantages = group.compute_rloo_advantages()
+            for env_name, examples in env_examples.items():
+                if env_name in self.rollout_storage:
+                    self.rollout_storage[env_name].extend(examples)
+                else:
+                    self.rollout_storage[env_name] = examples
 
-                    # Store each rollout individually with its advantage
-                    for rollout, advantage in zip(group.rollouts, advantages, strict=False):
-                        individual = IndividualRollout(rollout=rollout, advantage=advantage, usage_count=0)
+            if len(self.rollout_storage[env_name]) > self.capacity:
+                self.rollout_storage[env_name] = self.rollout_storage[env_name][-self.capacity :]
 
-                        env_name = rollout.env_name
-                        if env_name not in self.rollout_storage:
-                            self.rollout_storage[env_name] = []
-
-                        self.rollout_storage[env_name].append(individual)
-
-                        # Apply capacity limit per environment (keep most recent)
-                        if len(self.rollout_storage[env_name]) > self.capacity:
-                            self.rollout_storage[env_name] = self.rollout_storage[env_name][-self.capacity :]
-
-                logger.info("Added batch with %d groups to replay buffer", len(batch.groups))
-                self._total_batches_added += 1
-
-    def sample_training_batch(self) -> JaxRolloutBatch | None:
-        """Sample a training batch from individual rollouts with balanced environment sampling.
+    def sample_rollouts(self) -> list[RolloutWithCount] | None:
+        """Sample individual rollouts with balanced environment sampling.
 
         If no samples are available, returns None.
 
         Returns:
-            JaxRolloutBatch containing as many examples as possible up to local_batch_size.
+            List of IndividualRollout objects up to local_batch_size.
         """
         with self._lock:
             # Get all environments with rollouts
@@ -240,15 +163,7 @@ class ReplayBuffer:
                 idx = self._rng.choice(len(rollouts), p=weights)
                 individual = rollouts[idx]
 
-                # Convert to training format with precomputed advantage
-                training_example = _convert_to_training_format(
-                    individual.rollout,
-                    individual.advantage,
-                    self.max_input_length,
-                    self.max_output_length,
-                    self.pad_token_id,
-                )
-                sampled.append(training_example)
+                sampled.append(individual)
 
                 # Update usage count
                 individual.usage_count += 1
@@ -256,9 +171,9 @@ class ReplayBuffer:
             # Retire overused rollouts
             self._retire_overused_rollouts()
 
-            # Stack into batch
+            # Update stats
             self._total_batches_sampled += 1
-            return _stack_training_examples(sampled)
+            return sampled
 
     def size(self) -> int:
         """Get total number of rollouts across all environments."""
@@ -319,20 +234,20 @@ class ReplayDataLoader:
             self._thread = None
             logger.info("Stopped ReplayDataLoader background thread")
 
-    def get_training_batch(self, timeout: float = 5.0) -> JaxRolloutBatch | None:
-        """Get next training batch from replay buffer.
+    def get_rollouts(self, timeout: float = 5.0) -> list[RolloutWithCount] | None:
+        """Get next batch of rollouts from replay buffer.
 
         Args:
-            timeout: Maximum time to wait for a batch in seconds.
+            timeout: Maximum time to wait for rollouts in seconds.
 
         Returns:
-            JaxRolloutBatch if available, None if timeout or no data.
+            List of IndividualRollout if available, None if timeout or no data.
         """
         start_time = time.time()
         while time.time() - start_time < timeout:
-            batch = self.replay_buffer.sample_training_batch()
-            if batch is not None:
-                return batch
+            rollouts = self.replay_buffer.sample_rollouts()
+            if rollouts is not None:
+                return rollouts
             time.sleep(0.1)
         return None
 

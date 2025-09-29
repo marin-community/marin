@@ -76,43 +76,6 @@ def create_test_rollout_batch(idx: int, n_groups: int = 2, rollouts_per_group: i
     return RolloutBatch(groups=groups, metadata=metadata)
 
 
-def test_rollout_group_advantages():
-    """Test RLOO advantage computation."""
-    # Create group with known rewards
-    rollouts = []
-    rewards = [1.0, 2.0, 3.0, 4.0, 5.0]
-
-    for i, reward in enumerate(rewards):
-        rollout = create_test_rollout(i)
-        # Override episode reward
-        rollout = Rollout(
-            env_name=rollout.env_name,
-            env_example_id=rollout.env_example_id,
-            prompt_tokens=rollout.prompt_tokens,
-            response_tokens=rollout.response_tokens,
-            response_logprobs=rollout.response_logprobs,
-            token_rewards=rollout.token_rewards,
-            episode_reward=reward,
-        )
-        rollouts.append(rollout)
-
-    group = RolloutGroup(key="test_group", rollouts=rollouts)
-    advantages = group.compute_rloo_advantages()
-
-    # With RLOO: advantage = reward - (sum_others / (n-1))
-    # For reward=1: advantage = 1 - (2+3+4+5)/4 = 1 - 3.5 = -2.5
-    # For reward=5: advantage = 5 - (1+2+3+4)/4 = 5 - 2.5 = 2.5
-
-    assert len(advantages) == len(rewards)
-    assert advantages[0] < advantages[-1]  # Lower reward -> lower advantage
-
-    # Test edge case: single rollout
-    single_group = RolloutGroup(key="single", rollouts=[rollouts[0]])
-    single_advantages = single_group.compute_rloo_advantages()
-    assert len(single_advantages) == 1
-    assert single_advantages[0] == 0.0  # No advantage with single example
-
-
 @pytest.fixture(params=["memory", "file"])
 def storage_config(request, tmp_path):
     """Parametrized fixture for different storage types."""

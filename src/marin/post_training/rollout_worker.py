@@ -30,7 +30,6 @@ from typing import Any, cast
 
 import haliax as hax
 import jax
-import jax.numpy as jnp
 import jax.random as jrandom
 import levanter
 import numpy as np
@@ -39,7 +38,6 @@ from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
 from openai import AsyncOpenAI
-from optax import softmax_cross_entropy_with_integer_labels
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from marin.post_training.environments.load_environments import load_environment_from_spec
@@ -90,61 +88,6 @@ class RolloutWorkerConfig:
 
     # Initial checkpoint for the reference model (auto-detects HF repo vs local path)
     initial_checkpoint: str | None = None
-
-
-@jax.jit
-def compute_model_logprobs(
-    model,
-    input_tokens: np.ndarray,
-    input_attention_mask: np.ndarray,
-    target_tokens: np.ndarray,
-    target_attention_mask: np.ndarray,
-) -> np.ndarray:
-    """Compute log probabilities for target tokens.
-
-    N.B. This does not compute full log-probs, just the log-probs of the target
-    tokens themselves.
-
-    Args:
-        model: Haliax model to use for computation
-        input_tokens: (batch_size, input_length) input token IDs
-        input_attention_mask: (batch_size, input_length) attention mask for input
-        target_tokens: (batch_size, target_length) target token IDs
-        target_attention_mask: (batch_size, target_length) attention mask for target
-
-    Returns:
-        np.ndarray: (batch_size, target_length) log probabilities for target tokens
-    """
-    # Concatenate input and target tokens
-    full_tokens = jnp.concatenate([input_tokens, target_tokens], axis=1)
-    full_attention_mask = jnp.concatenate([input_attention_mask, target_attention_mask], axis=1)
-    full_position_ids = jnp.maximum(jnp.cumsum(full_attention_mask, axis=1) - 1, 0)
-
-    # Convert to Haliax named arrays
-    Batch = hax.Axis("batch", full_tokens.shape[0])
-    SeqLen = hax.Axis("position", full_tokens.shape[1])
-
-    tokens_named = hax.named(full_tokens, (Batch, SeqLen))
-    attn_mask_named = hax.named(full_attention_mask.astype(jnp.bool_), (Batch, SeqLen))
-    position_ids_named = hax.named(full_position_ids, (Batch, SeqLen))
-
-    # Compute logits using the model
-    input_tokens_named = tokens_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
-    input_mask_named = attn_mask_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
-    input_position_ids_named = position_ids_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
-
-    # Run forward pass through the model
-    logits = model(
-        input_tokens_named, attn_mask=input_mask_named, pos_ids=input_position_ids_named
-    )  # Shape: (batch, seq_len-1, vocab_size)
-
-    # Extract logits corresponding to target positions
-    logits_array = logits.array[:, input_tokens.shape[1] - 1 :]
-
-    logprobs = -softmax_cross_entropy_with_integer_labels(
-        logits_array.astype(jnp.float32), target_tokens.astype(jnp.int32)
-    )
-    return logprobs
 
 
 def find_open_port() -> int:

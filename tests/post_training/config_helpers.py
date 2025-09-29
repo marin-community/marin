@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import haliax as hax
+import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import jmp
@@ -33,13 +34,14 @@ from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from optax import softmax_cross_entropy_with_integer_labels
 
 from marin.post_training.environments.mock_env import MockEnv
 from marin.post_training.rollout_storage import (
     RolloutStorageConfig,
 )
 from marin.post_training.rollout_types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
-from marin.post_training.rollout_worker import RolloutWorkerConfig, compute_model_logprobs
+from marin.post_training.rollout_worker import RolloutWorkerConfig
 from marin.post_training.train_worker import ReplayBufferConfig, TrainWorkerConfig
 from marin.post_training.weight_transfer import WeightTransferConfig
 from marin.post_training.weight_transfer.base import WeightTransferMode
@@ -118,6 +120,61 @@ class DummyTokenizer:
 
     def __len__(self):
         return self.vocab_size
+
+
+@jax.jit
+def compute_model_logprobs(
+    model,
+    input_tokens: np.ndarray,
+    input_attention_mask: np.ndarray,
+    target_tokens: np.ndarray,
+    target_attention_mask: np.ndarray,
+) -> np.ndarray:
+    """Compute log probabilities for target tokens.
+
+    N.B. This does not compute full log-probs, just the log-probs of the target
+    tokens themselves.
+
+    Args:
+        model: Haliax model to use for computation
+        input_tokens: (batch_size, input_length) input token IDs
+        input_attention_mask: (batch_size, input_length) attention mask for input
+        target_tokens: (batch_size, target_length) target token IDs
+        target_attention_mask: (batch_size, target_length) attention mask for target
+
+    Returns:
+        np.ndarray: (batch_size, target_length) log probabilities for target tokens
+    """
+    # Concatenate input and target tokens
+    full_tokens = jnp.concatenate([input_tokens, target_tokens], axis=1)
+    full_attention_mask = jnp.concatenate([input_attention_mask, target_attention_mask], axis=1)
+    full_position_ids = jnp.maximum(jnp.cumsum(full_attention_mask, axis=1) - 1, 0)
+
+    # Convert to Haliax named arrays
+    Batch = hax.Axis("batch", full_tokens.shape[0])
+    SeqLen = hax.Axis("position", full_tokens.shape[1])
+
+    tokens_named = hax.named(full_tokens, (Batch, SeqLen))
+    attn_mask_named = hax.named(full_attention_mask.astype(jnp.bool_), (Batch, SeqLen))
+    position_ids_named = hax.named(full_position_ids, (Batch, SeqLen))
+
+    # Compute logits using the model
+    input_tokens_named = tokens_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
+    input_mask_named = attn_mask_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
+    input_position_ids_named = position_ids_named[SeqLen, hax.ds(0, SeqLen.size - 1)]
+
+    # Run forward pass through the model
+    logits = model(
+        input_tokens_named, attn_mask=input_mask_named, pos_ids=input_position_ids_named
+    )  # Shape: (batch, seq_len-1, vocab_size)
+
+    # Extract logits corresponding to target positions
+    logits_array = logits.array[:, input_tokens.shape[1] - 1 :]
+
+    logprobs = -softmax_cross_entropy_with_integer_labels(
+        logits_array.astype(jnp.float32), target_tokens.astype(jnp.int32)
+    )
+    return logprobs
 
 
 @pytest.fixture
@@ -343,6 +400,20 @@ def run_inference_with_engine(
     return result.tokens, generated_texts
 
 
+def compute_cats_reward(response: str) -> float:
+    """Compute reward for cat-themed responses using MoarCatsTask logic.
+
+    Args:
+        response: Generated response text
+
+    Returns:
+        Reward score based on cat content
+    """
+    num_cats = response.lower().count("cat")
+    love_cats = response.lower().count("love cats")
+    return (num_cats + (10 * love_cats)) / (1 + len(response))
+
+
 def encode_prompt_and_response(
     prompt: str,
     response: str,
@@ -385,20 +456,6 @@ def encode_prompt_and_response(
         "response_tokens": np.array(response_tokens, dtype=np.int32),
         "response_attention_mask": np.array(response_attention_mask, dtype=np.int32),
     }
-
-
-def compute_cats_reward(response: str) -> float:
-    """Compute reward for cat-themed responses using MoarCatsTask logic.
-
-    Args:
-        response: Generated response text
-
-    Returns:
-        Reward score based on cat content
-    """
-    num_cats = response.lower().count("cat")
-    love_cats = response.lower().count("love cats")
-    return (num_cats + (10 * love_cats)) / (1 + len(response))
 
 
 def create_rollout_batch(
@@ -477,7 +534,9 @@ def create_rollout_batch(
 
     # Create individual rollouts
     rollouts = []
-    for i, ((_prompt_text, response_text), encoded_ex) in enumerate(zip(examples, encoded_examples, strict=False)):
+    for i in range(len(examples)):
+        prompt_text, response_text = examples[i]
+        encoded_ex = encoded_examples[i]
         episode_reward = compute_cats_reward(response_text)
 
         # Extract individual arrays (remove batch dimension)

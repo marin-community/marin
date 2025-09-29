@@ -25,13 +25,11 @@ from dataclasses import dataclass
 
 import haliax as hax
 import jax
-import jax.numpy as jnp
 import jax.random as jrandom
 import levanter
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
-from optax import softmax_cross_entropy_with_integer_labels
 from transformers import AutoTokenizer
 
 from marin.post_training import weight_transfer
@@ -39,159 +37,11 @@ from marin.post_training.weight_transfer import WeightTransferConfig
 
 from .model_utils import load_model_from_checkpoint
 from .replay_buffer import ReplayBuffer, ReplayDataLoader
+from .rl_losses import rloo_loss_with_importance_sampling
 from .rollout_storage import RolloutStorageConfig
+from .train_batch import create_training_batch_from_rollouts
 
 logger = logging.getLogger(__name__)
-
-
-def ppo_loss(
-    model: LmHeadModel,
-    reference_model: LmHeadModel,
-    batch: dict[str, hax.NamedArray],
-    *,
-    key: jax.Array | None,
-    kl_coef: float,
-    clip_epsilon: float,
-) -> jax.Array:
-    """Compute PPO-style loss with RLOO advantages."""
-    reference_output = reference_model(
-        input_ids=batch["input_ids"],
-        attn_mask=batch["attention_mask"],
-        pos_ids=batch["position_ids"],
-        key=key,
-    )
-
-    model_output = model(
-        input_ids=batch["input_ids"],
-        attn_mask=batch["attention_mask"],
-        pos_ids=batch["position_ids"],
-        key=key,
-    )
-
-    logits = model_output.array.astype(jnp.float32)
-
-    target_ids_array = batch["target_ids"].array
-
-    reference_logits = reference_output.array
-    reference_logits_array = reference_logits.astype(jnp.float32)
-    reference_logprobs_array = -softmax_cross_entropy_with_integer_labels(reference_logits_array, target_ids_array)
-
-    token_ce_loss = softmax_cross_entropy_with_integer_labels(logits, target_ids_array)
-    current_logprobs = -token_ce_loss
-
-    # Get the old policy's log probs (from the worker policy that collected the data)
-    old_logprobs = batch["policy_logprobs"].array
-
-    # Compute importance sampling ratio exp(log π_current - log π_old)
-    log_ratio = current_logprobs - old_logprobs
-    ratio = jnp.exp(log_ratio)
-
-    # RLOO advantages (returned from the worker, and smeared across tokens)
-    advantages = batch["loss_weights"].array
-
-    # Get the mask for valid tokens (e.g., excluding padding)
-    mask = batch["loss_masks"].array
-
-    # PPO objective with clipping
-    # We want to maximize advantage-weighted log probs, so we minimize the negative
-
-    # Unclipped surrogate objective: ratio * advantage
-    surrogate_1 = ratio * advantages
-
-    # Clipped surrogate objective
-    clipped_ratio = jnp.clip(ratio, 1 - clip_epsilon, 1 + clip_epsilon)
-    surrogate_2 = clipped_ratio * advantages
-
-    # PPO takes the minimum of the two (pessimistic bound)
-    # We're minimizing negative rewards, so we take minimum of surrogate objectives
-    # then negate to convert maximization to minimization
-    ppo_loss_per_token = -jnp.minimum(surrogate_1, surrogate_2)
-
-    # Apply mask and average
-    ppo_loss = jnp.sum(ppo_loss_per_token * mask) / jnp.maximum(jnp.sum(mask), 1.0)
-
-    # KL penalty from reference policy (optional regularization)
-    # KL(π_current || π_ref) ≈ π_current * (log π_current - log π_ref)
-    kl_div = jnp.exp(current_logprobs) * (current_logprobs - reference_logprobs_array)
-    kl_loss = jnp.sum(kl_div * mask) / jnp.maximum(jnp.sum(mask), 1.0)
-
-    # Total loss
-    total_loss = ppo_loss + kl_coef * kl_loss
-    return total_loss
-
-
-def rloo_loss_with_importance_sampling(
-    model: LmHeadModel,
-    reference_model: LmHeadModel,
-    batch: dict[str, hax.NamedArray],
-    *,
-    key: jax.Array | None,
-    kl_coef: float,
-    clip_epsilon: float,
-) -> jax.Array:
-    """Compute RLOO (Reward Leave-One-Out) loss with importance sampling for off-policy data.
-
-    Args:
-        model: The language model
-        batch: JaxRolloutBatch containing rollout data with RLOO advantages
-        key: JAX random key for dropout
-        kl_coef: Coefficient for KL regularization
-        clip_epsilon: Clipping epsilon for importance sampling ratio
-
-    Returns:
-        Tuple of (loss, aux_metrics)
-    """
-    target_ids_array = batch["target_ids"].array
-    policy_logprobs_array = batch["policy_logprobs"].array
-    loss_weights_array = batch["loss_weights"].array
-    loss_masks_array = batch["loss_masks"].array
-
-    # Get logits from current policy
-    model_output = model(
-        input_ids=batch["input_ids"],
-        attn_mask=batch["attention_mask"],
-        pos_ids=batch["position_ids"],
-        key=key,
-    )
-
-    reference_output = reference_model(
-        input_ids=batch["input_ids"],
-        attn_mask=batch["attention_mask"],
-        pos_ids=batch["position_ids"],
-        key=key,
-    )
-
-    reference_logits = reference_output.array
-    reference_logits_array = reference_logits.astype(jnp.float32)
-    reference_logprobs_array = -softmax_cross_entropy_with_integer_labels(reference_logits_array, target_ids_array)
-
-    logits = model_output
-    logits_array = logits.array
-    logits_array = logits_array.astype(jnp.float32)
-    token_loss = softmax_cross_entropy_with_integer_labels(logits_array, target_ids_array)
-
-    current_logprobs = -token_loss
-
-    # importance sampling since we're using off-policy data
-    # ratio = π_current(a|s) / π_old(a|s) = log(π_current) - log(π_old)
-    log_ratio = jnp.subtract(current_logprobs, policy_logprobs_array)
-    ratio = jnp.exp(log_ratio)
-
-    # N.B. This should be enabled, but we seem to be training far enough
-    # off of policy that we're not learning anything when we clip.
-    ratio = jnp.clip(ratio, min=1.0 - clip_epsilon, max=1.0 + clip_epsilon)
-
-    # RLOO loss with importance sampling
-    # batch["loss_weights"] contains RLOO advantages: r_i - mean(r_j for j≠i)
-    weighted_loss = -ratio * loss_weights_array * loss_masks_array
-    reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)
-
-    # KL regularization
-    kl_penalty = jnp.exp(current_logprobs) * (current_logprobs - reference_logprobs_array)
-    kl_loss = kl_coef * jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
-
-    loss = reinforce_loss + kl_loss
-    return loss
 
 
 class StreamingRolloutLoader:
@@ -202,27 +52,44 @@ class StreamingRolloutLoader:
     implement the expected data loader interface directly.
     """
 
-    def __init__(self, data_loader: ReplayDataLoader, config: TrainerConfig):
+    def __init__(
+        self,
+        data_loader: ReplayDataLoader,
+        config: TrainerConfig,
+        max_input_length: int,
+        max_output_length: int,
+        pad_token_id: int,
+    ):
         """Initialize the streaming rollout loader.
 
         Args:
-            data_loader: The replay data loader to get batches from
+            data_loader: The replay data loader to get rollouts from
             config: Trainer config with mesh and axis mapping information
+            max_input_length: Maximum input sequence length for padding
+            max_output_length: Maximum output sequence length for padding
+            pad_token_id: Token ID to use for padding
         """
         self.data_loader = data_loader
         self.config = config
+        self.max_input_length = max_input_length
+        self.max_output_length = max_output_length
+        self.pad_token_id = pad_token_id
         self.timeout = 60.0
 
     def __iter__(self):
         """Yield batches continuously from the replay buffer."""
         while True:
-            batch = self.data_loader.get_training_batch(timeout=self.timeout)
-            if not batch:
-                logger.warning("No batch received from data loader within timeout, retrying...")
+            rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
+            if not rollouts:
+                logger.warning("No rollouts received from data loader within timeout, retrying...")
                 continue
 
-            # Convert to to a dict of `hax.NamedArray`s and shard
-            batch = batch.as_named()
+            # Convert rollouts to training batch
+            batch = create_training_batch_from_rollouts(
+                rollouts, self.max_input_length, self.max_output_length, self.pad_token_id
+            )
+
+            # shard onto the device mesh
             with self.config.device_mesh:
                 sharded_batch = hax.shard(batch, self.config.compute_axis_mapping)
 
@@ -376,7 +243,13 @@ class TrainWorker:
             state = trainer.initial_state(training_key, model=self.reference_model)
 
             self._configure_training_hooks(trainer)
-            train_loader = StreamingRolloutLoader(self.data_loader, config.trainer)
+            train_loader = StreamingRolloutLoader(
+                self.data_loader,
+                config.trainer,
+                self.replay_buffer.max_input_length,
+                self.replay_buffer.max_output_length,
+                self.replay_buffer.pad_token_id,
+            )
 
             try:
                 trainer.train(state, train_loader)

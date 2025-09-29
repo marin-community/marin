@@ -28,22 +28,19 @@ import numpy as np
 import pytest
 import ray
 
-try:
-    from marin.post_training.rollout_storage import (
-        RolloutStorageConfig,
-        StorageType,
-    )
-    from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
-    from marin.post_training.train_worker import TrainWorker, TrainWorkerConfig
-    from tests.post_training.config_helpers import (
-        DummyTokenizer,
-        create_nano_rollout_worker_config,
-        create_nano_training_worker_config,
-        create_rollout_batch,
-        run_inference_with_engine,
-    )
-except ImportError:
-    pytest.skip("Post training imports unavailable", allow_module_level=True)
+from marin.post_training.rollout_storage import (
+    RolloutStorageConfig,
+    StorageType,
+)
+from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
+from marin.post_training.train_worker import TrainWorker, TrainWorkerConfig
+from tests.post_training.config_helpers import (
+    DummyTokenizer,
+    create_nano_rollout_worker_config,
+    create_nano_training_worker_config,
+    create_rollout_batch,
+    run_inference_with_engine,
+)
 
 pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping integration tests on CI environment")
 
@@ -448,7 +445,7 @@ def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_conf
     This test validates that the training worker can process rollout batches
     with varying rewards and learn to prefer high-reward (cat-heavy) responses.
     """
-    target_steps = 100
+    target_steps = 200
     queue_writer = training_worker_config.rollout_storage.create_writer()
     training_worker_config.trainer.num_train_steps = target_steps
     batch_size = training_worker_config.trainer.train_batch_size
@@ -527,7 +524,7 @@ def test_full_integration_moar_cats(
                     training_runner.stop()
                     break
 
-                time.sleep(10)
+                time.sleep(1)
 
     # Validate we ran for sufficient time and generated data
     assert len(metrics_history) >= 2, "Test should run long enough to collect multiple metric snapshots"
