@@ -168,9 +168,10 @@ class MarinEnv:
 
 def load_environment_from_spec(env_spec: str, tokenizer: HfTokenizer) -> MarinEnv:
     """Load environment from spec string."""
+    print("Environment spec:", env_spec)
     env_name = env_spec.split(":")[0]
     env_args = {}
-    if ":" in env_name:
+    if ":" in env_spec:
         env_arg_str = env_spec.split(":")[1]
         for arg in env_arg_str.split(","):
             key, value = arg.split("=")
@@ -179,14 +180,14 @@ def load_environment_from_spec(env_spec: str, tokenizer: HfTokenizer) -> MarinEn
     if env_name == "math":
         from .math_env import MathEnvironment
 
-        return MathEnvironment(tokenizer=tokenizer, spec=env_spec)
+        return MathEnvironment(tokenizer=tokenizer, **env_args)
     elif env_name == "mock":
-        from .mock_env import MockEnvironment
+        from .mock_env import MockEnv
 
-        return MockEnvironment(tokenizer=tokenizer, spec=env_spec)
+        return MockEnv(tokenizer=tokenizer, **env_args)
     elif env_name == "prime_intellect":
-        from .prime_intellect_env import PrimeIntellectEnvironment
+        from .prime_intellect_env import PrimeIntellectEnv
 
-        return PrimeIntellectEnvironment(tokenizer=tokenizer, spec=env_spec)
+        return PrimeIntellectEnv(tokenizer=tokenizer, **env_args)
     else:
         raise ValueError(f"Unknown environment spec: {env_spec}")
