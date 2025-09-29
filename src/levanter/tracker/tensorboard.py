@@ -42,35 +42,47 @@ class TensorboardTracker(Tracker):
         del commit
         metrics = _flatten_nested_dict(metrics)
         for k, value in metrics.items():
-            if isinstance(value, jax.Array):
-                if value.ndim == 0:
-                    value = value.item()
+            try:
+                if isinstance(value, jax.Array):
+                    if value.ndim == 0:
+                        value = value.item()
+                    else:
+                        value = np.array(value)
+
+                if isinstance(value, Histogram):
+                    num = value.num
+                    if hasattr(num, "item"):
+                        num = num.item()
+                    self.writer.add_histogram_raw(
+                        k,
+                        min=value.min.item(),
+                        max=value.max.item(),
+                        num=num,
+                        sum=value.sum.item(),
+                        sum_squares=value.sum_squares.item(),
+                        bucket_limits=np.array(value.bucket_limits).tolist(),
+                        bucket_counts=np.concatenate([[0], np.array(value.bucket_counts)]).tolist(),
+                        global_step=step,
+                    )
+                elif isinstance(value, str):
+                    self.writer.add_text(k, value)
+                elif isinstance(value, np.ndarray):
+                    if np.dtype(value.dtype).kind in ("U", "S", "O"):
+                        self.writer.add_text(k, str(value))
+                    elif np.issubdtype(value.dtype, np.number):
+                        if value.ndim == 0:
+                            self.writer.add_scalar(k, value.item(), global_step=step)
+                        else:
+                            self.writer.add_histogram(k, value.ravel(), global_step=step)
+                    else:
+                        pylogger.error(f"Unsupported metric type: {type(value)} for key {k}")
                 else:
-                    value = np.array(value)
-            elif isinstance(value, Histogram):
-                num = value.num
-                if hasattr(num, "item"):
-                    num = num.item()
-                self.writer.add_histogram_raw(
-                    k,
-                    min=value.min.item(),
-                    max=value.max.item(),
-                    num=num,
-                    sum=value.sum.item(),
-                    sum_squares=value.sum_squares.item(),
-                    bucket_limits=np.array(value.bucket_limits).tolist(),
-                    bucket_counts=np.concatenate([[0], np.array(value.bucket_counts)]).tolist(),
-                    global_step=step,
-                )
-            elif isinstance(value, str):
-                self.writer.add_text(k, value)
-            elif isinstance(value, np.ndarray) and np.dtype(value.dtype).kind in ("U", "S", "O"):
-                self.writer.add_text(k, str(value))
-            else:
-                if not np.issubdtype(np.array(value).dtype, np.number):
-                    pylogger.error(f"Unsupported metric type: {type(value)} for key {k}")
-                else:
-                    self.writer.add_scalar(k, value, global_step=step)
+                    if isinstance(value, (int, float)):
+                        self.writer.add_scalar(k, value, global_step=step)
+                    else:
+                        self.writer.add_text(k, str(value), global_step=step)
+            except Exception:
+                pylogger.exception(f"Error logging metric {k} with value {value}")
 
     def log_summary(self, metrics: dict[str, Any]):
         for k, v in metrics.items():
