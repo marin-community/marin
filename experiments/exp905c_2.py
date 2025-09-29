@@ -8,7 +8,7 @@ from marin.evaluation.run import evaluate
 from marin.execution.executor import this_output_path
 from experiments.evals.resource_configs import ResourceConfig
 
-resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v6e-8", strategy="STRICT_PACK")
+resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v6e-4", strategy="STRICT_PACK")
 
 """
 Note for people trying to do evals:
@@ -41,14 +41,6 @@ if __name__ == "__main__":
         ),
         pip_dependency_groups=["eval", "transformers", "tiktoken", "sentencepiece"],
     )
-
-    max_eval_instances = None
-    # Configuration to fix rope_scaling original_max_position_embeddings issue
-    # The error occurs because original_max_position_embeddings (8192) > max_position_embeddings (4096)
-    engine_kwargs = {
-        "max_model_len": 4096,
-    }
-    
 
     levanter_lm_evaluation_harness_eval = evaluate_levanter_lm_evaluation_harness(
         model_name,
@@ -93,7 +85,7 @@ if __name__ == "__main__":
             # # Winograd challenge, extended to more domains
             EvalTaskConfig("winogrande", num_fewshot=0, task_alias="winogrande_0shot"),
         ],
-        max_eval_instances=max_eval_instances,
+        max_eval_instances=None,
         resource_config=resource_config,
         apply_chat_template=True,
     )
