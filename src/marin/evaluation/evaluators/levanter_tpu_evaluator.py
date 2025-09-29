@@ -60,7 +60,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         Returns the runtime environment to run the evaluator on the Ray cluster.
         """
         return build_runtime_env_for_packages(
-            extra=["eval"],
+            extra=["eval", "tpu"],
             env_vars={
                 "HF_DATASETS_TRUST_REMOTE_CODE": "1",
                 "TOKENIZERS_PARALLELISM": "false",
