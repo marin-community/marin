@@ -14,6 +14,7 @@
 
 import re
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from typing import Any
 
 import datasets
@@ -23,8 +24,20 @@ from tqdm.auto import tqdm
 
 from marin.post_training.flax.utils import validate_format
 
-from .marin_env import DataExample, EnvStep, InferenceContext, MarinEnv
+from .marin_env import EnvExample, EnvStep, InferenceContext, MarinEnv
 from .math_utils import grade_answer, last_boxed_only_string, latex_to_text, normalize_answer
+
+
+@dataclass
+class DataExample:
+    """Single data example with transformations for debugging."""
+
+    raw_prompt: str
+    raw_answer: str
+    processed_prompt: str
+    processed_answer: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
 
 TRAIN_DATA_SOURCE = "di-zhang-fdu/MATH12000"
 TEST_DATA_SOURCE = "HuggingFaceH4/MATH-500"
@@ -102,7 +115,7 @@ class MathEnv(MarinEnv):
 
     def _compute_rewards(
         self,
-        examples: list[dict[str, Any]],
+        examples: list[EnvExample],
         responses: list[list[dict[str, np.ndarray]]],
         tokenizer,
     ) -> tuple[np.ndarray, dict[str, float]]:

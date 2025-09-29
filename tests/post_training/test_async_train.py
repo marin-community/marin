@@ -28,22 +28,19 @@ import numpy as np
 import pytest
 import ray
 
-try:
-    from marin.post_training.rollout_storage import (
-        RolloutStorageConfig,
-        StorageType,
-    )
-    from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
-    from marin.post_training.train_worker import TrainWorker, TrainWorkerConfig
-    from tests.post_training.config_helpers import (
-        DummyTokenizer,
-        create_nano_rollout_worker_config,
-        create_nano_training_worker_config,
-        create_rollout_batch,
-        run_inference_with_engine,
-    )
-except ImportError:
-    pytest.skip("Post training imports unavailable", allow_module_level=True)
+from marin.post_training.rollout_storage import (
+    RolloutStorageConfig,
+    StorageType,
+)
+from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
+from marin.post_training.train_worker import TrainWorker, TrainWorkerConfig
+from tests.post_training.config_helpers import (
+    DummyTokenizer,
+    create_nano_rollout_worker_config,
+    create_nano_training_worker_config,
+    create_rollout_batch,
+    run_inference_with_engine,
+)
 
 pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping integration tests on CI environment")
 
@@ -186,15 +183,9 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
 
     def _create_and_run_worker(self):
         """Create and run the rollout worker with tracking hooks."""
-        from unittest.mock import patch
-
-        from tests.post_training.config_helpers import DummyTokenizer
-
-        with patch("levanter.inference.openai.load_tokenizer") as mock_load:
-            mock_load.return_value = DummyTokenizer()
-            self.worker = RolloutWorker(
-                config=self.rollout_worker_config,
-            )
+        self.worker = RolloutWorker(
+            config=self.rollout_worker_config,
+        )
 
         _sync_weights_original = self.worker._sync_weights
 
@@ -210,6 +201,8 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
 
         def counting_generate_batch(rng):
             batch_data, metrics = original_generate_batch(rng)
+            if batch_data is None:
+                return None, None
             self._track_rollout_generation()
             # Add metadata about rollout
             metrics["rollout_number"] = self.rollouts_generated
@@ -317,7 +310,6 @@ def test_train_worker(ray_cluster, training_worker_config: TrainWorkerConfig):
         for _ in range(5):
             batch = create_rollout_batch(
                 policy_model=runner.reference_model,
-                reference_model=runner.reference_model,
                 batch_size=batch_size,
                 tokenizer=tokenizer,
             )
@@ -390,7 +382,7 @@ def test_inference_and_training_workers(
     assert inference_runner.rollouts_generated > 0, "Should have generated at least one rollout"
 
 
-def print_model_validation(model, tokenizer):
+def validate_model(model, tokenizer) -> dict[str, str]:
     print("\n" + "=" * 60)
     print("Testing trained model responses:")
     print("=" * 60)
@@ -428,6 +420,19 @@ def print_model_validation(model, tokenizer):
         else:
             print("  - No cat references found")
 
+    # at least responses should have cats, we should have at least 10 total
+    cat_count = 0
+    cat_response_count = 0
+    for response in texts:
+        cat_count += response.lower().count("cat")
+        if response.lower().count("cat") > 0:
+            cat_response_count += 1
+
+    assert cat_response_count >= 3, f"Expected at least 3 cat responses, got {cat_response_count}"
+    assert cat_count >= 10, f"Expected at least 10 cat references, got {cat_count}"
+
+    return {prompt: response for prompt, response in zip(test_prompts, texts, strict=True)}
+
 
 @pytest.mark.slow("Integration test with training loop")
 def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_config):
@@ -436,13 +441,12 @@ def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_conf
     This test validates that the training worker can process rollout batches
     with varying rewards and learn to prefer high-reward (cat-heavy) responses.
     """
-    # Use the rollout storage config to create writer for sending test data
+    target_steps = 200
     queue_writer = training_worker_config.rollout_storage.create_writer()
-
+    training_worker_config.trainer.num_train_steps = target_steps
     batch_size = training_worker_config.trainer.train_batch_size
     tokenizer = DummyTokenizer()
 
-    target_steps = 1000
     with TrainWorkerRunner(training_worker_config) as runner:
         # Wait for worker to initialize and models to be available
         while not runner.worker:
@@ -451,19 +455,17 @@ def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_conf
         # create an initial batch to prime the trainer
         batch = create_rollout_batch(
             policy_model=runner.reference_model,
-            reference_model=runner.reference_model,
             batch_size=batch_size,
             tokenizer=tokenizer,
         )
         queue_writer.write_batch(batch)
 
-        while not runner.done.is_set() and runner.steps_completed < target_steps:
+        while not runner.done.is_set():
             if not runner.trained_model:
                 logger.warning("Waiting for trained model to be available...")
             else:
                 batch = create_rollout_batch(
                     policy_model=runner.trained_model,
-                    reference_model=runner.reference_model,
                     batch_size=batch_size,
                     tokenizer=tokenizer,
                 )
@@ -471,10 +473,8 @@ def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_conf
             time.sleep(1)
 
     assert all(not np.isnan(loss) for loss in runner.losses), "Loss should not be NaN"
-    # assert all(loss < 100.0 for loss in runner.losses), (
-    #     f"Loss should be reasonable, got {runner.losses}"
-    # )
-
+    assert all(loss < 10.0 for loss in runner.losses), f"Loss should be reasonable, got {runner.losses}"
+    #
     checkpoint_dir = str(training_worker_config.trainer.checkpointer.base_path)
     checkpoint_created = os.path.exists(checkpoint_dir) and len(os.listdir(checkpoint_dir)) > 0
     assert checkpoint_created, "Training worker should create checkpoint after processing batches"
@@ -485,7 +485,7 @@ def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_conf
     print(f"  - Final loss: {runner.losses[-1]:.4f}")
 
     # Test the trained model with example prompts
-    print_model_validation(runner.trained_model, DummyTokenizer())
+    validate_model(runner.trained_model, DummyTokenizer())
 
 
 @pytest.mark.slow("Long-running integration test.")
@@ -496,6 +496,8 @@ def test_full_integration_moar_cats(
     """Long-running test to validate environment objective improves over time."""
     # The workers already use the same storage config from the fixtures, so they'll automatically share data
 
+    target_steps = 100
+    training_worker_config.trainer.num_train_steps = target_steps
     metrics_history = []
     with TrainWorkerRunner(training_worker_config) as training_runner:
         time.sleep(1)
@@ -518,7 +520,7 @@ def test_full_integration_moar_cats(
                     training_runner.stop()
                     break
 
-                time.sleep(10)
+                time.sleep(1)
 
     # Validate we ran for sufficient time and generated data
     assert len(metrics_history) >= 2, "Test should run long enough to collect multiple metric snapshots"
@@ -544,7 +546,7 @@ def test_full_integration_moar_cats(
     # Validate weight transfers occur
     assert inference_runner.weight_transfers >= 1, "Should have at least one weight transfer during long run"
 
-    print_model_validation(training_runner.trained_model, DummyTokenizer())
+    validate_model(training_runner.trained_model, DummyTokenizer())
 
 
 @pytest.mark.slow("Integration test with checkpoint restart")
@@ -569,7 +571,6 @@ def test_train_worker_checkpoint_restart(ray_cluster, training_worker_config):
         for _ in range(5):
             batch = create_rollout_batch(
                 policy_model=runner.reference_model,
-                reference_model=runner.reference_model,
                 batch_size=batch_size,
                 tokenizer=tokenizer,
             )
@@ -606,7 +607,6 @@ def test_train_worker_checkpoint_restart(ray_cluster, training_worker_config):
         for _ in range(5):
             batch = create_rollout_batch(
                 policy_model=runner.reference_model,
-                reference_model=runner.reference_model,
                 batch_size=batch_size,
                 tokenizer=tokenizer,
             )

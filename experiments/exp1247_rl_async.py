@@ -226,12 +226,17 @@ def rl_train(name: str) -> ExecutorStep:
         poll_interval_seconds=1,
     )
 
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_TOKENIZER)
+
     train_worker = TrainWorkerConfig(
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         model=model_config,
         trainer=trainer_config,
         optimizer=opt_config,
+        max_input_length=MAX_INPUT_TOKENS,
+        max_output_length=MAX_OUTPUT_TOKENS,
+        pad_token_id=(tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id),
         replay_buffer=ReplayBufferConfig(
             capacity=4096,
             alpha=3,
@@ -242,8 +247,6 @@ def rl_train(name: str) -> ExecutorStep:
         initial_checkpoint=MODEL_NAME,
         run_id=RUN_ID,
     )
-
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_TOKENIZER)
 
     rollout_worker = RolloutWorkerConfig(
         trainer=trainer_config,
