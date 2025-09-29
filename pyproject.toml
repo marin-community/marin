@@ -17,6 +17,7 @@ dependencies = [
     "deepdiff",
     "draccus>=0.11.5",
     "fasteners>=0.19",
+    "flask",
     "gcsfs",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",

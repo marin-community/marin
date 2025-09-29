@@ -86,16 +86,16 @@ DEFAULT_ENV_VARS = [
 ]
 
 
-def build_env_dict(env_vars: list[str], extra_env: list[str] | None = None, forward_all: bool = False) -> dict[str, str]:
+def build_env_dict(extra_env: list[str] | None = None, forward_all: bool = False) -> dict[str, str]:
     """Build environment variable dictionary for forwarding."""
     # Start with all environment variables if requested, otherwise just defaults
+    env_dict = {}
+    for var in DEFAULT_ENV_VARS:
+        if os.environ.get(var) is not None:
+            env_dict[var] = os.environ[var]
+
     if forward_all:
         env_dict = dict(os.environ)
-    else:
-        env_dict = {}
-        for var in env_vars:
-            if value := os.environ.get(var):
-                env_dict[var] = value
 
     CONFIG_FILES = [".levanter.yaml", ".marin.yaml", ".config"]
     for config_file in CONFIG_FILES:
@@ -117,8 +117,8 @@ def build_env_dict(env_vars: list[str], extra_env: list[str] | None = None, forw
                 env_dict[key] = value
             else:
                 # Just the key, get value from current environment
-                if value := os.environ.get(env_var):
-                    env_dict[env_var] = value
+                if os.environ.get(env_var) is not None:
+                    env_dict[env_var] = os.environ[env_var]
 
     return env_dict
 
@@ -411,7 +411,10 @@ def hold_tpu_allocation(
     config_obj = yaml.safe_load(open(config_file).read())
     zone = config_obj["provider"]["availability_zone"]
 
-    with ray_utils.ray_dashboard(config_file, ray_init=True):
+    from src.marin.cluster.ray import DashboardConfig
+
+    config = DashboardConfig.from_cluster(config_file, ray_init=True)
+    with ray_utils.ray_dashboard(config):
         try:
             logger.info(f"Creating TPU allocation actor for {tpu_name}")
             actor = ray.remote(resources={"TPU": 4, f"TPU-{tpu_type}-head": 1})(TPUAllocationActor).remote(
@@ -541,7 +544,7 @@ def connect(ctx, username):
 
     tpu_name = ctx.obj.tpu_name
     host_alias = f"dev-tpu-{tpu_name}"
-    env = build_env_dict(env_vars=DEFAULT_ENV_VARS)
+    env = build_env_dict()
     env_string = build_env_string(env)
 
     config_path = Path.home() / ".ssh" / "config"
@@ -604,12 +607,12 @@ def execute(ctx, command, username, sync_path, env, forward_all_env):
     sync_to_remote(host_alias, sync_path)
 
     # Build environment variables
-    env_dict = build_env_dict(env_vars=DEFAULT_ENV_VARS, extra_env=list(env), forward_all=forward_all_env)
+    env_dict = build_env_dict(extra_env=list(env), forward_all=forward_all_env)
 
     command_str = " ".join(command)
     ssh_cmd = build_ssh_command(host_alias, command_str, env_dict)
 
-    print(f"Running: {command_str}")
+    print(f"Running: {ssh_cmd}")
     ssh_session = subprocess.Popen(ssh_cmd)
     atexit.register(lambda: kill_ssh_session(host_alias))
     result = ssh_session.wait()
@@ -754,7 +757,7 @@ def watch(ctx, command, username, sync_path, debounce, env, forward_all_env):
         sys.exit(1)
 
     # Build environment variables
-    env_dict = build_env_dict(env_vars=DEFAULT_ENV_VARS, extra_env=list(env), forward_all=forward_all_env)
+    env_dict = build_env_dict(extra_env=list(env), forward_all=forward_all_env)
 
     command_str = " ".join(command)
 

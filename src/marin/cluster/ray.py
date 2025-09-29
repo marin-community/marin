@@ -21,11 +21,12 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 from collections import Counter
 from collections.abc import Generator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,52 @@ import yaml
 from .config import RayClusterConfig
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DashboardConfig:
+    """Configuration for dashboard connections."""
+
+    cluster_configs: list[str] = field(default_factory=list)  # Empty = auto-discover
+    ray_init: bool = False  # Initialize Ray client
+    proxy_port: int = 9999  # Port for proxy dashboard when multiple clusters
+
+    @classmethod
+    def from_cluster(cls, cluster_name: str, ray_init: bool = False) -> "DashboardConfig":
+        """Create config for a single cluster by name."""
+        return cls(cluster_configs=[cluster_name], ray_init=ray_init)
+
+
+@dataclass
+class ClusterInfo:
+    """Information about a Ray cluster."""
+
+    cluster_name: str
+    config_path: str
+    head_ip: str  # Internal IP address (10.x.x.x)
+    zone: str
+    project: str
+
+
+@dataclass
+class DashboardConnection:
+    """Manages SSH tunnel and proxy for one or more clusters."""
+
+    clusters: dict[str, ClusterInfo]  # cluster_name -> info
+    port_mappings: dict[str, tuple[int, int, int]]  # cluster_name -> (dashboard, gcs, api)
+    ssh_process: subprocess.Popen
+    proxy_thread: threading.Thread | None = None
+    proxy_url: str | None = None
+
+    def get_dashboard_url(self, cluster_name: str | None = None) -> str:
+        """Get dashboard URL for a specific cluster or the proxy URL."""
+        if self.proxy_url and len(self.clusters) > 1:
+            return f"{self.proxy_url}/{cluster_name}" if cluster_name else self.proxy_url
+
+        # Single cluster or specific cluster requested
+        name = cluster_name or next(iter(self.clusters.keys()))
+        dashboard_port = self.port_mappings[name][0]
+        return f"http://localhost:{dashboard_port}"
 
 
 def find_free_port() -> int:
@@ -161,34 +208,139 @@ class DashboardInfo:
     ssh_process: subprocess.Popen
 
 
-def start_ssh_tunnel_to_head(cluster_config: str, head_ip: str) -> DashboardInfo:
-    """Start SSH tunnel to Ray head node with port forwarding.
+def allocate_ports(clusters: dict[str, ClusterInfo]) -> dict[str, tuple[int, int, int]]:
+    """Allocate local ports for each cluster.
 
-    Args:
-        cluster_config: Path to the Ray cluster configuration file
-        head_ip: IP address of the head node
-
-    Returns:
-        Tuple of (ssh_process, dashboard_port, gcs_port, api_port)
-
-    Raises:
-        RuntimeError: If SSH tunnel fails to start
+    Single cluster uses default ports (8265, 6379, 10001).
+    Multiple clusters use sequential ranges starting at 8000.
     """
-    # Find free ports for forwarding
-    ports = set()
-    while len(ports) < 3:
-        ports.add(find_free_port())
+    port_mappings = {}
 
-    dashboard_port, gcs_port, api_port = list(ports)
+    if len(clusters) == 1:
+        # Single cluster - use existing default ports
+        cluster_name = next(iter(clusters.keys()))
+        ports = set()
+        while len(ports) < 3:
+            ports.add(find_free_port())
+        dashboard_port, gcs_port, api_port = list(ports)
+        port_mappings[cluster_name] = (dashboard_port, gcs_port, api_port)
+    else:
+        # Multiple clusters - use sequential ranges
+        for i, cluster_name in enumerate(sorted(clusters.keys())):
+            base_port = 8000 + (i * 10)
+            port_mappings[cluster_name] = (base_port, base_port + 1, base_port + 2)
 
+    return port_mappings
+
+
+def find_config_by_cluster_name(cluster_name: str) -> str | None:
+    """Find config file for a given cluster name."""
+    # Look for config files in infra/ directory
+    infra_dir = Path("infra")
+    if not infra_dir.exists():
+        return None
+
+    for config_file in infra_dir.glob("*.yaml"):
+        try:
+            with open(config_file, "r") as f:
+                config = yaml.safe_load(f)
+                if config.get("cluster_name") == cluster_name:
+                    return str(config_file)
+        except Exception:
+            continue
+    return None
+
+
+def load_cluster_info(config_path: str) -> ClusterInfo:
+    """Load cluster info from config file."""
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    cluster_name = config["cluster_name"]
+    zone = config["provider"]["availability_zone"]
+    project = config["provider"].get("project_id", "")
+
+    # Get internal IP from gcloud
+    try:
+        cmd = [
+            "gcloud",
+            "compute",
+            "instances",
+            "list",
+            "--filter",
+            f"labels.ray-cluster-name={cluster_name} AND labels.ray-node-type=head",
+            "--format",
+            "value(networkInterfaces[0].networkIP)",
+            "--limit",
+            "1",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+        head_ip = result.stdout.strip()
+        if not head_ip:
+            raise RuntimeError(f"No head node found for cluster {cluster_name}")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(f"Failed to get internal IP for cluster {cluster_name}: {e}") from e
+
+    return ClusterInfo(cluster_name=cluster_name, config_path=config_path, head_ip=head_ip, zone=zone, project=project)
+
+
+def discover_active_clusters() -> dict[str, ClusterInfo]:
+    """Discover all active Ray clusters across all zones.
+
+    Uses gcloud to find all compute instances with ray-node-type=head label.
+    """
+    cmd = ["gcloud", "compute", "instances", "list", "--filter", "labels.ray-node-type=head", "--format", "json"]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
+        instances = json.loads(result.stdout)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(f"Failed to discover active clusters: {e}") from e
+
+    clusters = {}
+    for instance in instances:
+        # Extract cluster info from instance metadata
+        labels = instance.get("labels", {})
+        cluster_name = labels.get("ray-cluster-name")
+
+        if not cluster_name:
+            continue
+
+        # Get network info
+        internal_ip = instance["networkInterfaces"][0]["networkIP"]
+        zone = instance["zone"].split("/")[-1]
+        project = instance["zone"].split("/")[6]
+
+        # Find corresponding config file
+        config_path = find_config_by_cluster_name(cluster_name)
+        if not config_path:
+            logger.warning(f"No config file found for cluster {cluster_name}")
+            continue
+
+        clusters[cluster_name] = ClusterInfo(
+            cluster_name=cluster_name, config_path=config_path, head_ip=internal_ip, zone=zone, project=project
+        )
+
+    logger.info(f"Discovered {len(clusters)} active clusters")
+    return clusters
+
+
+def create_ssh_proxy_chain(
+    clusters: dict[str, ClusterInfo], port_mappings: dict[str, tuple[int, int, int]]
+) -> subprocess.Popen:
+    """Create single SSH connection that proxies to all cluster head nodes.
+
+    Uses the first cluster as jump host, then forwards ports to other clusters'
+    internal IPs through that connection.
+    """
+    # Sort for deterministic ordering
+    cluster_names = sorted(clusters.keys())
+    first_cluster = clusters[cluster_names[0]]
+
+    # Build SSH command with all port forwards
     ssh_cmd = [
         "ssh",
         "-tt",
-        f"-L{dashboard_port}:localhost:8265",  # Dashboard
-        f"-L{gcs_port}:localhost:6379",  # Ray GCS
-        f"-L{api_port}:localhost:10001",  # Ray API server
-        "-i",
-        os.path.expanduser("~/.ssh/marin_ray_cluster.pem"),
         "-o",
         "StrictHostKeyChecking=no",
         "-o",
@@ -197,115 +349,172 @@ def start_ssh_tunnel_to_head(cluster_config: str, head_ip: str) -> DashboardInfo
         "IdentitiesOnly=yes",
         "-o",
         "ExitOnForwardFailure=yes",
-        f"ray@{head_ip}",
-        "while true; do sleep 86400; done",
+        "-i",
+        os.path.expanduser("~/.ssh/marin_ray_cluster.pem"),
     ]
 
-    logger.info(
-        f"Starting SSH tunnel to {head_ip} with ports: "
-        + f"\ndashboard={dashboard_port}"
-        + f"\nray={gcs_port}"
-        + f"\napi={api_port}"
-        + f"\n View the dashboard at http://localhost:{dashboard_port}"
-    )
+    # Add port forwards for each cluster
+    for cluster_name in cluster_names:
+        cluster = clusters[cluster_name]
+        dashboard_port, gcs_port, api_port = port_mappings[cluster_name]
 
-    ssh_process = subprocess.Popen(
+        if cluster_name == cluster_names[0]:
+            # First cluster - direct forward to localhost
+            ssh_cmd.extend(
+                [
+                    f"-L{dashboard_port}:localhost:8265",
+                    f"-L{gcs_port}:localhost:6379",
+                    f"-L{api_port}:localhost:10001",
+                ]
+            )
+        else:
+            # Other clusters - forward through SSH to internal IP
+            ssh_cmd.extend(
+                [
+                    f"-L{dashboard_port}:{cluster.head_ip}:8265",
+                    f"-L{gcs_port}:{cluster.head_ip}:6379",
+                    f"-L{api_port}:{cluster.head_ip}:10001",
+                ]
+            )
+
+    # Connect to first cluster's external IP
+    first_external_ip = get_head_ip_from_config(first_cluster.config_path)
+    ssh_cmd.extend([f"ray@{first_external_ip}", "while true; do sleep 86400; done"])
+
+    logger.info(f"Creating SSH proxy chain through {first_cluster.cluster_name}")
+    logger.info(f"Tunneling to {len(clusters)} clusters")
+
+    return subprocess.Popen(
         ssh_cmd,
         stdin=subprocess.DEVNULL,
         env={**os.environ, "TERM": "dumb"},
     )
 
-    # Wait for tunnel to be ready
-    max_retries = 30
+
+def wait_for_tunnel(
+    clusters: dict[str, ClusterInfo], port_mappings: dict[str, tuple[int, int, int]], timeout: int = 30
+) -> None:
+    """Wait for SSH tunnel to be ready by testing dashboard connections."""
+    max_retries = timeout
     retry_delay = 1
 
     for attempt in range(max_retries):
-        try:
-            # Test dashboard connection
-            response = requests.get(f"http://localhost:{dashboard_port}/api/version", timeout=5)
-            if response.status_code == 200:
-                logger.info(f"SSH tunnel is ready - dashboard accessible on port {dashboard_port}")
-                return DashboardInfo(
-                    dashboard_port=dashboard_port,
-                    gcs_port=gcs_port,
-                    api_port=api_port,
-                    ssh_process=ssh_process,
-                )
-        except (requests.ConnectionError, requests.Timeout):
-            if attempt < max_retries - 1:
-                logger.info(f"SSH tunnel not ready, retrying in {retry_delay}s... ({attempt + 1}/{max_retries})")
-                time.sleep(retry_delay)
-            else:
-                logger.warning(f"SSH tunnel failed to become ready after {max_retries} attempts")
-                ssh_process.terminate()
-                ssh_process.wait()
-                raise RuntimeError(f"SSH tunnel failed to become ready after {max_retries} attempts") from None
+        all_ready = True
+        for cluster_name in clusters:
+            dashboard_port = port_mappings[cluster_name][0]
+            try:
+                response = requests.get(f"http://localhost:{dashboard_port}/api/version", timeout=5)
+                if response.status_code != 200:
+                    all_ready = False
+                    break
+            except (requests.ConnectionError, requests.Timeout):
+                all_ready = False
+                break
 
-    # Should not reach here
-    ssh_process.terminate()
-    ssh_process.wait()
-    raise RuntimeError("Unexpected error in SSH tunnel setup")
+        if all_ready:
+            logger.info("SSH tunnel is ready - all dashboards accessible")
+            return
+
+        if attempt < max_retries - 1:
+            logger.info(f"SSH tunnel not ready, retrying in {retry_delay}s... ({attempt + 1}/{max_retries})")
+            time.sleep(retry_delay)
+
+    raise RuntimeError(f"SSH tunnel failed to become ready after {max_retries} attempts")
 
 
 @contextmanager
-def ray_dashboard(cluster_config: str, ray_init: bool = False) -> Generator[DashboardInfo, None, None]:
-    """Context manager for Ray dashboard connection using SSH tunneling.
+def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, None, None]:
+    """Dashboard context manager supporting single and multiple clusters.
 
-    This establishes an SSH tunnel to the Ray head node and sets up environment variables
-    so that Ray CLI commands and Python API can connect to the cluster.
+    Creates a single SSH connection that can tunnel to multiple Ray clusters
+    using internal IP routing. For multiple clusters, starts a Flask proxy
+    in a background thread.
 
     Args:
-        cluster_config: Path to the Ray cluster configuration file
+        config: Dashboard configuration
 
     Yields:
-        DashboardInfo object with port information and SSH process
+        DashboardConnection with cluster details and access methods
     """
+
+    # Determine clusters to connect to
+    if not config.cluster_configs:
+        # Auto-discover active clusters across all zones
+        clusters = discover_active_clusters()
+        if not clusters:
+            raise RuntimeError("No active Ray clusters found")
+    else:
+        # Load specified cluster configs
+        clusters = {}
+        for config_path in config.cluster_configs:
+            info = load_cluster_info(config_path)
+            clusters[info.cluster_name] = info
+
+    # Allocate local ports for each cluster
+    port_mappings = allocate_ports(clusters)
+
+    # Create single SSH connection with port forwards to all clusters
+    ssh_process = create_ssh_proxy_chain(clusters, port_mappings)
+
+    # Wait for SSH tunnel to be ready
+    wait_for_tunnel(clusters, port_mappings, timeout=30)
+
+    # Create connection object
+    connection = DashboardConnection(clusters=clusters, port_mappings=port_mappings, ssh_process=ssh_process)
+
     # Save original environment variables
-    original_ray_address = os.environ.get("RAY_ADDRESS")
-    original_ray_api_server_address = os.environ.get("RAY_API_SERVER_ADDRESS")
-    original_ray_dashboard_address = os.environ.get("RAY_DASHBOARD_ADDRESS")
+    original_env = {
+        "RAY_ADDRESS": os.environ.get("RAY_ADDRESS"),
+        "RAY_API_SERVER_ADDRESS": os.environ.get("RAY_API_SERVER_ADDRESS"),
+        "RAY_DASHBOARD_ADDRESS": os.environ.get("RAY_DASHBOARD_ADDRESS"),
+    }
 
-    # Get head IP and start SSH tunnel
-    logger.info(f"Getting head IP for cluster config: {cluster_config}")
-    head_ip = get_head_ip_from_config(cluster_config)
-    dashboard_info = start_ssh_tunnel_to_head(cluster_config, head_ip)
+    # For single cluster, set Ray environment variables
+    if len(clusters) == 1:
+        cluster_name = next(iter(clusters.keys()))
+        dashboard_port, _, api_port = port_mappings[cluster_name]
 
-    # Set environment variables for Ray CLI and Python API
-    os.environ["RAY_ADDRESS"] = f"http://localhost:{dashboard_info.dashboard_port}"
-    os.environ["RAY_API_SERVER_ADDRESS"] = f"ray://localhost:{dashboard_info.api_port}"
-    os.environ["RAY_DASHBOARD_ADDRESS"] = f"http://localhost:{dashboard_info.dashboard_port}"
+        # Set new values
+        os.environ["RAY_ADDRESS"] = f"http://localhost:{dashboard_port}"
+        os.environ["RAY_API_SERVER_ADDRESS"] = f"ray://localhost:{api_port}"
+        os.environ["RAY_DASHBOARD_ADDRESS"] = f"http://localhost:{dashboard_port}"
+    else:
+        # Multiple clusters - start Flask proxy
+        from .dashboard_proxy import DashboardProxy
+
+        proxy = DashboardProxy(clusters, port_mappings, config.proxy_port)
+        proxy.start()
+        connection.proxy_thread = proxy.thread
+        connection.proxy_url = f"http://localhost:{config.proxy_port}"
 
     try:
-        if ray_init:
+        # Initialize Ray if requested (single cluster only)
+        if config.ray_init and len(clusters) == 1:
             import ray
 
-            ray.init(
-                address=f"ray://localhost:{dashboard_info.api_port}",
-                runtime_env={"working_dir": "."},
-            )
-        yield dashboard_info
+            cluster_name = next(iter(clusters.keys()))
+            api_port = port_mappings[cluster_name][2]
+            ray.init(address=f"ray://localhost:{api_port}", runtime_env={"working_dir": "."})
+
+        yield connection
+
     finally:
-        # Restore original environment variables
-        if original_ray_address is not None:
-            os.environ["RAY_ADDRESS"] = original_ray_address
-        else:
-            os.environ.pop("RAY_ADDRESS", None)
-
-        if original_ray_api_server_address is not None:
-            os.environ["RAY_API_SERVER_ADDRESS"] = original_ray_api_server_address
-        else:
-            os.environ.pop("RAY_API_SERVER_ADDRESS", None)
-
-        if original_ray_dashboard_address is not None:
-            os.environ["RAY_DASHBOARD_ADDRESS"] = original_ray_dashboard_address
-        else:
-            os.environ.pop("RAY_DASHBOARD_ADDRESS", None)
-
-        # Clean up the SSH tunnel
-        ssh_process = dashboard_info.ssh_process
+        # Cleanup
         if ssh_process and ssh_process.poll() is None:
             ssh_process.terminate()
             ssh_process.wait()
+
+        # Stop proxy if running
+        if connection.proxy_thread:
+            # The proxy will be stopped when the thread is stopped
+            pass
+
+        # Restore environment variables if changed
+        for key, value in original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def list_jobs() -> list[dict]:
