@@ -2,19 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
+import haliax as hax
 import jax
 import numpy as np
 import pytest
 
-from levanter.compat.hf_checkpoints import RepoRef
-from levanter.distributed import RayConfig
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
 from levanter.models.llama import LlamaConfig
-from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 try:
@@ -24,7 +21,6 @@ try:
 
     from levanter.inference.engine import InferenceEngineConfig
     from levanter.inference.openai import InferenceServer, InferenceServerConfig
-    from levanter.main.inference_worker import InferenceWorker
 
 except ImportError:
     pytest.skip("Serving imports not installed, use --extra=serve", allow_module_level=True)
@@ -33,28 +29,55 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.fixture(scope="module")
+def trainer_config():
+    return TrainerConfig(model_axis_size=1)
+
+
+@pytest.fixture(scope="module")
 def baby_llama_config():
     return InferenceServerConfig(
-        hf_checkpoint=RepoRef("timinar/baby-llama-58m"),
-        tokenizer="timinar/baby-llama-58m",
         service=InferenceEngineConfig(max_seqs=2, page_size=4, max_pages_per_seq=4, max_queued_tokens=8),
-        model=LlamaConfig(),
-        trainer=TrainerConfig(wandb=WandbConfig(mode="disabled"), ray=RayConfig(auto_start_cluster=False)),
         temperature=0.7,
         seed=42,
     )
 
 
 @pytest.fixture(scope="module")
-def inference_server(baby_llama_config):
-    """Create an InferenceServer instance."""
-    return InferenceServer.create(baby_llama_config)
+def loaded_model(trainer_config):
+    """Load the baby llama model and tokenizer."""
+    hf_checkpoint = "timinar/baby-llama-58m"
+    model_config = LlamaConfig()
+    tokenizer = load_tokenizer(hf_checkpoint)
+
+    with trainer_config.device_mesh, hax.axis_mapping(trainer_config.compute_axis_mapping):
+        converter = HFCheckpointConverter(
+            LlamaConfig,
+            reference_checkpoint=hf_checkpoint,
+            tokenizer=tokenizer,
+        )
+
+        model = converter.load_pretrained(
+            model_config.model_type,
+            ref=hf_checkpoint,
+            dtype=trainer_config.mp.compute_dtype,
+            axis_mapping=trainer_config.parameter_axis_mapping,
+        )
+
+    return model, tokenizer
 
 
 @pytest.fixture(scope="module")
-def test_client(baby_llama_config):
+def inference_server(baby_llama_config, loaded_model):
+    """Create an InferenceServer instance."""
+    model, tokenizer = loaded_model
+    return InferenceServer.create(baby_llama_config, model, tokenizer)
+
+
+@pytest.fixture(scope="module")
+def test_client(baby_llama_config, loaded_model):
     """Create a test client for the inference server."""
-    server = InferenceServer.create(baby_llama_config)
+    model, tokenizer = loaded_model
+    server = InferenceServer.create(baby_llama_config, model, tokenizer)
     with TestClient(server.app) as client:
         yield client, server
 
@@ -176,85 +199,6 @@ def test_weight_reloading_during_requests(test_client):
         assert "text" in response_data["choices"][0]
 
     print("Weight reloading test passed successfully!")
-
-
-@pytest.mark.slow
-def test_inference_worker_checkpoint_monitoring():
-    """
-    Test InferenceWorker's checkpoint monitoring functionality.
-
-    This test creates a temporary checkpoint directory, creates mock checkpoints,
-    and verifies that the worker can find and identify the latest checkpoint.
-    """
-    config = InferenceServerConfig(
-        hf_checkpoint=RepoRef("timinar/baby-llama-58m"),
-        tokenizer="timinar/baby-llama-58m",
-        model=LlamaConfig(),
-        trainer=TrainerConfig(wandb=WandbConfig(mode="disabled")),
-        temperature=0.7,
-        seed=42,
-    )
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        checkpoint_dir = Path(temp_dir)
-
-        # Create mock checkpoint directories with different step numbers
-        checkpoints = [
-            checkpoint_dir / "checkpoint-1000",
-            checkpoint_dir / "checkpoint-2000",
-            checkpoint_dir / "checkpoint-1500",
-            checkpoint_dir / "other-dir",  # Should be ignored
-        ]
-
-        for checkpoint in checkpoints:
-            checkpoint.mkdir()
-            # Create a dummy file to make it look like a real checkpoint
-            (checkpoint / "model.safetensors").write_text("dummy")
-
-        # Create InferenceWorker
-        worker = InferenceWorker(config, checkpoint_path=str(checkpoint_dir), check_interval=1)
-
-        # Test finding latest checkpoint
-        latest = worker._find_latest_checkpoint()
-        assert latest is not None
-        assert Path(latest).name == "checkpoint-2000"
-
-        # Test with empty directory
-        empty_worker = InferenceWorker(config, checkpoint_path="/nonexistent", check_interval=1)
-        assert empty_worker._find_latest_checkpoint() is None
-
-        # Test with no checkpoint directory specified
-        no_dir_worker = InferenceWorker(config, checkpoint_path=None, check_interval=1)
-        assert no_dir_worker._find_latest_checkpoint() is None
-
-        print("InferenceWorker checkpoint monitoring test passed!")
-
-
-def test_inference_worker():
-    """Test that InferenceWorker initializes correctly with different configurations."""
-    config = InferenceServerConfig(
-        hf_checkpoint=RepoRef("timinar/baby-llama-58m"),
-        tokenizer="timinar/baby-llama-58m",
-        model=LlamaConfig(),
-        trainer=TrainerConfig(wandb=WandbConfig(mode="disabled")),
-    )
-
-    # Test with checkpoint directory
-    with tempfile.TemporaryDirectory() as temp_dir:
-        worker = InferenceWorker(config, checkpoint_path=temp_dir, check_interval=30)
-        assert worker.checkpoint_path == Path(temp_dir)
-        assert worker.check_interval == 30
-        assert worker.server is not None
-        assert worker.latest_checkpoint is None
-        assert not worker.shutdown_event.is_set()
-
-    # Test without checkpoint directory
-    worker_no_dir = InferenceWorker(config, checkpoint_path=None, check_interval=60)
-    assert worker_no_dir.checkpoint_path is None
-    assert worker_no_dir.check_interval == 60
-    assert worker_no_dir.server is not None
-
-    print("InferenceWorker initialization test passed!")
 
 
 @pytest.mark.slow

@@ -15,7 +15,6 @@ CLI Usage:
 """
 
 import asyncio
-import dataclasses
 import json
 import logging
 import shlex
@@ -25,12 +24,19 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 import equinox as eqx
+import haliax as hax
 import jax.random as jrandom
-import levanter
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
+from prompt_toolkit import prompt
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.history import FileHistory
+from rich.console import Console
+from rich.panel import Panel
+
+import levanter
 from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import RepoRef
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, HfTokenizer, load_tokenizer
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import (
     ChatCompletionRequest,
@@ -42,12 +48,6 @@ from levanter.inference.openai import (
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
-from prompt_toolkit import prompt
-from prompt_toolkit.completion import WordCompleter
-from prompt_toolkit.history import FileHistory
-from rich.console import Console
-from rich.panel import Panel
-from transformers import LlamaConfig
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -64,6 +64,62 @@ def weight_loader(server, server_config, current_model: LmHeadModel) -> LmHeadMo
     return model
 
 
+def _load_model(
+    trainer_config: TrainerConfig,
+    model_config: LmConfig,
+    hf_checkpoint: str | None,
+    levanter_checkpoint: str | None,
+    *,
+    key,
+) -> tuple[LmHeadModel, HfTokenizer]:
+    """Load a model either from a checkpoint or HF repo."""
+
+    if levanter_checkpoint is None and hf_checkpoint is None:
+        raise ValueError("Must specify either checkpoint_path or hf_checkpoint")
+    if levanter_checkpoint is not None and hf_checkpoint is not None:
+        raise ValueError("Specify only one of checkpoint_path or hf_checkpoint")
+
+    mp = trainer_config.mp
+    tokenizer = load_tokenizer(hf_checkpoint)
+    vocab_size = len(tokenizer)
+
+    with trainer_config.device_mesh, hax.axis_mapping(trainer_config.compute_axis_mapping):
+        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), trainer_config.compute_axis_mapping)
+
+        if levanter_checkpoint is not None:
+            model = eqx.filter_eval_shape(model_config.build, Vocab, key=key)
+            model = load_checkpoint(model, levanter_checkpoint, subpath="model")
+            model = mp.cast_to_compute(model)
+            return model, None
+        else:
+            assert hf_checkpoint
+            logger.info(
+                f"Loading model from HF checkpoint {hf_checkpoint} "
+                + f"type={model_config.model_type}, "
+                + f"vocab_size={Vocab}, "
+                + f"dtype={trainer_config.mp.compute_dtype}"
+            )
+            converter: HFCheckpointConverter = HFCheckpointConverter(
+                type(model_config),
+                reference_checkpoint=hf_checkpoint,
+                tokenizer=tokenizer,
+            )
+            converter = converter.replaced(reference_checkpoint=hf_checkpoint)
+            if tokenizer is not None:
+                converter = converter.replaced(tokenizer=tokenizer)
+
+            logger.info(f"Param mapping: {trainer_config.parameter_axis_mapping}")
+            logger.info(f"Compute mapping: {trainer_config.compute_axis_mapping}")
+
+            model = converter.load_pretrained(
+                model_config.model_type,
+                ref=hf_checkpoint,
+                dtype=trainer_config.mp.compute_dtype,
+                axis_mapping=trainer_config.parameter_axis_mapping,
+            )
+            return model, tokenizer
+
+
 @dataclass
 class InferenceReplConfig:
     """Configuration for the inference REPL."""
@@ -71,8 +127,8 @@ class InferenceReplConfig:
     # Model and training configuration
     checkpoint: str
 
-    model: Optional[LmConfig] = None
-    tokenizer: Optional[str] = None
+    model: LmConfig
+    tokenizer: str | None = None
 
     trainer: TrainerConfig = field(
         default_factory=lambda: TrainerConfig(
@@ -82,9 +138,9 @@ class InferenceReplConfig:
             batch_axis="batch",
         )
     )
+
     server: InferenceServerConfig = field(
         default_factory=lambda: InferenceServerConfig(
-            model=LlamaConfig(),
             service=InferenceEngineConfig(
                 max_pages=32,
                 max_seqs=2,
@@ -112,7 +168,7 @@ class InferenceReplConfig:
 class ReplContext:
     """Command handler for both REPL and CLI modes."""
 
-    server: Optional[InferenceServer]
+    server: InferenceServer | None
     model_name: Optional[str]
     config: InferenceReplConfig
 
@@ -149,38 +205,39 @@ class ReplContext:
         """Load a model from checkpoint or HuggingFace."""
         console.print(f"[blue]Loading {path}...[/blue]")
 
-        # Use provided tokenizer or fall back to config
-        tokenizer = tokenizer or self.config.tokenizer
-
         # Determine if HF model
         is_hf_model = not ("://" in path or path.startswith("/") or path.startswith("./") or path.startswith("../"))
+        if not tokenizer:
+            tokenizer = self.config.tokenizer
 
         if is_hf_model:
-            server_config = dataclasses.replace(
-                self.config.server,
-                checkpoint_path=None,
-                hf_checkpoint=RepoRef.from_string(path),
-                tokenizer=tokenizer,
+            model, tokenizer = _load_model(
+                trainer_config=self.config.trainer,
+                model_config=self.config.model,
+                hf_checkpoint=path,
+                levanter_checkpoint=None,
+                key=jrandom.PRNGKey(self.config.server.seed),
             )
         else:
             if not tokenizer:
                 console.print("[red]Must specify --tokenizer for local checkpoints[/red]")
                 return
-            server_config = dataclasses.replace(
-                self.config.server,
-                checkpoint_path=path,
+            model, tokenizer = _load_model(
+                trainer_config=self.config.trainer,
+                model_config=self.config.model,
                 hf_checkpoint=None,
-                tokenizer=tokenizer,
+                levanter_checkpoint=path,
+                key=jrandom.PRNGKey(self.config.server.seed),
             )
 
         if self.server is not None:
 
             def _reload(current_model: LmHeadModel) -> LmHeadModel:
-                return weight_loader(self.server, server_config, current_model)
+                return weight_loader(self.server, self.config.server, current_model)
 
             self.server.reload(_reload)
         else:
-            self.server = InferenceServer.create(server_config)
+            self.server = InferenceServer.create(self.config.server, model=model, tokenizer=tokenizer)
 
         console.print(f"[green]✓ Loaded {path}[/green]")
 
@@ -289,7 +346,7 @@ class ReplContext:
                     messages.append(ChatMessage(role=msg["role"], content=msg.get("content", "")))
 
                 request = ChatCompletionRequest(
-                    model=req_data.get("model", model_name or "model"),
+                    model=req_data.get("model", "<default model>"),
                     messages=messages,
                     max_tokens=req_data.get("max_tokens", self.config.max_tokens),
                     temperature=req_data.get("temperature", server_config.temperature),
@@ -322,7 +379,7 @@ class ReplContext:
     def _run_chat_completion(self, messages, print_response=True):
         """Run async chat completion."""
         request = ChatCompletionRequest(
-            model=self.model_name or "model",
+            model=self.model_name or "<default model>",
             messages=messages,
             stop=[self.server.inference_context.tokenizer.eos_token],
             max_tokens=self.config.max_tokens,

@@ -20,15 +20,12 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Optional, Union
 
-import equinox as eqx
 import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from haliax import Axis
-from haliax.partitioning import round_axis_for_partitioning
 from openai.types import Completion, CompletionUsage
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice as ChatCompletionChoice
@@ -38,13 +35,11 @@ from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenL
 from openai.types.completion_choice import CompletionChoice, Logprobs
 from pydantic import BaseModel, Field
 
-from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmHeadModel
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import use_cpu_device
+from levanter.utils.hf_utils import HfTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -118,12 +113,7 @@ class CompletionRequest(BaseModel):
 class InferenceServerConfig:
     """Configuration for OpenAI-compatible inference server."""
 
-    checkpoint_path: Optional[str] = None
-    hf_checkpoint: Optional[RepoRef] = None
-
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
-    model: LmConfig = field(default_factory=LmConfig)
-
     tokenizer: str | None = None
 
     # Inference service/memory layout configuration
@@ -284,7 +274,7 @@ class InferenceContext:
         self.request_queue.put(request)
         return request_id
 
-    def _inference_loop(self):
+    def _inference_loop(self) -> None:
         """Main inference loop running in background thread - collects requests into batches"""
         logger.info("Inference thread started")
 
@@ -611,23 +601,21 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
             # Format logprobs if available
             logprobs = None
             if request.logprobs:
-                # Convert logprobs to API format
-                prompt_len = generation.prompt_tokens
-                generated_tokens = generation.tokens[prompt_len:]
+                generated_tokens = generation.tokens
 
                 # Create content logprobs in OpenAI format
                 content_logprobs = []
-                if generation.logprobs:
-                    for token_id, lp in zip(generated_tokens, generation.logprobs):
-                        token_str = ctx.tokenizer.decode([token_id], skip_special_tokens=False)
-                        content_logprobs.append(
-                            ChatCompletionTokenLogprob(
-                                token=token_str,
-                                logprob=float(lp),
-                                bytes=list(token_str.encode("utf-8")),
-                                top_logprobs=[],
-                            )
+                assert generation.logprobs is not None, "Logprobs requested but missing in generation result"
+                for token_id, lp in zip(generated_tokens, generation.logprobs, strict=True):
+                    token_str = ctx.tokenizer.decode([token_id], skip_special_tokens=False)
+                    content_logprobs.append(
+                        ChatCompletionTokenLogprob(
+                            token=token_str,
+                            logprob=float(lp),
+                            bytes=list(token_str.encode("utf-8")),
+                            top_logprobs=[],
                         )
+                    )
 
                 logprobs = ChoiceLogprobs(content=content_logprobs)
 
@@ -641,7 +629,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
             )
             total_completion_tokens += generation.completion_tokens
 
-        return ChatCompletion(
+        response = ChatCompletion(
             id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
             object="chat.completion",
             created=int(time.time()),
@@ -653,6 +641,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                 total_tokens=len(prompt_tokens) + total_completion_tokens,
             ),
         )
+        return response
 
     except Exception as e:
         logger.error(f"Error in chat completion: {e}", exc_info=True)
@@ -675,45 +664,20 @@ class InferenceServer:
         self.app = app
 
     @staticmethod
-    def create(config: InferenceServerConfig) -> "InferenceServer":
+    def create(config: InferenceServerConfig, model: LmHeadModel, tokenizer: HfTokenizer) -> "InferenceServer":
         """Create and initialize a new InferenceServer.
 
         This factory method loads the model, tokenizer, and creates all necessary
         components for the inference server.
         """
-        tokenizer_path: str | None = config.tokenizer
-        if config.tokenizer is None:
-            if config.hf_checkpoint is not None:
-                tokenizer_path = config.hf_checkpoint.model_name_or_path
-
-        if tokenizer_path is None:
-            raise ValueError("Must specify a tokenizer or an HF checkpoint with a tokenizer")
-
-        tokenizer = load_tokenizer(tokenizer_path)
-        key = jrandom.PRNGKey(config.seed)
-        vocab_size = len(tokenizer)
-        logger.info(f"Loaded tokenizer with vocab size {vocab_size} from {tokenizer_path}")
-
-        # N.B. I don't know what the difference between compute and parameter axis mapping is
-        # `compute_axis_mapping` shards across tensor-parallel dimensions (?)
-        with (
-            config.trainer.device_mesh,
-            hax.axis_mapping(config.trainer.compute_axis_mapping),
-        ):
-            Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), config.trainer.compute_axis_mapping)
-            model = _load_model(config, Vocab, key=key)
-
         service = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.service)
 
         # Create and start inference thread
         inference_context = InferenceContext(model, tokenizer, service, config)
         inference_context.start()
 
-        logger.info("Inference service initialized and ready")
-
         # Create FastAPI app with initialized context
         app = InferenceServer._create_app(inference_context)
-
         return InferenceServer(config, inference_context, app)
 
     @staticmethod
@@ -726,13 +690,13 @@ class InferenceServer:
         async def health_check():
             return _health_check()
 
-        @app.post("/v1/completions", response_model=Completion)
-        async def create_completion(request: CompletionRequest) -> Completion:
-            return await _create_completion(inference_context, request)
-
         @app.post("/v1/chat/completions", response_model=ChatCompletion)
         async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompletion:
             return await _create_chat_completion(inference_context, request)
+
+        @app.post("/v1/completions", response_model=Completion)
+        async def create_completion(request: CompletionRequest) -> Completion:
+            return await _create_completion(inference_context, request)
 
         return app
 
@@ -767,44 +731,3 @@ class InferenceServer:
     def shutdown(self):
         """Shutdown the inference context."""
         self.inference_context.shutdown()
-
-
-def _load_model(config: InferenceServerConfig, Vocab: Axis, *, key) -> LmHeadModel:
-    """Load a model either from a checkpoint or HF repo."""
-
-    if config.checkpoint_path is None and config.hf_checkpoint is None:
-        raise ValueError("Must specify either checkpoint_path or hf_checkpoint")
-    if config.checkpoint_path is not None and config.hf_checkpoint is not None:
-        raise ValueError("Specify only one of checkpoint_path or hf_checkpoint")
-
-    mp = config.trainer.mp
-
-    if config.checkpoint_path is not None:
-        with use_cpu_device():
-            model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-            model = load_checkpoint(model, config.checkpoint_path, subpath="model")
-            model = mp.cast_to_compute(model)
-        return model
-    else:
-        assert config.hf_checkpoint
-        logger.info(
-            f"Loading model from HF checkpoint {config.hf_checkpoint} "
-            + f"type={config.model.model_type}, "
-            + f"vocab_size={Vocab.size}, "
-            + f"dtype={config.trainer.mp.compute_dtype}"
-        )
-        converter: HFCheckpointConverter = HFCheckpointConverter.from_hf(config.hf_checkpoint)
-        converter = converter.replaced(reference_checkpoint=config.hf_checkpoint)
-        if config.tokenizer is not None:
-            converter = converter.replaced(tokenizer=load_tokenizer(config.tokenizer))
-
-        logger.info(f"Param mapping: {config.trainer.parameter_axis_mapping}")
-        logger.info(f"Compute mapping: {config.trainer.compute_axis_mapping}")
-
-        model = converter.load_pretrained(
-            config.model.model_type,
-            ref=config.hf_checkpoint,
-            dtype=config.trainer.mp.compute_dtype,
-            axis_mapping=config.trainer.parameter_axis_mapping,
-        )
-        return model
