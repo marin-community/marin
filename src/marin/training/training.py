@@ -330,11 +330,18 @@ def _add_run_env_variables(env: dict):
     """
     env = deepcopy(env)
 
-    if "GIT_COMMIT" not in env:
+    git_commit = env.get("GIT_COMMIT") or os.environ.get("GIT_COMMIT")
+
+    if not git_commit:
         try:
-            env["GIT_COMMIT"] = levanter.infra.cli_helpers.get_git_commit()
+            git_commit = levanter.infra.cli_helpers.get_git_commit()
         except:  # noqa
-            logger.warning("Could not infer git commit.")
+            pass
+
+    if git_commit:
+        env["GIT_COMMIT"] = git_commit
+    else:
+        logger.warning("Failed to find or infer git commit for logging.")
 
     # required for internal evals to run some tasks
     if "HF_DATASETS_TRUST_REMOTE_CODE" not in env:
