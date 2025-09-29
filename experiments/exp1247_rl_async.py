@@ -32,6 +32,7 @@ from levanter.infra.ray_tpu import run_on_pod_ray
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.tensorboard import TensorboardConfig
+from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from ray.runtime_env import RuntimeEnv
 from transformers import AutoConfig, AutoTokenizer
@@ -44,8 +45,7 @@ from marin.execution.executor import (
 from marin.post_training.rollout_storage import RolloutStorageConfig, StorageType
 from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.post_training.train_worker import ReplayBufferConfig, TrainWorker, TrainWorkerConfig
-from marin.post_training.weight_transfer import WeightTransferConfig
-from marin.post_training.weight_transfer.base import WeightTransferMode
+from marin.post_training.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.resources import TpuPodConfig
 from marin.training.training import (
     _add_run_env_variables,
@@ -55,7 +55,7 @@ from marin.utils import remove_tpu_lockfile_on_exit
 logger = logging.getLogger(__name__)
 
 ENVIRONMENT_SPEC = "math"
-MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
+MODEL_NAME = "meta-llama/Llama-3.2-1B"
 # MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 # MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 # MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
@@ -82,11 +82,10 @@ class RLTrainConfig:
     train_worker_config: TrainWorkerConfig
     inference_tpu_type: str
     train_tpu_type: str
-    num_inference_workers: int = 1
-    num_train_slices: int = 1
+    num_inference_workers: int
+    num_train_slices: int
 
 
-@ray.remote
 def run_rl_training_on_pod(config: RLTrainConfig):
     """
     Run async RL training with separate inference and training workers.
@@ -108,29 +107,22 @@ def run_rl_training_on_pod(config: RLTrainConfig):
     runtime_env = RuntimeEnv()
 
     train_pod_config = TpuPodConfig(tpu_type=config.train_tpu_type, runtime_env=runtime_env)
+    rollout_pod_config = TpuPodConfig(tpu_type=config.inference_tpu_type, runtime_env=runtime_env)
+
+    rollout_hw_config = rollout_pod_config.with_env_vars(env)
     train_hw_config = train_pod_config.with_env_vars(env)
 
-    train_kwargs = train_hw_config.as_remote_kwargs()
-    train_kwargs["max_calls"] = 1
+    train_kwargs = dict(max_calls=1, **train_hw_config.as_remote_kwargs())
+    rollout_kwargs = dict(max_calls=1, **rollout_hw_config.as_remote_kwargs())
 
     @ray.remote(**train_kwargs)
     def train_worker_task():
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-            # Print jax & TPU configuration
-            import jax
-
-            logging.error(f"JAX configuration: {jax.__version__}")
             worker = TrainWorker(
                 config=config.train_worker_config,
             )
             worker.train()
-
-    rollout_pod_config = TpuPodConfig(tpu_type=config.inference_tpu_type, runtime_env=runtime_env)
-    rollout_hw_config = rollout_pod_config.with_env_vars(env)
-
-    rollout_kwargs = rollout_hw_config.as_remote_kwargs()
-    rollout_kwargs["max_calls"] = 1
 
     @ray.remote(**rollout_kwargs)
     def inference_worker_task():
@@ -142,6 +134,7 @@ def run_rl_training_on_pod(config: RLTrainConfig):
             worker.run()
 
     train_tasks = []
+    logger.info("Running train worker on TPU type: %s", config.train_tpu_type)
     train_tasks.append(
         run_on_pod_ray.remote(
             train_worker_task,
@@ -154,6 +147,7 @@ def run_rl_training_on_pod(config: RLTrainConfig):
 
     inference_tasks = []
     for _ in range(config.num_inference_workers):
+        logger.info("Running inference worker on TPU type: %s", config.inference_tpu_type)
         inference_tasks.append(
             run_on_pod_ray.remote(
                 inference_worker_task,
@@ -174,12 +168,19 @@ def rl_train(name: str) -> ExecutorStep:
     # Adjust the max sequence length of the model to reduce memory usage.
     model_config = dataclasses.replace(config, seq_len=MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS, tokenizer=MODEL_TOKENIZER)
 
+    _ = WandbConfig
+
     trainer_config = TrainerConfig(
+        # tracker=WandbConfig(
+        #     project="marin_rl_testing",
+        #     name=name,
+        #     tags=["rl", "math", MODEL_NAME.split("/")[-1]],
+        # ),
         tracker=TensorboardConfig(
             logdir=OutputName("tblogs"),
         ),
         mp=jmp.get_policy("p=f32,c=bfloat16"),
-        train_batch_size=256,
+        train_batch_size=8,
         num_train_steps=50000,
         steps_per_eval=100,
         checkpointer=CheckpointerConfig(
@@ -202,7 +203,7 @@ def rl_train(name: str) -> ExecutorStep:
     inference_server_config = InferenceServerConfig(
         model=model_config,
         # Turn on tensor parallelism for inference
-        trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=["mlp", "kv_heads"]),
+        trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=4),
         hf_checkpoint=MODEL_CHECKPOINT,
         tokenizer=MODEL_TOKENIZER,
         temperature=1.0,
@@ -219,12 +220,10 @@ def rl_train(name: str) -> ExecutorStep:
         path=OutputName("rollouts"),
     )
     weight_transfer = WeightTransferConfig(
-        mode=WeightTransferMode.JAX_TRANSFER_SERVER,
-        sync_interval_steps=25,
-        poll_interval_seconds=10,
-        coordinator_name="rl_weight_transfer_coordinator",
-        # checkpoint_dir=OutputName("policy_checkpoints"),
-        # max_checkpoints=5,
+        # mode=WeightTransferMode.JAX_TRANSFER_SERVER,
+        mode=WeightTransferMode.ARROW_FLIGHT,
+        sync_interval_steps=1,
+        poll_interval_seconds=1,
     )
 
     train_worker = TrainWorkerConfig(
@@ -236,6 +235,8 @@ def rl_train(name: str) -> ExecutorStep:
         replay_buffer=ReplayBufferConfig(
             capacity=4096,
             alpha=3,
+            # Don't allow resampling.
+            max_samples=1,
         ),
         kl_coef=0.001,
         initial_checkpoint=MODEL_NAME,
@@ -268,8 +269,8 @@ def rl_train(name: str) -> ExecutorStep:
         rollout_worker_config=rollout_worker,
         train_worker_config=train_worker,
         inference_tpu_type="v5litepod-4",
-        train_tpu_type="v5litepod-128",
-        num_inference_workers=1,
+        train_tpu_type="v5litepod-4",
+        num_inference_workers=4,
         num_train_slices=1,
     )
 
@@ -288,7 +289,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test"),
+        rl_train(name="llama-1b-math-rl-test-005"),
     ]
 
     executor_main(

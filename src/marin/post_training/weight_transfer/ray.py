@@ -19,14 +19,12 @@ This module provides weight transfer using Ray's object store for
 high-performance distributed communication between training and inference workers.
 """
 
+import dataclasses
 import logging
-import time
 
-import haliax as hax
 import jax
-import numpy as np
 import ray
-from haliax.util import is_named_array
+from haliax import state_dict as hsd
 from jaxtyping import PyTree
 from levanter.utils.jax_utils import barrier_sync
 
@@ -71,7 +69,7 @@ class RayRemotingServer(WeightTransferServer):
 
         self.coordinator = get_or_create_actor(RayWeightCoordinator, config.coordinator_name)
 
-        self.metrics = WeightTransferServerMetrics(start_time=time.time())
+        self.metrics = WeightTransferServerMetrics()
 
     def serve_weights(self, weight_id: int, model) -> None:
         self.metrics.total_transfers += 1
@@ -80,27 +78,17 @@ class RayRemotingServer(WeightTransferServer):
             logger.info(f"Serving weights for weight_id {weight_id} via Ray remoting...")
             barrier_sync()
 
-            # Convert Levanter model params (NamedArrays) to numpy arrays for Ray
-            def convert_to_numpy(x):
-                if is_named_array(x):
-                    return np.array(x.array)
-                elif hasattr(x, "shape"):
-                    return np.array(x)
-                else:
-                    return x
+            state_dict = hsd.to_numpy_state_dict(model)
 
-            numpy_pytree = jax.tree.map(convert_to_numpy, model)
             barrier_sync()
 
             if jax.process_index() == 0:
                 logger.info(f"Updating Ray object store with new weights at weight_id {weight_id}...")
-                leaves, treedef = jax.tree.flatten(numpy_pytree)
-                weight_refs = {
-                    "leaves": [ray.put(leaf) for leaf in leaves],
-                    "treedef": ray.put(treedef),
-                }
-                ray.get(self.coordinator.put_weight_refs.remote(weight_id, weight_refs))
-                del weight_refs
+                ref_dict = {}
+                for k, v in state_dict.items():
+                    ref_dict[k] = ray.put(v)
+
+                ray.get(self.coordinator.put_weight_refs.remote(weight_id, ref_dict))
                 self.metrics.successful_transfers += 1
 
                 logger.info(f"Served weights for weight_id {weight_id} via Ray remoting (process {jax.process_index()})")
@@ -114,9 +102,8 @@ class RayRemotingServer(WeightTransferServer):
     def cleanup(self) -> None:
         pass
 
-    def get_metrics(self) -> WeightTransferServerMetrics:
-        """Get transfer metrics."""
-        return self.metrics
+    def get_metrics(self) -> dict:
+        return dataclasses.asdict(self.metrics)
 
 
 class RayRemotingClient(WeightTransferClient):
@@ -127,13 +114,11 @@ class RayRemotingClient(WeightTransferClient):
         config: WeightTransferConfig,
     ):
         self.config = config
-
         self.coordinator = get_or_create_actor(RayWeightCoordinator, config.coordinator_name)
-
         self.last_weight_id = None
 
         # Metrics tracking
-        self.metrics = WeightTransferClientMetrics(start_time=time.time())
+        self.metrics = WeightTransferClientMetrics()
 
     def receive_weights(self, old_model: PyTree = None) -> PyTree | None:
         """Receive weights from Ray object store and reconstruct as Levanter model."""
@@ -146,41 +131,19 @@ class RayRemotingClient(WeightTransferClient):
             if weight_refs is None or weight_id == self.last_weight_id:
                 return None
 
-            # Get individual leaf arrays and treedef from object store
-            leaf_refs = weight_refs["leaves"]
-            treedef_ref = weight_refs["treedef"]
+            state_dict = {}
+            for k, ref in weight_refs.items():
+                array = ray.get(ref)
+                state_dict[k] = array
 
-            # Get all leaves and treedef
-            leaves = [ray.get(ref) for ref in leaf_refs]
-            treedef = ray.get(treedef_ref)
-
-            # Reconstruct the pytree from numpy arrays
-            numpy_pytree = jax.tree.unflatten(treedef, leaves)
-
-            # Convert back to JAX arrays and reconstruct NamedArrays structure
-            if old_model is not None:
-
-                def convert_from_numpy(numpy_val, target_val=None):
-                    if target_val is not None and is_named_array(target_val):
-                        # Reconstruct NamedArray with same axes as target
-                        return hax.named(jax.numpy.array(numpy_val), target_val.axes)
-                    else:
-                        return jax.numpy.array(numpy_val)
-
-                def _convert_tree(numpy_tree, target_tree):
-                    return jax.tree.map(convert_from_numpy, numpy_tree, target_tree)
-
-                levanter_pytree = _convert_tree(numpy_pytree, old_model)
-            else:
-                # Without old_model, just convert to JAX arrays (lose NamedArray structure)
-                levanter_pytree = jax.tree.map(lambda x: jax.numpy.array(x), numpy_pytree)
+            model = hsd.from_state_dict(old_model, state_dict)
 
             self.metrics.successful_receives += 1
             self.last_weight_id = weight_id
 
             logger.info(f"Received weights for weight_id {weight_id} via Ray remoting")
 
-            return levanter_pytree
+            return model
 
         except Exception as e:
             self.metrics.failed_receives += 1
@@ -191,6 +154,5 @@ class RayRemotingClient(WeightTransferClient):
         """No cleanup needed for Ray remoting client."""
         pass
 
-    def get_metrics(self) -> WeightTransferClientMetrics:
-        """Get transfer metrics."""
-        return self.metrics
+    def get_metrics(self) -> dict:
+        return dataclasses.asdict(self.metrics)

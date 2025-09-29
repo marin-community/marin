@@ -326,3 +326,6 @@ log_cli_level = "INFO"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'"
 ]
+
+# Make sure we timeout before CI kills us
+addopts = "--session-timeout=500 --dist=worksteal"
