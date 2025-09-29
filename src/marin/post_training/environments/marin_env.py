@@ -12,21 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass, field
-from typing import Any, NamedTuple, Protocol
+from typing import NamedTuple, Protocol, TypedDict
 
 import numpy as np
 
 
-@dataclass
-class DataExample:
-    """Single data example with transformations for debugging."""
+class EnvResponse(TypedDict):
+    tokens: np.ndarray
+    logprobs: np.ndarray
 
-    raw_prompt: str
-    raw_answer: str
-    processed_prompt: str
-    processed_answer: str
-    metadata: dict[str, Any] = field(default_factory=dict)
+
+class EnvExample(TypedDict):
+    prompt: str
+    answer: str
 
 
 class EnvStep(NamedTuple):
@@ -37,12 +35,12 @@ class EnvStep(NamedTuple):
     rewards computed, and additional metrics collected.
 
     Attributes:
-        examples (list[dict[str, Any]]): A list of problem instances sampled from
+        examples (list[EnvExample]): A list of problem instances sampled from
             the dataset. Each instance contains data with keys:
                 - 'prompt': Problem description
                 - 'answer': Ground truth solution used for grading
 
-        responses (list[list[dict[str, np.ndarray]]]): A nested list structure where
+        responses (list[list[EnvResponse]]): A nested list structure where
             responses[i][j] contains the j-th generated sample for the i-th problem
             in the batch. Each inner dict contains:
             - 'tokens': numpy array of generated token IDs
@@ -70,8 +68,8 @@ class EnvStep(NamedTuple):
         ... )
     """
 
-    examples: list[dict[str, Any]]
-    responses: list[list[dict[str, np.ndarray]]]
+    examples: list[EnvExample]
+    responses: list[list[EnvResponse]]
     rewards: np.ndarray
     metrics: dict[str, float]
 
@@ -87,32 +85,13 @@ class InferenceContext(Protocol):
         """Return the tokenizer."""
         ...
 
-    def generate(
-        self,
-        prompts: list[str],
-        temperature: float = 1.0,
-        n_generations: int = 1,
-    ) -> list[list[dict]]:
+    def generate(self, prompts: list[str], temperature: float, n_generations: int) -> list[list[EnvResponse]]:
         """Generate responses for a batch of prompts.
 
         Returns:
             List of lists where outer list corresponds to prompts and
             inner list contains n_generations responses per prompt.
-            Each response is a dict with 'tokens' and 'logprobs' arrays.
-        """
-        ...
-
-    def compute_logprobs(
-        self,
-        input_tokens: np.ndarray,
-        input_attention_mask: np.ndarray,
-        target_tokens: np.ndarray,
-        target_attention_mask: np.ndarray,
-    ) -> np.ndarray:
-        """Compute log probabilities for given input/target pairs.
-
-        Returns:
-            Log probabilities for target tokens
+            Each response is an EnvResponse.
         """
         ...
 
