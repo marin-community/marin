@@ -52,8 +52,7 @@ def check_cluster_head_running(config_path: str) -> bool:
     try:
         # Try to connect to the dashboard to see if cluster is running
         with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-            # If we can get cluster resources, the head is running
-            ray.get_ray_cluster_resources()
+            ray.print_cluster_status()
             return True
     except Exception:
         # Any exception means we couldn't connect to a running cluster
@@ -215,8 +214,7 @@ def cluster_restore_jobs(ctx, backup_dir):
 def get_status(ctx):
     """Get cluster status."""
     with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
-        status_result = ray.get_ray_cluster_resources()
-        print(json.dumps(status_result, indent=2))
+        ray.print_cluster_status()
 
 
 @cli.command("list-configs")
@@ -401,12 +399,13 @@ def monitor_cluster(ctx, wandb):
         sys.exit(1)
 
     config_zones = {config_obj.region: [config_obj.zone]}
-    health_data = monitoring.monitor_cluster_health(
-        config_zones=config_zones, project=config_obj.project_id, log_to_wandb=wandb
-    )
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+        health_data = monitoring.monitor_cluster_health(
+            config_zones=config_zones, project=config_obj.project_id, log_to_wandb=wandb
+        )
 
-    summary = monitoring.get_cluster_health_summary(health_data)
-    print(summary)
+        summary = monitoring.get_cluster_health_summary(health_data)
+        print(summary)
 
     if wandb:
         print("Metrics logged to wandb")

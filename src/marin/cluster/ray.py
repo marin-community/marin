@@ -472,17 +472,19 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
         "RAY_ADDRESS": os.environ.get("RAY_ADDRESS"),
         "RAY_API_SERVER_ADDRESS": os.environ.get("RAY_API_SERVER_ADDRESS"),
         "RAY_DASHBOARD_ADDRESS": os.environ.get("RAY_DASHBOARD_ADDRESS"),
+        "RAY_GCS_ADDRESS": os.environ.get("RAY_GCS_ADDRESS"),
     }
 
     # For single cluster, set Ray environment variables
     if len(clusters) == 1:
         cluster_name = next(iter(clusters.keys()))
-        dashboard_port, _, api_port = port_mappings[cluster_name]
+        dashboard_port, gcs_port, api_port = port_mappings[cluster_name]
 
         # Set new values
         os.environ["RAY_ADDRESS"] = f"http://localhost:{dashboard_port}"
         os.environ["RAY_API_SERVER_ADDRESS"] = f"ray://localhost:{api_port}"
         os.environ["RAY_DASHBOARD_ADDRESS"] = f"http://localhost:{dashboard_port}"
+        os.environ["RAY_GCS_ADDRESS"] = f"localhost:{gcs_port}"
     else:
         # Multiple clusters - start Flask proxy
         proxy = DashboardProxy(clusters, port_mappings, config.proxy_port)
@@ -728,46 +730,37 @@ def restore_jobs(cluster_config: str, local_path: str, raise_errors: bool = Fals
 
 
 def list_nodes() -> list[dict[str, Any]]:
-    """Get list of Ray nodes.
-
-    Note: This requires RAY_ADDRESS to be set, typically via ray_dashboard context manager.
-    """
-    result = run_ray_command(["ray", "list", "nodes", "--format=json", "--limit=10000"])
+    """Get list of Ray nodes."""
+    result = run_ray_command(
+        ["ray", "list", "nodes", "--format=json", "--limit=10000"],
+    )
     return json.loads(result.stdout)
 
 
 def list_workers(limit: int = 10000) -> list[dict[str, Any]]:
-    """Get list of Ray workers.
-
-    Note: This requires RAY_ADDRESS to be set, typically via ray_dashboard context manager.
-    """
-    result = run_ray_command(["ray", "list", "workers", "--format=json", f"--limit={limit}"])
+    """Get list of Ray workers."""
+    result = run_ray_command(
+        ["ray", "list", "workers", "--format=json", f"--limit={limit}"],
+    )
     return json.loads(result.stdout)
 
 
 def list_tasks(limit: int = 1000) -> list[dict[str, Any]]:
-    """Get list of Ray tasks.
-
-    Note: This requires RAY_ADDRESS to be set, typically via ray_dashboard context manager.
-    """
-    result = run_ray_command(["ray", "list", "tasks", "--format=json", f"--limit={limit}"])
+    """Get list of Ray tasks."""
+    result = run_ray_command(
+        ["ray", "list", "tasks", "--format=json", f"--limit={limit}"],
+    )
     return json.loads(result.stdout)
 
 
 def list_actors(limit: int = 1000) -> list[dict[str, Any]]:
-    """Get list of Ray actors.
-
-    Note: This requires RAY_ADDRESS to be set, typically via ray_dashboard context manager.
-    """
+    """Get list of Ray actors."""
     result = run_ray_command(["ray", "list", "actors", "--format=json", f"--limit={limit}"])
     return json.loads(result.stdout)
 
 
 def get_cluster_utilization() -> dict[str, Any]:
-    """Get cluster resource utilization summary.
-
-    Note: This requires RAY_ADDRESS to be set, typically via ray_dashboard context manager.
-    """
+    """Get cluster resource utilization summary."""
     try:
         nodes = list_nodes()
         workers = list_workers()
@@ -810,13 +803,10 @@ def get_cluster_utilization() -> dict[str, Any]:
         raise RuntimeError(f"Failed to get cluster utilization: {e}") from e
 
 
-def get_ray_cluster_resources() -> dict[str, Any]:
-    """Get Ray cluster resources using ray CLI.
-
-    Note: This requires RAY_ADDRESS to be set, typically via ray_dashboard context manager.
-    """
-    result = run_ray_command(["ray", "status", "--format=json"])
-    return json.loads(result.stdout)
+def print_cluster_status() -> None:
+    """Get Ray cluster resources using ray CLI."""
+    # seriously, you can't use anything other than the GCS address here?
+    run_ray_command(["ray", "status", f"--address={os.environ['RAY_GCS_ADDRESS']}"], capture_output=False)
 
 
 def add_manual_worker(
