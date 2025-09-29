@@ -26,6 +26,7 @@ from experiments.speedrun.parallel_llama.exp1571_parallel_llama import ParallelL
 from marin.execution.executor import executor_main
 from marin.resources import GpuConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
+import time
 
 AUTHOR = Author(
     name="Harry Shin",
@@ -82,7 +83,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
         "75m": 128,
         "150m": 128,
         "300m": 128,
-        "600m": 128,
+        "520m": 128,
     }
 
     # Resource configurations - using GPUs for smaller models, TPUs for larger
@@ -144,11 +145,12 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
         "520m": "Parallel Llama ~520m with parallel attention/MLP computation.",
     }
 
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
     run_names = {
-        "75m": "parallel_llama_75m_1024",
-        "150m": "parallel_llama_150m_1024",
-        "300m": "parallel_llama_300m_1024",
-        "520m": "parallel_llama_520m_1024",
+        "75m": f"parallel_llama_75m_{timestamp}",
+        "150m": f"parallel_llama_150m_{timestamp}",
+        "300m": f"parallel_llama_300m_{timestamp}",
+        "520m": f"parallel_llama_520m_{timestamp}",
     }
 
     if size not in param_counts:
@@ -188,7 +190,7 @@ if __name__ == "__main__":
     runs = [
         build_config("75m"),
         build_config("150m"),
-        # build_config("300m"),
+        build_config("300m"),
         # build_config("520m"),
     ]
 
