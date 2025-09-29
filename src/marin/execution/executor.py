@@ -544,6 +544,7 @@ class Executor:
             strategy = schedule_on_head_node_strategy()
         else:
             strategy = None
+
         self.status_actor: StatusActor = StatusActor.options(
             name="status_actor",
             get_if_exists=True,
@@ -688,10 +689,13 @@ class Executor:
 
             append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
 
-            runtime_env = build_runtime_env_for_packages(extra=step.pip_dependency_groups)
-
-            # Inject themarin prefix into the runtime environment for each step.
-            runtime_env["env_vars"] = runtime_env.get("env_vars", {}) | {"MARIN_PREFIX": self.prefix}
+            # Skip runtime_env for local clusters since packages are already available
+            if is_local_ray_cluster():
+                runtime_env = {"env_vars": {"MARIN_PREFIX": self.prefix}}
+            else:
+                runtime_env = build_runtime_env_for_packages(extra=step.pip_dependency_groups)
+                # Inject the marin prefix into the runtime environment for each step.
+                runtime_env["env_vars"] = runtime_env.get("env_vars", {}) | {"MARIN_PREFIX": self.prefix}
 
             # uv doesn't reuse dependencies and ends up installing CUDA-enabled
             # torch, which is huge and causes OOMs, so disable it for now.
