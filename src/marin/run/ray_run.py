@@ -27,7 +27,7 @@ from pathlib import Path
 from ray.job_submission import JobSubmissionClient
 
 from marin.cluster.config import find_config_by_region
-from marin.cluster.ray import ray_dashboard
+from marin.cluster.ray import DashboardConfig, ray_dashboard
 from marin.run.ray_deps import build_runtime_env_for_packages
 from marin.run.vars import REMOTE_DASHBOARD_URL
 
@@ -286,7 +286,7 @@ def main():
 
     try:
         if cluster_config:
-            with ray_dashboard(cluster_config):
+            with ray_dashboard(DashboardConfig.from_cluster(cluster_config)):
                 asyncio.run(run_job())
         else:
             asyncio.run(run_job())
@@ -295,7 +295,7 @@ def main():
             logger.info(f"Auto-stopping job {submission_id}...")
             # Open a fresh connection for cleanup
             if cluster_config:
-                with ray_dashboard(cluster_config):
+                with ray_dashboard(DashboardConfig.from_cluster(cluster_config)):
                     client = make_client()
                     client.stop_job(submission_id)
             else:
