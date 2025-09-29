@@ -22,8 +22,6 @@ try:
     from jax.experimental.pallas.ops.tpu.ragged_paged_attention import (
         ragged_paged_attention as tpu_ragged_paged_attention,
     )
-
-    raise ImportError("Disabling TPU ragged paged attention until bugs are fixed.")
 except Exception:  # pragma: no cover - optional dep
     tpu_ragged_paged_attention = None
 
