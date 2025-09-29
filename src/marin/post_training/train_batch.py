@@ -19,16 +19,19 @@ This module provides functions to convert rollout data into training-ready
 batches with proper padding, masking, and advantage weighting.
 """
 
+import logging
+
 import haliax as hax
 import jax.numpy as jnp
 import numpy as np
 
 from .rollout_types import Rollout, RolloutWithAdvantage, TrainingBatch
 
+logger = logging.getLogger(__name__)
 
-def trim_and_pad(ary: np.ndarray, max_input_length: int, max_output_length: int, pad_token_id: int) -> np.ndarray:
+
+def trim_and_pad(ary: np.ndarray, max_seq_len: int, pad_token_id: int) -> np.ndarray:
     """Trim and pad array to max sequence length."""
-    max_seq_len = max_input_length + max_output_length
     ary = ary[:max_seq_len]
     ary = np.pad(
         ary,
@@ -85,14 +88,16 @@ def convert_rollout_to_training_format(
         [np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32), rollout.response_logprobs.astype(np.float32)]
     )
 
+    max_seq_len = max_input_length + max_output_length
+
     return {
-        "input_ids": trim_and_pad(input_tokens, max_input_length, max_output_length, pad_token_id),
-        "attention_mask": trim_and_pad(input_attention_mask, max_input_length, max_output_length, pad_token_id),
-        "position_ids": trim_and_pad(position_ids, max_input_length, max_output_length, pad_token_id),
-        "target_ids": trim_and_pad(target_tokens, max_input_length, max_output_length, pad_token_id),
-        "loss_weights": trim_and_pad(loss_weight, max_input_length, max_output_length, pad_token_id),
-        "loss_masks": trim_and_pad(loss_mask, max_input_length, max_output_length, pad_token_id),
-        "policy_logprobs": trim_and_pad(policy_logprob, max_input_length, max_output_length, pad_token_id),
+        "input_ids": trim_and_pad(input_tokens, max_seq_len, pad_token_id),
+        "attention_mask": trim_and_pad(input_attention_mask, max_seq_len, pad_token_id),
+        "position_ids": trim_and_pad(position_ids, max_seq_len, pad_token_id),
+        "target_ids": trim_and_pad(target_tokens, max_seq_len, pad_token_id),
+        "loss_weights": trim_and_pad(loss_weight, max_seq_len, pad_token_id),
+        "loss_masks": trim_and_pad(loss_mask, max_seq_len, pad_token_id),
+        "policy_logprobs": trim_and_pad(policy_logprob, max_seq_len, pad_token_id),
     }
 
 

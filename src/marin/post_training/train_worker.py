@@ -44,64 +44,6 @@ from .train_batch import create_training_batch_from_rollouts
 logger = logging.getLogger(__name__)
 
 
-class StreamingRolloutLoader:
-    """Direct loader for streaming rollout data.
-
-    Rollouts are a continous stream of data, not really well modeled by the
-    default Levanter indexing API. Instead of implemented a Dataset, we
-    implement the expected data loader interface directly.
-    """
-
-    def __init__(
-        self,
-        data_loader: ReplayDataLoader,
-        config: TrainerConfig,
-        max_input_length: int,
-        max_output_length: int,
-        pad_token_id: int,
-    ):
-        """Initialize the streaming rollout loader.
-
-        Args:
-            data_loader: The replay data loader to get rollouts from
-            config: Trainer config with mesh and axis mapping information
-            max_input_length: Maximum input sequence length for padding
-            max_output_length: Maximum output sequence length for padding
-            pad_token_id: Token ID to use for padding
-        """
-        self.data_loader = data_loader
-        self.config = config
-        self.max_input_length = max_input_length
-        self.max_output_length = max_output_length
-        self.pad_token_id = pad_token_id
-        self.timeout = 60.0
-
-    def __iter__(self):
-        """Yield batches continuously from the replay buffer."""
-        while True:
-            rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
-            if not rollouts:
-                logger.warning("No rollouts received from data loader within timeout, retrying...")
-                continue
-
-            # Convert rollouts to training batch
-            batch = create_training_batch_from_rollouts(
-                rollouts, self.max_input_length, self.max_output_length, self.pad_token_id
-            )
-
-            # shard onto the device mesh
-            with self.config.device_mesh:
-                sharded_batch = hax.shard(batch, self.config.compute_axis_mapping)
-
-            yield sharded_batch
-
-
-class StopTrainerException(Exception):
-    """Exception to signal stopping the trainer."""
-
-    pass
-
-
 @dataclass
 class ReplayBufferConfig:
     """Configuration for the replay buffer."""
@@ -128,6 +70,10 @@ class TrainWorkerConfig:
 
     weight_transfer: WeightTransferConfig
 
+    max_input_length: int
+    max_output_length: int
+    pad_token_id: int
+
     # Unique run ID for checkpointing and logging
     # (Not sure why this isn't part of TrainerConfig)
     run_id: str
@@ -139,8 +85,64 @@ class TrainWorkerConfig:
     kl_coef: float = 0.1
 
 
+class StreamingRolloutLoader:
+    """Direct loader for streaming rollout data.
+
+    Rollouts are a continous stream of data, not really well modeled by the
+    default Levanter indexing API. Instead of implemented a Dataset, we
+    implement the expected data loader interface directly.
+    """
+
+    config: TrainWorkerConfig
+
+    def __init__(
+        self,
+        data_loader: ReplayDataLoader,
+        config: TrainWorkerConfig,
+    ):
+        """Initialize the streaming rollout loader.
+
+        Args:
+            data_loader: The replay data loader to get rollouts from
+            config: Trainer config with mesh and axis mapping information
+            max_input_length: Maximum input sequence length for padding
+            max_output_length: Maximum output sequence length for padding
+            pad_token_id: Token ID to use for padding
+        """
+        self.data_loader = data_loader
+        self.config = config
+        self.timeout = 60.0
+
+    def __iter__(self):
+        """Yield batches continuously from the replay buffer."""
+        while True:
+            rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
+            if not rollouts:
+                logger.warning("No rollouts received from data loader within timeout, retrying...")
+                continue
+
+            # Convert rollouts to training batch
+            batch = create_training_batch_from_rollouts(
+                rollouts, self.config.max_input_length, self.config.max_output_length, self.config.pad_token_id
+            )
+
+            # shard onto the device mesh
+            with self.config.trainer.device_mesh:
+                sharded_batch = hax.shard(batch, self.config.trainer.compute_axis_mapping)
+
+            yield sharded_batch
+
+
+class StopTrainerException(Exception):
+    """Exception to signal stopping the trainer."""
+
+    pass
+
+
 class TrainWorker:
     """Training worker that reads rollout data from a queue and trains the model using Levanter."""
+
+    config: TrainWorkerConfig
 
     def __init__(
         self,
@@ -172,17 +174,18 @@ class TrainWorker:
             capacity=config.replay_buffer.capacity,
             local_batch_size=config.trainer.train_batch_size,
             recency_alpha=config.replay_buffer.alpha,
-            max_samples=config.replay_buffer.max_samples,
-            max_input_length=getattr(config.model, "seq_len", 512),
-            max_output_length=getattr(config.model, "seq_len", 512),
-            pad_token_id=getattr(self.tokenizer, "pad_token_id", 0) or 0,
         )
-        self.data_loader = ReplayDataLoader(
+
+        self.replay_loader = ReplayDataLoader(
             rollout_reader=self.rollout_reader,
             replay_buffer=self.replay_buffer,
             rollout_fetch_interval=1.0,
         )
 
+        self.data_loader = StreamingRolloutLoader(
+            self.replay_loader,
+            config,
+        )
         self.transfer_server = weight_transfer.create_weight_transfer_server(
             config.weight_transfer,
             mesh=self.config.trainer.device_mesh,
@@ -227,7 +230,7 @@ class TrainWorker:
         @jax.jit
         def _loss_function(model, batch, key):
             return rloo_loss_with_importance_sampling(
-                model, self.reference_model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=5
+                model, self.reference_model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=10
             )
             # return ppo_loss(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.5)
 
@@ -235,7 +238,7 @@ class TrainWorker:
             config.trainer.device_mesh,
             hax.axis_mapping(config.trainer.compute_axis_mapping),
             Trainer(config.trainer, optimizer, _loss_function) as trainer,
-            self.data_loader,
+            self.replay_loader,
         ):
             seed = config.trainer.seed
             _, training_key = jrandom.split(jrandom.PRNGKey(seed), 2)
@@ -243,16 +246,9 @@ class TrainWorker:
             state = trainer.initial_state(training_key, model=self.reference_model)
 
             self._configure_training_hooks(trainer)
-            train_loader = StreamingRolloutLoader(
-                self.data_loader,
-                config.trainer,
-                self.replay_buffer.max_input_length,
-                self.replay_buffer.max_output_length,
-                self.replay_buffer.pad_token_id,
-            )
 
             try:
-                trainer.train(state, train_loader)
+                trainer.train(state, self.data_loader)
             except StopTrainerException:
                 pass
 

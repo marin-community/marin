@@ -58,9 +58,6 @@ class ReplayBuffer:
         recency_alpha: float,
         capacity: int,
         max_samples: int = -1,
-        max_input_length: int = 512,
-        max_output_length: int = 512,
-        pad_token_id: int = 0,
     ):
         """Initialize replay buffer.
 
@@ -71,9 +68,6 @@ class ReplayBuffer:
             train_process_id: Identifier for this process. Used to sample across processes.
             num_train_processes: Total number of training processes.
             max_samples: Maximum number of times an example can be used before being retired.
-            max_input_length: Maximum input sequence length for padding.
-            max_output_length: Maximum output sequence length for padding.
-            pad_token_id: Token ID to use for padding.
 
         A `max_samples` of -1 indicates no limit, 0 or 1 means each example is used at most once.
         """
@@ -83,9 +77,6 @@ class ReplayBuffer:
         self.total_processes = total_processes
         self.process_id = process_id
         self.max_samples = max_samples
-        self.max_input_length = max_input_length
-        self.max_output_length = max_output_length
-        self.pad_token_id = pad_token_id
 
         self.rollout_storage: dict[str, list[RolloutWithCount]] = {}
         self._lock = threading.Lock()

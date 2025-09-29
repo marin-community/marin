@@ -245,6 +245,9 @@ def create_nano_training_worker_config(
         trainer=create_nano_trainer_config(output_dir),
         optimizer=create_nano_optimizer_config(),
         weight_transfer=create_weight_transfer_config(),
+        max_input_length=16,
+        max_output_length=16,
+        pad_token_id=0,
         replay_buffer=ReplayBufferConfig(
             capacity=2048,
             alpha=3.0,

@@ -43,7 +43,6 @@ from transformers import AutoTokenizer, PreTrainedTokenizer
 from marin.post_training.environments.load_environments import load_environment_from_spec
 from marin.post_training.environments.marin_env import EnvResponse, InferenceContext
 
-from . import weight_transfer
 from .model_utils import load_model_from_checkpoint
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .rollout_types import (
@@ -52,7 +51,7 @@ from .rollout_types import (
     RolloutGroup,
     RolloutMetadata,
 )
-from .weight_transfer import WeightTransferConfig
+from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_weight_transfer_client
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +99,6 @@ def find_open_port() -> int:
 class LevanterInferenceContext(InferenceContext):
     """Context that uses Levanter model and inference server."""
 
-    model: Any
     inference_server: InferenceServer
     max_tokens: int
     _tokenizer: Any
@@ -108,13 +106,11 @@ class LevanterInferenceContext(InferenceContext):
 
     def __init__(
         self,
-        model,
         tokenizer,
         stop_tokens: list[int] | None,
         inference_server: InferenceServer,
         max_tokens: int,
     ):
-        self.model = model
         self.inference_server = inference_server
         self.max_tokens = max_tokens
         self._tokenizer = tokenizer
@@ -135,9 +131,6 @@ class LevanterInferenceContext(InferenceContext):
         n_generations: int,
     ) -> list[list[EnvResponse]]:
         """Generate responses for a batch of prompts."""
-        self.inference_server.reload(lambda model: self.model)
-
-        # Convert stop tokens to strings for OpenAI API
         stop_strings = None
         if self._stop_tokens is not None:
             stop_strings = [self._tokenizer.decode([token]) for token in self._stop_tokens]
@@ -209,7 +202,7 @@ class RolloutWorker:
     _server_thread: threading.Thread
     inference_server: InferenceServer
     policy_model: Any
-    transfer_client: weight_transfer.WeightTransferClient
+    transfer_client: WeightTransferClient
     rollout_writer: RolloutWriter
     _tokenizer: PreTrainedTokenizer
 
@@ -234,7 +227,8 @@ class RolloutWorker:
 
         self._start_inference_server()
 
-        self.transfer_client = weight_transfer.create_weight_transfer_client(
+        logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
+        self.transfer_client = create_weight_transfer_client(
             config.weight_transfer,
             mesh=self.config.trainer.device_mesh,
             axis_mapping=self.config.trainer.compute_axis_mapping,
@@ -308,7 +302,6 @@ class RolloutWorker:
 
         # Create policy inference context for sampling from the inference server
         policy_ctx = LevanterInferenceContext(
-            self.policy_model,
             tokenizer=self._tokenizer,
             inference_server=self.inference_server,
             max_tokens=self.config.max_input_length + self.config.max_output_length,
@@ -364,6 +357,7 @@ class RolloutWorker:
         if weights:
             logger.info("Received new weights for policy model")
             self.policy_model = weights
+            self.inference_server.reload(lambda model: self.policy_model)
             return weights
         else:
             logger.info("No new weights available for policy model")
