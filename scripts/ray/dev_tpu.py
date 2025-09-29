@@ -413,8 +413,7 @@ def hold_tpu_allocation(
 
     from src.marin.cluster.ray import DashboardConfig
 
-    config = DashboardConfig.from_cluster(config_file, ray_init=True)
-    with ray_utils.ray_dashboard(config):
+    with ray_utils.ray_dashboard(DashboardConfig.from_cluster(config_file, ray_init=True)):
         try:
             logger.info(f"Creating TPU allocation actor for {tpu_name}")
             actor = ray.remote(resources={"TPU": 4, f"TPU-{tpu_type}-head": 1})(TPUAllocationActor).remote(

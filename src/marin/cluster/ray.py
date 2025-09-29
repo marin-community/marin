@@ -21,7 +21,6 @@ import shutil
 import socket
 import subprocess
 import tempfile
-import threading
 import time
 from collections import Counter
 from collections.abc import Generator
@@ -34,6 +33,7 @@ import requests
 import yaml
 
 from .config import RayClusterConfig
+from .dashboard_proxy import DashboardProxy
 
 logger = logging.getLogger(__name__)
 
@@ -70,13 +70,13 @@ class DashboardConnection:
     clusters: dict[str, ClusterInfo]  # cluster_name -> info
     port_mappings: dict[str, tuple[int, int, int]]  # cluster_name -> (dashboard, gcs, api)
     ssh_process: subprocess.Popen
-    proxy_thread: threading.Thread | None = None
-    proxy_url: str | None = None
+    proxy: "DashboardProxy | None" = None
 
     def get_dashboard_url(self, cluster_name: str | None = None) -> str:
         """Get dashboard URL for a specific cluster or the proxy URL."""
-        if self.proxy_url and len(self.clusters) > 1:
-            return f"{self.proxy_url}/{cluster_name}" if cluster_name else self.proxy_url
+        if self.proxy and len(self.clusters) > 1:
+            proxy_url = f"http://localhost:{self.proxy.proxy_port}"
+            return f"{proxy_url}/{cluster_name}" if cluster_name else proxy_url
 
         # Single cluster or specific cluster requested
         name = cluster_name or next(iter(self.clusters.keys()))
@@ -84,17 +84,27 @@ class DashboardConnection:
         return f"http://localhost:{dashboard_port}"
 
 
-def find_free_port() -> int:
-    """Find a free port on the local machine.
+def find_free_port(start_port: int = 9000, max_attempts: int = 1000) -> int:
+    """Find a free port on the local machine by scanning from start_port.
+
+    Args:
+        start_port: Port to start scanning from
+        max_attempts: Maximum number of ports to try
 
     Returns:
         An available port number
+
+    Raises:
+        RuntimeError: If no free port found within max_attempts
     """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        s.listen(1)
-        port = s.getsockname()[1]
-    return port
+    for port in range(start_port, start_port + max_attempts):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("", port))
+                return port
+        except OSError:
+            continue
+    raise RuntimeError(f"No free port found in range {start_port}-{start_port + max_attempts}")
 
 
 TPU_TYPE_TO_VM_IMAGE = {
@@ -209,26 +219,23 @@ class DashboardInfo:
 
 
 def allocate_ports(clusters: dict[str, ClusterInfo]) -> dict[str, tuple[int, int, int]]:
-    """Allocate local ports for each cluster.
+    """Allocate local ports for each cluster using Ray's traditional ports.
 
-    Single cluster uses default ports (8265, 6379, 10001).
-    Multiple clusters use sequential ranges starting at 8000.
+    First cluster uses Ray defaults: 8265 (dashboard), 6379 (GCS), 10001 (API).
+    Additional clusters scan upward from these starting points.
     """
     port_mappings = {}
 
-    if len(clusters) == 1:
-        # Single cluster - use existing default ports
-        cluster_name = next(iter(clusters.keys()))
-        ports = set()
-        while len(ports) < 3:
-            ports.add(find_free_port())
-        dashboard_port, gcs_port, api_port = list(ports)
+    # Ray's traditional port assignments
+    dashboard_start = 8265
+    gcs_start = 6379
+    api_start = 10001
+
+    for i, cluster_name in enumerate(sorted(clusters.keys())):
+        dashboard_port = find_free_port(dashboard_start + i)
+        gcs_port = find_free_port(gcs_start + i)
+        api_port = find_free_port(api_start + i)
         port_mappings[cluster_name] = (dashboard_port, gcs_port, api_port)
-    else:
-        # Multiple clusters - use sequential ranges
-        for i, cluster_name in enumerate(sorted(clusters.keys())):
-            base_port = 8000 + (i * 10)
-            port_mappings[cluster_name] = (base_port, base_port + 1, base_port + 2)
 
     return port_mappings
 
@@ -357,25 +364,13 @@ def create_ssh_proxy_chain(
     for cluster_name in cluster_names:
         cluster = clusters[cluster_name]
         dashboard_port, gcs_port, api_port = port_mappings[cluster_name]
-
-        if cluster_name == cluster_names[0]:
-            # First cluster - direct forward to localhost
-            ssh_cmd.extend(
-                [
-                    f"-L{dashboard_port}:localhost:8265",
-                    f"-L{gcs_port}:localhost:6379",
-                    f"-L{api_port}:localhost:10001",
-                ]
-            )
-        else:
-            # Other clusters - forward through SSH to internal IP
-            ssh_cmd.extend(
-                [
-                    f"-L{dashboard_port}:{cluster.head_ip}:8265",
-                    f"-L{gcs_port}:{cluster.head_ip}:6379",
-                    f"-L{api_port}:{cluster.head_ip}:10001",
-                ]
-            )
+        ssh_cmd.extend(
+            [
+                f"-L{dashboard_port}:{cluster.head_ip}:8265",
+                f"-L{gcs_port}:{cluster.head_ip}:6379",
+                f"-L{api_port}:{cluster.head_ip}:10001",
+            ]
+        )
 
     # Connect to first cluster's external IP
     first_external_ip = get_head_ip_from_config(first_cluster.config_path)
@@ -392,26 +387,36 @@ def create_ssh_proxy_chain(
 
 
 def wait_for_tunnel(
-    clusters: dict[str, ClusterInfo], port_mappings: dict[str, tuple[int, int, int]], timeout: int = 30
+    clusters: dict[str, ClusterInfo], port_mappings: dict[str, tuple[int, int, int]], timeout: int = 10
 ) -> None:
     """Wait for SSH tunnel to be ready by testing dashboard connections."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def check_dashboard(cluster_name: str, dashboard_port: int) -> tuple[str, bool]:
+        """Check if a dashboard is accessible."""
+        try:
+            response = requests.get(f"http://localhost:{dashboard_port}/api/version", timeout=5)
+            return (cluster_name, response.status_code == 200)
+        except (requests.ConnectionError, requests.Timeout):
+            return (cluster_name, False)
+
     max_retries = timeout
     retry_delay = 1
 
     for attempt in range(max_retries):
-        all_ready = True
-        for cluster_name in clusters:
-            dashboard_port = port_mappings[cluster_name][0]
-            try:
-                response = requests.get(f"http://localhost:{dashboard_port}/api/version", timeout=5)
-                if response.status_code != 200:
-                    all_ready = False
-                    break
-            except (requests.ConnectionError, requests.Timeout):
-                all_ready = False
-                break
+        # Test all dashboards concurrently
+        with ThreadPoolExecutor(max_workers=len(clusters)) as executor:
+            futures = {
+                executor.submit(check_dashboard, cluster_name, port_mappings[cluster_name][0]): cluster_name
+                for cluster_name in clusters
+            }
 
-        if all_ready:
+            results = {}
+            for future in as_completed(futures):
+                cluster_name, is_ready = future.result()
+                results[cluster_name] = is_ready
+
+        if all(results.values()):
             logger.info("SSH tunnel is ready - all dashboards accessible")
             return
 
@@ -480,12 +485,9 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
         os.environ["RAY_DASHBOARD_ADDRESS"] = f"http://localhost:{dashboard_port}"
     else:
         # Multiple clusters - start Flask proxy
-        from .dashboard_proxy import DashboardProxy
-
         proxy = DashboardProxy(clusters, port_mappings, config.proxy_port)
         proxy.start()
-        connection.proxy_thread = proxy.thread
-        connection.proxy_url = f"http://localhost:{config.proxy_port}"
+        connection.proxy = proxy
 
     try:
         # Initialize Ray if requested (single cluster only)
@@ -500,14 +502,12 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
 
     finally:
         # Cleanup
+        if connection.proxy:
+            connection.proxy.stop()
+
         if ssh_process and ssh_process.poll() is None:
             ssh_process.terminate()
             ssh_process.wait()
-
-        # Stop proxy if running
-        if connection.proxy_thread:
-            # The proxy will be stopped when the thread is stopped
-            pass
 
         # Restore environment variables if changed
         for key, value in original_env.items():
