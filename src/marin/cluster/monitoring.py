@@ -20,8 +20,7 @@ from collections import Counter
 from typing import Any
 
 from .gcp import list_tpu_nodes
-from .ray import get_cluster_utilization
-from .ray import list_nodes as get_ray_nodes
+from .ray import get_cluster_utilization, list_nodes
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +114,7 @@ def collect_ray_metrics() -> dict[str, Any]:
     """Collect Ray cluster metrics."""
     try:
         utilization = get_cluster_utilization()
-        nodes = get_ray_nodes()
+        nodes = list_nodes()
 
         # Count nodes by status
         node_status = Counter()
@@ -125,7 +124,7 @@ def collect_ray_metrics() -> dict[str, Any]:
 
         return {"utilization": utilization, "node_status": dict(node_status), "timestamp": time.time()}
     except Exception as e:
-        logger.error(f"Failed to collect Ray metrics: {e}")
+        logger.error("Failed to collect Ray metrics.", exc_info=True)
         return {"error": str(e), "timestamp": time.time()}
 
 
