@@ -54,7 +54,8 @@ class HELMEvaluator(VllmTpuEvaluator):
         Returns the runtime environment to run the evaluator on the Ray cluster.
         """
         return build_runtime_env_for_packages(
-            pip_packages=["crfm-helm@git+https://github.com/stanford-crfm/helm.git@chiheem/local_vllm_20250902"]
+            extra=["eval", "tpu"], 
+            pip_packages=["crfm-helm@git+https://github.com/stanford-crfm/helm.git@local_vllm_20250902"]
         )
 
     @staticmethod

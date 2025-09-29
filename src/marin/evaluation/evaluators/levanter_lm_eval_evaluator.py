@@ -51,7 +51,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         Returns the runtime environment to run the evaluator on the Ray cluster.
         """
         return build_runtime_env_for_packages(
-            extra=[],
+            extra=["eval", "tpu"],
             pip_packages=[
                 "antlr4-python3-runtime==4.11", # Required by lm-eval[math]
                 "haliax>=1.4.dev348",
