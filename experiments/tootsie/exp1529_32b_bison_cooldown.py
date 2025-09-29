@@ -31,6 +31,7 @@ from experiments.tootsie.exp1395_qwen3_32b import (
     qwen_32b_warmstart_train,
 )
 from experiments.evals.evals import default_base_eval
+from experiments.models import ModelConfig, download_model_step
 from experiments.nemotron_cc.tokenize_nemotron import (
     NEMOTRON_WEIGHTS,
     tokenize_nemotron_steps,
@@ -38,10 +39,10 @@ from experiments.nemotron_cc.tokenize_nemotron import (
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.tootsie.exp600_tootsie import phase_3_tokenized, starling_components
-from marin.execution import executor_main
+from marin.execution import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
-from experiments.evals.resource_configs import SINGLE_TPU_V4_16, SINGLE_TPU_V4_8
+from experiments.evals.resource_configs import SINGLE_TPU_V5p_8
 
 PHASE_3_START = 160_000
 PHASE_3_END = 192_000  # 20% of Training for Cooldown
