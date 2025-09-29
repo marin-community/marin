@@ -105,6 +105,13 @@ class DashboardProxy:
         self.thread.start()
         logger.info(f"Dashboard proxy started at http://localhost:{self.proxy_port}")
 
+        # iterate over clusters and log their dashboard URLs
+        for name in self.clusters:
+            dashboard_port = self.port_mappings[name][0]
+            logger.info(
+                f"Cluster '{name}' dashboard available at http://localhost:{dashboard_port} or http://localhost:{self.proxy_port}/{name}/"
+            )
+
     def stop(self):
         """Stop proxy server."""
         if self.server:
