@@ -11,10 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 from typing import NamedTuple, Protocol, TypedDict
 
 import numpy as np
+from levanter.compat.hf_checkpoints import HfTokenizer
 
 
 class EnvResponse(TypedDict):
@@ -164,3 +164,29 @@ class MarinEnv:
                 computed rewards, and collected metrics from this environment step.
         """
         raise NotImplementedError("Subclasses must implement the step method")
+
+
+def load_environment_from_spec(env_spec: str, tokenizer: HfTokenizer) -> MarinEnv:
+    """Load environment from spec string."""
+    env_name = env_spec.split(":")[0]
+    env_args = {}
+    if ":" in env_name:
+        env_arg_str = env_spec.split(":")[1]
+        for arg in env_arg_str.split(","):
+            key, value = arg.split("=")
+            env_args[key] = value
+
+    if env_name == "math":
+        from .math_env import MathEnvironment
+
+        return MathEnvironment(tokenizer=tokenizer, spec=env_spec)
+    elif env_name == "mock":
+        from .mock_env import MockEnvironment
+
+        return MockEnvironment(tokenizer=tokenizer, spec=env_spec)
+    elif env_name == "prime_intellect":
+        from .prime_intellect_env import PrimeIntellectEnvironment
+
+        return PrimeIntellectEnvironment(tokenizer=tokenizer, spec=env_spec)
+    else:
+        raise ValueError(f"Unknown environment spec: {env_spec}")
