@@ -106,7 +106,7 @@ def create_training_batch_from_rollouts(
     """Create a training batch from a list of individual rollouts.
 
     Args:
-        individual_rollouts: List of IndividualRollout objects with precomputed advantages
+        individual_rollouts: List of RolloutWithAdvantage objects with precomputed advantages
         max_input_length: Maximum input sequence length for padding
         max_output_length: Maximum output sequence length for padding
         pad_token_id: Token ID to use for padding

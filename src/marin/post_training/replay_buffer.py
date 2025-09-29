@@ -108,7 +108,7 @@ class ReplayBuffer:
             for group in batch.groups:
                 # Compute RLOO advantages for the group
                 advantages = group.compute_rloo_advantages()
-                for rollout, advantage in zip(group.rollouts, advantages, strict=False):
+                for rollout, advantage in zip(group.rollouts, advantages, strict=True):
                     individual = RolloutWithCount(rollout=rollout, advantage=advantage, usage_count=0)
                     env_examples[rollout.env_name].append(individual)
 

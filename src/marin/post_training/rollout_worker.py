@@ -159,18 +159,16 @@ class LevanterInferenceContext(InferenceContext):
 
             batch_results = []
             for completion in completions:
+                prompt_results = []
+                # drop responses that failed.
                 if isinstance(completion, Exception):
                     logger.error(f"Error during generation: {completion}")
-                    prompt_results = [{"tokens": np.array([]), "logprobs": np.array([])} for _ in range(n_generations)]
-                    batch_results.append(prompt_results)
-                    continue
-
-                prompt_results = []
-                for choice in completion.choices:
-                    content = choice.message.content
-                    tokens = self.tokenizer.encode(content)
-                    logprobs = [t.logprob for t in choice.logprobs.content]
-                    prompt_results.append({"tokens": np.array(tokens), "logprobs": np.array(logprobs)})
+                else:
+                    for choice in completion.choices:
+                        content = choice.message.content
+                        tokens = self.tokenizer.encode(content)
+                        logprobs = [t.logprob for t in choice.logprobs.content]
+                        prompt_results.append(EnvResponse(tokens=np.array(tokens), logprobs=np.array(logprobs)))
                 batch_results.append(prompt_results)
             return batch_results
 

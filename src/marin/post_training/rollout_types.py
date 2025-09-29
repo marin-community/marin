@@ -68,7 +68,7 @@ class RolloutWithAdvantage:
     """A rollout paired with its computed advantage."""
 
     rollout: Rollout
-    advantage: np.ndarray
+    advantage: float
 
 
 class TrainingBatch(eqx.Module):
