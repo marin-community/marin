@@ -19,7 +19,7 @@ This file is intentionally self-contained:
 - Defines a compact, Llama-ish transformer that implements Levanter's LmHeadModel
 - Provides a ready-to-run speedrun sweep across multiple model sizes
 
-(this example compares using / not using gpt-oss style attention sink)
+(this example allows comparing using / not using gpt-oss style attention sink)
 
 How to run (GPU or TPU):
   1) Set env vars (WANDB_API_KEY, HF_TOKEN, etc.) as in the tutorial:
@@ -307,7 +307,6 @@ class HackableEmbedding(ModuleWithStateDictSerialization, eqx.Module):
 class HackableLMHeadModel(
     ModuleWithStateDictSerialization,
     LmHeadModel[HackableTransformerConfig],
-    # eqx.Module,
 ):
     """Minimal Llama-like implementation of LmHeadModel"""
 
@@ -349,14 +348,7 @@ class HackableLMHeadModel(
         return self.embeddings.token_embeddings.weight if self.lm_head is None else self.lm_head.weight
 
     def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "HackableLMHeadModel":
-        new_V = self.Vocab.resize(new_size)
-        k1, k2 = maybe_rng_split(key, 2)
-        new_emb = self.embeddings.resize_embeddings(new_size, key=k1)
-        if self.lm_head is not None:
-            new_w = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_head = dataclasses.replace(self.lm_head, Out=new_V, weight=new_w)
-            return dataclasses.replace(self, embeddings=new_emb, lm_head=new_head)
-        return dataclasses.replace(self, embeddings=new_emb)
+        pass
 
 
 # =========================
@@ -528,7 +520,7 @@ if __name__ == "__main__":
 
     sizes = ["130m", "300m", "520m", "1_2b"]
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
-    sink = True
+    sink = False
     steps = []
     for s in sizes:
         name, cfg = build_run(s, sink, use_gpu=use_gpu)
