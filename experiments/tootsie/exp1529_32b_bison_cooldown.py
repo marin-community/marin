@@ -186,7 +186,8 @@ tootsie_32b_cooldown_bison_flat = default_train(
 baselines = [
     ("Qwen/Qwen3-32B", "9216db5781bf21249d130ec9da846c4624c16137"),
     ("Qwen/Qwen2.5-32B", "1818d35814b8319459f4bd55ed1ac8709630f003"),
-    # ("allenai/OLMo-2-0325-32B", "stage2-ingredient3-step9000-tokens76B"), OLMo 32B is currently borked on our eval harness so we will evaluate with GPU
+    # ("allenai/OLMo-2-0325-32B", "stage2-ingredient3-step9000-tokens76B"),
+    # OLMo 32B is currently borked on our eval harness so we will evaluate with GPU
 ]
 baseline_evals = []
 for model, revision in baselines:
@@ -203,9 +204,9 @@ for model, revision in baselines:
 if __name__ == "__main__":
     executor_main(
         [
-            # tootsie_32b_cooldown_bison,
-            # *default_base_eval(tootsie_32b_cooldown_bison, resource_config=SINGLE_TPU_V5p_8, run_generation_evals=False),
-            *baseline_evals
+            tootsie_32b_cooldown_bison,
+            *default_base_eval(tootsie_32b_cooldown_bison, resource_config=SINGLE_TPU_V5p_8, run_generation_evals=False),
+            *baseline_evals,
         ],
         description="Cooldown the 32B Qwen model on bison mixture",
     )
