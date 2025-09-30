@@ -22,7 +22,7 @@ If a bad batch is detected (e.g., due to timeout), the failing batch is written
 to /tmp/failing_batch.json for further analysis.
 
 Usage:
-    uv run src/marin/post_training/scripts/replay_completions.py \
+    uv run src/marin/rl/scripts/replay_completions.py \
         --requests math_prompts.json \
         --checkpoint meta-llama/Llama-3.2-1B-Instruct \
         --timeout 30 \

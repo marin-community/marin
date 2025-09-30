@@ -102,8 +102,6 @@ def run_rl_training_on_pod(config: RLTrainConfig):
     #     else:
     #         logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
 
-    # Use the default env when running on the driver (Ray doesn't support otherwise.)
-    # runtime_env = ray_deps.build_runtime_env_for_packages(extra=["tpu", "post_training"])
     runtime_env = RuntimeEnv()
 
     train_pod_config = TpuPodConfig(tpu_type=config.train_tpu_type, runtime_env=runtime_env)

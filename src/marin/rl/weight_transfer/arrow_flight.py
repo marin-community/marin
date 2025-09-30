@@ -17,6 +17,12 @@ Apache Arrow Flight-based weight transfer implementation.
 
 This module provides weight transfer using Apache Arrow Flight RPC for
 high-performance binary communication between training and inference workers.
+
+Architecture:
+- Server spawns multiple flight server instances (default 16) for parallel serving
+- Each model parameter is served as a separate flight, enabling parallel fetching
+- Client uses a thread pool to fetch parameters in parallel from multiple servers
+- Load balancing via consistent hashing of parameter names to server instances
 """
 
 import dataclasses
@@ -26,6 +32,7 @@ import threading
 import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from functools import partial
 
 import haliax as hax
@@ -51,37 +58,32 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass
+class ServerInfo:
+    """Information about available weights and servers."""
+
+    weight_id: int | None
+    server_addresses: list[str]
+    param_names: list[str]
+
+
 # The maximum number of array elements in a single Arrow RecordBatch.
 # Larger arrays are chunked into multiple RecordBatches to avoid hitting Arrow limits.
 # We assume our largest dtype is 4 bytes (e.g., float32/int32).
-MAX_ELEMENTS_PER_RECORD = (2000 * 1000 * 1000) / 4
+MAX_ELEMENTS_PER_RECORD = (2000 * 1000 * 1000) // 4
+
+# Thread pool configuration for parallel serving and fetching
+NUM_PARALLEL_SERVERS = 16
 
 
 def _create_binary_array(buffer_data: jax.Array) -> pa.Array:
     """Create a PyArrow binary array from buffer data."""
-    # dlpack_capsule = jax.dlpack.to_dlpack(buffer_data)
     block = pa.py_buffer(buffer_data)
     return pa.Array.from_buffers(
         pa.large_binary(),
         1,  # length
         [None, pa.array([0, len(block)], type=pa.int64()).buffers()[1], block],
-    )
-
-
-def _create_record_batch(
-    schema: pa.Schema, name: str, binary_array: pa.Array, shape: tuple, dtype: str, part_idx: int, total_parts: int
-) -> pa.RecordBatch:
-    """Create a RecordBatch with the standard schema."""
-    return pa.RecordBatch.from_arrays(
-        [
-            pa.array([name], type=pa.string()),
-            pa.array(binary_array, type=pa.large_binary()),
-            pa.array([list(shape)], type=pa.list_(pa.int64())),
-            pa.array([str(dtype)], type=pa.string()),
-            pa.array([part_idx], type=pa.int64()),
-            pa.array([total_parts], type=pa.int64()),
-        ],
-        schema=schema,
     )
 
 
@@ -162,13 +164,12 @@ def update_model(old_model, new_state_dict):
     return hsd.from_state_dict(old_model, new_state_dict)
 
 
-def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader, target_model: PyTree) -> jax.Array:
+def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -> jax.Array:
     """Convert Arrow RecordBatch back to a single parameter array.
 
     Args:
         param_name: Name of the parameter being deserialized
         reader: Arrow RecordBatch reader containing the parameter data
-        target_model: Template model to preserve structure
 
     Returns:
         JAX array for the parameter
@@ -202,7 +203,7 @@ def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader, t
         res = jax.numpy.asarray(array_np)
         ed = time.time()
         if ed - st > 0.1:
-            logger.info(f"Deserialized param {param_name} of shape {shape} and dtype {dtype} in {ed - st:.2f}s")
+            logger.debug(f"Deserialized param {param_name} of shape {shape} and dtype {dtype} in {ed - st:.2f}s")
         return res
 
 
@@ -210,55 +211,40 @@ def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader, t
 class ArrowFlightCoordinator:
     """Ray actor for coordinating Arrow Flight weight transfers."""
 
+    _server_info = ServerInfo | None
+
     def __init__(self):
-        self.server_address = None
-        self.latest_weight_id = None
-        self.server_location = None
-        self.available_params: dict[int, list[str]] = {}
-        self.all_server_locations: list[tuple[str, int]] = []
+        self._server_info = None
 
-    def register_server(self, server_address: str, server_port: int) -> None:
-        """Register the Arrow Flight server address."""
-        self.server_address = server_address
-        self.server_port = server_port
-        self.server_location = f"grpc://{server_address}:{server_port}"
-        logger.info(f"Registered Arrow Flight server at {self.server_location}")
+    def update_server(self, weight_id: int, param_names: list[str], server_locations: list[tuple[str, int]]) -> None:
+        """Update server state atomically with new weights and server locations."""
+        self._server_info = ServerInfo(
+            weight_id=weight_id,
+            server_addresses=[f"grpc://{host}:{port}" for host, port in server_locations],
+            param_names=param_names,
+        )
+        logger.info(f"Updated server: weight_id={weight_id}, params={len(param_names)}, servers={len(server_locations)}")
+        return 123
 
-    def register_all_servers(self, server_locations: list[tuple[str, int]]) -> None:
-        """Register all server locations for load balancing."""
-        self.all_server_locations = server_locations
-        logger.info(f"Registered {len(server_locations)} Arrow Flight servers")
-
-    def get_server_info(self) -> tuple[str | None, int | None]:
-        """Get the current server location and latest weight ID."""
-        return self.server_location, self.latest_weight_id
-
-    def get_all_server_locations(self) -> list[str]:
-        """Get all server locations for parallel fetching."""
-        return [f"grpc://{host}:{port}" for host, port in self.all_server_locations]
-
-    def update_weight_id(self, weight_id: int, param_names: list[str]) -> None:
-        """Update the latest weight ID and register available params atomically."""
-        if self.latest_weight_id is None or weight_id > self.latest_weight_id:
-            self.available_params[weight_id] = param_names
-            self.latest_weight_id = weight_id
-            logger.info(f"Updated latest weight ID to {weight_id} with {len(param_names)} params")
-
-    def get_available_params(self, weight_id: int) -> list[str] | None:
-        """Get the list of available param names for a weight_id."""
-        return self.available_params.get(weight_id)
+    def fetch_server(self) -> ServerInfo:
+        """Fetch current server state including weight ID, server addresses, and param names."""
+        return self._server_info
 
 
 class MarinFlightServer(flight.FlightServerBase):
     """Arrow Flight server for serving model weights."""
 
-    weights_store: dict[int, dict[str, tuple[pa.Schema, Sequence[pa.RecordBatch]]]]
+    config: WeightTransferConfig
+    _weights_store: dict[int, dict[str, tuple[pa.Schema, Sequence[pa.RecordBatch]]]]
+    _latest_weight_id: int | None
+    _lock: threading.Lock
+    _location: str
 
     def __init__(self, location: str, config: WeightTransferConfig):
         super().__init__(location)
         self.config = config
-        self.weights_store = {}
-        self.latest_weight_id = None
+        self._weights_store = {}
+        self._latest_weight_id = None
         self._lock = threading.Lock()
         self._location = location
 
@@ -278,11 +264,11 @@ class MarinFlightServer(flight.FlightServerBase):
             weight_id = int(weight_id_str)
 
             with self._lock:
-                if weight_id not in self.weights_store:
-                    logger.warning(f"Requested weight_id {weight_id} not found in store, using latest.")
-                    weight_id = self.latest_weight_id
+                if weight_id != self._latest_weight_id:
+                    logger.warning(f"Requested weight_id {weight_id} stale, returning {self._latest_weight_id}")
+                    weight_id = self._latest_weight_id
 
-                (schema, batches) = self.weights_store[weight_id][param_name]
+                (schema, batches) = self._weights_store[weight_id][param_name]
 
             return flight.RecordBatchStream(pa.RecordBatchReader.from_batches(schema, batches))
 
@@ -293,7 +279,7 @@ class MarinFlightServer(flight.FlightServerBase):
     def list_flights(self, context, criteria):
         """List available weight transfers."""
         with self._lock:
-            for weight_id, params_dict in self.weights_store.items():
+            for weight_id, params_dict in self._weights_store.items():
                 for param_name, (schema, batches) in params_dict.items():
                     ticket_str = f"{weight_id}/{param_name}"
                     descriptor = flight.FlightDescriptor.for_command(ticket_str)
@@ -309,18 +295,16 @@ class MarinFlightServer(flight.FlightServerBase):
                     yield info
 
     def store_weights(self, weight_id: int, params_dict: dict[str, tuple[pa.Schema, Sequence[pa.RecordBatch]]]) -> None:
-        """Store weights in the server atomically."""
         with self._lock:
             # remove all other weights
-            self.weights_store.clear()
-            self.weights_store[weight_id] = params_dict
-            self.latest_weight_id = weight_id
-            logger.info(f"Stored {len(params_dict)} params for weight_id {weight_id}")
+            self._weights_store.clear()
+            self._weights_store[weight_id] = params_dict
+            self._latest_weight_id = weight_id
 
     def get_latest_weight_id(self) -> int | None:
         """Get the latest weight ID."""
         with self._lock:
-            return self.latest_weight_id
+            return self._latest_weight_id
 
 
 class ArrowFlightServer(WeightTransferServer):
@@ -328,14 +312,26 @@ class ArrowFlightServer(WeightTransferServer):
 
     Uses Haliax state_dict for proper serialization of model parameters.
     Spawns multiple flight server instances for parallel serving.
+
+    Threading model: Each flight server runs in its own daemon thread via serve().
     """
+
+    config: WeightTransferConfig
+    mesh: Mesh | None
+    axis_mapping: ResourceMapping | None
+    num_servers: int
+    _flight_servers: list[MarinFlightServer]
+    _server_threads: list[threading.Thread]
+    _server_locations: list[str]
+    coordinator: ray.actor.ActorHandle
+    metrics: WeightTransferServerMetrics
 
     def __init__(
         self,
         config: WeightTransferConfig,
         mesh: Mesh | None = None,
         axis_mapping: ResourceMapping | None = None,
-        num_servers: int = 16,
+        num_servers: int = NUM_PARALLEL_SERVERS,
     ):
         self.config = config
         self.mesh = mesh
@@ -343,9 +339,9 @@ class ArrowFlightServer(WeightTransferServer):
         self.num_servers = num_servers
 
         # Start multiple Flight servers
-        self.flight_servers = []
+        self._flight_servers = []
         self._server_threads = []
-        self.server_locations = []
+        self._server_locations = []
 
         actual_host = config.flight_host if config.flight_host != "0.0.0.0" else socket.gethostname()
 
@@ -358,8 +354,8 @@ class ArrowFlightServer(WeightTransferServer):
             actual_port = flight_server.port
             server_location = f"grpc://{actual_host}:{actual_port}"
 
-            self.flight_servers.append(flight_server)
-            self.server_locations.append(server_location)
+            self._flight_servers.append(flight_server)
+            self._server_locations.append(server_location)
 
             # Start the server in a background thread
             server_thread = threading.Thread(target=flight_server.serve, daemon=True)
@@ -368,15 +364,8 @@ class ArrowFlightServer(WeightTransferServer):
 
             logger.info(f"Arrow Flight server {i} started at {server_location}")
 
-        # Register with coordinator (use first server's location for compatibility)
+        # Get coordinator
         self.coordinator = get_or_create_actor(ArrowFlightCoordinator, config.coordinator_name)
-        first_port = self.flight_servers[0].port
-        ray.get(self.coordinator.register_server.remote(actual_host, first_port))
-
-        # Also register all server locations
-        ray.get(
-            self.coordinator.register_all_servers.remote([(actual_host, server.port) for server in self.flight_servers])
-        )
 
         self.metrics = WeightTransferServerMetrics()
 
@@ -397,24 +386,27 @@ class ArrowFlightServer(WeightTransferServer):
                 params_dict = serialize_pytree_to_arrow(model, weight_id)
                 serialize_time = time.time()
 
-                for flight_server in self.flight_servers:
+                for flight_server in self._flight_servers:
                     flight_server.store_weights(weight_id, params_dict)
 
                 store_time = time.time()
 
-                # Update coordinator with param names
+                # Update coordinator with weight info and server locations
                 param_names = list(params_dict.keys())
-                ray.get(self.coordinator.update_weight_id.remote(weight_id, param_names))
+                actual_host = self.config.flight_host if self.config.flight_host != "0.0.0.0" else socket.gethostname()
+                server_locations = [(actual_host, server.port) for server in self._flight_servers]
+                ray.get(self.coordinator.update_server.remote(weight_id, param_names, server_locations))
                 update_time = time.time()
 
                 self.metrics.successful_transfers += 1
 
+                logger.info(
+                    f"Served weights for weight_id {weight_id}. serialize={serialize_time - start_time:.2f}s, "
+                    f"store={store_time - serialize_time:.2f}s, "
+                    f"update={update_time - store_time:.2f}s"
+                )
+
             barrier_sync()
-            logger.info(
-                f"Served weights for weight_id {weight_id}. serialize={serialize_time - start_time:.2f}s, "
-                f"store={store_time - serialize_time:.2f}s, "
-                f"update={update_time - store_time:.2f}s"
-            )
 
         except Exception as e:
             self.metrics.failed_transfers += 1
@@ -423,11 +415,14 @@ class ArrowFlightServer(WeightTransferServer):
 
     def cleanup(self) -> None:
         """Cleanup Flight server resources."""
-        for i, flight_server in enumerate(self.flight_servers):
-            try:
-                flight_server.shutdown()
-            except Exception as e:
-                logger.warning(f"Error during Arrow Flight server {i} cleanup: {e}")
+        # shutdown servers in parallel in a pool
+        with ThreadPoolExecutor(max_workers=self.num_servers) as executor:
+            futures = [executor.submit(server.shutdown) for server in self._flight_servers]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.warning(f"Error during Arrow Flight server shutdown: {e}")
 
     def get_metrics(self) -> WeightTransferServerMetrics:
         """Get transfer metrics."""
@@ -435,11 +430,15 @@ class ArrowFlightServer(WeightTransferServer):
 
 
 class ArrowFlightClient(WeightTransferClient):
-    """Arrow Flight-based weight transfer client for Haliax/Equinox models.
+    """Arrow Flight-based weight transfer client for Haliax/Equinox models."""
 
-    Uses Haliax state_dict for proper deserialization of model parameters.
-    """
-
+    config: WeightTransferConfig
+    mesh: Mesh | None
+    axis_mapping: ResourceMapping | None
+    _last_weight_id: int | None
+    _flight_clients: list[flight.FlightClient]
+    _server_locations: list[str]
+    metrics: WeightTransferClientMetrics
     _coordinator: ray.actor.ActorHandle
     _receive_pool: ThreadPoolExecutor
 
@@ -453,41 +452,31 @@ class ArrowFlightClient(WeightTransferClient):
         # Get coordinator
         self._coordinator = get_or_create_actor(ArrowFlightCoordinator, config.coordinator_name)
 
-        self.last_weight_id = None
-        self.flight_clients: list[flight.FlightClient] = []
-        self.server_locations: list[str] = []
+        self._last_weight_id = None
+        self._flight_clients = []
+        self._server_locations = []
 
         self.metrics = WeightTransferClientMetrics()
-        self._receive_pool = ThreadPoolExecutor(max_workers=16)
+        self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_SERVERS)
 
-    def _connect_to_servers(self) -> bool:
+    def _connect_to_servers(self, new_locations) -> bool:
         """Connect to all Arrow Flight servers."""
         try:
-            # Get all server locations
-            new_locations = ray.get(self._coordinator.get_all_server_locations.remote())
-
-            if not new_locations:
-                # Fall back to single server
-                server_location, _ = ray.get(self._coordinator.get_server_info.remote())
-                if server_location is None:
-                    return False
-                new_locations = [server_location]
-
             # Connect to new servers
-            if set(new_locations) != set(self.server_locations):
+            if set(new_locations) != set(self._server_locations):
                 # Close old clients
-                for client in self.flight_clients:
+                for client in self._flight_clients:
                     client.close()
-                self.flight_clients.clear()
+                self._flight_clients.clear()
 
                 # Create new clients
                 for loc in new_locations:
-                    self.flight_clients.append(
+                    self._flight_clients.append(
                         flight.FlightClient(loc, generic_options=[("grpc.per_message_compression", "0")])
                     )
-                    logger.info(f"Connected to Arrow Flight server at {loc}")
+                    logger.debug(f"Connected to Arrow Flight server at {loc}")
 
-                self.server_locations = new_locations
+                self._server_locations = new_locations
 
             return True
 
@@ -505,9 +494,9 @@ class ArrowFlightClient(WeightTransferClient):
         )
         call_options = pa.flight.FlightCallOptions(read_options=read_options)
 
-        server_id = hash(param_name) % len(self.flight_clients)
-        reader = self.flight_clients[server_id].do_get(ticket, options=call_options).to_reader()
-        param_array = deserialize_arrow_to_pytree(param_name, reader, None)
+        server_id = hash(param_name) % len(self._flight_clients)
+        reader = self._flight_clients[server_id].do_get(ticket, options=call_options).to_reader()
+        param_array = deserialize_arrow_to_pytree(param_name, reader)
         return param_name, param_array
 
     def receive_weights(self, old_model: PyTree = None) -> PyTree | None:
@@ -522,21 +511,18 @@ class ArrowFlightClient(WeightTransferClient):
             raise ValueError("old_model is required for Arrow Flight weight transfer to preserve model structure")
 
         try:
-            # Connect to servers if needed
-            if not self._connect_to_servers():
-                return None
-
             start_time = time.time()
-            # Get latest weight info
-            _server_location, latest_weight_id = ray.get(self._coordinator.get_server_info.remote())
 
-            if latest_weight_id is None or latest_weight_id == self.last_weight_id:
+            # Fetch server info from coordinator
+            server_info = ray.get(self._coordinator.fetch_server.remote())
+
+            if server_info.weight_id is None or server_info.weight_id == self._last_weight_id:
+                logger.info("No new weights available from Arrow Flight server.")
                 return None
 
-            # Get available params for this weight_id
-            param_names = ray.get(self._coordinator.get_available_params.remote(latest_weight_id))
-            if param_names is None:
-                logger.warning(f"No params available for weight_id {latest_weight_id}")
+            # Connect to servers if needed
+            if not self._connect_to_servers(server_info.server_addresses):
+                logger.info("Failed to connect to Arrow Flight servers.")
                 return None
 
             poll_time = time.time()
@@ -544,8 +530,8 @@ class ArrowFlightClient(WeightTransferClient):
             # Fetch all params in parallel
             state_dict = {}
             futures = {
-                self._receive_pool.submit(self._fetch_param, latest_weight_id, param_name): param_name
-                for param_name in param_names
+                self._receive_pool.submit(self._fetch_param, server_info.weight_id, param_name): param_name
+                for param_name in server_info.param_names
             }
 
             for future in as_completed(futures):
@@ -555,7 +541,6 @@ class ArrowFlightClient(WeightTransferClient):
             fetch_time = time.time()
 
             # Convert back to model using state_dict and move to target device
-            logger.info(f"Mesh {self.mesh} Axis mapping {self.axis_mapping}")
             with self.mesh, hax.axis_mapping(self.axis_mapping):
                 model = update_model(old_model, state_dict)
 
@@ -565,10 +550,10 @@ class ArrowFlightClient(WeightTransferClient):
             self.metrics.poll_time = poll_time - start_time
             self.metrics.fetch_time = fetch_time - poll_time
             self.metrics.decode_time = decode_time - fetch_time
-            self.last_weight_id = latest_weight_id
+            self._last_weight_id = server_info.weight_id
 
             logger.info(
-                f"Received {len(param_names)} params for weight_id {latest_weight_id} via Arrow Flight "
+                f"Received {len(server_info.param_names)} params for weight_id {server_info.weight_id} via Arrow Flight "
                 f"(poll={poll_time - start_time:.2f}s, fetch={fetch_time - poll_time:.2f}s, "
                 f"decode={decode_time - fetch_time:.2f}s)"
             )
@@ -582,8 +567,15 @@ class ArrowFlightClient(WeightTransferClient):
 
     def cleanup(self) -> None:
         """Cleanup Flight client resources."""
-        self._receive_pool.shutdown(wait=False)
-        for client in self.flight_clients:
+        try:
+            logger.info("Shutting down Arrow Flight client thread pool...")
+            self._receive_pool.shutdown(wait=False, cancel_futures=False)
+            logger.info("Thread pool shutdown completed")
+        except Exception as e:
+            logger.warning(f"Error shutting down thread pool: {e}")
+
+        logger.info("Closing Arrow Flight client connection...")
+        for client in self._flight_clients:
             try:
                 client.close()
             except Exception as e:

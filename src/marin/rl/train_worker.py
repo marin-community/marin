@@ -32,8 +32,8 @@ from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from transformers import AutoTokenizer
 
-from marin.post_training.model_utils import load_model_from_checkpoint
 from marin.rl import weight_transfer
+from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.weight_transfer import WeightTransferConfig
 
 from .replay_buffer import ReplayBuffer, ReplayDataLoader
