@@ -146,7 +146,7 @@ def get_or_create_actor(actor_class, name: str, *args, **kwargs):
     for attempt in range(max_retries):
         logger.info("Retrieving or creating actor '%s' (attempt %d)", name, attempt + 1)
         try:
-            return actor_class.options(name=name, get_if_exists=True).remote(*args, **kwargs)
+            return actor_class.options(name=name, get_if_exists=True, max_restarts=-1).remote(*args, **kwargs)
         except ValueError:
             # Another process might have created it, wait and retry
             if attempt < max_retries - 1:

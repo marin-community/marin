@@ -54,16 +54,14 @@ class Task(Protocol):
         ...
 
 
-class SimpleAdditionTask:
-    """Simple single-digit addition - 90% success rate target."""
-
+class AdditionTask:
     def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
         examples = []
         for _ in range(n_examples):
-            a = rng.integers(0, 25)
-            b = rng.integers(0, 25)
+            a = rng.integers(0, 1000)
+            b = rng.integers(0, 1000)
             result = a + b
-            prompt = f"What is {a}+{b}? Just the number:"
+            prompt = f"What is {a}+{b}? Output just the number:"
             answer = str(result)
             examples.append({"prompt": prompt, "answer": answer})
         return examples
@@ -75,7 +73,7 @@ class SimpleAdditionTask:
         return compute_soft_reward(correct_answer, actual_response)
 
 
-class SimpleOppositesTask:
+class OppositesTask:
     """Simple opposite words - 75% success rate target."""
 
     OPPOSITES: ClassVar[list[tuple[str, str]]] = [
@@ -133,44 +131,25 @@ class NumberComparisonTask:
         return 0.1 * format_score + 0.9 * compute_soft_reward(correct_answer, actual_response)
 
 
-def extract_first_n_tokens(response: str, n: int = 10) -> list[str]:
-    """Extract first N tokens from response."""
-    tokens = response.split()
-    return tokens[: min(n, len(tokens))]
-
-
-def compute_soft_reward(correct_answer: str, actual_response: str, strict_format: bool = False) -> float:
+def compute_soft_reward(correct_answer: str, actual_response: str) -> float:
     """Compute soft reward with partial credit for correctness and format."""
     if not actual_response:
         return 0.0
 
+    # remove commas from numbers
+    correct_answer = correct_answer.replace(",", "").lower()
+
     tokens = actual_response.split()
-    first_10_tokens = extract_first_n_tokens(actual_response, 10)
+    correct_score = 0
+    for token in tokens:
+        token = token.replace(",", "").lower()
 
-    correctness = 0.0
-    if tokens and tokens[0].lower() == correct_answer.lower():
-        correctness = 1.0  # Perfect match in first position
-    elif tokens and tokens[0].lower() == correct_answer.lower().rstrip(".,!?"):
-        correctness = 0.9  # Match with punctuation
-    elif correct_answer.lower() in [t.lower() for t in first_10_tokens]:
-        correctness = 0.6  # Answer appears early
-    elif correct_answer.lower() in actual_response.lower():
-        correctness = 0.3  # Answer appears somewhere
+        if token == correct_answer:
+            correct_score = 1
+            break
 
-    format_score = 0.0
-    if len(tokens) == 1:
-        format_score = 1.0  # Perfect - single word
-    elif len(tokens) <= 2 and strict_format:
-        format_score = 0.5  # Stricter scoring for patterns
-    elif len(tokens) <= 3:
-        format_score = 0.7  # Good - very brief
-    elif len(tokens) <= 10:
-        format_score = 0.4 if strict_format else 0.3  # Okay - short sentence
-    else:
-        format_score = 0.1  # Poor - verbose
-
-    # Weighted combination (70% correctness, 30% format)
-    return 0.7 * correctness + 0.3 * format_score
+    format_score = min(1.0, 1 / max(len(tokens), 1))
+    return 0.7 * correct_score + 0.3 * format_score
 
 
 class MoarCatsTask:
@@ -198,8 +177,8 @@ class MoarCatsTask:
 # Task mappings
 TASKS = {
     "cats": MoarCatsTask(),
-    "simple_addition": SimpleAdditionTask(),
-    "simple_opposites": SimpleOppositesTask(),
+    "addition": AdditionTask(),
+    "opposites": OppositesTask(),
     "number_comparison": NumberComparisonTask(),
 }
 
