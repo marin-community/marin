@@ -17,11 +17,12 @@ dependencies = [
     "deepdiff",
     "draccus>=0.11.5",
     "fasteners>=0.19",
+    "flask",
     "gcsfs",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "jax==0.7.2",
+    "jax==0.6.2",
     "haliax>=1.4.dev381",
     "levanter[serve]@git+https://github.com/marin-community/levanter.git",
     "lz4",
@@ -163,11 +164,11 @@ gcp = [
     "google-cloud-compute",
 ]
 
-cuda12 = ["jax[cuda12]==0.7.2", "torch"]
+cuda12 = ["jax[cuda12]==0.6.2", "torch"]
 
-tpu = ["jax[tpu]==0.7.2", "torch"]
+tpu = ["jax[tpu]==0.6.2", "torch"]
 
-cpu = ["jax==0.7.2", "torch"]
+cpu = ["jax==0.6.2", "torch"]
 
 crawl = [
     "w3lib",
@@ -268,6 +269,10 @@ data_browser = ["zstandard==0.23.0"]
 
 eval = [
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
+]
+
+pm = [
+  "PyGithub>=2.3.0"
 ]
 
 

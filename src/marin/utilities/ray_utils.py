@@ -24,7 +24,18 @@ def is_local_ray_cluster():
     if isinstance(address, str):
         address = address.strip()
     cluster_file = Path("/tmp/ray/ray_current_cluster")
-    return (address is None and not cluster_file.exists()) or address == "local"
+
+    # Check if it's a local cluster
+    if address is None and not cluster_file.exists():
+        return True
+    if address == "local":
+        return True
+
+    # Set when we're running with the unittest helper.
+    if os.environ.get("RAY_LOCAL_CLUSTER", None) == "1":
+        return True
+
+    return False
 
 
 def get_head_ip() -> str:
