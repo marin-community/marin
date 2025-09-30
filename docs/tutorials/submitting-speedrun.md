@@ -9,7 +9,7 @@ See [the overview of Marin Speedrun](../explanations/speedrun.md) for a more det
 
 Submitting to the Speedrun Leaderboard consists of the following steps:
 
-1. Define a configuration for training a model.
+1. Define a configuration for training a model (or additionally define a model architecture).
 2. Train it on your hardware; both GPUs and TPUs are supported. It is possible to create a good speedrun on just one/few GPUs.
 3. Submit the configuration and the generated results file to the Marin GitHub repository via a pull request.
 4. Watch it appear on the leaderboard once merged!
@@ -116,9 +116,11 @@ Before you get started, you will need the following:
             executor_main(steps=default_speedrun("llama_nano_tpu_speedrun", speedrun_config))
         ```
 
-    Feel free to go through each of the configuration classes' definitions to get an idea of the design space here. The training configuration can either be a `SimpleTrainConfig` or `TrainLmOnPodConfig`. Also, note that in this example, you only have one Python file, but if your submission is more complex, you can split it into multiple files.
+    Marin typically uses [Levanter](https://github.com/marin-community/levanter) for model training. In the example above, we use the `llama_nano` configuration for the Llama model implemented in Levanter. Feel free to go through each of the configuration classes' definitions to get an idea of the design space here. The training configuration can either be a `SimpleTrainConfig` or `TrainLmOnPodConfig`. Also, note that in this example, you only have one Python file, but if your submission is more complex, you can split it into multiple files. To see examples of other speedruns and configurations, check out the [speedrun directory](https://github.com/marin-community/marin/tree/main/experiments/speedrun).
 
-    To see examples of other speedruns and configurations, check out the [speedrun directory](https://github.com/marin-community/marin/tree/main/experiments/speedrun). You can also [add new optimizers](https://github.com/marin-community/marin/blob/main/docs/tutorials/add-optimizer.md), change learning rate schedules, play with hyperparameters, etc.
+    If you are interested in modifying model architectures, you can refer to the "[hackable transformer](https://github.com/marin-community/marin/tree/main/experiments/speedrun/hackable_transformer_starter/hackable_transformer_attn_sink.py)" starter file, where a generic transformer language model is implemented for you to make changes easily (without needing to merge a Levanter pull request), in addition to all other necessary code for you to make a submission.
+
+    You can also [add new optimizers](https://github.com/marin-community/marin/blob/main/docs/tutorials/add-optimizer.md), change learning rate schedules, play with hyperparameters, etc.
 
 3. Before running your speedrun, you may find it helpful to call [speedrun_config.print_run_info()](https://github.com/marin-community/marin/blob/main/src/marin/speedrun/speedrun.py#L76) to see the estimated training HW FLOPs, model FLOPs, model size, and your speedrun configs displayed. This will help you sanity-check your run, and also can be helpful in estimating the resources needed for your run.
 
