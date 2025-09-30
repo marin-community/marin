@@ -39,6 +39,7 @@ To edit this file for your speedrun:
   4) Submit (see "How to run" above)
 """
 
+# nodryrun
 import sys
 import os
 import dataclasses
