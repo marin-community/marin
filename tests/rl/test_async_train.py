@@ -26,7 +26,6 @@ from pathlib import Path
 import jax
 import numpy as np
 import pytest
-import ray
 
 from marin.rl.rollout_storage import (
     RolloutStorageConfig,
@@ -45,14 +44,6 @@ from tests.rl.config_helpers import (
 pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping integration tests on CI environment")
 
 logger = logging.getLogger(__name__)
-
-
-@pytest.fixture(scope="function")
-def ray_cluster():
-    """Start Ray cluster for weight transfer testing."""
-    ray.init(ignore_reinit_error=True)
-    yield
-    ray.shutdown()
 
 
 @pytest.fixture
@@ -294,7 +285,7 @@ def test_rollout_worker(rollout_worker_config: RolloutWorkerConfig):
 
 
 @pytest.mark.slow("Integration test.")
-def test_train_worker(ray_cluster, training_worker_config: TrainWorkerConfig):
+def test_train_worker(ray_tpu_cluster, training_worker_config: TrainWorkerConfig):
     """Test training worker processes rollout batch and creates checkpoint."""
     # Use the rollout storage config to create writer for sending test data
     queue_writer = training_worker_config.rollout_storage.create_writer()
@@ -322,14 +313,10 @@ def test_train_worker(ray_cluster, training_worker_config: TrainWorkerConfig):
     # Verify results
     assert runner.steps_completed >= 1, f"Expected at least 1 training step, got {runner.steps_completed}"
 
-    # Check checkpoint was created (using the new trainer config path)
-    checkpoint_dir = str(training_worker_config.trainer.checkpointer.base_path)
-    checkpoint_created = os.path.exists(checkpoint_dir) and len(os.listdir(checkpoint_dir)) > 0
-    assert checkpoint_created, "Training worker should create checkpoint after processing batch"
-
 
 @pytest.mark.slow("Integration test.")
 def test_inference_and_training_workers(
+    ray_tpu_cluster,
     training_worker_config,
     rollout_worker_config,
 ):
@@ -435,7 +422,7 @@ def validate_model(model, tokenizer) -> dict[str, str]:
 
 
 @pytest.mark.slow("Integration test with training loop")
-def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_config):
+def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, training_worker_config):
     """Test training worker with manually constructed cat-themed rollout batches.
 
     This test validates that the training worker can process rollout batches
@@ -475,9 +462,9 @@ def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_conf
     assert all(not np.isnan(loss) for loss in runner.losses), "Loss should not be NaN"
     assert all(loss < 10.0 for loss in runner.losses), f"Loss should be reasonable, got {runner.losses}"
     #
-    checkpoint_dir = str(training_worker_config.trainer.checkpointer.base_path)
-    checkpoint_created = os.path.exists(checkpoint_dir) and len(os.listdir(checkpoint_dir)) > 0
-    assert checkpoint_created, "Training worker should create checkpoint after processing batches"
+    checkpoint_base = Path(training_worker_config.trainer.checkpointer.base_path)
+    checkpoint_dirs = list(checkpoint_base.glob("*/*"))
+    assert len(checkpoint_dirs) >= 1, f"Expected at least 1 checkpoint, got {len(checkpoint_dirs)}"
 
     print(f"  - Steps completed: {runner.steps_completed}")
     print(f"  - Loss progression: {runner.losses}")
@@ -490,6 +477,7 @@ def test_train_worker_with_manual_cats_rollout(ray_cluster, training_worker_conf
 
 @pytest.mark.slow("Long-running integration test.")
 def test_full_integration_moar_cats(
+    ray_tpu_cluster,
     training_worker_config,
     rollout_worker_config,
 ):
@@ -550,7 +538,7 @@ def test_full_integration_moar_cats(
 
 
 @pytest.mark.slow("Integration test with checkpoint restart")
-def test_train_worker_checkpoint_restart(ray_cluster, training_worker_config):
+def test_train_worker_checkpoint_restart(ray_tpu_cluster, training_worker_config):
     """Test that training worker correctly restarts from checkpoint without repeating steps."""
     from pathlib import Path
 

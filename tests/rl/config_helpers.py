@@ -273,6 +273,7 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
             max_seqs=8, page_size=8, max_pages_per_seq=32, max_queued_tokens=8, enable_logprobs=True
         ),
         temperature=1.0,
+        port=27123,
     )
 
 
