@@ -57,6 +57,9 @@ class RolloutMetadata:
     worker_id: str
     timestamp: float
 
+    """The step at which the model weights were used to generate this rollout."""
+    weight_step: int
+
 
 class RolloutBatch(eqx.Module):
     groups: list[RolloutGroup]

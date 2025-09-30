@@ -78,7 +78,7 @@ def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16, env_
     group = RolloutGroup(key=f"group_{idx}", rollouts=rollouts)
 
     # Create batch
-    metadata = RolloutMetadata(worker_id="test_worker", timestamp=time.time())
+    metadata = RolloutMetadata(worker_id="test_worker", timestamp=time.time(), weight_step=0)
     return RolloutBatch(groups=[group], metadata=metadata)
 
 
@@ -286,3 +286,45 @@ def test_replay_buffer_max_resamples_multiple_envs():
     for env_name in ["env_0", "env_1"]:
         assert env_name in final_stats["env_sizes"]
         # Due to balanced sampling, both environments should have some data
+
+
+def test_replay_buffer_weight_step_filtering():
+    replay_buffer = ReplayBuffer(
+        config=ReplayBufferConfig(capacity=100, alpha=2.0, max_samples=-1, max_rollout_delay=30),
+        local_batch_size=4,
+        process_id=0,
+        total_processes=1,
+    )
+
+    # Create batches with weight_steps 50, 100, 150
+    for weight_step in [50, 100, 150]:
+        batch = create_test_batch(weight_step, batch_size=4, max_seq_len=16, env_name="test_env")
+        batch = RolloutBatch(
+            groups=batch.groups,
+            metadata=RolloutMetadata(worker_id="test", timestamp=time.time(), weight_step=weight_step),
+        )
+        replay_buffer.add_batches([batch])
+
+    assert replay_buffer.size() == 12
+
+    # Set current step to 100, min_step=70, should filter out weight_step=50
+    replay_buffer.set_current_step(100)
+    assert replay_buffer.size() == 8
+
+    # Set current step to 150, min_step=120, should filter out 50 and 100
+    replay_buffer.set_current_step(150)
+    assert replay_buffer.size() == 4
+
+    # Add new batch with weight_step=180
+    new_batch = create_test_batch(180, batch_size=3, max_seq_len=16, env_name="test_env")
+    new_batch = RolloutBatch(
+        groups=new_batch.groups, metadata=RolloutMetadata(worker_id="test", timestamp=time.time(), weight_step=180)
+    )
+    replay_buffer.add_batches([new_batch])
+
+    # Should now have 7 total (4 from weight_step=150 + 3 from weight_step=180)
+    assert replay_buffer.size() == 7
+
+    # Set current step to 190, min_step=160, should filter out weight_step=150
+    replay_buffer.set_current_step(190)
+    assert replay_buffer.size() == 3

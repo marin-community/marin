@@ -211,6 +211,7 @@ class RolloutWorker:
         self._running = True
         self._shutdown_complete = threading.Event()
         self._shutdown_condition = threading.Condition()
+        self._current_weight_step: int = 0
 
         # for testing, we accept a tokenizer instance or a string
         if isinstance(self.config.model.tokenizer, str):
@@ -261,9 +262,11 @@ class RolloutWorker:
             key=key,
         )
 
-        self._policy_model = self._transfer_client.receive_weights(initial_model)
-        if self._policy_model:
+        update = self._transfer_client.receive_weights(initial_model)
+        if update:
             logger.info("Loaded initial policy model from weight transfer")
+            self._policy_model = update.model
+            self._current_weight_step = update.weight_id
         else:
             logger.info("Initializing policy model from initial checkpoint")
             self._policy_model = initial_model
@@ -337,7 +340,11 @@ class RolloutWorker:
 
         rollout_batch = RolloutBatch(
             groups=rollout_groups,
-            metadata=RolloutMetadata(worker_id=f"{socket.gethostname()}_{os.getpid()}", timestamp=time.time()),
+            metadata=RolloutMetadata(
+                worker_id=f"{socket.gethostname()}_{os.getpid()}",
+                timestamp=time.time(),
+                weight_step=self._current_weight_step,
+            ),
         )
 
         barrier_sync()
@@ -345,15 +352,16 @@ class RolloutWorker:
 
     def _sync_weights(self):
         logger.info("Checking for new weights...")
-        weights = self._transfer_client.receive_weights(self._policy_model)
+        update = self._transfer_client.receive_weights(self._policy_model)
 
-        if weights:
-            logger.info("Received new weights for policy model")
-            self._policy_model = weights
+        if update:
+            self._current_weight_step = update.weight_id
+            logger.info(f"Received new weights from step {update.weight_id}")
+            self._policy_model = update.model
             self._inference_server.reload(lambda model: self._policy_model)
-            return weights
+            return update.model
         else:
-            logger.info("No new weights available for policy model")
+            logger.info("No new weights available")
             return None
 
     def run(self):

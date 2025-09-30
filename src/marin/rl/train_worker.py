@@ -20,6 +20,7 @@ rollout workers, and periodically dumps new checkpoints to disk. These
 checkpoints are read by the rollout workers to update their models.
 """
 
+import dataclasses
 import logging
 from dataclasses import dataclass
 
@@ -244,6 +245,11 @@ class TrainWorker:
             every=self.config.weight_transfer.sync_interval_steps,
         )
 
+        def _update_current_step(info: levanter.callbacks.StepInfo):
+            self.replay_buffer.set_current_step(info.step)
+
+        trainer.add_hook(_update_current_step, every=1)
+
         def _stop_on_signal(info: levanter.callbacks.StepInfo):
             if self._should_stop:
                 raise StopTrainerException()
@@ -262,7 +268,9 @@ class TrainWorker:
 
         model_params = state.model
         self.transfer_server.serve_weights(step, model_params)
-        metrics = {f"train.weight_transfer.{k}": v for k, v in self.transfer_server.get_metrics().items()}
+        metrics = {
+            f"train.weight_transfer.{k}": v for k, v in dataclasses.asdict(self.transfer_server.get_metrics()).items()
+        }
         self.trainer.tracker.log(metrics, step=step)
         logger.info(f"Successfully transferred weights with ID {step}")
 

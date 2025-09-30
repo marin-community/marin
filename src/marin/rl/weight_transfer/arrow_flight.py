@@ -54,6 +54,7 @@ from .base import (
     WeightTransferConfig,
     WeightTransferServer,
     WeightTransferServerMetrics,
+    WeightUpdate,
     get_or_create_actor,
 )
 
@@ -498,7 +499,7 @@ class ArrowFlightClient(WeightTransferClient):
         param_array = deserialize_arrow_to_pytree(param_name, reader)
         return param_name, param_array
 
-    def receive_weights(self, old_model: PyTree = None) -> PyTree | None:
+    def receive_weights(self, old_model: PyTree = None) -> WeightUpdate | None:
         """Receive weights from Arrow Flight servers in parallel.
 
         Args:
@@ -560,7 +561,7 @@ class ArrowFlightClient(WeightTransferClient):
                 f"decode={decode_time - fetch_time:.2f}s)"
             )
 
-            return model
+            return WeightUpdate(model=model, weight_id=server_info.weight_id)
 
         except Exception:
             self.metrics.failed_receives += 1
