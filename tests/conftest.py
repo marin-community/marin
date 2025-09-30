@@ -83,6 +83,10 @@ def ray_tpu_cluster(tmp_path_factory, worker_id):
 
     When running under pytest-xdist, we need to ensure each cluster is isolated
     by specifying unique temp directories and ports.
+
+    We additionally set the "RAY_LOCAL_CLUSTER" environment variable to signal to code like
+    executor that this is a test cluster. This allows us to skip things like dependency collection
+    that are unnecessary in a test environment.
     """
     if not worker_id or worker_id == "master":
         worker_id = 0
@@ -126,6 +130,7 @@ def ray_tpu_cluster(tmp_path_factory, worker_id):
     os.environ["RAY_ADDRESS"] = ctx.address_info["address"]
     os.environ["RAY_DASHBOARD_URL"] = ctx.address_info["webui_url"]
     os.environ["RAY_API_SERVER_ADDRESS"] = ctx.address_info["gcs_address"]
+    os.environ["RAY_LOCAL_CLUSTER"] = "1"
 
     print(
         f"Initialized ray with address={ctx.address_info['address']}",
