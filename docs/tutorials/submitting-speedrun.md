@@ -9,8 +9,7 @@ See [the overview of Marin Speedrun](../explanations/speedrun.md) for a more det
 
 Submitting to the Speedrun Leaderboard consists of the following steps:
 
-1. Define a configuration for training a model.
-    - or define a custom model architecture
+1. Define a configuration for training a model (or additionally define a model architecture).
 2. Train it on your hardware; both GPUs and TPUs are supported. It is possible to create a good speedrun on just one/few GPUs.
 3. Submit the configuration and the generated results file to the Marin GitHub repository via a pull request.
 4. Watch it appear on the leaderboard once merged!
