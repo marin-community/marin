@@ -54,7 +54,7 @@ from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
-ENVIRONMENT_SPEC = "mock:task_type=number_comparison"
+ENVIRONMENT_SPEC = "mock:task_type=addition"
 MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 # MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 # MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
@@ -220,7 +220,7 @@ def rl_train(name: str) -> ExecutorStep:
     weight_transfer = WeightTransferConfig(
         # mode=WeightTransferMode.JAX_TRANSFER_SERVER,
         mode=WeightTransferMode.ARROW_FLIGHT,
-        sync_interval_steps=1,
+        sync_interval_steps=4,
         poll_interval_seconds=1,
     )
 

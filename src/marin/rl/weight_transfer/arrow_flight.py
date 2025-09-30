@@ -15,14 +15,15 @@
 """
 Apache Arrow Flight-based weight transfer implementation.
 
-This module provides weight transfer using Apache Arrow Flight RPC for
-high-performance binary communication between training and inference workers.
+Currently all parameters are replicated to worker 0 and served from their for simplicity.
+For performance, we start multiple Flight servers on the worker and load balance client requests
+based on the parameter name hash.
 
-Architecture:
-- Server spawns multiple flight server instances (default 16) for parallel serving
-- Each model parameter is served as a separate flight, enabling parallel fetching
-- Client uses a thread pool to fetch parameters in parallel from multiple servers
-- Load balancing via consistent hashing of parameter names to server instances
+This gets us to about ~7GB/s transfer on a TPUv5-4 VM (running the server & client on the same VM).
+We can likely extract a bit more performance by:
+
+* Batching smaller parameters to avoid tiny requests
+* Tweaking gRPC settings for larger message sizes, compression, etc.
 """
 
 import dataclasses
@@ -77,8 +78,8 @@ MAX_ELEMENTS_PER_RECORD = (2000 * 1000 * 1000) // 4
 NUM_PARALLEL_SERVERS = 16
 
 
-def _create_binary_array(buffer_data: jax.Array) -> pa.Array:
-    """Create a PyArrow binary array from buffer data."""
+def _create_binary_array(buffer_data: np.ndarray) -> pa.Array:
+    """Construct a single element Arrow LargeBinary array from numpy buffer data without copies"""
     block = pa.py_buffer(buffer_data)
     return pa.Array.from_buffers(
         pa.large_binary(),
@@ -87,12 +88,10 @@ def _create_binary_array(buffer_data: jax.Array) -> pa.Array:
     )
 
 
-def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> dict[str, tuple[pa.Schema, Sequence[pa.RecordBatch]]]:
-    """Convert model to Arrow RecordBatch per parameter using Haliax state_dict for efficient transfer.
-
-    Args:
-        model: Haliax/Equinox model or PyTree
-        weight_id: Unique identifier for this weight version
+def state_dict_to_batches(
+    state_dict: dict[str, np.ndarray], weight_id: int
+) -> dict[str, tuple[pa.Schema, Sequence[pa.RecordBatch]]]:
+    """Convert state_dict to Arrow RecordBatch per parameter using Haliax state_dict for efficient transfer.
 
     Large arrays are split into multiple RecordBatches if needed to avoid hitting the Arrow
     2GB limit.
@@ -100,12 +99,23 @@ def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> dict[str, tuple[
     Returns:
         Dict mapping param_name -> (schema, batches) for per-parameter flights
     """
-    # Convert model to state dict using Haliax's JAX array format
-    state_dict = hsd.to_state_dict(model)
-    state_dict = jax.device_get(state_dict)
 
     result = {}
     sz = 0
+
+    schema = pa.schema(
+        [
+            pa.field("data", pa.large_binary()),
+            pa.field("shape", pa.list_(pa.int64())),
+            pa.field("dtype", pa.string()),
+            pa.field("idx", pa.int64()),
+            pa.field("count", pa.int64()),
+        ],
+        metadata={
+            "weight_id": str(weight_id),
+            "timestamp": str(time.time()),
+        },
+    )
 
     for name, value in state_dict.items():
         shape = value.shape
@@ -113,23 +123,6 @@ def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> dict[str, tuple[
         dtype = value.dtype
         sz += value.nbytes
 
-        # Create schema for this parameter
-        schema = pa.schema(
-            [
-                pa.field("data", pa.large_binary()),
-                pa.field("shape", pa.list_(pa.int64())),
-                pa.field("dtype", pa.string()),
-                pa.field("idx", pa.int64()),
-                pa.field("count", pa.int64()),
-            ],
-            metadata={
-                "weight_id": str(weight_id),
-                "timestamp": str(time.time()),
-                "param_name": name,
-            },
-        )
-
-        # Handle splitting for large arrays
         if is_scalar:
             splits = [value]
             total_parts = 1
@@ -217,7 +210,6 @@ class ArrowFlightCoordinator:
         self._server_info = None
 
     def update_server(self, weight_id: int, param_names: list[str], server_locations: list[tuple[str, int]]) -> None:
-        """Update server state atomically with new weights and server locations."""
         self._server_info = ServerInfo(
             weight_id=weight_id,
             server_addresses=[f"grpc://{host}:{port}" for host, port in server_locations],
@@ -227,7 +219,6 @@ class ArrowFlightCoordinator:
         return 123
 
     def fetch_server(self) -> ServerInfo:
-        """Fetch current server state including weight ID, server addresses, and param names."""
         return self._server_info
 
 
@@ -265,7 +256,7 @@ class MarinFlightServer(flight.FlightServerBase):
 
             with self._lock:
                 if weight_id != self._latest_weight_id:
-                    logger.warning(f"Requested weight_id {weight_id} stale, returning {self._latest_weight_id}")
+                    logger.debug(f"Requested weight_id {weight_id} stale, returning {self._latest_weight_id}")
                     weight_id = self._latest_weight_id
 
                 (schema, batches) = self._weights_store[weight_id][param_name]
@@ -382,8 +373,13 @@ class ArrowFlightServer(WeightTransferServer):
             barrier_sync()
 
             if jax.process_index() == 0:
-                # Convert model to Arrow RecordBatch per parameter
-                params_dict = serialize_pytree_to_arrow(model, weight_id)
+                # Fetching the entire state dict to CPU allows JAX to parallelize the individual transfers
+                state_dict = hsd.to_state_dict(model)
+                state_dict = jax.device_get(state_dict)
+                copy_time = time.time()
+
+                # Convert to Arrow RecordBatch per parameter
+                params_dict = state_dict_to_batches(state_dict, weight_id)
                 serialize_time = time.time()
 
                 for flight_server in self._flight_servers:
@@ -401,9 +397,11 @@ class ArrowFlightServer(WeightTransferServer):
                 self.metrics.successful_transfers += 1
 
                 logger.info(
-                    f"Served weights for weight_id {weight_id}. serialize={serialize_time - start_time:.2f}s, "
+                    f"Served weights for weight_id {weight_id}.",
+                    f"timings: copy={copy_time - start_time:.2f}s, "
+                    f"serialize={serialize_time - copy_time:.2f}s, "
                     f"store={store_time - serialize_time:.2f}s, "
-                    f"update={update_time - store_time:.2f}s"
+                    f"update={update_time - store_time:.2f}s",
                 )
 
             barrier_sync()
