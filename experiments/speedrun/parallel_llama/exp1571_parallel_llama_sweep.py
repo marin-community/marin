@@ -59,7 +59,7 @@ def _to_parallel_llama_from_llama(llama_cfg, *, seq_len_override=None) -> Parall
         use_layer_norm_weight=True,
         tie_word_embeddings=False,
         use_parallel_blocks=True,
-        cross_entropy_block_size=32000
+        cross_entropy_block_size=32000,
     )
     return parallel_llama
 
@@ -89,7 +89,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     # Resource configurations - using GPUs for smaller models, TPUs for larger
     resource_cfgs = {
         "75m": GpuConfig(gpu_count=1, accelerator_type="H100"),
-        "150m": GpuConfig(gpu_count=1, accelerator_type="H100"), 
+        "150m": GpuConfig(gpu_count=1, accelerator_type="H100"),
         "300m": GpuConfig(gpu_count=1, accelerator_type="H100"),
         "520m": GpuConfig(gpu_count=1, accelerator_type="H100"),
     }
@@ -199,4 +199,6 @@ if __name__ == "__main__":
         cfg.print_run_info()
         steps.extend(default_speedrun(name, cfg))
 
-    executor_main(steps=steps, description="Parallel Llama speedruns (Chinchilla-optimal tokens, w/ parallel attention/MLP)")
+    executor_main(
+        steps=steps, description="Parallel Llama speedruns " "(Chinchilla-optimal tokens, w/ parallel attention/MLP)"
+    )

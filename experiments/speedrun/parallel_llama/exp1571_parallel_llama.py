@@ -209,7 +209,7 @@ class ParallelLlamaConfig(HFCompatConfig):
         # so we don't need those conditional additions
 
         transformer = self.num_layers * transformer_layer + self.hidden_dim  # plus final rmsnorm
-        
+
         lm_head = 0 if self.tie_word_embeddings else token_embedding
         return transformer + token_embedding + lm_head
 
