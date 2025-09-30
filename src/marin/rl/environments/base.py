@@ -178,7 +178,7 @@ def load_environment_from_spec(env_spec: str, tokenizer: HfTokenizer) -> MarinEn
             env_args[key] = value
 
     if env_name == "math":
-        from .math_env import MathEnvironment
+        from .math import MathEnvironment
 
         return MathEnvironment(tokenizer=tokenizer, **env_args)
     elif env_name == "mock":
