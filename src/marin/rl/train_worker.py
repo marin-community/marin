@@ -238,7 +238,7 @@ class TrainWorker:
 
     def _configure_training_hooks(self, trainer):
         def _weight_transfer_hook(info: levanter.callbacks.StepInfo):
-            self.weight_transfer_hook(info)
+            self.weight_transfer_hook(trainer, info)
 
         trainer.add_hook(
             _weight_transfer_hook,
@@ -256,7 +256,7 @@ class TrainWorker:
 
         trainer.add_hook(_stop_on_signal, every=1)
 
-    def weight_transfer_hook(self, info: levanter.callbacks.StepInfo):
+    def weight_transfer_hook(self, trainer: Trainer, info: levanter.callbacks.StepInfo):
         step = info.step
         state = info.state
 
@@ -271,7 +271,7 @@ class TrainWorker:
         metrics = {
             f"train.weight_transfer.{k}": v for k, v in dataclasses.asdict(self.transfer_server.get_metrics()).items()
         }
-        self.trainer.tracker.log(metrics, step=step)
+        trainer.tracker.log(metrics, step=step)
         logger.info(f"Successfully transferred weights with ID {step}")
 
     def stop(self):
