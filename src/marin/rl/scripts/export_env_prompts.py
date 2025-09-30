@@ -21,7 +21,7 @@ This is useful for debugging inference server issues by replaying the exact
 requests that would be made during training.
 
 Usage:
-    uv run src/marin/post_training/scripts/export_env_prompts.py \
+    uv run src/marin/rl/scripts/export_env_prompts.py \
         --env math \
         --output math_prompts.json \
         --n-examples 100 \
@@ -37,7 +37,7 @@ import jax.random as jrandom
 from levanter.inference.openai import ChatCompletionRequest, ChatMessage
 from transformers import AutoTokenizer
 
-from marin.post_training.environments.load_environments import load_environment_from_spec
+from marin.rl.environments import load_environment_from_spec
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
