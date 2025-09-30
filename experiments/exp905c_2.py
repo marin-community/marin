@@ -8,7 +8,7 @@ from marin.evaluation.run import evaluate
 from marin.execution.executor import this_output_path
 from experiments.evals.resource_configs import ResourceConfig
 
-resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v6e-4", strategy="STRICT_PACK")
+resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v6e-8", strategy="STRICT_PACK")
 
 """
 Note for people trying to do evals:
@@ -21,8 +21,9 @@ Note for people trying to do evals:
 
 if __name__ == "__main__":
     model_name = "deeper_starling_sft_nemotron_and_openthoughts3"
-    model_path = "gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/hf/step-1540000"
-
+    # model_path = "gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/hf/step-1540000"
+    model_path = "gs://marin-us-central2/models/llama-3.1-8b"
+    
     # Run all evaluations on all models
     helm_eval = ExecutorStep(
         name="evaluation/helm/exp905c",
@@ -85,7 +86,8 @@ if __name__ == "__main__":
             # # Winograd challenge, extended to more domains
             EvalTaskConfig("winogrande", num_fewshot=0, task_alias="winogrande_0shot"),
         ],
-        max_eval_instances=None,
+        max_eval_instances=10,
+        eval_batch_size=1,  # Set EvalBatch size to 4 (per_device_eval_parallelism=4)
         resource_config=resource_config,
         apply_chat_template=True,
     )
