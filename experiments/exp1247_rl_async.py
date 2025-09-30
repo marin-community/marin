@@ -42,11 +42,11 @@ from marin.execution.executor import (
     OutputName,
     executor_main,
 )
-from marin.post_training.rollout_storage import RolloutStorageConfig, StorageType
-from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
-from marin.post_training.train_worker import ReplayBufferConfig, TrainWorker, TrainWorkerConfig
-from marin.post_training.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.resources import TpuPodConfig
+from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
+from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
+from marin.rl.train_worker import ReplayBufferConfig, TrainWorker, TrainWorkerConfig
+from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.training.training import (
     _add_run_env_variables,
 )
@@ -201,10 +201,8 @@ def rl_train(name: str) -> ExecutorStep:
     )
 
     inference_server_config = InferenceServerConfig(
-        model=model_config,
         # Turn on tensor parallelism for inference
         trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=4),
-        hf_checkpoint=MODEL_CHECKPOINT,
         tokenizer=MODEL_TOKENIZER,
         temperature=1.0,
         service=InferenceEngineConfig(
