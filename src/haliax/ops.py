@@ -333,7 +333,7 @@ def unique(
     )
 
     if axis is not None:
-        axis_index = array._lookup_indices(axis)
+        axis_index = array.axis_indices(axis)
         if axis_index is None:
             raise ValueError(f"Axis {axis} not found in array. Available axes: {array.axes}")
         out = jnp.unique(array.array, axis=axis_index, **kwargs)

@@ -251,7 +251,7 @@ def _gmm(lhs, rhs, group_sizes, out_axes, sharded=False, ar=False):
     else:
         gmm_fn = shard_map(
             partial(gmm_sharded, ar=ar),
-            mesh=hax.partitioning._get_mesh(),
+            mesh=jax.sharding.get_abstract_mesh(),
             in_specs=(
                 hax.partitioning.pspec_for_axis(lhs.axes),
                 hax.partitioning.pspec_for_axis(rhs.axes),

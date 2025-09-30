@@ -8,11 +8,8 @@ from typing import Optional, Sequence
 
 import jax
 import jax.numpy as jnp
+from jax.typing import DTypeLike
 
-try:
-    from jax.typing import DTypeLike
-except ImportError:
-    from jax._src.typing import DTypeLike
 
 import haliax.debug as debug
 import haliax.nn as nn
@@ -124,7 +121,7 @@ from .fft import (
     rfft,
     rfftfreq,
 )
-from .partitioning import auto_sharded, axis_mapping, fsdp, named_jit, shard, shard_with_axis_mapping
+from .partitioning import auto_sharded, axis_mapping, fsdp, named_jit, set_mesh, shard, shard_with_axis_mapping
 from .specialized_fns import top_k
 from .types import Scalar
 from .util import is_named_array
@@ -1352,4 +1349,5 @@ __all__ = [
     "NamedArrayAxes",
     "NamedArrayAxesSpec",
     "Named",
+    "set_mesh",
 ]

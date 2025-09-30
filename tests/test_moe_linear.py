@@ -66,8 +66,9 @@ def test_moe_linear_gmm_matches_ragged_dot_general():
     x = hax.random.normal(jrandom.PRNGKey(1), (B, In))
     group_sizes = hax.named(jnp.array([2, 1], dtype=jnp.int32), (E,))
 
-    with jax.sharding.Mesh(jax.devices(), ("data",)):
-        actual = moe(x, group_sizes)
+    mesh = jax.sharding.Mesh(jax.devices(), ("data",))
+    with hax.partitioning.set_mesh(mesh):
+        actual = hax.named_jit(moe)(x, group_sizes)
 
     expected = _expected_moe_linear_output(moe, x, group_sizes)
 

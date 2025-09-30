@@ -197,7 +197,7 @@ def from_state_dict(tree: T, state_dict: StateDict, prefix: Optional[str] = None
         array = state_dict[prefix]
 
         if isinstance(array, np.ndarray):
-            mesh = partitioning._get_mesh()
+            mesh = jax.sharding.get_abstract_mesh()
             # TODO: modernize this
             if jax.device_count() > 1:  # this happens with the default mesh
                 pspec = partitioning.pspec_for_axis(tree.axes)

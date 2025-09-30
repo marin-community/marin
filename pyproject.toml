@@ -21,8 +21,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
 ]
 dependencies = [
-    # we require that you install jax yourself, since the extras vary by system.
-    # jax = {version = ">=0.4.19,<0.5.0"}
+     "jax >= 0.6.2",
     "equinox>=0.10.6",
     "jaxtyping>=0.2.20",
     "jmp>=0.0.4",

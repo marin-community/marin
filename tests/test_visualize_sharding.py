@@ -37,16 +37,19 @@ def test_visualize_shardings_runs(capsys):
     assert "dim1" in out and "dim2" in out and "dim3" in out
 
 
+@skip_if_not_enough_devices(2, reason="JAX will claim it's unsharded if there's only one device")
 def test_visualize_shardings_inside_jit(capsys):
     mesh = jax.sharding.Mesh(np.array(jax.devices()).reshape(-1, 1), (ResourceAxis.DATA, ResourceAxis.MODEL))
 
-    @named_jit(out_axis_resources={"dim1": ResourceAxis.DATA})
+    @named_jit
     def fn(x):
+        x = hax.shard(x)
         visualize_shardings(x)
         return x
 
     with axis_mapping({"dim1": ResourceAxis.DATA}), mesh:
-        x = hax.ones(Dim1)
+        x = hax.ones({"dim1": 8 * len(jax.devices())})
+        x = hax.shard(x)
         fn(x)
 
     out = capsys.readouterr().out
