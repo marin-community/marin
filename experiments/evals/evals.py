@@ -106,6 +106,7 @@ def evaluate_lm_evaluation_harness(
     resource_config: ResourceConfig | None = None,
     apply_chat_template: bool = False,
     wandb_tags: list[str] | None = None,
+    discover_latest_checkpoint: bool = True,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
@@ -126,7 +127,7 @@ def evaluate_lm_evaluation_harness(
             evals=evals,
             max_eval_instances=max_eval_instances,
             launch_with_ray=True,
-            discover_latest_checkpoint=True,
+            discover_latest_checkpoint=discover_latest_checkpoint,
             engine_kwargs=engine_kwargs,
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
