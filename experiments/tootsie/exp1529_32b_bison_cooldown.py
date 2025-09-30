@@ -184,10 +184,9 @@ tootsie_32b_cooldown_bison_flat = default_train(
 ).with_output_path("checkpoints/tootsie-32b-cooldown-bison-adamc-flat")
 
 baselines = [
-    # ("Qwen/Qwen3-32B", "9216db5781bf21249d130ec9da846c4624c16137"),
-    # ("Qwen/Qwen2.5-32B", "1818d35814b8319459f4bd55ed1ac8709630f003"),
-    ("allenai/OLMo-2-0325-32B", "stage2-ingredient3-step9000-tokens76B"),
-    # ("allenai/OLMo-2-1124-13B", "stage2-ingredient4-step9000-tokens76B"),
+    ("Qwen/Qwen3-32B", "9216db5781bf21249d130ec9da846c4624c16137"),
+    ("Qwen/Qwen2.5-32B", "1818d35814b8319459f4bd55ed1ac8709630f003"),
+    # ("allenai/OLMo-2-0325-32B", "stage2-ingredient3-step9000-tokens76B"), OLMo 32B is currently borked on our eval harness so we will evaluate with GPU
 ]
 baseline_evals = []
 for model, revision in baselines:
