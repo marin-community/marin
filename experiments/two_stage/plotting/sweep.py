@@ -1,24 +1,18 @@
-import matplotlib.pyplot as plt
-import wandb
-from pprint import pprint
-import pandas as pd
-from tqdm import tqdm
 import argparse
 import pickle
-from scipy.interpolate import griddata
-import numpy as np
-import json
-from scipy.optimize import curve_fit
-import matplotlib.colors as mcolors
 
-plt.rcParams.update({
-    "font.family": "Palatino Linotype"
-})
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
+import numpy as np
+import wandb
+from tqdm import tqdm
+
+plt.rcParams.update({"font.family": "Palatino Linotype"})
 
 # Custom color scheme
-LIGHT_BLUE = '#8CD9FF'
-PURPLE = '#7030A0'
-CUSTOM_CMAP = mcolors.LinearSegmentedColormap.from_list('custom', [LIGHT_BLUE, PURPLE])
+LIGHT_BLUE = "#8CD9FF"
+PURPLE = "#7030A0"
+CUSTOM_CMAP = mcolors.LinearSegmentedColormap.from_list("custom", [LIGHT_BLUE, PURPLE])
 
 pretty_name_dict = {
     "finemath": "FineMath",
@@ -44,13 +38,16 @@ value_pretty_name_dict = {
     "1_9b4k": "1.9B",
 }
 
+
 def format_sci(val):
     return f"{val:.0e}".replace("e-0", "e-").replace("e+0", "e+")
+
 
 def value_to_pretty_name(value):
     if value in value_pretty_name_dict:
         return value_pretty_name_dict[value]
     return value
+
 
 def parse_run(run):
     if key not in run.tags:
@@ -68,7 +65,7 @@ def parse_run(run):
     lr_str = run_id.split(f"{run_dict['lr_schedule']}-")[-1][:5]
     lr_str = lr_str if lr_str[-1] != "-" else lr_str[:-1]
     run_dict["lr"] = float(lr_str)
-    lr_str = f"{run_dict['lr']:.3f}" if run_dict['lr'] >= 1e-3 else f"{format_sci(run_dict['lr'])}"
+    lr_str = f"{run_dict['lr']:.3f}" if run_dict["lr"] >= 1e-3 else f"{format_sci(run_dict['lr'])}"
     run_dict["lr_cooldown_duration"] = "na" if "-na-" in run_id else float(run_id.split(f"{lr_str}-")[-1][:4])
     run_dict["rare_data_epochs"] = int(run_id.split("x")[-1].split("-")[0])
     run_dict["model_name"] = run_id.split("-")[0]
@@ -93,16 +90,17 @@ def parse_run(run):
 
     if f"eval/{rare_data_name}/loss" not in history_loss.columns:
         return None
-    
+
     run_dict[f"final_{rare_data_name}_loss"] = history_loss[f"eval/{rare_data_name}/loss"].iloc[-1]
     run_dict[f"final_{common_data_name}_loss"] = history_loss[f"eval/{common_data_name}/loss"].iloc[-1]
 
     return run_dict
 
+
 def create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key, loss_key):
     """
     Creates a heatmap visualization from a list of experimental runs.
-    
+
     Args:
         run_list: List of run dictionaries containing experiment results
         x_axis_key: Key for x-axis values in run dictionaries
@@ -125,51 +123,52 @@ def create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data
     # Fill the grid with best (lowest) loss values
     for i, x in enumerate(unique_x_axis_values):
         for j, y in enumerate(unique_y_axis_values):
-            matching_runs = [run for run in run_list 
-                           if run[x_axis_key] == x 
-                           and run[y_axis_key] == y]
+            matching_runs = [run for run in run_list if run[x_axis_key] == x and run[y_axis_key] == y]
             if matching_runs:
-                best_run = min(matching_runs, key=lambda x: x[f'final_{loss_key}_loss'])
-                loss_grid[i, j] = best_run[f'final_{loss_key}_loss']
+                best_run = min(matching_runs, key=lambda x: x[f"final_{loss_key}_loss"])
+                loss_grid[i, j] = best_run[f"final_{loss_key}_loss"]
                 best_run_grid[i, j] = best_run
 
     # Create heatmap plot
     plt.figure(figsize=(3, 5), dpi=600)
-    plt.imshow(loss_grid, cmap=CUSTOM_CMAP, aspect='auto', interpolation='nearest')
+    plt.imshow(loss_grid, cmap=CUSTOM_CMAP, aspect="auto", interpolation="nearest")
 
     # Find the best (minimum) value coordinates
     best_idx = np.unravel_index(np.argmin(loss_grid), loss_grid.shape)
-    rect = plt.Rectangle((best_idx[1] - 0.5, best_idx[0] - 0.5), 1, 1, fill=False, 
-                        edgecolor=PURPLE, linewidth=2)
+    rect = plt.Rectangle((best_idx[1] - 0.5, best_idx[0] - 0.5), 1, 1, fill=False, edgecolor=PURPLE, linewidth=2)
     plt.gca().add_patch(rect)
 
     # Move colorbar to bottom and make it horizontal
-    plt.colorbar(label=f'{pretty_name_dict[loss_key]} Loss', 
-                orientation='horizontal')
+    plt.colorbar(label=f"{pretty_name_dict[loss_key]} Loss", orientation="horizontal")
 
     # Add text annotations to cells
     for i in range(len(unique_x_axis_values)):
         for j in range(len(unique_y_axis_values)):
             if best_run_grid[i, j] is not None:
-                plt.text(j, i, f'{loss_grid[i, j]:.2f}', 
-                        ha='center', va='center', 
-                        color='white' if loss_grid[i, j] > np.mean(loss_grid) else 'black')
+                plt.text(
+                    j,
+                    i,
+                    f"{loss_grid[i, j]:.2f}",
+                    ha="center",
+                    va="center",
+                    color="white" if loss_grid[i, j] > np.mean(loss_grid) else "black",
+                )
 
     plt.xlabel(key_pretty_name_dict[y_axis_key])
     plt.ylabel(key_pretty_name_dict[x_axis_key])
 
     if loss_key != "c4":
-        plt.title(f'{pretty_name_dict[loss_key]} Loss')
+        plt.title(f"{pretty_name_dict[loss_key]} Loss")
     else:
-        plt.title(f'C4 Loss, Training on {pretty_name_dict[rare_data_name]}')
+        plt.title(f"C4 Loss, Training on {pretty_name_dict[rare_data_name]}")
 
     # Set tick labels
     plt.xticks(range(len(unique_y_axis_values)), unique_y_axis_values)
     plt.yticks(range(len(unique_x_axis_values)), unique_x_axis_values)
 
     plt.tight_layout()
-    output_path = f'plotting/plots/{key}_{loss_key}_loss_heatmap.png'
-    plt.savefig(output_path, bbox_inches='tight')
+    output_path = f"experiments/two_stage/plotting/plots/{key}_{loss_key}_loss_heatmap.png"
+    plt.savefig(output_path, bbox_inches="tight")
     plt.close()
 
     # Print the best overall configuration
@@ -183,6 +182,7 @@ def create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data
 
     return best_run
 
+
 def create_scatter_plot(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key):
     """
     Creates a scatter plot visualization from a list of experimental runs.
@@ -190,6 +190,7 @@ def create_scatter_plot(run_list, x_axis_key, y_axis_key, rare_data_name, common
     For replay_ratio, uses log(1-x) transformation.
     Includes quadratic fits for each set of points.
     """
+
     def transform_x(x):
         if x_axis_key == "replay_ratio":
             return -np.log(1 - x)
@@ -197,83 +198,100 @@ def create_scatter_plot(run_list, x_axis_key, y_axis_key, rare_data_name, common
 
     def get_tick_labels(x):
         return str(x)
-    
+
     def fit_quadratic(x, y):
         coeffs = np.polyfit(x, y, 2)
         # Find minimum of quadratic: -b/(2a)
-        min_x = -coeffs[1]/(2*coeffs[0])
-        min_y = coeffs[0]*min_x**2 + coeffs[1]*min_x + coeffs[2]
+        min_x = -coeffs[1] / (2 * coeffs[0])
+        min_y = coeffs[0] * min_x**2 + coeffs[1] * min_x + coeffs[2]
         return coeffs, min_x, min_y
-    
+
     unique_y_values = sorted(list(set([run[y_axis_key] for run in run_list])))
     color_positions = np.linspace(0, 1, len(unique_y_values))
     colors = [CUSTOM_CMAP(pos) for pos in color_positions]
-    
+
     plt.figure(figsize=(6, 4), dpi=600)
-    
+
     # Store handles for legend ordering
     scatter_handles = []
     min_points = []
-    
-    for y_val, color in zip(unique_y_values, colors):
+
+    for y_val, color in zip(unique_y_values, colors, strict=False):
         matching_runs = [run for run in run_list if run[y_axis_key] == y_val]
         x_values = [run[x_axis_key] for run in matching_runs]
         x_values_transformed = [transform_x(x) for x in x_values]
-        losses = [run[f'final_{rare_data_name}_loss'] for run in matching_runs]
-        
+        losses = [run[f"final_{rare_data_name}_loss"] for run in matching_runs]
+
         # First plot quadratic fit
         coeffs, min_x, min_y = fit_quadratic(x_values_transformed, losses)
         x_fit = np.linspace(min(x_values_transformed), max(x_values_transformed), 100)
-        y_fit = coeffs[0]*x_fit**2 + coeffs[1]*x_fit + coeffs[2]
-        plt.plot(x_fit, y_fit, '--k', alpha=0.5)
-        
+        y_fit = coeffs[0] * x_fit**2 + coeffs[1] * x_fit + coeffs[2]
+        plt.plot(x_fit, y_fit, "--k", alpha=0.5)
+
         # Then plot minimum point
         x_range = max(x_values_transformed) - min(x_values_transformed)
-        if (min_x >= min(x_values_transformed) - 0.2*x_range and 
-            min_x <= max(x_values_transformed) + 0.2*x_range):
-            min_point = plt.scatter(min_x, min_y, color=color, marker='*', s=200, zorder=10)
+        if min_x >= min(x_values_transformed) - 0.2 * x_range and min_x <= max(x_values_transformed) + 0.2 * x_range:
+            min_point = plt.scatter(min_x, min_y, color=color, marker="*", s=200, zorder=10)
             min_points.append(min_point)
 
         # Finally plot the actual points on top
-        scatter = plt.scatter(x_values_transformed, losses, color=color, 
-                            label=f'{value_to_pretty_name(y_val)} {key_pretty_name_dict[y_axis_key]}',
-                            zorder=10)  # Higher zorder to ensure points are on top
+        scatter = plt.scatter(
+            x_values_transformed,
+            losses,
+            color=color,
+            label=f"{value_to_pretty_name(y_val)} {key_pretty_name_dict[y_axis_key]}",
+            zorder=10,
+        )  # Higher zorder to ensure points are on top
         scatter_handles.append(scatter)
-    
+
     # Add the fit line to legend (single entry)
-    fit_line = plt.plot([], [], '--k', alpha=0.5, label='Quadratic Fit')[0]
-    
+    fit_line = plt.plot([], [], "--k", alpha=0.5, label="Quadratic Fit")[0]
+
     # Add the minimum points to legend (single entry)
-    min_point_legend = plt.scatter([], [], color='k', marker='*', s=200, alpha=0.7, 
-                                 label='Predicted Minima')
-    
+    min_point_legend = plt.scatter([], [], color="k", marker="*", s=200, alpha=0.7, label="Predicted Minima")
+
     # Order legend: scatter points, quadratic fit, minima
-    handles = scatter_handles + [fit_line, min_point_legend]
+    handles = [*scatter_handles, fit_line, min_point_legend]
     labels = [h.get_label() for h in handles]
-    plt.legend(handles=handles, labels=labels, bbox_to_anchor=(1.05, 1), loc='upper left')
-    
+    plt.legend(handles=handles, labels=labels, bbox_to_anchor=(1.05, 1), loc="upper left")
+
     # Find and mark the best actual point
-    best_run = min(run_list, key=lambda x: x[f'final_{rare_data_name}_loss'])
-    
-    plt.xlabel(f'{key_pretty_name_dict[x_axis_key]}')
-    plt.ylabel(f'{pretty_name_dict[rare_data_name]} Loss')
-    plt.title(f'{pretty_name_dict[rare_data_name]} Loss vs {key_pretty_name_dict[x_axis_key]} and {key_pretty_name_dict[y_axis_key]}')
-    
+    best_run = min(run_list, key=lambda x: x[f"final_{rare_data_name}_loss"])
+
+    plt.xlabel(f"{key_pretty_name_dict[x_axis_key]}")
+    plt.ylabel(f"{pretty_name_dict[rare_data_name]} Loss")
+    rare_data_name_pretty = pretty_name_dict[rare_data_name]
+    x_axis_key_pretty = key_pretty_name_dict[x_axis_key]
+    y_axis_key_pretty = key_pretty_name_dict[y_axis_key]
+    plt.title(f"{rare_data_name_pretty} Loss vs {x_axis_key_pretty} and {y_axis_key_pretty}")
+
     unique_x_values = sorted(list(set([run[x_axis_key] for run in run_list])))
     x_ticks = [transform_x(x) for x in unique_x_values]
     plt.xticks(x_ticks, [get_tick_labels(x) for x in unique_x_values])
-    
-    output_path = f'plotting/plots/{key}_loss_scatter.png'
-    plt.savefig(output_path, bbox_inches='tight')
+
+    output_path = f"experiments/two_stage/plotting/plots/{key}_loss_scatter.png"
+    plt.savefig(output_path, bbox_inches="tight")
     plt.close()
-    
+
     print("\nBest configuration from scatter analysis:")
     print(f"{key_pretty_name_dict[x_axis_key]}: {best_run[x_axis_key]}")
     print(f"{key_pretty_name_dict[y_axis_key]}: {best_run[y_axis_key]}")
     print(f"Final {pretty_name_dict[rare_data_name]} Loss: {best_run[f'final_{rare_data_name}_loss']:.4f}")
     print(f"Run ID: {best_run['run_id']}")
 
-def create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=True, baseline=None, title_stub="", ylims=None, show_best=False):
+
+def create_simple_scatter(
+    run_list,
+    x_axis_key,
+    rare_data_name,
+    common_data_name,
+    key,
+    fit=True,
+    baseline=None,
+    title_stub="",
+    ylims=None,
+    show_best=False,
+):
     """
     Creates a simple scatter plot with x_axis_key on x-axis and loss on y-axis.
     Only keeps the best (lowest loss) run for each x-axis value.
@@ -283,9 +301,9 @@ def create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name
     best_runs = []
     for x in unique_x_values:
         matching_runs = [run for run in run_list if run[x_axis_key] == x]
-        best_run = min(matching_runs, key=lambda r: r[f'final_{rare_data_name}_loss'])
+        best_run = min(matching_runs, key=lambda r: r[f"final_{rare_data_name}_loss"])
         best_runs.append(best_run)
-    
+
     run_list = best_runs
 
     def transform_x(x):
@@ -302,70 +320,70 @@ def create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name
 
     def get_tick_labels(x):
         return str(x)
-    
+
     plt.figure(figsize=(5, 3), dpi=300)
-    
+
     x_values = [run[x_axis_key] for run in run_list]
     x_values_transformed = [transform_x(x) for x in x_values]
-    losses = [run[f'final_{rare_data_name}_loss'] for run in run_list]
-    
+    losses = [run[f"final_{rare_data_name}_loss"] for run in run_list]
+
     # Plot the actual points first
-    scatter = plt.scatter(x_values_transformed, losses, color=LIGHT_BLUE, zorder=5)
-    
+    _ = plt.scatter(x_values_transformed, losses, color=LIGHT_BLUE, zorder=5)
+
     # Plot quadratic fit
     if fit:
         coeffs = np.polyfit(x_values_transformed, losses, 2)
         x_fit = np.linspace(min(x_values_transformed), max(x_values_transformed), 100)
-        y_fit = coeffs[0]*x_fit**2 + coeffs[1]*x_fit + coeffs[2]
-        fit_line = plt.plot(x_fit, y_fit, '--k', alpha=0.5, label='Quadratic Fit')[0]
+        y_fit = coeffs[0] * x_fit**2 + coeffs[1] * x_fit + coeffs[2]
+        _fit_line = plt.plot(x_fit, y_fit, "--k", alpha=0.5, label="Quadratic Fit")[0]
     else:
         plt.plot(x_values_transformed, losses, color=LIGHT_BLUE, zorder=5)
-        fit_line = None
+        _fit_line = None
 
     if baseline:
-        baseline_point = plt.scatter([transform_x(1.0)], [baseline], color=PURPLE, zorder=10)
-        plt.axhline(y=baseline, color='black', linestyle=':', alpha=0.7)
+        _baseline_point = plt.scatter([transform_x(1.0)], [baseline], color=PURPLE, zorder=10)
+        plt.axhline(y=baseline, color="black", linestyle=":", alpha=0.7)
     else:
-        baseline_point = None
+        _baseline_point = None
 
     if show_best:
         # Add star at the best point
         best_idx = np.argmin(losses)
-        plt.scatter(x_values_transformed[best_idx], losses[best_idx], 
-                   marker='*', color=LIGHT_BLUE, s=200, zorder=6)
-        
+        plt.scatter(x_values_transformed[best_idx], losses[best_idx], marker="*", color=LIGHT_BLUE, s=200, zorder=6)
+
         # Print stats for best point
-        print(f"\nBest point:")
+        print("\nBest point:")
         print(f"{key_pretty_name_dict[x_axis_key]}: {x_values[best_idx]}")
         print(f"Loss: {losses[best_idx]:.4f}")
         print(f"Run ID: {run_list[best_idx]['run_id']}")
-    
-    plt.xlabel(f'{key_pretty_name_dict[x_axis_key]}')
-    plt.ylabel(f'{pretty_name_dict[rare_data_name]} Loss')
-    plt.title(f'{pretty_name_dict[rare_data_name]} Loss vs {key_pretty_name_dict[x_axis_key]}{title_stub}')
-    
+
+    plt.xlabel(f"{key_pretty_name_dict[x_axis_key]}")
+    plt.ylabel(f"{pretty_name_dict[rare_data_name]} Loss")
+    plt.title(f"{pretty_name_dict[rare_data_name]} Loss vs {key_pretty_name_dict[x_axis_key]}{title_stub}")
+
     unique_x_values = sorted(list(set(x_values)))
     x_ticks = [transform_x(x) for x in unique_x_values]
     plt.xticks(x_ticks, [get_tick_labels(x) for x in unique_x_values])
 
     if ylims:
         plt.ylim(ylims)
-    
+
     # Order legend with data points first
     # print(fit, baseline)
     # if fit or baseline:
-    #     plt.legend([scatter, fit_line, baseline_point], ['Data Points', 'Quadratic Fit', 'Uniform Ordering'], 
+    #     plt.legend([scatter, fit_line, baseline_point], ['Data Points', 'Quadratic Fit', 'Uniform Ordering'],
     #             bbox_to_anchor=(1.05, 1), loc='upper left')
-    
+
     file_stub = title_stub.replace(" ", "_").replace("\\", "_").replace("%", "")
-    output_path = f'plotting/plots/{key}_loss_simple{file_stub}.png'
-    plt.savefig(output_path, bbox_inches='tight')
+    output_path = f"experiments/two_stage/plotting/plots/{key}_loss_simple{file_stub}.png"
+    plt.savefig(output_path, bbox_inches="tight")
     plt.close()
-    
+
     print("\nBest configuration from simple scatter analysis:")
     print(f"{key_pretty_name_dict[x_axis_key]}: {best_run[x_axis_key]}")
     print(f"Final {pretty_name_dict[rare_data_name]} Loss: {best_run[f'final_{rare_data_name}_loss']:.4f}")
     print(f"Run ID: {best_run['run_id']}")
+
 
 def plot_train_loss(run_list, key):
     assert len(run_list) == 1
@@ -381,13 +399,14 @@ def plot_train_loss(run_list, key):
     plt.title("Train Loss")
     plt.tight_layout()
     plt.legend()
-    plt.savefig(f"plotting/plots/{key}_train_loss.png")
+    plt.savefig(f"experiments/two_stage/plotting/plots/{key}_train_loss.png")
     plt.close()
+
 
 def create_double_scatter(run_lists, x_axis_key, rare_data_name, common_data_name, key, labels, ylims=None):
     """
     Creates a scatter plot with two series of data points.
-    
+
     Args:
         run_lists: List of two run lists, each containing run dictionaries
         x_axis_key: Key for x-axis values
@@ -397,6 +416,7 @@ def create_double_scatter(run_lists, x_axis_key, rare_data_name, common_data_nam
         labels: List of two labels for the legend
         ylims: Optional tuple of (ymin, ymax) for setting y-axis limits
     """
+
     def transform_x(x):
         if x_axis_key == "replay_ratio":
             return -np.log(1 - x)
@@ -411,25 +431,25 @@ def create_double_scatter(run_lists, x_axis_key, rare_data_name, common_data_nam
 
     def get_tick_labels(x):
         return str(x)
-    
+
     plt.figure(figsize=(5, 3), dpi=300)
-    
+
     colors = [LIGHT_BLUE, PURPLE]  # Use our custom colors for the two series
     scatter_handles = []
-    
-    for runs, label, color in zip(run_lists, labels, colors):
+
+    for runs, label, color in zip(run_lists, labels, colors, strict=False):
         # Get unique x values and find best run for each
         unique_x_values = sorted(list(set([run[x_axis_key] for run in runs])))
         best_runs = []
         for x in unique_x_values:
             matching_runs = [run for run in runs if run[x_axis_key] == x]
-            best_run = min(matching_runs, key=lambda r: r[f'final_{rare_data_name}_loss'])
+            best_run = min(matching_runs, key=lambda r: r[f"final_{rare_data_name}_loss"])
             best_runs.append(best_run)
-        
+
         x_values = [run[x_axis_key] for run in best_runs]
         x_values_transformed = [transform_x(x) for x in x_values]
-        losses = [run[f'final_{rare_data_name}_loss'] for run in best_runs]
-        
+        losses = [run[f"final_{rare_data_name}_loss"] for run in best_runs]
+
         # Plot points and line
         scatter = plt.scatter(x_values_transformed, losses, color=color, label=label, zorder=5)
         plt.plot(x_values_transformed, losses, color=color, alpha=0.5, zorder=4)
@@ -437,19 +457,18 @@ def create_double_scatter(run_lists, x_axis_key, rare_data_name, common_data_nam
 
         # Add star at the best point
         best_idx = np.argmin(losses)
-        plt.scatter(x_values_transformed[best_idx], losses[best_idx], 
-                   marker='*', color=color, s=200, zorder=6)
-        
+        plt.scatter(x_values_transformed[best_idx], losses[best_idx], marker="*", color=color, s=200, zorder=6)
+
         # Print stats for best point
         print(f"\nBest point for {label}:")
         print(f"{key_pretty_name_dict[x_axis_key]}: {x_values[best_idx]}")
         print(f"Loss: {losses[best_idx]:.4f}")
         print(f"Run ID: {best_runs[best_idx]['run_id']}")
-    
-    plt.xlabel(f'{key_pretty_name_dict[x_axis_key]}')
-    plt.ylabel(f'{pretty_name_dict[rare_data_name]} Loss')
-    plt.title(f'{pretty_name_dict[rare_data_name]} Loss vs {key_pretty_name_dict[x_axis_key]}')
-    
+
+    plt.xlabel(f"{key_pretty_name_dict[x_axis_key]}")
+    plt.ylabel(f"{pretty_name_dict[rare_data_name]} Loss")
+    plt.title(f"{pretty_name_dict[rare_data_name]} Loss vs {key_pretty_name_dict[x_axis_key]}")
+
     # Set x-axis ticks using all runs to get complete range
     all_runs = run_lists[0] + run_lists[1]
     unique_x_values = sorted(list(set([run[x_axis_key] for run in all_runs])))
@@ -458,12 +477,13 @@ def create_double_scatter(run_lists, x_axis_key, rare_data_name, common_data_nam
 
     if ylims:
         plt.ylim(ylims)
-    
-    plt.legend(handles=scatter_handles, bbox_to_anchor=(1.05, 1), loc='upper left')
-    
-    output_path = f'plotting/plots/{key}_loss_double.png'
-    plt.savefig(output_path, bbox_inches='tight')
+
+    plt.legend(handles=scatter_handles)
+
+    output_path = f"experiments/two_stage/plotting/plots/{key}_loss_double.png"
+    plt.savefig(output_path, bbox_inches="tight")
     plt.close()
+
 
 # Main execution
 if __name__ == "__main__":
@@ -495,7 +515,7 @@ if __name__ == "__main__":
         "lr_schedule_v2": f"{rare_data_name}-{common_data_name}-finding-lr-schedule-v2",
         "weight_decay": f"{rare_data_name}-{common_data_name}-finding-weight-decay",
         "model_scaling": f"{rare_data_name}-{common_data_name}-model-scaling-v3",
-        "spike": f"train-loss-spike-observation",
+        "spike": "train-loss-spike-observation",
     }[args.mode]
 
     if args.build_cache:
@@ -507,9 +527,9 @@ if __name__ == "__main__":
                 print(run_dict["run_id"])
                 print(run_dict)
                 run_list.append(run_dict)
-        pickle.dump(run_list, open(f"cache/{key}_run_list.pkl", "wb"))
+        pickle.dump(run_list, open(f"experiments/two_stage/cache/{key}_run_list.pkl", "wb"))
     else:
-        run_list = pickle.load(open(f"cache/{key}_run_list.pkl", "rb"))
+        run_list = pickle.load(open(f"experiments/two_stage/cache/{key}_run_list.pkl", "rb"))
 
     run_list = sorted(run_list, key=lambda x: x[x_axis_key])
 
@@ -519,14 +539,30 @@ if __name__ == "__main__":
     elif x_axis_key == "rare_data_epochs":
         create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=False)
     elif x_axis_key == "lr_cooldown_duration":
-        # baseline_run = [run for run in run_list if run["replay_ratio"] != 0.0 and run["lr_cooldown_duration"] == 0.99 and run["lr"] == 3e-3][0]
-        run_list = [run for run in run_list if run["replay_ratio"] == 0.0 and run["lr_cooldown_duration"] != 1.0 and run["lr"] == 3e-3]
+        # baseline_run = [run for run in run_list if run["replay_ratio"] != 0.0
+        # and run["lr_cooldown_duration"] == 0.99 and run["lr"] == 3e-3][0]
+        run_list = [
+            run
+            for run in run_list
+            if run["replay_ratio"] == 0.0 and run["lr_cooldown_duration"] != 1.0 and run["lr"] == 3e-3
+        ]
         create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=False)
     elif args.mode == "sft":
-        run_list = [run for run in run_list if run["lr"] == 3e-4 and run["rare_data_epochs"] == 64 and run["replay_ratio"] < 0.8]
-        baseline_run = [run for run in run_list if run["replay_ratio"] == 0.0][0]
+        run_list = [
+            run for run in run_list if run["lr"] == 3e-4 and run["rare_data_epochs"] == 64 and run["replay_ratio"] < 0.8
+        ]
+        baseline_run = next(run for run in run_list if run["replay_ratio"] == 0.0)
         assert x_axis_key == "replay_ratio"
-        create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=False, baseline=baseline_run[f"final_{rare_data_name}_loss"], show_best=True)
+        create_simple_scatter(
+            run_list,
+            x_axis_key,
+            rare_data_name,
+            common_data_name,
+            key,
+            fit=False,
+            baseline=baseline_run[f"final_{rare_data_name}_loss"],
+            show_best=True,
+        )
     elif args.mode == "weight_decay":
         assert x_axis_key == "weight_decay"
         run_list = [run for run in run_list if run["rare_data_epochs"] == 32]
@@ -540,15 +576,18 @@ if __name__ == "__main__":
         create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key, loss_key=rare_data_name)
         if args.mode == "schedule_v3":
             create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key, loss_key="c4")
-            
+
         create_scatter_plot(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key)
 
         if args.mode == "schedule_v3" and rare_data_name == "starcoder":
             run_list_no_early = [run for run in run_list if run["stage2_allocation"] == 1.0]
             run_list_most_early = [run for run in run_list if run["stage2_allocation"] == 0.25]
-            create_double_scatter([run_list_no_early, run_list_most_early], 
-                                 "replay_ratio", rare_data_name, common_data_name,
-                                 key, ["All at end", "25% at end"], ylims=(2.9, 3.8))
-
-
-    
+            create_double_scatter(
+                [run_list_no_early, run_list_most_early],
+                "replay_ratio",
+                rare_data_name,
+                common_data_name,
+                key,
+                ["All at end", "25% at end"],
+                ylims=(2.9, 3.8),
+            )

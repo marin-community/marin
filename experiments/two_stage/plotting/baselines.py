@@ -1,18 +1,17 @@
+import argparse
+
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit
-import argparse
-import matplotlib.colors as mcolors
 
 # Adopt plotting standards from sweep.py
-plt.rcParams.update({
-    "font.family": "Palatino Linotype"
-})
+plt.rcParams.update({"font.family": "Palatino Linotype"})
 
 # Custom color scheme
-LIGHT_BLUE = '#8CD9FF'
-PURPLE = '#7030A0'
-CUSTOM_CMAP = mcolors.LinearSegmentedColormap.from_list('custom', [LIGHT_BLUE, PURPLE])
+LIGHT_BLUE = "#8CD9FF"
+PURPLE = "#7030A0"
+CUSTOM_CMAP = mcolors.LinearSegmentedColormap.from_list("custom", [LIGHT_BLUE, PURPLE])
 
 pretty_name_dict = {
     "finemath": "FineMath",
@@ -22,6 +21,7 @@ pretty_name_dict = {
     "c4": "C4",
 }
 
+
 # Define the power law function
 def power_law(x, A, B, C):
     """
@@ -29,7 +29,8 @@ def power_law(x, A, B, C):
     A / (x ** B) + C
     where C represents the asymptotic loss
     """
-    return A / (x ** B) + C
+    return A / (x**B) + C
+
 
 # Define the bounded power law function
 def bounded_power_law(x, A, B, C, D):
@@ -42,7 +43,8 @@ def bounded_power_law(x, A, B, C, D):
     C = vertical offset
     D = small x bound control (prevents infinity as x->0)
     """
-    return A / (x ** B + D) + C
+    return A / (x**B + D) + C
+
 
 # Define the sigmoid function
 def sigmoid(x, A, B, C, D):
@@ -57,14 +59,16 @@ def sigmoid(x, A, B, C, D):
     """
     return A / (1 + np.exp(-B * (x - C))) + D
 
+
 # Function to find multiplier given a loss value using algebra - power law version
 def power_law_to_multiplier(loss, A, B, C):
     # From: loss = A/(x^B) + C
     # loss - C = A/(x^B)
     # x^B = A/(loss - C)
     # x = (A/(loss - C))^(1/B)
-    x = (A/(loss - C))**(1/B)
+    x = (A / (loss - C)) ** (1 / B)
     return x
+
 
 # Function to find multiplier given a loss value using algebra - bounded power law version
 def bounded_power_law_to_multiplier(loss, A, B, C, D):
@@ -73,8 +77,9 @@ def bounded_power_law_to_multiplier(loss, A, B, C, D):
     # x^B + D = A/(loss - C)
     # x^B = A/(loss - C) - D
     # x = (A/(loss - C) - D)^(1/B)
-    x = (A/(loss - C) - D)**(1/B)
+    x = (A / (loss - C) - D) ** (1 / B)
     return x
+
 
 # Function to find multiplier given a loss value using algebra - sigmoid version
 def sigmoid_to_multiplier(loss, A, B, C, D):
@@ -85,36 +90,37 @@ def sigmoid_to_multiplier(loss, A, B, C, D):
     # 1/((loss - D)/A) - 1 = exp(-B*(x - C))
     # ln(A/(loss - D) - 1) = -B*(x - C)
     # x = C - ln(A/(loss - D) - 1)/B
-    return C - np.log(A/(loss - D) - 1)/B
+    return C - np.log(A / (loss - D) - 1) / B
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--rare_data", type=str)
-parser.add_argument("--fit_type", type=str, default="power_law", 
-                    choices=["power_law", "bounded_power_law"])
+parser.add_argument("--fit_type", type=str, default="power_law", choices=["power_law", "bounded_power_law"])
 args = parser.parse_args()
 
 rare_data = args.rare_data
 
-# candidate losses: first number is yes replay yes early, second is yes replay no early, third is no replay yes early, fourth is no replay, no early
+# candidate losses: first number is yes replay yes early, second is yes replay no early,
+# third is no replay yes early, fourth is no replay, no early
 
 if rare_data == "finemath":
     # multipliers = [0.20, 0.10, 0.05, 0.02, 0.01, 0.004]
     # losses = [2.62149, 2.66707, 2.80266, 3.10907, 3.38551, 3.87458]
-    multipliers = [16.0/1024.0, 8.0/1024.0, 4.0/1024.0, 2.0/1024.0, 1.0/1024.0]
+    multipliers = [16.0 / 1024.0, 8.0 / 1024.0, 4.0 / 1024.0, 2.0 / 1024.0, 1.0 / 1024.0]
     losses = [2.99478, 3.16164, 3.39593, 3.49087, 3.62532]
     candidate_losses = [3.90261, 3.99417, 3.35965, 3.42762, 3.56935, 4.33786, 3.56935]
 elif rare_data == "starcoder":
-    multipliers = [16.0/1024.0, 8.0/1024.0, 4.0/1024.0, 2.0/1024.0, 1.0/1024.0]
+    multipliers = [16.0 / 1024.0, 8.0 / 1024.0, 4.0 / 1024.0, 2.0 / 1024.0, 1.0 / 1024.0]
     losses = [2.45525, 2.90404, 3.53084, 3.77065, 3.98357]
     candidate_losses = [4.49146, 4.53793, 3.02749, 3.02749, 3.26809]
 elif rare_data == "flan":
     # multipliers = [0.50, 0.20, 0.10, 0.05, 0.02, 0.01, 0.001]
     # losses = [3.3972, 3.56355, 3.54664, 3.70888, 3.79287, 4.05113, 4.53829]
-    multipliers = [16.0/1024.0, 8.0/1024.0, 4.0/1024.0, 2.0/1024.0, 1.0/1024.0]
+    multipliers = [16.0 / 1024.0, 8.0 / 1024.0, 4.0 / 1024.0, 2.0 / 1024.0, 1.0 / 1024.0]
     losses = [3.2712, 3.27876, 3.37226, 3.41444, 3.54749]
     candidate_losses = [3.51, 3.65354, 3.29485, 3.35773, 3.44407]
 elif rare_data == "spj":
-    multipliers = [16.0/1024.0, 8.0/1024.0, 4.0/1024.0, 2.0/1024.0, 1.0/1024.0]
+    multipliers = [16.0 / 1024.0, 8.0 / 1024.0, 4.0 / 1024.0, 2.0 / 1024.0, 1.0 / 1024.0]
     losses = []
     candidate_losses = [3.90, 3.93, 3.93, 4.13]
 
@@ -126,7 +132,7 @@ if args.fit_type == "power_law":
     D = None
     fit_func = power_law
     to_multiplier = power_law_to_multiplier
-    fit_label = "Best power law fit"
+    fit_label = "Power law fit"
 else:  # bounded power law
     p0 = [0.1, 0.2, 2.0, 0.001]  # Initial guesses for A, B, C, D
     popt, pcov = curve_fit(bounded_power_law, multipliers, losses, p0=p0, maxfev=10000)
@@ -135,31 +141,31 @@ else:  # bounded power law
     to_multiplier = bounded_power_law_to_multiplier
     fit_label = "Best bounded power law fit"
 
-# Calculate excess loss (loss - asymptotic loss C)
-excess_losses = [loss - C for loss in losses]
+# # Calculate excess loss (loss - asymptotic loss C)
+# excess_losses = [loss - C for loss in losses]
 log_multipliers = np.log(multipliers)
-log_excess = np.log(excess_losses)
+# log_excess = np.log(excess_losses)
 
-# Generate points for smooth curve plotting
+# # Generate points for smooth curve plotting
 x_smooth = np.logspace(np.log10(min(multipliers)), np.log10(max(multipliers)), 100)
 y_smooth = fit_func(x_smooth, *popt)
-excess_smooth = y_smooth - C
+# excess_smooth = y_smooth - C
 log_x_smooth = np.log(x_smooth)
-log_excess_smooth = np.log(excess_smooth)
+# log_excess_smooth = np.log(excess_smooth)
 
 # Create figure with updated styling
-plt.figure(figsize=(6, 3), dpi=600)
-plt.plot(log_multipliers, log_excess, 'o', color=PURPLE, label='Data points')
-plt.plot(log_x_smooth, log_excess_smooth, '-', color=LIGHT_BLUE, label=fit_label)
-plt.xlabel(f"log(Rare Fraction)")
-plt.ylabel("log(Excess Loss)")
-plt.title(f"{pretty_name_dict[rare_data]} log(Excess Loss) vs log(Rare Fraction)")
+plt.figure(figsize=(4, 4), dpi=600)
+plt.plot(multipliers, losses, "o", color=PURPLE, label="Data points")
+plt.plot(x_smooth, y_smooth, "-", color=LIGHT_BLUE, label=fit_label)
+plt.xlabel("Rare Fraction")
+plt.ylabel("Loss")
+plt.title(f"{pretty_name_dict[rare_data]} Loss vs Rare Fraction")
 plt.grid(True, alpha=0.3)
-plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.legend()
 plt.tight_layout()
-plt.savefig(f"plotting/plots/log_excess_loss_vs_fraction_{rare_data}.png", bbox_inches='tight')
+plt.savefig(f"experiments/two_stage/plotting/plots/loss_vs_fraction_{rare_data}_v2.png", bbox_inches="tight")
 
-print(f"Best fit parameters:")
+print("Best fit parameters:")
 print(f"A = {A:.3f}")
 print(f"B = {B:.3f}")
 print(f"C (asymptotic loss) = {C:.3f}")
