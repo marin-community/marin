@@ -237,12 +237,6 @@ class RolloutWorker:
         self._inference_thread = threading.Thread(target=lambda: self._inference_server.serve(), daemon=True)
         self._inference_thread.start()
 
-    def __del__(self):
-        # best effort cleanup
-        self._inference_server.shutdown()
-        del self._inference_server
-        del self._inference_thread
-
     def _build_models(self):
         """Build policy model after levanter initialization."""
 

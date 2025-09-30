@@ -32,10 +32,10 @@ from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from transformers import AutoTokenizer
 
+from marin.post_training.model_utils import load_model_from_checkpoint
 from marin.rl import weight_transfer
 from marin.rl.weight_transfer import WeightTransferConfig
 
-from marin.post_training.model_utils import load_model_from_checkpoint
 from .replay_buffer import ReplayBuffer, ReplayDataLoader
 from .rl_losses import rloo_loss_with_importance_sampling
 from .rollout_storage import RolloutStorageConfig
@@ -226,9 +226,10 @@ class TrainWorker:
         config = self.config
         optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
+        @jax.jit
         def _loss_function(model, batch, key):
             return rloo_loss_with_importance_sampling(
-                model, self.reference_model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=10
+                model, self.reference_model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.2
             )
             # return ppo_loss(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.5)
 
@@ -266,9 +267,6 @@ class TrainWorker:
         def weight_transfer_hook(info: levanter.callbacks.StepInfo):
             step = info.step
             state = info.state
-
-            if step % self.config.weight_transfer.sync_interval_steps != 0:
-                return
 
             self.weight_id += 1
             logger.info(
