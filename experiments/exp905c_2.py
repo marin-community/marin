@@ -87,7 +87,6 @@ if __name__ == "__main__":
             EvalTaskConfig("winogrande", num_fewshot=0, task_alias="winogrande_0shot"),
         ],
         max_eval_instances=10,
-        eval_batch_size=1,  # Set EvalBatch size to 4 (per_device_eval_parallelism=4)
         resource_config=resource_config,
         apply_chat_template=True,
     )
