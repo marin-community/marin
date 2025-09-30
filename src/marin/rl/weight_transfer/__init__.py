@@ -25,6 +25,7 @@ import logging
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 
+from .arrow_flight import ArrowFlightClient, ArrowFlightCoordinator, ArrowFlightServer
 from .base import (
     WeightTransferClient,
     WeightTransferClientMetrics,
@@ -33,9 +34,7 @@ from .base import (
     WeightTransferServer,
     WeightTransferServerMetrics,
 )
-from .arrow_flight import ArrowFlightClient, ArrowFlightCoordinator, ArrowFlightServer
 from .checkpoint import GCSCheckpointClient, GCSCheckpointServer
-from .ray import RayRemotingClient, RayRemotingServer, RayWeightCoordinator
 
 try:
     from .jax import JAXTransferClient, JAXTransferServer, WeightTransferCoordinator
@@ -68,9 +67,6 @@ def create_weight_transfer_server(
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
         return JAXTransferServer(config, mesh, axis_mapping)
 
-    elif config.mode == WeightTransferMode.RAY_REMOTING:
-        return RayRemotingServer(config)
-
     elif config.mode == WeightTransferMode.ARROW_FLIGHT:
         return ArrowFlightServer(config, mesh, axis_mapping)
 
@@ -100,9 +96,6 @@ def create_weight_transfer_client(
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
         return JAXTransferClient(config, mesh, axis_mapping)
 
-    elif config.mode == WeightTransferMode.RAY_REMOTING:
-        return RayRemotingClient(config)
-
     elif config.mode == WeightTransferMode.ARROW_FLIGHT:
         return ArrowFlightClient(config, mesh, axis_mapping)
 
@@ -122,9 +115,6 @@ __all__ = [
     "GCSCheckpointServer",
     "JAXTransferClient",
     "JAXTransferServer",
-    "RayRemotingClient",
-    "RayRemotingServer",
-    "RayWeightCoordinator",
     "WeightTransferClient",
     "WeightTransferClientMetrics",
     "WeightTransferConfig",

@@ -19,7 +19,7 @@ import jax.numpy as jnp
 from levanter.models.lm_model import LmHeadModel
 from optax import softmax_cross_entropy_with_integer_labels
 
-from marin.post_training.rollout_types import TrainingBatch
+from marin.rl.rollout_types import TrainingBatch
 
 # TODO(power) - these should be refactored to accept the precomputed logits instead
 # of computing outputs themselves.

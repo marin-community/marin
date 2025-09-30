@@ -36,15 +36,15 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
 
-from marin.post_training.environments.mock_env import MockEnv
-from marin.post_training.rollout_storage import (
+from marin.rl.environments.mock_env import MockEnv
+from marin.rl.rollout_storage import (
     RolloutStorageConfig,
 )
-from marin.post_training.rollout_types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
-from marin.post_training.rollout_worker import RolloutWorkerConfig
-from marin.post_training.train_worker import ReplayBufferConfig, TrainWorkerConfig
-from marin.post_training.weight_transfer import WeightTransferConfig
-from marin.post_training.weight_transfer.base import WeightTransferMode
+from marin.rl.rollout_types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
+from marin.rl.rollout_worker import RolloutWorkerConfig
+from marin.rl.train_worker import ReplayBufferConfig, TrainWorkerConfig
+from marin.rl.weight_transfer import WeightTransferConfig
+from marin.rl.weight_transfer.base import WeightTransferMode
 
 
 class DummyTokenizer:
@@ -273,6 +273,7 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
             max_seqs=8, page_size=8, max_pages_per_seq=32, max_queued_tokens=8, enable_logprobs=True
         ),
         temperature=1.0,
+        port=27123,
     )
 
 

@@ -20,14 +20,14 @@ import numpy as np
 import pytest
 
 try:
-    from marin.post_training import train_batch
-    from marin.post_training.replay_buffer import ReplayBuffer, ReplayDataLoader
+    from marin.rl import train_batch
+    from marin.rl.replay_buffer import ReplayBuffer, ReplayDataLoader
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
-from marin.post_training.rollout_storage import (
+from marin.rl.rollout_storage import (
     InMemoryRolloutQueue,
 )
-from marin.post_training.rollout_types import (
+from marin.rl.rollout_types import (
     Rollout,
     RolloutBatch,
     RolloutGroup,

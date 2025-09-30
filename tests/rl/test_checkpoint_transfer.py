@@ -19,7 +19,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 try:
-    from marin.post_training.weight_transfer import (
+    from marin.rl.weight_transfer import (
         GCSCheckpointClient,
         WeightTransferConfig,
         WeightTransferMode,
