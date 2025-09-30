@@ -196,7 +196,7 @@ def rl_train(name: str) -> ExecutorStep:
             base_path=OutputName("checkpoints"),
             save_interval=datetime.timedelta(seconds=3600),  # Save less frequently
         ),
-        tensor_parallel_axes=["mlp", "kv_head"],
+        tensor_parallel_axes=["mlp", "kv_head", "vocab"],
         fsdp_axis="embed",
         batch_axis="batch",
         ray=RayConfig(auto_start_cluster=False),
@@ -252,6 +252,7 @@ def rl_train(name: str) -> ExecutorStep:
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_TOKENIZER)
 
+    # TODO(power): Support multi environment setup
     rollout_worker = RolloutWorkerConfig(
         trainer=trainer_config,
         inference_server_config=inference_server_config,
