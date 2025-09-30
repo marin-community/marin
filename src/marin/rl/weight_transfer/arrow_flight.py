@@ -476,10 +476,10 @@ class ArrowFlightClient(WeightTransferClient):
 
             return model
 
-        except Exception as e:
+        except Exception:
             self.metrics.failed_receives += 1
-            logger.error(f"Failed to receive weights via Arrow Flight: {e}")
-            raise
+            logger.error("Failed to receive weights via Arrow Flight", exc_info=True)
+            return None
 
     def cleanup(self) -> None:
         """Cleanup Flight client resources."""

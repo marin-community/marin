@@ -34,7 +34,6 @@ logger = logging.getLogger(__name__)
 class WeightTransferMode(Enum):
     GCS_CHECKPOINT = "gcs_checkpoint"
     JAX_TRANSFER_SERVER = "jax_transfer_server"
-    RAY_REMOTING = "ray_remoting"
     ARROW_FLIGHT = "arrow_flight"
 
 
