@@ -42,11 +42,11 @@ from marin.execution.executor import (
     OutputName,
     executor_main,
 )
-from marin.post_training.rollout_storage import RolloutStorageConfig, StorageType
-from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
-from marin.post_training.train_worker import ReplayBufferConfig, TrainWorker, TrainWorkerConfig
-from marin.post_training.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.resources import TpuPodConfig
+from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
+from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
+from marin.rl.train_worker import ReplayBufferConfig, TrainWorker, TrainWorkerConfig
+from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.training.training import (
     _add_run_env_variables,
 )
@@ -54,8 +54,8 @@ from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
-ENVIRONMENT_SPEC = "math"
-MODEL_NAME = "meta-llama/Llama-3.2-1B"
+ENVIRONMENT_SPEC = "mock:task_type=number_comparison"
+MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 # MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 # MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 # MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
@@ -94,13 +94,13 @@ def run_rl_training_on_pod(config: RLTrainConfig):
     env = _add_run_env_variables(env)
     env["EQX_ON_ERROR"] = "nan"
 
-    if "JAX_COMPILATION_CACHE_DIR" not in env:
-        marin_prefix = os.environ.get("MARIN_PREFIX")
-        if marin_prefix:
-            env["JAX_COMPILATION_CACHE_DIR"] = os.path.join(marin_prefix, "compilation-cache")
-            logger.info(f"JAX compilation cache enabled at: {env['JAX_COMPILATION_CACHE_DIR']}")
-        else:
-            logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
+    # if "JAX_COMPILATION_CACHE_DIR" not in env:
+    #     marin_prefix = os.environ.get("MARIN_PREFIX")
+    #     if marin_prefix:
+    #         env["JAX_COMPILATION_CACHE_DIR"] = os.path.join(marin_prefix, "compilation-cache")
+    #         logger.info(f"JAX compilation cache enabled at: {env['JAX_COMPILATION_CACHE_DIR']}")
+    #     else:
+    #         logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
 
     # Use the default env when running on the driver (Ray doesn't support otherwise.)
     # runtime_env = ray_deps.build_runtime_env_for_packages(extra=["tpu", "post_training"])
@@ -179,6 +179,8 @@ def rl_train(name: str) -> ExecutorStep:
         tracker=TensorboardConfig(
             logdir=OutputName("tblogs"),
         ),
+        log_xla_hlo=False,
+        log_jaxprs=False,
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         train_batch_size=8,
         num_train_steps=50000,
@@ -194,17 +196,15 @@ def rl_train(name: str) -> ExecutorStep:
     )
 
     opt_config = AdamConfig(
-        learning_rate=1e-3,
-        weight_decay=1e-3,
-        warmup=10,
+        learning_rate=1e-6,
+        weight_decay=1e-2,
+        warmup=100,
         lr_schedule="constant",
     )
 
     inference_server_config = InferenceServerConfig(
-        model=model_config,
         # Turn on tensor parallelism for inference
         trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=4),
-        hf_checkpoint=MODEL_CHECKPOINT,
         tokenizer=MODEL_TOKENIZER,
         temperature=1.0,
         service=InferenceEngineConfig(
@@ -243,7 +243,7 @@ def rl_train(name: str) -> ExecutorStep:
             # Don't allow resampling.
             max_samples=1,
         ),
-        kl_coef=0.001,
+        kl_coef=0.05,
         initial_checkpoint=MODEL_NAME,
         run_id=RUN_ID,
     )
@@ -292,7 +292,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-005"),
+        rl_train(name="llama-1b-math-rl-test-007"),
     ]
 
     executor_main(

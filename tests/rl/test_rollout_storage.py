@@ -21,11 +21,11 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from marin.post_training.rollout_storage import (
+from marin.rl.rollout_storage import (
     RolloutStorageConfig,
     StorageType,
 )
-from marin.post_training.rollout_types import (
+from marin.rl.rollout_types import (
     Rollout,
     RolloutBatch,
     RolloutGroup,

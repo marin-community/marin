@@ -21,7 +21,7 @@ from typing import Any, ClassVar, Protocol
 import jax
 import numpy as np
 
-from .marin_env import EnvResponse, EnvStep, InferenceContext, MarinEnv
+from .base import EnvResponse, EnvStep, InferenceContext, MarinEnv
 
 NUM_TRAIN_EXAMPLES = 1000
 NUM_EVAL_EXAMPLES = 100

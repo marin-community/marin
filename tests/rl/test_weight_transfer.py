@@ -24,8 +24,7 @@ import pytest
 import ray
 from jax.sharding import Mesh
 
-from marin.post_training.weight_transfer import (
-    RayWeightCoordinator,
+from marin.rl.weight_transfer import (
     WeightTransferConfig,
     WeightTransferMode,
     create_weight_transfer_client,
@@ -36,14 +35,12 @@ try:
     import jax.experimental.transfer
 
     TRANSFER_TYPES = [
-        WeightTransferMode.RAY_REMOTING,
         WeightTransferMode.GCS_CHECKPOINT,
         WeightTransferMode.JAX_TRANSFER_SERVER,
         WeightTransferMode.ARROW_FLIGHT,
     ]
 except (ImportError, AttributeError):
     TRANSFER_TYPES = [
-        WeightTransferMode.RAY_REMOTING,
         WeightTransferMode.GCS_CHECKPOINT,
         WeightTransferMode.ARROW_FLIGHT,
     ]
@@ -108,12 +105,8 @@ def sample_params():
 def create_test_weight_transfer_pair(weight_transfer_config):
     """Helper function to create server/client pairs for testing with simplified Levanter API."""
     # Set unique coordinator name for distributed modes
-    if weight_transfer_config.mode in [
-        WeightTransferMode.RAY_REMOTING,
-        WeightTransferMode.JAX_TRANSFER_SERVER,
-    ]:
-        coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
-        weight_transfer_config.coordinator_name = coordinator_name
+    coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
+    weight_transfer_config.coordinator_name = coordinator_name
 
     # Create simple mesh and axis mapping for testing
     mesh = create_mesh()
@@ -151,15 +144,6 @@ def weight_transfer_config(transfer_mode):
         yield config
 
 
-def test_ray_coordinator_no_weights_initially(ray_tpu_cluster):
-    """Test coordinator returns None when no weights stored."""
-    coordinator = RayWeightCoordinator.remote()
-
-    weight_refs, weight_id = ray.get(coordinator.get_latest_weight_refs.remote())
-    assert weight_refs is None
-    assert weight_id is None
-
-
 def test_multiple_weight_updates(ray_tpu_cluster, weight_transfer_config, sample_params):
     """Test multiple sequential weight updates."""
     server, client = create_test_weight_transfer_pair(weight_transfer_config)
@@ -185,7 +169,6 @@ def test_multiple_weight_updates(ray_tpu_cluster, weight_transfer_config, sample
     received_params_3 = client.receive_weights(received_params_2)
     assert received_params_3 is None
 
-    # Cleanup
     server.cleanup()
     client.cleanup()
 

@@ -36,7 +36,7 @@ if os.environ.get("CI"):
 try:
     from jax.experimental import transfer as jax_transfer
 
-    from marin.post_training.weight_transfer import (
+    from marin.rl.weight_transfer import (
         WeightTransferConfig,
         WeightTransferMode,
         create_weight_transfer_client,
