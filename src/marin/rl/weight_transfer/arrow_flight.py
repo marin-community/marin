@@ -30,7 +30,6 @@ from functools import partial
 import haliax as hax
 import haliax.state_dict as hsd
 import jax
-import jax.numpy as jnp
 import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
@@ -53,11 +52,13 @@ logger = logging.getLogger(__name__)
 
 # The maximum number of array elements in a single Arrow RecordBatch.
 # Larger arrays are chunked into multiple RecordBatches to avoid hitting Arrow limits.
-MAX_ELEMENTS_PER_RECORD = 32 * 1000 * 1000
+# We assume our largest dtype is 4 bytes (e.g., float32/int32).
+MAX_ELEMENTS_PER_RECORD = (2000 * 1000 * 1000) / 4
 
 
-def _create_binary_array(buffer_data: bytes) -> pa.Array:
+def _create_binary_array(buffer_data: jax.Array) -> pa.Array:
     """Create a PyArrow binary array from buffer data."""
+    # dlpack_capsule = jax.dlpack.to_dlpack(buffer_data)
     block = pa.py_buffer(buffer_data)
     return pa.Array.from_buffers(
         pa.large_binary(),
@@ -111,46 +112,25 @@ def serialize_pytree_to_arrow(model: PyTree, weight_id: int) -> tuple[pa.Schema,
         metadata={"weight_id": str(weight_id), "timestamp": str(time.time()), "num_params": str(len(state_dict))},
     )
 
-    # make a thread pool for big arrays
-    import concurrent.futures
+    state_dict = jax.device_get(state_dict)
 
-    # serialize directly from JAX array buffers
-    pool = concurrent.futures.ThreadPoolExecutor()
-    with pool:
-        for name, value in state_dict.items():
-            value = jax.device_get(value)
-            shape = value.shape
-            is_scalar = len(shape) == 0
-            dtype = value.dtype
+    for name, value in state_dict.items():
+        shape = value.shape
+        is_scalar = len(shape) == 0
+        dtype = value.dtype
 
-            # Handle splitting for large arrays
-            if is_scalar:
-                splits = [value]
-                total_parts = 1
-            else:
-                flat_data = value.ravel()
-                splits = list(jnp.array_split(flat_data, max(1, len(flat_data) // MAX_ELEMENTS_PER_RECORD)))
-                total_parts = len(splits)
+        # Handle splitting for large arrays
+        if is_scalar:
+            splits = [value]
+            total_parts = 1
+        else:
+            splits = np.array_split(value.flatten(), max(1, value.size // MAX_ELEMENTS_PER_RECORD))
+            total_parts = len(splits)
 
-            # Create batches for each split
-            for i, split in enumerate(splits):
-                buffer_data = split.tobytes()
-                binary_array = _create_binary_array(buffer_data)
-
-                def _task(
-                    schema=schema,
-                    name=name,
-                    binary_array=binary_array,
-                    shape=shape,
-                    dtype=dtype,
-                    i=i,
-                    total_parts=total_parts,
-                ):
-                    return _create_record_batch(schema, name, binary_array, shape, dtype, i, total_parts)
-
-                batches.append(pool.submit(_task))
-    # Wait for all tasks to complete and collect results
-    batches = [batch.result() for batch in batches]
+        # Create batches for each split
+        for i, split in enumerate(splits):
+            binary_array = _create_binary_array(split)
+            batches.append(_create_record_batch(schema, name, binary_array, shape, dtype, i, total_parts))
     return schema, batches
 
 
@@ -336,24 +316,32 @@ class ArrowFlightServer(WeightTransferServer):
         """Serve weights via Arrow Flight using Haliax state_dict serialization."""
         self.metrics.total_transfers += 1
 
+        logger.info(f"Serving weights for weight_id {weight_id} via Arrow Flight...")
+        start_time = time.time()
         try:
-            logger.info(f"Serving weights for weight_id {weight_id} via Arrow Flight...")
             barrier_sync()
 
             if jax.process_index() == 0:
                 # Convert model to Arrow RecordBatch
                 schema, batches = serialize_pytree_to_arrow(model, weight_id)
+                serialize_time = time.time()
 
                 # Store in Flight server
                 self.flight_server.store_weights(weight_id, schema, batches)
+                store_time = time.time()
 
                 # Update coordinator
                 ray.get(self.coordinator.update_weight_id.remote(weight_id))
+                update_time = time.time()
 
                 self.metrics.successful_transfers += 1
-                logger.info(f"Served weights for weight_id {weight_id} via Arrow Flight")
 
             barrier_sync()
+            logger.info(
+                f"Served weights for weight_id {weight_id}. serialize={serialize_time - start_time:.2f}s, "
+                f"store={store_time - serialize_time:.2f}s, "
+                f"update={update_time - store_time:.2f}s"
+            )
 
         except Exception as e:
             self.metrics.failed_transfers += 1
@@ -378,6 +366,8 @@ class ArrowFlightClient(WeightTransferClient):
     Uses Haliax state_dict for proper deserialization of model parameters.
     """
 
+    _coordinator: ray.actor.ActorHandle
+
     def __init__(
         self, config: WeightTransferConfig, mesh: Mesh | None = None, axis_mapping: ResourceMapping | None = None
     ):
@@ -386,7 +376,7 @@ class ArrowFlightClient(WeightTransferClient):
         self.axis_mapping = axis_mapping
 
         # Get coordinator
-        self.coordinator = get_or_create_actor(ArrowFlightCoordinator, config.coordinator_name)
+        self._coordinator = get_or_create_actor(ArrowFlightCoordinator, config.coordinator_name)
 
         self.last_weight_id = None
         self.flight_client = None
@@ -397,7 +387,7 @@ class ArrowFlightClient(WeightTransferClient):
     def _connect_to_server(self) -> bool:
         """Connect to the Arrow Flight server."""
         try:
-            server_location, _latest_weight_id = ray.get(self.coordinator.get_server_info.remote())
+            server_location, _latest_weight_id = ray.get(self._coordinator.get_server_info.remote())
 
             if server_location is None:
                 return False
@@ -435,7 +425,7 @@ class ArrowFlightClient(WeightTransferClient):
 
             start_time = time.time()
             # Get latest weight info
-            _server_location, latest_weight_id = ray.get(self.coordinator.get_server_info.remote())
+            _server_location, latest_weight_id = ray.get(self._coordinator.get_server_info.remote())
 
             if latest_weight_id is None or latest_weight_id == self.last_weight_id:
                 return None

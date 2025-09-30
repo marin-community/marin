@@ -217,10 +217,18 @@ def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
     )
 
     server, client = create_test_weight_transfer_pair(weight_transfer_config)
-    large_params = create_sample_pytree(seed=789, hidden_size=5000, layers=4)
+    # 5k * 5k * 4bytes = ~100MB per layer, 40 layers = ~4GB total
+    large_params = create_sample_pytree(seed=789, hidden_size=5000, layers=40)
+
+    # put the params on the TPU to test real transfer, shard across the devices
+    print("Creating mesh for large params transfer...")
+    mesh = create_mesh(devices=jax.devices("tpu"))
+    with mesh:
+        large_params = jax.device_put(large_params)
+    print("Mesh created with devices:", mesh.devices)
 
     try:
-        for i in range(100):
+        for i in range(10):
             print(i)
             server.serve_weights(i, large_params)
             received_params = client.receive_weights(large_params)
