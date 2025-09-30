@@ -14,16 +14,28 @@
 
 """Mock environment for testing RL training without external dependencies."""
 
-from pathlib import Path
+from collections.abc import Iterator
+from dataclasses import dataclass, field
 from typing import Any, ClassVar, Protocol
 
 import jax
 import numpy as np
 
-from .marin_env import EnvStep, InferenceContext, MarinEnv
+from .marin_env import EnvResponse, EnvStep, InferenceContext, MarinEnv
 
 NUM_TRAIN_EXAMPLES = 1000
 NUM_EVAL_EXAMPLES = 100
+
+
+@dataclass
+class MockEnvExample:
+    """Single data example with transformations for debugging."""
+
+    raw_prompt: str
+    raw_answer: str
+    processed_prompt: str
+    processed_answer: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class Task(Protocol):
@@ -117,26 +129,8 @@ class NumberComparisonTask:
         return self.generate_training_examples(n_examples, rng)
 
     def compute_reward(self, correct_answer: str, actual_response: str) -> float:
-        return compute_soft_reward(correct_answer, actual_response)
-
-
-class SecondHalfOfWordTask:
-    def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        examples = []
-        words = Path("/usr/share/dict/words").read_text().splitlines()
-        for _ in range(n_examples):
-            w = rng.choice(words)
-            prompt = f"Second half of '{w}'? Just the letters:"
-            mid = len(w) // 2
-            answer = w[mid:]
-            examples.append({"prompt": prompt, "answer": answer})
-        return examples
-
-    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        return self.generate_training_examples(n_examples, rng)
-
-    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
-        return compute_soft_reward(correct_answer, actual_response)
+        format_score = 1.0 if actual_response.strip().isdigit() else 0.0
+        return 0.1 * format_score + 0.9 * compute_soft_reward(correct_answer, actual_response)
 
 
 def extract_first_n_tokens(response: str, n: int = 10) -> list[str]:
@@ -198,7 +192,7 @@ class MoarCatsTask:
         num_cats = actual_response.lower().count("cat")
         love_cats = actual_response.lower().count("love cats")
 
-        return (num_cats + (10 * love_cats)) / (1 + len(actual_response))
+        return (num_cats + (10 * love_cats)) / np.sqrt(1 + len(actual_response))
 
 
 # Task mappings
@@ -207,7 +201,6 @@ TASKS = {
     "simple_addition": SimpleAdditionTask(),
     "simple_opposites": SimpleOppositesTask(),
     "number_comparison": NumberComparisonTask(),
-    "second_half_of_word": SecondHalfOfWordTask(),
 }
 
 
@@ -269,12 +262,34 @@ class MockEnv(MarinEnv):
 
         return EnvStep(examples=examples, responses=responses, rewards=rewards, metrics=metrics)
 
+    def training_data(self) -> Iterator[MockEnvExample]:
+        """Stream training data."""
+        for example in self.train_examples:
+            yield MockEnvExample(
+                raw_prompt=example["prompt"],
+                raw_answer=example["answer"],
+                processed_prompt=example["prompt"],  # MockEnv doesn't transform
+                processed_answer=example["answer"],
+                metadata={"task_type": self.task_type},
+            )
+
+    def eval_data(self) -> Iterator[MockEnvExample]:
+        """Stream evaluation data."""
+        for example in self.eval_examples:
+            yield MockEnvExample(
+                raw_prompt=example["prompt"],
+                raw_answer=example["answer"],
+                processed_prompt=example["prompt"],  # MockEnv doesn't transform
+                processed_answer=example["answer"],
+                metadata={"task_type": self.task_type},
+            )
+
     def get_eval_examples(self, n_examples: int) -> list[dict[str, Any]]:
         """Get evaluation examples."""
         return self.eval_examples[:n_examples]
 
     def _compute_rewards(
-        self, examples: list[dict], responses: list[list[dict[str, Any]]], tokenizer
+        self, examples: list[MockEnvExample], responses: list[list[EnvResponse]], tokenizer
     ) -> tuple[np.ndarray, dict]:
         """Compute rewards for generated responses."""
         n_examples = len(examples)

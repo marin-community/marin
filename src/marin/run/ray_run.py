@@ -14,6 +14,7 @@
 
 import argparse
 import asyncio
+import getpass
 import json
 import logging
 import os
@@ -21,39 +22,40 @@ import re
 import shlex
 import subprocess
 import time
+from pathlib import Path
 
 from ray.job_submission import JobSubmissionClient
 
+from marin.cluster.config import find_config_by_region
+from marin.cluster.ray import DashboardConfig, ray_dashboard
 from marin.run.ray_deps import build_runtime_env_for_packages
 from marin.run.vars import REMOTE_DASHBOARD_URL
 
 logger = logging.getLogger(__name__)
 
 
-def parse_user_command_line(command: str) -> dict[str, str | None]:
-    """Parse command line to extract experiment name and prefix for submission ID."""
-    experiment = re.search(r"experiments/([^ ]+)", command)
+def parse_user_command_line(command: str) -> dict[str, str]:
+    """Extract interesting parts from a user command line."""
+    parts = command.strip().split()
+    entrypoint = None
+    for part in parts:
+        if Path(part).exists() and "/python" not in part:
+            entrypoint = Path(part).name.split(".")[0]
+            return {"entrypoint": entrypoint}
 
-    try:
-        if experiment:
-            experiment = experiment.group(1).split("/")[-1].split(".")[0]
-    except Exception:
-        experiment = ""
+    if parts and entrypoint is None:
+        entrypoint = parts[0]
+    else:
+        entrypoint = "unknown"
 
-    return {
-        "experiment": experiment,
-    }
+    return {"entrypoint": entrypoint}
 
 
 def generate_submission_id(command: str) -> str:
     """Generate a nice submission ID based on the inferred experiment."""
     parsed = parse_user_command_line(command)
-    timestamp_micros = int(time.time() * 1_000_000)
-    parts = ["ray-run"]
-    parts.append(f"experiment-{parsed.get('experiment', 'unknown')}")
-    # parts.append(f"prefix-{parsed.get('prefix', 'unknown')}")
-    parts.append(str(timestamp_micros))
-
+    timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    parts = ["ray-run", getpass.getuser(), parsed["entrypoint"], timestamp]
     return "-".join(parts)
 
 
@@ -70,13 +72,21 @@ def tpus_per_node(tpu_type: str) -> int:
     return chips
 
 
+def make_client() -> JobSubmissionClient:
+    """Create a JobSubmissionClient based on environment variables."""
+    if "RAY_ADDRESS" not in os.environ:
+        client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
+    else:
+        client = JobSubmissionClient()
+    return client
+
+
 async def submit_and_track_job(
     entrypoint: str,
     extra: str,
     env_vars: dict,
     no_wait: bool,
     submission_id: str,
-    client: JobSubmissionClient,
     *,
     entrypoint_num_cpus: float | None = None,
     entrypoint_num_gpus: float | None = None,
@@ -84,7 +94,7 @@ async def submit_and_track_job(
     entrypoint_resources: dict | None = None,
 ):
     """Submit a job to Ray and optionally track logs."""
-
+    client = make_client()
     current_dir = os.getcwd()
 
     # Inject GIT_COMMIT into the environment for logging
@@ -181,6 +191,12 @@ def main():
         default=None,
         help="TPU type to reserve for the entrypoint (e.g. v4-8)",
     )
+    parser.add_argument(
+        "--cluster",
+        type=str,
+        default=None,
+        help="Cluster name or config file path to submit job to",
+    )
     parser.add_argument("--auto-stop", action="store_true", help="Automatically stop the cluster on shutdown.")
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
 
@@ -235,34 +251,56 @@ def main():
         tpu_res = {f"TPU-{args.tpu}-head": 1, "TPU": chips}
         entrypoint_resources = (entrypoint_resources or {}) | tpu_res
 
+    # Resolve cluster config if specified
+    cluster_config = None
+    if args.cluster:
+        if args.cluster.endswith(".yaml") or os.path.exists(args.cluster):
+            cluster_config = args.cluster
+        else:
+            cluster_config = find_config_by_region(args.cluster)
+
     # Submit the job and track it asynchronously
     submission_id = generate_submission_id(full_cmd)
-    if "RAY_ADDRESS" not in os.environ:
-        client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
-    else:
-        client = JobSubmissionClient()
 
-    try:
-        asyncio.run(
-            submit_and_track_job(
+    async def run_job():
+        try:
+            await submit_and_track_job(
                 full_cmd,
                 args.extra,
                 env_vars,
                 args.no_wait,
                 submission_id=submission_id,
-                client=client,
                 entrypoint_num_cpus=args.entrypoint_num_cpus,
                 entrypoint_num_gpus=args.entrypoint_num_gpus,
                 entrypoint_memory=args.entrypoint_memory,
                 entrypoint_resources=entrypoint_resources,
             )
-        )
-    except KeyboardInterrupt:
-        pass
+        except KeyboardInterrupt:
+            pass
+        except asyncio.CancelledError:
+            logger.info("Job tracking cancelled by user.")
+            pass
+        except Exception as e:
+            logger.error(f"Error submitting or tracking job: {e}")
+            raise
+
+    try:
+        if cluster_config:
+            with ray_dashboard(DashboardConfig.from_cluster(cluster_config)):
+                asyncio.run(run_job())
+        else:
+            asyncio.run(run_job())
     finally:
         if args.auto_stop:
             logger.info(f"Auto-stopping job {submission_id}...")
-            client.stop_job(submission_id)
+            # Open a fresh connection for cleanup
+            if cluster_config:
+                with ray_dashboard(DashboardConfig.from_cluster(cluster_config)):
+                    client = make_client()
+                    client.stop_job(submission_id)
+            else:
+                client = make_client()
+                client.stop_job(submission_id)
 
 
 if __name__ == "__main__":

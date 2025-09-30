@@ -137,6 +137,13 @@ T_co = TypeVar("T_co", covariant=True)
 ExecutorFunction = Callable | ray.remote_function.RemoteFunction | None
 
 
+def asdict_without_description(obj: dataclass) -> dict[str, Any]:
+    """Return the `asdict` of an object, but remove the `description` field, because it doesn't affect the semantics."""
+    d = asdict(obj)
+    d.pop("description", None)
+    return d
+
+
 @dataclass(frozen=True)
 class ExecutorStep(Generic[ConfigT]):
     """
@@ -537,6 +544,7 @@ class Executor:
             strategy = schedule_on_head_node_strategy()
         else:
             strategy = None
+
         self.status_actor: StatusActor = StatusActor.options(
             name="status_actor",
             get_if_exists=True,
@@ -626,7 +634,7 @@ class Executor:
                 status_path = get_status_path(self.output_paths[finished_step])
                 ran = running[finished_step][1]
                 try:
-                    logger.info(f"Waiting for {ref} to finish for step {finished_step.name}")
+                    logger.info("Waiting for %s to finish for step %s", ref, finished_step.name)
                     ray.get(ref)
                 except Exception:
                     message = traceback.format_exc()
@@ -658,11 +666,11 @@ class Executor:
         config_version = self.versions[step]["config"]
         output_path = self.output_paths[step]
 
-        logger.info(f"{step.name}: {get_fn_name(step.fn)}")
-        logger.info(f"  output_path = {output_path}")
-        logger.info(f"  config = {json.dumps(config_version, cls=CustomJsonEncoder)}")
+        logger.info("%s: %s", step.name, get_fn_name(step.fn))
+        logger.info("  output_path = %s", output_path)
+        logger.info("  config = %s", json.dumps(config_version, cls=CustomJsonEncoder))
         for i, dep in enumerate(self.dependencies[step]):
-            logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
+            logger.info("  %s = %s", dependency_index_str(i), self.output_paths[dep])
 
         if not dry_run:
             step_name = f"{step.name}: {get_fn_name(step.fn)}"
@@ -681,10 +689,13 @@ class Executor:
 
             append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
 
-            runtime_env = build_runtime_env_for_packages(extra=step.pip_dependency_groups)
-
-            # Inject themarin prefix into the runtime environment for each step.
-            runtime_env["env_vars"] = runtime_env.get("env_vars", {}) | {"MARIN_PREFIX": self.prefix}
+            # Skip runtime_env for local clusters since packages are already available
+            if is_local_ray_cluster():
+                runtime_env = {"env_vars": {"MARIN_PREFIX": self.prefix}}
+            else:
+                runtime_env = build_runtime_env_for_packages(extra=step.pip_dependency_groups)
+                # Inject the marin prefix into the runtime environment for each step.
+                runtime_env["env_vars"] = runtime_env.get("env_vars", {}) | {"MARIN_PREFIX": self.prefix}
 
             # uv doesn't reuse dependencies and ends up installing CUDA-enabled
             # torch, which is huge and causes OOMs, so disable it for now.
@@ -885,9 +896,14 @@ class Executor:
 
         # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
         # import pdb; pdb.set_trace()
-        executor_version_str = json.dumps(
-            list(map(asdict_without_description, self.step_infos)), sort_keys=True, cls=CustomJsonEncoder
-        )
+
+        # we pre-compute the asdict as it can be expensive.
+        executor_info_dict = asdict_without_description(self.executor_info)
+        step_infos = executor_info_dict["steps"]
+        for s in step_infos:
+            s.pop("description", None)
+
+        executor_version_str = json.dumps(step_infos, sort_keys=True, cls=CustomJsonEncoder)
         executor_version_hash = hashlib.md5(executor_version_str.encode()).hexdigest()[:6]
         name = os.path.basename(self.executor_info.caller_path).replace(".py", "")
         self.executor_info_path = os.path.join(
@@ -902,28 +918,21 @@ class Executor:
         logger.info(self.get_experiment_url())
         logger.info("")
         # Write out info for each step
-        for step, info in zip(self.steps, self.step_infos, strict=True):
+        for step, info in zip(self.steps, executor_info_dict["steps"], strict=True):
             info_path = _get_info_path(self.output_paths[step])
             fsspec_utils.mkdirs(os.path.dirname(info_path))
             with fsspec.open(info_path, "w") as f:
-                print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
+                print(json.dumps(info, indent=2, cls=CustomJsonEncoder), file=f)
 
         # Write out info for the entire execution
         fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
         with fsspec.open(self.executor_info_path, "w") as f:
-            print(json.dumps(asdict(self.executor_info), indent=2, cls=CustomJsonEncoder), file=f)
+            print(json.dumps(executor_info_dict, indent=2, cls=CustomJsonEncoder), file=f)
 
     # caching saves ~10% off some tests
     @cached_property
     def _dry_run_result(self):
         return ray.put(None)
-
-
-def asdict_without_description(obj: dataclass) -> dict[str, Any]:
-    """Return the `asdict` of an object, but remove the `description` field, because it doesn't affect the semantics."""
-    d = asdict(obj)
-    d.pop("description", None)
-    return d
 
 
 def _get_ray_status(current_owner_task_id: str | None) -> str | None:

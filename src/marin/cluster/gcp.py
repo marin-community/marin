@@ -21,6 +21,7 @@ connect to TPUs, and find TPUs by IP address.
 import json
 import logging
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 def run_gcloud_command(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     """Run a gcloud command with error handling."""
     try:
+        logger.info(f"Running {' '.join(cmd)}")
         return subprocess.run(cmd, check=True, capture_output=True, text=True, **kwargs)
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"gcloud command failed: {' '.join(cmd)}\nError: {e.stderr}") from e
@@ -84,7 +86,7 @@ def list_instances(project: str, zone: str, filter_expr: str | None = None) -> l
 
 def find_head_node_ip(cluster_name: str, project: str, zone: str) -> str:
     """Find the internal IP of the Ray cluster head node."""
-    filter_expr = f"labels.ray-node-type=head AND labels.ray-cluster-name={cluster_name}"
+    filter_expr = f"labels.ray-node-type=head AND labels.ray-node-name=ray-{cluster_name}-head"
     instances = list_instances(project, zone, filter_expr)
 
     if not instances:
@@ -93,7 +95,7 @@ def find_head_node_ip(cluster_name: str, project: str, zone: str) -> str:
     return instances[0]["networkInterfaces"][0]["networkIP"]
 
 
-def list_tpu_nodes(project: str, zone: str) -> list[dict[str, Any]]:
+def list_tpu_nodes(project: str, zone: str, filter_expr: str = "") -> list[dict[str, Any]]:
     """List TPU nodes in a zone."""
     cmd = [
         "gcloud",
@@ -105,6 +107,8 @@ def list_tpu_nodes(project: str, zone: str) -> list[dict[str, Any]]:
         f"--zone={zone}",
         "--format=json",
     ]
+    if filter_expr:
+        cmd.append(f"--filter={filter_expr}")
 
     result = run_gcloud_command(cmd)
     return json.loads(result.stdout)
@@ -225,6 +229,75 @@ def get_tpu_health_status(project: str, zone: str) -> dict[str, Any]:
             health_status["unhealthy"].append(node_info)
 
     return health_status
+
+
+def terminate_tpus_in_cluster(project: str, zone: str, cluster_name: str) -> list[str]:
+    """Terminate TPU nodes belonging to a specific cluster in parallel."""
+    # Find TPUs with the correct node name.
+    # Note we don't use the zone as a tag (we might have different clusters in a zone)
+    # Nor the cluster name tag, as some clusters do not include the zone name and
+    # are ambiguous e.g. eu-west4 vs eu-west4-a
+    label_filter = f"labels.ray-node-name:ray-{cluster_name}-worker"
+    nodes = list_tpu_nodes(project, zone, label_filter)
+    terminated_nodes = []
+
+    if not nodes:
+        logger.info(f"No TPU nodes found for cluster {cluster_name} in zone {zone}")
+        return terminated_nodes
+
+    def delete_single_tpu(node: dict[str, Any]) -> str | None:
+        node_name = node.get("name", "").split("/")[-1]
+        try:
+            delete_tpu_node(node_name, project, zone, quiet=True)
+            logger.info(f"Terminated TPU node: {node_name}")
+            return node_name
+        except Exception as e:
+            logger.error(f"Failed to terminate TPU node {node_name}: {e}")
+            return None
+
+    # Use ThreadPoolExecutor to terminate TPUs in parallel
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        future_to_node = {executor.submit(delete_single_tpu, node): node for node in nodes}
+
+        for future in as_completed(future_to_node):
+            result = future.result()
+            if result is not None:
+                terminated_nodes.append(result)
+
+    logger.info(f"Terminated {len(terminated_nodes)} TPU nodes for cluster {cluster_name} in zone {zone}")
+    return terminated_nodes
+
+
+def terminate_head_node(cluster_name: str, project: str, zone: str) -> str | None:
+    """Terminate the Ray cluster head node directly via gcloud."""
+    # Use ray-cluster-name label for cluster identification
+    filter_expr = f"labels.ray-node-type=head AND labels.ray-node-name=ray-{cluster_name}-head"
+    instances = list_instances(project, zone, filter_expr)
+
+    if not instances:
+        logger.warning(f"No head node found for cluster {cluster_name} in zone {zone}")
+        return None
+
+    head_name = instances[0]["name"]
+
+    cmd = [
+        "gcloud",
+        "compute",
+        "instances",
+        "delete",
+        head_name,
+        f"--project={project}",
+        f"--zone={zone}",
+        "--quiet",
+    ]
+
+    try:
+        run_gcloud_command(cmd)
+        logger.info(f"Terminated head node: {head_name}")
+        return head_name
+    except Exception as e:
+        logger.error(f"Failed to terminate head node {head_name}: {e}")
+        raise
 
 
 def cleanup_preempted_tpus(project: str, zone: str, dry_run: bool = False) -> list[str]:

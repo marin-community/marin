@@ -25,12 +25,11 @@ Usage:
 from dataclasses import dataclass
 import json
 import logging
-import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
-from typing import Optional
 
 import click
 
@@ -52,9 +51,8 @@ def check_cluster_head_running(config_path: str) -> bool:
     """
     try:
         # Try to connect to the dashboard to see if cluster is running
-        with ray.ray_dashboard(config_path):
-            # If we can get cluster resources, the head is running
-            ray.get_ray_cluster_resources()
+        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
+            ray.print_cluster_status()
             return True
     except Exception:
         # Any exception means we couldn't connect to a running cluster
@@ -64,8 +62,8 @@ def check_cluster_head_running(config_path: str) -> bool:
 @dataclass
 class Context:
     verbose: bool = False
-    config_file: Optional[str] = None
-    config_obj: Optional[RayClusterConfig] = None
+    config_file: str | None = None
+    config_obj: RayClusterConfig | None = None
 
 
 # Context object to pass global options between commands
@@ -121,9 +119,31 @@ def stop_cluster(ctx):
         print("Error: --config required for cluster commands", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Stopping cluster {config_obj.cluster_name}...")
-    subprocess.run(["ray", "down", "-y", config_path], check=True)
+    _stop_cluster_internal(config_obj, config_path)
     print("Cluster stopped successfully!")
+
+
+def _stop_cluster_internal(config_obj: RayClusterConfig, config_path: str):
+    """Terminate a Ray cluster.
+
+    N.B. We terminate the Ray coordinator node first to avoid restarting any new TPUs while
+    shutting down. We then explicitly shut down the TPU nodes in parallel. Ray serializes this
+    and often times out by default.
+
+    Finally we call ray down to finish up any leftover resources.
+    """
+    print(f"Terminating coordinator node for cluster {config_obj.cluster_name}...")
+    terminated_head = gcp.terminate_head_node(config_obj.cluster_name, config_obj.project_id, config_obj.zone)
+    if terminated_head:
+        print(f"Terminated head node: {terminated_head}")
+
+    print(f"Terminating TPUs for cluster {config_obj.cluster_name} in zone {config_obj.zone}...")
+    terminated_tpus = gcp.terminate_tpus_in_cluster(config_obj.project_id, config_obj.zone, config_obj.cluster_name)
+    if terminated_tpus:
+        print(f"Terminated {len(terminated_tpus)} TPUs")
+
+    print(f"Cleaning up Ray cluster state for {config_obj.cluster_name}...")
+    subprocess.run(["ray", "down", "-y", config_path], check=False)  # check=False since instances may already be gone
 
 
 @cli.command("restart-cluster")
@@ -140,7 +160,7 @@ def restart_cluster(ctx, preserve_jobs):
 
     if not preserve_jobs:
         print("Stopping cluster...")
-        subprocess.run(["ray", "down", "-y", config_path], check=True)
+        _stop_cluster_internal(config_obj, config_path)
 
         print("Starting cluster...")
         subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
@@ -150,19 +170,19 @@ def restart_cluster(ctx, preserve_jobs):
     # Backup jobs
     print("Backing up jobs...")
     with tempfile.TemporaryDirectory() as backup_dir:
-        with ray.ray_dashboard(config_path):
+        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
             ray.backup_jobs(config_path, backup_dir)
 
-        # Restart cluster
+        # Restart cluster using proper stop sequence
         print("Stopping cluster...")
-        subprocess.run(["ray", "down", "-y", config_path], check=True)
+        _stop_cluster_internal(config_obj, config_path)
 
         print("Starting cluster...")
         subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
 
         # Restore jobs
         print("Restoring jobs...")
-        with ray.ray_dashboard(config_path):
+        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
             ray.restore_jobs(config_path, backup_dir)
 
     print("Cluster restarted successfully!")
@@ -173,7 +193,7 @@ def restart_cluster(ctx, preserve_jobs):
 @click.pass_context
 def cluster_backup_jobs(ctx, backup_dir):
     """Backup Ray jobs to specified directory."""
-    with ray.ray_dashboard(ctx.obj.config_file):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         Path(backup_dir).mkdir(parents=True, exist_ok=True)
         ray.backup_jobs(ctx.obj.config_file, backup_dir)
         print(f"Jobs backed up successfully to {backup_dir}")
@@ -184,7 +204,7 @@ def cluster_backup_jobs(ctx, backup_dir):
 @click.pass_context
 def cluster_restore_jobs(ctx, backup_dir):
     """Restore Ray jobs from specified directory."""
-    with ray.ray_dashboard(ctx.obj.config_file):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         ray.restore_jobs(ctx.obj.config_file, backup_dir)
         print(f"Jobs restored successfully from {backup_dir}")
 
@@ -193,9 +213,8 @@ def cluster_restore_jobs(ctx, backup_dir):
 @click.pass_context
 def get_status(ctx):
     """Get cluster status."""
-    with ray.ray_dashboard(ctx.obj.config_file):
-        status_result = ray.get_ray_cluster_resources()
-        print(json.dumps(status_result, indent=2))
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+        ray.print_cluster_status()
 
 
 @cli.command("list-configs")
@@ -263,7 +282,7 @@ def ssh_head(ctx, extra_args):
 @click.pass_context
 def list_workers(ctx):
     """List Ray workers."""
-    with ray.ray_dashboard(ctx.obj.config_file):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         print(json.dumps(ray.list_workers(), indent=2))
 
 
@@ -272,7 +291,7 @@ def list_workers(ctx):
 @click.pass_context
 def list_jobs(ctx):
     """List Ray jobs."""
-    with ray.ray_dashboard(ctx.obj.config_file):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         print(json.dumps(ray.list_jobs(), indent=2))
 
 
@@ -285,7 +304,7 @@ def submit_job(ctx, entrypoint, working_dir, runtime_env):
     """Submit a Ray job."""
     runtime_env_dict = json.loads(runtime_env) if runtime_env else None
 
-    with ray.ray_dashboard(ctx.obj.config_file):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         job_id = ray.submit_job(entrypoint, working_dir, runtime_env_dict)
         print(f"Job submitted with ID: {job_id}")
 
@@ -341,19 +360,32 @@ def init_worker(ctx, name):
     print("Worker initialized successfully!")
 
 
-@cli.command("open-dashboard")
+@cli.command("dashboard")
+@click.option("--port", default=9999, help="Proxy dashboard port")
 @click.pass_context
-def open_dashboard(ctx):
-    """Open Ray dashboard in browser."""
-    with ray.ray_dashboard(ctx.obj.config_file) as dashboard_url:
-        print(f"Ray dashboard is running at: {dashboard_url}")
-        print("Press Ctrl+C to stop the dashboard.")
-        # Keep the context manager alive until interrupted
-        try:
-            while True:
-                pass
-        except KeyboardInterrupt:
-            print("Stopping Ray dashboard...")
+def open_multi_dashboard(ctx, port):
+    """Open dashboard for all active Ray clusters."""
+    with ray.ray_dashboard(ray.DashboardConfig(proxy_port=port)) as conn:
+        if not conn.clusters:
+            print("No active clusters found")
+            return
+
+        print(f"Connected to {len(conn.clusters)} clusters:")
+        for name, info in conn.clusters.items():
+            port_info = conn.port_mappings[name]
+            print(f"  - {name} ({info.zone})")
+            print(f"    Dashboard: http://localhost:{port_info[0]}")
+            print(f"    Internal IP: {info.head_ip}")
+
+        if conn.proxy:
+            print(f"\n📊 Proxy dashboard: {conn.get_dashboard_url()}")
+            print("\nPress Ctrl+C to stop")
+
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                print("\nShutting down...")
 
 
 @cli.command("monitor-cluster")
@@ -367,12 +399,13 @@ def monitor_cluster(ctx, wandb):
         sys.exit(1)
 
     config_zones = {config_obj.region: [config_obj.zone]}
-    health_data = monitoring.monitor_cluster_health(
-        config_zones=config_zones, project=config_obj.project_id, log_to_wandb=wandb
-    )
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+        health_data = monitoring.monitor_cluster_health(
+            config_zones=config_zones, project=config_obj.project_id, log_to_wandb=wandb
+        )
 
-    summary = monitoring.get_cluster_health_summary(health_data)
-    print(summary)
+        summary = monitoring.get_cluster_health_summary(health_data)
+        print(summary)
 
     if wandb:
         print("Metrics logged to wandb")

@@ -71,4 +71,4 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           CI: true
         run: |
-          PYTHONPATH=tests:. uv run --extra=cpu pytest --durations=5 --tb=no -m 'not slow' -vv tests/
+          PYTHONPATH=tests:. uv run --extra=cpu pytest -n3 --durations=5 --tb=no -m 'not slow' -vv tests/
