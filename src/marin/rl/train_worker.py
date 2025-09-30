@@ -159,7 +159,6 @@ class TrainWorker:
         levanter.initialize(config.trainer)
         self.config = config
         self._should_stop = False
-        self.weight_id = 0
         if isinstance(config.model.tokenizer, str):
             self.tokenizer = AutoTokenizer.from_pretrained(config.model.tokenizer)
         else:
@@ -252,8 +251,11 @@ class TrainWorker:
                 pass
 
     def _configure_training_hooks(self, trainer):
+        def _weight_transfer_hook(info: levanter.callbacks.StepInfo):
+            self.weight_transfer_hook(info)
+
         trainer.add_hook(
-            self.create_weight_transfer_hook(),
+            _weight_transfer_hook,
             every=self.config.weight_transfer.sync_interval_steps,
         )
 
@@ -263,24 +265,19 @@ class TrainWorker:
 
         trainer.add_hook(_stop_on_signal, every=1)
 
-    def create_weight_transfer_hook(self):
-        def weight_transfer_hook(info: levanter.callbacks.StepInfo):
-            step = info.step
-            state = info.state
+    def weight_transfer_hook(self, info: levanter.callbacks.StepInfo):
+        step = info.step
+        state = info.state
 
-            self.weight_id += 1
-            logger.info(
-                "Transferring weights at step %d, weight_id %d, loss=%s",
-                step,
-                self.weight_id,
-                info.loss,
-            )
+        logger.info(
+            "Transferring weights at step %d, loss=%s",
+            step,
+            info.loss,
+        )
 
-            model_params = state.model
-            self.transfer_server.serve_weights(self.weight_id, model_params)
-            logger.info(f"Successfully transferred weights with ID {self.weight_id}")
-
-        return weight_transfer_hook
+        model_params = state.model
+        self.transfer_server.serve_weights(step, model_params)
+        logger.info(f"Successfully transferred weights with ID {step}")
 
     def stop(self):
         """Stop the training worker."""

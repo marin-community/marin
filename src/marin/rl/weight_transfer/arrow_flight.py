@@ -397,11 +397,12 @@ class ArrowFlightServer(WeightTransferServer):
                 self.metrics.successful_transfers += 1
 
                 logger.info(
-                    f"Served weights for weight_id {weight_id}.",
-                    f"timings: copy={copy_time - start_time:.2f}s, "
-                    f"serialize={serialize_time - copy_time:.2f}s, "
-                    f"store={store_time - serialize_time:.2f}s, "
-                    f"update={update_time - store_time:.2f}s",
+                    "Served weights for weight_id %s, timings: copy=%.2fs, serialize=%.2fs, store=%.2fs, update=%.2fs",
+                    weight_id,
+                    copy_time - start_time,
+                    serialize_time - copy_time,
+                    store_time - serialize_time,
+                    update_time - store_time,
                 )
 
             barrier_sync()
@@ -470,7 +471,7 @@ class ArrowFlightClient(WeightTransferClient):
                 # Create new clients
                 for loc in new_locations:
                     self._flight_clients.append(
-                        flight.FlightClient(loc, generic_options=[("grpc.per_message_compression", "0")])
+                        flight.FlightClient(loc, generic_options=[("grpc.per_message_compression", 0)])
                     )
                     logger.debug(f"Connected to Arrow Flight server at {loc}")
 
@@ -514,6 +515,10 @@ class ArrowFlightClient(WeightTransferClient):
             # Fetch server info from coordinator
             server_info = ray.get(self._coordinator.fetch_server.remote())
 
+            if not server_info:
+                logger.info("No Arrow Flight server info available from coordinator.")
+                return None
+
             if server_info.weight_id is None or server_info.weight_id == self._last_weight_id:
                 logger.info("No new weights available from Arrow Flight server.")
                 return None
@@ -525,7 +530,6 @@ class ArrowFlightClient(WeightTransferClient):
 
             poll_time = time.time()
 
-            # Fetch all params in parallel
             state_dict = {}
             futures = {
                 self._receive_pool.submit(self._fetch_param, server_info.weight_id, param_name): param_name
