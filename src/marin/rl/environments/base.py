@@ -13,7 +13,6 @@
 # limitations under the License.
 from typing import NamedTuple, Protocol, TypedDict
 
-import jax
 import numpy as np
 from levanter.compat.hf_checkpoints import HfTokenizer
 
@@ -178,6 +177,12 @@ def load_environment_from_spec(env_spec: str, tokenizer: HfTokenizer) -> MarinEn
             key, value = arg.split("=")
             env_args[key] = value
 
+    # hash hostname for seeding mock environment
+    import socket
+
+    host_name = socket.gethostname()
+    seed = abs(hash(host_name))
+
     if env_name == "math":
         from .math import MathEnvironment
 
@@ -185,7 +190,7 @@ def load_environment_from_spec(env_spec: str, tokenizer: HfTokenizer) -> MarinEn
     elif env_name == "mock":
         from .mock_env import MockEnv
 
-        return MockEnv(tokenizer=tokenizer, seed=jax.process_index(), **env_args)
+        return MockEnv(tokenizer=tokenizer, seed=seed, **env_args)
     elif env_name == "prime_intellect":
         from .prime_intellect_env import PrimeIntellectEnv
 

@@ -14,6 +14,7 @@
 
 """Mock environment for testing RL training without external dependencies."""
 
+import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Protocol
@@ -25,6 +26,8 @@ from .base import EnvResponse, EnvStep, InferenceContext, MarinEnv
 
 NUM_TRAIN_EXAMPLES = 1000
 NUM_EVAL_EXAMPLES = 100
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -224,6 +227,7 @@ class MockEnv(MarinEnv):
         # Use numpy random for sampling
         n_to_sample = min(n_examples, len(available_examples))
         seed = jax.random.randint(prng_key, (), 0, 1_000_000).item()
+        logger.info("Selecting %d examples with seed %d", n_to_sample, seed)
         rng = np.random.default_rng(seed)
         indices = rng.choice(len(available_examples), size=n_to_sample, replace=True)
         examples = [available_examples[int(idx)] for idx in indices]

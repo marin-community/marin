@@ -194,7 +194,7 @@ def rl_train(name: str) -> ExecutorStep:
     )
 
     opt_config = AdamConfig(
-        learning_rate=1e-6,
+        learning_rate=1e-5,
         weight_decay=1e-2,
         warmup=100,
         lr_schedule="constant",
@@ -290,7 +290,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-007"),
+        rl_train(name="llama-1b-math-rl-test-009"),
     ]
 
     executor_main(
