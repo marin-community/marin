@@ -36,6 +36,20 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class ReplayBufferConfig:
+    """Configuration for the replay buffer."""
+
+    capacity: int = 10000
+    """Maximum number of examples per environment in the buffer."""
+
+    alpha: float = 3.0
+    """Recency bias for sampling, higher values favor newer examples."""
+
+    max_samples: int = 4
+    """Maximum number of times to use an example before retiring."""
+
+
+@dataclass
 class RolloutWithCount(RolloutWithAdvantage):
     """Single rollout with precomputed RLOO advantage & usage count tracking."""
 
@@ -52,31 +66,25 @@ class ReplayBuffer:
 
     def __init__(
         self,
+        config: ReplayBufferConfig,
         local_batch_size: int,
         process_id: int,
         total_processes: int,
-        recency_alpha: float,
-        capacity: int,
-        max_samples: int = -1,
     ):
         """Initialize replay buffer.
 
         Args:
-            capacity: Maximum number of examples to store per environment.
+            config: Configuration for buffer capacity, recency bias, and sampling limits.
             local_batch_size: Target size for training batches.
-            recency_alpha: Power law exponent for recency weighting (higher = more recent bias).
-            train_process_id: Identifier for this process. Used to sample across processes.
-            num_train_processes: Total number of training processes.
-            max_samples: Maximum number of times an example can be used before being retired.
-
-        A `max_samples` of -1 indicates no limit, 0 or 1 means each example is used at most once.
+            process_id: Identifier for this process. Used to sample across processes.
+            total_processes: Total number of training processes.
         """
-        self.capacity = capacity
+        self.capacity = config.capacity
         self.local_batch_size = local_batch_size
-        self.recency_alpha = recency_alpha
+        self.recency_alpha = config.alpha
         self.total_processes = total_processes
         self.process_id = process_id
-        self.max_samples = max_samples
+        self.max_samples = config.max_samples
 
         self.rollout_storage: dict[str, list[RolloutWithCount]] = {}
         self._lock = threading.Lock()

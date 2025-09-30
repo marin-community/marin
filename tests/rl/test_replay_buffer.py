@@ -21,7 +21,7 @@ import pytest
 
 try:
     from marin.rl import train_batch
-    from marin.rl.replay_buffer import ReplayBuffer, ReplayDataLoader
+    from marin.rl.replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 from marin.rl.rollout_storage import (
@@ -95,11 +95,10 @@ def test_replay_buffer():
             writer.write_batch(batch)
 
     replay_buffer = ReplayBuffer(
+        config=ReplayBufferConfig(capacity=100, alpha=3.0, max_samples=-1),
         local_batch_size=4,
         process_id=0,
         total_processes=1,
-        recency_alpha=3.0,
-        capacity=100,
     )
 
     # Add batches to replay buffer
@@ -142,11 +141,10 @@ def test_replay_buffer_recency_bias():
         batches.append(batch)
 
     replay_buffer = ReplayBuffer(
+        config=ReplayBufferConfig(capacity=100, alpha=10.0, max_samples=-1),  # Very strong recency bias
         local_batch_size=50,
         process_id=0,
         total_processes=1,
-        recency_alpha=10.0,  # Very strong recency bias
-        capacity=100,
     )
     replay_buffer.add_batches(batches)
 
@@ -173,11 +171,10 @@ def test_replay_buffer_recency_bias():
 def test_replay_buffer_capacity_eviction():
     """Test that replay buffer respects capacity limits and evicts old data."""
     replay_buffer = ReplayBuffer(
+        config=ReplayBufferConfig(capacity=3, alpha=2.0, max_samples=-1),
         local_batch_size=4,
         process_id=0,
         total_processes=1,
-        recency_alpha=2.0,
-        capacity=3,
     )
 
     for i in range(5):
@@ -196,12 +193,10 @@ def test_replay_buffer_capacity_eviction():
 def test_replay_buffer_max_resamples():
     """Test that examples are retired after max_resamples uses."""
     replay_buffer = ReplayBuffer(
+        config=ReplayBufferConfig(capacity=100, alpha=1.0, max_samples=3),  # Uniform sampling for predictable behavior
         local_batch_size=2,
         process_id=0,
         total_processes=1,
-        recency_alpha=1.0,  # Uniform sampling for predictable behavior
-        capacity=100,
-        max_samples=3,
     )
 
     # Create batch with identifiable examples (already has identifiable tokens)
@@ -231,12 +226,10 @@ def test_replay_buffer_max_resamples():
 def test_replay_buffer_max_resamples_disabled():
     """Test that max_resamples=-1 disables retirement."""
     replay_buffer = ReplayBuffer(
+        config=ReplayBufferConfig(capacity=100, alpha=1.0, max_samples=-1),  # Disabled
         local_batch_size=2,
         process_id=0,
         total_processes=1,
-        recency_alpha=1.0,
-        capacity=100,
-        max_samples=-1,  # Disabled
     )
 
     # Add small batch
@@ -262,12 +255,10 @@ def test_replay_buffer_max_resamples_disabled():
 def test_replay_buffer_max_resamples_multiple_envs():
     """Test max_resamples with multiple environments."""
     replay_buffer = ReplayBuffer(
+        config=ReplayBufferConfig(capacity=100, alpha=1.0, max_samples=2),
         local_batch_size=3,
         process_id=0,
         total_processes=1,
-        recency_alpha=1.0,
-        capacity=100,
-        max_samples=2,
     )
 
     # Add batches from different environments (identifiable tokens already set)

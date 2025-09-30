@@ -361,7 +361,7 @@ class RolloutWorker:
         logger.info("Starting inference worker...")
 
         step = 0
-        seed = abs(hash(f"{socket.gethostname()}_{os.getpid()}"))
+        seed = 0
         logger.info(f"Starting rollout worker with seed {seed}")
         rng = jax.random.PRNGKey(seed)
 

@@ -37,12 +37,13 @@ from levanter.trainer import TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
 
 from marin.rl.environments.mock_env import MockEnv
+from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rollout_storage import (
     RolloutStorageConfig,
 )
 from marin.rl.rollout_types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
 from marin.rl.rollout_worker import RolloutWorkerConfig
-from marin.rl.train_worker import ReplayBufferConfig, TrainWorkerConfig
+from marin.rl.train_worker import TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 from marin.rl.weight_transfer.base import WeightTransferMode
 
