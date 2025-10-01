@@ -70,16 +70,16 @@ MAX_OUTPUT_TOKENS = 128
 
 # Create a sanitized version of ENVIRONMENT_SPEC for the RUN_ID
 # Replace all filesystem-unfriendly characters
-sanitized_env_spec = (ENVIRONMENT_SPEC
-    .replace(':', '_')
-    .replace('=', '_')
-    .replace('/', '_')
-    .replace(',', '_')
-    .replace('{', '')
-    .replace('}', '')
-    .replace("'", '')
-    .replace('"', '')
-    .replace(' ', '')
+sanitized_env_spec = (
+    ENVIRONMENT_SPEC.replace(":", "_")
+    .replace("=", "_")
+    .replace("/", "_")
+    .replace(",", "_")
+    .replace("{", "")
+    .replace("}", "")
+    .replace("'", "")
+    .replace('"', "")
+    .replace(" ", "")
 )
 RUN_ID = f"test-{MODEL_NAME.split('/')[-1]}-{sanitized_env_spec}"
 

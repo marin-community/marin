@@ -26,11 +26,16 @@ def test_load_environment_from_spec():
     env = load_environment_from_spec("olym_math:difficulty=hard", tokenizer=None)
     assert isinstance(env, OlymMathEnv), "Loaded environment should be an instance of OlymMathEnv"
 
-    env = load_environment_from_spec("prime_intellect:env_id=primeintellect/gsm8k,env_args={'num_train_examples':-1,'num_eval_examples':-1}", tokenizer=None)
-    assert env.env_args == {'num_train_examples': -1, 'num_eval_examples': -1}
-    assert isinstance(env, PrimeIntellectEnv), "Loaded environment should be an instance of PrimeIntellectEnv"
-    
-    env = load_environment_from_spec("prime_intellect:env_id=primeintellect/gsm8k,env_args={num_train_examples:-1,num_eval_examples:-1}", tokenizer=None)
-    assert env.env_args == {'num_train_examples': -1, 'num_eval_examples': -1}
+    env = load_environment_from_spec(
+        "prime_intellect:env_id=primeintellect/gsm8k,env_args={'num_train_examples':-1,'num_eval_examples':-1}",
+        tokenizer=None,
+    )
+    assert env.env_args == {"num_train_examples": -1, "num_eval_examples": -1}
     assert isinstance(env, PrimeIntellectEnv), "Loaded environment should be an instance of PrimeIntellectEnv"
 
+    env = load_environment_from_spec(
+        "prime_intellect:env_id=primeintellect/gsm8k,env_args={num_train_examples:-1,num_eval_examples:-1}",
+        tokenizer=None,
+    )
+    assert env.env_args == {"num_train_examples": -1, "num_eval_examples": -1}
+    assert isinstance(env, PrimeIntellectEnv), "Loaded environment should be an instance of PrimeIntellectEnv"
