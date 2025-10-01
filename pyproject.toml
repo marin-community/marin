@@ -246,6 +246,7 @@ tokenize_train = [
 ]
 
 rl = [
+    "prime",
     "sympy",
     "verifiers",
 ]
