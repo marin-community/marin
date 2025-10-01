@@ -56,6 +56,6 @@ You don't generate comments with obviously reflect the code, e.g.
 
 ## Testing
 - You always run the appropriate tests for your changes in e.g. the tests/ directory
-- You use pytest features like fixtures & paramterization to avoid dupliction and write clean code
+- You use pytest features like fixtures & parameterization to avoid duplication and write clean code
 
 > This file will be expanded as agent workflows and best practices evolve.
