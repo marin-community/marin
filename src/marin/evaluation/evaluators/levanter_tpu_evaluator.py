@@ -31,7 +31,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
     """For `Evaluator`s that runs inference with Levanter (primarily Lm Eval Harness) on TPUs."""
 
     # Where to store checkpoints, cache inference results, etc.
-    CACHE_PATH: str = "/tmp/levanter-lm-eval"
+    CACHE_PATH: str = "/opt/gcsfuse_mount/models"
 
     @staticmethod
     def download_model(model: ModelConfig) -> str:
@@ -41,8 +41,11 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         downloaded_path: str | None = model.ensure_downloaded(
             local_path=os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
         )
+
+        print(f"IN TPU: {downloaded_path}")
         # Use the model name if a path is not specified (e.g., for Hugging Face models)
         model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
+
         return model_name_or_path
 
     @staticmethod
@@ -81,7 +84,10 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         """
 
         @ray.remote(
-            resources={"TPU": resource_config.num_tpu, f"{resource_config.tpu_type}-head": 1},
+            resources={
+                "TPU": resource_config.num_tpu,
+                f"{resource_config.tpu_type}-head": 1,
+            },
             runtime_env=self.get_runtime_env(),
             max_calls=1,
         )

@@ -21,6 +21,7 @@ import fsspec
 import psutil
 import yaml
 from fsspec.implementations.local import LocalFileSystem
+from fsspec.callbacks import TqdmCallback
 
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_mtime
 
@@ -45,19 +46,26 @@ def is_remote_path(path: str) -> bool:
 
 def download_from_gcs(gcs_path: str, destination_path: str) -> None:
     """
-    Downloads the folder at `gcs_path` to `destination_path`.
+    Downloads the folder at `gcs_path` to `destination_path`,
+    unless `destination_path` already exists.
     """
-    print(f"Downloading {gcs_path} from GCS.")
+    if os.path.exists(destination_path):
+        print(f"Skipping download: {destination_path} already exists.")
+        return
+
+    print(f"Downloading {gcs_path} from GCS to {destination_path}.")
     start_time: float = time.time()
     fs = fsspec.filesystem("gcs")
+
     if not fs.exists(gcs_path):
         raise FileNotFoundError(f"{gcs_path} does not exist in GCS.")
 
     # The slash is needed to download the contents of the folder to `destination_path`
     os.makedirs(destination_path, exist_ok=True)
-    fs.get(gcs_path + "/", destination_path, recursive=True)
+    fs.get(gcs_path + "/", destination_path, recursive=True, callback=TqdmCallback())
+
     elapsed_time_seconds: float = time.time() - start_time
-    print(f"Downloaded {gcs_path} to {destination_path} ({elapsed_time_seconds}s).")
+    print(f"Downloaded {gcs_path} to {destination_path} ({elapsed_time_seconds:.2f}s).")
 
 
 def upload_to_gcs(local_path: str, gcs_path: str) -> None:
