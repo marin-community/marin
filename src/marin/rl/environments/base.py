@@ -186,7 +186,7 @@ def load_environment_from_spec(env_spec: str, tokenizer: HfTokenizer) -> MarinEn
 
         return MockEnv(tokenizer=tokenizer, **env_args)
     elif env_name == "prime_intellect":
-        from .prime_intellect_env import PrimeIntellectEnv
+        from marin.post_training.environments.prime_intellect_env import PrimeIntellectEnv
 
         return PrimeIntellectEnv(tokenizer=tokenizer, **env_args)
     else:

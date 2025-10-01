@@ -113,8 +113,46 @@ def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer):
             
             # Special handling for JSON-like values
             if value.startswith('{') and value.endswith('}'):
-                # Keep as string - prime_intellect_env.py will parse it
-                kwargs[key] = value
+                # Parse simplified dictionary format: {key1:val1,key2:val2}
+                # Convert to proper Python dict string for literal_eval
+                inner = value[1:-1]  # Remove outer braces
+                if inner:
+                    # Split by comma, respecting nested structures
+                    dict_pairs = []
+                    current = []
+                    depth = 0
+                    for char in inner:
+                        if char in '{[(':
+                            depth += 1
+                            current.append(char)
+                        elif char in '}])':
+                            depth -= 1
+                            current.append(char)
+                        elif char == ',' and depth == 0:
+                            if current:
+                                dict_pairs.append(''.join(current))
+                                current = []
+                        else:
+                            current.append(char)
+                    if current:
+                        dict_pairs.append(''.join(current))
+                    
+                    # Convert to proper Python dict syntax
+                    formatted_pairs = []
+                    for dict_pair in dict_pairs:
+                        if ':' in dict_pair:
+                            k, v = dict_pair.split(':', 1)
+                            k = k.strip()
+                            v = v.strip()
+                            # Add quotes around key if it's not already quoted
+                            if not (k.startswith("'") or k.startswith('"')):
+                                k = f"'{k}'"
+                            formatted_pairs.append(f"{k}: {v}")
+                    
+                    # Reconstruct as proper Python dict string
+                    kwargs[key] = "{" + ", ".join(formatted_pairs) + "}"
+                else:
+                    kwargs[key] = value
             else:
                 kwargs[key] = str_to_val(value)
     

@@ -20,7 +20,6 @@ import dataclasses
 import datetime
 import logging
 import os
-import re
 from dataclasses import dataclass
 
 import jmp
@@ -30,9 +29,10 @@ from levanter.distributed import RayConfig
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.infra.ray_tpu import run_on_pod_ray
-from levanter.models.qwen import Qwen3Config
+from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.tensorboard import TensorboardConfig
+from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from ray.runtime_env import RuntimeEnv
 from transformers import AutoConfig, AutoTokenizer
@@ -42,11 +42,11 @@ from marin.execution.executor import (
     OutputName,
     executor_main,
 )
-from marin.post_training.rollout_storage import RolloutStorageConfig, StorageType
-from marin.post_training.rollout_worker import RolloutWorker, RolloutWorkerConfig
-from marin.post_training.train_worker import ReplayBufferConfig, TrainWorker, TrainWorkerConfig
-from marin.post_training.weight_transfer import WeightTransferConfig
 from marin.resources import TpuPodConfig
+from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
+from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
+from marin.rl.train_worker import ReplayBufferConfig, TrainWorker, TrainWorkerConfig
+from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.training.training import (
     _add_run_env_variables,
 )
@@ -54,20 +54,34 @@ from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
-ENVIRONMENT_SPEC = "prime_intellect:env_id=primeintellect/gsm8k,env_args={'num_train_examples':-1,'num_eval_examples':-1}"
-# MODEL_NAME = "meta-llama/Llama-3.2-8B-Instruct"
+# Use proper dictionary syntax for env_args that literal_eval can parse
+# Note: Keys should not have quotes for literal_eval to work properly with dict syntax
+ENVIRONMENT_SPEC = "prime_intellect:env_id=primeintellect/gsm8k,env_args={num_train_examples:-1,num_eval_examples:-1}"
+MODEL_NAME = "unsloth/Llama-3.2-1B"
 # MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 # MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
-MODEL_TYPE = "qwen3"
+# MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
+MODEL_TYPE = "llama"
 WANDB_PROJECT = f"rl_testing_{MODEL_NAME.split('/')[-1].lower()}"
 MODEL_TOKENIZER = MODEL_NAME
 MODEL_CHECKPOINT = MODEL_NAME
 MAX_INPUT_TOKENS = 128
 MAX_OUTPUT_TOKENS = 128
-# Sanitize the run_id to be filesystem-safe
-SANITIZED_ENV = re.sub(r'[^a-zA-Z0-9_\-]', '_', ENVIRONMENT_SPEC)
-RUN_ID = f"test-{MODEL_NAME.split('/')[-1]}-{SANITIZED_ENV}"
+
+# Create a sanitized version of ENVIRONMENT_SPEC for the RUN_ID
+# Replace all filesystem-unfriendly characters
+sanitized_env_spec = (ENVIRONMENT_SPEC
+    .replace(':', '_')
+    .replace('=', '_')
+    .replace('/', '_')
+    .replace(',', '_')
+    .replace('{', '')
+    .replace('}', '')
+    .replace("'", '')
+    .replace('"', '')
+    .replace(' ', '')
+)
+RUN_ID = f"test-{MODEL_NAME.split('/')[-1]}-{sanitized_env_spec}"
 
 
 def stop_tokens(tokenizer_name: str):
@@ -84,74 +98,59 @@ class RLTrainConfig:
     train_worker_config: TrainWorkerConfig
     inference_tpu_type: str
     train_tpu_type: str
-    num_inference_workers: int = 1
-    num_train_slices: int = 1
+    num_inference_workers: int
+    num_train_slices: int
 
 
-@ray.remote
 def run_rl_training_on_pod(config: RLTrainConfig):
     """
     Run async RL training with separate inference and training workers.
     """
     env = {}
     env = _add_run_env_variables(env)
+    env["EQX_ON_ERROR"] = "nan"
 
-    if "JAX_COMPILATION_CACHE_DIR" not in env:
-        marin_prefix = os.environ.get("MARIN_PREFIX")
-        if marin_prefix:
-            env["JAX_COMPILATION_CACHE_DIR"] = os.path.join(marin_prefix, "compilation-cache")
-            logger.info(f"JAX compilation cache enabled at: {env['JAX_COMPILATION_CACHE_DIR']}")
-        else:
-            logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
+    # if "JAX_COMPILATION_CACHE_DIR" not in env:
+    #     marin_prefix = os.environ.get("MARIN_PREFIX")
+    #     if marin_prefix:
+    #         env["JAX_COMPILATION_CACHE_DIR"] = os.path.join(marin_prefix, "compilation-cache")
+    #         logger.info(f"JAX compilation cache enabled at: {env['JAX_COMPILATION_CACHE_DIR']}")
+    #     else:
+    #         logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
 
     # Use the default env when running on the driver (Ray doesn't support otherwise.)
     # runtime_env = ray_deps.build_runtime_env_for_packages(extra=["tpu", "post_training"])
     runtime_env = RuntimeEnv()
 
     train_pod_config = TpuPodConfig(tpu_type=config.train_tpu_type, runtime_env=runtime_env)
+    rollout_pod_config = TpuPodConfig(tpu_type=config.inference_tpu_type, runtime_env=runtime_env)
+
+    rollout_hw_config = rollout_pod_config.with_env_vars(env)
     train_hw_config = train_pod_config.with_env_vars(env)
 
-    train_kwargs = train_hw_config.as_remote_kwargs()
-    train_kwargs["max_calls"] = 1
+    train_kwargs = dict(max_calls=1, **train_hw_config.as_remote_kwargs())
+    rollout_kwargs = dict(max_calls=1, **rollout_hw_config.as_remote_kwargs())
 
     @ray.remote(**train_kwargs)
     def train_worker_task():
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-            # Print jax & TPU configuration
-            import jax
-            
-            # Ensure logs directory exists for the run_id
-            log_dir = os.path.join("logs", config.train_worker_config.run_id)
-            os.makedirs(log_dir, exist_ok=True)
-
-            logging.error(f"JAX configuration: {jax.__version__}")
             worker = TrainWorker(
                 config=config.train_worker_config,
             )
             worker.train()
 
-    rollout_pod_config = TpuPodConfig(tpu_type=config.inference_tpu_type, runtime_env=runtime_env)
-    rollout_hw_config = rollout_pod_config.with_env_vars(env)
-
-    rollout_kwargs = rollout_hw_config.as_remote_kwargs()
-    rollout_kwargs["max_calls"] = 1
-
     @ray.remote(**rollout_kwargs)
     def inference_worker_task():
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-            
-            # Ensure logs directory exists for the run_id
-            log_dir = os.path.join("logs", config.rollout_worker_config.run_id)
-            os.makedirs(log_dir, exist_ok=True)
-            
             worker = RolloutWorker(
                 config=config.rollout_worker_config,
             )
             worker.run()
 
     train_tasks = []
+    logger.info("Running train worker on TPU type: %s", config.train_tpu_type)
     train_tasks.append(
         run_on_pod_ray.remote(
             train_worker_task,
@@ -164,6 +163,7 @@ def run_rl_training_on_pod(config: RLTrainConfig):
 
     inference_tasks = []
     for _ in range(config.num_inference_workers):
+        logger.info("Running inference worker on TPU type: %s", config.inference_tpu_type)
         inference_tasks.append(
             run_on_pod_ray.remote(
                 inference_worker_task,
@@ -179,41 +179,48 @@ def run_rl_training_on_pod(config: RLTrainConfig):
 
 def rl_train(name: str) -> ExecutorStep:
     hf_config = AutoConfig.from_pretrained(MODEL_NAME)
-    config = Qwen3Config.from_hf_config(hf_config)
+    config = LlamaConfig.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
     model_config = dataclasses.replace(config, seq_len=MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS, tokenizer=MODEL_TOKENIZER)
 
+    _ = WandbConfig
+
     trainer_config = TrainerConfig(
+        # tracker=WandbConfig(
+        #     project="marin_rl_testing",
+        #     name=name,
+        #     tags=["rl", "math", MODEL_NAME.split("/")[-1]],
+        # ),
         tracker=TensorboardConfig(
             logdir=OutputName("tblogs"),
         ),
+        log_xla_hlo=False,
+        log_jaxprs=False,
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         train_batch_size=8,
-        num_train_steps=10,  # Minimal steps for testing
-        steps_per_eval=5,
+        num_train_steps=500,
+        steps_per_eval=100,
         checkpointer=CheckpointerConfig(
             base_path=OutputName("checkpoints"),
-            save_interval=datetime.timedelta(seconds=3600),  # Save less frequently
+            save_interval=datetime.timedelta(seconds=600),
         ),
-        tensor_parallel_axes=["mlp", "kv_head", "vocab"],
+        tensor_parallel_axes=["mlp", "heads"],
         fsdp_axis="embed",
         batch_axis="batch",
         ray=RayConfig(auto_start_cluster=False),
     )
 
     opt_config = AdamConfig(
-        learning_rate=1e-3,
-        weight_decay=1e-3,
-        warmup=10,
+        learning_rate=1e-6,
+        weight_decay=1e-2,
+        warmup=100,
         lr_schedule="constant",
     )
 
     inference_server_config = InferenceServerConfig(
-        model=model_config,
         # Turn on tensor parallelism for inference
-        trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=["mlp", "kv_head"]),
-        hf_checkpoint=MODEL_CHECKPOINT,
+        trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=4),
         tokenizer=MODEL_TOKENIZER,
         temperature=1.0,
         service=InferenceEngineConfig(
@@ -229,11 +236,13 @@ def rl_train(name: str) -> ExecutorStep:
         path=OutputName("rollouts"),
     )
     weight_transfer = WeightTransferConfig(
-        sync_interval_steps=25,
-        poll_interval_seconds=10,
-        checkpoint_dir=OutputName("policy_checkpoints"),
-        max_checkpoints=5,
+        # mode=WeightTransferMode.JAX_TRANSFER_SERVER,
+        mode=WeightTransferMode.ARROW_FLIGHT,
+        sync_interval_steps=1,
+        poll_interval_seconds=1,
     )
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_TOKENIZER)
 
     train_worker = TrainWorkerConfig(
         rollout_storage=rollout_storage,
@@ -241,18 +250,20 @@ def rl_train(name: str) -> ExecutorStep:
         model=model_config,
         trainer=trainer_config,
         optimizer=opt_config,
+        max_input_length=MAX_INPUT_TOKENS,
+        max_output_length=MAX_OUTPUT_TOKENS,
+        pad_token_id=(tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id),
         replay_buffer=ReplayBufferConfig(
             capacity=4096,
             alpha=3,
+            # Don't allow resampling.
+            max_samples=1,
         ),
-        kl_coef=0.001,
+        kl_coef=0.05,
         initial_checkpoint=MODEL_NAME,
         run_id=RUN_ID,
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_TOKENIZER)
-
-    # TODO(power): Support multi environment setup
     rollout_worker = RolloutWorkerConfig(
         trainer=trainer_config,
         inference_server_config=inference_server_config,
@@ -261,11 +272,11 @@ def rl_train(name: str) -> ExecutorStep:
         max_input_length=MAX_INPUT_TOKENS,
         max_output_length=MAX_OUTPUT_TOKENS,
         pad_token_id=(tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id),
-        n_prompts_per_step=2,  # Minimal prompts
-        n_generations=1,  # Single generation
+        n_prompts_per_step=16,
+        n_generations=4,
         temperature=0.7,
-        log_freq=1,  # Log every step
-        max_rollouts=10,  # Only 10 rollouts for test
+        log_freq=5,
+        max_rollouts=100,
         stop_tokens=stop_tokens(MODEL_TOKENIZER),
         initial_checkpoint=MODEL_NAME,
         weight_transfer=weight_transfer,
@@ -277,13 +288,13 @@ def rl_train(name: str) -> ExecutorStep:
         rollout_worker_config=rollout_worker,
         train_worker_config=train_worker,
         inference_tpu_type="v5litepod-4",
-        train_tpu_type="v5litepod-128",
-        num_inference_workers=1,
+        train_tpu_type="v5litepod-4",
+        num_inference_workers=4,
         num_train_slices=1,
     )
 
     return ExecutorStep(
-        name=f"rl_testing/{name}",
+        name=f"rl_testing/{name}_v7",
         description=f"Async RL training: {name}",
         fn=run_rl_training_on_pod,
         config=config,
@@ -292,17 +303,17 @@ def rl_train(name: str) -> ExecutorStep:
 
 
 def main():
-    import time
-
-    nonce = int(time.time())
+    if os.getenv("CI", None) is not None:
+        logger.info("Skipping experiment execution on CI environment, needs HF access.")
+        return
 
     experiments = [
-        rl_train(name=f"qwen3-gsm8k-rl-test-{nonce}"),
+        rl_train(name="llama-1b-math-rl-test-007"),
     ]
 
     executor_main(
         steps=experiments,
-        description="Async RL GSM8K training experiments",
+        description="Async RL math training experiments",
     )
 
 
