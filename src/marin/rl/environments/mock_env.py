@@ -278,7 +278,7 @@ class MockEnv(MarinEnv):
                 token_rewards = jnp.full(len(choice.response_tokens), reward, dtype=jnp.float32)
 
                 rollout = Rollout(
-                    env_name=f"mock:task_type={self.task_type}",
+                    env_name=f"mock:{self.task_type}",
                     env_example_id=example["example_id"],
                     prompt_tokens=jnp.array(prompt_tokens, dtype=jnp.int32),
                     response_tokens=jnp.array(choice.response_tokens, dtype=jnp.int32),

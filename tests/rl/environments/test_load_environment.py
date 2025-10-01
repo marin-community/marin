@@ -12,8 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from marin.rl.types import InferenceContext, InferenceResponse
+"""Tests for environment loading from EnvConfig."""
 
-from .base import EnvConfig, MarinEnv, load_environment_from_spec
+from marin.rl.environments import EnvConfig, load_environment_from_spec
+from marin.rl.environments.mock_env import MockEnv
 
-__all__ = ["EnvConfig", "InferenceContext", "InferenceResponse", "MarinEnv", "load_environment_from_spec"]
+
+def test_load_mock_environment():
+    """Test loading MockEnv via EnvConfig."""
+    config = EnvConfig(env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "cats", "seed": 42})
+
+    env = load_environment_from_spec(config)
+
+    assert isinstance(env, MockEnv)
+    assert env.task_type == "cats"
+    assert len(env.train_examples) > 0
+    assert len(env.eval_examples) > 0
