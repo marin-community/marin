@@ -17,13 +17,16 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from marin.rl.curriculum import (
     Curriculum,
     CurriculumConfig,
     LessonConfig,
+    LessonDependency,
     LessonStats,
     get_combined_success_rate,
+    is_plateaued,
     sigmoid,
     update_from_rollout,
 )
@@ -300,3 +303,179 @@ def test_lesson_stats_serialization():
     assert restored.eval_step == stats.eval_step
     assert restored.total_samples == stats.total_samples
     assert restored.reward_history == stats.reward_history
+
+
+def test_circular_dependency_detection():
+    """Test that circular dependencies are detected during initialization."""
+    # Create lessons with circular dependency: A -> B -> A
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="lessonA",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "cats"},
+                ),
+                dependencies=[LessonDependency(dependency_name="lessonB")],
+            ),
+            LessonConfig(
+                lesson_name="lessonB",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "addition"},
+                ),
+                dependencies=[LessonDependency(dependency_name="lessonA")],
+            ),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="Circular dependency"):
+        Curriculum(config)
+
+
+def test_unknown_dependency():
+    """Test that unknown dependencies are detected."""
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="lesson1",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "cats"},
+                ),
+                dependencies=[LessonDependency(dependency_name="nonexistent")],
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="unknown lesson"):
+        Curriculum(config)
+
+
+def test_progressive_unlocking():
+    """Test that lessons unlock progressively as dependencies are met."""
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="basic",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "cats"},
+                ),
+            ),
+            LessonConfig(
+                lesson_name="intermediate",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "addition"},
+                ),
+                dependencies=[LessonDependency(dependency_name="basic", reward_threshold=0.5)],
+            ),
+        ]
+    )
+
+    curriculum = Curriculum(config)
+
+    # Initially, only basic should be unlocked
+    assert "basic" in curriculum.unlocked
+    assert "intermediate" not in curriculum.unlocked
+
+    # Set basic to have good performance but not plateaued
+    for i in range(49):
+        curriculum.stats["basic"].reward_history.append(0.6 + i * 0.001)
+    curriculum.stats["basic"].smoothed_success = 0.6
+    curriculum.stats["basic"].total_samples = 50
+
+    # Intermediate should still not unlock (not plateaued)
+    curriculum.update_unlocked_lessons()
+    assert "intermediate" not in curriculum.unlocked
+
+    # Add more samples to create a plateau
+    for _ in range(51):
+        curriculum.stats["basic"].reward_history.append(0.65)
+    curriculum.stats["basic"].total_samples = 100
+
+    # Now intermediate should unlock
+    curriculum.update_unlocked_lessons()
+    assert "intermediate" in curriculum.unlocked
+
+
+def test_multiple_dependencies():
+    """Test lessons with multiple dependencies."""
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="lesson1",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "cats"},
+                ),
+            ),
+            LessonConfig(
+                lesson_name="lesson2",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "addition"},
+                ),
+            ),
+            LessonConfig(
+                lesson_name="advanced",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "opposites"},
+                ),
+                dependencies=[
+                    LessonDependency(dependency_name="lesson1", reward_threshold=0.6),
+                    LessonDependency(dependency_name="lesson2", reward_threshold=0.5),
+                ],
+            ),
+        ]
+    )
+
+    curriculum = Curriculum(config)
+
+    # Initially, only lesson1 and lesson2 should be unlocked
+    assert "lesson1" in curriculum.unlocked
+    assert "lesson2" in curriculum.unlocked
+    assert "advanced" not in curriculum.unlocked
+
+    # Set lesson1 to meet threshold and plateau
+    for _ in range(50):
+        curriculum.stats["lesson1"].reward_history.append(0.7)
+    curriculum.stats["lesson1"].smoothed_success = 0.7
+    curriculum.stats["lesson1"].total_samples = 50
+
+    # Advanced should still not unlock (lesson2 not ready)
+    curriculum.update_unlocked_lessons()
+    assert "advanced" not in curriculum.unlocked
+
+    # Set lesson2 to meet threshold and plateau
+    for _ in range(50):
+        curriculum.stats["lesson2"].reward_history.append(0.6)
+    curriculum.stats["lesson2"].smoothed_success = 0.6
+    curriculum.stats["lesson2"].total_samples = 50
+
+    # Now advanced should unlock
+    curriculum.update_unlocked_lessons()
+    assert "advanced" in curriculum.unlocked
+
+
+def test_plateau_detection():
+    """Test plateau detection with different reward patterns."""
+    # Flat rewards (plateaued)
+    stats_flat = LessonStats(reward_history=[1.0] * 50)
+    assert is_plateaued(stats_flat, window=50, threshold=0.01)
+
+    # Increasing rewards (not plateaued)
+    stats_increasing = LessonStats(reward_history=list(np.linspace(0.0, 1.0, 50)))
+    assert not is_plateaued(stats_increasing, window=50, threshold=0.01)
+
+    # Noisy but flat (plateaued)
+    rng = np.random.default_rng(42)
+    noisy_rewards = [0.5 + 0.01 * rng.standard_normal() for _ in range(50)]
+    stats_noisy = LessonStats(reward_history=noisy_rewards)
+    assert is_plateaued(stats_noisy, window=50, threshold=0.01)
+
+    # Insufficient data
+    stats_insufficient = LessonStats(reward_history=[1.0] * 20)
+    assert not is_plateaued(stats_insufficient, window=50, threshold=0.01)

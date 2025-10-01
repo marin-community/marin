@@ -283,6 +283,45 @@ class Curriculum:
 
         return lesson_name, self.environments[lesson_name]
 
+    def check_dependencies(self, lesson_name: str) -> bool:
+        """Check if all dependencies for a lesson are satisfied.
+
+        Args:
+            lesson_name: Name of the lesson to check.
+
+        Returns:
+            True if all dependencies are satisfied, False otherwise.
+        """
+        lesson_config = self.lesson_configs[lesson_name]
+
+        for dep in lesson_config.dependencies:
+            dep_name = dep.dependency_name
+            dep_stats = self.stats[dep_name]
+
+            # Check if dependency has reached required threshold
+            success_rate = get_combined_success_rate(dep_stats, self.current_step)
+            if success_rate < dep.reward_threshold:
+                return False
+
+            # Check if dependency has plateaued (if threshold is met or is 0.0)
+            if success_rate >= dep.reward_threshold:
+                dep_config = self.lesson_configs[dep_name]
+                if not is_plateaued(dep_stats, window=dep_config.plateau_window, threshold=dep_config.plateau_threshold):
+                    return False
+
+        return True
+
+    def update_unlocked_lessons(self):
+        """Update which lessons are currently unlocked based on dependencies."""
+        for lesson_name in self.lesson_configs:
+            # Skip if already unlocked or graduated
+            if lesson_name in self.unlocked or lesson_name in self.graduated:
+                continue
+
+            # Check if dependencies are satisfied
+            if self.check_dependencies(lesson_name):
+                self.unlocked.add(lesson_name)
+
 
 def update_from_rollout(stats: LessonStats, rollout: Rollout, alpha: float = 0.1) -> LessonStats:
     """Update lesson statistics from a training rollout.
@@ -360,3 +399,34 @@ def sigmoid(x: float, center: float, steepness: float) -> float:
         Sigmoid output in [0, 1].
     """
     return 1 / (1 + np.exp(-steepness * (x - center)))
+
+
+def is_plateaued(stats: LessonStats, window: int = 50, threshold: float = 0.01) -> bool:
+    """Detect if reward has plateaued using linear regression on recent history.
+
+    Args:
+        stats: Lesson statistics with reward history.
+        window: Number of recent samples to analyze.
+        threshold: Relative slope threshold for plateau detection.
+
+    Returns:
+        True if the reward has plateaued, False otherwise.
+    """
+    if len(stats.reward_history) < window:
+        return False
+
+    # Get recent rewards
+    recent = np.array(stats.reward_history[-window:])
+
+    # Fit linear trend
+    x = np.arange(len(recent))
+    coeffs = np.polyfit(x, recent, 1)
+    slope = coeffs[0]
+
+    # Check if relative trend is flat
+    mean_reward = np.mean(recent)
+    if abs(mean_reward) > 1e-6:
+        relative_trend = abs(slope) / abs(mean_reward)
+        return relative_trend < threshold
+
+    return True
