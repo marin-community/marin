@@ -65,7 +65,7 @@ def main(config: VizLmConfig):
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
 
-    with config.trainer.use_mesh(), hax.axis_mapping(parameter_axis_mapping):
+    with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
         key = jax.random.PRNGKey(0)
 
         vocab_size = len(tokenizer)

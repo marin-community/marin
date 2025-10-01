@@ -819,7 +819,13 @@ class TrainerConfig:
             self.data_dcn_axis_size,
         )
 
-    def use_mesh(self) -> ContextManager[None]:
+    def use_device_mesh(self) -> ContextManager[None]:
+        """
+        Context manager that sets the device mesh for jax, using Haliax's wrapper.
+
+        In recent jax, this is the same as `jax.set_mesh(self.device_mesh)`, but we use Haliax's wrapper for
+        compatibility with older jax versions.
+        """
         return haliax.partitioning.set_mesh(self.device_mesh)
 
     @property

@@ -303,21 +303,9 @@ def create_test_mesh(tensor_parallelism: int = 1, skip_ok: bool = False) -> Mesh
 
 
 @contextmanager
-def use_test_mesh(tensor_parallelism: int = 1, *, mesh: Optional[Mesh] = None):
+def use_test_mesh(tensor_parallelism: int = 1, *, mesh: Optional[Mesh] = None, skip_ok: bool = False):
     """Context manager that activates a data/model Mesh and sets haliax's global mesh."""
     if mesh is None:
-        mesh = create_test_mesh(tensor_parallelism)
+        mesh = create_test_mesh(tensor_parallelism, skip_ok=skip_ok)
     with set_mesh(mesh):
         yield mesh
-
-
-@contextmanager
-def maybe_mesh(tensor_parallelism: int = 1):
-    try:
-        mesh = create_test_mesh(tensor_parallelism)
-    except RuntimeError:
-        yield
-        return
-
-    with use_test_mesh(mesh=mesh) as active_mesh:
-        yield active_mesh
