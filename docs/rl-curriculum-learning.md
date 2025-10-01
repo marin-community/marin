@@ -8,7 +8,6 @@ An optimal curriculum focuses on the "zone of proximal development" - tasks just
 
 ### Prior Work
 
-- **[Automatic Curriculum Learning](https://arxiv.org/abs/2012.02035)**: Curricula emerge from competence-based progression
 - **[Teacher-Student Curriculum Learning](https://arxiv.org/abs/1707.00183)**: Benefits of adaptive difficulty based on performance
 - **[Automatic Domain Randomization](https://arxiv.org/abs/1910.07113)**: Progressive distribution expansion
 
@@ -29,15 +28,38 @@ Key principles:
 A lesson wraps an environment with metadata about dependencies and activation thresholds.
 
 ```python
+
+@dataclass
+class LessonDependency:
+    dependency_name: str
+    """Lesson this depends on."""
+
+    reward_threshold: float = 0.0
+    """When `dependency_name` reaches `reward_threshold` and learning plateaus, activate.
+    By default, wait only for `dependency_name` to plateau."""
+
+
 @dataclass
 class LessonConfig:
-    name: str
+    lesson_name: str
+
     env_config: EnvConfig  # Uses existing Marin EnvConfig
-    dependencies: dict[str, float] = field(default_factory=dict)
-    # e.g., {"basic_math": 0.7, "algebra": 0.6}
+    dependencies: list[LessonDependency] = field(default_factory=list)
+
     initial_weight: float = 1.0
-    start_threshold: float = 0.1  # Activate when unlocked
-    stop_threshold: float = 0.95  # Deactivate when exceeded
+    """The initial weight to use for sampling this environment before data is available."""
+
+    start_threshold: float = 0.0
+    """Once unlocked, how well does the agent need to do on this environment in eval to being training?"""
+
+    stop_threshold: float = 1.00
+    """As reward approaches this threshold, consider the environment for graduation."""
+
+    plateau_window: int = 50
+    """Number of recent samples to consider for plateau detection."""
+
+    plateau_threshold: float = 0.01
+    """Relative slope threshold for detecting plateaus."""
 ```
 
 ### Performance Tracking
@@ -49,10 +71,12 @@ Statistics track recent training and evaluation performance for each lesson. Tra
 class LessonStats:
     smoothed_success: float = 0.0  # Exponentially smoothed success rate
     smoothed_reward: float = 0.0   # Exponentially smoothed reward
-    reward_history: deque = field(default_factory=lambda: deque(maxlen=100))
     eval_success: float = 0.0      # Last evaluation success rate
+    eval_reward: float = 0.0
     eval_step: int = -1            # When last evaluated
     total_samples: int = 0         # Total rollouts seen
+
+    reward_history: list[float] = field(default_factory=list)  # Last 100 samples kept
 
 def update_from_rollout(stats: LessonStats, rollout: Rollout) -> LessonStats:
 
@@ -73,7 +97,7 @@ The curriculum maintains lesson configurations, statistics, and sampling state a
 
 ```python
 
-def _validate_dependencies(lesson_config):
+def _validate_dependencies(lesson_configs):
     """Ensure no circular dependencies."""
     visited = set()
     rec_stack = set()
@@ -96,6 +120,9 @@ def _validate_dependencies(lesson_config):
         if name not in visited and has_cycle(name):
             raise ValueError(f"Circular dependency detected involving {name}")
 
+class CurriculumStats:
+    lesson_stats: dict[str, LessonStats]
+    """Mapping from lesson name to statistics."""
 
 class AdaptiveCurriculum:
     """Manages lesson progression and sampling."""
@@ -106,6 +133,8 @@ class AdaptiveCurriculum:
         eval_frequency: int = 1000,
         temperature: float = 1.0
     ):
+        _validate_dependencies(lesson_configs)
+
         self.lesson_configs = {cfg.name: cfg for cfg in lesson_configs}
         self.stats = {cfg.name: LessonStats() for cfg in lesson_configs}
         self.environments = {
@@ -115,14 +144,13 @@ class AdaptiveCurriculum:
 
         self.unlocked = set()  # Currently accessible lessons
         self.graduated = set()  # Mastered lessons
+
+        for lesson in lesson_configs:
+            # unlock any lesson without deps
+
         self.eval_frequency = eval_frequency
         self.temperature = temperature
         self.current_step = 0
-
-        # Validate dependency DAG
-        _validate_dependencies(self._lesson_configs)
-
-
 ```
 
 ### Dependency Management
@@ -130,7 +158,7 @@ class AdaptiveCurriculum:
 Dependencies ensure lessons unlock in logical order based on prerequisite performance.
 
 ```python
-def check_dependencies(self, lesson_name: str) -> bool:
+def check_dependencies(lesson_stats: LessonStats, lesson_name: str) -> bool:
     """Check if all dependencies are satisfied for a lesson."""
 
 def update_unlocked_lessons(self):
@@ -297,7 +325,8 @@ for step in range(num_steps):
 
     # Periodic evaluation (user-triggered)
     if step % eval_frequency == 0:
-        curriculum.trigger_evaluation(inference_ctx, prng_key)
+        curriculum.evaluate(inference_ctx, prng_key, n_examples=n_eval_examples)
+        # evaluation iterates over all active environments and collects a sample
         curriculum.update_lesson_states()
 
     # Log metrics
@@ -310,7 +339,7 @@ for step in range(num_steps):
 ## Metrics and Monitoring
 
 ```python
-def get_metrics(self) -> dict:
+Curriculum::get_metrics(self) -> dict:
     """Comprehensive metrics for monitoring curriculum health."""
     weights = self.compute_sampling_weights()
     active = self.unlocked - self.graduated
@@ -333,11 +362,7 @@ def get_metrics(self) -> dict:
             get_combined_success_rate(self.stats[n], self.current_step)
             for n in active
         ]) if active else 0,
-        "top_weights": sorted(
-            [(n, w) for n, w in weights.items()],
-            key=lambda x: x[1],
-            reverse=True
-        )[:5]
+        "sampling_weights": weights,
     }
 
 def check_health(self) -> list[str]:
@@ -363,43 +388,270 @@ def check_health(self) -> list[str]:
 ## State Persistence
 
 The curriculum supports checkpointing for fault tolerance and experiment resumption.
+Uses JSON serialization for portability and human-readability.
 
 ```python
-@dataclass
-class CurriculumCheckpoint:
-    """Serializable curriculum state."""
-    lesson_configs: dict[str, LessonConfig]
-    stats: dict[str, LessonStats]
-    unlocked: set[str]
-    graduated: set[str]
-    current_step: int
-
 def save_checkpoint(self, path: str):
-    """Save curriculum state to disk."""
-    checkpoint = CurriculumCheckpoint(
-        lesson_configs=self.lesson_configs,
-        stats=self.stats,
-        unlocked=self.unlocked,
-        graduated=self.graduated,
-        current_step=self.current_step
-    )
-    with open(path, "wb") as f:
-        pickle.dump(checkpoint, f)
+    """Save curriculum state to disk as JSON."""
+    checkpoint_data = {
+        "lesson_configs": {
+            name: {
+                "lesson_name": config.lesson_name,
+                "env_config": {
+                    "env_class": config.env_config.env_class,
+                    "env_args": config.env_config.env_args,
+                },
+                "dependencies": [
+                    {"dependency_name": dep.dependency_name, "reward_threshold": dep.reward_threshold}
+                    for dep in config.dependencies
+                ],
+                "initial_weight": config.initial_weight,
+                "start_threshold": config.start_threshold,
+                "stop_threshold": config.stop_threshold,
+                "plateau_window": config.plateau_window,
+                "plateau_threshold": config.plateau_threshold,
+            }
+            for name, config in self.lesson_configs.items()
+        },
+        "stats": {name: stats.to_dict() for name, stats in self.stats.items()},
+        "unlocked": list(self.unlocked),
+        "graduated": list(self.graduated),
+        "current_step": self.current_step,
+    }
 
-def load_checkpoint(cls, path: str, eval_frequency: int = 1000) -> "AdaptiveCurriculum":
+    with open(path, "w") as f:
+        json.dump(checkpoint_data, f, indent=2)
+
+@classmethod
+def load_checkpoint(cls, path: str, config: CurriculumConfig) -> "Curriculum":
     """Restore curriculum from checkpoint."""
-    with open(path, "rb") as f:
-        checkpoint = pickle.load(f)
+    with open(path, "r") as f:
+        checkpoint_data = json.load(f)
 
-    # Reconstruct curriculum
-    curriculum = cls(
-        lesson_configs=list(checkpoint.lesson_configs.values()),
-        eval_frequency=eval_frequency
-    )
-    curriculum.stats = checkpoint.stats
-    curriculum.unlocked = checkpoint.unlocked
-    curriculum.graduated = checkpoint.graduated
-    curriculum.current_step = checkpoint.current_step
+    # Create curriculum from config
+    curriculum = cls(config)
+
+    # Restore state
+    curriculum.stats = {
+        name: LessonStats.from_dict(stats_dict)
+        for name, stats_dict in checkpoint_data["stats"].items()
+    }
+    curriculum.unlocked = set(checkpoint_data["unlocked"])
+    curriculum.graduated = set(checkpoint_data["graduated"])
+    curriculum.current_step = checkpoint_data["current_step"]
 
     return curriculum
 ```
+
+# Implementation
+
+You will implement this project in phases. After each phase you will validate
+the progress with tests before committing the phase with an appropriate `git`
+message.
+
+Step 1.
+
+Write out the core curriculum classes in `src/rl/curriculum.py`:
+
+* LessonStatistics
+* LessonDependency
+* LessonPlan
+* Curriculum
+
+No tests.
+
+Step 2.
+
+Write functions for statistics tracking and environment sampling, along with
+tests in `tests/rl/test_curriculum.py`.  Implement basic environment weighting
+based on the low and high watermarks.
+
+Your test should cover basic boundary conditions like single environment
+curricula.
+
+Step 3.
+
+Add dependency activation and test.
+
+Step 4.
+
+Add graduation and plateau detection.
+Add tests.
+
+Step 5.
+
+Add exploration bonuses.
+Add tests.
+
+Step 6.
+
+Add checkpoint/restore support.
+Add tests.
+
+Step 7.
+Integrate into `RolloutWorker`.
+
+**Breaking change:** Rollout workers now accept a `CurriculumConfig` to initialize
+the curriculum, replacing the `environment_spec: EnvConfig` field. No backwards
+compatibility layer is needed.
+
+Changes:
+- Remove `environment_spec: EnvConfig` from `RolloutWorkerConfig`
+- Add `curriculum_config: CurriculumConfig` to `RolloutWorkerConfig`
+- Add `curriculum_eval_frequency: int` for triggering periodic evaluation
+- Update RolloutWorker to sample from curriculum instead of single environment
+- Add curriculum eval logic (triggered by rollout worker, evaluates unlocked lessons only)
+- Update curriculum stats from rollouts
+
+Update tests in `config_helpers` and `test_async_train`.
+
+Step 8.
+
+Update integration tests for "moar cats" and validate.
+
+---
+
+# Implementation Progress
+
+## Implementation Decisions
+
+During the planning phase, the following design decisions were made:
+
+1. **Naming Conventions**: Used concise names (`LessonStats`, `LessonConfig`) instead of verbose alternatives to match existing codebase patterns.
+
+2. **Dependency Structure**: Implemented dependencies as `list[LessonDependency]` dataclass format for type safety and clarity.
+
+3. **RolloutWorker Integration**: Chose breaking change approach (Option A) - completely replace `environment_spec: EnvConfig` with `curriculum_config: CurriculumConfig`. No backwards compatibility layer.
+
+4. **Environment Naming**: Rollouts use internal environment names (e.g., `"mock:cats"`) in the `env_name` field. Lesson tracking happens via separate curriculum state.
+
+5. **Evaluation Trigger**: Evaluation is triggered by the rollout worker based on a configurable frequency. Evaluates only unlocked (non-graduated) lessons and updates `eval_reward` and `eval_success` in `LessonStats`.
+
+6. **Checkpoint Format**: Uses JSON serialization (not pickle) for portability and human-readability. Leverages `LessonStats.to_dict()` and `from_dict()` methods.
+
+7. **Integration Test**: For Step 8, focus on ensuring `test_full_integration_moar_cats` runs end-to-end with curriculum support.
+
+8. **Plateau Detection Parameters**: Implemented as per-lesson configuration (`plateau_window`, `plateau_threshold`) with sensible defaults (50 samples, 0.01 relative slope).
+
+## Completed Steps
+
+### ✅ Step 1: Core Curriculum Classes (Completed)
+**Files:** `src/marin/rl/curriculum.py`
+
+Implemented core data structures:
+- `LessonStats`: Performance tracking with serialization support
+- `LessonDependency`: Prerequisite specification
+- `LessonConfig`: Lesson configuration with plateau parameters
+- `CurriculumConfig`: Top-level curriculum configuration
+- `Curriculum`: Main curriculum manager class with state tracking
+
+Includes circular dependency validation using DFS algorithm.
+
+**Commit:** `3224abbf` - "Add statistics tracking and sampling for curriculum learning."
+
+### ✅ Step 2: Statistics Tracking & Sampling (Completed)
+**Files:** `src/marin/rl/curriculum.py`, `tests/rl/test_curriculum.py`
+
+Implemented core curriculum logic:
+- `update_from_rollout()`: Exponential smoothing of success/reward metrics
+- `get_combined_success_rate()`: Blends eval and training metrics with staleness decay
+- `compute_sampling_weights()`: Quadratic weighting peaking at 50% success, with sigmoid smoothing
+- `sample_lesson()`: JAX-based weighted sampling
+- `sigmoid()`: Smooth transition function
+
+**Tests:**
+- Statistics update mechanics
+- Combined success rate computation
+- Quadratic weight distribution
+- Sampling respects weight distribution
+- Initial weight handling
+- Serialization round-trip
+
+**Commit:** `3224abbf` - "Add statistics tracking and sampling for curriculum learning."
+
+### ✅ Step 3: Dependency Management (Completed)
+**Files:** `src/marin/rl/curriculum.py`, `tests/rl/test_curriculum.py`
+
+Implemented dependency system:
+- `check_dependencies()`: Validates threshold and plateau requirements
+- `update_unlocked_lessons()`: Progressive lesson activation
+- `is_plateaued()`: Linear regression-based plateau detection
+
+**Tests:**
+- Circular dependency detection
+- Unknown dependency validation
+- Progressive unlocking with thresholds
+- Multiple dependency chains
+- Plateau detection with various reward patterns
+
+**Commit:** `9ab93df3` - "Add dependency management and plateau detection."
+
+### ✅ Step 4: Graduation Logic (Completed)
+**Files:** `src/marin/rl/curriculum.py`, `tests/rl/test_curriculum.py`
+
+Implemented graduation system:
+- `check_graduation()`: Verifies stop threshold + plateau + eval data
+- `update_graduated_lessons()`: Automatic graduation tracking
+- Graduated lessons automatically excluded from `compute_sampling_weights()`
+
+**Tests:**
+- Basic graduation with eval data requirement
+- Plateau requirement for graduation
+- Graduated lessons excluded from sampling
+
+**Commit:** `203ef6a3` - "Add lesson graduation logic and tests."
+
+## Remaining Work
+
+### ⏳ Step 5: Exploration Bonuses (Pending)
+Add exploration bonus to `compute_sampling_weights()` based on `total_samples` with exponential decay. Ensures new lessons get sufficient initial sampling.
+
+### ⏳ Step 6: Checkpoint/Restore (Pending)
+Implement JSON-based checkpoint save/load with tests for state persistence and round-trip validation.
+
+### ⏳ Step 7: RolloutWorker Integration (Pending)
+**Breaking changes:**
+- Replace `environment_spec: EnvConfig` with `curriculum_config: CurriculumConfig`
+- Add `curriculum_eval_frequency: int` configuration
+- Update `RolloutWorker` to:
+  - Initialize curriculum
+  - Sample lessons instead of single environment
+  - Process rollout batches to update curriculum stats
+  - Trigger periodic evaluation
+  - Track curriculum metrics
+
+Update helper functions in `tests/rl/config_helpers.py` and tests in `tests/rl/test_async_train.py`.
+
+### ⏳ Step 8: Integration Test (Pending)
+Validate end-to-end functionality by ensuring `test_full_integration_moar_cats` passes with multi-lesson curriculum configuration.
+
+## Test Coverage
+
+Current test count: **18 tests passing**
+
+Test categories:
+- Core functionality: 6 tests
+- Dependency management: 4 tests
+- Plateau detection: 1 test
+- Graduation: 3 tests
+- Sampling & weighting: 4 tests
+
+## Architecture Notes
+
+**Key Design Patterns:**
+- Functional approach for statistics updates (immutable `LessonStats` transformations)
+- Protocol-based `MarinEnv` for environment abstraction
+- Dataclass-based configuration for clear type contracts
+- JAX integration for sampling operations
+
+**Performance Considerations:**
+- Training metric updates: O(1) per rollout (exponential smoothing)
+- Evaluation: O(n) where n = number of unlocked lessons
+- Weight computation: O(k) where k = number of active lessons
+- Dependency checking: O(d) where d = dependency depth (cached via sets)
+
+**Future Extensions:**
+- Dynamic threshold adjustment based on training progress
+- Multi-objective optimization (speed vs accuracy)
+- Automatic difficulty estimation from first N samples
+- Curriculum visualization and debugging tools
