@@ -16,8 +16,7 @@
 Consolidated type definitions for RL/post-training.
 
 This module contains all shared type definitions used across the RL system:
-- Environment types (InferenceChoice, InferenceResponse, EnvExample)
-- Inference context protocol
+- Inference types (InferenceChoice, InferenceResponse, InferenceContext)
 - Rollout types (Rollout, RolloutGroup, RolloutBatch, etc.)
 - Training types (TrainingBatch, RolloutWithAdvantage)
 """
@@ -50,15 +49,6 @@ class InferenceResponse:
     choices: list[InferenceChoice]
 
 
-@dataclass
-class EnvExample:
-    """A single environment example with prompt and ground truth."""
-
-    prompt: str
-    answer: str
-    example_id: str
-
-
 class InferenceContext(Protocol):
     """Protocol for inference providers that generate text from prompts.
 
@@ -81,6 +71,14 @@ class InferenceContext(Protocol):
         Returns:
             List of InferenceResponse objects, one per input prompt.
             Each InferenceResponse contains n_generations choices.
+        """
+        ...
+
+    def openai_client(self):
+        """Return an OpenAI-compatible client for environments that need it.
+
+        Returns:
+            AsyncOpenAI or OpenAI client instance
         """
         ...
 

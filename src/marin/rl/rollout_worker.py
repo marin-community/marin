@@ -317,26 +317,14 @@ class RolloutWorker:
             self.config.trainer.device_mesh,
             hax.axis_mapping(self.config.trainer.compute_axis_mapping),
         ):
-            # Sample examples from environment
-            examples = self._environment.sample(
+            # Sample examples, generate responses, and create rollouts
+            rollout_groups, metrics = self._environment.sample(
+                inference_ctx=policy_ctx,
                 n_examples=self.config.n_prompts_per_step,
+                n_generations=self.config.n_generations,
+                temperature=self.config.temperature,
                 prng_key=rng,
                 mode="train",
-            )
-
-            # Generate responses for each prompt
-            prompts = [example.prompt for example in examples]
-            responses = policy_ctx.generate(
-                prompts=prompts,
-                temperature=self.config.temperature,
-                n_generations=self.config.n_generations,
-            )
-
-            # Evaluate responses and create rollouts
-            rollout_groups, metrics = self._environment.evaluate(
-                examples=examples,
-                responses=responses,
-                max_input_length=self.config.max_input_length,
             )
 
         if len(rollout_groups) == 0:

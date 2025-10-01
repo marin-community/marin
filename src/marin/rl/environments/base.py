@@ -16,30 +16,47 @@ from abc import ABC, abstractmethod
 
 from levanter.compat.hf_checkpoints import HfTokenizer
 
-from marin.rl.types import RolloutGroup
+from marin.rl.types import InferenceContext, RolloutGroup
 
 
 class MarinEnv(ABC):
     """Abstract base class for RL environments.
 
-    Environments manage datasets and evaluate model responses.
-    Subclasses must implement sample() and evaluate() methods.
+    Environments manage datasets, generate responses, and evaluate them.
+    Subclasses must implement sample() method.
     """
+
+    @property
+    def name(self) -> str:
+        """Return the name of this environment.
+
+        This is used to tag rollouts with their source environment.
+        Subclasses should override this to provide a meaningful name.
+        """
+        return self.__class__.__name__
 
     @abstractmethod
     def sample(
         self,
+        inference_ctx: InferenceContext,
         n_examples: int,
         n_generations: int,
+        temperature: float,
         prng_key,
         mode: str = "train",
-    ) -> list[RolloutGroup]:
-        """Sample examples from the environment dataset.
+    ) -> tuple[list[RolloutGroup], dict[str, float]]:
+        """Sample examples, generate responses, and create rollouts.
 
         Args:
+            inference_ctx: Context for generating responses from the model
             n_examples: Number of examples to sample
+            n_generations: Number of generations per example
+            temperature: Sampling temperature for generation
             prng_key: JAX random key for sampling
             mode: "train" or "eval" - which dataset to sample from
+
+        Returns:
+            Tuple of (rollout_groups, metrics)
         """
         ...
 

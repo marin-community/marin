@@ -23,7 +23,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from marin.rl.types import EnvExample, InferenceResponse, Rollout, RolloutGroup
+from marin.rl.types import InferenceContext, Rollout, RolloutGroup
 
 from .base import MarinEnv
 
@@ -218,60 +218,66 @@ class MockEnv(MarinEnv):
 
     def sample(
         self,
+        inference_ctx: InferenceContext,
         n_examples: int,
+        n_generations: int,
+        temperature: float,
         prng_key,
         mode: str = "train",
-    ) -> list[EnvExample]:
-        """Sample examples from the dataset."""
+    ) -> tuple[list[RolloutGroup], dict[str, float]]:
+        """Sample examples, generate responses, and create rollouts."""
+        # Select dataset
         if mode == "train":
             available_examples = self.train_examples
         else:
             available_examples = self.eval_examples
 
-        # Use numpy random for sampling
+        # Sample examples
         n_to_sample = min(n_examples, len(available_examples))
         seed = jax.random.randint(prng_key, (), 0, 1_000_000).item()
         logger.info("Selecting %d examples with seed %d", n_to_sample, seed)
         rng = np.random.default_rng(seed)
         indices = rng.choice(len(available_examples), size=n_to_sample, replace=True)
 
-        env_examples = []
+        sampled_examples = []
         for idx in indices:
             example = available_examples[int(idx)]
-            env_examples.append(
-                EnvExample(
-                    prompt=example["prompt"],
-                    answer=example["answer"],
-                    example_id=f"{self.task_type}_example_{idx}",
-                )
+            sampled_examples.append(
+                {
+                    "prompt": example["prompt"],
+                    "answer": example["answer"],
+                    "example_id": f"{self.task_type}_example_{idx}",
+                }
             )
-        return env_examples
 
-    def evaluate(
-        self,
-        examples: list[EnvExample],
-        responses: list[InferenceResponse],
-        max_input_length: int,
-    ) -> tuple[list[RolloutGroup], dict[str, float]]:
-        """Evaluate responses and create rollouts."""
+        # Generate responses
+        prompts = [ex["prompt"] for ex in sampled_examples]
+        responses = inference_ctx.generate(
+            prompts=prompts,
+            temperature=temperature,
+            n_generations=n_generations,
+        )
+
+        # Evaluate and create rollouts
+        max_input_length = 2048  # Default, will use what we can get from responses
         rollout_groups = []
         correct_count = 0
         total_count = 0
         format_correct_count = 0
 
-        for example, response in zip(examples, responses, strict=True):
+        for example, response in zip(sampled_examples, responses, strict=True):
             rollouts = []
 
             for choice in response.choices:
                 # Extract response text (already decoded by inference context)
                 # Note: response_text may include the prompt, so extract the actual response
-                if choice.response_text.startswith(example.prompt):
-                    actual_response = choice.response_text[len(example.prompt) :]
+                if choice.response_text.startswith(example["prompt"]):
+                    actual_response = choice.response_text[len(example["prompt"]) :]
                 else:
                     actual_response = choice.response_text
 
                 # Compute reward
-                reward = self.task.compute_reward(example.answer, actual_response)
+                reward = self.task.compute_reward(example["answer"], actual_response)
 
                 # Create rollout
                 prompt_tokens = response.prompt_tokens[-max_input_length:]
@@ -279,7 +285,7 @@ class MockEnv(MarinEnv):
 
                 rollout = Rollout(
                     env_name=self.name,
-                    env_example_id=example.example_id,
+                    env_example_id=example["example_id"],
                     prompt_tokens=jnp.array(prompt_tokens, dtype=jnp.int32),
                     response_tokens=jnp.array(choice.response_tokens, dtype=jnp.int32),
                     response_logprobs=jnp.array(choice.logprobs, dtype=jnp.float32),
