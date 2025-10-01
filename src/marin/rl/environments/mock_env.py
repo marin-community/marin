@@ -211,11 +211,6 @@ class MockEnv(MarinEnv):
             f"and {len(self.eval_examples)} eval examples."
         )
 
-    @property
-    def name(self) -> str:
-        """Return the environment name."""
-        return f"mock:task_type={self.task_type}"
-
     def sample(
         self,
         inference_ctx: InferenceContext,
@@ -284,7 +279,7 @@ class MockEnv(MarinEnv):
                 token_rewards = jnp.full(len(choice.response_tokens), reward, dtype=jnp.float32)
 
                 rollout = Rollout(
-                    env_name=self.name,
+                    env_name=f"mock:task_type={self.task_type}",
                     env_example_id=example["example_id"],
                     prompt_tokens=jnp.array(prompt_tokens, dtype=jnp.int32),
                     response_tokens=jnp.array(choice.response_tokens, dtype=jnp.int32),

@@ -26,15 +26,6 @@ class MarinEnv(ABC):
     Subclasses must implement sample() method.
     """
 
-    @property
-    def name(self) -> str:
-        """Return the name of this environment.
-
-        This is used to tag rollouts with their source environment.
-        Subclasses should override this to provide a meaningful name.
-        """
-        return self.__class__.__name__
-
     @abstractmethod
     def sample(
         self,

@@ -47,11 +47,6 @@ class PrimeIntellectEnv(MarinEnv):
             self._output_dir_path = os.path.join(output_dir_path)
             os.makedirs(self._output_dir_path, exist_ok=True)
 
-    @property
-    def name(self) -> str:
-        """Return the environment name."""
-        return f"prime_intellect:{self.env_id}"
-
     def load_prime_intellect_env(self, env_id: str, env_args: dict) -> vf.Environment:
         """
         Get the Verifiers environment for the environment ID.
@@ -123,7 +118,7 @@ class PrimeIntellectEnv(MarinEnv):
                 response_logprobs = jnp.zeros(len(response_tokens), dtype=jnp.float32)
 
                 rollout = Rollout(
-                    env_name=self.name,
+                    env_name=f"prime_intellect:{self.env_id}",
                     env_example_id=f"{self.env_id}_example_{prompt_idx}",
                     prompt_tokens=jnp.array(prompt_tokens, dtype=jnp.int32),
                     response_tokens=jnp.array(response_tokens, dtype=jnp.int32),
