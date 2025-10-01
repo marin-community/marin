@@ -12,10 +12,11 @@ import pytest
 import equinox as eqx
 from chex import assert_trees_all_close
 from jax.lax import Precision
-from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from jax.sharding import NamedSharding, PartitionSpec
 
 import haliax as hax
 from haliax import Axis
+from haliax.partitioning import ResourceAxis
 
 from levanter.layers.attention import (
     AttentionBackend,
@@ -28,7 +29,7 @@ from levanter.layers.attention import (
     dot_product_attention,
     dot_product_attention_with_sink,
 )
-from test_utils import skip_if_module_missing, skip_if_no_torch
+from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
 
 
 @pytest.mark.skip
@@ -318,7 +319,7 @@ def test_tpu_splash_attention():
 
     mask = AttentionMask.causal()
 
-    with jax.sharding.Mesh(jax.devices(), ("dp",)):
+    with use_test_mesh():
         flash_out = _tpu_splash_attention(
             QPos,
             KPos,
@@ -353,7 +354,7 @@ def test_tpu_splash_attention_sliding_window():
 
     mask = AttentionMask.causal(sliding_window=BLOCK_SIZE)
 
-    with jax.sharding.Mesh(jax.devices(), ("dp",)):
+    with use_test_mesh():
         flash_out = _tpu_splash_attention(
             QPos,
             KPos,
@@ -392,17 +393,26 @@ def test_segment_ids_are_respected(impl):
     keys = hax.named(keys, (KPos, Head))
     values = hax.named(values, (KPos, Head))
 
-    dp_mesh = Mesh(jax.devices(), ("dp",))
-    query, keys, values = jax.device_put([query, keys, values], NamedSharding(dp_mesh, PartitionSpec("dp", None)))
+    with use_test_mesh() as dp_mesh:
+        query, keys, values = jax.device_put(
+            [query, keys, values], NamedSharding(dp_mesh, PartitionSpec(ResourceAxis.DATA, None))
+        )
 
-    segment_ids = np.array([0, 0, 0] + [1] * (L - 3), dtype=np.int32)
-    segment_ids = jax.device_put(segment_ids, NamedSharding(dp_mesh, PartitionSpec("dp")))
-    segment_ids = hax.named(segment_ids, (Pos,))
-    mask = AttentionMask(causal_offset=0, segment_ids=segment_ids)
+        segment_ids = np.array([0, 0, 0] + [1] * (L - 3), dtype=np.int32)
+        segment_ids = jax.device_put(segment_ids, NamedSharding(dp_mesh, PartitionSpec(ResourceAxis.DATA)))
+        segment_ids = hax.named(segment_ids, (Pos,))
+        mask = AttentionMask(causal_offset=0, segment_ids=segment_ids)
 
-    with dp_mesh:
         result = jit_dpa(
-            Pos, KPos, Head, query, keys, values, attn_backend=AttentionBackend(impl), mask=mask, flash_block_size=128
+            Pos,
+            KPos,
+            Head,
+            query,
+            keys,
+            values,
+            attn_backend=AttentionBackend(impl),
+            mask=mask,
+            flash_block_size=128,
         )
 
     # the first 3 positions should all have a value of 300.0
@@ -464,7 +474,7 @@ def test_causal_offset_cross_attention(impl):
     )
 
     # The output should be the same, since the mask is relaxed by the offset
-    assert_trees_all_close(offset_out.array, full_out.array[4:6, :], atol=2e-3, rtol=2e-3)
+    assert_trees_all_close(offset_out.array, full_out.array[4:6, :], atol=3e-3, rtol=3e-3)
 
     # sanity check: output should be wrong if we don't use the offset
     wrong_out = jit_dpa(

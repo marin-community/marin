@@ -9,6 +9,7 @@ from dataclasses import fields
 from typing import Any, Callable, Optional, TypeVar
 
 import equinox as eqx
+import haliax.partitioning
 import jax
 import numpy as np
 from jax import numpy as jnp
@@ -51,10 +52,8 @@ def use_cpu_device():
 def local_cpu_mesh():
     """Temporarily sets the default device to CPU and creates a mesh with a single CPU device"""
     cpu = jax.local_devices(backend="cpu")[0]
-    mesh = jax.sharding.Mesh(
-        np.array([cpu]).reshape(1, 1, 1), (ResourceAxis.REPLICA, ResourceAxis.DATA, ResourceAxis.MODEL)
-    )
-    with use_cpu_device(), mesh:
+    mesh = jax.make_mesh((1, 1, 1), (ResourceAxis.REPLICA, ResourceAxis.DATA, ResourceAxis.MODEL), devices=[cpu])
+    with use_cpu_device(), haliax.partitioning.set_mesh(mesh):
         yield mesh
 
 
@@ -284,7 +283,7 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
 
     if mesh is None:
         mesh = hax.partitioning._get_mesh()
-        if mesh.devices.shape == ():
+        if mesh is not None and mesh.devices.shape == ():
             mesh = None
 
     if mesh is None:

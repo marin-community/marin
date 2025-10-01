@@ -12,6 +12,8 @@ from jax import numpy as jnp
 
 import haliax
 
+from test_utils import use_test_mesh
+
 from levanter.optim import AdamConfig
 from levanter.optim.skipstep import SkipStepConfig, SkipStepState
 from levanter.tensorstore_serialization import tree_deserialize_leaves_tensorstore, tree_serialize_leaves_tensorstore
@@ -383,7 +385,7 @@ def test_skip_step_state_serialization_can_load_non_skip():
     wrapped_optimizer = skip_conf.wrap(optimizer)
     wrapped_state = wrapped_optimizer.init(model)
 
-    with tempfile.TemporaryDirectory() as tmpdir, jax.sharding.Mesh(jax.devices(), ("device",)):
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
         tree_serialize_leaves_tensorstore(tmpdir, initial_state)
 
         restored_state = tree_deserialize_leaves_tensorstore(tmpdir, initial_state)

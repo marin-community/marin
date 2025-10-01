@@ -318,6 +318,7 @@ class DistributedConfig:
     num_processes: Optional[int] = None
     process_id: Optional[int] = None
     local_device_ids: Optional[Union[int, List[int]]] = None
+    initialize_jax_distributed: bool = True
 
     def _is_distributed(self):
         if (
@@ -336,6 +337,10 @@ class DistributedConfig:
         return False
 
     def initialize(self):
+        if not self.initialize_jax_distributed:
+            logger.info("Skipping jax.distributed.initialize because initialize_jax_distributed=False.")
+            return
+
         if self._is_distributed():
             device_ids = self.local_device_ids
             coordinator_address = self.coordinator_address

@@ -10,12 +10,12 @@ import numpy as np
 import pytest
 import ray
 from jax.lax import with_sharding_constraint
-from jax.sharding import Mesh
 from jax.sharding import PartitionSpec as P
 from ray.exceptions import RayTaskError
 
 from levanter.infra.ray_tpu import run_on_pod
-from tests.test_utils import skip_in_ci
+from haliax.partitioning import ResourceAxis
+from tests.test_utils import create_test_mesh, skip_in_ci, use_test_mesh
 
 # Store whether TPUs are available and if multislice is possible
 _TPU_AVAILABLE = False
@@ -72,7 +72,7 @@ def simple_jax_fn():
         if not devices:
             raise RuntimeError("No JAX TPU devices found on the worker.")
 
-        mesh = Mesh(devices, ("data",))  # Simple 1D mesh over all available TPUs on the host
+        mesh = create_test_mesh()
         # print(f"JAX devices found on worker: {devices}")
         # print(f"Mesh created: {mesh}")
 
@@ -87,25 +87,24 @@ def simple_jax_fn():
     dim_in = 8  # factor of num_tpus_per_host usually
     dim_out = 4
 
-    with mesh:
+    with use_test_mesh(mesh=mesh):
         x = jrandom.normal(key_x, (dim_in,))
         weights = jrandom.normal(key_weights, (dim_in, dim_out))
         bias = jrandom.normal(key_bias, (dim_out,))
 
         # Shard inputs - simple 1D sharding for x and weights
         # Adjust PartitionSpec based on your actual sharding strategy.
-        # For a single host, this might just be P(None) or P('data') if you intend to shard across cores.
-        x_sharded = with_sharding_constraint(x, P("data"))
-        weights_sharded = with_sharding_constraint(weights, P("data"))
+        # For a single host, this might just be P(None) or P(ResourceAxis.DATA) if you intend to shard across cores.
+        x_sharded = with_sharding_constraint(x, P(ResourceAxis.DATA))
+        weights_sharded = with_sharding_constraint(weights, P(ResourceAxis.DATA))
         # Bias is usually replicated or not sharded
         bias_sharded = with_sharding_constraint(bias, P())
 
-    @jax.jit
-    def layer(x_arg, weights_arg, bias_arg):
-        with mesh:  # Ensure the computation also happens within the mesh context
+        @jax.jit
+        def layer(x_arg, weights_arg, bias_arg):
             return with_sharding_constraint(jnp.dot(x_arg, weights_arg) + bias_arg, P())
 
-    output = layer(x_sharded, weights_sharded, bias_sharded)
+        output = layer(x_sharded, weights_sharded, bias_sharded)
     return np.array(output)
 
 

@@ -12,7 +12,21 @@ import warnings
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple, TypeVar, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+    ContextManager,
+)
 
 import equinox as eqx
 import fsspec
@@ -270,7 +284,7 @@ class Trainer:
 
         self._cmanagers = [
             levanter.current_tracker(self.tracker),
-            self.device_mesh,
+            haliax.partitioning.set_mesh(self.device_mesh),
             hax.axis_mapping(self.parameter_axis_mapping),
         ]
 
@@ -804,6 +818,9 @@ class TrainerConfig:
             self.replica_dcn_axis_size,
             self.data_dcn_axis_size,
         )
+
+    def use_mesh(self) -> ContextManager[None]:
+        return haliax.partitioning.set_mesh(self.device_mesh)
 
     @property
     def eval_batch_size(self):

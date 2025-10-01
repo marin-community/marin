@@ -49,7 +49,7 @@ def loaded_model(trainer_config):
     model_config = LlamaConfig()
     tokenizer = load_tokenizer(hf_checkpoint)
 
-    with trainer_config.device_mesh, hax.axis_mapping(trainer_config.compute_axis_mapping):
+    with trainer_config.use_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
         converter = HFCheckpointConverter(
             LlamaConfig,
             reference_checkpoint=hf_checkpoint,
