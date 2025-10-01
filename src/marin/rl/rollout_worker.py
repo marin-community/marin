@@ -303,7 +303,6 @@ class RolloutWorker:
             self._inference_server.shutdown()
 
     def _generate_rollout_batch(self, rng) -> tuple[RolloutBatch | None, dict | None]:
-        """Generate rollout batches directly from environment."""
         barrier_sync()
 
         # Create policy inference context for sampling from the inference server
