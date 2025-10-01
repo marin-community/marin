@@ -40,7 +40,7 @@ from levanter.utils.jax_utils import barrier_sync
 from openai import AsyncOpenAI
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
-from marin.rl.environments import load_environment_from_spec
+from marin.rl.environments import EnvConfig, load_environment_from_spec
 from marin.rl.model_utils import load_model_from_checkpoint
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
@@ -64,7 +64,7 @@ class RolloutWorkerConfig:
 
     trainer: TrainerConfig
     model: LmConfig
-    environment_spec: str
+    environment_spec: EnvConfig
     rollout_storage: RolloutStorageConfig
     max_input_length: int
     max_output_length: int
