@@ -4579,7 +4579,7 @@ requires-dist = [
     { name = "google-cloud-storage-transfer", marker = "extra == 'crawl'", specifier = "~=1.0" },
     { name = "google-cloud-storage-transfer", marker = "extra == 'download-transform'", specifier = "~=1.0" },
     { name = "google-cloud-storage-transfer", marker = "extra == 'gcp'" },
-    { name = "haliax", specifier = ">=1.4.dev381" },
+    { name = "haliax", specifier = ">=1.4.dev418" },
     { name = "haliax", marker = "extra == 'tokenize-train'", specifier = ">=1.4.dev348" },
     { name = "html2text", marker = "extra == 'download-transform'", specifier = "==2024.2.26" },
     { name = "htmlmin", marker = "extra == 'crawl'" },

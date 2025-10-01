@@ -23,7 +23,7 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-storage-transfer",
     "jax==0.6.2",
-    "haliax>=1.4.dev381",
+    "haliax>=1.4.dev418",
     "levanter[serve] @ git+https://github.com/marin-community/levanter.git",
     "lz4",
     "multiprocess==0.70.16",

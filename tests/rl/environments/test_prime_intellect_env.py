@@ -47,24 +47,28 @@ def mock_vf_env():
     """Create a mock verifiers environment."""
     env = Mock()
 
-    # Mock the evaluate() method to return GenerateOutputs
+    # Mock the generate() method to return GenerateOutputs
     mock_result = Mock()
     mock_result.prompt = ["What is 2+2?", "What is 3+3?"]
     mock_result.completion = ["4", "4", "6", "6"]  # 2 generations per prompt
     mock_result.reward = [1.0, 0.9, 1.0, 0.8]
     mock_result.metrics = {"accuracy": 0.95}
 
-    env.evaluate = Mock(return_value=mock_result)
+    env.generate = Mock(return_value=mock_result)
+    env.dataset = Mock()
+    env.eval_dataset = Mock()
+    env.get_dataset = Mock(return_value=Mock(repeat=Mock(return_value=Mock())))
+    env.get_eval_dataset = Mock(return_value=Mock(repeat=Mock(return_value=Mock())))
 
     return env
 
 
 def test_prime_intellect_env_sample(tokenizer, mock_inference_ctx, mock_vf_env):
     """Test sampling from PrimeIntellectEnv with mocked verifiers."""
-    env = PrimeIntellectEnv(tokenizer=tokenizer, env_id="test/word-count", output_dir_path=None)
+    env = PrimeIntellectEnv(env_id="primeintellect/word-count", env_args={}, max_tokens=1024, max_concurrent=32)
 
     # Mock the load_prime_intellect_env method to return our mock environment
-    with patch.object(env, "load_prime_intellect_env", return_value=mock_vf_env):
+    with patch.object(env, "load_prime_intellect_env", return_value=mock_vf_env), patch("subprocess.run"):
         # Sample from the environment
         prng_key = jax.random.PRNGKey(0)
         rollout_groups, metrics = env.sample(
@@ -77,12 +81,11 @@ def test_prime_intellect_env_sample(tokenizer, mock_inference_ctx, mock_vf_env):
         )
 
     # Verify the mock was called correctly
-    mock_vf_env.evaluate.assert_called_once()
-    call_kwargs = mock_vf_env.evaluate.call_args.kwargs
-    assert call_kwargs["num_examples"] == 2
-    assert call_kwargs["rollouts_per_example"] == 2
+    mock_vf_env.generate.assert_called_once()
+    call_kwargs = mock_vf_env.generate.call_args.kwargs
     assert call_kwargs["sampling_args"]["temperature"] == 0.7
-    assert call_kwargs["score_rollouts"] is True
+    assert call_kwargs["sampling_args"]["max_tokens"] == 1024
+    assert call_kwargs["max_concurrent"] == 32
 
     # Verify rollout groups structure
     assert len(rollout_groups) == 2, "Should have 2 rollout groups (one per prompt)"
@@ -91,8 +94,8 @@ def test_prime_intellect_env_sample(tokenizer, mock_inference_ctx, mock_vf_env):
         assert len(group.rollouts) == 2, "Each group should have 2 rollouts"
 
         for rollout in group.rollouts:
-            assert rollout.env_name == "prime_intellect:test/word-count"
-            assert rollout.env_example_id.startswith("test/word-count_example_")
+            assert rollout.env_name == "prime_intellect:primeintellect/word-count"
+            assert rollout.env_example_id.startswith("primeintellect/word-count_example_")
             assert len(rollout.prompt_tokens) > 0
             assert len(rollout.response_tokens) > 0
             assert len(rollout.response_logprobs) == len(rollout.response_tokens)
@@ -102,15 +105,15 @@ def test_prime_intellect_env_sample(tokenizer, mock_inference_ctx, mock_vf_env):
     # Verify metrics
     assert "accuracy" in metrics
     assert metrics["accuracy"] == 0.95
-    assert "test/word-count.mean_reward" in metrics
-    assert "test/word-count.total_rollouts" in metrics
+    assert "primeintellect/word-count.mean_reward" in metrics
+    assert "primeintellect/word-count.total_rollouts" in metrics
 
 
 def test_prime_intellect_env_openai_client_called(tokenizer, mock_inference_ctx, mock_vf_env):
     """Test that the OpenAI client is properly requested from inference context."""
-    env = PrimeIntellectEnv(tokenizer=tokenizer, env_id="test/math", output_dir_path=None)
+    env = PrimeIntellectEnv(env_id="primeintellect/math", env_args={})
 
-    with patch.object(env, "load_prime_intellect_env", return_value=mock_vf_env):
+    with patch.object(env, "load_prime_intellect_env", return_value=mock_vf_env), patch("subprocess.run"):
         prng_key = jax.random.PRNGKey(42)
         env.sample(
             inference_ctx=mock_inference_ctx,
@@ -123,15 +126,15 @@ def test_prime_intellect_env_openai_client_called(tokenizer, mock_inference_ctx,
     # Verify that openai_client() was called on the inference context
     mock_inference_ctx.openai_client.assert_called_once()
 
-    # Verify the client was passed to vf_env.evaluate()
-    call_kwargs = mock_vf_env.evaluate.call_args.kwargs
+    # Verify the client was passed to vf_env.generate()
+    call_kwargs = mock_vf_env.generate.call_args.kwargs
     assert "client" in call_kwargs
     assert call_kwargs["client"] == mock_inference_ctx.openai_client.return_value
 
 
 def test_prime_intellect_env_handles_empty_results(tokenizer, mock_inference_ctx):
     """Test that environment handles empty results gracefully."""
-    env = PrimeIntellectEnv(tokenizer=tokenizer, env_id="test/empty", output_dir_path=None)
+    env = PrimeIntellectEnv(env_id="primeintellect/empty", env_args={})
 
     # Create a mock environment that returns empty results
     mock_vf_env = Mock()
@@ -140,9 +143,11 @@ def test_prime_intellect_env_handles_empty_results(tokenizer, mock_inference_ctx
     mock_result.completion = []
     mock_result.reward = []
     mock_result.metrics = {}
-    mock_vf_env.evaluate = Mock(return_value=mock_result)
+    mock_vf_env.generate = Mock(return_value=mock_result)
+    mock_vf_env.dataset = Mock()
+    mock_vf_env.get_dataset = Mock(return_value=Mock(repeat=Mock(return_value=Mock())))
 
-    with patch.object(env, "load_prime_intellect_env", return_value=mock_vf_env):
+    with patch.object(env, "load_prime_intellect_env", return_value=mock_vf_env), patch("subprocess.run"):
         prng_key = jax.random.PRNGKey(0)
         rollout_groups, metrics = env.sample(
             inference_ctx=mock_inference_ctx,
@@ -158,9 +163,9 @@ def test_prime_intellect_env_handles_empty_results(tokenizer, mock_inference_ctx
 
 def test_prime_intellect_env_tokenization(tokenizer, mock_inference_ctx, mock_vf_env):
     """Test that prompts and completions are properly tokenized."""
-    env = PrimeIntellectEnv(tokenizer=tokenizer, env_id="test/tokenize", output_dir_path=None)
+    env = PrimeIntellectEnv(env_id="primeintellect/tokenize", env_args={})
 
-    with patch.object(env, "load_prime_intellect_env", return_value=mock_vf_env):
+    with patch.object(env, "load_prime_intellect_env", return_value=mock_vf_env), patch("subprocess.run"):
         prng_key = jax.random.PRNGKey(123)
         rollout_groups, _ = env.sample(
             inference_ctx=mock_inference_ctx,

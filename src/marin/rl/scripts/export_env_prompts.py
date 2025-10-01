@@ -22,10 +22,9 @@ requests that would be made during training.
 
 Usage:
     uv run src/marin/rl/scripts/export_env_prompts.py \
-        --env math \
-        --output math_prompts.json \
-        --n-examples 100 \
-        --mode train
+        --env-class marin.rl.environments.mock_env.MockEnv \
+        --env-args '{"task_type": "cats", "seed": 42}' \
+        --output prompts.json
 """
 
 import json
@@ -37,14 +36,15 @@ import jax.random as jrandom
 from levanter.inference.openai import ChatCompletionRequest, ChatMessage
 from transformers import AutoTokenizer
 
-from marin.rl.environments import load_environment_from_spec
+from marin.rl.environments import EnvConfig, load_environment_from_spec
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 @click.command()
-@click.option("--env", "env_spec", required=True, help="Environment spec (e.g., 'math' or 'math:difficulty=hard')")
+@click.option("--env-class", required=True, help="Full class path like marin.rl.environments.mock_env.MockEnv")
+@click.option("--env-args", required=True, help='JSON string of environment arguments, e.g. \'{"task_type": "cats"}\'')
 @click.option("--tokenizer", "tokenizer_name", default="meta-llama/Llama-3.2-1B-Instruct", help="Tokenizer name or path")
 @click.option("--output", required=True, help="Output JSON file path")
 @click.option("--n-examples", type=int, default=100, help="Number of examples to export")
@@ -56,7 +56,8 @@ logger = logging.getLogger(__name__)
 @click.option("--stop-tokens", type=int, multiple=True, help="Stop token IDs")
 @click.option("--seed", type=int, default=42, help="Random seed")
 def export_environment_prompts(
-    env_spec: str,
+    env_class: str,
+    env_args: str,
     tokenizer_name: str,
     output: str,
     n_examples: int,
@@ -69,13 +70,22 @@ def export_environment_prompts(
     seed: int = 42,
 ):
     """Export prompts from an environment as OpenAI chat completion requests."""
-    logger.info(f"Exporting prompts from {env_spec} environment")
+    logger.info(f"Exporting prompts from {env_class} environment")
+
+    # Parse env_args JSON
+    try:
+        env_args_dict = json.loads(env_args)
+    except json.JSONDecodeError as e:
+        raise click.ClickException(f"Invalid JSON in --env-args: {e}") from e
+
+    # Create EnvConfig
+    config = EnvConfig(env_class=env_class, env_args=env_args_dict)
 
     logger.info(f"Loading tokenizer: {tokenizer_name}")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
-    logger.info(f"Loading environment: {env_spec}")
-    env = load_environment_from_spec(env_spec)
+    logger.info(f"Loading environment: {env_class}")
+    env = load_environment_from_spec(config)
 
     # Get examples from the environment
     if mode == "train":
@@ -120,7 +130,7 @@ def export_environment_prompts(
         # Add metadata for debugging
         request_dict = request.model_dump(exclude_none=True)
         request_dict["_metadata"] = {
-            "environment": env_spec,
+            "environment": env_class,
             "example_index": i,
             "ground_truth_answer": example.get("answer", ""),
             "mode": mode,

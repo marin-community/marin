@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 from marin.rl.types import InferenceContext, RolloutGroup
 
@@ -50,34 +51,23 @@ class MarinEnv(ABC):
         ...
 
 
-def load_environment_from_spec(env_spec: str) -> MarinEnv:
-    """Load environment from spec string."""
-    print("Environment spec:", env_spec)
-    env_name = env_spec.split(":")[0]
-    env_args = {}
-    if ":" in env_spec:
-        env_arg_str = env_spec.split(":")[1]
-        for arg in env_arg_str.split(","):
-            key, value = arg.split("=")
-            env_args[key] = value
+@dataclass
+class EnvConfig:
+    """Configuration for an environment."""
 
-    # hash hostname for seeding mock environment
-    import socket
+    env_class: str
+    """Fully qualified class name of the environment, e.g. 'marin.rl.environments.math.MathEnvironment'."""
 
-    host_name = socket.gethostname()
-    seed = abs(hash(host_name))
+    env_args: dict
+    """Arguments to pass to the environment constructor."""
 
-    if env_name == "math":
-        from .math import MathEnvironment
 
-        return MathEnvironment(**env_args)
-    elif env_name == "mock":
-        from .mock_env import MockEnv
-
-        return MockEnv(seed=seed, **env_args)
-    elif env_name == "prime_intellect":
-        from .prime_intellect_env import PrimeIntellectEnv
-
-        return PrimeIntellectEnv(**env_args)
-    else:
-        raise ValueError(f"Unknown environment spec: {env_spec}")
+def load_environment_from_spec(config: EnvConfig) -> MarinEnv:
+    """Load an environment from the given configuration."""
+    env_class = config.env_class
+    env_args = config.env_args
+    # Dynamically import the environment class
+    module_name, class_name = env_class.rsplit(".", 1)
+    env_module = __import__(module_name, fromlist=[class_name])
+    env_class = getattr(env_module, class_name)
+    return env_class(**env_args)
