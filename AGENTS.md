@@ -25,7 +25,7 @@ This document provides a starting point for using coding agents (AI or human) in
 - Prefer top-level Python functions & fixtures for tests.
 - Prefer early-exit (if not x: return None) when it will reduce nesting significantly.
 
-- You never introduce hacks like `hasattr(m, "old_attr")`, you instead update code to have a consistent pattern.
+- You never introduce hacks like `hasattr(m, "old_attr")`, you instead update code to have a consistent pattern. The only exception is if you are explicitly asked to update usage of a 3rd party library and are explicitly asked to add backwards compatibility for older versions of that dependency
 
 ## Deprecation
 
