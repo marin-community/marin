@@ -11,7 +11,7 @@ from haliax.quantization import QuantizationConfig
 
 import levanter.main.train_lm as train_lm
 import tiny_test_corpus
-from levanter.distributed import RayConfig
+from levanter.distributed import DistributedConfig, RayConfig
 from levanter.tracker import NoopConfig
 
 
@@ -37,6 +37,7 @@ def test_train_lm():
                     max_eval_batches=1,
                     tracker=NoopConfig(),
                     require_accelerator=False,
+                    distributed=DistributedConfig(initialize_jax_distributed=False),
                     ray=RayConfig(auto_start_cluster=False),
                 ),
             )
@@ -71,6 +72,7 @@ def test_train_lm_fp8():
                     max_eval_batches=1,
                     tracker=NoopConfig(),
                     require_accelerator=False,
+                    distributed=DistributedConfig(initialize_jax_distributed=False),
                     ray=RayConfig(auto_start_cluster=False),
                 ),
             )

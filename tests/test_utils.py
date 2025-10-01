@@ -19,6 +19,7 @@ from jax._src.random import PRNGKey
 from transformers import AutoConfig, BatchEncoding
 
 import haliax as hax
+from haliax.partitioning import ResourceAxis, set_mesh
 
 from levanter.checkpoint import _get_fs_and_plain_path
 from levanter.data._preprocessor import BatchProcessor
@@ -278,13 +279,45 @@ def _stack_batch_encodings(a: BatchEncoding, b: BatchEncoding) -> BatchEncoding:
     return BatchEncoding({k: _ensure_batched(a[k]) + _ensure_batched(b[k]) for k in a.keys()})
 
 
-@contextmanager
-def maybe_mesh():
+def create_test_mesh(tensor_parallelism: int = 1, skip_ok: bool = False) -> Mesh:
+    """Create a Mesh with separate data and tensor parallel axes."""
+
+    if tensor_parallelism < 1:
+        raise ValueError("tensor_parallelism must be at least 1")
+
     devices = jax.devices()
     if not devices:
+        raise RuntimeError("No JAX devices available for creating a mesh")
+
+    if len(devices) % tensor_parallelism != 0:
+        if skip_ok:
+            pytest.skip(
+                f"Cannot create mesh with tensor_parallelism={tensor_parallelism} using {len(devices)} devices"
+            )
+        raise ValueError(
+            f"Cannot create mesh with tensor_parallelism={tensor_parallelism} using {len(devices)} devices"
+        )
+
+    mesh_devices = np.array(devices).reshape(-1, tensor_parallelism)
+    return Mesh(mesh_devices, (ResourceAxis.DATA, ResourceAxis.MODEL))
+
+
+@contextmanager
+def use_test_mesh(tensor_parallelism: int = 1, *, mesh: Optional[Mesh] = None):
+    """Context manager that activates a data/model Mesh and sets haliax's global mesh."""
+    if mesh is None:
+        mesh = create_test_mesh(tensor_parallelism)
+    with set_mesh(mesh):
+        yield mesh
+
+
+@contextmanager
+def maybe_mesh(tensor_parallelism: int = 1):
+    try:
+        mesh = create_test_mesh(tensor_parallelism)
+    except RuntimeError:
         yield
         return
 
-    mesh = Mesh(np.array(devices).reshape((len(devices),)), ("_device",))
-    with mesh:
-        yield
+    with use_test_mesh(mesh=mesh) as active_mesh:
+        yield active_mesh

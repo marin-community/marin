@@ -125,7 +125,7 @@ class TrainArgs:
 
 def train(config: TrainArgs):
     ...
-    with config.trainer.device_mesh:
+    with config.trainer.use_mesh():
         ...
 
         @hax.named_jit(axis_resources=parameter_axis_mapping, donate_args=(True))
@@ -148,7 +148,7 @@ using the `lora_trainable_params_filter` function, which takes a model and retur
 ```python
 def train(config: TrainArgs):
     ...
-    with config.trainer.device_mesh:
+    with config.trainer.use_mesh():
         ...
 
         lora_param_filter = lora_trainable_params_filter(model)

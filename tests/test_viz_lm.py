@@ -12,7 +12,7 @@ import haliax
 import levanter.main.viz_logprobs as viz_logprobs
 import tiny_test_corpus
 from levanter.checkpoint import save_checkpoint
-from levanter.distributed import RayConfig
+from levanter.distributed import DistributedConfig, RayConfig
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.tracker import NoopConfig
 
@@ -46,6 +46,7 @@ def test_viz_lm():
                     max_eval_batches=1,
                     tracker=NoopConfig(),
                     require_accelerator=False,
+                    distributed=DistributedConfig(initialize_jax_distributed=False),
                     ray=RayConfig(auto_start_cluster=False),
                 ),
                 checkpoint_path=f"{f}/ckpt",
