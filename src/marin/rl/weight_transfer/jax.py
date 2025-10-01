@@ -27,7 +27,6 @@ import socket
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any
 
 import jax
 import jax.experimental.transfer as jax_transfer
@@ -46,6 +45,7 @@ from .base import (
     WeightTransferConfig,
     WeightTransferServer,
     WeightTransferServerMetrics,
+    WeightUpdate,
     get_or_create_actor,
 )
 
@@ -487,7 +487,7 @@ class JAXTransferClient(WeightTransferClient):
             # Use default device placement
             return jax.device_put(model, jax.devices()[0])
 
-    def receive_weights(self, old_model: PyTree) -> Any:
+    def receive_weights(self, old_model: PyTree) -> WeightUpdate | None:
         """Receive weights with CPU transfer."""
         self.metrics.total_polls += 1
 
@@ -535,7 +535,7 @@ class JAXTransferClient(WeightTransferClient):
                 # Update metrics and track received weight ID
                 self.metrics.successful_receives += 1
                 self._last_received_weight_id = metadata.weight_id
-                return params
+                return WeightUpdate(model=params, weight_id=metadata.weight_id)
 
             return None
 

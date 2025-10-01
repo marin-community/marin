@@ -25,7 +25,7 @@ from marin.rl.rollout_storage import (
     RolloutStorageConfig,
     StorageType,
 )
-from marin.rl.rollout_types import (
+from marin.rl.types import (
     Rollout,
     RolloutBatch,
     RolloutGroup,
@@ -61,7 +61,7 @@ def create_test_rollout(idx: int) -> Rollout:
 def create_test_rollout_group(key: str, n_rollouts: int, start_idx: int = 0) -> RolloutGroup:
     """Create a test rollout group."""
     rollouts = [create_test_rollout(start_idx + i) for i in range(n_rollouts)]
-    return RolloutGroup(key=key, rollouts=rollouts)
+    return RolloutGroup(rollouts=rollouts)
 
 
 def create_test_rollout_batch(idx: int, n_groups: int = 2, rollouts_per_group: int = 3) -> RolloutBatch:
@@ -72,7 +72,7 @@ def create_test_rollout_batch(idx: int, n_groups: int = 2, rollouts_per_group: i
         group = create_test_rollout_group(f"group_{idx}_{group_idx}", rollouts_per_group, start_idx)
         groups.append(group)
 
-    metadata = RolloutMetadata(worker_id=f"worker_{idx}", timestamp=time.time())
+    metadata = RolloutMetadata(worker_id=f"worker_{idx}", timestamp=time.time(), weight_step=0)
     return RolloutBatch(groups=groups, metadata=metadata)
 
 
