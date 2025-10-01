@@ -51,6 +51,15 @@ def _get_current_tpu_pod_type() -> str:
     raise AttributeError("TPUAcceleratorManager is missing TPU pod type helpers")
 
 
+def _get_current_node_tpu_worker_id() -> int | None:
+    """Return the TPU worker ID for the current node across Ray versions."""
+    if hasattr(TPUAcceleratorManager, "_get_current_node_tpu_worker_id"):
+        return TPUAcceleratorManager._get_current_node_tpu_worker_id()
+    if hasattr(TPUAcceleratorManager, "get_current_node_tpu_worker_id"):
+        return TPUAcceleratorManager.get_current_node_tpu_worker_id()
+    raise AttributeError("TPUAcceleratorManager is missing TPU worker ID helpers")
+
+
 # CF https://gist.github.com/allenwang28/e3400b9e9212b50aa1cda55ebeccea60
 # CF: https://github.com/AI-Hypercomputer/ray-tpu/blob/main/src/ray_tpu.py
 
@@ -639,9 +648,12 @@ class TPUHostActor:
         if self._host_info:
             return self._host_info
 
+        worker_id = _get_current_node_tpu_worker_id()
+        if worker_id is None:
+            raise Exception("Could not get TPU worker ID. This should never happen.")
         self._host_info = TPUHostInfo(
             slice_name=self._slice_info.slice_name,
-            worker_index=TPUAcceleratorManager._get_current_node_tpu_worker_id(),
+            worker_index=worker_id,
             node_id=ray.get_runtime_context().get_node_id(),
             num_tpus=self._slice_info.num_tpus_per_vm,
         )
