@@ -47,6 +47,7 @@ from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
+from marin.rl.environments import EnvConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.training.training import (
     _add_run_env_variables,
@@ -55,7 +56,9 @@ from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
-ENVIRONMENT_SPEC = "mock:task_type=addition"
+ENVIRONMENT_CONFIG = EnvConfig(
+    env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "addition", "seed": 42}
+)
 MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 # MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 # MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
@@ -66,7 +69,7 @@ MODEL_TOKENIZER = MODEL_NAME
 MODEL_CHECKPOINT = MODEL_NAME
 MAX_INPUT_TOKENS = 128
 MAX_OUTPUT_TOKENS = 128
-RUN_ID = f"test-{MODEL_NAME.split('/')[-1]}-{ENVIRONMENT_SPEC.replace(':', '_').replace('=', '_')}"
+RUN_ID = f"test-{MODEL_NAME.split('/')[-1]}-{ENVIRONMENT_CONFIG.env_args['task_type']}"
 
 
 def stop_tokens(tokenizer_name: str):
@@ -251,7 +254,7 @@ def rl_train(name: str) -> ExecutorStep:
         trainer=trainer_config,
         inference_server_config=inference_server_config,
         model=model_config,
-        environment_spec=ENVIRONMENT_SPEC,
+        environment_spec=ENVIRONMENT_CONFIG,
         max_input_length=MAX_INPUT_TOKENS,
         max_output_length=MAX_OUTPUT_TOKENS,
         pad_token_id=(tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id),

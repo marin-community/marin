@@ -17,7 +17,6 @@ Environment Wrapper for the Environments Hub by Prime-Intellect, which contains 
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
 import logging
-import os
 from typing import ClassVar
 
 import jax.numpy as jnp
@@ -38,13 +37,25 @@ class PrimeIntellectEnv(MarinEnv):
 
     ENVS: ClassVar[dict[str, vf.Environment]] = {}
 
-    def __init__(self, env_id: str, output_dir_path: str | None = None, **kwargs):
+    def __init__(
+        self,
+        env_id: str,
+        env_args: dict,
+        max_tokens: int = 1024,
+        max_concurrent: int = 32,
+    ):
+        """Initialize PrimeIntellect environment.
+
+        Args:
+            env_id: Environment ID like "primeintellect/gsm8k"
+            env_args: Dict with verifier-specific args (num_train_examples, etc.)
+            max_tokens: Maximum tokens for generation
+            max_concurrent: Maximum concurrent requests
+        """
         self.env_id = env_id
-        self.env_args = kwargs
-        self._output_dir_path: str | None = None
-        if output_dir_path:
-            self._output_dir_path = os.path.join(output_dir_path)
-            os.makedirs(self._output_dir_path, exist_ok=True)
+        self.env_args = env_args
+        self.max_tokens = max_tokens
+        self.max_concurrent = max_concurrent
 
     def load_prime_intellect_env(self, env_id: str, env_args: dict) -> vf.Environment:
         """
@@ -66,39 +77,57 @@ class PrimeIntellectEnv(MarinEnv):
         prng_key,
         mode: str = "train",
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
-        """Sample examples, generate responses, and create rollouts using verifiers library.
+        """Sample problems and generate responses using the model."""
+        import subprocess
 
-        This uses the Prime Intellect verifiers library which handles the full pipeline
-        internally (sampling, generation, and scoring).
-        """
-        # Load the verifiers environment
-        vf_env = self.load_prime_intellect_env(self.env_id, self.env_args)
+        # Download/install the environment
+        subprocess.run(["prime", "env", "install", self.env_id], check=True)
 
-        # Get OpenAI client from inference context
-        client = inference_ctx.openai_client()
+        # Extract just the env name after slash
+        env_id = self.env_id.split("/", 1)[-1]
+        vf_env = self.load_prime_intellect_env(env_id, self.env_args)
 
-        # Use evaluate() to sample from dataset and generate/score responses
-        # Note: verifiers uses "model" as a string identifier, we'll pass "marin-model"
-        sampling_args = {"temperature": temperature}
+        # Prepare sampling arguments
+        sampling_args = {
+            "max_tokens": self.max_tokens,
+            "temperature": temperature,
+        }
 
-        logger.info(f"Evaluating {n_examples} examples with {n_generations} generations per example")
-        result = vf_env.evaluate(
-            client=client,
-            model="marin-model",  # Model identifier for the OpenAI client
-            sampling_args=sampling_args,
-            num_examples=n_examples,
-            rollouts_per_example=n_generations,
-            score_rollouts=True,
+        logger.info(
+            f"Starting evaluation: n_examples={n_examples}, "
+            f"n_generations={n_generations}, max_concurrent={self.max_concurrent}"
         )
 
-        # Convert verifiers GenerateOutputs to our RolloutGroup format
-        rollout_groups = []
+        # Get dataset based on mode
+        if mode == "train":
+            if vf_env.dataset is None:
+                raise ValueError(f"Train dataset missing for {env_id}")
+            inputs = vf_env.get_dataset(n=n_examples)
+        else:
+            if vf_env.eval_dataset is None:
+                raise ValueError(f"Eval dataset missing for {env_id}")
+            inputs = vf_env.get_eval_dataset(n=n_examples)
 
-        # Group results by prompt (each prompt has multiple rollouts)
+        # Repeat inputs for multiple generations
+        if n_generations > 1:
+            inputs = inputs.repeat(n_generations)
+
+        # Generate using verifiers
+        result = vf_env.generate(
+            dataset=inputs,
+            client=inference_ctx.openai_client(),
+            model="marin-model",
+            sampling_args=sampling_args,
+            max_concurrent=self.max_concurrent,
+        )
+
+        # Access tokenizer from inference context
+        tokenizer = inference_ctx.tokenizer
+
+        # Convert to RolloutGroups
+        rollout_groups = []
         for prompt_idx in range(len(result.prompt)):
             rollouts = []
-
-            # Each prompt has n_generations completions
             for gen_idx in range(n_generations):
                 overall_idx = prompt_idx * n_generations + gen_idx
                 if overall_idx >= len(result.completion):
@@ -107,13 +136,11 @@ class PrimeIntellectEnv(MarinEnv):
                 completion = result.completion[overall_idx]
                 reward = result.reward[overall_idx] if overall_idx < len(result.reward) else 0.0
 
-                # Tokenize prompt and completion
-                prompt_tokens = inference_ctx.tokenizer.encode(result.prompt[prompt_idx])
-                response_tokens = inference_ctx.tokenizer.encode(completion)
+                # Use tokenizer from inference context
+                prompt_tokens = tokenizer.encode(result.prompt[prompt_idx])
+                response_tokens = tokenizer.encode(completion)
 
-                # Create uniform reward and logprobs (verifiers doesn't give us token-level data)
                 token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
-                # Use zero logprobs since verifiers doesn't provide them
                 response_logprobs = jnp.zeros(len(response_tokens), dtype=jnp.float32)
 
                 rollout = Rollout(
@@ -130,16 +157,14 @@ class PrimeIntellectEnv(MarinEnv):
             if rollouts:
                 rollout_groups.append(RolloutGroup(rollouts=rollouts))
 
-        # Extract metrics from verifiers result
+        # Extract metrics
         metrics = {}
         if hasattr(result, "metrics") and result.metrics:
             metrics.update(result.metrics)
 
-        # Add basic statistics
         if result.reward:
             metrics[f"{self.env_id}.mean_reward"] = float(np.mean(result.reward))
             metrics[f"{self.env_id}.total_rollouts"] = len(result.reward)
 
-        logger.info(f"Generated {len(rollout_groups)} rollout groups with metrics: {metrics}")
-
+        logger.info(f"Generated {len(rollout_groups)} rollout groups")
         return rollout_groups, metrics

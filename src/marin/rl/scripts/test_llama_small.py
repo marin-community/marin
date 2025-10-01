@@ -33,6 +33,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from transformers import AutoConfig, AutoTokenizer
 
+from marin.rl.environments import EnvConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
@@ -51,10 +52,13 @@ MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 # MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 MODEL_TOKENIZER = MODEL_NAME
 MODEL_CHECKPOINT = MODEL_NAME
-ENVIRONMENT = "mock:task_type=number_comparison"
-RUN_ID = f"006-{MODEL_NAME.split('/')[-1]}-{ENVIRONMENT.replace(':', '_').replace('=', '_')}"
-CHECKPOINT_DIR = f"{PREFIX}/rl_checkpoints/llama_small_test/checkpoints/{ENVIRONMENT}/run_{RUN_ID}"
-ROLLOUT_QUEUE_PATH = f"{PREFIX}/rl_checkpoints/llama_small_test/rollout_queue/{ENVIRONMENT}/run_{RUN_ID}"
+ENVIRONMENT_CONFIG = EnvConfig(
+    env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "number_comparison", "seed": 42}
+)
+ENV_NAME = "number_comparison"
+RUN_ID = f"006-{MODEL_NAME.split('/')[-1]}-{ENV_NAME}"
+CHECKPOINT_DIR = f"{PREFIX}/rl_checkpoints/llama_small_test/checkpoints/{ENV_NAME}/run_{RUN_ID}"
+ROLLOUT_QUEUE_PATH = f"{PREFIX}/rl_checkpoints/llama_small_test/rollout_queue/{ENV_NAME}/run_{RUN_ID}"
 MAX_INPUT_TOKENS = 32
 MAX_OUTPUT_TOKENS = 32
 
@@ -78,7 +82,7 @@ def llama_small_trainer_config(output_dir: str) -> TrainerConfig:
         tracker=WandbConfig(
             project=WANDB_PROJECT,
             mode="shared",
-            tags=["rl", ENVIRONMENT],
+            tags=["rl", ENVIRONMENT_CONFIG.env_class.split(".")[-1], "llama_small"],
             # N.B. run_id is set by the individual workers.
         ),
         mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -171,7 +175,7 @@ def llama_small_rollout_worker_config(output_dir: str, run_id: str) -> RolloutWo
         trainer=llama_small_trainer_config(output_dir),
         inference_server_config=llama_small_inference_server_config(output_dir),
         model=llama_small_config(),
-        environment_spec=ENVIRONMENT,
+        environment_spec=ENVIRONMENT_CONFIG,
         rollout_storage=rollout_storage,
         max_input_length=MAX_INPUT_TOKENS,
         max_output_length=MAX_OUTPUT_TOKENS,
