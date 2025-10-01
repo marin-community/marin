@@ -106,7 +106,7 @@ def main(config: SampleLmConfig):
     key = jrandom.PRNGKey(config.seed)
 
     # NB: we use the compute_axis_mapping b/c we're doing inference
-    with config.trainer.use_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
         vocab_size = len(tokenizer)
         Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), config.trainer.compute_axis_mapping)
         model = _load_model(config, Vocab, key=key)
