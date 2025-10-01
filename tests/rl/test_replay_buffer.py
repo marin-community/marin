@@ -75,7 +75,7 @@ def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16, env_
         rollouts.append(rollout)
 
     # Group rollouts
-    group = RolloutGroup(key=f"group_{idx}", rollouts=rollouts)
+    group = RolloutGroup(rollouts=rollouts)
 
     # Create batch
     metadata = RolloutMetadata(worker_id="test_worker", timestamp=time.time(), weight_step=0)

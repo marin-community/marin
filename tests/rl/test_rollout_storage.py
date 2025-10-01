@@ -61,7 +61,7 @@ def create_test_rollout(idx: int) -> Rollout:
 def create_test_rollout_group(key: str, n_rollouts: int, start_idx: int = 0) -> RolloutGroup:
     """Create a test rollout group."""
     rollouts = [create_test_rollout(start_idx + i) for i in range(n_rollouts)]
-    return RolloutGroup(key=key, rollouts=rollouts)
+    return RolloutGroup(rollouts=rollouts)
 
 
 def create_test_rollout_batch(idx: int, n_groups: int = 2, rollouts_per_group: int = 3) -> RolloutBatch:

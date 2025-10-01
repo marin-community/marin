@@ -42,7 +42,7 @@ from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rollout_storage import (
     RolloutStorageConfig,
 )
-from marin.rl.rollout_worker import RolloutWorkerConfig
+from marin.rl.rollout_worker import RolloutWorkerConfig, find_open_port
 from marin.rl.train_worker import TrainWorkerConfig
 from marin.rl.types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
 from marin.rl.weight_transfer import WeightTransferConfig
@@ -275,7 +275,7 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
             max_seqs=8, page_size=8, max_pages_per_seq=32, max_queued_tokens=8, enable_logprobs=True
         ),
         temperature=1.0,
-        port=27123,
+        port=find_open_port(),
     )
 
 
@@ -545,7 +545,7 @@ def create_rollout_batch(
         rollouts.append(rollout)
 
     # Group rollouts
-    group = RolloutGroup(key="cats_group", rollouts=rollouts)
+    group = RolloutGroup(rollouts=rollouts)
 
     # Use a fixed large step number to ensure these batches are never discarded
     metadata = RolloutMetadata(worker_id=worker_id, timestamp=time.time(), weight_step=10000)
