@@ -37,6 +37,7 @@ from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
 
+from marin.rl.environments import EnvConfig
 from marin.rl.environments.mock_env import MockEnv
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rollout_storage import (
@@ -295,7 +296,9 @@ def create_nano_rollout_worker_config(
         trainer=create_nano_trainer_config(output_dir),
         inference_server_config=inference_server_config,
         model=model_config,
-        environment_spec="mock:task_type=cats",
+        environment_spec=EnvConfig(
+            env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "cats", "seed": 42}
+        ),
         rollout_storage=rollout_storage,
         max_input_length=8,
         max_output_length=8,
@@ -534,7 +537,7 @@ def create_rollout_batch(
         token_rewards = np.full(len(individual_response), episode_reward, dtype=np.float32)
 
         rollout = Rollout(
-            env_name="mock:task_type=cats",
+            env_name="mock:cats",
             env_example_id=f"cats_example_{i}",
             prompt_tokens=individual_prompt,
             response_tokens=individual_response,

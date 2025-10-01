@@ -3229,18 +3229,19 @@ wheels = [
 
 [[package]]
 name = "haliax"
-version = "1.4.dev413"
+version = "1.4.dev419"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aqtp" },
     { name = "equinox" },
+    { name = "jax" },
     { name = "jaxtyping" },
     { name = "jmp" },
     { name = "safetensors" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1c/c4/2e13fa0940c006c336f6bf9709e9a40440735f07e72f94dd2cf2ef762a00/haliax-1.4.dev413.tar.gz", hash = "sha256:4113e44c4a75ae5644ed2bc054b09c1eb148de22352aac445f59aec659dead97", size = 809193, upload-time = "2025-09-16T00:56:49.893Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/01/40/1f02d5e855afd37564db0a843fc4412dbbf017c898faaa0a0e1927e73333/haliax-1.4.dev419.tar.gz", hash = "sha256:3b26e1a06622b03adf163f9e7a2a31b9e8a31182a1da21dad82760b997ae65d1", size = 833176, upload-time = "2025-09-30T23:01:54.84Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1c/5e/844bd8095de0748758192e46619ae90b10d6d43b8216918e1af460aa9612/haliax-1.4.dev413-py3-none-any.whl", hash = "sha256:54a89a8921c1058bcb431c4c961c4cfbbab51646237569999a7ce841b845f20f", size = 133715, upload-time = "2025-09-16T00:56:47.793Z" },
+    { url = "https://files.pythonhosted.org/packages/70/9b/1cdef3cc5c0792368640afdcc879b750ea11b0e051d9a342626332b43c1e/haliax-1.4.dev419-py3-none-any.whl", hash = "sha256:67add7af3e2020f36d0b0ff5b9bd73d3864420fad48aef06f53236f4b704e768", size = 136632, upload-time = "2025-09-30T23:01:53Z" },
 ]
 
 [[package]]
@@ -4575,7 +4576,7 @@ requires-dist = [
     { name = "google-cloud-storage-transfer", marker = "extra == 'crawl'", specifier = "~=1.0" },
     { name = "google-cloud-storage-transfer", marker = "extra == 'download-transform'", specifier = "~=1.0" },
     { name = "google-cloud-storage-transfer", marker = "extra == 'gcp'" },
-    { name = "haliax", specifier = ">=1.4.dev381" },
+    { name = "haliax", specifier = ">=1.4.dev418" },
     { name = "haliax", marker = "extra == 'tokenize-train'", specifier = ">=1.4.dev348" },
     { name = "html2text", marker = "extra == 'download-transform'", specifier = "==2024.2.26" },
     { name = "htmlmin", marker = "extra == 'crawl'" },
