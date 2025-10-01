@@ -349,7 +349,9 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
     if candidate_tokenized is None:
         return AnnealConfig(
             dataset_config=lm_mixture_data_config(
-                components={"dclm": dclm_components_llama3["dclm_baseline"]}, weights={"dclm": 1.0}
+                components={"dclm": dclm_components_llama3["dclm_baseline"]},
+                weights={"dclm": 1.0},
+                permutation_type="linear",
             ),
             resources=TpuPodConfig(tpu_type=tpu_type, slice_count=2),
             use_default_validation=True,
@@ -359,6 +361,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
             dataset_config=lm_mixture_data_config(
                 components={"dclm": dclm_components_llama3["dclm_baseline"], "candidate": candidate_tokenized},
                 weights={"dclm": 0.70, "candidate": 0.30},
+                permutation_type="linear",
             ),
             resources=TpuPodConfig(tpu_type=tpu_type, slice_count=2),
             use_default_validation=True,

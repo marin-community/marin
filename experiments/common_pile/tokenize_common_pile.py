@@ -504,14 +504,22 @@ def comma_main_mixture(*, tokenizer: str = llama3_tokenizer):
     """LmMixtureDatasetConfig for the main training stage."""
     tokenized = common_pile_tokenized(tokenizer=tokenizer)
     components = {f"common_pile/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_DATASETS}
-    return lm_mixture_data_config(components=components, weights=COMMA_MAIN_MIXTURE_WEIGHTS)
+    return lm_mixture_data_config(
+        components=components,
+        weights=COMMA_MAIN_MIXTURE_WEIGHTS,
+        permutation_type="linear",
+    )
 
 
 def comma_cooldown_mixture(*, tokenizer: str = llama3_tokenizer):
     """LmMixtureDatasetConfig for the cooldown stage."""
     tokenized = common_pile_tokenized(tokenizer=tokenizer)
     components = {f"common_pile/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_DATASETS}
-    return lm_mixture_data_config(components=components, weights=COMMA_COOLDOWN_MIXTURE_WEIGHTS)
+    return lm_mixture_data_config(
+        components=components,
+        weights=COMMA_COOLDOWN_MIXTURE_WEIGHTS,
+        permutation_type="linear",
+    )
 
 
 if __name__ == "__main__":

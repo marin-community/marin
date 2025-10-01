@@ -30,6 +30,7 @@ dolmino_dclm = get_dolmino_step_llama3("dclm")
 control_dataset_config = lm_mixture_data_config(
     components={"dolmino_dclm": dolmino_dclm},
     weights={"dolmino_dclm": 1.0},
+    permutation_type="linear",
 )
 control_anneal_config = AnnealConfig(
     dataset_config=control_dataset_config,
@@ -49,6 +50,7 @@ dataset_config = lm_mixture_data_config(
         "dclm": dolmino_dclm,
     },
     weights={"stackexchange": 0.30, "dclm": 0.70},
+    permutation_type="linear",
 )
 # Dolmino Stack Exchange dataset has 1.26B tokens.
 # Our mixed dataset is 30% dolmino and 70% high-quality web data.
@@ -72,6 +74,7 @@ wiki_tokenized = get_dolmino_step_llama3("wiki")
 wiki_dataset_config = lm_mixture_data_config(
     components={"wiki": wiki_tokenized, "dolmino_dclm": dolmino_dclm},
     weights={"wiki": 0.3, "dolmino_dclm": 0.7},
+    permutation_type="linear",
 )
 wiki_anneal_config = AnnealConfig(
     dataset_config=wiki_dataset_config,

@@ -84,6 +84,7 @@ megamath_token_counts = {
 megamath_mixture = lm_mixture_data_config(
     components=megamath_tokenized,
     weights=megamath_token_counts,
+    permutation_type="linear",
 )
 
 megamath_real_only = lm_mixture_data_config(
@@ -95,6 +96,7 @@ megamath_real_only = lm_mixture_data_config(
         "megamath/web": megamath_token_counts["megamath/web"],
         "megamath/web_pro": megamath_token_counts["megamath/web_pro"],
     },
+    permutation_type="linear",
 )
 
 pile_pubmed_abstracts_validation = default_download(
