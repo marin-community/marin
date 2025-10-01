@@ -418,7 +418,7 @@ class ArrowFlightServer(WeightTransferServer):
         # shutdown servers in parallel in threads to avoid blocking on shutdown
         for flight_server in self._flight_servers:
             logger.info(f"Shutting down Arrow Flight server at {flight_server._location}...")
-            threading.Thread(target=flight_server.shutdown, daemon=True).start()
+            threading.Thread(target=flight_server.close, daemon=True).start()
 
     def get_metrics(self) -> WeightTransferServerMetrics:
         """Get transfer metrics."""

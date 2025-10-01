@@ -277,3 +277,4 @@ class TrainWorker:
     def stop(self):
         """Stop the training worker."""
         self._should_stop = True
+        self.transfer_server.cleanup()

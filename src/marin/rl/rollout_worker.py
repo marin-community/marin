@@ -292,6 +292,7 @@ class RolloutWorker:
         """Stop the inference worker loop and server."""
         with self._shutdown_condition:
             self._running = False
+            self._transfer_client.cleanup()
             self._shutdown_condition.notify()
 
         # Wait for the main loop to finish
