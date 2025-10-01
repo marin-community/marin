@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .base import EnvExample, EnvResponse, EnvStep, InferenceContext, MarinEnv, load_environment_from_spec
+from marin.rl.types import EnvExample, EnvResponse, EnvStep, InferenceContext
+
+from .base import MarinEnv, load_environment_from_spec
 
 __all__ = ["EnvExample", "EnvResponse", "EnvStep", "InferenceContext", "MarinEnv", "load_environment_from_spec"]

@@ -27,8 +27,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .rl_losses import compute_rloo_advantages
 from .rollout_storage import RolloutReader
-from .rollout_types import RolloutBatch, RolloutWithAdvantage
+from .types import RolloutBatch, RolloutWithAdvantage
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +143,7 @@ class ReplayBuffer:
             weight_step = batch.metadata.weight_step
             for group in batch.groups:
                 # Compute RLOO advantages for the group
-                advantages = group.compute_rloo_advantages()
+                advantages = compute_rloo_advantages(group.rollouts)
                 for rollout, advantage in zip(group.rollouts, advantages, strict=True):
                     individual = RolloutWithCount(
                         rollout=rollout, advantage=advantage, usage_count=0, weight_step=weight_step

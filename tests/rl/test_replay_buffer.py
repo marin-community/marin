@@ -27,7 +27,7 @@ except ImportError:
 from marin.rl.rollout_storage import (
     InMemoryRolloutQueue,
 )
-from marin.rl.rollout_types import (
+from marin.rl.types import (
     Rollout,
     RolloutBatch,
     RolloutGroup,

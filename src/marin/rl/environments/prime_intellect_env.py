@@ -24,7 +24,9 @@ from typing import ClassVar
 
 import verifiers as vf
 
-from .base import EnvStep, InferenceContext, MarinEnv
+from marin.rl.types import EnvStep, InferenceContext
+
+from .base import MarinEnv
 
 logger = logging.getLogger("ray")
 

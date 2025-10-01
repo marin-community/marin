@@ -16,10 +16,11 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from levanter.models.lm_model import LmHeadModel
 from optax import softmax_cross_entropy_with_integer_labels
 
-from marin.rl.rollout_types import TrainingBatch
+from marin.rl.types import Rollout, TrainingBatch
 
 # TODO(power) - these should be refactored to accept the precomputed logits instead
 # of computing outputs themselves.
@@ -173,3 +174,30 @@ def rloo_loss_with_importance_sampling(
 
     loss = reinforce_loss + kl_loss
     return loss
+
+
+def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
+    """Compute RLOO (Reward Leave-One-Out) advantages for a group of rollouts.
+
+    This is a standalone version of RolloutGroup.compute_rloo_advantages() that
+    can be used independently.
+
+    Args:
+        rollouts: List of rollouts to compute advantages for
+
+    Returns:
+        Array of advantages, one per rollout
+    """
+    rewards = np.array([r.episode_reward for r in rollouts])
+    n = len(rewards)
+    if n <= 1:
+        return np.zeros_like(rewards)
+
+    total = rewards.sum()
+    leave_one_out_baselines = (total - rewards) / (n - 1)
+    advantages = rewards - leave_one_out_baselines
+
+    # Add random noise to avoid failure cases when all rewards are identical
+    generator = np.random.default_rng()
+    advantages += generator.normal(loc=0.0, scale=1e-6, size=advantages.shape)
+    return advantages

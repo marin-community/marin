@@ -11,89 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import NamedTuple, Protocol, TypedDict
 
-import numpy as np
 from levanter.compat.hf_checkpoints import HfTokenizer
 
-
-class EnvResponse(TypedDict):
-    tokens: np.ndarray
-    logprobs: np.ndarray
-
-
-class EnvExample(TypedDict):
-    prompt: str
-    answer: str
-
-
-class EnvStep(NamedTuple):
-    """Container for a single interactive environment step.
-
-    This class encapsulates all the data generated during one step of interaction
-    with an environment, including the input problems (prompts), model responses,
-    rewards computed, and additional metrics collected.
-
-    Attributes:
-        examples (list[EnvExample]): A list of problem instances sampled from
-            the dataset. Each instance contains data with keys:
-                - 'prompt': Problem description
-                - 'answer': Ground truth solution used for grading
-
-        responses (list[list[EnvResponse]]): A nested list structure where
-            responses[i][j] contains the j-th generated sample for the i-th problem
-            in the batch. Each inner dict contains:
-            - 'tokens': numpy array of generated token IDs
-            - 'logprobs': numpy array of log probabilities for each generated token
-            - Other generation-specific metadata
-
-        rewards (np.ndarray): A 2D numpy array with shape
-            (number of examples, number of generations per example) containing
-            the computed reward for each generated response. Rewards are typically
-            binary (0.0 or 1.0) indicating correctness, but can be continuous values.
-
-        metrics (dict[str, float]): Additional scalar metrics computed during this
-            environment step, such as:
-            - Average reward across all responses
-            - Format validation success rate
-            - Average response length
-            - Problem-specific evaluation metrics
-
-    Example:
-        >>> env_step = EnvStep(
-        ...     examples=[{'prompt': 'What is 2+2?', 'answer': '4'}],
-        ...     responses=[[[{'tokens': np.array([1, 2, 3]), 'logprobs': np.array([0.1, 0.2, 0.3])}]]],
-        ...     rewards=np.array([[1.0]]),
-        ...     metrics={'avg_reward': 1.0, 'avg_length': 3.0}
-        ... )
-    """
-
-    examples: list[EnvExample]
-    responses: list[list[EnvResponse]]
-    rewards: np.ndarray
-    metrics: dict[str, float]
-
-
-class InferenceContext(Protocol):
-    """Protocol for inference providers that generate text from prompts.
-
-    This decouples the backend (Flax vs Levanter) during our transition period.
-    """
-
-    @property
-    def tokenizer(self):
-        """Return the tokenizer."""
-        ...
-
-    def generate(self, prompts: list[str], temperature: float, n_generations: int) -> list[list[EnvResponse]]:
-        """Generate responses for a batch of prompts.
-
-        Returns:
-            List of lists where outer list corresponds to prompts and
-            inner list contains n_generations responses per prompt.
-            Each response is an EnvResponse.
-        """
-        ...
+from marin.rl.types import EnvStep, InferenceContext
 
 
 class MarinEnv:

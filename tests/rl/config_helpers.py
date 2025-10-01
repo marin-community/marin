@@ -15,6 +15,7 @@
 """Test helpers for creating minimal Levanter components for post-training tests."""
 
 import datetime
+import time
 from pathlib import Path
 from typing import ClassVar
 
@@ -41,9 +42,9 @@ from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rollout_storage import (
     RolloutStorageConfig,
 )
-from marin.rl.rollout_types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
 from marin.rl.rollout_worker import RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorkerConfig
+from marin.rl.types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
 from marin.rl.weight_transfer import WeightTransferConfig
 from marin.rl.weight_transfer.base import WeightTransferMode
 
@@ -546,8 +547,6 @@ def create_rollout_batch(
     # Group rollouts
     group = RolloutGroup(key="cats_group", rollouts=rollouts)
 
-    # Create batch with metadata
-    import time
-
-    metadata = RolloutMetadata(worker_id=worker_id, timestamp=time.time())
+    # Use a fixed large step number to ensure these batches are never discarded
+    metadata = RolloutMetadata(worker_id=worker_id, timestamp=time.time(), weight_step=10000)
     return RolloutBatch(groups=[group], metadata=metadata)
