@@ -18,13 +18,11 @@ https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
 import logging
 import os
-import subprocess
-import time
 from typing import ClassVar
 
 import verifiers as vf
 
-from marin.rl.types import EnvStep, InferenceContext
+from marin.rl.types import EnvExample, InferenceResponse, RolloutGroup
 
 from .base import MarinEnv
 
@@ -54,64 +52,30 @@ class PrimeIntellectEnv(MarinEnv):
 
         return self.ENVS[env_id]
 
-    def step(
+    def sample(
         self,
-        env_id: str,
-        env_args: dict,
-        num_examples: int,
-        rollouts_per_example: int,
-        inference_ctx: InferenceContext | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        max_concurrent: int = 32,
-    ) -> EnvStep:
+        n_examples: int,
+        prng_key,
+        mode: str = "train",
+    ) -> list[EnvExample]:
+        """Sample examples from the environment dataset.
+
+        TODO: This environment needs to be updated to match the new API.
+        The Prime Intellect environments use the verifiers library which has its own
+        sampling/evaluation flow that doesn't match our current MarinEnv interface.
         """
-        Sample problems and generate responses using the model.
+        raise NotImplementedError("PrimeIntellectEnv needs to be updated to match the new API")
 
-        Args:
-            env_id: The ID of the environment to evaluate
-            env_args: The arguments to use for the environment
-            inference_ctx: The inference context
-            temperature: The temperature to use for the model
-            max_tokens: The maximum number of tokens to use for the model
-            num_examples: The number of examples to use for the model
-            rollouts_per_example: The number of rollouts to use for the model
-            max_concurrent: The maximum number of concurrent requests to use for the model
+    def evaluate(
+        self,
+        examples: list[EnvExample],
+        responses: list[InferenceResponse],
+        max_input_length: int,
+    ) -> tuple[list[RolloutGroup], dict[str, float]]:
+        """Evaluate model responses and create rollouts.
+
+        TODO: This environment needs to be updated to match the new API.
+        The Prime Intellect environments use the verifiers library which has its own
+        sampling/evaluation flow that doesn't match our current MarinEnv interface.
         """
-        # Download the environment
-        subprocess.run(["prime", "env", "install", env_id])
-        env_id = env_id.split("/", 1)[-1]
-
-        vf_env = self.load_prime_intellect_env(env_id, env_args)
-
-        sampling_args: dict = {}
-        if max_tokens is not None:
-            sampling_args["max_tokens"] = max_tokens
-        if temperature is not None:
-            sampling_args["temperature"] = temperature
-
-        logger.info(f"Starting evaluation with model: {inference_ctx.model}")
-        logger.info(
-            f"Configuration: num_examples={num_examples}, \
-                rollouts_per_example={rollouts_per_example}, \
-                max_concurrent={max_concurrent}, \
-                max_tokens={max_tokens}, \
-                temperature={temperature}"
-        )
-
-        start_time = time.time()
-        result = vf_env.evaluate(
-            client=inference_ctx.openai_client(),
-            model=inference_ctx.model,
-            sampling_args=sampling_args,
-            num_examples=num_examples,
-            rollouts_per_example=rollouts_per_example,
-            max_concurrent=max_concurrent,
-        )
-
-        end_time = time.time()
-        logger.info(f"Evaluation completed in {end_time - start_time:.2f} seconds")
-
-        return EnvStep(
-            examples=result.prompt, responses=result.completion, rewards=result.reward, metrics=result.metrics
-        )
+        raise NotImplementedError("PrimeIntellectEnv needs to be updated to match the new API")

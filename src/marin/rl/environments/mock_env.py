@@ -20,9 +20,10 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Protocol
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 
-from marin.rl.types import EnvResponse, EnvStep, InferenceContext
+from marin.rl.types import EnvExample, InferenceResponse, Rollout, RolloutGroup
 
 from .base import MarinEnv
 
@@ -210,17 +211,18 @@ class MockEnv(MarinEnv):
             f"and {len(self.eval_examples)} eval examples."
         )
 
-    def step(
+    @property
+    def name(self) -> str:
+        """Return the environment name."""
+        return f"mock:task_type={self.task_type}"
+
+    def sample(
         self,
-        inference_ctx: InferenceContext,
         n_examples: int,
         prng_key,
         mode: str = "train",
-        n_generations: int = 1,
-        temperature: float = 1.0,
-        **kwargs,
-    ) -> EnvStep:
-        """Generate synthetic rollouts for testing."""
+    ) -> list[EnvExample]:
+        """Sample examples from the dataset."""
         if mode == "train":
             available_examples = self.train_examples
         else:
@@ -232,20 +234,85 @@ class MockEnv(MarinEnv):
         logger.info("Selecting %d examples with seed %d", n_to_sample, seed)
         rng = np.random.default_rng(seed)
         indices = rng.choice(len(available_examples), size=n_to_sample, replace=True)
-        examples = [available_examples[int(idx)] for idx in indices]
 
-        # Generate responses
-        prompts = [example["prompt"] for example in examples]
-        responses = inference_ctx.generate(
-            prompts,
-            temperature=temperature,
-            n_generations=n_generations,
+        env_examples = []
+        for idx in indices:
+            example = available_examples[int(idx)]
+            env_examples.append(
+                EnvExample(
+                    prompt=example["prompt"],
+                    answer=example["answer"],
+                    example_id=f"{self.task_type}_example_{idx}",
+                )
+            )
+        return env_examples
+
+    def evaluate(
+        self,
+        examples: list[EnvExample],
+        responses: list[InferenceResponse],
+        max_input_length: int,
+    ) -> tuple[list[RolloutGroup], dict[str, float]]:
+        """Evaluate responses and create rollouts."""
+        rollout_groups = []
+        correct_count = 0
+        total_count = 0
+        format_correct_count = 0
+
+        for example, response in zip(examples, responses, strict=True):
+            rollouts = []
+
+            for choice in response.choices:
+                # Extract response text (already decoded by inference context)
+                # Note: response_text may include the prompt, so extract the actual response
+                if choice.response_text.startswith(example.prompt):
+                    actual_response = choice.response_text[len(example.prompt) :]
+                else:
+                    actual_response = choice.response_text
+
+                # Compute reward
+                reward = self.task.compute_reward(example.answer, actual_response)
+
+                # Create rollout
+                prompt_tokens = response.prompt_tokens[-max_input_length:]
+                token_rewards = jnp.full(len(choice.response_tokens), reward, dtype=jnp.float32)
+
+                rollout = Rollout(
+                    env_name=self.name,
+                    env_example_id=example.example_id,
+                    prompt_tokens=jnp.array(prompt_tokens, dtype=jnp.int32),
+                    response_tokens=jnp.array(choice.response_tokens, dtype=jnp.int32),
+                    response_logprobs=jnp.array(choice.logprobs, dtype=jnp.float32),
+                    token_rewards=token_rewards,
+                    episode_reward=float(reward),
+                )
+                rollouts.append(rollout)
+
+                # Track metrics
+                if reward > 0:
+                    correct_count += 1
+                if actual_response:
+                    format_correct_count += 1
+                total_count += 1
+
+            if rollouts:
+                rollout_groups.append(RolloutGroup(rollouts=rollouts))
+
+        # Compute metrics
+        accuracy = correct_count / total_count if total_count > 0 else 0.0
+        format_accuracy = format_correct_count / total_count if total_count > 0 else 0.0
+        mean_reward = (
+            sum(r.episode_reward for g in rollout_groups for r in g.rollouts) / total_count if total_count > 0 else 0.0
         )
 
-        # Compute rewards and metrics
-        rewards, metrics = self._compute_rewards(examples, responses, inference_ctx.tokenizer)
+        metrics = {
+            f"{self.task_type}.accuracy": accuracy,
+            f"{self.task_type}.format_accuracy": format_accuracy,
+            f"{self.task_type}.mean_reward": mean_reward,
+            f"{self.task_type}.total_examples": total_count,
+        }
 
-        return EnvStep(examples=examples, responses=responses, rewards=rewards, metrics=metrics)
+        return rollout_groups, metrics
 
     def training_data(self) -> Iterator[MockEnvExample]:
         """Stream training data."""
@@ -272,63 +339,3 @@ class MockEnv(MarinEnv):
     def get_eval_examples(self, n_examples: int) -> list[dict[str, Any]]:
         """Get evaluation examples."""
         return self.eval_examples[:n_examples]
-
-    def _compute_rewards(
-        self, examples: list[MockEnvExample], responses: list[list[EnvResponse]], tokenizer
-    ) -> tuple[np.ndarray, dict]:
-        """Compute rewards for generated responses."""
-        n_examples = len(examples)
-        n_generations = len(responses[0]) if responses else 1
-
-        # Initialize rewards array
-        rewards = np.zeros((n_examples, n_generations), dtype=np.float32)
-
-        correct_count = 0
-        total_count = 0
-        format_correct_count = 0
-
-        for example_idx, (example, response_list) in enumerate(zip(examples, responses, strict=False)):
-            correct_answer = example["answer"]
-
-            for gen_idx, response in enumerate(response_list):
-                # Decode the generated tokens to text
-                decoded_response = tokenizer.decode(response["tokens"], skip_special_tokens=True)
-
-                # Extract response after the prompt
-                prompt = example["prompt"]
-                if decoded_response.startswith(prompt):
-                    actual_response = decoded_response[len(prompt) :]
-                else:
-                    actual_response = decoded_response
-                reward = self.task.compute_reward(correct_answer, actual_response)
-                rewards[example_idx, gen_idx] = reward
-
-                # Print sample outputs for debugging
-                if example_idx == 0 and gen_idx == 0:
-                    print("=" * 50)
-                    print(f"Task: {self.task_type}")
-                    print(f"Prompt: {prompt}")
-                    print(f"Full decoded response: {decoded_response}")
-                    print(f"Extracted response: '{actual_response}'")
-                    print(f"Expected answer: '{correct_answer}'")
-                    print(f"Reward: {reward}")
-                    print("=" * 50)
-
-                if reward > 0:
-                    correct_count += 1
-                if actual_response:  # Non-empty response counts as format correct
-                    format_correct_count += 1
-                total_count += 1
-
-        accuracy = correct_count / total_count if total_count > 0 else 0.0
-        format_accuracy = format_correct_count / total_count if total_count > 0 else 0.0
-        mean_reward = float(np.mean(rewards))
-
-        metrics = {
-            f"{self.task_type}.accuracy": accuracy,
-            f"{self.task_type}.format_accuracy": format_accuracy,
-            f"{self.task_type}.mean_reward": mean_reward,
-            f"{self.task_type}.total_examples": total_count,
-        }
-
-        return rewards, metrics

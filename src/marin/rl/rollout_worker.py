@@ -45,11 +45,10 @@ from marin.rl.model_utils import load_model_from_checkpoint
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .types import (
-    EnvResponse,
+    InferenceChoice,
     InferenceContext,
-    Rollout,
+    InferenceResponse,
     RolloutBatch,
-    RolloutGroup,
     RolloutMetadata,
 )
 from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_weight_transfer_client
@@ -130,7 +129,7 @@ class LevanterInferenceContext(InferenceContext):
         prompts: list[str],
         temperature: float,
         n_generations: int,
-    ) -> list[list[EnvResponse]]:
+    ) -> list[InferenceResponse]:
         """Generate responses for a batch of prompts."""
         stop_strings = None
         if self._stop_tokens is not None:
@@ -140,7 +139,7 @@ class LevanterInferenceContext(InferenceContext):
         asyncio.set_event_loop(loop)
         client = self.openai_client()
 
-        def _process_batch(batch_prompts: list[str]) -> list[list[dict]]:
+        def _process_batch(batch_prompts: list[str]) -> list[InferenceResponse]:
             batch_completions = []
 
             for prompt in batch_prompts:
@@ -159,8 +158,8 @@ class LevanterInferenceContext(InferenceContext):
             completions = loop.run_until_complete(asyncio.gather(*batch_completions, return_exceptions=True))
 
             batch_results = []
-            for completion in completions:
-                prompt_results = []
+            for prompt, completion in zip(batch_prompts, completions, strict=True):
+                choices = []
                 # drop responses that failed.
                 if isinstance(completion, Exception):
                     logger.error(f"Error during generation: {completion}")
@@ -169,8 +168,23 @@ class LevanterInferenceContext(InferenceContext):
                         content = choice.message.content
                         tokens = self.tokenizer.encode(content)
                         logprobs = [t.logprob for t in choice.logprobs.content]
-                        prompt_results.append(EnvResponse(tokens=np.array(tokens), logprobs=np.array(logprobs)))
-                batch_results.append(prompt_results)
+                        choices.append(
+                            InferenceChoice(
+                                response_text=content,
+                                response_tokens=np.array(tokens, dtype=np.int32),
+                                logprobs=np.array(logprobs, dtype=np.float32),
+                            )
+                        )
+
+                # Create InferenceResponse with prompt tokens
+                prompt_tokens = self.tokenizer.encode(prompt, add_special_tokens=True)
+                batch_results.append(
+                    InferenceResponse(
+                        prompt=prompt,
+                        prompt_tokens=np.array(prompt_tokens, dtype=np.int32),
+                        choices=choices,
+                    )
+                )
             return batch_results
 
         # Process prompts in batches to limit concurrent requests
@@ -288,7 +302,7 @@ class RolloutWorker:
             self._inference_server.shutdown()
 
     def _generate_rollout_batch(self, rng) -> tuple[RolloutBatch | None, dict | None]:
-        """Generate rollout batches directly from environment without using rl_dataset."""
+        """Generate rollout batches directly from environment."""
         barrier_sync()
 
         # Create policy inference context for sampling from the inference server
@@ -303,38 +317,27 @@ class RolloutWorker:
             self.config.trainer.device_mesh,
             hax.axis_mapping(self.config.trainer.compute_axis_mapping),
         ):
-            env_step = self._environment.step(
-                inference_ctx=policy_ctx,
+            # Sample examples from environment
+            examples = self._environment.sample(
                 n_examples=self.config.n_prompts_per_step,
                 prng_key=rng,
                 mode="train",
-                n_generations=self.config.n_generations,
-                temperature=self.config.temperature,
             )
 
-        rollout_groups: list[RolloutGroup] = []
-        for i, response in enumerate(env_step.responses):
-            rewards = env_step.rewards[i]
-            group = RolloutGroup(key=f"example_{i}", rollouts=[])
-            prompt = env_step.examples[i]["prompt"]
-            # answer = env_step.examples[i]["answer"]
-            prompt_tokens = self._tokenizer.encode(prompt, add_special_tokens=True)[-self.config.max_input_length :]
+            # Generate responses for each prompt
+            prompts = [example.prompt for example in examples]
+            responses = policy_ctx.generate(
+                prompts=prompts,
+                temperature=self.config.temperature,
+                n_generations=self.config.n_generations,
+            )
 
-            for j in range(len(response)):
-                rollout = Rollout(
-                    env_name=self.config.environment_spec,
-                    env_example_id=f"example_{i}",
-                    prompt_tokens=np.array(prompt_tokens, dtype=np.int32),
-                    response_tokens=np.array(response[j]["tokens"], dtype=np.int32),
-                    response_logprobs=response[j]["logprobs"],
-                    token_rewards=np.array([rewards[j]] * len(response[j]["tokens"]), dtype=np.float32),
-                    episode_reward=rewards[j],
-                )
-                group.rollouts.append(rollout)
-
-            # ignore empty groups
-            if len(group.rollouts) > 0:
-                rollout_groups.append(group)
+            # Evaluate responses and create rollouts
+            rollout_groups, metrics = self._environment.evaluate(
+                examples=examples,
+                responses=responses,
+                max_input_length=self.config.max_input_length,
+            )
 
         if len(rollout_groups) == 0:
             logger.warning("No valid rollouts generated in this batch, retrying...")
@@ -350,7 +353,7 @@ class RolloutWorker:
         )
 
         barrier_sync()
-        return rollout_batch, env_step.metrics
+        return rollout_batch, metrics
 
     def _sync_weights(self):
         logger.info("Checking for new weights...")

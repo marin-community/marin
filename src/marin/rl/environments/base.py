@@ -12,79 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from abc import ABC, abstractmethod
+
 from levanter.compat.hf_checkpoints import HfTokenizer
 
-from marin.rl.types import EnvStep, InferenceContext
+from marin.rl.types import RolloutGroup
 
 
-class MarinEnv:
+class MarinEnv(ABC):
     """Abstract base class for RL environments.
 
-    This class defines the interface that all environment implementations must follow.
-    Environments are responsible for:
-    1. Managing datasets of problems/tasks
-    2. Sampling problems for training or evaluation
-    3. Running inference to generate responses
-    4. Computing rewards based on responses
-    5. Collecting metrics for monitoring training progress
-
-    Subclasses must implement the `step` method to define environment-specific
-    behavior for problem sampling, inference, and reward computation.
-
-    Example:
-        >>> class MyEnv(MarinEnv):
-        ...     def __init__(self, dataset_path, **kwargs):
-        ...         super().__init__(**kwargs)
-        ...         self.dataset = load_dataset(dataset_path)
-        ...
-        ...     def step(self, sampler, params, n_examples, prng_key, **kwargs):
-        ...         # Sample problems, run inference, compute rewards
-        ...         return EnvStep(examples, responses, rewards, metrics)
+    Environments manage datasets and evaluate model responses.
+    Subclasses must implement sample() and evaluate() methods.
     """
 
-    def __init__(self, **kwargs):
-        """Initialize the environment with environment-specific configuration.
-
-        This method should be overridden by subclasses to perform any necessary
-        setup such as:
-        - Loading datasets and perform preprocessing
-        - Configuring tokenizers (used for reward computation)
-        """
-        pass
-
-    def step(
+    @abstractmethod
+    def sample(
         self,
-        inference_ctx: InferenceContext,
         n_examples: int,
+        n_generations: int,
         prng_key,
         mode: str = "train",
-        n_generations: int = 1,
-        temperature: float = 1.0,
-        **kwargs,
-    ) -> EnvStep:
-        """Execute one step of environment interaction.
-
-        This is the main interface method that subclasses must implement. It should:
-        1. Sample a batch of problems from the dataset
-        2. Generate model responses using the provided inference context
-        3. Compute rewards by comparing responses to ground truth
-        4. Collect metrics for monitoring and logging
-        5. Return all data packaged in an EnvStep container
+    ) -> list[RolloutGroup]:
+        """Sample examples from the environment dataset.
 
         Args:
-            inference_ctx: Context for generating responses
             n_examples: Number of examples to sample
-            prng_key: JAX random key
-            mode: "train" or "eval"
-            n_generations: Number of generations per example
-            temperature: Generation temperature
-            **kwargs: Additional environment-specific parameters
-
-        Returns:
-            EnvStep: A container with the sampled examples, generated responses,
-                computed rewards, and collected metrics from this environment step.
+            prng_key: JAX random key for sampling
+            mode: "train" or "eval" - which dataset to sample from
         """
-        raise NotImplementedError("Subclasses must implement the step method")
+        ...
 
 
 def load_environment_from_spec(env_spec: str, tokenizer: HfTokenizer) -> MarinEnv:

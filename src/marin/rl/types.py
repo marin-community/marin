@@ -16,14 +16,14 @@
 Consolidated type definitions for RL/post-training.
 
 This module contains all shared type definitions used across the RL system:
-- Environment types (EnvResponse, EnvExample, EnvStep)
+- Environment types (InferenceChoice, InferenceResponse, EnvExample)
 - Inference context protocol
 - Rollout types (Rollout, RolloutGroup, RolloutBatch, etc.)
 - Training types (TrainingBatch, RolloutWithAdvantage)
 """
 
 from dataclasses import dataclass
-from typing import NamedTuple, Protocol, TypedDict
+from typing import Protocol
 
 import equinox as eqx
 import haliax.haxtyping as ht
@@ -32,65 +32,31 @@ import numpy as np
 from haliax import NamedArray
 
 
-class EnvResponse(TypedDict):
-    """Response from model generation."""
+@dataclass
+class InferenceChoice:
+    """A single choice from the inference provider."""
 
-    tokens: np.ndarray
-    logprobs: np.ndarray
+    response_text: str
+    response_tokens: np.ndarray  # Shape: (sequence_length,)
+    logprobs: np.ndarray  # Shape: (sequence_length,)
 
 
-class EnvExample(TypedDict):
-    """A single environment example."""
+@dataclass
+class InferenceResponse:
+    """A single response from the inference provider."""
+
+    prompt: str
+    prompt_tokens: np.ndarray  # Shape: (prompt_length,)
+    choices: list[InferenceChoice]
+
+
+@dataclass
+class EnvExample:
+    """A single environment example with prompt and ground truth."""
 
     prompt: str
     answer: str
-
-
-class EnvStep(NamedTuple):
-    """Container for a single interactive environment step.
-
-    This class encapsulates all the data generated during one step of interaction
-    with an environment, including the input problems (prompts), model responses,
-    rewards computed, and additional metrics collected.
-
-    Attributes:
-        examples (list[EnvExample]): A list of problem instances sampled from
-            the dataset. Each instance contains data with keys:
-                - 'prompt': Problem description
-                - 'answer': Ground truth solution used for grading
-
-        responses (list[list[EnvResponse]]): A nested list structure where
-            responses[i][j] contains the j-th generated sample for the i-th problem
-            in the batch. Each inner dict contains:
-            - 'tokens': numpy array of generated token IDs
-            - 'logprobs': numpy array of log probabilities for each generated token
-            - Other generation-specific metadata
-
-        rewards (np.ndarray): A 2D numpy array with shape
-            (number of examples, number of generations per example) containing
-            the computed reward for each generated response. Rewards are typically
-            binary (0.0 or 1.0) indicating correctness, but can be continuous values.
-
-        metrics (dict[str, float]): Additional scalar metrics computed during this
-            environment step, such as:
-            - Average reward across all responses
-            - Format validation success rate
-            - Average response length
-            - Problem-specific evaluation metrics
-
-    Example:
-        >>> env_step = EnvStep(
-        ...     examples=[{'prompt': 'What is 2+2?', 'answer': '4'}],
-        ...     responses=[[[{'tokens': np.array([1, 2, 3]), 'logprobs': np.array([0.1, 0.2, 0.3])}]]],
-        ...     rewards=np.array([[1.0]]),
-        ...     metrics={'avg_reward': 1.0, 'avg_length': 3.0}
-        ... )
-    """
-
-    examples: list[EnvExample]
-    responses: list[list[EnvResponse]]
-    rewards: np.ndarray
-    metrics: dict[str, float]
+    example_id: str
 
 
 class InferenceContext(Protocol):
@@ -104,13 +70,17 @@ class InferenceContext(Protocol):
         """Return the tokenizer."""
         ...
 
-    def generate(self, prompts: list[str], temperature: float, n_generations: int) -> list[list[EnvResponse]]:
+    def generate(self, prompts: list[str], temperature: float, n_generations: int) -> list[InferenceResponse]:
         """Generate responses for a batch of prompts.
 
+        Args:
+            prompts: List of text prompts to generate from
+            temperature: Sampling temperature
+            n_generations: Number of generations per prompt
+
         Returns:
-            List of lists where outer list corresponds to prompts and
-            inner list contains n_generations responses per prompt.
-            Each response is an EnvResponse.
+            List of InferenceResponse objects, one per input prompt.
+            Each InferenceResponse contains n_generations choices.
         """
         ...
 
@@ -119,18 +89,30 @@ class Rollout(eqx.Module):
     """A single rollout: one prompt + one generated response + rewards."""
 
     env_name: str
+    """The name of the environment used to generate this rollout."""
+
     env_example_id: str
+    """An identifier for the example used to initialize the environment."""
+
     prompt_tokens: jax.Array
+    """Array of (prompt_length,) token IDs representing the input prompt."""
+
     response_tokens: jax.Array
+    """Array of (response_length,) token IDs representing the generated response."""
+
     response_logprobs: jax.Array
+    """Array of (response_length,) log probabilities for each generated token."""
+
     token_rewards: jax.Array
+    """The reward assigned to each generated token."""
+
     episode_reward: float
+    """The overall reward for the episode."""
 
 
 class RolloutGroup(eqx.Module):
     """Multiple rollouts for the same prompt (e.g., n_generations samples)."""
 
-    key: str
     rollouts: list[Rollout]
 
 
