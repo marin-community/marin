@@ -70,7 +70,9 @@ def _impute_model_config(config):
     if config.discover_latest_checkpoint:
         model_path = discover_hf_checkpoints(model_path)[-1]
 
-    if config.model_name is None:
+    if config.model_name is None and "gcsfuse" in model_path:
+        model_name = model_path.split("/")[-1]
+    elif config.model_name is None:
         # have to impute the model name from the path
         model_name_parts = model_path.split("/")
         # we're looking for something that looks like a run name and something that looks like a step
