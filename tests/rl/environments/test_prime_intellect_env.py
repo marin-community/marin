@@ -21,7 +21,10 @@ import numpy as np
 import pytest
 from transformers import AutoTokenizer
 
-from marin.rl.environments.prime_intellect_env import PrimeIntellectEnv
+try:
+    from marin.rl.environments.prime_intellect_env import PrimeIntellectEnv
+except ImportError:
+    pytest.skip("verifiers library not installed", allow_module_level=True)
 
 
 @pytest.fixture
