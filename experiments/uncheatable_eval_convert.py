@@ -13,14 +13,14 @@
 # limitations under the License.
 
 """
-The Paloma eval sets, downloaded and tokenized
+The Uncheatable eval sets, converted from downloaded files and tokenized
 
-https://huggingface.co/datasets/allenai/paloma
+This experiment converts already downloaded Uncheatable eval files to the correct format
 """
 
 import os.path
 
-from src.marin.download.uncheatable_eval.download import make_uncheatable_eval_step
+from src.marin.download.uncheatable_eval.convert import make_hf_download_step, make_uncheatable_eval_convert_step
 
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
@@ -31,32 +31,34 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 
 
-# The datasets in the uncheatable eval set and their paths within the uncheatable eval repository
-# https://huggingface.co/datasets/allenai/paloma
+# The datasets in the uncheatable eval set and their paths within the converted output
 UNCHEATABLE_EVAL_TO_FILE_PATTERN = {
     # "wikipedia_arabic": "wikipedia_arabic_*.jsonl.gz",
-    "wikipedia_english": "wikipedia_english_*.jsonl.gz",
+    "wikipedia_english": "wikipedia_english*.jsonl.gz",
     # "wikipedia_french": "wikipedia_french_*.jsonl.gz",
     # "wikipedia_german": "wikipedia_german_*.jsonl.gz",
     # "wikipedia_japanese": "wikipedia_japanese_*.jsonl.gz",
     # "wikipedia_spanish": "wikipedia_spanish_*.jsonl.gz",
-    "github_python": "github_python_*.jsonl.gz",
-    "github_cpp": "github_cpp_*.jsonl.gz",
-    "bbc_news": "bbc_news_*.jsonl.gz",
-    "arxiv_physics": "arxiv_physics_*.jsonl.gz",
-    "arxiv_computer_science": "arxiv_computer_science_*.jsonl.gz",
+    "github_python": "github_python*.jsonl.gz",
+    "github_cpp": "github_cpp*.jsonl.gz",
+    "bbc_news": "bbc_news*.jsonl.gz",
+    "arxiv_physics": "arxiv_physics*.jsonl.gz",
+    "arxiv_computer_science": "arxiv_computer_science*.jsonl.gz",
     # "ao3_chinese": "ao3_chinese_*.jsonl.gz",
     # "ao3_english": "ao3_english_*.jsonl.gz",
 }
 
-uncheatable_eval = make_uncheatable_eval_step()
+hf_download = make_hf_download_step()
+uncheatable_eval_convert = make_uncheatable_eval_convert_step(
+    input_path=hf_download
+)
 
 
-def uncheatable_eval_tokenized(
-    *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, uncheatable_eval_raw: ExecutorStep = uncheatable_eval
+def uncheatable_eval_converted_tokenized(
+    *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, uncheatable_eval_converted: ExecutorStep = uncheatable_eval_convert
 ) -> dict[str, TokenizerStep]:
     """
-    Returns a dictionary of steps to tokenize the Paloma eval sets. Keys are the subset names (with `paloma/` prefix)
+    Returns a dictionary of steps to tokenize the converted Uncheatable eval sets. Keys are the subset names (with `uncheatable_eval/` prefix)
     """
     # avoid cyclic dependency
     from experiments.defaults import default_tokenize
@@ -65,7 +67,7 @@ def uncheatable_eval_tokenized(
     for dataset, path_part in UNCHEATABLE_EVAL_TO_FILE_PATTERN.items():
         uncheatable_eval_steps[os.path.join("uncheatable_eval", dataset)] = default_tokenize(
             name=os.path.join("uncheatable_eval", dataset),
-            dataset=uncheatable_eval_raw.cd(f"{path_part}"),
+            dataset=uncheatable_eval_converted.cd(f"{path_part}"),
             tokenizer=tokenizer,
             is_validation=True,
         )
@@ -73,5 +75,20 @@ def uncheatable_eval_tokenized(
     return uncheatable_eval_steps
 
 
+def make_uncheatable_eval_convert_experiment(input_path: str) -> tuple[ExecutorStep, dict[str, TokenizerStep]]:
+    """
+    Create a complete conversion experiment with custom input path.
+
+    Args:
+        input_path: Path to the directory containing downloaded uncheatable eval files
+
+    Returns:
+        Tuple of (conversion_step, tokenized_steps_dict)
+    """
+    convert_step = make_uncheatable_eval_convert_step(input_path=input_path)
+    tokenized_steps = uncheatable_eval_converted_tokenized(uncheatable_eval_converted=convert_step)
+    return convert_step, tokenized_steps
+
+
 if __name__ == "__main__":
-    executor_main(steps=[uncheatable_eval, *uncheatable_eval_tokenized().values()])
+    executor_main(steps=[uncheatable_eval_convert, *uncheatable_eval_converted_tokenized().values()])

@@ -278,6 +278,10 @@ pm = [
   "PyGithub>=2.3.0"
 ]
 
+default_lm_log_probs = [
+    "levanter @ git+https://github.com/marin-community/levanter.git@27a0992434d7a1d7cee044f2b0154a41d222baad",
+]
+
 
 [tool.black]
 line-length = 121

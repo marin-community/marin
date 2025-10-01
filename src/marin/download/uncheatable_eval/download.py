@@ -376,7 +376,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
 def make_uncheatable_eval_step(
     *,
     name: str = "raw/uncheatable-eval/latest",
-    repo_owner: str = "Jellyfish042",
+    repo_owner: str = "ziqing-huang",
     repo_name: str = "uncheatable_eval",
     data_path: str = "data",
     branch: str = "master",

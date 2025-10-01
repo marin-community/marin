@@ -29,6 +29,7 @@ SINGLE_TPU_V5p_8 = ResourceConfig(num_tpu=1, tpu_type="TPU-v5p-8", strategy="STR
 SINGLE_TPU_V5p_8_FULL = ResourceConfig(
     num_tpu=4, tpu_type="TPU-v5p-8", strategy="STRICT_PACK", include_head_in_scheduling_strategy=True
 )  # us-central1
+SINGLE_TPU_V5p_32 = ResourceConfig(num_tpu=1, tpu_type="TPU-v5p-32", strategy="STRICT_PACK")
 SINGLE_TPU_V6E_8 = ResourceConfig(num_tpu=1, tpu_type="TPU-v6e-8", strategy="STRICT_PACK")  # us-east5
 TPU_V6E_8_STRICT_PACK = ResourceConfig(num_tpu=8, tpu_type="TPU-v6e-8", strategy="STRICT_PACK")  # us-east5
 TPU_V4_16_STRICT_PACK = ResourceConfig(num_tpu=8, tpu_type="TPU-v4-16", strategy="PACK")  # us-central2

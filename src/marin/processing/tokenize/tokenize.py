@@ -230,7 +230,7 @@ def tokenize(config: TokenizeConfigBase):
             f"validation source: {validation_source}"
         )
 
-    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer, force_download=True)
     batch_tokenizer = preprocessor_for_format(config.format, tokenizer)
 
     if train_source is not None:

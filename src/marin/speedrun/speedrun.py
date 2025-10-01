@@ -37,7 +37,7 @@ from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize import add_validation_sets_to_mixture, lm_data_config
-from marin.speedrun.paloma_local_download import speedrun_paloma_tokenized
+# from marin.speedrun.paloma_local_download import speedrun_paloma_tokenized
 from marin.training.training import TrainLmOnPodConfig
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 from marin.utils import asdict_excluding
@@ -212,7 +212,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
     # get wandb run and metrics
     run = wandb.Api().run(f"{config.wandb_entity}/{config.wandb_project}/{wandb_run_id}")
     wandb_metrics = {
-        "eval/paloma/c4_en/bpb": run.summary.get("eval/paloma/c4_en/bpb", None),
+        # "eval/paloma/c4_en/bpb": run.summary.get("eval/paloma/c4_en/bpb", None),
     }
 
     wandb_num_devices = run.summary.get("num_devices", None)
@@ -252,11 +252,11 @@ def speedrun_results(config: SpeedrunResultsConfig):
         # Training metrics
         "training_time": training_time,
         "training_hardware_flops": training_hardware_flops,
-        "eval/paloma/c4_en/bpb": (
-            float(wandb_metrics.get("eval/paloma/c4_en/bpb"))
-            if wandb_metrics.get("eval/paloma/c4_en/bpb") is not None
-            else None
-        ),
+        # "eval/paloma/c4_en/bpb": (
+        #     float(wandb_metrics.get("eval/paloma/c4_en/bpb"))
+        #     if wandb_metrics.get("eval/paloma/c4_en/bpb") is not None
+        #     else None
+        # ),
         # Run metadata
         "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
         "wandb_run_link": wandb_run_link,
@@ -306,13 +306,14 @@ def default_speedrun(
     if isinstance(config.tokenized_dataset, InputName | ExecutorStep):
         pretraining_data = lm_data_config(
             training_set=config.tokenized_dataset,
-            validation_sets=speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
+            # validation_sets=speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
         )
     else:
-        pretraining_data = add_validation_sets_to_mixture(
-            config.tokenized_dataset,
-            speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
-        )
+        pretraining_data = config.tokenized_dataset
+        # pretraining_data = add_validation_sets_to_mixture(
+        #     config.tokenized_dataset,
+        #     speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
+        # )
 
     train_step = default_train(
         name=f"speedrun/{name}",

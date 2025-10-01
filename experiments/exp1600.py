@@ -16,15 +16,19 @@ from experiments.llama import llama_3_2_1b as llama_3_2_1b_config, llama3_tokeni
 from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
-from experiments.paloma import paloma_tokenized
+# from experiments.paloma import paloma_tokenized
+from marin.processing.tokenize.data_configs import TokenizerStep
+from marin.processing.tokenize import TokenizeConfig
+from marin.resources import TpuPodConfig
 
 from dataclasses import dataclass
 from levanter.models.llama import LmConfig
 from levanter.models.olmo import Olmo2Config
-from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
+from experiments.evals.resource_configs import SINGLE_TPU_V5p_8
 from experiments.evals.task_configs import EvalTaskConfig
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
 from marin.execution.executor import ExecutorStep
+from experiments.defaults import default_tokenize
 from experiments.models import (
     llama_3_1_8b,
     olmo_2_base_8b,
@@ -48,6 +52,42 @@ from experiments.qwen3 import (
 from experiments.isoflop_sweep import generate_isoflop_sweep
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from experiments.uncheatable_eval import uncheatable_eval_tokenized
+
+UNCHEATABLE_EVAL_TO_FILE_PATTERN = {
+    # "wikipedia_arabic": "wikipedia_arabic_*.jsonl.gz",
+    "wikipedia_english": "wikipedia_english_*.jsonl.gz",
+    # "wikipedia_french": "wikipedia_french_*.jsonl.gz",
+    # "wikipedia_german": "wikipedia_german_*.jsonl.gz",
+    # "wikipedia_japanese": "wikipedia_japanese_*.jsonl.gz",
+    # "wikipedia_spanish": "wikipedia_spanish_*.jsonl.gz",
+    "github_python": "github_python_*.jsonl.gz",
+    "github_cpp": "github_cpp_*.jsonl.gz",
+    "bbc_news": "bbc_news_*.jsonl.gz",
+    "arxiv_physics": "arxiv_physics_*.jsonl.gz",
+    "arxiv_computer_science": "arxiv_computer_science_*.jsonl.gz",
+    # "ao3_chinese": "ao3_chinese_*.jsonl.gz",
+    # "ao3_english": "ao3_english_*.jsonl.gz",
+}
+
+# def uncheatable_eval_tokenized(
+#     *, base_path="tokenized/", tokenizer: str = llama3_tokenizer) -> dict[str, TokenizerStep]:
+#     """
+#     Returns a dictionary of steps to tokenize the Paloma eval sets. Keys are the subset names (with `paloma/` prefix)
+#     """
+#     # avoid cyclic dependency
+#     from experiments.defaults import default_tokenize
+
+#     uncheatable_eval_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
+#     for dataset, path_part in UNCHEATABLE_EVAL_TO_FILE_PATTERN.items():
+#         uncheatable_eval_steps[os.path.join("uncheatable_eval", dataset)] = default_tokenize(
+#             name=os.path.join("uncheatable_eval", dataset),
+#             dataset=f"gs://marin-us-east5/raw/uncheatable-eval/convert/{path_part}",
+#             tokenizer=tokenizer,
+#             is_validation=True,
+#         )
+
+#     return uncheatable_eval_steps
+
 
 olmo_7b = Olmo2Config(
     seq_len=4096,
@@ -92,36 +132,42 @@ model_with_config = [
         tokenizer="allenai/OLMo-2-1124-7B",
         model_path=olmo_2_base_8b,
     ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-0.6B", model_config=qwen3_0_6b_config, tokenizer="Qwen/Qwen3-0.6B", model_path=qwen3_0_6b
-    ),
+    # ModelConfig(
+    #     model_name="allenai/OLMo-2-0325-32B",
+    #     model_config=olmo_2_base_8b,
+    #     tokenizer="allenai/OLMo-2-0325-32B",
+    #     model_path=olmo_2_base_8b,
+    # ),
+    # ModelConfig(
+    #     model_name="Qwen/Qwen3-0.6B", model_config=qwen3_0_6b_config, tokenizer="Qwen/Qwen3-0.6B", model_path=qwen3_0_6b
+    # ),
     ModelConfig(
         model_name="Qwen/Qwen3-1.7B", model_config=qwen3_1_7b_config, tokenizer="Qwen/Qwen3-1.7B", model_path=qwen3_1_7b
     ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-4B", model_config=qwen3_4b_config, tokenizer="Qwen/Qwen3-4B", model_path=qwen3_4b
-    ),
+    # ModelConfig(
+    #     model_name="Qwen/Qwen3-4B", model_config=qwen3_4b_config, tokenizer="Qwen/Qwen3-4B", model_path=qwen3_4b
+    # ),
     ModelConfig(
         model_name="Qwen/Qwen3-8B", model_config=qwen3_8b_config, tokenizer="Qwen/Qwen3-8B", model_path=qwen3_8b
     ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-0.6B-Base",
-        model_config=qwen3_0_6b_config,
-        tokenizer="Qwen/Qwen3-0.6B",
-        model_path=qwen3_0_6b_base,
-    ),
+    # ModelConfig(
+    #     model_name="Qwen/Qwen3-0.6B-Base",
+    #     model_config=qwen3_0_6b_config,
+    #     tokenizer="Qwen/Qwen3-0.6B",
+    #     model_path=qwen3_0_6b_base,
+    # ),
     ModelConfig(
         model_name="Qwen/Qwen3-1.7B-Base",
         model_config=qwen3_1_7b_config,
         tokenizer="Qwen/Qwen3-1.7B",
         model_path=qwen3_1_7b_base,
     ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-4B-Base",
-        model_config=qwen3_4b_config,
-        tokenizer="Qwen/Qwen3-4B",
-        model_path=qwen3_4b_base,
-    ),
+    # ModelConfig(
+    #     model_name="Qwen/Qwen3-4B-Base",
+    #     model_config=qwen3_4b_config,
+    #     tokenizer="Qwen/Qwen3-4B",
+    #     model_path=qwen3_4b_base,
+    # ),
     ModelConfig(
         model_name="Qwen/Qwen3-8B-Base",
         model_config=qwen3_8b_config,
@@ -136,20 +182,24 @@ def get_directory_friendly_name(model_name: str) -> str:
 
 
 EVAL_TASKS = [
-    EvalTaskConfig("mmlu_sl_verb", num_fewshot=5, task_alias="mmlu_sl_verb_5_shot"),
-    EvalTaskConfig("hellaswag", 10, task_alias="hellaswag_10shot"),  # 4-way MCQ commonsense reasoning dataset,
+    # EvalTaskConfig("mmlu_sl_verb", num_fewshot=5, task_alias="mmlu_sl_verb_5_shot"),
+    # EvalTaskConfig("hellaswag", 10, task_alias="hellaswag_10shot"),  # 4-way MCQ commonsense reasoning dataset,
     EvalTaskConfig("gsm8k_loss", num_fewshot=8, task_alias="gsm8k_loss_8shot"),
     EvalTaskConfig("math_500_loss", num_fewshot=0),
 ]
 
 steps = []
+isoflop_steps, isoflop_metadatas = generate_isoflop_sweep(
+    nemotron_mix,
+    experiment_name="nemo-wider-depth-adapt",
+)
 for isoflop_step, isoflop_metadata in zip(
     isoflop_steps, isoflop_metadatas, strict=False
 ):
     experiment_name = isoflop_step.name.split("/")[-1]
-    paloma_tokenized_dict = paloma_tokenized(tokenizer=llama3_tokenizer)
+    # paloma_tokenized_dict = paloma_tokenized(tokenizer=llama3_tokenizer)
     uncheatable_eval_tokenized_dict = uncheatable_eval_tokenized(tokenizer=llama3_tokenizer)
-    eval_data = mixture_for_evaluation(paloma_tokenized_dict | uncheatable_eval_tokenized_dict)
+    # eval_data = mixture_for_evaluation(paloma_tokenized_dict | uncheatable_eval_tokenized_dict)
     eval_data = mixture_for_evaluation(uncheatable_eval_tokenized_dict)
     budget, hidden_size, num_layers, batch_size, train_steps = isoflop_metadata
     wandb_tags = (
@@ -164,7 +214,7 @@ for isoflop_step, isoflop_metadata in zip(
             checkpoint=isoflop_step,
             model=isoflop_metadata,
             data=eval_data,
-            resource_config=SINGLE_TPU_V5p_8_FULL,
+            resource_config=SINGLE_TPU_V5p_8,
             checkpoint_is_hf=False,
             per_device_batch_size=4,
             name=f"{experiment_name}-paloma-uncheatable-eval-logprobs-v2",
@@ -176,15 +226,16 @@ for isoflop_step, isoflop_metadata in zip(
             model_name=experiment_name,
             model_path=isoflop_step,
             evals=EVAL_TASKS,
-            resource_config=SINGLE_TPU_V5p_8_FULL,
-            wandb_tags=wandb_tags,
+            resource_config=SINGLE_TPU_V5p_8,
+            # wandb_tags=wandb_tags,
         )
     )
 
 for model_config in model_with_config:
-    paloma_tokenized_dict = paloma_tokenized(tokenizer=model_config.tokenizer)
+    # paloma_tokenized_dict = paloma_tokenized(tokenizer=model_config.tokenizer)
     uncheatable_eval_tokenized_dict = uncheatable_eval_tokenized(tokenizer=model_config.tokenizer)
-    eval_data = mixture_for_evaluation(paloma_tokenized_dict | uncheatable_eval_tokenized_dict)
+    # eval_data = mixture_for_evaluation(paloma_tokenized_dict | uncheatable_eval_tokenized_dict)
+    eval_data = mixture_for_evaluation(uncheatable_eval_tokenized_dict)
 
     directory_friendly_name = get_directory_friendly_name(model_config.model_name)
     steps.append(
@@ -192,6 +243,7 @@ for model_config in model_with_config:
             checkpoint=model_config.model_name,
             model=model_config.model_config,
             data=eval_data,
+            resource_config=SINGLE_TPU_V5p_8,
             checkpoint_is_hf=True,
             per_device_batch_size=4,
             name=f"{directory_friendly_name}-paloma-uncheatable-eval-logprobs-v2",
@@ -211,8 +263,8 @@ for model_config in model_with_config:
                 EvalTaskConfig("gsm8k_loss", num_fewshot=8, task_alias="gsm8k_loss_8shot"),
                 EvalTaskConfig("math_500_loss", num_fewshot=0),
             ],
-            resource_config=SINGLE_TPU_V5p_8_FULL,
-            wandb_tags=[f"M={model_config.model_name}", "eval=mmlu-5shot-sl"],
+            resource_config=SINGLE_TPU_V5p_8,
+            # wandb_tags=[f"M={model_config.model_name}", "eval=mmlu-5shot-sl"],
         )
     )
 
