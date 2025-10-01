@@ -601,33 +601,65 @@ Implemented graduation system:
 
 **Commit:** `203ef6a3` - "Add lesson graduation logic and tests."
 
+### ✅ Step 5: Exploration Bonuses (Completed)
+**Files:** `src/marin/rl/curriculum.py`, `tests/rl/test_curriculum.py`
+
+Implemented exploration bonus system:
+- Exponential decay: `bonus = 1.0 + exp(-0.03 * total_samples)`
+- Bonus decays from 2x to ~1x over first 100 samples
+- Applied to base weight in `compute_sampling_weights()`
+- Ensures new lessons get sufficient exploration
+
+**Tests:**
+- Bonus effect on new vs experienced lessons
+- Decay curve validation
+- Convergence at high sample counts
+
+**Commit:** `f67d188f` - "Integrate curriculum learning into RolloutWorker"
+
+### ✅ Step 6: Checkpoint/Restore (Completed)
+**Files:** `src/marin/rl/curriculum.py`, `tests/rl/test_curriculum.py`
+
+Implemented JSON-based checkpoint system:
+- `save_checkpoint(filename)`: Serializes curriculum state to JSON
+- `load_checkpoint(config, filename)`: Restores from checkpoint
+- Added `checkpoint_dir` field to `CurriculumConfig`
+- Preserves: stats, unlocked, graduated, current_step
+
+**Tests:**
+- Round-trip save/load validation
+- Reward history preservation
+- Graduation state preservation
+- Error handling for missing checkpoint_dir
+
+**Commit:** `f67d188f` - "Integrate curriculum learning into RolloutWorker"
+
+### ✅ Step 7: RolloutWorker Integration (Completed)
+**Files:** `src/marin/rl/rollout_worker.py`, `tests/rl/config_helpers.py`
+
+**Breaking changes:**
+- Replaced `environment_spec: EnvConfig` with `curriculum_config: CurriculumConfig`
+- Added `eval_n_examples`, `eval_n_generations`, `eval_frequency` to `CurriculumConfig`
+
+**Implementation:**
+- `RolloutWorker` initializes `Curriculum` instead of single environment
+- `_generate_rollout_batch()` samples lesson from curriculum, updates stats
+- `_evaluate_curriculum()` evaluates all active lessons periodically
+- Automatic curriculum state updates (step, unlock, graduate)
+- Test helpers create single-lesson curriculum by default
+
+**Commit:** `f67d188f` - "Integrate curriculum learning into RolloutWorker"
+
 ## Remaining Work
 
-### ⏳ Step 5: Exploration Bonuses (Pending)
-Add exploration bonus to `compute_sampling_weights()` based on `total_samples` with exponential decay. Ensures new lessons get sufficient initial sampling.
+### ⏳ Step 8: Integration Test (Not Started)
+Validate end-to-end functionality with multi-lesson curriculum in integration tests.
 
-### ⏳ Step 6: Checkpoint/Restore (Pending)
-Implement JSON-based checkpoint save/load with tests for state persistence and round-trip validation.
-
-### ⏳ Step 7: RolloutWorker Integration (Pending)
-**Breaking changes:**
-- Replace `environment_spec: EnvConfig` with `curriculum_config: CurriculumConfig`
-- Add `curriculum_eval_frequency: int` configuration
-- Update `RolloutWorker` to:
-  - Initialize curriculum
-  - Sample lessons instead of single environment
-  - Process rollout batches to update curriculum stats
-  - Trigger periodic evaluation
-  - Track curriculum metrics
-
-Update helper functions in `tests/rl/config_helpers.py` and tests in `tests/rl/test_async_train.py`.
-
-### ⏳ Step 8: Integration Test (Pending)
-Validate end-to-end functionality by ensuring `test_full_integration_moar_cats` passes with multi-lesson curriculum configuration.
+**Note:** Steps 7 integration test updates and Step 8 deferred - basic integration complete and working with existing single-lesson default.
 
 ## Test Coverage
 
-Current test count: **18 tests passing**
+Current test count: **25 tests passing**
 
 Test categories:
 - Core functionality: 6 tests
@@ -635,6 +667,8 @@ Test categories:
 - Plateau detection: 1 test
 - Graduation: 3 tests
 - Sampling & weighting: 4 tests
+- Exploration bonuses: 3 tests
+- Checkpointing: 4 tests
 
 ## Architecture Notes
 
@@ -655,3 +689,17 @@ Test categories:
 - Multi-objective optimization (speed vs accuracy)
 - Automatic difficulty estimation from first N samples
 - Curriculum visualization and debugging tools
+
+
+## Distributed Curricula
+
+As we will be using multiple rollout workers, it's important the statistics for
+all workers are used. To manage this, we will run the curriculum as a Ray actor:
+
+```
+class CurriculumActor(Curriculum):
+  ...
+```
+
+Note that this implies inputs to the curriculum should be small, e.g. episode
+level statistics instead of entire rollouts.
