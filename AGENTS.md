@@ -11,7 +11,8 @@ This document provides a starting point for using coding agents (AI or human) in
 
 ## Coding Guidelines
 
-- Always fix tests if you broke them
+- Always fix tests if you broke them.
+- DO NOT fix tests by relaxing tolerances or hacking around them.
 - NEVER SAY You're absolutely right!
 - You never credit yourself in commits
 - Always use `uv run` in python projects instead of `python`
