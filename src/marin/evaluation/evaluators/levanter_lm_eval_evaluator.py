@@ -58,7 +58,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 "immutabledict",
                 "jax[tpu]",
                 "langdetect",
-                "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@chiheem/merge_upstream",
+                "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@25307586d1e7dc3dd6c788f9a0cd57ca072111be",
                 "math-verify", # Required by lm-eval[math]
                 "ray==2.45",
                 "statsmodels==0.14.4",
@@ -99,11 +99,18 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
             # NOTE(chris): Before, the batch size was 16, but this is too large for the 8B model.
             # In the future, we should make this user-configurable.
+            #
+            # NOTE (chiheem 2025-09-30): We should make the users pass TrainerConfig so that they 
+            # are forced to customize the TrainerConfig according to their device, device, and model.
+            # Current config is customized for our 8B model on v6e-8.
+            # 
             trainer_config = TrainerConfig(
                 tracker=WandbConfig(project="marin", tags=wandb_tags, name=name),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
-                per_device_eval_parallelism=8,
+                per_device_eval_parallelism=1,
                 ray=RayConfig(auto_start_cluster=False),
+                model_axis_size=4,
+                tensor_parallel_axes=["mlp", "heads", "kv_head", "vocab"],
             )
 
             model_config = HFCheckpointConverter.from_hf(model_name_or_path).LevConfigClass()

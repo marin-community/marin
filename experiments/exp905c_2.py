@@ -21,8 +21,8 @@ Note for people trying to do evals:
 
 if __name__ == "__main__":
     model_name = "deeper_starling_sft_nemotron_and_openthoughts3"
-    # model_path = "gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/hf/step-1540000"
-    model_path = "gs://marin-us-central2/models/llama-3.1-8b"
+    model_path = "gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/hf/step-1540000"
+    # model_path = "gs://marin-us-central2/models/llama-3.1-8b"
     
     # Run all evaluations on all models
     helm_eval = ExecutorStep(
@@ -43,6 +43,9 @@ if __name__ == "__main__":
         pip_dependency_groups=["eval", "transformers", "tiktoken", "sentencepiece"],
     )
 
+    # NOTE(chiheem 2025-10-01): We may want to run the lm-eval tasks as separate steps so that we can avoid
+    # `out of pages` error.
+    
     levanter_lm_evaluation_harness_eval = evaluate_levanter_lm_evaluation_harness(
         model_name,
         model_path,
@@ -60,14 +63,14 @@ if __name__ == "__main__":
             # # use causal reasoning to predict the correct outcome of a given scenario
             # EvalTaskConfig("copa", num_fewshot=0, task_alias="copa_0shot"),
             # EvalTaskConfig(name="drop", num_fewshot=0, task_alias="drop_0shot"),
-            EvalTaskConfig(name="gsm8k_cot", num_fewshot=8, task_alias="gsm8k_cot"),
+            # EvalTaskConfig(name="gsm8k_cot", num_fewshot=8, task_alias="gsm8k_cot"),
             # # 4-way multiple choice commonsense reasoning dataset
-            EvalTaskConfig("hellaswag", 0, task_alias="hellaswag_0shot"),
+            # EvalTaskConfig("hellaswag", 0, task_alias="hellaswag_0shot"),
             # # 4-way MCQ commonsense reasoning dataset
             # EvalTaskConfig("hellaswag", num_fewshot=10, task_alias="hellaswag_10shot"),
             # EvalTaskConfig(name="humaneval", num_fewshot=0, task_alias="humaneval_0shot"),
             # EvalTaskConfig(name="bbh_cot_fewshot", num_fewshot=3, task_alias="bbh_3shot"),
-            EvalTaskConfig(name="ifeval", num_fewshot=0, task_alias="ifeval_0shot"),
+            # EvalTaskConfig(name="ifeval", num_fewshot=0, task_alias="ifeval_0shot"),
             # predict the endings of text passages
             # EvalTaskConfig("lambada_openai", num_fewshot=0, task_alias="lambada_openai_0shot"),
             # EvalTaskConfig("leaderboard_gpqa", num_fewshot=0, task_alias="gpqa_0shot"),
@@ -75,7 +78,7 @@ if __name__ == "__main__":
             # EvalTaskConfig("leaderboard_math_hard", num_fewshot=4, task_alias="lb_math_4shot"),
             # EvalTaskConfig("leaderboard_mmlu_pro", num_fewshot=5, task_alias="mmlu_5shot"),
             # EvalTaskConfig(name="minerva_math", num_fewshot=4, task_alias="math_4shot"),
-            # EvalTaskConfig("mmlu", num_fewshot=0, task_alias="mmlu_0shot"),
+            EvalTaskConfig("mmlu", num_fewshot=0, task_alias="mmlu_0shot"),
             # EvalTaskConfig("mmlu", num_fewshot=5, task_alias="mmlu_5shot"),
             # # 4-way multiple choice question answering task that requires multi-step reasoning
             # EvalTaskConfig("openbookqa", num_fewshot=0, task_alias="openbookqa_0shot"),
@@ -84,9 +87,9 @@ if __name__ == "__main__":
             # # Winograd Schema Challenge
             # EvalTaskConfig("wsc273", num_fewshot=0, task_alias="wsc273_0shot"),
             # # Winograd challenge, extended to more domains
-            EvalTaskConfig("winogrande", num_fewshot=0, task_alias="winogrande_0shot"),
+            # EvalTaskConfig("winogrande", num_fewshot=0, task_alias="winogrande_0shot"),
         ],
-        max_eval_instances=10,
+        max_eval_instances=1000,
         resource_config=resource_config,
         apply_chat_template=True,
     )
