@@ -235,7 +235,7 @@ class RolloutWorker:
         else:
             self._tokenizer = cast(PreTrainedTokenizer, self.config.model.tokenizer)
 
-        self._environment = load_environment_from_spec(config.environment_spec, tokenizer=self._tokenizer)
+        self._environment = load_environment_from_spec(config.environment_spec)
 
         logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
         self._transfer_client = create_weight_transfer_client(

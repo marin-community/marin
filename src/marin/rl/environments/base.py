@@ -14,8 +14,6 @@
 
 from abc import ABC, abstractmethod
 
-from levanter.compat.hf_checkpoints import HfTokenizer
-
 from marin.rl.types import InferenceContext, RolloutGroup
 
 
@@ -52,7 +50,7 @@ class MarinEnv(ABC):
         ...
 
 
-def load_environment_from_spec(env_spec: str, tokenizer: HfTokenizer) -> MarinEnv:
+def load_environment_from_spec(env_spec: str) -> MarinEnv:
     """Load environment from spec string."""
     print("Environment spec:", env_spec)
     env_name = env_spec.split(":")[0]
@@ -72,14 +70,14 @@ def load_environment_from_spec(env_spec: str, tokenizer: HfTokenizer) -> MarinEn
     if env_name == "math":
         from .math import MathEnvironment
 
-        return MathEnvironment(tokenizer=tokenizer, **env_args)
+        return MathEnvironment(**env_args)
     elif env_name == "mock":
         from .mock_env import MockEnv
 
-        return MockEnv(tokenizer=tokenizer, seed=seed, **env_args)
+        return MockEnv(seed=seed, **env_args)
     elif env_name == "prime_intellect":
         from .prime_intellect_env import PrimeIntellectEnv
 
-        return PrimeIntellectEnv(tokenizer=tokenizer, **env_args)
+        return PrimeIntellectEnv(**env_args)
     else:
         raise ValueError(f"Unknown environment spec: {env_spec}")

@@ -192,8 +192,7 @@ TASKS = {
 class MockEnv(MarinEnv):
     """Mock environment that generates synthetic data for testing."""
 
-    def __init__(self, tokenizer, task_type: str, seed=None, **kwargs):
-        self.tokenizer = tokenizer
+    def __init__(self, task_type: str, seed=None, **kwargs):
         self.task_type = task_type
 
         # Get the task instance for this task type

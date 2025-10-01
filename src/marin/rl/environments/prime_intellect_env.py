@@ -38,8 +38,7 @@ class PrimeIntellectEnv(MarinEnv):
 
     ENVS: ClassVar[dict[str, vf.Environment]] = {}
 
-    def __init__(self, tokenizer, env_id: str, output_dir_path: str | None = None, **kwargs):
-        self.tokenizer = tokenizer
+    def __init__(self, env_id: str, output_dir_path: str | None = None, **kwargs):
         self.env_id = env_id
         self.env_args = kwargs
         self._output_dir_path: str | None = None
@@ -109,8 +108,8 @@ class PrimeIntellectEnv(MarinEnv):
                 reward = result.reward[overall_idx] if overall_idx < len(result.reward) else 0.0
 
                 # Tokenize prompt and completion
-                prompt_tokens = self.tokenizer.encode(result.prompt[prompt_idx])
-                response_tokens = self.tokenizer.encode(completion)
+                prompt_tokens = inference_ctx.tokenizer.encode(result.prompt[prompt_idx])
+                response_tokens = inference_ctx.tokenizer.encode(completion)
 
                 # Create uniform reward and logprobs (verifiers doesn't give us token-level data)
                 token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
