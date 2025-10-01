@@ -15,6 +15,7 @@
 """Test helpers for creating minimal Levanter components for post-training tests."""
 
 import datetime
+import time
 from pathlib import Path
 from typing import ClassVar
 
@@ -32,17 +33,18 @@ from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
-from levanter.tracker.wandb import WandbConfig
+from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
 
 from marin.rl.environments.mock_env import MockEnv
+from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rollout_storage import (
     RolloutStorageConfig,
 )
-from marin.rl.rollout_types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
-from marin.rl.rollout_worker import RolloutWorkerConfig
-from marin.rl.train_worker import ReplayBufferConfig, TrainWorkerConfig
+from marin.rl.rollout_worker import RolloutWorkerConfig, find_open_port
+from marin.rl.train_worker import TrainWorkerConfig
+from marin.rl.types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
 from marin.rl.weight_transfer import WeightTransferConfig
 from marin.rl.weight_transfer.base import WeightTransferMode
 
@@ -200,7 +202,7 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
     """Create a minimal TrainerConfig for testing."""
     return TrainerConfig(
         # tracker=JsonLoggerConfig(),
-        tracker=WandbConfig(mode="disabled", project="marin-tests"),
+        tracker=NoopConfig(),
         mp=jmp.get_policy("p=f32"),
         train_batch_size=32,
         num_train_steps=1000,
@@ -262,7 +264,7 @@ def create_mock_environment(tokenizer=None):
     """Create a MockEnv instance for testing."""
     if tokenizer is None:
         tokenizer = DummyTokenizer()
-    return MockEnv(tokenizer=tokenizer, task_type="simple_addition", seed=42)
+    return MockEnv(tokenizer=tokenizer, task_type="cats", seed=42)
 
 
 def create_test_inference_server_config(model_config: LlamaConfig, output_dir: str | Path):
@@ -273,7 +275,7 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
             max_seqs=8, page_size=8, max_pages_per_seq=32, max_queued_tokens=8, enable_logprobs=True
         ),
         temperature=1.0,
-        port=27123,
+        port=find_open_port(),
     )
 
 
@@ -543,10 +545,8 @@ def create_rollout_batch(
         rollouts.append(rollout)
 
     # Group rollouts
-    group = RolloutGroup(key="cats_group", rollouts=rollouts)
+    group = RolloutGroup(rollouts=rollouts)
 
-    # Create batch with metadata
-    import time
-
-    metadata = RolloutMetadata(worker_id=worker_id, timestamp=time.time())
+    # Use a fixed large step number to ensure these batches are never discarded
+    metadata = RolloutMetadata(worker_id=worker_id, timestamp=time.time(), weight_step=10000)
     return RolloutBatch(groups=[group], metadata=metadata)

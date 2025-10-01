@@ -25,7 +25,7 @@ import haliax as hax
 import jax.numpy as jnp
 import numpy as np
 
-from .rollout_types import Rollout, RolloutWithAdvantage, TrainingBatch
+from .types import Rollout, RolloutWithAdvantage, TrainingBatch
 
 logger = logging.getLogger(__name__)
 

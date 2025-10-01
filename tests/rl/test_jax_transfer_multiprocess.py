@@ -142,10 +142,10 @@ def run_client(coordinator_name: str, process_id: int, num_processes: int, coord
     placeholder = create_sample_pytree(seed=0)
     for _ in range(10):
         logger.info("Attempting to receive weights...")
-        received_params = client.receive_weights(placeholder)
-        logger.info("Received weights: %s", received_params)
-        if received_params is not None:
-            params_received.append(received_params)
+        update = client.receive_weights(placeholder)
+        logger.info("Received weights: %s", update)
+        if update is not None:
+            params_received.append(update.model)
         time.sleep(1)
 
     # count unique weights received

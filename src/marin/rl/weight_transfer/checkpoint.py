@@ -24,7 +24,6 @@ import logging
 import os
 import threading
 from collections import deque
-from typing import Any
 
 import fsspec
 import jax
@@ -39,6 +38,7 @@ from .base import (
     WeightTransferConfig,
     WeightTransferServer,
     WeightTransferServerMetrics,
+    WeightUpdate,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,13 +125,19 @@ class GCSCheckpointClient(WeightTransferClient):
         self.latest_checkpoint_path = None
         self.metrics = WeightTransferClientMetrics()
 
-    def receive_weights(self, old_model: PyTree) -> Any:
+    def receive_weights(self, old_model: PyTree) -> WeightUpdate | None:
         """Load latest checkpoint using Levanter's checkpoint system."""
         self.metrics.total_polls += 1
-        latest_checkpoint = self._find_latest_checkpoint()
+        result = self._find_latest_checkpoint()
+
+        if result is None:
+            logger.info("No new checkpoint found.")
+            return None
+
+        latest_checkpoint, weight_step = result
 
         try:
-            if latest_checkpoint is None or latest_checkpoint == self.latest_checkpoint_path:
+            if latest_checkpoint == self.latest_checkpoint_path:
                 logger.info("No new checkpoint found.")
                 return None
 
@@ -151,9 +157,9 @@ class GCSCheckpointClient(WeightTransferClient):
         self.latest_checkpoint_path = latest_checkpoint
         self.metrics.successful_receives += 1
 
-        return params
+        return WeightUpdate(model=params, weight_id=weight_step)
 
-    def _find_latest_checkpoint(self) -> str | None:
+    def _find_latest_checkpoint(self) -> tuple[str, int] | None:
         """Find the latest checkpoint in the checkpoint directory."""
         logger.info(f"Search for new checkpoints in {self.config.checkpoint_dir}...")
         fs, path_in_fs = fsspec.core.url_to_fs(self.config.checkpoint_dir, use_listings_cache=False)
@@ -175,12 +181,12 @@ class GCSCheckpointClient(WeightTransferClient):
         if not checkpoint_dirs:
             return None
 
-        latest_dir = max(checkpoint_dirs, key=lambda x: x[0])[1]
+        step_num, latest_dir = max(checkpoint_dirs, key=lambda x: x[0])
         # Reconstruct full URL with original scheme
         if "://" in str(self.config.checkpoint_dir) and "://" not in latest_dir:
             scheme = self.config.checkpoint_dir.split("://")[0]
-            return f"{scheme}://{latest_dir}"
-        return latest_dir
+            return f"{scheme}://{latest_dir}", step_num
+        return latest_dir, step_num
 
     def cleanup(self) -> None:
         """No cleanup needed for GCS checkpoints."""

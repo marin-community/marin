@@ -24,7 +24,6 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 
 from jaxtyping import PyTree
 
@@ -56,6 +55,14 @@ class WeightTransferClientMetrics:
     fetch_time: float = 0
     decode_time: float = 0
     poll_time: float = 0
+
+
+@dataclass
+class WeightUpdate:
+    """Result of receiving weights from a weight transfer server."""
+
+    model: PyTree
+    weight_id: int
 
 
 @dataclass
@@ -106,15 +113,14 @@ class WeightTransferClient(ABC):
     """Abstract base class for weight transfer clients (inference worker side)."""
 
     @abstractmethod
-    def receive_weights(self, old_model: PyTree) -> Any:
+    def receive_weights(self, old_model: PyTree) -> WeightUpdate | None:
         """Receive weights from server.
 
         Args:
             old_model: Previous model for memory optimization (optional)
 
         Returns:
-            new_model or None if no update available.
-            new_model will be Levanter model parameters (PyTree of NamedArrays).
+            WeightUpdate containing the new model and weight_id if update available, None otherwise.
         """
         pass
 
