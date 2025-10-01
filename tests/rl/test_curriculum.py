@@ -479,3 +479,118 @@ def test_plateau_detection():
     # Insufficient data
     stats_insufficient = LessonStats(reward_history=[1.0] * 20)
     assert not is_plateaued(stats_insufficient, window=50, threshold=0.01)
+
+
+def test_graduation():
+    """Test that lessons graduate when mastered."""
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="easy_lesson",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "cats"},
+                ),
+                stop_threshold=0.9,
+            )
+        ]
+    )
+
+    curriculum = Curriculum(config)
+
+    # Initially not graduated
+    assert "easy_lesson" not in curriculum.graduated
+
+    # Set high performance but no eval data
+    for _ in range(50):
+        curriculum.stats["easy_lesson"].reward_history.append(0.95)
+    curriculum.stats["easy_lesson"].smoothed_success = 0.95
+    curriculum.stats["easy_lesson"].total_samples = 50
+
+    # Should not graduate without eval data
+    curriculum.update_graduated_lessons()
+    assert "easy_lesson" not in curriculum.graduated
+
+    # Add eval data showing high performance
+    curriculum.stats["easy_lesson"].eval_success = 0.95
+    curriculum.stats["easy_lesson"].eval_reward = 0.95
+    curriculum.stats["easy_lesson"].eval_step = 100
+    curriculum.current_step = 100
+
+    # Should graduate now
+    curriculum.update_graduated_lessons()
+    assert "easy_lesson" in curriculum.graduated
+
+
+def test_graduation_requires_plateau():
+    """Test that lessons don't graduate until plateaued."""
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="improving_lesson",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "cats"},
+                ),
+                stop_threshold=0.8,
+            )
+        ]
+    )
+
+    curriculum = Curriculum(config)
+
+    # Set improving performance (not plateaued)
+    for i in range(50):
+        curriculum.stats["improving_lesson"].reward_history.append(0.5 + i * 0.01)
+    curriculum.stats["improving_lesson"].smoothed_success = 0.9
+    curriculum.stats["improving_lesson"].eval_success = 0.9
+    curriculum.stats["improving_lesson"].eval_step = 50
+    curriculum.stats["improving_lesson"].total_samples = 50
+    curriculum.current_step = 50
+
+    # Should not graduate (still improving)
+    curriculum.update_graduated_lessons()
+    assert "improving_lesson" not in curriculum.graduated
+
+    # Add plateau
+    for _ in range(50):
+        curriculum.stats["improving_lesson"].reward_history.append(0.9)
+
+    # Now should graduate
+    curriculum.update_graduated_lessons()
+    assert "improving_lesson" in curriculum.graduated
+
+
+def test_graduated_lessons_excluded_from_weights():
+    """Test that graduated lessons are excluded from sampling weights."""
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="graduated",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "cats"},
+                ),
+            ),
+            LessonConfig(
+                lesson_name="active",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "addition"},
+                ),
+            ),
+        ]
+    )
+
+    curriculum = Curriculum(config)
+
+    # Mark first lesson as graduated
+    curriculum.graduated.add("graduated")
+
+    # Get weights
+    weights = curriculum.compute_sampling_weights()
+
+    # Only active lesson should have weight
+    assert "graduated" not in weights
+    assert "active" in weights
+    assert abs(weights["active"] - 1.0) < 0.01

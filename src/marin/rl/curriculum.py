@@ -322,6 +322,39 @@ class Curriculum:
             if self.check_dependencies(lesson_name):
                 self.unlocked.add(lesson_name)
 
+    def check_graduation(self, lesson_name: str) -> bool:
+        """Check if a lesson should graduate.
+
+        Args:
+            lesson_name: Name of the lesson to check.
+
+        Returns:
+            True if the lesson has reached stop threshold and plateaued.
+        """
+        lesson_config = self.lesson_configs[lesson_name]
+        stats = self.stats[lesson_name]
+
+        # Must have evaluation data to graduate
+        if stats.eval_step < 0:
+            return False
+
+        # Check if performance meets graduation threshold
+        success_rate = get_combined_success_rate(stats, self.current_step)
+        if success_rate < lesson_config.stop_threshold:
+            return False
+
+        # Check if performance has plateaued
+        if not is_plateaued(stats, window=lesson_config.plateau_window, threshold=lesson_config.plateau_threshold):
+            return False
+
+        return True
+
+    def update_graduated_lessons(self):
+        """Update which lessons have graduated (mastered and can be deprioritized)."""
+        for lesson_name in list(self.unlocked):
+            if lesson_name not in self.graduated and self.check_graduation(lesson_name):
+                self.graduated.add(lesson_name)
+
 
 def update_from_rollout(stats: LessonStats, rollout: Rollout, alpha: float = 0.1) -> LessonStats:
     """Update lesson statistics from a training rollout.
