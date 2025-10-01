@@ -53,7 +53,7 @@ from enum import Enum
 
 import fsspec
 
-from .rollout_types import RolloutBatch
+from .types import RolloutBatch
 
 logger = logging.getLogger(__name__)
 

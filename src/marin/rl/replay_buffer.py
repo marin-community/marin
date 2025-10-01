@@ -27,8 +27,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .rl_losses import compute_rloo_advantages
 from .rollout_storage import RolloutReader
-from .rollout_types import RolloutBatch, RolloutWithAdvantage
+from .types import RolloutBatch, RolloutWithAdvantage
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +37,28 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class ReplayBufferConfig:
+    """Configuration for the replay buffer."""
+
+    capacity: int = 10000
+    """Maximum number of examples per environment in the buffer."""
+
+    alpha: float = 3.0
+    """Recency bias for sampling, higher values favor newer examples."""
+
+    max_samples: int = 4
+    """Maximum number of times to use an example before retiring."""
+
+    max_rollout_delay: int = 1000
+    """Maximum age of rollouts in training steps."""
+
+
+@dataclass
 class RolloutWithCount(RolloutWithAdvantage):
     """Single rollout with precomputed RLOO advantage & usage count tracking."""
 
     usage_count: int = 0
+    weight_step: int = 0
 
 
 class ReplayBuffer:
@@ -52,39 +71,55 @@ class ReplayBuffer:
 
     def __init__(
         self,
+        config: ReplayBufferConfig,
         local_batch_size: int,
         process_id: int,
         total_processes: int,
-        recency_alpha: float,
-        capacity: int,
-        max_samples: int = -1,
     ):
         """Initialize replay buffer.
 
         Args:
-            capacity: Maximum number of examples to store per environment.
+            config: Configuration for buffer capacity, recency bias, and sampling limits.
             local_batch_size: Target size for training batches.
-            recency_alpha: Power law exponent for recency weighting (higher = more recent bias).
-            train_process_id: Identifier for this process. Used to sample across processes.
-            num_train_processes: Total number of training processes.
-            max_samples: Maximum number of times an example can be used before being retired.
-
-        A `max_samples` of -1 indicates no limit, 0 or 1 means each example is used at most once.
+            process_id: Identifier for this process. Used to sample across processes.
+            total_processes: Total number of training processes.
         """
-        self.capacity = capacity
+        self.capacity = config.capacity
         self.local_batch_size = local_batch_size
-        self.recency_alpha = recency_alpha
+        self.recency_alpha = config.alpha
         self.total_processes = total_processes
         self.process_id = process_id
-        self.max_samples = max_samples
+        self.max_samples = config.max_samples
+        self.max_rollout_delay = config.max_rollout_delay
 
         self.rollout_storage: dict[str, list[RolloutWithCount]] = {}
         self._lock = threading.Lock()
 
         self._total_batches_added = 0
         self._total_batches_sampled = 0
+        self._current_step: int = 0
 
         self._rng = np.random.default_rng(seed=process_id + 42)
+
+    def set_current_step(self, step: int) -> None:
+        """Set current training step and filter stale rollouts."""
+        self._current_step = step
+        min_step = step - self.max_rollout_delay
+
+        with self._lock:
+            total_removed = 0
+            for env_name in self.rollout_storage:
+                rollouts = self.rollout_storage[env_name]
+                before = len(rollouts)
+                self.rollout_storage[env_name] = [r for r in rollouts if r.weight_step >= min_step]
+                total_removed += before - len(self.rollout_storage[env_name])
+
+            total_remaining = sum(len(rollouts) for rollouts in self.rollout_storage.values())
+
+            if total_removed > 0:
+                logger.info(
+                    f"Filtered {total_removed} stale rollouts (min_step={min_step}), " f"{total_remaining} remaining"
+                )
 
     def _retire_overused_rollouts(self):
         """Remove rollouts that exceeded max_samples usage."""
@@ -105,11 +140,14 @@ class ReplayBuffer:
         env_examples: dict[str, list[RolloutWithCount]] = defaultdict(list)
         for batch in new_batches:
             self._total_batches_added += 1
+            weight_step = batch.metadata.weight_step
             for group in batch.groups:
                 # Compute RLOO advantages for the group
-                advantages = group.compute_rloo_advantages()
+                advantages = compute_rloo_advantages(group.rollouts)
                 for rollout, advantage in zip(group.rollouts, advantages, strict=True):
-                    individual = RolloutWithCount(rollout=rollout, advantage=advantage, usage_count=0)
+                    individual = RolloutWithCount(
+                        rollout=rollout, advantage=advantage, usage_count=0, weight_step=weight_step
+                    )
                     env_examples[rollout.env_name].append(individual)
 
         with self._lock:

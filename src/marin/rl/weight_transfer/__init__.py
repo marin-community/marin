@@ -33,6 +33,7 @@ from .base import (
     WeightTransferMode,
     WeightTransferServer,
     WeightTransferServerMetrics,
+    WeightUpdate,
 )
 from .checkpoint import GCSCheckpointClient, GCSCheckpointServer
 
@@ -122,6 +123,7 @@ __all__ = [
     "WeightTransferMode",
     "WeightTransferServer",
     "WeightTransferServerMetrics",
+    "WeightUpdate",
     "create_weight_transfer_client",
     "create_weight_transfer_server",
     "get_or_create_actor",

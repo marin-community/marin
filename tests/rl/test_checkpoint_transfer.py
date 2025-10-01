@@ -73,12 +73,13 @@ def test_find_latest_checkpoint_with_trailing_slashes(gcs_config):
             "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
         ),
     ):
-        latest_checkpoint = client._find_latest_checkpoint()
+        result = client._find_latest_checkpoint()
 
     # Should find step_40 (highest number) and reconstruct full GCS URL
     # Note: preserves trailing slash from original fs.ls() result
-    expected = "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_40/"
-    assert latest_checkpoint == expected
+    expected_path = "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_40/"
+    expected_step = 40
+    assert result == (expected_path, expected_step)
 
 
 def test_find_latest_checkpoint_without_trailing_slashes(gcs_config):
@@ -100,10 +101,11 @@ def test_find_latest_checkpoint_without_trailing_slashes(gcs_config):
             "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
         ),
     ):
-        latest_checkpoint = client._find_latest_checkpoint()
+        result = client._find_latest_checkpoint()
 
-    expected = "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_40"
-    assert latest_checkpoint == expected
+    expected_path = "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_40"
+    expected_step = 40
+    assert result == (expected_path, expected_step)
 
 
 def test_find_latest_checkpoint_mixed_formats(gcs_config):
@@ -126,11 +128,12 @@ def test_find_latest_checkpoint_mixed_formats(gcs_config):
             "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
         ),
     ):
-        latest_checkpoint = client._find_latest_checkpoint()
+        result = client._find_latest_checkpoint()
 
     # Should still find step_40 as the latest
-    expected = "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_40"
-    assert latest_checkpoint == expected
+    expected_path = "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_40"
+    expected_step = 40
+    assert result == (expected_path, expected_step)
 
 
 def test_find_latest_checkpoint_step_number_extraction(gcs_config):
@@ -152,12 +155,13 @@ def test_find_latest_checkpoint_step_number_extraction(gcs_config):
             "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
         ),
     ):
-        latest_checkpoint = client._find_latest_checkpoint()
+        result = client._find_latest_checkpoint()
 
     # Should find step_100 (highest number), not step_9
     # Note: preserves trailing slash from original fs.ls() result
-    expected = "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_100/"
-    assert latest_checkpoint == expected
+    expected_path = "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_100/"
+    expected_step = 100
+    assert result == (expected_path, expected_step)
 
 
 def test_find_latest_checkpoint_local_filesystem(local_config):
@@ -173,11 +177,12 @@ def test_find_latest_checkpoint_local_filesystem(local_config):
     ]
 
     with patch("fsspec.core.url_to_fs", return_value=(mock_fs, local_config.checkpoint_dir)):
-        latest_checkpoint = client._find_latest_checkpoint()
+        result = client._find_latest_checkpoint()
 
     # For local paths, no scheme reconstruction needed
-    expected = f"{local_config.checkpoint_dir}/step_10"
-    assert latest_checkpoint == expected
+    expected_path = f"{local_config.checkpoint_dir}/step_10"
+    expected_step = 10
+    assert result == (expected_path, expected_step)
 
 
 def test_find_latest_checkpoint_empty_directory(gcs_config):
@@ -195,9 +200,9 @@ def test_find_latest_checkpoint_empty_directory(gcs_config):
             "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
         ),
     ):
-        latest_checkpoint = client._find_latest_checkpoint()
+        result = client._find_latest_checkpoint()
 
-    assert latest_checkpoint is None
+    assert result is None
 
 
 def test_find_latest_checkpoint_nonexistent_directory(gcs_config):
@@ -214,9 +219,9 @@ def test_find_latest_checkpoint_nonexistent_directory(gcs_config):
             "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
         ),
     ):
-        latest_checkpoint = client._find_latest_checkpoint()
+        result = client._find_latest_checkpoint()
 
-    assert latest_checkpoint is None
+    assert result is None
 
 
 def test_find_latest_checkpoint_no_step_directories(gcs_config):
@@ -238,9 +243,9 @@ def test_find_latest_checkpoint_no_step_directories(gcs_config):
             "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
         ),
     ):
-        latest_checkpoint = client._find_latest_checkpoint()
+        result = client._find_latest_checkpoint()
 
-    assert latest_checkpoint is None
+    assert result is None
 
 
 def test_url_reconstruction_with_scheme(gcs_config):
@@ -260,11 +265,14 @@ def test_url_reconstruction_with_scheme(gcs_config):
             "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
         ),
     ):
-        latest_checkpoint = client._find_latest_checkpoint()
+        result = client._find_latest_checkpoint()
 
     # Should reconstruct with gs:// scheme
-    assert latest_checkpoint.startswith("gs://")
-    assert "step_42" in latest_checkpoint
+    assert result is not None
+    checkpoint_path, step_num = result
+    assert checkpoint_path.startswith("gs://")
+    assert "step_42" in checkpoint_path
+    assert step_num == 42
 
 
 def test_url_reconstruction_already_has_scheme(gcs_config):
@@ -285,13 +293,14 @@ def test_url_reconstruction_already_has_scheme(gcs_config):
             "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
         ),
     ):
-        latest_checkpoint = client._find_latest_checkpoint()
+        result = client._find_latest_checkpoint()
 
     # Should not have double gs:// prefix
-    assert (
-        latest_checkpoint == "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_42"
-    )
-    assert not latest_checkpoint.startswith("gs://gs://")
+    assert result is not None
+    checkpoint_path, step_num = result
+    assert checkpoint_path == "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_42"
+    assert not checkpoint_path.startswith("gs://gs://")
+    assert step_num == 42
 
 
 def test_step_parsing_with_very_large_numbers(gcs_config):
@@ -313,6 +322,9 @@ def test_step_parsing_with_very_large_numbers(gcs_config):
             "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
         ),
     ):
-        latest_checkpoint = client._find_latest_checkpoint()
+        result = client._find_latest_checkpoint()
 
-    assert "step_1000001" in latest_checkpoint
+    assert result is not None
+    checkpoint_path, step_num = result
+    assert "step_1000001" in checkpoint_path
+    assert step_num == 1000001

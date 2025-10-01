@@ -33,9 +33,10 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from transformers import AutoConfig, AutoTokenizer
 
+from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
-from marin.rl.train_worker import ReplayBufferConfig, TrainWorker, TrainWorkerConfig
+from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")

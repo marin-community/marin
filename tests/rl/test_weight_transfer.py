@@ -150,24 +150,26 @@ def test_multiple_weight_updates(ray_tpu_cluster, weight_transfer_config, sample
 
     # First weight transfer
     server.serve_weights(1, sample_params)
-    received_params_1 = client.receive_weights(sample_params)
-    assert received_params_1 is not None
+    update_1 = client.receive_weights(sample_params)
+    assert update_1 is not None
+    assert update_1.weight_id == 1
 
     # Second weight transfer with new params
     new_params = create_sample_pytree(seed=456)  # Different seed
     server.serve_weights(2, new_params)
-    received_params_2 = client.receive_weights(received_params_1)
-    assert received_params_2 is not None
+    update_2 = client.receive_weights(update_1.model)
+    assert update_2 is not None
+    assert update_2.weight_id == 2
 
     jax.tree.map(
         lambda x, y: np.testing.assert_array_equal(x, y),
-        received_params_2,
+        update_2.model,
         new_params,
     )
 
     # Third call should return None (no new weights)
-    received_params_3 = client.receive_weights(received_params_2)
-    assert received_params_3 is None
+    update_3 = client.receive_weights(update_2.model)
+    assert update_3 is None
 
     server.cleanup()
     client.cleanup()
@@ -187,16 +189,16 @@ def test_concurrent_clients(ray_tpu_cluster, weight_transfer_config, sample_para
         server.serve_weights(1, sample_params)
 
         # Both clients should receive the same weights
-        received_params_1 = client_1.receive_weights(sample_params)
-        received_params_2 = client_2.receive_weights(sample_params)
+        update_1 = client_1.receive_weights(sample_params)
+        update_2 = client_2.receive_weights(sample_params)
 
-        assert received_params_1 is not None
-        assert received_params_2 is not None
+        assert update_1 is not None
+        assert update_2 is not None
 
         jax.tree.map(
             lambda x, y: np.testing.assert_array_equal(x, y),
-            received_params_1,
-            received_params_2,
+            update_1.model,
+            update_2.model,
         )
 
     finally:
@@ -232,10 +234,10 @@ def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
         for i in range(10):
             print(i)
             server.serve_weights(i, large_params)
-            received_params = client.receive_weights(large_params)
+            update = client.receive_weights(large_params)
 
-            assert received_params is not None
-            assert isinstance(received_params, eqx.Module)
+            assert update is not None
+            assert isinstance(update.model, eqx.Module)
 
             print(client.get_metrics())
 
@@ -243,7 +245,7 @@ def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
         def assert_arrays_equal(x, y):
             np.testing.assert_array_equal(x, y)
 
-        jax.tree.map(assert_arrays_equal, large_params, received_params)
+        jax.tree.map(assert_arrays_equal, large_params, update.model)
     finally:
         server.cleanup()
         client.cleanup()

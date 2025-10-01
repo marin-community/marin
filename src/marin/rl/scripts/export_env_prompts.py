@@ -75,7 +75,7 @@ def export_environment_prompts(
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
     logger.info(f"Loading environment: {env_spec}")
-    env = load_environment_from_spec(env_spec, tokenizer)
+    env = load_environment_from_spec(env_spec)
 
     # Get examples from the environment
     if mode == "train":

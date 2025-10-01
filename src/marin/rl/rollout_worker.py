@@ -40,14 +40,15 @@ from levanter.utils.jax_utils import barrier_sync
 from openai import AsyncOpenAI
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
-from marin.rl.environments import EnvResponse, InferenceContext, load_environment_from_spec
+from marin.rl.environments import load_environment_from_spec
 from marin.rl.model_utils import load_model_from_checkpoint
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
-from .rollout_types import (
-    Rollout,
+from .types import (
+    InferenceChoice,
+    InferenceContext,
+    InferenceResponse,
     RolloutBatch,
-    RolloutGroup,
     RolloutMetadata,
 )
 from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_weight_transfer_client
@@ -128,7 +129,7 @@ class LevanterInferenceContext(InferenceContext):
         prompts: list[str],
         temperature: float,
         n_generations: int,
-    ) -> list[list[EnvResponse]]:
+    ) -> list[InferenceResponse]:
         """Generate responses for a batch of prompts."""
         stop_strings = None
         if self._stop_tokens is not None:
@@ -138,7 +139,7 @@ class LevanterInferenceContext(InferenceContext):
         asyncio.set_event_loop(loop)
         client = self.openai_client()
 
-        def _process_batch(batch_prompts: list[str]) -> list[list[dict]]:
+        def _process_batch(batch_prompts: list[str]) -> list[InferenceResponse]:
             batch_completions = []
 
             for prompt in batch_prompts:
@@ -157,8 +158,8 @@ class LevanterInferenceContext(InferenceContext):
             completions = loop.run_until_complete(asyncio.gather(*batch_completions, return_exceptions=True))
 
             batch_results = []
-            for completion in completions:
-                prompt_results = []
+            for prompt, completion in zip(batch_prompts, completions, strict=True):
+                choices = []
                 # drop responses that failed.
                 if isinstance(completion, Exception):
                     logger.error(f"Error during generation: {completion}")
@@ -167,8 +168,23 @@ class LevanterInferenceContext(InferenceContext):
                         content = choice.message.content
                         tokens = self.tokenizer.encode(content)
                         logprobs = [t.logprob for t in choice.logprobs.content]
-                        prompt_results.append(EnvResponse(tokens=np.array(tokens), logprobs=np.array(logprobs)))
-                batch_results.append(prompt_results)
+                        choices.append(
+                            InferenceChoice(
+                                response_text=content,
+                                response_tokens=np.array(tokens, dtype=np.int32),
+                                logprobs=np.array(logprobs, dtype=np.float32),
+                            )
+                        )
+
+                # Create InferenceResponse with prompt tokens
+                prompt_tokens = self.tokenizer.encode(prompt, add_special_tokens=True)
+                batch_results.append(
+                    InferenceResponse(
+                        prompt=prompt,
+                        prompt_tokens=np.array(prompt_tokens, dtype=np.int32),
+                        choices=choices,
+                    )
+                )
             return batch_results
 
         # Process prompts in batches to limit concurrent requests
@@ -211,6 +227,7 @@ class RolloutWorker:
         self._running = True
         self._shutdown_complete = threading.Event()
         self._shutdown_condition = threading.Condition()
+        self._current_weight_step: int = 0
 
         # for testing, we accept a tokenizer instance or a string
         if isinstance(self.config.model.tokenizer, str):
@@ -218,7 +235,7 @@ class RolloutWorker:
         else:
             self._tokenizer = cast(PreTrainedTokenizer, self.config.model.tokenizer)
 
-        self._environment = load_environment_from_spec(config.environment_spec, tokenizer=self._tokenizer)
+        self._environment = load_environment_from_spec(config.environment_spec)
 
         logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
         self._transfer_client = create_weight_transfer_client(
@@ -261,9 +278,11 @@ class RolloutWorker:
             key=key,
         )
 
-        self._policy_model = self._transfer_client.receive_weights(initial_model)
-        if self._policy_model:
+        update = self._transfer_client.receive_weights(initial_model)
+        if update:
             logger.info("Loaded initial policy model from weight transfer")
+            self._policy_model = update.model
+            self._current_weight_step = update.weight_id
         else:
             logger.info("Initializing policy model from initial checkpoint")
             self._policy_model = initial_model
@@ -273,6 +292,7 @@ class RolloutWorker:
         """Stop the inference worker loop and server."""
         with self._shutdown_condition:
             self._running = False
+            self._transfer_client.cleanup()
             self._shutdown_condition.notify()
 
         # Wait for the main loop to finish
@@ -283,7 +303,6 @@ class RolloutWorker:
             self._inference_server.shutdown()
 
     def _generate_rollout_batch(self, rng) -> tuple[RolloutBatch | None, dict | None]:
-        """Generate rollout batches directly from environment without using rl_dataset."""
         barrier_sync()
 
         # Create policy inference context for sampling from the inference server
@@ -298,38 +317,15 @@ class RolloutWorker:
             self.config.trainer.device_mesh,
             hax.axis_mapping(self.config.trainer.compute_axis_mapping),
         ):
-            env_step = self._environment.step(
+            # Sample examples, generate responses, and create rollouts
+            rollout_groups, metrics = self._environment.sample(
                 inference_ctx=policy_ctx,
                 n_examples=self.config.n_prompts_per_step,
-                prng_key=rng,
-                mode="train",
                 n_generations=self.config.n_generations,
                 temperature=self.config.temperature,
+                prng_key=rng,
+                mode="train",
             )
-
-        rollout_groups: list[RolloutGroup] = []
-        for i, response in enumerate(env_step.responses):
-            rewards = env_step.rewards[i]
-            group = RolloutGroup(key=f"example_{i}", rollouts=[])
-            prompt = env_step.examples[i]["prompt"]
-            # answer = env_step.examples[i]["answer"]
-            prompt_tokens = self._tokenizer.encode(prompt, add_special_tokens=True)[-self.config.max_input_length :]
-
-            for j in range(len(response)):
-                rollout = Rollout(
-                    env_name=self.config.environment_spec,
-                    env_example_id=f"example_{i}",
-                    prompt_tokens=np.array(prompt_tokens, dtype=np.int32),
-                    response_tokens=np.array(response[j]["tokens"], dtype=np.int32),
-                    response_logprobs=response[j]["logprobs"],
-                    token_rewards=np.array([rewards[j]] * len(response[j]["tokens"]), dtype=np.float32),
-                    episode_reward=rewards[j],
-                )
-                group.rollouts.append(rollout)
-
-            # ignore empty groups
-            if len(group.rollouts) > 0:
-                rollout_groups.append(group)
 
         if len(rollout_groups) == 0:
             logger.warning("No valid rollouts generated in this batch, retrying...")
@@ -337,23 +333,28 @@ class RolloutWorker:
 
         rollout_batch = RolloutBatch(
             groups=rollout_groups,
-            metadata=RolloutMetadata(worker_id=f"{socket.gethostname()}_{os.getpid()}", timestamp=time.time()),
+            metadata=RolloutMetadata(
+                worker_id=f"{socket.gethostname()}_{os.getpid()}",
+                timestamp=time.time(),
+                weight_step=self._current_weight_step,
+            ),
         )
 
         barrier_sync()
-        return rollout_batch, env_step.metrics
+        return rollout_batch, metrics
 
     def _sync_weights(self):
         logger.info("Checking for new weights...")
-        weights = self._transfer_client.receive_weights(self._policy_model)
+        update = self._transfer_client.receive_weights(self._policy_model)
 
-        if weights:
-            logger.info("Received new weights for policy model")
-            self._policy_model = weights
+        if update:
+            self._current_weight_step = update.weight_id
+            logger.info(f"Received new weights from step {update.weight_id}")
+            self._policy_model = update.model
             self._inference_server.reload(lambda model: self._policy_model)
-            return weights
+            return update.model
         else:
-            logger.info("No new weights available for policy model")
+            logger.info("No new weights available")
             return None
 
     def run(self):
@@ -361,7 +362,9 @@ class RolloutWorker:
         logger.info("Starting inference worker...")
 
         step = 0
-        rng = jax.random.PRNGKey(0)
+        seed = 0
+        logger.info(f"Starting rollout worker with seed {seed}")
+        rng = jax.random.PRNGKey(seed)
 
         last_weight_check = time.time()
 

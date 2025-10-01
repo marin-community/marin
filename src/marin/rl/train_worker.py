@@ -20,6 +20,7 @@ rollout workers, and periodically dumps new checkpoints to disk. These
 checkpoints are read by the rollout workers to update their models.
 """
 
+import dataclasses
 import logging
 from dataclasses import dataclass
 
@@ -36,26 +37,12 @@ from marin.rl import weight_transfer
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.weight_transfer import WeightTransferConfig
 
-from .replay_buffer import ReplayBuffer, ReplayDataLoader
+from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader
 from .rl_losses import rloo_loss_with_importance_sampling
 from .rollout_storage import RolloutStorageConfig
 from .train_batch import create_training_batch_from_rollouts
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ReplayBufferConfig:
-    """Configuration for the replay buffer."""
-
-    capacity: int = 10000
-    """Maximum number of examples per environment in the buffer."""
-
-    alpha: float = 3.0
-    """Recency bias for sampling, higher values favor newer examples."""
-
-    max_samples: int = 4
-    """Maximum number of times to use an example before retiring."""
 
 
 @dataclass
@@ -167,11 +154,10 @@ class TrainWorker:
         self.rollout_reader = config.rollout_storage.create_reader()
 
         self.replay_buffer = ReplayBuffer(
+            config=config.replay_buffer,
+            local_batch_size=config.trainer.train_batch_size,
             process_id=jax.process_index(),
             total_processes=jax.process_count(),
-            capacity=config.replay_buffer.capacity,
-            local_batch_size=config.trainer.train_batch_size,
-            recency_alpha=config.replay_buffer.alpha,
         )
 
         self.replay_loader = ReplayDataLoader(
@@ -252,12 +238,17 @@ class TrainWorker:
 
     def _configure_training_hooks(self, trainer):
         def _weight_transfer_hook(info: levanter.callbacks.StepInfo):
-            self.weight_transfer_hook(info)
+            self.weight_transfer_hook(trainer, info)
 
         trainer.add_hook(
             _weight_transfer_hook,
             every=self.config.weight_transfer.sync_interval_steps,
         )
+
+        def _update_current_step(info: levanter.callbacks.StepInfo):
+            self.replay_buffer.set_current_step(info.step)
+
+        trainer.add_hook(_update_current_step, every=1)
 
         def _stop_on_signal(info: levanter.callbacks.StepInfo):
             if self._should_stop:
@@ -265,7 +256,7 @@ class TrainWorker:
 
         trainer.add_hook(_stop_on_signal, every=1)
 
-    def weight_transfer_hook(self, info: levanter.callbacks.StepInfo):
+    def weight_transfer_hook(self, trainer: Trainer, info: levanter.callbacks.StepInfo):
         step = info.step
         state = info.state
 
@@ -277,8 +268,13 @@ class TrainWorker:
 
         model_params = state.model
         self.transfer_server.serve_weights(step, model_params)
+        metrics = {
+            f"train.weight_transfer.{k}": v for k, v in dataclasses.asdict(self.transfer_server.get_metrics()).items()
+        }
+        trainer.tracker.log(metrics, step=step)
         logger.info(f"Successfully transferred weights with ID {step}")
 
     def stop(self):
         """Stop the training worker."""
         self._should_stop = True
+        self.transfer_server.cleanup()
