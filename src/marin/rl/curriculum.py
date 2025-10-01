@@ -20,7 +20,9 @@ environment sampling based on performance, managing dependencies between
 lessons and tracking progress to maximize learning efficiency.
 """
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -124,8 +126,17 @@ class CurriculumConfig:
     eval_frequency: int = 1000
     """How often to run evaluation (in rollout worker steps)."""
 
+    eval_n_examples: int = 8
+    """Number of examples to use for each lesson during evaluation."""
+
+    eval_n_generations: int = 4
+    """Number of generations per example during evaluation."""
+
     temperature: float = 1.0
     """Temperature for sampling weight distribution."""
+
+    checkpoint_dir: str | None = None
+    """Directory for saving curriculum checkpoints. If None, checkpointing is disabled."""
 
 
 def _validate_dependencies(lesson_configs: dict[str, LessonConfig]):
@@ -220,7 +231,8 @@ class Curriculum:
         """Compute sampling weights for all active lessons.
 
         Uses quadratic weighting that peaks at intermediate success rates,
-        with sigmoid smoothing at boundaries and minimum probability guarantees.
+        with sigmoid smoothing at boundaries, exploration bonuses for new
+        lessons, and minimum probability guarantees.
 
         Returns:
             Dictionary mapping lesson names to sampling probabilities.
@@ -252,7 +264,9 @@ class Curriculum:
             if stats.total_samples == 0:
                 weights[name] = config.initial_weight
             else:
-                weights[name] = max(base_weight, min_prob)
+                # Apply exploration bonus for new lessons (decays to 1.0 after ~100 samples)
+                exploration_bonus = 1.0 + np.exp(-0.03 * stats.total_samples)
+                weights[name] = max(base_weight * exploration_bonus, min_prob)
 
         # Renormalize
         total = sum(weights.values())
@@ -354,6 +368,88 @@ class Curriculum:
         for lesson_name in list(self.unlocked):
             if lesson_name not in self.graduated and self.check_graduation(lesson_name):
                 self.graduated.add(lesson_name)
+
+    def save_checkpoint(self, filename: str = "curriculum_state.json"):
+        """Save curriculum state to disk as JSON.
+
+        Args:
+            filename: Name of the checkpoint file (saved in checkpoint_dir from config).
+
+        Raises:
+            ValueError: If checkpoint_dir is not configured.
+        """
+        if self.config.checkpoint_dir is None:
+            raise ValueError("Cannot save checkpoint: checkpoint_dir not configured")
+
+        checkpoint_dir = Path(self.config.checkpoint_dir)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_path = checkpoint_dir / filename
+
+        checkpoint_data = {
+            "lesson_configs": {
+                name: {
+                    "lesson_name": config.lesson_name,
+                    "env_config": {
+                        "env_class": config.env_config.env_class,
+                        "env_args": config.env_config.env_args,
+                    },
+                    "dependencies": [
+                        {"dependency_name": dep.dependency_name, "reward_threshold": dep.reward_threshold}
+                        for dep in config.dependencies
+                    ],
+                    "initial_weight": config.initial_weight,
+                    "start_threshold": config.start_threshold,
+                    "stop_threshold": config.stop_threshold,
+                    "plateau_window": config.plateau_window,
+                    "plateau_threshold": config.plateau_threshold,
+                }
+                for name, config in self.lesson_configs.items()
+            },
+            "stats": {name: stats.to_dict() for name, stats in self.stats.items()},
+            "unlocked": list(self.unlocked),
+            "graduated": list(self.graduated),
+            "current_step": self.current_step,
+        }
+
+        with open(checkpoint_path, "w") as f:
+            json.dump(checkpoint_data, f, indent=2)
+
+    @classmethod
+    def load_checkpoint(cls, config: CurriculumConfig, filename: str = "curriculum_state.json") -> "Curriculum":
+        """Restore curriculum from checkpoint.
+
+        Args:
+            config: Curriculum configuration (must match checkpoint structure).
+            filename: Name of the checkpoint file to load.
+
+        Returns:
+            Curriculum instance with restored state.
+
+        Raises:
+            ValueError: If checkpoint_dir is not configured or checkpoint doesn't exist.
+        """
+        if config.checkpoint_dir is None:
+            raise ValueError("Cannot load checkpoint: checkpoint_dir not configured")
+
+        checkpoint_path = Path(config.checkpoint_dir) / filename
+        if not checkpoint_path.exists():
+            raise ValueError(f"Checkpoint file not found: {checkpoint_path}")
+
+        with open(checkpoint_path) as f:
+            checkpoint_data = json.load(f)
+
+        # Create curriculum from config
+        curriculum = cls(config)
+
+        # Restore state
+        curriculum.stats = {
+            name: LessonStats.from_dict(stats_dict) for name, stats_dict in checkpoint_data["stats"].items()
+        }
+        curriculum.unlocked = set(checkpoint_data["unlocked"])
+        curriculum.graduated = set(checkpoint_data["graduated"])
+        curriculum.current_step = checkpoint_data["current_step"]
+
+        return curriculum
 
 
 def update_from_rollout(stats: LessonStats, rollout: Rollout, alpha: float = 0.1) -> LessonStats:

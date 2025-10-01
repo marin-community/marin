@@ -281,24 +281,41 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
 
 
 def create_nano_rollout_worker_config(
-    output_dir: str, rollout_storage: RolloutStorageConfig, environment=None
+    output_dir: str, rollout_storage: RolloutStorageConfig, curriculum_config=None
 ) -> RolloutWorkerConfig:
-    """Create a minimal RolloutWorkerConfig for testing."""
+    """Create a minimal RolloutWorkerConfig for testing.
+
+    Args:
+        output_dir: Directory for outputs
+        rollout_storage: Rollout storage configuration
+        curriculum_config: Optional curriculum config. If None, creates single-lesson curriculum.
+    """
+    from marin.rl.curriculum import CurriculumConfig, LessonConfig
+
     model_config = create_nano_llama_config()
     inference_server_config = create_test_inference_server_config(model_config, output_dir)
 
-    if environment is None:
-        # Use the DummyTokenizer for the mock environment
-        environment = create_mock_environment(tokenizer=DummyTokenizer())
+    # Create default single-lesson curriculum if not provided
+    if curriculum_config is None:
+        curriculum_config = CurriculumConfig(
+            lessons=[
+                LessonConfig(
+                    lesson_name="cats",
+                    env_config=EnvConfig(
+                        env_class="marin.rl.environments.mock_env.MockEnv",
+                        env_args={"task_type": "cats", "seed": 42},
+                    ),
+                )
+            ],
+            eval_frequency=1000,
+        )
 
     return RolloutWorkerConfig(
         run_id="test-0",
         trainer=create_nano_trainer_config(output_dir),
         inference_server_config=inference_server_config,
         model=model_config,
-        environment_spec=EnvConfig(
-            env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "cats", "seed": 42}
-        ),
+        curriculum_config=curriculum_config,
         rollout_storage=rollout_storage,
         max_input_length=8,
         max_output_length=8,

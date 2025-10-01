@@ -40,7 +40,7 @@ from levanter.utils.jax_utils import barrier_sync
 from openai import AsyncOpenAI
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
-from marin.rl.environments import EnvConfig, load_environment_from_spec
+from marin.rl.curriculum import Curriculum, CurriculumConfig, update_from_rollout
 from marin.rl.model_utils import load_model_from_checkpoint
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
@@ -64,7 +64,7 @@ class RolloutWorkerConfig:
 
     trainer: TrainerConfig
     model: LmConfig
-    environment_spec: EnvConfig
+    curriculum_config: "CurriculumConfig"  # type: ignore
     rollout_storage: RolloutStorageConfig
     max_input_length: int
     max_output_length: int
@@ -235,7 +235,8 @@ class RolloutWorker:
         else:
             self._tokenizer = cast(PreTrainedTokenizer, self.config.model.tokenizer)
 
-        self._environment = load_environment_from_spec(config.environment_spec)
+        # Initialize curriculum
+        self.curriculum = Curriculum(config.curriculum_config)
 
         logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
         self._transfer_client = create_weight_transfer_client(
@@ -305,6 +306,11 @@ class RolloutWorker:
     def _generate_rollout_batch(self, rng) -> tuple[RolloutBatch | None, dict | None]:
         barrier_sync()
 
+        # Sample lesson from curriculum
+        rng, lesson_rng = jrandom.split(rng)
+        lesson_name, env = self.curriculum.sample_lesson(lesson_rng)
+        logger.info(f"Sampled lesson '{lesson_name}' from curriculum")
+
         # Create policy inference context for sampling from the inference server
         policy_ctx = LevanterInferenceContext(
             tokenizer=self._tokenizer,
@@ -317,8 +323,8 @@ class RolloutWorker:
             self.config.trainer.device_mesh,
             hax.axis_mapping(self.config.trainer.compute_axis_mapping),
         ):
-            # Sample examples, generate responses, and create rollouts
-            rollout_groups, metrics = self._environment.sample(
+            # Sample examples, generate responses, and create rollouts from selected lesson
+            rollout_groups, metrics = env.sample(
                 inference_ctx=policy_ctx,
                 n_examples=self.config.n_prompts_per_step,
                 n_generations=self.config.n_generations,
@@ -330,6 +336,24 @@ class RolloutWorker:
         if len(rollout_groups) == 0:
             logger.warning("No valid rollouts generated in this batch, retrying...")
             return None, None
+
+        # Update curriculum stats from rollouts
+        for group in rollout_groups:
+            for rollout in group.rollouts:
+                # Extract lesson name from rollout.env_name
+                # env_name format: "mock:cats" or similar
+                env_name_parts = rollout.env_name.split(":", 1)
+                rollout_lesson = env_name_parts[1] if len(env_name_parts) > 1 else env_name_parts[0]
+
+                if rollout_lesson in self.curriculum.stats:
+                    self.curriculum.stats[rollout_lesson] = update_from_rollout(
+                        self.curriculum.stats[rollout_lesson], rollout
+                    )
+
+        # Update curriculum state
+        self.curriculum.step()
+        self.curriculum.update_unlocked_lessons()
+        self.curriculum.update_graduated_lessons()
 
         rollout_batch = RolloutBatch(
             groups=rollout_groups,
@@ -357,6 +381,61 @@ class RolloutWorker:
             logger.info("No new weights available")
             return None
 
+    def _evaluate_curriculum(self, rng):
+        """Evaluate all unlocked, non-graduated lessons and update eval metrics."""
+        barrier_sync()
+
+        active_lessons = self.curriculum.unlocked - self.curriculum.graduated
+        if not active_lessons:
+            logger.info("No active lessons to evaluate")
+            return
+
+        logger.info(f"Evaluating {len(active_lessons)} active lessons")
+
+        # Create inference context
+        policy_ctx = LevanterInferenceContext(
+            tokenizer=self._tokenizer,
+            inference_server=self._inference_server,
+            max_tokens=self.config.max_input_length + self.config.max_output_length,
+            stop_tokens=self.config.stop_tokens,
+        )
+
+        for lesson_name in active_lessons:
+            env = self.curriculum.environments[lesson_name]
+            rng, eval_rng = jrandom.split(rng)
+
+            with (
+                self.config.trainer.device_mesh,
+                hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+            ):
+                # Sample eval rollouts
+                rollout_groups, metrics = env.sample(
+                    inference_ctx=policy_ctx,
+                    n_examples=self.config.curriculum_config.eval_n_examples,
+                    n_generations=self.config.curriculum_config.eval_n_generations,
+                    temperature=self.config.temperature,
+                    prng_key=eval_rng,
+                    mode="eval",
+                )
+
+            # Update eval metrics
+            if rollout_groups:
+                success_count = sum(1 for g in rollout_groups for r in g.rollouts if r.episode_reward > 0)
+                reward_sum = sum(r.episode_reward for g in rollout_groups for r in g.rollouts)
+                total_count = sum(len(g.rollouts) for g in rollout_groups)
+
+                if total_count > 0:
+                    self.curriculum.stats[lesson_name].eval_success = success_count / total_count
+                    self.curriculum.stats[lesson_name].eval_reward = reward_sum / total_count
+                    self.curriculum.stats[lesson_name].eval_step = self.curriculum.current_step
+
+                    logger.info(
+                        f"Eval {lesson_name}: success={success_count}/{total_count} "
+                        f"({100*success_count/total_count:.1f}%), reward={reward_sum/total_count:.3f}"
+                    )
+
+        barrier_sync()
+
     def run(self):
         """Main inference worker loop."""
         logger.info("Starting inference worker...")
@@ -378,6 +457,11 @@ class RolloutWorker:
             if time.time() - last_weight_check > self.config.weight_transfer.poll_interval_seconds:
                 self._sync_weights()
                 last_weight_check = time.time()
+
+            # Periodic curriculum evaluation
+            if step > 0 and step % self.config.curriculum_config.eval_frequency == 0:
+                rng, eval_rng = jrandom.split(rng)
+                self._evaluate_curriculum(eval_rng)
 
             rng, input_rng = jax.random.split(rng)
             logger.info("Generating rollout batch...")

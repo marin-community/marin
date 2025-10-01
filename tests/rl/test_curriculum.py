@@ -594,3 +594,262 @@ def test_graduated_lessons_excluded_from_weights():
     assert "graduated" not in weights
     assert "active" in weights
     assert abs(weights["active"] - 1.0) < 0.01
+
+
+def test_exploration_bonus_for_new_lessons():
+    """Test that new lessons receive exploration bonus."""
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="new_lesson",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "cats"},
+                ),
+            ),
+            LessonConfig(
+                lesson_name="experienced_lesson",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "addition"},
+                ),
+            ),
+        ]
+    )
+
+    curriculum = Curriculum(config)
+
+    # Set both lessons to same success rate (0.5) but different sample counts
+    curriculum.stats["new_lesson"].smoothed_success = 0.5
+    curriculum.stats["new_lesson"].total_samples = 10  # New lesson
+    curriculum.stats["experienced_lesson"].smoothed_success = 0.5
+    curriculum.stats["experienced_lesson"].total_samples = 150  # Experienced
+
+    weights = curriculum.compute_sampling_weights()
+
+    # New lesson should have higher weight due to exploration bonus
+    assert weights["new_lesson"] > weights["experienced_lesson"]
+
+
+def test_exploration_bonus_decay():
+    """Test that exploration bonus decays with increasing samples."""
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="varying_lesson",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "cats"},
+                ),
+            ),
+            LessonConfig(
+                lesson_name="reference_lesson",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "addition"},
+                ),
+            ),
+        ]
+    )
+
+    curriculum = Curriculum(config)
+
+    # Keep reference lesson constant with many samples
+    curriculum.stats["reference_lesson"].smoothed_success = 0.5
+    curriculum.stats["reference_lesson"].total_samples = 500
+
+    # Track how varying_lesson's weight changes relative to reference
+    sample_counts = [1, 10, 50, 100, 200]
+    relative_weights = []
+
+    for count in sample_counts:
+        curriculum.stats["varying_lesson"].smoothed_success = 0.5
+        curriculum.stats["varying_lesson"].total_samples = count
+        weight_dict = curriculum.compute_sampling_weights()
+        # Track ratio of varying to reference
+        relative_weights.append(weight_dict["varying_lesson"] / weight_dict["reference_lesson"])
+
+    # Relative weight should decrease as samples increase (bonus decays)
+    assert relative_weights[0] > relative_weights[1]
+    assert relative_weights[1] > relative_weights[2]
+
+
+def test_exploration_bonus_converges():
+    """Test that exploration bonus converges to minimal effect at high sample counts."""
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="lesson1",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "cats"},
+                ),
+            ),
+            LessonConfig(
+                lesson_name="lesson2",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "addition"},
+                ),
+            ),
+        ]
+    )
+
+    curriculum = Curriculum(config)
+
+    # Both lessons with high sample counts should have similar weights
+    curriculum.stats["lesson1"].smoothed_success = 0.5
+    curriculum.stats["lesson1"].total_samples = 500
+    curriculum.stats["lesson2"].smoothed_success = 0.5
+    curriculum.stats["lesson2"].total_samples = 600
+
+    weights = curriculum.compute_sampling_weights()
+
+    # Weights should be very similar (exploration bonus is negligible)
+    assert abs(weights["lesson1"] - weights["lesson2"]) < 0.05
+
+
+def test_checkpoint_save_and_load(tmp_path):
+    """Test that curriculum state can be saved and restored."""
+    checkpoint_dir = tmp_path / "checkpoints"
+
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="lesson1",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "cats"},
+                ),
+            ),
+            LessonConfig(
+                lesson_name="lesson2",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "addition"},
+                ),
+                dependencies=[LessonDependency(dependency_name="lesson1", reward_threshold=0.5)],
+            ),
+        ],
+        checkpoint_dir=str(checkpoint_dir),
+    )
+
+    # Create curriculum and modify state
+    curriculum = Curriculum(config)
+    curriculum.current_step = 42
+    curriculum.stats["lesson1"].smoothed_success = 0.7
+    curriculum.stats["lesson1"].smoothed_reward = 0.8
+    curriculum.stats["lesson1"].total_samples = 100
+    curriculum.stats["lesson1"].eval_success = 0.75
+    curriculum.stats["lesson1"].eval_step = 40
+    curriculum.unlocked.add("lesson2")
+
+    # Save checkpoint
+    curriculum.save_checkpoint()
+
+    # Create new curriculum and load checkpoint
+    restored = Curriculum.load_checkpoint(config)
+
+    # Verify all state was restored
+    assert restored.current_step == 42
+    assert restored.stats["lesson1"].smoothed_success == 0.7
+    assert restored.stats["lesson1"].smoothed_reward == 0.8
+    assert restored.stats["lesson1"].total_samples == 100
+    assert restored.stats["lesson1"].eval_success == 0.75
+    assert restored.stats["lesson1"].eval_step == 40
+    assert "lesson1" in restored.unlocked
+    assert "lesson2" in restored.unlocked
+
+
+def test_checkpoint_without_checkpoint_dir():
+    """Test that checkpointing fails gracefully when checkpoint_dir is not configured."""
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="lesson1",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "cats"},
+                ),
+            )
+        ],
+        checkpoint_dir=None,
+    )
+
+    curriculum = Curriculum(config)
+
+    # Should raise ValueError when trying to save
+    with pytest.raises(ValueError, match="checkpoint_dir not configured"):
+        curriculum.save_checkpoint()
+
+    # Should raise ValueError when trying to load
+    with pytest.raises(ValueError, match="checkpoint_dir not configured"):
+        Curriculum.load_checkpoint(config)
+
+
+def test_checkpoint_preserves_reward_history(tmp_path):
+    """Test that reward history is preserved through checkpoint."""
+    checkpoint_dir = tmp_path / "checkpoints"
+
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="lesson",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "cats"},
+                ),
+            )
+        ],
+        checkpoint_dir=str(checkpoint_dir),
+    )
+
+    curriculum = Curriculum(config)
+
+    # Add reward history
+    curriculum.stats["lesson"].reward_history = [0.1, 0.2, 0.3, 0.4, 0.5]
+    curriculum.stats["lesson"].total_samples = 5
+
+    # Save and restore
+    curriculum.save_checkpoint()
+    restored = Curriculum.load_checkpoint(config)
+
+    # Verify reward history
+    assert restored.stats["lesson"].reward_history == [0.1, 0.2, 0.3, 0.4, 0.5]
+    assert restored.stats["lesson"].total_samples == 5
+
+
+def test_checkpoint_graduated_lessons(tmp_path):
+    """Test that graduated lessons are preserved through checkpoint."""
+    checkpoint_dir = tmp_path / "checkpoints"
+
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="lesson1",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "cats"},
+                ),
+            ),
+            LessonConfig(
+                lesson_name="lesson2",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "addition"},
+                ),
+            ),
+        ],
+        checkpoint_dir=str(checkpoint_dir),
+    )
+
+    curriculum = Curriculum(config)
+    curriculum.graduated.add("lesson1")
+
+    # Save and restore
+    curriculum.save_checkpoint()
+    restored = Curriculum.load_checkpoint(config)
+
+    # Verify graduation state
+    assert "lesson1" in restored.graduated
+    assert "lesson2" not in restored.graduated
