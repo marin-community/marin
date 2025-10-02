@@ -14,6 +14,7 @@
 
 """Tests for adaptive curriculum learning system."""
 
+import jax
 import numpy as np
 import pytest
 
@@ -96,7 +97,7 @@ def test_single_lesson_curriculum():
     assert abs(weights["only_lesson"] - 1.0) < 0.01
 
     # Should be able to sample
-    lesson_name = curriculum.sample_lesson(prng_seed=0)
+    lesson_name = curriculum.sample_lesson(prng_key=jax.random.PRNGKey(0))
     assert lesson_name == "only_lesson"
 
 
@@ -184,7 +185,7 @@ def test_sampling_distribution():
     # Sample many times and check distribution
     samples = []
     for i in range(1000):
-        lesson_name = curriculum.sample_lesson(prng_seed=i)
+        lesson_name = curriculum.sample_lesson(prng_key=jax.random.PRNGKey(i))
         samples.append(lesson_name)
 
     # Count samples

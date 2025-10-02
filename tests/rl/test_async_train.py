@@ -188,10 +188,11 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
 
         self.worker._sync_weights = sync_and_track
 
-        original_generate_batch = self.worker._generate_rollout_batch
+        original_sample_batch = self.worker._sample_batch
 
-        def counting_generate_batch(rng, step):
-            batch_data, metrics = original_generate_batch(rng, step)
+        # rollout_batch, metrics = self._sample_batch(lesson_id, mode="train", rng=input_rng, step=step)
+        def counting_sample_batch(lesson_id, mode, rng):
+            batch_data, metrics = original_sample_batch(lesson_id, mode=mode, rng=rng)
             if batch_data is None:
                 return None, None
             self._track_rollout_generation()
@@ -199,7 +200,7 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
             metrics["rollout_number"] = self.rollouts_generated
             return batch_data, metrics
 
-        self.worker._generate_rollout_batch = counting_generate_batch
+        self.worker._sample_batch = counting_sample_batch
 
         # Run the worker normally
         self.worker.run()

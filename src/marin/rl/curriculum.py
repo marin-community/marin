@@ -355,11 +355,11 @@ class Curriculum:
         weights = {k: v / total for k, v in weights.items()}
         return weights
 
-    def sample_lesson(self, prng_seed: int) -> str:
+    def sample_lesson(self, prng_key: jax.Array) -> str:
         """Sample a lesson for training based on current weights.
 
         Args:
-            prng_seed: Random seed for sampling.
+            prng_key: Random key for sampling.
 
         Returns:
             Lesson ID string.
@@ -370,9 +370,6 @@ class Curriculum:
 
         lesson_ids = list(weights.keys())
         probs = jnp.array([weights[lesson_id] for lesson_id in lesson_ids])
-
-        # Sample lesson
-        prng_key = jax.random.PRNGKey(prng_seed)
         idx = jax.random.choice(prng_key, len(lesson_ids), p=probs)
         lesson_id = lesson_ids[int(idx)]
 

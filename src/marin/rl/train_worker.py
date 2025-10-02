@@ -28,6 +28,7 @@ import haliax as hax
 import jax
 import jax.random as jrandom
 import levanter
+import ray
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -179,9 +180,6 @@ class TrainWorker:
             mesh=self.config.trainer.device_mesh,
             axis_mapping=self.config.trainer.compute_axis_mapping,
         )
-
-        # Get curriculum actor handle (will fail if not available)
-        import ray
 
         self.curriculum_actor = get_or_create_curriculum_actor(config.curriculum_config)
 
