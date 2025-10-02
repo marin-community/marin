@@ -68,7 +68,7 @@ class RolloutWorkerConfig:
 
     trainer: TrainerConfig
     model: LmConfig
-    curriculum_config: "CurriculumConfig"  # type: ignore
+    curriculum_config: CurriculumConfig
     curriculum_actor_name: str
     rollout_storage: RolloutStorageConfig
     max_input_length: int
@@ -323,7 +323,7 @@ class RolloutWorker:
         if self._inference_server:
             self._inference_server.shutdown()
 
-    def _generate_rollout_batch(self, rng) -> tuple[RolloutBatch | None, dict | None]:
+    def _generate_rollout_batch(self, rng, step: int) -> tuple[RolloutBatch | None, dict | None]:
         barrier_sync()
 
         # Sample lesson from curriculum actor
@@ -361,8 +361,6 @@ class RolloutWorker:
             logger.warning("No valid rollouts generated in this batch, retrying...")
             return None, None
 
-        # Update curriculum stats via actor
-        # Collect stats for batch update
         rollout_stats_list = []
         for group in rollout_groups:
             for rollout in group.rollouts:
@@ -371,12 +369,8 @@ class RolloutWorker:
                 )
                 rollout_stats_list.append(rollout_stats)
 
-        # Update curriculum stats via actor (batched)
         if rollout_stats_list:
-            self.curriculum_actor.update_lesson_stats.remote(rollout_stats_list, mode="training")
-
-        # Update curriculum state via actor
-        self.curriculum_actor.step.remote()
+            self.curriculum_actor.update_lesson_stats.remote(rollout_stats_list, mode="training", current_step=step)
 
         rollout_batch = RolloutBatch(
             groups=rollout_groups,
@@ -404,21 +398,22 @@ class RolloutWorker:
             logger.info("No new weights available")
             return None
 
-    def _evaluate_curriculum(self, rng):
-        """Evaluate all unlocked, non-graduated lessons and update eval metrics."""
+    def _evaluate_curriculum(self, rng, step: int) -> dict:
+        """Evaluate all lessons and update eval metrics.
+
+        Returns:
+            Dictionary of evaluation metrics for logging.
+        """
         barrier_sync()
 
-        # Get active lessons from curriculum actor
-        metrics = ray.get(self.curriculum_actor.get_metrics.remote())
-        active_lesson_names = [
-            name for name in metrics["sampling_weights"].keys()
-        ]  # Active lessons are those with sampling weights
+        # Evaluate all lessons, not just active ones
+        lesson_names = list(self.config.curriculum_config.lessons.keys())
 
-        if not active_lesson_names:
-            logger.info("No active lessons to evaluate")
-            return
+        if not lesson_names:
+            logger.info("No lessons to evaluate")
+            return {}
 
-        logger.info(f"Evaluating {len(active_lesson_names)} active lessons")
+        logger.info(f"Evaluating {len(lesson_names)} lessons")
 
         # Create inference context
         policy_ctx = LevanterInferenceContext(
@@ -428,10 +423,10 @@ class RolloutWorker:
             stop_tokens=self.config.stop_tokens,
         )
 
-        for lesson_id in active_lesson_names:
-            # Get lesson config and load environment
-            lesson_config = self.config.curriculum_config.lessons[lesson_id]
-            env = load_environment_from_spec(lesson_config.env_config)
+        eval_metrics = {}
+
+        for lesson_id in lesson_names:
+            env = self._load_environment(lesson_id)
 
             rng, eval_rng = jrandom.split(rng)
 
@@ -468,7 +463,8 @@ class RolloutWorker:
                         success_count += 1
                     reward_sum += rollout.episode_reward
 
-            self.curriculum_actor.update_lesson_stats.remote(rollout_stats_list, mode="eval")
+            self.curriculum_actor.update_lesson_stats.remote(rollout_stats_list, mode="eval", current_step=step)
+
             if total_count > 0:
                 success_rate = success_count / total_count
                 avg_reward = reward_sum / total_count
@@ -478,7 +474,12 @@ class RolloutWorker:
                     f"({100 * success_rate:.1f}%), reward={avg_reward:.3f}"
                 )
 
+                eval_metrics[f"eval/{lesson_id}/success_rate"] = success_rate
+                eval_metrics[f"eval/{lesson_id}/avg_reward"] = avg_reward
+                eval_metrics[f"eval/{lesson_id}/total_count"] = total_count
+
         barrier_sync()
+        return eval_metrics
 
     def run(self):
         """Main inference worker loop."""
@@ -504,11 +505,19 @@ class RolloutWorker:
 
             if step > 0 and step % self.config.curriculum_config.eval_frequency == 0:
                 rng, eval_rng = jrandom.split(rng)
-                self._evaluate_curriculum(eval_rng)
+                eval_metrics = self._evaluate_curriculum(eval_rng, step)
+
+                # Log eval metrics
+                if jax.process_index() == 0 and eval_metrics:
+                    log_metrics = {"step": step}
+                    log_metrics.update(jax.device_get(eval_metrics))
+                    log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
+                    logger.info(f"Logging eval metrics at step {step}... {log_metrics}")
+                    self.tracker.log(log_metrics, step=step)
 
             rng, input_rng = jax.random.split(rng)
             logger.info("Generating rollout batch...")
-            rollout_batch, metrics = self._generate_rollout_batch(input_rng)
+            rollout_batch, metrics = self._generate_rollout_batch(input_rng, step)
             if rollout_batch is None:
                 continue
             step += 1

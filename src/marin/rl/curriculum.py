@@ -308,11 +308,6 @@ class Curriculum:
         # Step counter for internal tracking
         self.current_step = 0
 
-    def step(self):
-        """Increment the curriculum step counter."""
-        self.current_step += 1
-        self.update_lessons()
-
     def compute_sampling_weights(self) -> dict[str, float]:
         """Compute sampling weights for all active lessons.
 
@@ -382,14 +377,18 @@ class Curriculum:
 
         return lesson_id
 
-    def update_lesson_stats(self, rollout_stats_list: list[RolloutStats], mode: str = "training") -> None:
-        """Update lesson statistics from rollout stats.
+    def update_lesson_stats(self, rollout_stats_list: list[RolloutStats], mode: str, current_step: int) -> None:
+        """Update lesson statistics from rollout stats and trigger lesson state updates.
 
         Args:
             rollout_stats_list: List of statistics from completed rollouts.
             mode: "training" or "eval" to determine which stats to update.
+            current_step: Current training step for tracking and triggering lesson updates.
         """
         assert mode in ("training", "eval"), f"Invalid mode: {mode}"
+
+        # Update current step (use max to handle potential concurrent updates from multiple workers)
+        self.current_step = max(self.current_step, current_step)
 
         for rollout_stats in rollout_stats_list:
             assert rollout_stats.lesson_id in self.stats, f"Unknown lesson '{rollout_stats.lesson_id}'"
@@ -406,6 +405,9 @@ class Curriculum:
                 )
 
             self.stats[rollout_stats.lesson_id] = lesson_stats
+
+        # Automatically update lesson states (unlocking/graduation) after updating stats
+        self._unlock_and_graduate_lessons()
 
     def get_metrics(self) -> dict:
         """Get curriculum metrics for monitoring.
@@ -436,7 +438,7 @@ class Curriculum:
             "sampling_weights": weights,
         }
 
-    def check_dependencies(self, lesson_id: str) -> bool:
+    def _check_dependencies_for_lesson(self, lesson_id: str) -> bool:
         """Return true if all dependencies for a lesson are satisfied."""
         lesson_config = self.config.lessons[lesson_id]
 
@@ -486,10 +488,10 @@ class Curriculum:
 
         return True
 
-    def update_lessons(self):
+    def _unlock_and_graduate_lessons(self):
         """Update which lessons are currently available based on dependencies or graduation."""
         for lesson_id in self.config.lessons:
-            if lesson_id not in self.unlocked and self.check_dependencies(lesson_id):
+            if lesson_id not in self.unlocked and self._check_dependencies_for_lesson(lesson_id):
                 logger.info("Unlocking lesson '%s' with stats %s", lesson_id, self.stats[lesson_id])
                 self.unlocked.add(lesson_id)
 

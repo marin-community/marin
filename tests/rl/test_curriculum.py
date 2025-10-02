@@ -332,23 +332,23 @@ def test_progressive_unlocking():
     assert "basic" in curriculum.unlocked
     assert "intermediate" not in curriculum.unlocked
 
-    # Set basic to have good performance but not plateaued
+    # Simulate good performance but not plateaued (increasing rewards)
+    rollout_stats = []
     for i in range(49):
-        curriculum.stats["basic"].training_stats.reward_history.append(0.6 + i * 0.001)
-    curriculum.stats["basic"].training_stats.smoothed_success = 0.6
-    curriculum.stats["basic"].training_stats.total_samples = 50
+        reward = 0.6 + i * 0.001
+        rollout_stats.append(create_test_rollout_stats(episode_reward=reward, lesson_id="basic"))
+    curriculum.update_lesson_stats(rollout_stats, mode="training", current_step=49)
 
     # Intermediate should still not unlock (not plateaued)
-    curriculum.step()
     assert "intermediate" not in curriculum.unlocked
 
-    # Add more samples to create a plateau
+    # Add more samples to create a plateau (constant rewards)
+    rollout_stats = []
     for _ in range(51):
-        curriculum.stats["basic"].training_stats.reward_history.append(0.65)
-    curriculum.stats["basic"].training_stats.total_samples = 100
+        rollout_stats.append(create_test_rollout_stats(episode_reward=0.65, lesson_id="basic"))
+    curriculum.update_lesson_stats(rollout_stats, mode="training", current_step=100)
 
     # Now intermediate should unlock
-    curriculum.step()
     assert "intermediate" in curriculum.unlocked
 
 
@@ -392,23 +392,21 @@ def test_multiple_dependencies():
     assert "advanced" not in curriculum.unlocked
 
     # Set lesson1 to meet threshold and plateau
+    rollout_stats = []
     for _ in range(50):
-        curriculum.stats["lesson1"].training_stats.reward_history.append(0.7)
-    curriculum.stats["lesson1"].training_stats.smoothed_success = 0.7
-    curriculum.stats["lesson1"].training_stats.total_samples = 50
+        rollout_stats.append(create_test_rollout_stats(episode_reward=0.7, lesson_id="lesson1"))
+    curriculum.update_lesson_stats(rollout_stats, mode="training", current_step=50)
 
     # Advanced should still not unlock (lesson2 not ready)
-    curriculum.step()
     assert "advanced" not in curriculum.unlocked
 
     # Set lesson2 to meet threshold and plateau
+    rollout_stats = []
     for _ in range(50):
-        curriculum.stats["lesson2"].training_stats.reward_history.append(0.6)
-    curriculum.stats["lesson2"].training_stats.smoothed_success = 0.6
-    curriculum.stats["lesson2"].training_stats.total_samples = 50
+        rollout_stats.append(create_test_rollout_stats(episode_reward=0.6, lesson_id="lesson2"))
+    curriculum.update_lesson_stats(rollout_stats, mode="training", current_step=100)
 
     # Now advanced should unlock
-    curriculum.step()
     assert "advanced" in curriculum.unlocked
 
 
@@ -481,23 +479,21 @@ def test_graduation():
     assert "easy_lesson" not in curriculum.graduated
 
     # Set high performance but no eval data
-    curriculum.stats["easy_lesson"].training_stats.smoothed_success = 0.95
-    curriculum.stats["easy_lesson"].training_stats.total_samples = 50
+    rollout_stats = []
     for _ in range(50):
-        curriculum.stats["easy_lesson"].training_stats.reward_history.append(0.95)
-        curriculum.step()
+        rollout_stats.append(create_test_rollout_stats(episode_reward=0.95, lesson_id="easy_lesson"))
+    curriculum.update_lesson_stats(rollout_stats, mode="training", current_step=50)
 
     # Should not graduate without eval data
     assert "easy_lesson" not in curriculum.graduated
 
     # Add eval data showing high performance
-    curriculum.stats["easy_lesson"].eval_stats.smoothed_success = 0.95
-    curriculum.stats["easy_lesson"].eval_stats.smoothed_reward = 0.95
-    curriculum.stats["easy_lesson"].eval_stats.last_update_step = 100
-    curriculum.stats["easy_lesson"].eval_stats.reward_history = [0.95] * 50
+    eval_stats = []
+    for _ in range(50):
+        eval_stats.append(create_test_rollout_stats(episode_reward=0.95, lesson_id="easy_lesson"))
+    curriculum.update_lesson_stats(eval_stats, mode="eval", current_step=100)
 
     # Should graduate now
-    curriculum.step()
     assert "easy_lesson" in curriculum.graduated, curriculum.stats
 
 
@@ -519,24 +515,28 @@ def test_graduation_requires_plateau():
     curriculum = Curriculum(config)
 
     # Set improving performance (not plateaued) in TRAINING stats
+    rollout_stats = []
     for i in range(50):
-        curriculum.stats["improving_lesson"].training_stats.reward_history.append(0.5 + i * 0.01)
-    curriculum.stats["improving_lesson"].training_stats.smoothed_success = 0.9
-    curriculum.stats["improving_lesson"].training_stats.total_samples = 50
-    curriculum.stats["improving_lesson"].eval_stats.smoothed_success = 0.9
-    curriculum.stats["improving_lesson"].eval_stats.last_update_step = 50
-    curriculum.current_step = 50
+        reward = 0.5 + i * 0.01
+        rollout_stats.append(create_test_rollout_stats(episode_reward=reward, lesson_id="improving_lesson"))
+    curriculum.update_lesson_stats(rollout_stats, mode="training", current_step=50)
+
+    # Add eval data
+    eval_stats = []
+    for _ in range(10):
+        eval_stats.append(create_test_rollout_stats(episode_reward=0.9, lesson_id="improving_lesson"))
+    curriculum.update_lesson_stats(eval_stats, mode="eval", current_step=50)
 
     # Should not graduate (still improving)
-    curriculum.step()
     assert "improving_lesson" not in curriculum.graduated
 
-    # Add plateau to TRAINING stats
+    # Add plateau to TRAINING stats (constant rewards)
+    rollout_stats = []
     for _ in range(50):
-        curriculum.stats["improving_lesson"].training_stats.reward_history.append(0.9)
+        rollout_stats.append(create_test_rollout_stats(episode_reward=0.9, lesson_id="improving_lesson"))
+    curriculum.update_lesson_stats(rollout_stats, mode="training", current_step=100)
 
     # Now should graduate
-    curriculum.step()
     assert "improving_lesson" in curriculum.graduated, curriculum
 
 
@@ -870,15 +870,14 @@ def test_curriculum_update_lesson_stats():
 
     # Update stats via method (training mode)
     rollout_stats = create_test_rollout_stats(episode_reward=1.0, lesson_id="test_lesson")
-    curriculum.update_lesson_stats([rollout_stats], mode="training")
+    curriculum.update_lesson_stats([rollout_stats], mode="training", current_step=1)
 
     assert curriculum.stats["test_lesson"].training_stats.total_samples == 1
     assert curriculum.stats["test_lesson"].training_stats.smoothed_reward == 1.0
 
     # Update eval stats
     eval_stats = create_test_rollout_stats(episode_reward=0.9, lesson_id="test_lesson")
-    curriculum.current_step = 100
-    curriculum.update_lesson_stats([eval_stats], mode="eval")
+    curriculum.update_lesson_stats([eval_stats], mode="eval", current_step=100)
 
     assert curriculum.stats["test_lesson"].eval_stats.total_samples == 1
     assert curriculum.stats["test_lesson"].eval_stats.smoothed_reward == 0.9
