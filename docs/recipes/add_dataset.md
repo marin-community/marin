@@ -1,7 +1,7 @@
 # Recipe: Dataset Schema Inspection
 
 ## Overview
-This recipe guides agents and humans in inspecting Hugging Face dataset schemas using Marin's schema inspection tool. The inspection is the first step toward exposing a dataset for training. After capturing the schema, register an `ExecutorStep` so the dataset can be downloaded in Marin pipelines. For simple datasets, add the step to `experiments/pretraining_datasets.py` (see the `fineweb_edu` entry). If the dataset is multipart or more complex, create a dedicated file (e.g., `experiments/nemotron_cc.py`) and add the step there instead.
+This recipe guides agents and humans in inspecting Hugging Face dataset schemas using Marin's schema inspection tool. The inspection is the first step toward exposing a dataset for training. After capturing the schema, register an `ExecutorStep` so the dataset can be downloaded in Marin pipelines. For simple datasets, add the step to `experiments/pretraining_datasets.py` (see the `fineweb_edu` entry). If the dataset is multipart or more complex, create a dedicated file (e.g., `experiments/nemotron_cc.py`) and add the step there instead. Datasets with Hugging Face–exposed subsets or splits should pattern match on `experiments/nemotron_cc.py`, defining separate steps for each subset.
 
 ## Prerequisites
 - Install the [Hugging Face `datasets` library](https://huggingface.co/docs/datasets/) (e.g., `pip install datasets`).

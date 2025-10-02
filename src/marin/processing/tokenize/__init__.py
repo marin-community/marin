@@ -21,6 +21,7 @@ from .data_configs import (
     step_to_lm_mixture_component,
 )
 from .tokenize import (
+    HfDatasetSpec,
     TokenizeConfig,
     tokenize,
 )

@@ -1011,8 +1011,6 @@ class FlaxInferenceContext:
         prompts: list[str],
         temperature: float = 1.0,
         n_generations: int = 1,
-        top_p: float | None = None,
-        top_k: int | None = None,
     ) -> list[list[dict]]:
         """Generate using hidden params and sampler."""
 
