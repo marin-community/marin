@@ -7,7 +7,7 @@
 import dataclasses
 import typing
 from types import EllipsisType
-from typing import Mapping, Optional, Sequence
+from typing import Mapping, Sequence
 
 import jax.lax
 import jax.numpy as jnp
@@ -157,7 +157,7 @@ def einops_rearrange(array: NamedArray, expression: str, **bindings: AxisSelecto
 @dataclasses.dataclass(frozen=True)
 class _Plan:
     intermediate_axes: tuple[Axis, ...]
-    transpose: Optional[tuple[int, ...]]
+    transpose: tuple[int, ...] | None
     needs_final_reshape: bool
 
     final_axes: tuple[Axis, ...]
@@ -170,7 +170,7 @@ def _plan_rearrange(
     grouped_new_shapes = _determine_initial_reshape(original_str, lhs, array, aliases)
     intermediate_axes = tuple(ax for split_axes in grouped_new_shapes for ax in split_axes)
 
-    transpose: Optional[tuple[int, ...]]
+    transpose: tuple[int, ...] | None
     transpose, final_axes = _determine_final_transpose_and_reshape(original_str, rhs, aliases, intermediate_axes)
 
     transposed_intermediate_axes = tuple(intermediate_axes[i] for i in transpose)
@@ -289,7 +289,7 @@ def _determine_initial_reshape(
     # the lhs all need to be bound to axes in the array, or synthesized as parts of axes.
     # In the lhs, bindings look like either a name, or a name and a list of (new) axes.
     # bindings can either be done by name, or by position, depending on if lhs.is_ordered
-    new_shapes: list[Optional[list[Axis]]] = [None] * len(array.axes)
+    new_shapes: list[list[Axis] | None] = [None] * len(array.axes)
     used_new_names: set[str] = set()  # names can only be used once on a side
 
     # one subtle difference between the lhs and the rhs is the handling of binding in expressions like (a: b c)
@@ -301,7 +301,7 @@ def _determine_initial_reshape(
         # if we start with an ellipsis, we bind from the right
         # if we end with an ellipsis, we bind from the left
         ellipsis_pos = None
-        axis_index_for_capture: list[Optional[int]] = [None] * len(lhs.captures)
+        axis_index_for_capture: list[int | None] = [None] * len(lhs.captures)
         covered_axes = set()
         # bind from the left
         axis_pos = 0
@@ -414,8 +414,8 @@ def _solve_split_axes(axis, capture, aliases, used_new_names, expression):
     """
     Given an axis and a capture of the form (a: b c) or (b c) on the lhs, solve for the new axes.
     """
-    new_axes: list[Optional[Axis]] = []
-    unsolved_axis_index: Optional[int] = None
+    new_axes: list[Axis | None] = []
+    unsolved_axis_index: int | None = None
 
     # easy case: 1 axis in capture
     if len(capture.axes) == 1:

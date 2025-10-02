@@ -5,7 +5,6 @@
 
 import functools
 from types import EllipsisType
-from typing import Optional, Tuple
 
 import jax.lax
 
@@ -24,7 +23,7 @@ def einsum(
     equation: str,
     *arrays: NamedArray,
     precision: PrecisionLike = None,
-    preferred_element_type: Optional[DTypeLike] = None,
+    preferred_element_type: DTypeLike | None = None,
     _dot_general: DotGeneralOp = jax.lax.dot_general,
     **axis_aliases: AxisSelector,
 ) -> NamedArray:
@@ -306,7 +305,7 @@ def _all_input_axes(arrays):
     return ensure_tuple(functools.reduce(union_axes, (a.axes for a in arrays), ()))  # type: ignore
 
 
-def _captures_to_axis_names(equation, lhs, aliases) -> Tuple[list[str | EllipsisType], bool, set[str]]:
+def _captures_to_axis_names(equation, lhs, aliases) -> tuple[list[str | EllipsisType], bool, set[str]]:
     covered_aliases = set()
     candidate_axes: list[str | EllipsisType] = []
     has_ellipsis = False

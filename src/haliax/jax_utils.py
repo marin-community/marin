@@ -6,7 +6,7 @@
 import functools as ft
 import typing
 import warnings
-from typing import Any, Callable, Optional, Sequence, Union
+from typing import Any, Callable, Sequence
 
 import equinox as eqx
 import jax
@@ -39,7 +39,7 @@ class Static(eqx.Module):
     value: Any = eqx.field(static=True)
 
 
-def shaped_rng_split(key, split_shape: Union[int, Sequence[int]] = 2) -> PRNGKeyArray:
+def shaped_rng_split(key, split_shape: int | Sequence[int] = 2) -> PRNGKeyArray:
     if isinstance(split_shape, int):
         num_splits = split_shape
         split_shape = (num_splits,) + key.shape
@@ -54,7 +54,7 @@ def shaped_rng_split(key, split_shape: Union[int, Sequence[int]] = 2) -> PRNGKey
     return jnp.reshape(unshaped, split_shape)
 
 
-def maybe_rng_split(key: Optional[PRNGKeyArray], num: int = 2):
+def maybe_rng_split(key: PRNGKeyArray | None, num: int = 2):
     """Splits a random key into multiple random keys. If the key is None, then it replicates the None. Also handles
     num == 1 case"""
     if key is None:
@@ -73,7 +73,7 @@ def filter_eval_shape(*args, **kwargs):
     return eqx.filter_eval_shape(*args, **kwargs)
 
 
-def filter_checkpoint(fun: Callable, *, prevent_cse: bool = True, policy: Optional[Callable[..., bool]] = None):
+def filter_checkpoint(fun: Callable, *, prevent_cse: bool = True, policy: Callable[..., bool] | None = None):
     """As `jax.checkpoint`, but allows any Python object as inputs and outputs"""
 
     warnings.warn("filter_checkpoint is deprecated, use eqx.filter_checkpoint instead", DeprecationWarning)
@@ -86,7 +86,7 @@ def is_jax_array_like(x):
 
 
 # adapted from jax but exposed so i can use it
-def broadcast_prefix(prefix_tree: Any, full_tree: Any, is_leaf: Optional[Callable[[Any], bool]] = None):
+def broadcast_prefix(prefix_tree: Any, full_tree: Any, is_leaf: Callable[[Any], bool] | None = None):
     """Broadcast a prefix tree to match the structure of a full tree."""
     result = []
     num_leaves = lambda t: jax.tree_util.tree_structure(t).num_leaves  # noqa: E731
@@ -110,14 +110,14 @@ def _UNSPECIFIED():
 
 
 @typing.overload
-def named_call(f: F, name: Optional[str] = None) -> F: ...
+def named_call(f: F, name: str | None = None) -> F: ...
 
 
 @typing.overload
-def named_call(*, name: Optional[str] = None) -> Callable[[F], F]: ...
+def named_call(*, name: str | None = None) -> Callable[[F], F]: ...
 
 
-def named_call(f=_UNSPECIFIED, name: Optional[str] = None):
+def named_call(f=_UNSPECIFIED, name: str | None = None):
     if f is _UNSPECIFIED:
         return lambda f: named_call(f, name)  # type: ignore
     else:

@@ -4,7 +4,7 @@
 
 
 import functools
-from typing import Sequence, Tuple, TypeAlias, TypeVar, Union
+from typing import Sequence, TypeAlias, TypeVar
 
 import equinox
 
@@ -23,7 +23,7 @@ def is_named_array(leaf):
     return isinstance(leaf, NamedArray)
 
 
-def ensure_tuple(x: Union[Sequence[T], T]) -> Tuple[T, ...]:
+def ensure_tuple(x: Sequence[T] | T) -> tuple[T, ...]:
     if isinstance(x, str):
         return (x,)  # type: ignore
     elif isinstance(x, Sequence):
@@ -31,7 +31,7 @@ def ensure_tuple(x: Union[Sequence[T], T]) -> Tuple[T, ...]:
     return (x,)
 
 
-def maybe_untuple(x: Union[Sequence[T], T]) -> Union[T, Sequence[T]]:
+def maybe_untuple(x: Sequence[T] | T) -> T | Sequence[T]:
     """
     If x is a tuple with one element, return that element. Otherwise return x.
     """

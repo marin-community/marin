@@ -5,7 +5,7 @@
 
 import dataclasses
 from abc import abstractmethod
-from typing import Optional, TypeVar
+from typing import TypeVar
 
 import equinox as eqx
 from jax import nn as jnn
@@ -25,10 +25,10 @@ A = TypeVar("A", Scalar, NamedArray, jnp.ndarray)
 
 class LayerNormBase(ModuleWithStateDictSerialization):
     axis: AxisSpec = eqx.field(static=True)
-    weight: Optional[NamedArray]
-    bias: Optional[NamedArray]
+    weight: NamedArray | None
+    bias: NamedArray | None
     eps: float = eqx.field(default=1e-5, static=True)
-    dtype: Optional[jnp.dtype] = eqx.field(default=None, static=True)
+    dtype: jnp.dtype | None = eqx.field(default=None, static=True)
 
     @abstractmethod
     def __call__(self, x: NamedArray) -> NamedArray:
@@ -42,7 +42,7 @@ class LayerNormBase(ModuleWithStateDictSerialization):
         *,
         use_weight: bool = True,
         use_bias: bool = True,
-        dtype: Optional[jnp.dtype] = None,
+        dtype: jnp.dtype | None = None,
     ):
         if use_weight:
             weight = hax.ones(axis)
@@ -99,11 +99,11 @@ class LayerNorm(LayerNormBase):
     """
 
     axis: AxisSpec = eqx.field(static=True)
-    weight: Optional[NamedArray]
-    bias: Optional[NamedArray]
+    weight: NamedArray | None
+    bias: NamedArray | None
 
     eps: float = eqx.field(default=1e-5, static=True)
-    dtype: Optional[jnp.dtype] = eqx.field(default=None, static=True)
+    dtype: jnp.dtype | None = eqx.field(default=None, static=True)
 
     def __call__(self, x: NamedArray) -> NamedArray:
         dtype = x.dtype
@@ -140,7 +140,7 @@ class RmsNorm(LayerNormBase):
         return out
 
 
-def logsumexp(a: A, axis: Optional[AxisSelection] = None) -> A:
+def logsumexp(a: A, axis: AxisSelection | None = None) -> A:
     # TODO: logsumexp indirectly supports where via `b`. we should support it directly
     return wrap_reduction_call(jnn.logsumexp, a, axis=axis, single_axis_only=False, supports_where=False)
 
@@ -148,11 +148,11 @@ def logsumexp(a: A, axis: Optional[AxisSelection] = None) -> A:
 # TODO: support where in softmax, etc
 
 
-def softmax(a: A, axis: Optional[AxisSelection] = None) -> A:
+def softmax(a: A, axis: AxisSelection | None = None) -> A:
     return wrap_axiswise_call(jnn.softmax, a, axis=axis, single_axis_only=False)
 
 
-def log_softmax(a: A, axis: Optional[AxisSelection] = None) -> A:
+def log_softmax(a: A, axis: AxisSelection | None = None) -> A:
     return wrap_axiswise_call(jnn.log_softmax, a, axis=axis, single_axis_only=False)
 
 
@@ -160,10 +160,10 @@ def standardize(
     x: NamedArray,
     axis: AxisSpec,
     *,
-    mean: Optional[NamedArray] = None,
-    variance: Optional[NamedArray] = None,
+    mean: NamedArray | None = None,
+    variance: NamedArray | None = None,
     epsilon: float = 1e-5,
-    where: Optional[NamedArray] = None,
+    where: NamedArray | None = None,
 ) -> NamedArray:
     """Analogous to [jax.nn.standardize][], but with support for NamedArrays."""
     x, mean, variance, where = haliax.broadcast_arrays(x, mean, variance, where)  # type: ignore

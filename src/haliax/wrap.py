@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from typing import Optional, Protocol
+from typing import Protocol
 
 import jax
 
@@ -23,8 +23,8 @@ def wrap_elemwise_unary(f, a, *args, **kwargs):
 def wrap_reduction_call(
     fn,
     a,
-    axis: Optional[AxisSelection],
-    where: Optional[NamedArray] = None,
+    axis: AxisSelection | None,
+    where: NamedArray | None = None,
     single_axis_only: bool = False,
     supports_where: bool = True,
     **kwargs,
@@ -72,7 +72,7 @@ def wrap_reduction_call(
     return jax.tree_util.tree_map(reduce_one_leaf, a, is_leaf=lambda x: isinstance(x, NamedArray))
 
 
-def wrap_axiswise_call(fn, a, axis: Optional[AxisSelection], *, single_axis_only: bool, **kwargs):
+def wrap_axiswise_call(fn, a, axis: AxisSelection | None, *, single_axis_only: bool, **kwargs):
     if isinstance(a, NamedArray):
         if axis is None:
             return fn(a.array, axis=None, **kwargs)
@@ -142,14 +142,14 @@ class ReductionFunction(Protocol):
     def __call__(
         self,
         array: NamedArray,
-        axis: Optional[AxisSelection] = None,
-        where: Optional[NamedArray] = None,
+        axis: AxisSelection | None = None,
+        where: NamedArray | None = None,
         **kwargs,
     ) -> NamedArray: ...
 
 
 class SimpleReductionFunction(Protocol):
-    def __call__(self, array: NamedArray, axis: Optional[AxisSelector] = None, **kwargs) -> NamedArray: ...
+    def __call__(self, array: NamedArray, axis: AxisSelector | None = None, **kwargs) -> NamedArray: ...
 
 
 __all__ = [

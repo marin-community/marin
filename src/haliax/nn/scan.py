@@ -11,9 +11,7 @@ from typing import (
     Any,
     Callable,
     Concatenate,
-    Dict,
     Generic,
-    Optional,
     Protocol,
     Sequence,
     Type,
@@ -319,10 +317,10 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
         else:
             return x
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"blocks": None}
 
-    def from_state_dict(self: M, state_dict: StateDict, prefix: Optional[str] = None) -> M:
+    def from_state_dict(self: M, state_dict: StateDict, prefix: str | None = None) -> M:
         out_blocks = []
         for i, block in enumerate(self.blocks):
             my_prefix = with_prefix(prefix, str(i))
@@ -331,7 +329,7 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
 
         return eqx.tree_at(lambda m: m.blocks, self, out_blocks)
 
-    def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
+    def to_state_dict(self, prefix: str | None = None) -> StateDict:
         """
         Returns the unstacked format of the module, which is compatible with torch.nn.Sequential, with keys of the form (...). The stacked/vectorized format is required for haliax.nn.Stacked and vectorizes all such tensors into a single shared key.".
         """
@@ -610,7 +608,7 @@ class Stacked(ModuleWithStateDictSerialization, Generic[M]):
         return block(carry, *extra_args, **extra_kwargs)
 
     # TODO: this is for logic that's in levanter. We should move that logic to haliax I guess?
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"stacked": None}
 
     def unstacked(self) -> Sequence[M]:
@@ -640,14 +638,14 @@ class Stacked(ModuleWithStateDictSerialization, Generic[M]):
         unstacked_leaves = tuple(zip(*unstacked_leaves))
         return tuple(map(lambda x: jax.tree_util.tree_unflatten(structure, x), unstacked_leaves))
 
-    def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
+    def to_state_dict(self, prefix: str | None = None) -> StateDict:
         # this method needs to "devectorize" the blocks, so that we have a list of blocks h.0.FOO, h.1.FOO, etc.
         # first just do the normal thing with our own dict, which we'll post-process
         state_dict: StateDict = super().to_state_dict(prefix)
 
         return _unstack_state_dict(state_dict, prefix)
 
-    def from_state_dict(self: M, state_dict: StateDict, prefix: Optional[str] = None) -> M:
+    def from_state_dict(self: M, state_dict: StateDict, prefix: str | None = None) -> M:
         # this method needs to "vectorize" the blocks, so that we have a single block h.FOO
         # first just do the normal thing with our own dict, which we'll post-process
         stacked = _stack_state_dict(state_dict, prefix=prefix)
@@ -655,7 +653,7 @@ class Stacked(ModuleWithStateDictSerialization, Generic[M]):
         return out
 
 
-def _stack_state_dict(state_dict: StateDict, prefix: Optional[str] = None) -> StateDict:
+def _stack_state_dict(state_dict: StateDict, prefix: str | None = None) -> StateDict:
     """
     Stack all keys matching prefix in a new state dict, returning a state dict that has all keys matching
     prefix stacked, but otherwise the same.
@@ -667,7 +665,7 @@ def _stack_state_dict(state_dict: StateDict, prefix: Optional[str] = None) -> St
     """
     vectorized_dict: StateDict = {}
 
-    tensors_to_vectorize: dict[str, list[Optional[Any]]] = {}
+    tensors_to_vectorize: dict[str, list[Any | None]] = {}
     if prefix is not None:
         prefix_for_pat = re.escape(prefix + ".")
     else:
@@ -694,7 +692,7 @@ def _stack_state_dict(state_dict: StateDict, prefix: Optional[str] = None) -> St
     return vectorized_dict
 
 
-def _unstack_state_dict(state_dict: StateDict, prefix: Optional[str] = None) -> StateDict:
+def _unstack_state_dict(state_dict: StateDict, prefix: str | None = None) -> StateDict:
     """
     Unstack all keys matching prefix in a new state dict, returning a state dict that has all keys matching
     prefix unstacked, but otherwise the same. Mostly for use with [haliax.nn.Stacked][].

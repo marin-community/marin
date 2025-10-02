@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from typing import Callable, Optional, Sequence
+from typing import Callable, Sequence
 
 import equinox as eqx
 import jax
@@ -52,7 +52,7 @@ class MLP(eqx.Module):
         use_bias: bool = True,
         use_final_bias: bool = True,
         key: PRNGKeyArray,
-        dot_general: Optional[DotGeneralOp] = None,
+        dot_general: DotGeneralOp | None = None,
         init_scale: float = 1.0,
     ):
         Width = _get_width(width)

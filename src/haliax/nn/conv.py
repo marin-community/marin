@@ -5,7 +5,7 @@
 
 import string
 from functools import cached_property
-from typing import Optional, Sequence, TypeVar
+from typing import Sequence, TypeVar
 
 import equinox as eqx
 import jax
@@ -41,7 +41,7 @@ class _ConvBase(eqx.Module):
     In: Axis = eqx.field(static=True)
     Out: Axis = eqx.field(static=True)
     weight: NamedArray = eqx.field()
-    bias: Optional[NamedArray] = eqx.field()
+    bias: NamedArray | None = eqx.field()
 
     def _lhs_dim_spec(self, batch_index, inputs):
         # the dim spec are single letters, for things like NCHW
@@ -165,7 +165,7 @@ class Conv(_ConvBase):
         return Conv(Spatial, In, Out, weight, bias, kernel_size, stride, padding, dilation, groups)
 
     @named_call
-    def __call__(self, inputs, *, key: Optional[PRNGKeyArray] = None):
+    def __call__(self, inputs, *, key: PRNGKeyArray | None = None):
         """
         Args:
             inputs (NamedArray): Input array
@@ -321,7 +321,7 @@ class ConvTranspose(_ConvBase):
         )
 
     @named_call
-    def __call__(self, inputs, *, key: Optional[PRNGKeyArray] = None):
+    def __call__(self, inputs, *, key: PRNGKeyArray | None = None):
         """
         Args:
             inputs (NamedArray): Input array

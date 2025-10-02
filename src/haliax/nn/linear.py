@@ -6,7 +6,6 @@
 import dataclasses
 import math
 from functools import partial
-from typing import Optional
 
 import equinox as eqx
 import jax
@@ -14,6 +13,7 @@ import jax.numpy as jnp
 from jax.experimental.pallas.ops.tpu.megablox import gmm
 from jax.experimental.shard_map import shard_map
 from jax.random import PRNGKey
+from jaxtyping import PRNGKeyArray
 
 import haliax as hax
 
@@ -31,7 +31,7 @@ class Linear(ModuleWithStateDictSerialization):
     and output, which is occasionally useful."""
 
     weight: NamedArray
-    bias: Optional[NamedArray]
+    bias: NamedArray | None
 
     In: AxisSpec = eqx.field(static=True)
     Out: AxisSpec = eqx.field(static=True)
@@ -45,7 +45,7 @@ class Linear(ModuleWithStateDictSerialization):
         key: PRNGKey,
         use_bias: bool = True,
         out_first: bool = True,
-        dot_general: Optional[DotGeneralOp] = None,
+        dot_general: DotGeneralOp | None = None,
         init_scale: float = 1.0,
     ) -> "Linear":
         """
@@ -69,7 +69,7 @@ class Linear(ModuleWithStateDictSerialization):
         return Linear(weight, bias, In, Out, dot_general=dot_general)
 
     @named_call
-    def __call__(self, inputs, *, key: Optional[PRNGKey] = None):
+    def __call__(self, inputs, *, key: PRNGKeyArray | None = None):
         """
         Args:
             inputs (NamedArray): Input array
@@ -143,7 +143,7 @@ class MoELinear(eqx.Module):
     and output, which is occasionally useful."""
 
     weight: NamedArray
-    bias: Optional[NamedArray]
+    bias: NamedArray | None
 
     Experts: AxisSpec = eqx.field(static=True)
     In: Axis = eqx.field(static=True)
@@ -185,7 +185,7 @@ class MoELinear(eqx.Module):
         return MoELinear(weight, bias, Experts, In, Out, use_gmm=use_gmm)
 
     @named_call
-    def __call__(self, inputs, group_sizes, *, key: Optional[PRNGKey] = None):
+    def __call__(self, inputs, group_sizes, *, key: PRNGKeyArray | None = None):
         """
         Args:
             inputs (NamedArray): Input array    (Batch, In)

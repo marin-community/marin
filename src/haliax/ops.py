@@ -4,7 +4,7 @@
 
 
 import typing
-from typing import Mapping, Optional, Union
+from typing import Mapping
 
 import jax
 import jax.numpy as jnp
@@ -54,11 +54,11 @@ def where(
 
 
 def where(
-    condition: Union[NamedOrNumeric, bool],
-    x: Optional[NamedOrNumeric] = None,
-    y: Optional[NamedOrNumeric] = None,
-    fill_value: Optional[int] = None,
-    new_axis: Optional[Axis] = None,
+    condition: NamedOrNumeric | bool,
+    x: NamedOrNumeric | None = None,
+    y: NamedOrNumeric | None = None,
+    fill_value: int | None = None,
+    new_axis: Axis | None = None,
 ) -> NamedArray | tuple[NamedArray, ...]:
     """Like jnp.where, but with named axes."""
 

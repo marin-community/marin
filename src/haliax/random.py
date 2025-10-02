@@ -4,7 +4,6 @@
 
 
 """Wrappers around jax.random functions."""
-from typing import Optional
 
 import jax.random as jrandom
 
@@ -142,9 +141,7 @@ def ball(key, shape: AxisSpec, D: Axis, p: float = 2.0, dtype=float):
 
 
 @named_call
-def choice(
-    key, shape: AxisSpec, a: NamedArray, axis: AxisSelector, replace: bool = True, p: Optional[NamedArray] = None
-):
+def choice(key, shape: AxisSpec, a: NamedArray, axis: AxisSelector, replace: bool = True, p: NamedArray | None = None):
     """
     Selects random elements from an array along the given axis. If p is provided, the elements are selected
     with probability proportional to their weights and it must be a 1-d array with its only axis being the axis.
@@ -171,7 +168,7 @@ def choice(
 
 
 @named_call
-def categorical(key, logits: NamedArray, axis: AxisSelector, shape: Optional[AxisSpec] = None):
+def categorical(key, logits: NamedArray, axis: AxisSelector, shape: AxisSpec | None = None):
     """Sample random values from categorical distributions.
 
     Args:

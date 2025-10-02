@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from typing import Optional, Tuple
-
 import jax
 import jax.numpy as jnp
 
@@ -13,15 +11,15 @@ from .core import NamedArray
 
 
 def top_k(
-    arr: NamedArray, axis: AxisSelector, k: int, new_axis: Optional[AxisSelector] = None
-) -> Tuple[NamedArray, NamedArray]:
+    arr: NamedArray, axis: AxisSelector, k: int, new_axis: AxisSelector | None = None
+) -> tuple[NamedArray, NamedArray]:
     """
     Select the top k elements along the given axis.
     Args:
         arr (NamedArray): array to select from
         axis (AxisSelector): axis to select from
         k (int): number of elements to select
-        new_axis (Optional[AxisSelector]): new axis name, if none, the original axis will be resized to k
+        new_axis (AxisSelector | None): new axis name, if none, the original axis will be resized to k
 
     Returns:
         NamedArray: array with the top k elements along the given axis

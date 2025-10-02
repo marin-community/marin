@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from typing import Optional, TypeVar
+from typing import TypeVar
 
 import equinox
 
@@ -28,7 +28,7 @@ T = TypeVar("T")
 
 
 def to_torch_compatible_state_dict(
-    t: T, *, flatten: bool = True, prefix: Optional[str] = None, filter: FilterSpec = is_jax_array_like
+    t: T, *, flatten: bool = True, prefix: str | None = None, filter: FilterSpec = is_jax_array_like
 ) -> StateDict:
     """
     Convert a tree to a state dict that is compatible with torch-style state dicts.

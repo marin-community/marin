@@ -6,7 +6,7 @@
 # Module to support torch-style "state dict" serialization via safetensors
 import dataclasses
 import typing
-from typing import Any, Optional, Sequence, TypeVar
+from typing import Any, Sequence, TypeVar
 
 import equinox as eqx
 import jax
@@ -36,7 +36,7 @@ T = TypeVar("T")
 
 
 def from_torch_compatible_state_dict(
-    t: T, state_dict: StateDict, *, unflatten: bool = True, prefix: Optional[str] = None
+    t: T, state_dict: StateDict, *, unflatten: bool = True, prefix: str | None = None
 ) -> T:
     """
     Convert a state dict to a tree that is compatible with the structure of `t`.
@@ -120,10 +120,10 @@ def with_prefix(prefix: str, leaf: None) -> str: ...
 
 
 @typing.overload
-def with_prefix(prefix: Optional[str], leaf: Optional[str]) -> Optional[str]: ...
+def with_prefix(prefix: str | None, leaf: str | None) -> str | None: ...
 
 
-def with_prefix(prefix: Optional[str], leaf: Optional[str]) -> Optional[str]:
+def with_prefix(prefix: str | None, leaf: str | None) -> str | None:
     """Joins two optional path strings in a way compatible with pytorch state dict serialization"""
     if prefix is None:
         return leaf
@@ -136,13 +136,13 @@ def with_prefix(prefix: Optional[str], leaf: Optional[str]) -> Optional[str]:
 class ModuleWithStateDictSerialization(eqx.Module):
     """An eqx.Module that can be serialized to a torch-style state dict."""
 
-    def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
+    def to_state_dict(self, prefix: str | None = None) -> StateDict:
         return default_eqx_module_to_state_dict(self, prefix)
 
-    def from_state_dict(self: Mod, state_dict: StateDict, prefix: Optional[str] = None) -> Mod:
+    def from_state_dict(self: Mod, state_dict: StateDict, prefix: str | None = None) -> Mod:
         return default_eqx_module_from_state_dict(self, state_dict, prefix)
 
-    def _state_dict_key_map(self) -> dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         """Returns a dict mapping eqx.Module keys to torch keys that need to be renamed for serialization"""
         return {}
 
@@ -166,7 +166,7 @@ class ModuleWithStateDictSerialization(eqx.Module):
         return self
 
 
-def from_state_dict(tree: T, state_dict: StateDict, prefix: Optional[str] = None) -> T:
+def from_state_dict(tree: T, state_dict: StateDict, prefix: str | None = None) -> T:
     """
     Given a (template) tree and a state dict, return a new tree with the same structure as the input tree, but with
     the values from the state dict.
@@ -224,7 +224,7 @@ def from_state_dict(tree: T, state_dict: StateDict, prefix: Optional[str] = None
         return state_dict.get(prefix, tree)
 
 
-def to_state_dict(tree: PyTree, prefix: Optional[str] = None) -> StateDict:
+def to_state_dict(tree: PyTree, prefix: str | None = None) -> StateDict:
     """
     Convert a PyTree to a state dict.
 
@@ -276,8 +276,8 @@ def to_state_dict(tree: PyTree, prefix: Optional[str] = None) -> StateDict:
     return state_dict
 
 
-def default_eqx_module_from_state_dict(mod: Mod, state_dict: StateDict, prefix: Optional[str] = None) -> Mod:
-    key_map: Dict[str, Optional[str]] = getattr(mod, "_state_dict_key_map", lambda: {})()  # type: ignore
+def default_eqx_module_from_state_dict(mod: Mod, state_dict: StateDict, prefix: str | None = None) -> Mod:
+    key_map: dict[str, str | None] = getattr(mod, "_state_dict_key_map", lambda: {})()  # type: ignore
     names = []
     values = []
     for field in dataclasses.fields(mod):
@@ -296,7 +296,7 @@ def default_eqx_module_from_state_dict(mod: Mod, state_dict: StateDict, prefix: 
     return eqx.tree_at(lambda m: [getattr(m, name) for name in names], mod, values)
 
 
-def default_eqx_module_to_state_dict(mod: eqx.Module, prefix: Optional[str] = None) -> StateDict:
+def default_eqx_module_to_state_dict(mod: eqx.Module, prefix: str | None = None) -> StateDict:
     """
     Convert an eqx.Module to a state dict. This is the default implementation of the to_state_dict method for
     eqx.Modules. It works by iterating over the fields of the module and calling to_state_dict on each field.
@@ -308,7 +308,7 @@ def default_eqx_module_to_state_dict(mod: eqx.Module, prefix: Optional[str] = No
 
     """
     state_dict: StateDict = {}
-    key_map: Dict[str, Optional[str]] = getattr(mod, "_state_dict_key_map", lambda: {})()  # type: ignore
+    key_map: dict[str, str | None] = getattr(mod, "_state_dict_key_map", lambda: {})()  # type: ignore
     for field in dataclasses.fields(mod):
         if field.metadata.get("static", False):
             continue
@@ -320,7 +320,7 @@ def default_eqx_module_to_state_dict(mod: eqx.Module, prefix: Optional[str] = No
     return state_dict
 
 
-def format_path_for_state_dict(prefix: Optional[str], path: Sequence) -> str:
+def format_path_for_state_dict(prefix: str | None, path: Sequence) -> str:
     res = "".join(_format_key_path_element(path_elem) for path_elem in path)
     # res will have a .
     if prefix is not None:
@@ -352,7 +352,7 @@ def _format_key_path_element(path_elem) -> str:
                 return f".{path_elem}"
 
 
-def to_numpy_state_dict(model, prefix: Optional[str] = None) -> StateDict:
+def to_numpy_state_dict(model, prefix: str | None = None) -> StateDict:
     """
     Convert a model to a state dict by first creating desharded copies of all parameters that reside in CPU
     memory.

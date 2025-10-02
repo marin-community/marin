@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from typing import Optional
-
 import equinox as eqx
 import jax
 from jaxtyping import PRNGKeyArray
@@ -67,13 +65,13 @@ class Dropout(eqx.Module):
 
     # key difference from equinox: these are static fields
     pdrop: float = eqx.field(static=True)
-    broadcast_axes: Optional[AxisSpec] = eqx.field(static=True)
+    broadcast_axes: AxisSpec | None = eqx.field(static=True)
     inference: bool = False  # note: not static
 
     def __init__(
         self,
         pdrop: float = 0.5,
-        broadcast_axes: Optional[AxisSpec] = None,
+        broadcast_axes: AxisSpec | None = None,
         inference: bool = False,
     ):
         self.pdrop = pdrop
@@ -89,8 +87,8 @@ class Dropout(eqx.Module):
         self,
         x: NamedArray,
         *,
-        inference: Optional[bool] = None,
-        key: Optional[PRNGKeyArray] = None,
+        inference: bool | None = None,
+        key: PRNGKeyArray | None = None,
     ) -> NamedArray:
         """**Arguments:**
 

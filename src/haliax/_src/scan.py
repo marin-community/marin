@@ -2,11 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 
 import dataclasses
 import functools as ft
 import inspect
-from typing import Any, Callable, Literal, ParamSpec, Protocol, Sequence, Tuple, TypeVar, Union, overload
+from typing import Any, Callable, Literal, ParamSpec, Protocol, Sequence, TypeVar, overload
 
 import equinox as eqx
 import jax
@@ -21,7 +22,7 @@ from haliax.core import NamedArray
 from haliax.jax_utils import is_jax_array_like, multilevel_scan, tree_checkpoint_name
 from haliax.util import is_jax_or_hax_array_like, is_named_array
 
-BoolAxisSpec = Union[bool, Callable[[Any], bool]]
+BoolAxisSpec = bool | Callable[[Any], bool]
 Carry = TypeVar("Carry")
 X = TypeVar("X", contravariant=True)
 Y = TypeVar("Y", covariant=True)
@@ -170,7 +171,7 @@ class ScanCheckpointPolicy:
             raise ValueError(f"Invalid checkpoint policy {remat_policy}")
 
     @staticmethod
-    def _mk(remat_policy: Union[bool, str, "ScanCheckpointPolicy"]) -> "ScanCheckpointPolicy":
+    def _mk(remat_policy: bool | str | "ScanCheckpointPolicy") -> "ScanCheckpointPolicy":
         if isinstance(remat_policy, ScanCheckpointPolicy):
             return remat_policy
         else:
@@ -253,7 +254,7 @@ class ScanCheckpointPolicy:
                 return None
 
 
-ScanCheckpointSpec = Union[ScanCheckpointPolicy, bool, Literal["offload", "recompute", "full", "save_all", "nested"]]
+ScanCheckpointSpec = ScanCheckpointPolicy | bool | Literal["offload", "recompute", "full", "save_all", "nested"]
 
 
 @overload
@@ -540,8 +541,8 @@ def map(
     return scanned_f
 
 
-ResolvedUnnamedAxisSpec = Union[int, None]
-UnnamedAxisSpec = Union[ResolvedUnnamedAxisSpec, Callable[[Any], ResolvedUnnamedAxisSpec]]
+ResolvedUnnamedAxisSpec = int | None
+UnnamedAxisSpec = ResolvedUnnamedAxisSpec | Callable[[Any], ResolvedUnnamedAxisSpec]
 
 
 def _zero_if_array_else_none(x: Any) -> ResolvedUnnamedAxisSpec:
@@ -606,7 +607,7 @@ class _PassiveNamedArray:
     """
 
     array: jax.numpy.ndarray
-    main_axes: Tuple[Axis, ...]
+    main_axes: tuple[Axis, ...]
 
     def as_scanned_result(self, scan_axis: Axis):
         return NamedArray(self.array, (scan_axis,) + self.main_axes)

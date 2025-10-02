@@ -4,7 +4,7 @@
 
 
 import dataclasses
-from typing import List, Tuple, Union, Sequence
+from typing import Sequence, TypeAlias
 
 import equinox as eqx
 import jax
@@ -18,7 +18,7 @@ from haliax.util import is_jax_or_hax_array_like
 
 from ._src.util import IdentityMap
 
-ArrayLike = Union[jnp.ndarray, NamedArray]
+ArrayLike: TypeAlias = jnp.ndarray | NamedArray
 
 
 def describe_array(arr):
@@ -30,8 +30,8 @@ def describe_array(arr):
 
 class ModuleProblems(Exception):
     def __init__(self):
-        self.reused_arrays: List[Tuple[ArrayLike, List]] = []
-        self.static_arrays: List[str] = []
+        self.reused_arrays: list[tuple[ArrayLike, list[str]]] = []
+        self.static_arrays: list[str] = []
 
     def __bool__(self):
         return bool(self.reused_arrays or self.static_arrays)
@@ -86,7 +86,7 @@ def diagnose_common_issues(module: eqx.Module):
 
 
 def _check_for_reused_arrays(problems, module):
-    used_arrays = IdentityMap[ArrayLike, List[str]]()
+    used_arrays = IdentityMap[ArrayLike, list[str]]()
 
     path_leaves, _ = jtu.tree_flatten_with_path(module, is_leaf=is_jax_or_hax_array_like)
 

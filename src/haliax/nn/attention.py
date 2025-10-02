@@ -4,7 +4,6 @@
 
 
 import math
-from typing import List, Optional
 
 import jax
 import jax.numpy as jnp
@@ -32,11 +31,11 @@ def dot_product_attention_weights(
     KPos: AxisSelection,
     query: NamedArray,
     key: NamedArray,
-    mask: Optional[NamedArray] = None,
-    bias: Optional[NamedArray] = None,
-    attention_dtype: Optional[jnp.dtype] = None,
+    mask: NamedArray | None = None,
+    bias: NamedArray | None = None,
+    attention_dtype: jnp.dtype | None = None,
     precision: PrecisionLike = None,
-    scaling_factor: Optional[float] = None,
+    scaling_factor: float | None = None,
 ) -> NamedArray:
     """
     NamedArray version of dot product attention. Computes the logits for the attention weights. Note that the
@@ -46,8 +45,8 @@ def dot_product_attention_weights(
     :param KPos: Axis or axes that are attended to
     :param query: NamedArray of shape (QPos, KeySize)
     :param key: NamedArray of shape (KPos, KeySize)
-    :param mask: Optional[NamedArray] broadcast compatible with (KeySize, QPos, KPos). Should be boolean
-    :param bias: Optional[NamedArray] broadcast compatible with (KeySize, QPos, KPos). Should be float
+    :param mask: NamedArray | None broadcast compatible with (KeySize, QPos, KPos). Should be boolean
+    :param bias: NamedArray | None broadcast compatible with (KeySize, QPos, KPos). Should be float
     :param attention_dtype: Optional dtype to use for attention
     :param precision: PrecisionLike for dot product. See precision argument to jax.lax.dot_general
     :param scaling_factor: Optional float as scaling factor for attention score. Default to 1/sqrt(D)
@@ -83,9 +82,9 @@ def dot_product_attention(
     query: NamedArray,
     key: NamedArray,
     value: NamedArray,
-    mask: Optional[NamedArray] = None,
-    bias: Optional[NamedArray] = None,
-    attention_dtype: Optional[jnp.dtype] = None,
+    mask: NamedArray | None = None,
+    bias: NamedArray | None = None,
+    attention_dtype: jnp.dtype | None = None,
     precision: PrecisionLike = None,
 ) -> NamedArray:
     """
@@ -96,8 +95,8 @@ def dot_product_attention(
     :param query: NamedArray of shape {..., QPos, KeySize}
     :param key: NamedArray of shape {..., KPos, KeySize}
     :param value: NamedArray of shape {..., KPos, KeySize}
-    :param mask: Optional[NamedArray] broadcast compatible with (KeySize, QPos, KPos). Should be boolean
-    :param bias: Optional[NamedArray] broadcast compatible with (KeySize, QPos, KPos). Should be float
+    :param mask: NamedArray | None broadcast compatible with (KeySize, QPos, KPos). Should be boolean
+    :param bias: NamedArray | None broadcast compatible with (KeySize, QPos, KPos). Should be float
     :param attention_dtype: Optional dtype to use for attention
     :param precision: PrecisionLike for dot product. See precision argument to jax.lax.dot_general
     :return: NamedArray of shape (QPos, KeySize)
@@ -143,7 +142,7 @@ def mask_to_bias(mask: NamedArray, mask_value: float = -1e9) -> NamedArray:
     return mask * mask_value
 
 
-def combine_masks_and(mask1: Optional[NamedArray], mask2: Optional[NamedArray]) -> Optional[NamedArray]:
+def combine_masks_and(mask1: NamedArray | None, mask2: NamedArray | None) -> NamedArray | None:
     if mask1 is None:
         return mask2
     if mask2 is None:
@@ -151,7 +150,7 @@ def combine_masks_and(mask1: Optional[NamedArray], mask2: Optional[NamedArray]) 
     return mask1 & mask2.broadcast_axis(mask1.axes)
 
 
-def combine_masks_or(mask1: Optional[NamedArray], mask2: Optional[NamedArray]) -> Optional[NamedArray]:
+def combine_masks_or(mask1: NamedArray | None, mask2: NamedArray | None) -> NamedArray | None:
     if mask1 is None:
         return mask2
     if mask2 is None:
@@ -225,7 +224,7 @@ def forgetful_causal_mask(KPos: Axis, mask_prob: float, sample_prob: bool = True
         return base | zeroth_on
 
 
-def _get_alibi_slopes(heads: int, bias_max: float) -> List[float]:
+def _get_alibi_slopes(heads: int, bias_max: float) -> list[float]:
     # Mosaic supports "bias_max"
     log_bias_max = math.log2(bias_max)
     # from https://github.com/ofirpress/attention_with_linear_biases/blob/a35aaca144e0eb6b789dfcb46784c4b8e31b7983/fairseq/models/transformer.py#L742

@@ -5,7 +5,8 @@
 
 import dataclasses
 import functools
-from typing import Optional
+
+# Removed unused import
 
 import equinox as eqx
 import jax
@@ -101,7 +102,7 @@ def tree_structure(tree, is_leaf=None):
     return jax.tree_util.tree_structure(tree, is_leaf=is_leaf)
 
 
-def resize_axis(tree: PyTree[NamedArray], old_axis: AxisSelector, new_size: int, key: Optional[PRNGKeyArray] = None):
+def resize_axis(tree: PyTree[NamedArray], old_axis: AxisSelector, new_size: int, key: PRNGKeyArray | None = None):
     """Resizes the NamedArrays of a PyTree along a given axis. If the array needs to grow and key is not none, then the
     new elements are sampled from a truncated normal distribution with the same mean and standard deviation as the
     existing elements. If the key is none, they're just initialized to the mean. If the array needs to shrink, then it's
