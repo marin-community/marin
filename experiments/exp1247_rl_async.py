@@ -319,8 +319,8 @@ def rl_train(name: str) -> ExecutorStep:
     config = RLTrainConfig(
         rollout_worker_config=rollout_worker,
         train_worker_config=train_worker,
-        inference_tpu_type="v5litepod-4",
-        train_tpu_type="v5litepod-4",
+        inference_tpu_type="v5p-8",
+        train_tpu_type="v5p-8",
         num_inference_workers=4,
         num_train_slices=1,
     )
