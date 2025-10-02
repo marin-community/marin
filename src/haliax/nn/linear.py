@@ -37,8 +37,9 @@ class Linear(ModuleWithStateDictSerialization):
     Out: AxisSpec = eqx.field(static=True)
     dot_general: DotGeneralOp = eqx.field(default_factory=DotGeneralOp.default)
 
-    @staticmethod
+    @classmethod
     def init(
+        cls,
         In: AxisSpec,
         Out: AxisSpec,
         *,
@@ -197,7 +198,10 @@ class MoELinear(eqx.Module):
         dim_numbers = jax.lax.RaggedDotDimensionNumbers(
             dot_dimension_numbers=(
                 # contracting
-                (ensure_tuple(inputs.axis_indices(self.In)), ensure_tuple(self.weight.axis_indices(self.In))),
+                (
+                    ensure_tuple(inputs.axis_indices(self.In)),
+                    ensure_tuple(self.weight.axis_indices(self.In)),
+                ),
                 # batch
                 ((), ()),
             ),
