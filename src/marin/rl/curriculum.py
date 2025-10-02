@@ -21,7 +21,7 @@ lessons and tracking progress to maximize learning efficiency.
 """
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import jax
@@ -29,7 +29,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from marin.rl.environments.base import EnvConfig, MarinEnv, load_environment_from_spec
-from marin.rl.types import Rollout
+from marin.rl.types import RolloutStats
 
 
 @dataclass
@@ -56,23 +56,6 @@ class LessonStats:
 
     reward_history: list[float] = field(default_factory=list)
     """Recent reward history for plateau detection."""
-
-    def to_dict(self) -> dict:
-        """Serialize to dictionary for checkpointing."""
-        return {
-            "smoothed_success": self.smoothed_success,
-            "smoothed_reward": self.smoothed_reward,
-            "eval_success": self.eval_success,
-            "eval_reward": self.eval_reward,
-            "eval_step": self.eval_step,
-            "total_samples": self.total_samples,
-            "reward_history": self.reward_history,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "LessonStats":
-        """Deserialize from dictionary."""
-        return cls(**data)
 
 
 @dataclass
@@ -126,10 +109,10 @@ class CurriculumConfig:
     eval_frequency: int = 1000
     """How often to run evaluation (in rollout worker steps)."""
 
-    eval_n_examples: int = 8
+    eval_n_examples: int = 32
     """Number of examples to use for each lesson during evaluation."""
 
-    eval_n_generations: int = 4
+    eval_n_generations: int = 1
     """Number of generations per example during evaluation."""
 
     temperature: float = 1.0
@@ -139,28 +122,24 @@ class CurriculumConfig:
     """Directory for saving curriculum checkpoints. If None, checkpointing is disabled."""
 
 
-def _validate_dependencies(lesson_configs: dict[str, LessonConfig]):
-    """Validate that lesson dependencies form a valid DAG (no cycles).
+def _validate_dependencies(lesson_configs: list[LessonConfig]):
+    """Validate that lesson dependencies form a valid DAG (no cycles)."""
+    # Build name->config mapping
+    config_map = {config.lesson_name: config for config in lesson_configs}
 
-    Args:
-        lesson_configs: Mapping from lesson name to configuration.
-
-    Raises:
-        ValueError: If circular dependencies are detected.
-    """
     visited = set()
     rec_stack = set()
 
     def has_cycle(node: str) -> bool:
         """Check if there's a cycle starting from node using DFS."""
-        if node not in lesson_configs:
+        if node not in config_map:
             # Dependency doesn't exist - we'll catch this elsewhere
             return False
 
         visited.add(node)
         rec_stack.add(node)
 
-        for dep in lesson_configs[node].dependencies:
+        for dep in config_map[node].dependencies:
             dep_name = dep.dependency_name
             if dep_name not in visited:
                 if has_cycle(dep_name):
@@ -171,16 +150,111 @@ def _validate_dependencies(lesson_configs: dict[str, LessonConfig]):
         rec_stack.remove(node)
         return False
 
-    for name in lesson_configs:
+    for config in lesson_configs:
+        name = config.lesson_name
         if name not in visited:
             if has_cycle(name):
                 raise ValueError(f"Circular dependency detected involving lesson '{name}'")
 
     # Also validate that all dependencies reference existing lessons
-    for name, config in lesson_configs.items():
+    for config in lesson_configs:
         for dep in config.dependencies:
-            if dep.dependency_name not in lesson_configs:
-                raise ValueError(f"Lesson '{name}' depends on unknown lesson '{dep.dependency_name}'")
+            if dep.dependency_name not in config_map:
+                raise ValueError(f"Lesson '{config.lesson_name}' depends on unknown lesson '{dep.dependency_name}'")
+
+
+def update_from_rollout(stats: LessonStats, rollout_stats: RolloutStats, alpha: float = 0.1) -> LessonStats:
+    """Update lesson statistics from rollout stats.
+
+    Args:
+        stats: Current lesson statistics.
+        rollout_stats: Lightweight rollout statistics.
+        alpha: Exponential smoothing parameter (higher = more weight on new data).
+
+    Returns:
+        Updated lesson statistics.
+    """
+    # Compute success (binary: reward > 0)
+    success = 1.0 if rollout_stats.episode_reward > 0 else 0.0
+
+    # Update exponential moving averages
+    if stats.total_samples == 0:
+        # First sample - initialize
+        smoothed_success = success
+        smoothed_reward = rollout_stats.episode_reward
+    else:
+        smoothed_success = (1 - alpha) * stats.smoothed_success + alpha * success
+        smoothed_reward = (1 - alpha) * stats.smoothed_reward + alpha * rollout_stats.episode_reward
+
+    reward_history = stats.reward_history.copy()
+    reward_history.append(float(rollout_stats.episode_reward))
+    if len(reward_history) > 100:
+        reward_history = reward_history[-100:]
+
+    return LessonStats(
+        smoothed_success=smoothed_success,
+        smoothed_reward=smoothed_reward,
+        eval_success=stats.eval_success,
+        eval_reward=stats.eval_reward,
+        eval_step=stats.eval_step,
+        total_samples=stats.total_samples + 1,
+        reward_history=reward_history,
+    )
+
+
+def get_combined_success_rate(stats: LessonStats, current_step: int) -> float:
+    """Blend training and evaluation success rates based on recency.
+
+    Weights evaluation more heavily when recent, training more when eval is stale.
+
+    Args:
+        stats: Lesson statistics.
+        current_step: Current training step.
+
+    Returns:
+        Combined success rate in [0, 1].
+    """
+    if stats.eval_step < 0:
+        # No evaluation data yet
+        return stats.smoothed_success
+
+    # Compute staleness and decay eval weight
+    staleness = current_step - stats.eval_step
+    eval_weight = 0.7 * np.exp(-0.001 * staleness)
+
+    # Blend eval and training metrics
+    return eval_weight * stats.eval_success + (1 - eval_weight) * stats.smoothed_success
+
+
+def is_plateaued(stats: LessonStats, window: int = 50, threshold: float = 0.01) -> bool:
+    """Detect if reward has plateaued for `stats`.
+
+    Args:
+        stats: Lesson statistics with reward history.
+        window: Number of recent samples to analyze.
+        threshold: Relative slope threshold for plateau detection.
+
+    Returns:
+        True if the reward has plateaued, False otherwise.
+    """
+    if len(stats.reward_history) < window:
+        return False
+
+    # Get recent rewards
+    recent = np.array(stats.reward_history[-window:])
+
+    # Fit linear trend
+    x = np.arange(len(recent))
+    coeffs = np.polyfit(x, recent, 1)
+    slope = coeffs[0]
+
+    # Check if relative trend is flat
+    mean_reward = np.mean(recent)
+    if abs(mean_reward) > 1e-6:
+        relative_trend = abs(slope) / abs(mean_reward)
+        return relative_trend < threshold
+
+    return True
 
 
 class Curriculum:
@@ -197,11 +271,10 @@ class Curriculum:
         Args:
             config: Curriculum configuration with lesson specs.
         """
+        _validate_dependencies(config.lessons)
         self.config = config
 
-        # Build lesson mapping and validate
         self.lesson_configs = {lesson.lesson_name: lesson for lesson in config.lessons}
-        _validate_dependencies(self.lesson_configs)
 
         # Initialize statistics for each lesson
         self.stats: dict[str, LessonStats] = {lesson.lesson_name: LessonStats() for lesson in config.lessons}
@@ -230,9 +303,8 @@ class Curriculum:
     def compute_sampling_weights(self) -> dict[str, float]:
         """Compute sampling weights for all active lessons.
 
-        Uses quadratic weighting that peaks at intermediate success rates,
-        with sigmoid smoothing at boundaries, exploration bonuses for new
-        lessons, and minimum probability guarantees.
+        Uses quadratic weighting that peaks at intermediate success rates
+        and minimum probability guarantees.
 
         Returns:
             Dictionary mapping lesson names to sampling probabilities.
@@ -255,11 +327,6 @@ class Curriculum:
             # w = 1 - 4(s - 0.5)^2 = -4s^2 + 4s
             base_weight = max(0.0, -4 * success_rate**2 + 4 * success_rate)
 
-            # Apply sigmoid smoothing at low and high ends
-            low_sigmoid = sigmoid(success_rate, center=0.1, steepness=20.0)
-            high_sigmoid = 1.0 - sigmoid(success_rate, center=0.9, steepness=20.0)
-            base_weight = base_weight * low_sigmoid * high_sigmoid
-
             # Use initial weight if we have no data yet
             if stats.total_samples == 0:
                 weights[name] = config.initial_weight
@@ -275,14 +342,14 @@ class Curriculum:
 
         return weights
 
-    def sample_lesson(self, prng_key) -> tuple[str, MarinEnv]:
+    def sample_lesson(self, prng_seed: int) -> tuple[str, dict]:
         """Sample a lesson for training based on current weights.
 
         Args:
-            prng_key: JAX random key for sampling.
+            prng_seed: Random seed for sampling.
 
         Returns:
-            Tuple of (lesson_name, environment).
+            Tuple of (lesson_name, env_config_dict).
         """
         weights = self.compute_sampling_weights()
         if not weights:
@@ -292,20 +359,68 @@ class Curriculum:
         probs = jnp.array([weights[name] for name in names])
 
         # Sample lesson
+        prng_key = jax.random.PRNGKey(prng_seed)
         idx = jax.random.choice(prng_key, len(names), p=probs)
         lesson_name = names[int(idx)]
 
-        return lesson_name, self.environments[lesson_name]
+        # Return env config as dict for serialization
+        env_config = self.lesson_configs[lesson_name].env_config
+        return lesson_name, asdict(env_config)
 
-    def check_dependencies(self, lesson_name: str) -> bool:
-        """Check if all dependencies for a lesson are satisfied.
+    def update_lesson_stats(self, rollout_stats: RolloutStats) -> None:
+        """Update lesson statistics from rollout stats.
 
         Args:
-            lesson_name: Name of the lesson to check.
+            rollout_stats: Statistics from a completed rollout.
+        """
+        assert rollout_stats.lesson_name in self.stats, f"Unknown lesson '{rollout_stats.lesson_name}'"
+        self.stats[rollout_stats.lesson_name] = update_from_rollout(self.stats[rollout_stats.lesson_name], rollout_stats)
+
+    def update_eval_stats(self, lesson_name: str, success: float, reward: float, step: int) -> None:
+        """Update evaluation statistics for a lesson.
+
+        Args:
+            lesson_name: Name of the lesson.
+            success: Success rate from evaluation.
+            reward: Average reward from evaluation.
+            step: Current training step.
+        """
+        assert lesson_name in self.stats, f"Unknown lesson '{lesson_name}'"
+        self.stats[lesson_name].eval_success = success
+        self.stats[lesson_name].eval_reward = reward
+        self.stats[lesson_name].eval_step = step
+
+    def get_metrics(self) -> dict:
+        """Get curriculum metrics for monitoring.
 
         Returns:
-            True if all dependencies are satisfied, False otherwise.
+            Dictionary of metrics including sampling weights, active lessons, etc.
         """
+        weights = self.compute_sampling_weights()
+        active = self.unlocked - self.graduated
+
+        # Sampling entropy
+        entropy = -sum(w * np.log(w + 1e-10) for w in weights.values() if w > 0)
+
+        # Effective lessons (inverse Simpson index)
+        effective = 1 / sum(w**2 for w in weights.values()) if weights else 0
+
+        return {
+            "step": self.current_step,
+            "total_lessons": len(self.lesson_configs),
+            "unlocked_lessons": len(self.unlocked),
+            "active_lessons": len(active),
+            "graduated_lessons": len(self.graduated),
+            "sampling_entropy": entropy,
+            "effective_lessons": effective,
+            "mean_success": (
+                np.mean([get_combined_success_rate(self.stats[n], self.current_step) for n in active]) if active else 0
+            ),
+            "sampling_weights": weights,
+        }
+
+    def check_dependencies(self, lesson_name: str) -> bool:
+        """Return true if all dependencies for a lesson are satisfied."""
         lesson_config = self.lesson_configs[lesson_name]
 
         for dep in lesson_config.dependencies:
@@ -337,14 +452,7 @@ class Curriculum:
                 self.unlocked.add(lesson_name)
 
     def check_graduation(self, lesson_name: str) -> bool:
-        """Check if a lesson should graduate.
-
-        Args:
-            lesson_name: Name of the lesson to check.
-
-        Returns:
-            True if the lesson has reached stop threshold and plateaued.
-        """
+        """Return true if a lesson should graduate and be removed from active sampling."""
         lesson_config = self.lesson_configs[lesson_name]
         stats = self.stats[lesson_name]
 
@@ -386,26 +494,8 @@ class Curriculum:
         checkpoint_path = checkpoint_dir / filename
 
         checkpoint_data = {
-            "lesson_configs": {
-                name: {
-                    "lesson_name": config.lesson_name,
-                    "env_config": {
-                        "env_class": config.env_config.env_class,
-                        "env_args": config.env_config.env_args,
-                    },
-                    "dependencies": [
-                        {"dependency_name": dep.dependency_name, "reward_threshold": dep.reward_threshold}
-                        for dep in config.dependencies
-                    ],
-                    "initial_weight": config.initial_weight,
-                    "start_threshold": config.start_threshold,
-                    "stop_threshold": config.stop_threshold,
-                    "plateau_window": config.plateau_window,
-                    "plateau_threshold": config.plateau_threshold,
-                }
-                for name, config in self.lesson_configs.items()
-            },
-            "stats": {name: stats.to_dict() for name, stats in self.stats.items()},
+            "lesson_configs": {name: asdict(config) for name, config in self.lesson_configs.items()},
+            "stats": {name: asdict(stats) for name, stats in self.stats.items()},
             "unlocked": list(self.unlocked),
             "graduated": list(self.graduated),
             "current_step": self.current_step,
@@ -442,9 +532,7 @@ class Curriculum:
         curriculum = cls(config)
 
         # Restore state
-        curriculum.stats = {
-            name: LessonStats.from_dict(stats_dict) for name, stats_dict in checkpoint_data["stats"].items()
-        }
+        curriculum.stats = {name: LessonStats(**stats_dict) for name, stats_dict in checkpoint_data["stats"].items()}
         curriculum.unlocked = set(checkpoint_data["unlocked"])
         curriculum.graduated = set(checkpoint_data["graduated"])
         curriculum.current_step = checkpoint_data["current_step"]
@@ -452,110 +540,7 @@ class Curriculum:
         return curriculum
 
 
-def update_from_rollout(stats: LessonStats, rollout: Rollout, alpha: float = 0.1) -> LessonStats:
-    """Update lesson statistics from a training rollout.
+def get_or_create_curriculum_actor(config: CurriculumConfig, name: str = "curriculum"):
+    import ray
 
-    Args:
-        stats: Current lesson statistics.
-        rollout: Rollout to incorporate.
-        alpha: Exponential smoothing parameter (higher = more weight on new data).
-
-    Returns:
-        Updated lesson statistics.
-    """
-    # Compute success (binary: reward > 0)
-    success = 1.0 if rollout.episode_reward > 0 else 0.0
-
-    # Update exponential moving averages
-    if stats.total_samples == 0:
-        # First sample - initialize
-        smoothed_success = success
-        smoothed_reward = rollout.episode_reward
-    else:
-        smoothed_success = (1 - alpha) * stats.smoothed_success + alpha * success
-        smoothed_reward = (1 - alpha) * stats.smoothed_reward + alpha * rollout.episode_reward
-
-    # Update reward history (keep last 100 samples)
-    reward_history = stats.reward_history.copy()
-    reward_history.append(float(rollout.episode_reward))
-    if len(reward_history) > 100:
-        reward_history = reward_history[-100:]
-
-    return LessonStats(
-        smoothed_success=smoothed_success,
-        smoothed_reward=smoothed_reward,
-        eval_success=stats.eval_success,
-        eval_reward=stats.eval_reward,
-        eval_step=stats.eval_step,
-        total_samples=stats.total_samples + 1,
-        reward_history=reward_history,
-    )
-
-
-def get_combined_success_rate(stats: LessonStats, current_step: int) -> float:
-    """Blend training and evaluation success rates based on recency.
-
-    Weights evaluation more heavily when recent, training more when eval is stale.
-
-    Args:
-        stats: Lesson statistics.
-        current_step: Current training step.
-
-    Returns:
-        Combined success rate in [0, 1].
-    """
-    if stats.eval_step < 0:
-        # No evaluation data yet
-        return stats.smoothed_success
-
-    # Compute staleness and decay eval weight
-    staleness = current_step - stats.eval_step
-    eval_weight = 0.7 * np.exp(-0.001 * staleness)
-
-    # Blend eval and training metrics
-    return eval_weight * stats.eval_success + (1 - eval_weight) * stats.smoothed_success
-
-
-def sigmoid(x: float, center: float, steepness: float) -> float:
-    """Smooth sigmoid transition.
-
-    Args:
-        x: Input value.
-        center: Center point of the sigmoid.
-        steepness: Steepness of the transition.
-
-    Returns:
-        Sigmoid output in [0, 1].
-    """
-    return 1 / (1 + np.exp(-steepness * (x - center)))
-
-
-def is_plateaued(stats: LessonStats, window: int = 50, threshold: float = 0.01) -> bool:
-    """Detect if reward has plateaued using linear regression on recent history.
-
-    Args:
-        stats: Lesson statistics with reward history.
-        window: Number of recent samples to analyze.
-        threshold: Relative slope threshold for plateau detection.
-
-    Returns:
-        True if the reward has plateaued, False otherwise.
-    """
-    if len(stats.reward_history) < window:
-        return False
-
-    # Get recent rewards
-    recent = np.array(stats.reward_history[-window:])
-
-    # Fit linear trend
-    x = np.arange(len(recent))
-    coeffs = np.polyfit(x, recent, 1)
-    slope = coeffs[0]
-
-    # Check if relative trend is flat
-    mean_reward = np.mean(recent)
-    if abs(mean_reward) > 1e-6:
-        relative_trend = abs(slope) / abs(mean_reward)
-        return relative_trend < threshold
-
-    return True
+    return ray.remote(Curriculum).options(name=name, get_if_exists=True, max_restarts=-1).remote(config)

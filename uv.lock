@@ -4079,7 +4079,7 @@ wheels = [
 [[package]]
 name = "levanter"
 version = "1.2"
-source = { git = "https://github.com/marin-community/levanter.git#8d457ce7944b383454989bf943268063f7c9073c" }
+source = { directory = "submodules/levanter" }
 dependencies = [
     { name = "async-lru" },
     { name = "braceexpand" },
@@ -4120,6 +4120,89 @@ serve = [
     { name = "fastapi" },
     { name = "openai" },
     { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "async-lru", specifier = "~=2.0" },
+    { name = "braceexpand", specifier = ">=0.1.7" },
+    { name = "dataclasses-json", specifier = "~=0.6.4" },
+    { name = "datasets", specifier = ">=3.1.0,<5.0" },
+    { name = "deepdiff" },
+    { name = "draccus", specifier = ">=0.11.5" },
+    { name = "equinox", specifier = ">=0.11.7,!=0.12.0" },
+    { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.100.0" },
+    { name = "filelock", specifier = "~=3.13" },
+    { name = "fsspec", extras = ["http"], specifier = ">=2024.2,<2026" },
+    { name = "gcsfs", specifier = ">=2024.2,<2026" },
+    { name = "google-api-python-client", marker = "extra == 'gcp'", specifier = ">=2.175.0" },
+    { name = "google-auth", marker = "extra == 'gcp'" },
+    { name = "google-cloud-storage", marker = "extra == 'gcp'" },
+    { name = "google-cloud-storage-transfer", marker = "extra == 'gcp'" },
+    { name = "haliax", specifier = ">=1.4.dev419" },
+    { name = "humanfriendly", specifier = "==10.0" },
+    { name = "jax", specifier = ">=0.6.2,!=0.7.0,!=0.7.1" },
+    { name = "jax", extras = ["cuda12"], marker = "extra == 'gpu'", specifier = ">=0.6.2" },
+    { name = "jax", extras = ["tpu"], marker = "extra == 'tpu'", specifier = ">=0.6.2" },
+    { name = "jaxtyping", specifier = ">=0.2.34" },
+    { name = "jinja2" },
+    { name = "jmp", specifier = ">=0.0.3" },
+    { name = "lenses" },
+    { name = "lm-eval", marker = "extra == 'lm-eval'" },
+    { name = "matplotlib", specifier = ">=3.7.0" },
+    { name = "openai", marker = "extra == 'serve'", specifier = ">=1.0.0" },
+    { name = "optax", specifier = ">=0.1.9" },
+    { name = "peft", marker = "extra == 'torch-test'", specifier = ">=0.12.0" },
+    { name = "protobuf", specifier = ">=6,<7" },
+    { name = "pyarrow", specifier = ">=11.0.0" },
+    { name = "pydantic", specifier = "<3" },
+    { name = "pytimeparse", specifier = ">=1.1.8" },
+    { name = "ray", extras = ["default"], specifier = ">=2.34.0" },
+    { name = "safetensors", extras = ["numpy"], specifier = ">=0.4.2,<0.7.0" },
+    { name = "tblib", specifier = ">=1.7.0,<4.0.0" },
+    { name = "tensorboard", marker = "extra == 'profiling'", specifier = ">=2.16" },
+    { name = "tensorboardx", marker = "extra == 'profiling'", specifier = ">=2.6" },
+    { name = "tensorstore", specifier = ">=0.1.73" },
+    { name = "tokenizers", specifier = ">=0.15.2" },
+    { name = "torch", marker = "extra == 'torch-test'", specifier = ">=2.7.0" },
+    { name = "tqdm-loggable", specifier = ">=0.2" },
+    { name = "transformers", specifier = ">=4.53.0,<5.0" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'serve'", specifier = ">=0.23.0" },
+    { name = "wandb", specifier = ">=0.17.8" },
+    { name = "xprof", marker = "extra == 'profiling'" },
+    { name = "zstandard", specifier = ">=0.18.0" },
+]
+provides-extras = ["gpu", "tpu", "torch-test", "profiling", "serve", "lm-eval", "gcp"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "click", specifier = ">=8.0.0" },
+    { name = "pre-commit" },
+    { name = "prompt-toolkit", specifier = ">=3.0.0" },
+    { name = "pygments" },
+]
+docs = [
+    { name = "mkdocs", specifier = ">=1.4.3" },
+    { name = "mkdocs-include-markdown-plugin" },
+    { name = "mkdocs-literate-nav", specifier = ">=0.6.0" },
+    { name = "mkdocs-macros-plugin", specifier = ">=0.7.0" },
+    { name = "mkdocs-material", specifier = ">=7.3.3" },
+    { name = "mkdocstrings", specifier = ">=0.22.0" },
+    { name = "mkdocstrings-python", specifier = ">=1.1.2" },
+    { name = "pygments" },
+    { name = "pymdown-extensions" },
+]
+test = [
+    { name = "chex", specifier = ">=0.1.86" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "librosa" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-forked" },
+    { name = "pytest-profiling", specifier = ">=1.8.1" },
+    { name = "soundfile" },
+    { name = "tensorboardx", specifier = ">=2.6" },
+    { name = "trackio" },
 ]
 
 [[package]]
@@ -4592,7 +4675,7 @@ requires-dist = [
     { name = "jax", extras = ["tpu"], marker = "extra == 'tpu'", specifier = "==0.6.2" },
     { name = "jaxtyping", marker = "extra == 'post-training'" },
     { name = "kenlm", marker = "extra == 'crawl'", git = "https://github.com/FredHaa/kenlm?rev=fix-build-with-cmake-4.0" },
-    { name = "levanter", extras = ["serve"], git = "https://github.com/marin-community/levanter.git" },
+    { name = "levanter", extras = ["serve"], directory = "submodules/levanter" },
     { name = "lm-eval", marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness.git" },
     { name = "lm-eval", marker = "extra == 'tokenize-train'", git = "https://github.com/stanford-crfm/lm-evaluation-harness.git" },
     { name = "lxml", marker = "extra == 'crawl'" },

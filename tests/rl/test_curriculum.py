@@ -14,8 +14,6 @@
 
 """Tests for adaptive curriculum learning system."""
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -31,20 +29,12 @@ from marin.rl.curriculum import (
     update_from_rollout,
 )
 from marin.rl.environments.base import EnvConfig
-from marin.rl.types import Rollout
+from marin.rl.types import RolloutStats
 
 
-def create_test_rollout(episode_reward: float, lesson_name: str = "test") -> Rollout:
-    """Helper to create a minimal rollout for testing."""
-    return Rollout(
-        env_name=f"mock:{lesson_name}",
-        env_example_id="test_example",
-        prompt_tokens=jnp.array([1, 2, 3], dtype=jnp.int32),
-        response_tokens=jnp.array([4, 5, 6], dtype=jnp.int32),
-        response_logprobs=jnp.array([0.1, 0.2, 0.3], dtype=jnp.float32),
-        token_rewards=jnp.array([episode_reward] * 3, dtype=jnp.float32),
-        episode_reward=episode_reward,
-    )
+def create_test_rollout_stats(episode_reward: float, lesson_name: str = "test") -> RolloutStats:
+    """Helper to create rollout stats for testing."""
+    return RolloutStats(lesson_name=lesson_name, episode_reward=episode_reward, env_example_id="test_example")
 
 
 def test_sigmoid():
@@ -60,12 +50,12 @@ def test_sigmoid():
 
 
 def test_update_from_rollout():
-    """Test statistics updates from rollouts."""
+    """Test statistics updates from rollout stats."""
     stats = LessonStats()
 
     # First rollout with reward
-    rollout1 = create_test_rollout(episode_reward=1.0)
-    stats = update_from_rollout(stats, rollout1)
+    rollout_stats1 = create_test_rollout_stats(episode_reward=1.0)
+    stats = update_from_rollout(stats, rollout_stats1)
 
     assert stats.total_samples == 1
     assert stats.smoothed_success == 1.0
@@ -73,8 +63,8 @@ def test_update_from_rollout():
     assert len(stats.reward_history) == 1
 
     # Second rollout with zero reward
-    rollout2 = create_test_rollout(episode_reward=0.0)
-    stats = update_from_rollout(stats, rollout2)
+    rollout_stats2 = create_test_rollout_stats(episode_reward=0.0)
+    stats = update_from_rollout(stats, rollout_stats2)
 
     assert stats.total_samples == 2
     assert stats.smoothed_success < 1.0  # Should decrease
@@ -88,8 +78,8 @@ def test_update_from_rollout_history_limit():
 
     # Add 150 rollouts
     for i in range(150):
-        rollout = create_test_rollout(episode_reward=float(i))
-        stats = update_from_rollout(stats, rollout)
+        rollout_stats = create_test_rollout_stats(episode_reward=float(i))
+        stats = update_from_rollout(stats, rollout_stats)
 
     # Should only keep last 100
     assert len(stats.reward_history) == 100
@@ -144,10 +134,11 @@ def test_single_lesson_curriculum():
     assert abs(weights["only_lesson"] - 1.0) < 0.01
 
     # Should be able to sample
-    key = jax.random.PRNGKey(0)
-    lesson_name, env = curriculum.sample_lesson(key)
+    lesson_name, env_config_dict = curriculum.sample_lesson(prng_seed=0)
     assert lesson_name == "only_lesson"
-    assert env is not None
+    assert env_config_dict is not None
+    assert "env_class" in env_config_dict
+    assert "env_args" in env_config_dict
 
 
 def test_weight_computation_at_different_success_rates():
@@ -232,11 +223,9 @@ def test_sampling_distribution():
     curriculum.stats["hard"].total_samples = 100
 
     # Sample many times and check distribution
-    key = jax.random.PRNGKey(42)
     samples = []
-    for _ in range(1000):
-        key, subkey = jax.random.split(key)
-        lesson_name, _ = curriculum.sample_lesson(subkey)
+    for i in range(1000):
+        lesson_name, _ = curriculum.sample_lesson(prng_seed=i)
         samples.append(lesson_name)
 
     # Count samples
@@ -279,7 +268,9 @@ def test_initial_weights():
 
 
 def test_lesson_stats_serialization():
-    """Test that LessonStats can be serialized and deserialized."""
+    """Test that LessonStats can be serialized and deserialized using dataclasses."""
+    from dataclasses import asdict
+
     stats = LessonStats(
         smoothed_success=0.7,
         smoothed_reward=0.8,
@@ -290,11 +281,11 @@ def test_lesson_stats_serialization():
         reward_history=[0.1, 0.2, 0.3],
     )
 
-    # Serialize
-    data = stats.to_dict()
+    # Serialize using dataclasses.asdict()
+    data = asdict(stats)
 
-    # Deserialize
-    restored = LessonStats.from_dict(data)
+    # Deserialize using constructor
+    restored = LessonStats(**data)
 
     assert restored.smoothed_success == stats.smoothed_success
     assert restored.smoothed_reward == stats.smoothed_reward
@@ -853,3 +844,98 @@ def test_checkpoint_graduated_lessons(tmp_path):
     # Verify graduation state
     assert "lesson1" in restored.graduated
     assert "lesson2" not in restored.graduated
+
+
+def test_rollout_stats_dataclass():
+    """Test RolloutStats dataclass creation and serialization."""
+    rollout_stats = RolloutStats(lesson_name="test_lesson", episode_reward=1.5, env_example_id="example_123")
+
+    assert rollout_stats.lesson_name == "test_lesson"
+    assert rollout_stats.episode_reward == 1.5
+    assert rollout_stats.env_example_id == "example_123"
+
+    # Test that it's serializable (important for Ray)
+    from dataclasses import asdict
+
+    stats_dict = asdict(rollout_stats)
+    assert stats_dict["lesson_name"] == "test_lesson"
+    assert stats_dict["episode_reward"] == 1.5
+
+    # Test reconstruction
+    reconstructed = RolloutStats(**stats_dict)
+    assert reconstructed.lesson_name == rollout_stats.lesson_name
+    assert reconstructed.episode_reward == rollout_stats.episode_reward
+
+
+def test_curriculum_update_lesson_stats():
+    """Test update_lesson_stats method."""
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="test_lesson",
+                env_config=EnvConfig(env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "cats"}),
+            )
+        ]
+    )
+
+    curriculum = Curriculum(config)
+
+    # Update stats via method
+    rollout_stats = create_test_rollout_stats(episode_reward=1.0, lesson_name="test_lesson")
+    curriculum.update_lesson_stats(rollout_stats)
+
+    assert curriculum.stats["test_lesson"].total_samples == 1
+    assert curriculum.stats["test_lesson"].smoothed_reward == 1.0
+
+
+def test_curriculum_update_eval_stats():
+    """Test update_eval_stats method."""
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="test_lesson",
+                env_config=EnvConfig(env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "cats"}),
+            )
+        ]
+    )
+
+    curriculum = Curriculum(config)
+
+    # Update eval stats
+    curriculum.update_eval_stats("test_lesson", success=0.85, reward=0.9, step=100)
+
+    assert curriculum.stats["test_lesson"].eval_success == 0.85
+    assert curriculum.stats["test_lesson"].eval_reward == 0.9
+    assert curriculum.stats["test_lesson"].eval_step == 100
+
+
+def test_curriculum_get_metrics():
+    """Test get_metrics method."""
+    config = CurriculumConfig(
+        lessons=[
+            LessonConfig(
+                lesson_name="lesson1",
+                env_config=EnvConfig(env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "cats"}),
+            ),
+            LessonConfig(
+                lesson_name="lesson2",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "addition"}
+                ),
+            ),
+        ]
+    )
+
+    curriculum = Curriculum(config)
+    curriculum.current_step = 42
+
+    metrics = curriculum.get_metrics()
+
+    assert metrics["step"] == 42
+    assert metrics["total_lessons"] == 2
+    assert metrics["unlocked_lessons"] == 2  # Both unlocked by default
+    assert metrics["active_lessons"] == 2
+    assert metrics["graduated_lessons"] == 0
+    assert "sampling_entropy" in metrics
+    assert "effective_lessons" in metrics
+    assert "sampling_weights" in metrics

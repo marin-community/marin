@@ -33,6 +33,7 @@ import jax
 import jax.random as jrandom
 import levanter
 import numpy as np
+import ray
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
@@ -40,7 +41,8 @@ from levanter.utils.jax_utils import barrier_sync
 from openai import AsyncOpenAI
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
-from marin.rl.curriculum import Curriculum, CurriculumConfig, update_from_rollout
+from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
+from marin.rl.environments.base import EnvConfig, load_environment_from_spec
 from marin.rl.model_utils import load_model_from_checkpoint
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
@@ -50,6 +52,7 @@ from .types import (
     InferenceResponse,
     RolloutBatch,
     RolloutMetadata,
+    RolloutStats,
 )
 from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_weight_transfer_client
 
@@ -65,6 +68,7 @@ class RolloutWorkerConfig:
     trainer: TrainerConfig
     model: LmConfig
     curriculum_config: "CurriculumConfig"  # type: ignore
+    curriculum_actor_name: str
     rollout_storage: RolloutStorageConfig
     max_input_length: int
     max_output_length: int
@@ -235,8 +239,10 @@ class RolloutWorker:
         else:
             self._tokenizer = cast(PreTrainedTokenizer, self.config.model.tokenizer)
 
-        # Initialize curriculum
-        self.curriculum = Curriculum(config.curriculum_config)
+        # Get or create curriculum actor
+        self.curriculum_actor = get_or_create_curriculum_actor(
+            config.curriculum_config, name=config.curriculum_actor_name
+        )
 
         logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
         self._transfer_client = create_weight_transfer_client(
@@ -306,10 +312,16 @@ class RolloutWorker:
     def _generate_rollout_batch(self, rng) -> tuple[RolloutBatch | None, dict | None]:
         barrier_sync()
 
-        # Sample lesson from curriculum
+        # Sample lesson from curriculum actor
         rng, lesson_rng = jrandom.split(rng)
-        lesson_name, env = self.curriculum.sample_lesson(lesson_rng)
+        seed = int(lesson_rng[0])
+
+        lesson_name, env_config_dict = ray.get(self.curriculum_actor.sample_lesson.remote(seed))
         logger.info(f"Sampled lesson '{lesson_name}' from curriculum")
+
+        # Load environment from config dict
+        env_config = EnvConfig(**env_config_dict)
+        env = load_environment_from_spec(env_config)
 
         # Create policy inference context for sampling from the inference server
         policy_ctx = LevanterInferenceContext(
@@ -337,23 +349,18 @@ class RolloutWorker:
             logger.warning("No valid rollouts generated in this batch, retrying...")
             return None, None
 
-        # Update curriculum stats from rollouts
+        # Update curriculum stats via actor
         for group in rollout_groups:
             for rollout in group.rollouts:
-                # Extract lesson name from rollout.env_name
-                # env_name format: "mock:cats" or similar
-                env_name_parts = rollout.env_name.split(":", 1)
-                rollout_lesson = env_name_parts[1] if len(env_name_parts) > 1 else env_name_parts[0]
+                rollout_stats = RolloutStats(
+                    lesson_name=lesson_name, episode_reward=rollout.episode_reward, env_example_id=rollout.env_example_id
+                )
+                self.curriculum_actor.update_lesson_stats.remote(rollout_stats)
 
-                if rollout_lesson in self.curriculum.stats:
-                    self.curriculum.stats[rollout_lesson] = update_from_rollout(
-                        self.curriculum.stats[rollout_lesson], rollout
-                    )
-
-        # Update curriculum state
-        self.curriculum.step()
-        self.curriculum.update_unlocked_lessons()
-        self.curriculum.update_graduated_lessons()
+        # Update curriculum state via actor
+        self.curriculum_actor.step.remote()
+        self.curriculum_actor.update_unlocked_lessons.remote()
+        self.curriculum_actor.update_graduated_lessons.remote()
 
         rollout_batch = RolloutBatch(
             groups=rollout_groups,
@@ -385,12 +392,17 @@ class RolloutWorker:
         """Evaluate all unlocked, non-graduated lessons and update eval metrics."""
         barrier_sync()
 
-        active_lessons = self.curriculum.unlocked - self.curriculum.graduated
-        if not active_lessons:
+        # Get active lessons from curriculum actor
+        metrics = ray.get(self.curriculum_actor.get_metrics.remote())
+        active_lesson_names = [
+            name for name in metrics["sampling_weights"].keys()
+        ]  # Active lessons are those with sampling weights
+
+        if not active_lesson_names:
             logger.info("No active lessons to evaluate")
             return
 
-        logger.info(f"Evaluating {len(active_lessons)} active lessons")
+        logger.info(f"Evaluating {len(active_lesson_names)} active lessons")
 
         # Create inference context
         policy_ctx = LevanterInferenceContext(
@@ -400,8 +412,14 @@ class RolloutWorker:
             stop_tokens=self.config.stop_tokens,
         )
 
-        for lesson_name in active_lessons:
-            env = self.curriculum.environments[lesson_name]
+        current_step = metrics["step"]
+
+        for lesson_name in active_lesson_names:
+            # Get env config from actor and load environment
+            _, env_config_dict = ray.get(self.curriculum_actor.sample_lesson.remote(int(rng[0])))
+            env_config = EnvConfig(**env_config_dict)
+            env = load_environment_from_spec(env_config)
+
             rng, eval_rng = jrandom.split(rng)
 
             with (
@@ -409,7 +427,7 @@ class RolloutWorker:
                 hax.axis_mapping(self.config.trainer.compute_axis_mapping),
             ):
                 # Sample eval rollouts
-                rollout_groups, metrics = env.sample(
+                rollout_groups, _ = env.sample(
                     inference_ctx=policy_ctx,
                     n_examples=self.config.curriculum_config.eval_n_examples,
                     n_generations=self.config.curriculum_config.eval_n_generations,
@@ -418,20 +436,21 @@ class RolloutWorker:
                     mode="eval",
                 )
 
-            # Update eval metrics
+            # Update eval metrics via actor
             if rollout_groups:
                 success_count = sum(1 for g in rollout_groups for r in g.rollouts if r.episode_reward > 0)
                 reward_sum = sum(r.episode_reward for g in rollout_groups for r in g.rollouts)
                 total_count = sum(len(g.rollouts) for g in rollout_groups)
 
                 if total_count > 0:
-                    self.curriculum.stats[lesson_name].eval_success = success_count / total_count
-                    self.curriculum.stats[lesson_name].eval_reward = reward_sum / total_count
-                    self.curriculum.stats[lesson_name].eval_step = self.curriculum.current_step
+                    success_rate = success_count / total_count
+                    avg_reward = reward_sum / total_count
+
+                    self.curriculum_actor.update_eval_stats.remote(lesson_name, success_rate, avg_reward, current_step)
 
                     logger.info(
                         f"Eval {lesson_name}: success={success_count}/{total_count} "
-                        f"({100*success_count/total_count:.1f}%), reward={reward_sum/total_count:.3f}"
+                        f"({100*success_rate:.1f}%), reward={avg_reward:.3f}"
                     )
 
         barrier_sync()

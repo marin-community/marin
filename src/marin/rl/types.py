@@ -133,6 +133,15 @@ class RolloutBatch(eqx.Module):
 
 
 @dataclass
+class RolloutStats:
+    """Lightweight statistics extracted from a rollout for curriculum updates."""
+
+    lesson_name: str
+    episode_reward: float
+    env_example_id: str
+
+
+@dataclass
 class RolloutWithAdvantage:
     """A rollout paired with its computed advantage."""
 

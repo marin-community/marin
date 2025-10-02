@@ -693,13 +693,95 @@ Test categories:
 
 ## Distributed Curricula
 
-As we will be using multiple rollout workers, it's important the statistics for
-all workers are used. To manage this, we will run the curriculum as a Ray actor:
+Multiple rollout workers share a single curriculum to aggregate statistics and
+coordinate lesson progression. The `Curriculum` class is deployed as a Ray actor
+using the `get_or_create_curriculum_actor()` helper.
 
-```
-class CurriculumActor(Curriculum):
-  ...
+### RolloutStats Format
+
+Curriculum updates use lightweight `RolloutStats` instead of full rollouts:
+
+```python
+@dataclass
+class RolloutStats:
+    """Lightweight statistics from a rollout for curriculum updates."""
+    lesson_name: str
+    episode_reward: float
+    env_example_id: str
 ```
 
-Note that this implies inputs to the curriculum should be small, e.g. episode
-level statistics instead of entire rollouts.
+### Actor Creation
+
+The `Curriculum` class itself is the Ray actor. Use `get_or_create_curriculum_actor()`
+to obtain a handle:
+
+```python
+from marin.rl.curriculum import get_or_create_curriculum_actor, CurriculumConfig
+
+# Get or create curriculum actor (shared across workers)
+curriculum_actor = get_or_create_curriculum_actor(
+    config=curriculum_config,
+    name="curriculum"  # Named actor for shared access
+)
+```
+
+### Curriculum Actor Interface
+
+The actor supports remote method calls from multiple workers:
+
+```python
+# Sample lesson (returns lesson_name and serializable env_config dict)
+lesson_name, env_config_dict = ray.get(curriculum_actor.sample_lesson.remote(seed=42))
+
+# Update statistics from rollout
+rollout_stats = RolloutStats(
+    lesson_name="basic_math",
+    episode_reward=1.0,
+    env_example_id="example_123"
+)
+curriculum_actor.update_lesson_stats.remote(rollout_stats)  # Async
+
+# Update from evaluation
+curriculum_actor.update_eval_stats.remote(
+    lesson_name="basic_math",
+    success=0.85,
+    reward=0.9,
+    step=1000
+)
+
+# Update curriculum state
+curriculum_actor.step.remote()
+curriculum_actor.update_unlocked_lessons.remote()
+curriculum_actor.update_graduated_lessons.remote()
+
+# Get monitoring metrics
+metrics = ray.get(curriculum_actor.get_metrics.remote())
+print(f"Active lessons: {metrics['active_lessons']}")
+print(f"Sampling entropy: {metrics['sampling_entropy']:.2f}")
+```
+
+### Multi-Worker Usage
+
+Multiple rollout workers coordinate through the shared actor:
+
+```python
+# Worker 1
+curriculum_actor = get_or_create_curriculum_actor(config, name="shared_curriculum")
+lesson_name, env_config = ray.get(curriculum_actor.sample_lesson.remote(seed=1))
+# ... generate rollouts ...
+curriculum_actor.update_lesson_stats.remote(rollout_stats)
+
+# Worker 2 (gets same actor by name)
+curriculum_actor = get_or_create_curriculum_actor(config, name="shared_curriculum")
+lesson_name, env_config = ray.get(curriculum_actor.sample_lesson.remote(seed=2))
+# ... generate rollouts ...
+curriculum_actor.update_lesson_stats.remote(rollout_stats)
+```
+
+### Concurrency & Synchronization
+
+- Actor uses `num_cpus=0` for minimal overhead
+- All methods are thread-safe (single actor instance)
+- Stats updates are async (`.remote()` without `ray.get()`)
+- Lesson sampling is synchronous (`ray.get()` required)
+- The `get_or_create_actor()` pattern handles race conditions during initialization
