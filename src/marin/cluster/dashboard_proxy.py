@@ -61,7 +61,7 @@ class DashboardProxy:
             return html
 
         @app.route("/<cluster>/", defaults={"path": ""})
-        @app.route("/<cluster>/<path:path>")
+        @app.route("/<cluster>/<path:path>", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
         def proxy(cluster, path):
             """Proxy requests to appropriate cluster dashboard."""
             if cluster not in self.clusters:

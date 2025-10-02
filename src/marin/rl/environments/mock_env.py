@@ -61,11 +61,25 @@ class Task(Protocol):
 
 
 class AdditionTask:
+    """Addition task with configurable difficulty."""
+
+    DIFFICULTY_RANGES: ClassVar[dict[str, tuple[int, int]]] = {
+        "easy": (0, 10),  # 1 digit
+        "medium": (0, 100),  # 2 digits
+        "hard": (0, 10000),  # 4-5 digits
+    }
+
+    def __init__(self, difficulty: str = "medium"):
+        if difficulty not in self.DIFFICULTY_RANGES:
+            raise ValueError(f"Unknown difficulty: {difficulty}. Must be one of {list(self.DIFFICULTY_RANGES.keys())}")
+        self.difficulty = difficulty
+        self.min_val, self.max_val = self.DIFFICULTY_RANGES[difficulty]
+
     def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
         examples = []
         for _ in range(n_examples):
-            a = rng.integers(0, 1000)
-            b = rng.integers(0, 1000)
+            a = rng.integers(self.min_val, self.max_val)
+            b = rng.integers(self.min_val, self.max_val)
             result = a + b
             prompt = f"What is {a}+{b}? Output just the number:"
             answer = str(result)
@@ -95,6 +109,10 @@ class OppositesTask:
         ("good", "bad"),
     ]
 
+    def __init__(self, difficulty: str = "medium"):
+        # Difficulty not used for this task
+        pass
+
     def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
         examples = []
         for _ in range(n_examples):
@@ -113,6 +131,10 @@ class OppositesTask:
 
 class NumberComparisonTask:
     """Compare two numbers - 50% success rate target."""
+
+    def __init__(self, difficulty: str = "medium"):
+        # Difficulty not used for this task
+        pass
 
     def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
         examples = []
@@ -155,11 +177,15 @@ def compute_soft_reward(correct_answer: str, actual_response: str) -> float:
             break
 
     format_score = min(1.0, 1 / max(len(tokens), 1))
-    return 0.7 * correct_score + 0.3 * format_score
+    return -1 + correct_score + 0.3 * format_score
 
 
 class MoarCatsTask:
     """Make moar cats."""
+
+    def __init__(self, difficulty: str = "medium"):
+        # Difficulty not used for this task
+        pass
 
     def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
         examples = []
@@ -182,32 +208,36 @@ class MoarCatsTask:
 
 # Task mappings
 TASKS = {
-    "cats": MoarCatsTask(),
-    "addition": AdditionTask(),
-    "opposites": OppositesTask(),
-    "number_comparison": NumberComparisonTask(),
+    "cats": MoarCatsTask,
+    "addition": AdditionTask,
+    "opposites": OppositesTask,
+    "number_comparison": NumberComparisonTask,
 }
 
 
 class MockEnv(MarinEnv):
     """Mock environment that generates synthetic data for testing."""
 
-    def __init__(self, task_type: str, seed=None, **kwargs):
+    def __init__(self, task_type: str, seed=None, difficulty: str = "medium", **kwargs):
         self.task_type = task_type
 
-        # Get the task instance for this task type
-        self.task = TASKS.get(task_type)
-        if not self.task:
+        # Get the task class for this task type
+        task_class = TASKS.get(task_type)
+        if not task_class:
             raise ValueError(f"Unknown task type: {task_type}")
+
+        # Instantiate the task with difficulty
+        self.task = task_class(difficulty=difficulty)
 
         # Generate examples using the task
         rng = np.random.default_rng(seed)
         self.train_examples = self.task.generate_training_examples(NUM_TRAIN_EXAMPLES, rng)
         self.eval_examples = self.task.generate_eval_examples(NUM_EVAL_EXAMPLES, rng)
 
+        difficulty_str = f" (difficulty={difficulty})" if task_type == "addition" else ""
         print(
-            f"Initialized MockEnv with task '{task_type}': {len(self.train_examples)} train examples "
-            f"and {len(self.eval_examples)} eval examples."
+            f"Initialized MockEnv with task '{task_type}'{difficulty_str}: "
+            f"{len(self.train_examples)} train examples and {len(self.eval_examples)} eval examples."
         )
 
     def sample(
