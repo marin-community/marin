@@ -622,7 +622,7 @@ gsm8k_finemath_without_finetuning = default_ablations(
 
 # last_finetune_step = gsm8k_finemath_with_finetuning[-1]
 test_gsm8k_step = evaluate_levanter_lm_evaluation_harness(
-    model_name="test-llama-1b-gsm8k-base-v3",
+    model_name="test-llama-1b-gsm8k-base-v4",
     # model_path=llama_3_1_8b_instruct,
     model_path=gcs_llama_3_2_1b,
     # evals=eval_tasks,
@@ -652,6 +652,6 @@ if __name__ == "__main__":
         # steps=eval_steps,
         # steps=microanneal_steps,
         # steps=fixed_microanneal_steps,
-        steps=gsm8k_finemath_with_finetuning + gsm8k_finemath_without_finetuning,
-        # steps=[test_gsm8k_step],
+        # steps=gsm8k_finemath_with_finetuning + gsm8k_finemath_without_finetuning,
+        steps=[test_gsm8k_step],
     )

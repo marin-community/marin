@@ -243,6 +243,8 @@ tokenize_train = [
     "sentencepiece",
     "tiktoken",
     "datasets==3.6.0",
+    "accelerate",
+    "peft"
 ]
 
 

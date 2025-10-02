@@ -44,10 +44,11 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         """
         return build_runtime_env_for_packages(
             extra=["eval"],
-            pip_packages=["statsmodels==0.14.4"],
+            pip_packages=["statsmodels==0.14.4", "math_verify", "sympy", "antlr4-python3-runtime==4.11"],
             env_vars={
                 "TOKENIZERS_PARALLELISM": "false",
                 "HF_DATASETS_TRUST_REMOTE_CODE": "1",
+                "HF_ALLOW_CODE_EVAL": "1",
             },
         )
 
@@ -86,7 +87,10 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 mp=jmp.get_policy("p=bfloat16,c=bfloat16"),
                 per_device_eval_parallelism=8,
                 ray=RayConfig(auto_start_cluster=False),
+                # tensor_parallel_axes=["mlp", "vocab"],
+                # # did not include "heads" which is query heads or kv_heads because div
                 tensor_parallel_axes=["mlp", "heads", "kv_head", "vocab"],
+                # tensor_parallel_axes=["mlp", "vocab"],
                 model_axis_size=4,
             )
 
@@ -108,7 +112,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     task_spec=tasks,
                     max_examples=max_eval_instances,
                     log_samples=False,
-                    max_eval_length=2048,
+                    max_eval_length=4096,
                     apply_chat_template=model.apply_chat_template,
                     gen_kwargs=model.generation_params,
                 ),

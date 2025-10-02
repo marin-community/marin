@@ -244,7 +244,7 @@ def generate_midtrain_step(config: DecayConfig):
 decay_data_name = "flan"
 decay_data_tokenized = get_dolmino_step_llama3("flan")
 # NOTE(chris): Working on the low isoflop budgets for now.
-sweep_cfg = IsoFlopSweepConfig(tokenized_dataset=decay_data_tokenized, budgets=[1e18, 3e18, 6e18, 1e19, 3e19])
+sweep_cfg = IsoFlopSweepConfig(tokenized_dataset=nemotron_mix, budgets=[1e18, 3e18, 6e18, 1e19, 3e19])
 isoflop_steps, isoflop_model_configs, isoflop_train_configs, isoflop_budgets, _ = generate_isoflop_steps(
     sweep_cfg, "nemo-wider-depth-adapt"
 )

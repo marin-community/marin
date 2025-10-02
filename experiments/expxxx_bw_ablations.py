@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from marin.execution.executor import InputName, executor_main
 from experiments.defaults import default_tokenize, default_train
 from levanter.data.text import TextLmDatasetFormat
@@ -32,6 +46,10 @@ dclm_3B_high_quality_subset_non_chunked = InputName.hardcoded(
     "gs://marin-us-central2/documents/quality_filtering/synthetic-dclm-25B-subset-fineweb-edu-top-20-c22b1b"
 )
 
+synthetic_dclm_10B_8B_subset = InputName.hardcoded(
+    "gs://marin-us-central2/documents/synthetic-dclm-subset-10B-wrapqa-8b-e0b426"
+)
+
 
 # 10B tokens
 dclm_10B_subset_text = default_tokenize(
@@ -45,6 +63,13 @@ dclm_10B_subset_text = default_tokenize(
 dclm_10B_subset_generated_text = default_tokenize(
     name="dclm_10B_subset/llama-3b/wrap-qa",
     dataset=synthetic_dclm_10B_subset,
+    tokenizer=llama3_tokenizer,
+    format=TextLmDatasetFormat(text_key="generated_text"),
+)
+
+dclm_10B_8B_subset_generated_text = default_tokenize(
+    name="dclm_10B_subset/llama-8b/wrap-qa",
+    dataset=synthetic_dclm_10B_8B_subset,
     tokenizer=llama3_tokenizer,
     format=TextLmDatasetFormat(text_key="generated_text"),
 )
@@ -230,6 +255,32 @@ llama_3_2_1b_10B_wrapqa_lr_5e_5 = default_train(
     eval_harness_tasks=BEYOND_WEB_TASKS,
 )
 
+# Experiment on 10B tokens re-written by Llama-8B model
+llama_3_2_8b_10B_wrapqa_lr_5e_5 = default_train(
+    name="dclm_10B_subset/llama-3.2-1b-hf-dclm-50-wrapqa-50-8b-lr=5e-5",
+    tokenized=lm_mixture_data_config(
+        components={
+            "dclm": dclm_components_llama3["dclm_baseline"],
+            "wrap-qa": dclm_10B_8B_subset_generated_text,
+        },
+        weights={"dclm": 0.50, "wrap-qa": 0.50},
+    ),
+    model_config=llama_3_2_1b,
+    train_config=SimpleTrainConfig(
+        resources=TpuPodConfig(tpu_type="v4-64"),
+        train_batch_size=_batch_size,
+        num_train_steps=num_train_steps,
+        learning_rate=5e-5,
+        weight_decay=1e-7,
+        warmup=0.05,
+        lr_schedule="cosine",
+        steps_per_task_eval=1000,  # roughly 1B token
+        initialize_from_hf="meta-llama/Llama-3.2-1B",
+    ),
+    tags=["llama-1b", "dclm-50", "wrapqa-50", "lr=5e-5", "wd=1e-7", "cosine", "10B", "M=8b"],
+    eval_harness_tasks=BEYOND_WEB_TASKS,
+)
+
 
 # Experiment on High Quality vs. Low Quality 3B Tokens
 # 6B tokens
@@ -384,6 +435,7 @@ llama_3_2_1b_high_synth_high_web_non_chunked = default_train(
     eval_harness_tasks=BEYOND_WEB_TASKS,
 )
 
+
 if __name__ == "__main__":
     executor_main(
         steps=[
@@ -395,8 +447,9 @@ if __name__ == "__main__":
             # llama_3_2_1b_low_web_high_web,
             # llama_3_2_1b_low_synth_high_web,
             # llama_3_2_1b_high_synth_high_web,
-            llama_3_2_1b_low_web_high_web_non_chunked,
-            llama_3_2_1b_low_synth_high_web_non_chunked,
-            llama_3_2_1b_high_synth_high_web_non_chunked,
+            # llama_3_2_1b_low_web_high_web_non_chunked,
+            # llama_3_2_1b_low_synth_high_web_non_chunked,
+            # llama_3_2_1b_high_synth_high_web_non_chunked,
+            llama_3_2_8b_10B_wrapqa_lr_5e_5,
         ],
     )

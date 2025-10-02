@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import argparse
 import os
 import re
@@ -116,10 +130,10 @@ def main():
                 "acc_norm",
             ),
             (
-                "gsm8k_loss_8shot_bpb",
-                [re.compile(r"^lm_eval/gsm8k_loss_8shot/bpb$")],
-                "GSM8K loss 8-shot bpb vs pretraining ratio",
-                "bpb",
+                "gsm8k_cot acc",
+                [re.compile(r"^lm_eval/gsm8k_cot/exact_match,strict-match$")],
+                "GSM8K loss 8-shot acc vs pretraining ratio",
+                "acc",
             ),
             (
                 "math_500_loss_bpb",
@@ -220,6 +234,7 @@ def main():
             collected.append((pre_ratio, history_val, name))
 
         if not collected:
+            print(f"No collected data for {metric_key_prefix}")
             return
 
         collected.sort(key=lambda x: x[0])
