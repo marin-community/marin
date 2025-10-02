@@ -37,6 +37,7 @@ from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
 
+from marin.rl.curriculum import CurriculumConfig, LessonConfig
 from marin.rl.environments import EnvConfig
 from marin.rl.environments.mock_env import MockEnv
 from marin.rl.replay_buffer import ReplayBufferConfig
@@ -290,8 +291,6 @@ def create_nano_rollout_worker_config(
         rollout_storage: Rollout storage configuration
         curriculum_config: Optional curriculum config. If None, creates single-lesson curriculum.
     """
-    from marin.rl.curriculum import CurriculumConfig, LessonConfig
-
     model_config = create_nano_llama_config()
     inference_server_config = create_test_inference_server_config(model_config, output_dir)
 
@@ -307,7 +306,7 @@ def create_nano_rollout_worker_config(
                     ),
                 )
             },
-            eval_frequency=1000,
+            eval_frequency=100,
         )
 
     return RolloutWorkerConfig(

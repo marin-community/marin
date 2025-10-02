@@ -33,7 +33,7 @@ from marin.rl.rollout_storage import (
 )
 from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
-from tests.rl.config_helpers import (
+from tests.rl.integration_test_config import (
     DummyTokenizer,
     create_nano_rollout_worker_config,
     create_nano_training_worker_config,
@@ -190,8 +190,8 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
 
         original_generate_batch = self.worker._generate_rollout_batch
 
-        def counting_generate_batch(rng):
-            batch_data, metrics = original_generate_batch(rng)
+        def counting_generate_batch(rng, step):
+            batch_data, metrics = original_generate_batch(rng, step)
             if batch_data is None:
                 return None, None
             self._track_rollout_generation()
