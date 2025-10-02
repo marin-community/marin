@@ -155,7 +155,7 @@ def compute_soft_reward(correct_answer: str, actual_response: str) -> float:
             break
 
     format_score = min(1.0, 1 / max(len(tokens), 1))
-    return 0.7 * correct_score + 0.3 * format_score
+    return -1 + correct_score + 0.3 * format_score
 
 
 class MoarCatsTask:
