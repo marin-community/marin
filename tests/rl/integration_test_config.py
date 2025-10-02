@@ -37,6 +37,7 @@ from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
 
+from marin.rl.curriculum import CurriculumConfig, LessonConfig
 from marin.rl.environments import EnvConfig
 from marin.rl.environments.mock_env import MockEnv
 from marin.rl.replay_buffer import ReplayBufferConfig
@@ -237,6 +238,23 @@ def create_weight_transfer_config():
     )
 
 
+def create_test_curriculum_config(actor_name: str = "test_curriculum") -> CurriculumConfig:
+    """Create a minimal CurriculumConfig for testing."""
+    return CurriculumConfig(
+        lessons={
+            "cats": LessonConfig(
+                lesson_id="cats",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "cats", "seed": 42},
+                ),
+            )
+        },
+        eval_frequency=100,
+        actor_name=actor_name,
+    )
+
+
 def create_nano_training_worker_config(
     rollout_storage: RolloutStorageConfig, output_dir: str | Path
 ) -> TrainWorkerConfig:
@@ -248,6 +266,7 @@ def create_nano_training_worker_config(
         trainer=create_nano_trainer_config(output_dir),
         optimizer=create_nano_optimizer_config(),
         weight_transfer=create_weight_transfer_config(),
+        curriculum_config=create_test_curriculum_config(),
         max_input_length=16,
         max_output_length=16,
         pad_token_id=0,
@@ -258,6 +277,7 @@ def create_nano_training_worker_config(
         ),
         # disable KL since we're training from scratch
         kl_coef=0.0,
+        curriculum_checkpoint_interval=50,
     )
 
 
@@ -280,25 +300,22 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
     )
 
 
-def create_nano_rollout_worker_config(
-    output_dir: str, rollout_storage: RolloutStorageConfig, environment=None
-) -> RolloutWorkerConfig:
-    """Create a minimal RolloutWorkerConfig for testing."""
+def create_nano_rollout_worker_config(output_dir: str, rollout_storage: RolloutStorageConfig) -> RolloutWorkerConfig:
+    """Create a minimal RolloutWorkerConfig for testing.
+
+    Args:
+        output_dir: Directory for outputs
+        rollout_storage: Rollout storage configuration
+    """
     model_config = create_nano_llama_config()
     inference_server_config = create_test_inference_server_config(model_config, output_dir)
-
-    if environment is None:
-        # Use the DummyTokenizer for the mock environment
-        environment = create_mock_environment(tokenizer=DummyTokenizer())
 
     return RolloutWorkerConfig(
         run_id="test-0",
         trainer=create_nano_trainer_config(output_dir),
         inference_server_config=inference_server_config,
         model=model_config,
-        environment_spec=EnvConfig(
-            env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "cats", "seed": 42}
-        ),
+        curriculum_config=create_test_curriculum_config(),
         rollout_storage=rollout_storage,
         max_input_length=8,
         max_output_length=8,

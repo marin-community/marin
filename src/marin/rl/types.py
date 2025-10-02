@@ -83,6 +83,15 @@ class InferenceContext(Protocol):
         ...
 
 
+@dataclass
+class RolloutStats:
+    """Statistics from a Rollout. Used for curriculum feedback."""
+
+    episode_reward: float
+    env_example_id: str
+    lesson_id: str
+
+
 class Rollout(eqx.Module):
     """A single rollout: one prompt + one generated response + rewards."""
 

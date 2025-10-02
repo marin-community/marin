@@ -28,12 +28,14 @@ import haliax as hax
 import jax
 import jax.random as jrandom
 import levanter
+import ray
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from transformers import AutoTokenizer
 
 from marin.rl import weight_transfer
+from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.weight_transfer import WeightTransferConfig
 
@@ -56,6 +58,7 @@ class TrainWorkerConfig:
     replay_buffer: ReplayBufferConfig
 
     weight_transfer: WeightTransferConfig
+    curriculum_config: "CurriculumConfig"  # type: ignore
 
     max_input_length: int
     max_output_length: int
@@ -70,6 +73,8 @@ class TrainWorkerConfig:
 
     # Optimization parameters
     kl_coef: float = 0.1
+
+    curriculum_checkpoint_interval: int = 100
 
 
 class StreamingRolloutLoader:
@@ -176,6 +181,14 @@ class TrainWorker:
             axis_mapping=self.config.trainer.compute_axis_mapping,
         )
 
+        self.curriculum_actor = get_or_create_curriculum_actor(config.curriculum_config)
+
+        # Restore curriculum state from checkpoint if it exists
+        checkpoint_dir = config.trainer.checkpointer.expanded_path(config.run_id)
+        ray.get(self.curriculum_actor.restore_checkpoint.remote(checkpoint_dir))
+
+        logger.info("Connected to curriculum actor: %s", config.curriculum_config.actor_name)
+
         self._build_models()
 
     def _build_models(self):
@@ -255,6 +268,12 @@ class TrainWorker:
                 raise StopTrainerException()
 
         trainer.add_hook(_stop_on_signal, every=1)
+
+        def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
+            checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
+            self.curriculum_actor.save_checkpoint.remote(checkpoint_dir)
+
+        trainer.add_hook(_curriculum_checkpoint_hook, every=self.config.curriculum_checkpoint_interval)
 
     def weight_transfer_hook(self, trainer: Trainer, info: levanter.callbacks.StepInfo):
         step = info.step
