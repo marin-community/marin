@@ -116,6 +116,7 @@ class HiddenLinear(MupLinear):
     def mup_lr_scale(self):
         return 1 / hax.axis_size(self.In)
 
-    @property
-    def mup_init_scale(self):
-        return 1 / math.sqrt(hax.axis_size(self.In))
+    @staticmethod
+    def mup_init_scale(In: AxisSpec, Out: AxisSpec):
+        del Out
+        return 1 / math.sqrt(hax.axis_size(In))
