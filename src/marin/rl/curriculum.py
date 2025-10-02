@@ -22,9 +22,10 @@ lessons and tracking progress to maximize learning efficiency.
 
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 
+import fsspec
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -128,8 +129,8 @@ class CurriculumConfig:
     temperature: float = 1.0
     """Temperature for sampling weight distribution."""
 
-    checkpoint_dir: str | None = None
-    """Directory for saving curriculum checkpoints. If None, checkpointing is disabled."""
+    actor_name: str = "curriculum"
+    """Name for the Ray actor (shared between rollout and train workers)."""
 
     minimum_sample_probability: float = 0.1
     """Minimum probability for sampling any active lesson."""
@@ -499,22 +500,19 @@ class Curriculum:
                 logger.info("Graduating lesson '%s' with stats %s", lesson_id, self.stats[lesson_id])
                 self.graduated.add(lesson_id)
 
-    def save_checkpoint(self, filename: str = "curriculum_state.json"):
+    def save_checkpoint(self, checkpoint_dir: str, filename: str = "curriculum_state.json"):
         """Save curriculum state to disk as JSON.
 
         Args:
-            filename: Name of the checkpoint file (saved in checkpoint_dir from config).
-
-        Raises:
-            ValueError: If checkpoint_dir is not configured.
+            checkpoint_dir: Directory to save checkpoint in.
+            filename: Name of the checkpoint file.
         """
-        logger.info("Saving curriculum checkpoint to %s at step %d", filename, self.current_step)
-        if self.config.checkpoint_dir is None:
-            raise ValueError("Cannot save checkpoint: checkpoint_dir not configured")
 
-        checkpoint_dir = Path(self.config.checkpoint_dir)
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_path = checkpoint_dir / filename
+        logger.info("Saving curriculum checkpoint to %s/%s at step %d", checkpoint_dir, filename, self.current_step)
+
+        fs, _ = fsspec.core.url_to_fs(checkpoint_dir)
+        fs.makedirs(checkpoint_dir, exist_ok=True)
+        checkpoint_path = os.path.join(checkpoint_dir, filename)
 
         checkpoint_data = {
             "stats": {name: asdict(stats) for name, stats in self.stats.items()},
@@ -523,52 +521,46 @@ class Curriculum:
             "current_step": self.current_step,
         }
 
-        with open(checkpoint_path, "w") as f:
+        with fs.open(checkpoint_path, "w") as f:
             json.dump(checkpoint_data, f, indent=2)
 
-    @classmethod
-    def load_checkpoint(cls, config: CurriculumConfig, filename: str = "curriculum_state.json") -> "Curriculum":
-        """Restore curriculum from checkpoint.
+    def restore_checkpoint(self, checkpoint_dir: str, filename: str = "curriculum_state.json"):
+        """Restore curriculum state from checkpoint in-place.
 
         Args:
-            config: Curriculum configuration (must match checkpoint structure).
+            checkpoint_dir: Directory containing the checkpoint.
             filename: Name of the checkpoint file to load.
-
-        Returns:
-            Curriculum instance with restored state.
-
-        Raises:
-            ValueError: If checkpoint_dir is not configured or checkpoint doesn't exist.
         """
-        if config.checkpoint_dir is None:
-            raise ValueError("Cannot load checkpoint: checkpoint_dir not configured")
+        import os
 
-        checkpoint_path = Path(config.checkpoint_dir) / filename
-        if not checkpoint_path.exists():
-            raise ValueError(f"Checkpoint file not found: {checkpoint_path}")
+        import fsspec
 
-        with open(checkpoint_path) as f:
+        fs, _ = fsspec.core.url_to_fs(checkpoint_dir)
+        checkpoint_path = os.path.join(checkpoint_dir, filename)
+
+        if not fs.exists(checkpoint_path):
+            logger.info("No curriculum checkpoint found at %s, starting fresh", checkpoint_path)
+            return
+
+        with fs.open(checkpoint_path) as f:
             checkpoint_data = json.load(f)
 
-        # Create curriculum from config
-        curriculum = cls(config)
-
-        # Restore state with nested dataclass reconstruction
-        curriculum.stats = {
+        # Restore state in-place
+        self.stats = {
             name: LessonStats(
                 training_stats=PerformanceStats(**stats_dict["training_stats"]),
                 eval_stats=PerformanceStats(**stats_dict["eval_stats"]),
             )
             for name, stats_dict in checkpoint_data["stats"].items()
         }
-        curriculum.unlocked = set(checkpoint_data["unlocked"])
-        curriculum.graduated = set(checkpoint_data["graduated"])
-        curriculum.current_step = checkpoint_data["current_step"]
+        self.unlocked = set(checkpoint_data["unlocked"])
+        self.graduated = set(checkpoint_data["graduated"])
+        self.current_step = checkpoint_data["current_step"]
 
-        return curriculum
+        logger.info("Restored curriculum checkpoint from %s at step %d", checkpoint_path, self.current_step)
 
 
-def get_or_create_curriculum_actor(config: CurriculumConfig, name: str = "curriculum"):
+def get_or_create_curriculum_actor(config: CurriculumConfig):
     import ray
 
-    return ray.remote(Curriculum).options(name=name, get_if_exists=True, max_restarts=-1).remote(config)
+    return ray.remote(Curriculum).options(name=config.actor_name, get_if_exists=True, max_restarts=-1).remote(config)

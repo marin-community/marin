@@ -69,7 +69,6 @@ class RolloutWorkerConfig:
     trainer: TrainerConfig
     model: LmConfig
     curriculum_config: CurriculumConfig
-    curriculum_actor_name: str
     rollout_storage: RolloutStorageConfig
     max_input_length: int
     max_output_length: int
@@ -242,9 +241,7 @@ class RolloutWorker:
             self._tokenizer = cast(PreTrainedTokenizer, self.config.model.tokenizer)
 
         # Get or create curriculum actor
-        self.curriculum_actor = get_or_create_curriculum_actor(
-            config.curriculum_config, name=config.curriculum_actor_name
-        )
+        self.curriculum_actor = get_or_create_curriculum_actor(config.curriculum_config)
 
         logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
         self._transfer_client = create_weight_transfer_client(

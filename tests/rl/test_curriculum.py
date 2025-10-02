@@ -710,7 +710,6 @@ def test_checkpoint_save_and_load(tmp_path):
                 dependencies=[LessonDependency(dependency_id="lesson1", reward_threshold=0.5)],
             ),
         },
-        checkpoint_dir=str(checkpoint_dir),
     )
 
     # Create curriculum and modify state
@@ -724,10 +723,11 @@ def test_checkpoint_save_and_load(tmp_path):
     curriculum.unlocked.add("lesson2")
 
     # Save checkpoint
-    curriculum.save_checkpoint()
+    curriculum.save_checkpoint(str(checkpoint_dir))
 
-    # Create new curriculum and load checkpoint
-    restored = Curriculum.load_checkpoint(config)
+    # Create new curriculum and restore from checkpoint
+    restored = Curriculum(config)
+    restored.restore_checkpoint(str(checkpoint_dir))
 
     # Verify all state was restored
     assert restored.current_step == 42
@@ -740,8 +740,8 @@ def test_checkpoint_save_and_load(tmp_path):
     assert "lesson2" in restored.unlocked
 
 
-def test_checkpoint_without_checkpoint_dir():
-    """Test that checkpointing fails gracefully when checkpoint_dir is not configured."""
+def test_checkpoint_without_checkpoint_dir(tmp_path):
+    """Test that restore_checkpoint returns early when no checkpoint exists."""
     config = CurriculumConfig(
         lessons={
             "lesson1": LessonConfig(
@@ -752,18 +752,16 @@ def test_checkpoint_without_checkpoint_dir():
                 ),
             )
         },
-        checkpoint_dir=None,
     )
 
     curriculum = Curriculum(config)
+    checkpoint_dir = str(tmp_path / "nonexistent")
 
-    # Should raise ValueError when trying to save
-    with pytest.raises(ValueError, match="checkpoint_dir not configured"):
-        curriculum.save_checkpoint()
+    # Should not raise when checkpoint doesn't exist, just log and return
+    curriculum.restore_checkpoint(checkpoint_dir)
 
-    # Should raise ValueError when trying to load
-    with pytest.raises(ValueError, match="checkpoint_dir not configured"):
-        Curriculum.load_checkpoint(config)
+    # State should remain unchanged (at step 0)
+    assert curriculum.current_step == 0
 
 
 def test_checkpoint_preserves_reward_history(tmp_path):
@@ -780,7 +778,6 @@ def test_checkpoint_preserves_reward_history(tmp_path):
                 ),
             )
         },
-        checkpoint_dir=str(checkpoint_dir),
     )
 
     curriculum = Curriculum(config)
@@ -790,8 +787,9 @@ def test_checkpoint_preserves_reward_history(tmp_path):
     curriculum.stats["lesson"].training_stats.total_samples = 5
 
     # Save and restore
-    curriculum.save_checkpoint()
-    restored = Curriculum.load_checkpoint(config)
+    curriculum.save_checkpoint(str(checkpoint_dir))
+    restored = Curriculum(config)
+    restored.restore_checkpoint(str(checkpoint_dir))
 
     # Verify reward history
     assert restored.stats["lesson"].training_stats.reward_history == [0.1, 0.2, 0.3, 0.4, 0.5]
@@ -819,15 +817,15 @@ def test_checkpoint_graduated_lessons(tmp_path):
                 ),
             ),
         },
-        checkpoint_dir=str(checkpoint_dir),
     )
 
     curriculum = Curriculum(config)
     curriculum.graduated.add("lesson1")
 
     # Save and restore
-    curriculum.save_checkpoint()
-    restored = Curriculum.load_checkpoint(config)
+    curriculum.save_checkpoint(str(checkpoint_dir))
+    restored = Curriculum(config)
+    restored.restore_checkpoint(str(checkpoint_dir))
 
     # Verify graduation state
     assert "lesson1" in restored.graduated
