@@ -232,7 +232,7 @@ class InferenceContext:
 
             start = time.time()
             with (
-                self.config.trainer.device_mesh,
+                hax.partitioning.set_mesh(self.config.trainer.device_mesh),
                 hax.axis_mapping(self.config.trainer.compute_axis_mapping),
             ):
                 self.model = weight_callback(self.model)
@@ -329,7 +329,7 @@ class InferenceContext:
                 batch = self.batch_queue.get(timeout=1)
                 with (
                     self.model_lock,
-                    self.config.trainer.device_mesh,
+                    hax.partitioning.set_mesh(self.config.trainer.device_mesh),
                     hax.axis_mapping(self.config.trainer.compute_axis_mapping),
                 ):
                     self._execute_batch(batch)
@@ -544,7 +544,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
         )
 
     except Exception as e:
-        logger.error(f"Error in completion: {e}", exc_info=True)
+        logger.error("Error in completion.", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -30,15 +30,14 @@ from functools import cached_property
 from typing import Iterator, List, Optional, Tuple, Union
 
 import equinox as eqx
+import haliax
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import jmp
 import numpy as np
-from jax.sharding import PartitionSpec
-
-import haliax
 from haliax import NamedArray
+from jax.sharding import PartitionSpec
 
 import levanter.tracker
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
@@ -48,14 +47,15 @@ from levanter.data.packing import (
     per_segment_correct,
     per_segment_loss,
 )
+from levanter.inference.engine import InferenceEngine, InferenceEngineConfig
+from levanter.inference.engine import Request as GenRequest
+from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.inference.utils import INVALID
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.loss import next_token_loss
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.py_utils import set_global_rng_seeds
-from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request as GenRequest
-from levanter.inference.jit_scheduler import SeqDecodingParams
-from levanter.inference.utils import INVALID
 
 try:
     from lm_eval import evaluator
@@ -69,10 +69,9 @@ except ImportError:
     handle_stop_sequences = None
     postprocess_generated_text = None
 
-from tqdm_loggable.auto import tqdm
-
 import haliax as hax
 from haliax.partitioning import ResourceMapping, round_axis_for_partitioning
+from tqdm_loggable.auto import tqdm
 
 import levanter.config
 from levanter.callbacks import StepInfo
@@ -83,7 +82,6 @@ from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, use_cpu_device
 from levanter.utils.tree_utils import inference_mode
-
 
 logger = logging.getLogger(__name__)
 
