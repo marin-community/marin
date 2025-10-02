@@ -298,15 +298,15 @@ def create_nano_rollout_worker_config(
     # Create default single-lesson curriculum if not provided
     if curriculum_config is None:
         curriculum_config = CurriculumConfig(
-            lessons=[
-                LessonConfig(
-                    lesson_name="cats",
+            lessons={
+                "cats": LessonConfig(
+                    lesson_id="cats",
                     env_config=EnvConfig(
                         env_class="marin.rl.environments.mock_env.MockEnv",
                         env_args={"task_type": "cats", "seed": 42},
                     ),
                 )
-            ],
+            },
             eval_frequency=1000,
         )
 
@@ -316,6 +316,7 @@ def create_nano_rollout_worker_config(
         inference_server_config=inference_server_config,
         model=model_config,
         curriculum_config=curriculum_config,
+        curriculum_actor_name="test_curriculum",
         rollout_storage=rollout_storage,
         max_input_length=8,
         max_output_length=8,

@@ -64,31 +64,33 @@ class LessonConfig:
 
 ### Performance Tracking
 
-Statistics track recent training and evaluation performance for each lesson. Training updates are cheap (every rollout), evaluation updates are expensive (periodic).
+Training and evaluation performance are tracked separately using the same mechanism for consistency.
 
 ```python
 @dataclass
-class LessonStats:
+class PerformanceStats:
+    """Statistics for a particular mode (training or eval)."""
     smoothed_success: float = 0.0  # Exponentially smoothed success rate
     smoothed_reward: float = 0.0   # Exponentially smoothed reward
-    eval_success: float = 0.0      # Last evaluation success rate
-    eval_reward: float = 0.0
-    eval_step: int = -1            # When last evaluated
     total_samples: int = 0         # Total rollouts seen
+    reward_history: list[float] = field(default_factory=list)  # Last 100 samples
+    last_update_step: int = -1     # When last updated
 
-    reward_history: list[float] = field(default_factory=list)  # Last 100 samples kept
+@dataclass
+class LessonStats:
+    training_stats: PerformanceStats = field(default_factory=PerformanceStats)
+    eval_stats: PerformanceStats = field(default_factory=PerformanceStats)
 
-def update_from_rollout(stats: LessonStats, rollout: Rollout) -> LessonStats:
+def update_performance_stats(stats: PerformanceStats, rollout_stats: RolloutStats, current_step: int) -> PerformanceStats:
+    """Update performance stats with exponential smoothing."""
 
-def get_combined_success_rate(stats: LessonStats, current_step: int) -> float:
-    """Blend training and eval metrics based on recency."""
-    if stats.eval_step < 0:
-        return stats.smoothed_success
-
-    # Weight eval more if recent, training more if stale
-    staleness = current_step - stats.eval_step
-    eval_weight = 0.7 * np.exp(-0.001 * staleness)
-    return eval_weight * stats.eval_success + (1 - eval_weight) * stats.smoothed_success
+def get_success_rate_for_decisions(stats: LessonStats, current_step: int, max_staleness: int = 1000) -> float:
+    """Use eval if available and recent, otherwise training."""
+    if stats.eval_stats.last_update_step >= 0:
+        staleness = current_step - stats.eval_stats.last_update_step
+        if staleness <= max_staleness:
+            return stats.eval_stats.smoothed_success
+    return stats.training_stats.smoothed_success
 ```
 
 ### Curriculum Manager
@@ -733,21 +735,18 @@ The actor supports remote method calls from multiple workers:
 # Sample lesson (returns lesson_name and serializable env_config dict)
 lesson_name, env_config_dict = ray.get(curriculum_actor.sample_lesson.remote(seed=42))
 
-# Update statistics from rollout
-rollout_stats = RolloutStats(
-    lesson_name="basic_math",
-    episode_reward=1.0,
-    env_example_id="example_123"
-)
-curriculum_actor.update_lesson_stats.remote(rollout_stats)  # Async
+# Collect statistics from rollouts (batched for efficiency)
+rollout_stats_list = [
+    RolloutStats(lesson_name="basic_math", episode_reward=1.0, env_example_id="ex_1"),
+    RolloutStats(lesson_name="basic_math", episode_reward=0.5, env_example_id="ex_2"),
+]
 
-# Update from evaluation
-curriculum_actor.update_eval_stats.remote(
-    lesson_name="basic_math",
-    success=0.85,
-    reward=0.9,
-    step=1000
-)
+# Update statistics (training mode)
+curriculum_actor.update_lesson_stats.remote(rollout_stats_list, mode="training")  # Async
+
+# Update from evaluation (eval mode)
+eval_stats_list = [...]
+curriculum_actor.update_lesson_stats.remote(eval_stats_list, mode="eval")
 
 # Update curriculum state
 curriculum_actor.step.remote()

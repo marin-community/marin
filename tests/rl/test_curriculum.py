@@ -23,63 +23,53 @@ from marin.rl.curriculum import (
     LessonConfig,
     LessonDependency,
     LessonStats,
-    get_combined_success_rate,
+    PerformanceStats,
+    compute_success_ratio,
     is_plateaued,
-    sigmoid,
-    update_from_rollout,
+    update_performance_stats,
 )
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
 
 
-def create_test_rollout_stats(episode_reward: float, lesson_name: str = "test") -> RolloutStats:
+def create_test_rollout_stats(episode_reward: float, lesson_id: str = "test") -> RolloutStats:
     """Helper to create rollout stats for testing."""
-    return RolloutStats(lesson_name=lesson_name, episode_reward=episode_reward, env_example_id="test_example")
+    return RolloutStats(lesson_id=lesson_id, episode_reward=episode_reward, env_example_id="test_example")
 
 
-def test_sigmoid():
-    """Test sigmoid function produces expected values."""
-    # At center, should be 0.5
-    assert abs(sigmoid(0.5, center=0.5, steepness=1.0) - 0.5) < 0.01
-
-    # Far below center should be near 0
-    assert sigmoid(0.0, center=0.5, steepness=10.0) < 0.01
-
-    # Far above center should be near 1
-    assert sigmoid(1.0, center=0.5, steepness=10.0) > 0.99
-
-
-def test_update_from_rollout():
+def test_update_performance_stats():
     """Test statistics updates from rollout stats."""
-    stats = LessonStats()
+    stats = PerformanceStats()
 
     # First rollout with reward
     rollout_stats1 = create_test_rollout_stats(episode_reward=1.0)
-    stats = update_from_rollout(stats, rollout_stats1)
+    stats = update_performance_stats(stats, rollout_stats1, current_step=1)
 
     assert stats.total_samples == 1
     assert stats.smoothed_success == 1.0
     assert stats.smoothed_reward == 1.0
     assert len(stats.reward_history) == 1
+    assert stats.last_update_step == 1
 
     # Second rollout with zero reward
     rollout_stats2 = create_test_rollout_stats(episode_reward=0.0)
-    stats = update_from_rollout(stats, rollout_stats2)
+    stats = update_performance_stats(stats, rollout_stats2, current_step=2)
 
     assert stats.total_samples == 2
     assert stats.smoothed_success < 1.0  # Should decrease
     assert stats.smoothed_success > 0.0
     assert len(stats.reward_history) == 2
+    assert stats.last_update_step == 2
 
 
-def test_update_from_rollout_history_limit():
+def test_update_performance_stats_history_limit():
     """Test that reward history is limited to 100 samples."""
-    stats = LessonStats()
+    stats = PerformanceStats()
 
     # Add 150 rollouts
     for i in range(150):
         rollout_stats = create_test_rollout_stats(episode_reward=float(i))
-        stats = update_from_rollout(stats, rollout_stats)
+        stats = update_performance_stats(stats, rollout_stats, current_step=i)
 
     # Should only keep last 100
     assert len(stats.reward_history) == 100
@@ -87,38 +77,41 @@ def test_update_from_rollout_history_limit():
     assert stats.reward_history[-1] == 149.0  # Last reward
 
 
-def test_get_combined_success_rate_no_eval():
-    """Test combined success rate when no eval data exists."""
-    stats = LessonStats(smoothed_success=0.7)
-    rate = get_combined_success_rate(stats, current_step=100)
+def test_get_success_rate_for_decisions_no_eval():
+    """Test success rate when no eval data exists."""
+    stats = LessonStats(training_stats=PerformanceStats(smoothed_success=0.7))
+    rate = compute_success_ratio(stats, current_step=100)
     assert rate == 0.7
 
 
-def test_get_combined_success_rate_with_eval():
-    """Test combined success rate blends eval and training data."""
-    stats = LessonStats(smoothed_success=0.5, eval_success=0.8, eval_step=50)
+def test_get_success_rate_for_decisions_with_eval():
+    """Test success rate uses eval when recent, training when stale."""
+    stats = LessonStats(
+        training_stats=PerformanceStats(smoothed_success=0.5),
+        eval_stats=PerformanceStats(smoothed_success=0.8, last_update_step=50),
+    )
 
-    # Recent eval should weight heavily
-    rate_recent = get_combined_success_rate(stats, current_step=60)
-    assert rate_recent > 0.6  # Should be closer to eval
+    # Recent eval should be used
+    rate_recent = compute_success_ratio(stats, current_step=60)
+    assert rate_recent == 0.8
 
-    # Stale eval should weight less
-    rate_stale = get_combined_success_rate(stats, current_step=1050)
-    assert rate_stale < 0.6  # Should be closer to training
+    # Stale eval should fall back to training
+    rate_stale = compute_success_ratio(stats, current_step=1060, max_staleness=1000)
+    assert rate_stale == 0.5
 
 
 def test_single_lesson_curriculum():
     """Test curriculum with a single lesson."""
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="only_lesson",
+        lessons={
+            "only_lesson": LessonConfig(
+                lesson_id="only_lesson",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats", "seed": 42},
                 ),
             )
-        ]
+        }
     )
 
     curriculum = Curriculum(config)
@@ -134,27 +127,24 @@ def test_single_lesson_curriculum():
     assert abs(weights["only_lesson"] - 1.0) < 0.01
 
     # Should be able to sample
-    lesson_name, env_config_dict = curriculum.sample_lesson(prng_seed=0)
+    lesson_name = curriculum.sample_lesson(prng_seed=0)
     assert lesson_name == "only_lesson"
-    assert env_config_dict is not None
-    assert "env_class" in env_config_dict
-    assert "env_args" in env_config_dict
 
 
 def test_weight_computation_at_different_success_rates():
     """Test that weights peak at intermediate success rates."""
     # Create multiple lessons to avoid normalization issues
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name=f"lesson{i}",
+        lessons={
+            f"lesson{i}": LessonConfig(
+                lesson_id=f"lesson{i}",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats", "seed": i},
                 ),
             )
             for i in range(5)
-        ]
+        }
     )
 
     curriculum = Curriculum(config)
@@ -166,8 +156,8 @@ def test_weight_computation_at_different_success_rates():
     # Set each lesson to a different success rate
     for i, success_rate in enumerate(success_rates):
         lesson_name = f"lesson{i}"
-        curriculum.stats[lesson_name].smoothed_success = success_rate
-        curriculum.stats[lesson_name].total_samples = 100
+        curriculum.stats[lesson_name].training_stats.smoothed_success = success_rate
+        curriculum.stats[lesson_name].training_stats.total_samples = 100
 
     curriculum.current_step = 1000
     weight_dict = curriculum.compute_sampling_weights()
@@ -187,45 +177,45 @@ def test_weight_computation_at_different_success_rates():
 def test_sampling_distribution():
     """Test that sampling respects weight distribution."""
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="easy",
+        lessons={
+            "easy": LessonConfig(
+                lesson_id="easy",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
             ),
-            LessonConfig(
-                lesson_name="medium",
+            "medium": LessonConfig(
+                lesson_id="medium",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "addition"},
                 ),
             ),
-            LessonConfig(
-                lesson_name="hard",
+            "hard": LessonConfig(
+                lesson_id="hard",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "opposites"},
                 ),
             ),
-        ]
+        }
     )
 
     curriculum = Curriculum(config)
 
     # Set different success rates to create different weights
-    curriculum.stats["easy"].smoothed_success = 0.9  # Too easy - low weight
-    curriculum.stats["easy"].total_samples = 100
-    curriculum.stats["medium"].smoothed_success = 0.5  # Just right - high weight
-    curriculum.stats["medium"].total_samples = 100
-    curriculum.stats["hard"].smoothed_success = 0.1  # Too hard - low weight
-    curriculum.stats["hard"].total_samples = 100
+    curriculum.stats["easy"].training_stats.smoothed_success = 0.9  # Too easy - low weight
+    curriculum.stats["easy"].training_stats.total_samples = 100
+    curriculum.stats["medium"].training_stats.smoothed_success = 0.5  # Just right - high weight
+    curriculum.stats["medium"].training_stats.total_samples = 100
+    curriculum.stats["hard"].training_stats.smoothed_success = 0.1  # Too hard - low weight
+    curriculum.stats["hard"].training_stats.total_samples = 100
 
     # Sample many times and check distribution
     samples = []
     for i in range(1000):
-        lesson_name, _ = curriculum.sample_lesson(prng_seed=i)
+        lesson_name = curriculum.sample_lesson(prng_seed=i)
         samples.append(lesson_name)
 
     # Count samples
@@ -239,24 +229,24 @@ def test_sampling_distribution():
 def test_initial_weights():
     """Test that initial weights are used when no data is available."""
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="lesson1",
+        lessons={
+            "lesson1": LessonConfig(
+                lesson_id="lesson1",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
                 initial_weight=0.3,
             ),
-            LessonConfig(
-                lesson_name="lesson2",
+            "lesson2": LessonConfig(
+                lesson_id="lesson2",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "addition"},
                 ),
                 initial_weight=0.7,
             ),
-        ]
+        }
     )
 
     curriculum = Curriculum(config)
@@ -272,52 +262,53 @@ def test_lesson_stats_serialization():
     from dataclasses import asdict
 
     stats = LessonStats(
-        smoothed_success=0.7,
-        smoothed_reward=0.8,
-        eval_success=0.75,
-        eval_reward=0.85,
-        eval_step=100,
-        total_samples=500,
-        reward_history=[0.1, 0.2, 0.3],
+        training_stats=PerformanceStats(
+            smoothed_success=0.7,
+            smoothed_reward=0.8,
+            total_samples=500,
+            reward_history=[0.1, 0.2, 0.3],
+            last_update_step=100,
+        ),
+        eval_stats=PerformanceStats(smoothed_success=0.75, smoothed_reward=0.85, total_samples=50, last_update_step=100),
     )
 
     # Serialize using dataclasses.asdict()
     data = asdict(stats)
 
-    # Deserialize using constructor
-    restored = LessonStats(**data)
+    # Deserialize using constructor with nested dataclass reconstruction
+    restored = LessonStats(
+        training_stats=PerformanceStats(**data["training_stats"]), eval_stats=PerformanceStats(**data["eval_stats"])
+    )
 
-    assert restored.smoothed_success == stats.smoothed_success
-    assert restored.smoothed_reward == stats.smoothed_reward
-    assert restored.eval_success == stats.eval_success
-    assert restored.eval_reward == stats.eval_reward
-    assert restored.eval_step == stats.eval_step
-    assert restored.total_samples == stats.total_samples
-    assert restored.reward_history == stats.reward_history
+    assert restored.training_stats.smoothed_success == stats.training_stats.smoothed_success
+    assert restored.training_stats.smoothed_reward == stats.training_stats.smoothed_reward
+    assert restored.training_stats.total_samples == stats.training_stats.total_samples
+    assert restored.training_stats.reward_history == stats.training_stats.reward_history
+    assert restored.eval_stats.smoothed_success == stats.eval_stats.smoothed_success
 
 
 def test_circular_dependency_detection():
     """Test that circular dependencies are detected during initialization."""
     # Create lessons with circular dependency: A -> B -> A
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="lessonA",
+        lessons={
+            "lessonA": LessonConfig(
+                lesson_id="lessonA",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
-                dependencies=[LessonDependency(dependency_name="lessonB")],
+                dependencies=[LessonDependency(dependency_id="lessonB")],
             ),
-            LessonConfig(
-                lesson_name="lessonB",
+            "lessonB": LessonConfig(
+                lesson_id="lessonB",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "addition"},
                 ),
-                dependencies=[LessonDependency(dependency_name="lessonA")],
+                dependencies=[LessonDependency(dependency_id="lessonA")],
             ),
-        ]
+        }
     )
 
     with pytest.raises(ValueError, match="Circular dependency"):
@@ -327,16 +318,16 @@ def test_circular_dependency_detection():
 def test_unknown_dependency():
     """Test that unknown dependencies are detected."""
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="lesson1",
+        lessons={
+            "lesson1": LessonConfig(
+                lesson_id="lesson1",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
-                dependencies=[LessonDependency(dependency_name="nonexistent")],
+                dependencies=[LessonDependency(dependency_id="nonexistent")],
             )
-        ]
+        }
     )
 
     with pytest.raises(ValueError, match="unknown lesson"):
@@ -346,23 +337,23 @@ def test_unknown_dependency():
 def test_progressive_unlocking():
     """Test that lessons unlock progressively as dependencies are met."""
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="basic",
+        lessons={
+            "basic": LessonConfig(
+                lesson_id="basic",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
             ),
-            LessonConfig(
-                lesson_name="intermediate",
+            "intermediate": LessonConfig(
+                lesson_id="intermediate",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "addition"},
                 ),
-                dependencies=[LessonDependency(dependency_name="basic", reward_threshold=0.5)],
+                dependencies=[LessonDependency(dependency_id="basic", reward_threshold=0.5)],
             ),
-        ]
+        }
     )
 
     curriculum = Curriculum(config)
@@ -373,9 +364,9 @@ def test_progressive_unlocking():
 
     # Set basic to have good performance but not plateaued
     for i in range(49):
-        curriculum.stats["basic"].reward_history.append(0.6 + i * 0.001)
-    curriculum.stats["basic"].smoothed_success = 0.6
-    curriculum.stats["basic"].total_samples = 50
+        curriculum.stats["basic"].training_stats.reward_history.append(0.6 + i * 0.001)
+    curriculum.stats["basic"].training_stats.smoothed_success = 0.6
+    curriculum.stats["basic"].training_stats.total_samples = 50
 
     # Intermediate should still not unlock (not plateaued)
     curriculum.update_unlocked_lessons()
@@ -383,8 +374,8 @@ def test_progressive_unlocking():
 
     # Add more samples to create a plateau
     for _ in range(51):
-        curriculum.stats["basic"].reward_history.append(0.65)
-    curriculum.stats["basic"].total_samples = 100
+        curriculum.stats["basic"].training_stats.reward_history.append(0.65)
+    curriculum.stats["basic"].training_stats.total_samples = 100
 
     # Now intermediate should unlock
     curriculum.update_unlocked_lessons()
@@ -394,33 +385,33 @@ def test_progressive_unlocking():
 def test_multiple_dependencies():
     """Test lessons with multiple dependencies."""
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="lesson1",
+        lessons={
+            "lesson1": LessonConfig(
+                lesson_id="lesson1",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
             ),
-            LessonConfig(
-                lesson_name="lesson2",
+            "lesson2": LessonConfig(
+                lesson_id="lesson2",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "addition"},
                 ),
             ),
-            LessonConfig(
-                lesson_name="advanced",
+            "advanced": LessonConfig(
+                lesson_id="advanced",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "opposites"},
                 ),
                 dependencies=[
-                    LessonDependency(dependency_name="lesson1", reward_threshold=0.6),
-                    LessonDependency(dependency_name="lesson2", reward_threshold=0.5),
+                    LessonDependency(dependency_id="lesson1", reward_threshold=0.6),
+                    LessonDependency(dependency_id="lesson2", reward_threshold=0.5),
                 ],
             ),
-        ]
+        }
     )
 
     curriculum = Curriculum(config)
@@ -432,9 +423,9 @@ def test_multiple_dependencies():
 
     # Set lesson1 to meet threshold and plateau
     for _ in range(50):
-        curriculum.stats["lesson1"].reward_history.append(0.7)
-    curriculum.stats["lesson1"].smoothed_success = 0.7
-    curriculum.stats["lesson1"].total_samples = 50
+        curriculum.stats["lesson1"].training_stats.reward_history.append(0.7)
+    curriculum.stats["lesson1"].training_stats.smoothed_success = 0.7
+    curriculum.stats["lesson1"].training_stats.total_samples = 50
 
     # Advanced should still not unlock (lesson2 not ready)
     curriculum.update_unlocked_lessons()
@@ -442,9 +433,9 @@ def test_multiple_dependencies():
 
     # Set lesson2 to meet threshold and plateau
     for _ in range(50):
-        curriculum.stats["lesson2"].reward_history.append(0.6)
-    curriculum.stats["lesson2"].smoothed_success = 0.6
-    curriculum.stats["lesson2"].total_samples = 50
+        curriculum.stats["lesson2"].training_stats.reward_history.append(0.6)
+    curriculum.stats["lesson2"].training_stats.smoothed_success = 0.6
+    curriculum.stats["lesson2"].training_stats.total_samples = 50
 
     # Now advanced should unlock
     curriculum.update_unlocked_lessons()
@@ -454,37 +445,37 @@ def test_multiple_dependencies():
 def test_plateau_detection():
     """Test plateau detection with different reward patterns."""
     # Flat rewards (plateaued)
-    stats_flat = LessonStats(reward_history=[1.0] * 50)
+    stats_flat = LessonStats(training_stats=PerformanceStats(reward_history=[1.0] * 50))
     assert is_plateaued(stats_flat, window=50, threshold=0.01)
 
     # Increasing rewards (not plateaued)
-    stats_increasing = LessonStats(reward_history=list(np.linspace(0.0, 1.0, 50)))
+    stats_increasing = LessonStats(training_stats=PerformanceStats(reward_history=list(np.linspace(0.0, 1.0, 50))))
     assert not is_plateaued(stats_increasing, window=50, threshold=0.01)
 
     # Noisy but flat (plateaued)
     rng = np.random.default_rng(42)
     noisy_rewards = [0.5 + 0.01 * rng.standard_normal() for _ in range(50)]
-    stats_noisy = LessonStats(reward_history=noisy_rewards)
+    stats_noisy = LessonStats(training_stats=PerformanceStats(reward_history=noisy_rewards))
     assert is_plateaued(stats_noisy, window=50, threshold=0.01)
 
     # Insufficient data
-    stats_insufficient = LessonStats(reward_history=[1.0] * 20)
+    stats_insufficient = LessonStats(training_stats=PerformanceStats(reward_history=[1.0] * 20))
     assert not is_plateaued(stats_insufficient, window=50, threshold=0.01)
 
 
 def test_graduation():
     """Test that lessons graduate when mastered."""
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="easy_lesson",
+        lessons={
+            "easy_lesson": LessonConfig(
+                lesson_id="easy_lesson",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
                 stop_threshold=0.9,
             )
-        ]
+        }
     )
 
     curriculum = Curriculum(config)
@@ -494,18 +485,19 @@ def test_graduation():
 
     # Set high performance but no eval data
     for _ in range(50):
-        curriculum.stats["easy_lesson"].reward_history.append(0.95)
-    curriculum.stats["easy_lesson"].smoothed_success = 0.95
-    curriculum.stats["easy_lesson"].total_samples = 50
+        curriculum.stats["easy_lesson"].training_stats.reward_history.append(0.95)
+    curriculum.stats["easy_lesson"].training_stats.smoothed_success = 0.95
+    curriculum.stats["easy_lesson"].training_stats.total_samples = 50
 
     # Should not graduate without eval data
     curriculum.update_graduated_lessons()
     assert "easy_lesson" not in curriculum.graduated
 
     # Add eval data showing high performance
-    curriculum.stats["easy_lesson"].eval_success = 0.95
-    curriculum.stats["easy_lesson"].eval_reward = 0.95
-    curriculum.stats["easy_lesson"].eval_step = 100
+    curriculum.stats["easy_lesson"].eval_stats.smoothed_success = 0.95
+    curriculum.stats["easy_lesson"].eval_stats.smoothed_reward = 0.95
+    curriculum.stats["easy_lesson"].eval_stats.last_update_step = 100
+    curriculum.stats["easy_lesson"].eval_stats.reward_history = [0.95] * 50
     curriculum.current_step = 100
 
     # Should graduate now
@@ -516,27 +508,27 @@ def test_graduation():
 def test_graduation_requires_plateau():
     """Test that lessons don't graduate until plateaued."""
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="improving_lesson",
+        lessons={
+            "improving_lesson": LessonConfig(
+                lesson_id="improving_lesson",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
                 stop_threshold=0.8,
             )
-        ]
+        }
     )
 
     curriculum = Curriculum(config)
 
     # Set improving performance (not plateaued)
     for i in range(50):
-        curriculum.stats["improving_lesson"].reward_history.append(0.5 + i * 0.01)
-    curriculum.stats["improving_lesson"].smoothed_success = 0.9
-    curriculum.stats["improving_lesson"].eval_success = 0.9
-    curriculum.stats["improving_lesson"].eval_step = 50
-    curriculum.stats["improving_lesson"].total_samples = 50
+        curriculum.stats["improving_lesson"].eval_stats.reward_history.append(0.5 + i * 0.01)
+    curriculum.stats["improving_lesson"].training_stats.smoothed_success = 0.9
+    curriculum.stats["improving_lesson"].eval_stats.smoothed_success = 0.9
+    curriculum.stats["improving_lesson"].eval_stats.last_update_step = 50
+    curriculum.stats["improving_lesson"].training_stats.total_samples = 50
     curriculum.current_step = 50
 
     # Should not graduate (still improving)
@@ -545,7 +537,7 @@ def test_graduation_requires_plateau():
 
     # Add plateau
     for _ in range(50):
-        curriculum.stats["improving_lesson"].reward_history.append(0.9)
+        curriculum.stats["improving_lesson"].eval_stats.reward_history.append(0.9)
 
     # Now should graduate
     curriculum.update_graduated_lessons()
@@ -555,22 +547,22 @@ def test_graduation_requires_plateau():
 def test_graduated_lessons_excluded_from_weights():
     """Test that graduated lessons are excluded from sampling weights."""
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="graduated",
+        lessons={
+            "graduated": LessonConfig(
+                lesson_id="graduated",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
             ),
-            LessonConfig(
-                lesson_name="active",
+            "active": LessonConfig(
+                lesson_id="active",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "addition"},
                 ),
             ),
-        ]
+        }
     )
 
     curriculum = Curriculum(config)
@@ -590,31 +582,31 @@ def test_graduated_lessons_excluded_from_weights():
 def test_exploration_bonus_for_new_lessons():
     """Test that new lessons receive exploration bonus."""
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="new_lesson",
+        lessons={
+            "new_lesson": LessonConfig(
+                lesson_id="new_lesson",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
             ),
-            LessonConfig(
-                lesson_name="experienced_lesson",
+            "experienced_lesson": LessonConfig(
+                lesson_id="experienced_lesson",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "addition"},
                 ),
             ),
-        ]
+        }
     )
 
     curriculum = Curriculum(config)
 
     # Set both lessons to same success rate (0.5) but different sample counts
-    curriculum.stats["new_lesson"].smoothed_success = 0.5
-    curriculum.stats["new_lesson"].total_samples = 10  # New lesson
-    curriculum.stats["experienced_lesson"].smoothed_success = 0.5
-    curriculum.stats["experienced_lesson"].total_samples = 150  # Experienced
+    curriculum.stats["new_lesson"].training_stats.smoothed_success = 0.5
+    curriculum.stats["new_lesson"].training_stats.total_samples = 10  # New lesson
+    curriculum.stats["experienced_lesson"].training_stats.smoothed_success = 0.5
+    curriculum.stats["experienced_lesson"].training_stats.total_samples = 150  # Experienced
 
     weights = curriculum.compute_sampling_weights()
 
@@ -625,37 +617,37 @@ def test_exploration_bonus_for_new_lessons():
 def test_exploration_bonus_decay():
     """Test that exploration bonus decays with increasing samples."""
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="varying_lesson",
+        lessons={
+            "varying_lesson": LessonConfig(
+                lesson_id="varying_lesson",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
             ),
-            LessonConfig(
-                lesson_name="reference_lesson",
+            "reference_lesson": LessonConfig(
+                lesson_id="reference_lesson",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "addition"},
                 ),
             ),
-        ]
+        }
     )
 
     curriculum = Curriculum(config)
 
     # Keep reference lesson constant with many samples
-    curriculum.stats["reference_lesson"].smoothed_success = 0.5
-    curriculum.stats["reference_lesson"].total_samples = 500
+    curriculum.stats["reference_lesson"].training_stats.smoothed_success = 0.5
+    curriculum.stats["reference_lesson"].training_stats.total_samples = 500
 
     # Track how varying_lesson's weight changes relative to reference
     sample_counts = [1, 10, 50, 100, 200]
     relative_weights = []
 
     for count in sample_counts:
-        curriculum.stats["varying_lesson"].smoothed_success = 0.5
-        curriculum.stats["varying_lesson"].total_samples = count
+        curriculum.stats["varying_lesson"].training_stats.smoothed_success = 0.5
+        curriculum.stats["varying_lesson"].training_stats.total_samples = count
         weight_dict = curriculum.compute_sampling_weights()
         # Track ratio of varying to reference
         relative_weights.append(weight_dict["varying_lesson"] / weight_dict["reference_lesson"])
@@ -668,31 +660,31 @@ def test_exploration_bonus_decay():
 def test_exploration_bonus_converges():
     """Test that exploration bonus converges to minimal effect at high sample counts."""
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="lesson1",
+        lessons={
+            "lesson1": LessonConfig(
+                lesson_id="lesson1",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
             ),
-            LessonConfig(
-                lesson_name="lesson2",
+            "lesson2": LessonConfig(
+                lesson_id="lesson2",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "addition"},
                 ),
             ),
-        ]
+        }
     )
 
     curriculum = Curriculum(config)
 
     # Both lessons with high sample counts should have similar weights
-    curriculum.stats["lesson1"].smoothed_success = 0.5
-    curriculum.stats["lesson1"].total_samples = 500
-    curriculum.stats["lesson2"].smoothed_success = 0.5
-    curriculum.stats["lesson2"].total_samples = 600
+    curriculum.stats["lesson1"].training_stats.smoothed_success = 0.5
+    curriculum.stats["lesson1"].training_stats.total_samples = 500
+    curriculum.stats["lesson2"].training_stats.smoothed_success = 0.5
+    curriculum.stats["lesson2"].training_stats.total_samples = 600
 
     weights = curriculum.compute_sampling_weights()
 
@@ -705,34 +697,34 @@ def test_checkpoint_save_and_load(tmp_path):
     checkpoint_dir = tmp_path / "checkpoints"
 
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="lesson1",
+        lessons={
+            "lesson1": LessonConfig(
+                lesson_id="lesson1",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
             ),
-            LessonConfig(
-                lesson_name="lesson2",
+            "lesson2": LessonConfig(
+                lesson_id="lesson2",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "addition"},
                 ),
-                dependencies=[LessonDependency(dependency_name="lesson1", reward_threshold=0.5)],
+                dependencies=[LessonDependency(dependency_id="lesson1", reward_threshold=0.5)],
             ),
-        ],
+        },
         checkpoint_dir=str(checkpoint_dir),
     )
 
     # Create curriculum and modify state
     curriculum = Curriculum(config)
     curriculum.current_step = 42
-    curriculum.stats["lesson1"].smoothed_success = 0.7
-    curriculum.stats["lesson1"].smoothed_reward = 0.8
-    curriculum.stats["lesson1"].total_samples = 100
-    curriculum.stats["lesson1"].eval_success = 0.75
-    curriculum.stats["lesson1"].eval_step = 40
+    curriculum.stats["lesson1"].training_stats.smoothed_success = 0.7
+    curriculum.stats["lesson1"].training_stats.smoothed_reward = 0.8
+    curriculum.stats["lesson1"].training_stats.total_samples = 100
+    curriculum.stats["lesson1"].eval_stats.smoothed_success = 0.75
+    curriculum.stats["lesson1"].eval_stats.last_update_step = 40
     curriculum.unlocked.add("lesson2")
 
     # Save checkpoint
@@ -743,11 +735,11 @@ def test_checkpoint_save_and_load(tmp_path):
 
     # Verify all state was restored
     assert restored.current_step == 42
-    assert restored.stats["lesson1"].smoothed_success == 0.7
-    assert restored.stats["lesson1"].smoothed_reward == 0.8
-    assert restored.stats["lesson1"].total_samples == 100
-    assert restored.stats["lesson1"].eval_success == 0.75
-    assert restored.stats["lesson1"].eval_step == 40
+    assert restored.stats["lesson1"].training_stats.smoothed_success == 0.7
+    assert restored.stats["lesson1"].training_stats.smoothed_reward == 0.8
+    assert restored.stats["lesson1"].training_stats.total_samples == 100
+    assert restored.stats["lesson1"].eval_stats.smoothed_success == 0.75
+    assert restored.stats["lesson1"].eval_stats.last_update_step == 40
     assert "lesson1" in restored.unlocked
     assert "lesson2" in restored.unlocked
 
@@ -755,15 +747,15 @@ def test_checkpoint_save_and_load(tmp_path):
 def test_checkpoint_without_checkpoint_dir():
     """Test that checkpointing fails gracefully when checkpoint_dir is not configured."""
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="lesson1",
+        lessons={
+            "lesson1": LessonConfig(
+                lesson_id="lesson1",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
             )
-        ],
+        },
         checkpoint_dir=None,
     )
 
@@ -783,31 +775,31 @@ def test_checkpoint_preserves_reward_history(tmp_path):
     checkpoint_dir = tmp_path / "checkpoints"
 
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="lesson",
+        lessons={
+            "lesson": LessonConfig(
+                lesson_id="lesson",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
             )
-        ],
+        },
         checkpoint_dir=str(checkpoint_dir),
     )
 
     curriculum = Curriculum(config)
 
     # Add reward history
-    curriculum.stats["lesson"].reward_history = [0.1, 0.2, 0.3, 0.4, 0.5]
-    curriculum.stats["lesson"].total_samples = 5
+    curriculum.stats["lesson"].training_stats.reward_history = [0.1, 0.2, 0.3, 0.4, 0.5]
+    curriculum.stats["lesson"].training_stats.total_samples = 5
 
     # Save and restore
     curriculum.save_checkpoint()
     restored = Curriculum.load_checkpoint(config)
 
     # Verify reward history
-    assert restored.stats["lesson"].reward_history == [0.1, 0.2, 0.3, 0.4, 0.5]
-    assert restored.stats["lesson"].total_samples == 5
+    assert restored.stats["lesson"].training_stats.reward_history == [0.1, 0.2, 0.3, 0.4, 0.5]
+    assert restored.stats["lesson"].training_stats.total_samples == 5
 
 
 def test_checkpoint_graduated_lessons(tmp_path):
@@ -815,22 +807,22 @@ def test_checkpoint_graduated_lessons(tmp_path):
     checkpoint_dir = tmp_path / "checkpoints"
 
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="lesson1",
+        lessons={
+            "lesson1": LessonConfig(
+                lesson_id="lesson1",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats"},
                 ),
             ),
-            LessonConfig(
-                lesson_name="lesson2",
+            "lesson2": LessonConfig(
+                lesson_id="lesson2",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "addition"},
                 ),
             ),
-        ],
+        },
         checkpoint_dir=str(checkpoint_dir),
     )
 
@@ -848,9 +840,9 @@ def test_checkpoint_graduated_lessons(tmp_path):
 
 def test_rollout_stats_dataclass():
     """Test RolloutStats dataclass creation and serialization."""
-    rollout_stats = RolloutStats(lesson_name="test_lesson", episode_reward=1.5, env_example_id="example_123")
+    rollout_stats = RolloutStats(lesson_id="test_lesson", episode_reward=1.5, env_example_id="example_123")
 
-    assert rollout_stats.lesson_name == "test_lesson"
+    assert rollout_stats.lesson_id == "test_lesson"
     assert rollout_stats.episode_reward == 1.5
     assert rollout_stats.env_example_id == "example_123"
 
@@ -858,72 +850,60 @@ def test_rollout_stats_dataclass():
     from dataclasses import asdict
 
     stats_dict = asdict(rollout_stats)
-    assert stats_dict["lesson_name"] == "test_lesson"
+    assert stats_dict["lesson_id"] == "test_lesson"
     assert stats_dict["episode_reward"] == 1.5
 
     # Test reconstruction
     reconstructed = RolloutStats(**stats_dict)
-    assert reconstructed.lesson_name == rollout_stats.lesson_name
+    assert reconstructed.lesson_id == rollout_stats.lesson_id
     assert reconstructed.episode_reward == rollout_stats.episode_reward
 
 
 def test_curriculum_update_lesson_stats():
     """Test update_lesson_stats method."""
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="test_lesson",
+        lessons={
+            "test_lesson": LessonConfig(
+                lesson_id="test_lesson",
                 env_config=EnvConfig(env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "cats"}),
             )
-        ]
+        }
     )
 
     curriculum = Curriculum(config)
 
-    # Update stats via method
-    rollout_stats = create_test_rollout_stats(episode_reward=1.0, lesson_name="test_lesson")
-    curriculum.update_lesson_stats(rollout_stats)
+    # Update stats via method (training mode)
+    rollout_stats = create_test_rollout_stats(episode_reward=1.0, lesson_id="test_lesson")
+    curriculum.update_lesson_stats([rollout_stats], mode="training")
 
-    assert curriculum.stats["test_lesson"].total_samples == 1
-    assert curriculum.stats["test_lesson"].smoothed_reward == 1.0
-
-
-def test_curriculum_update_eval_stats():
-    """Test update_eval_stats method."""
-    config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="test_lesson",
-                env_config=EnvConfig(env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "cats"}),
-            )
-        ]
-    )
-
-    curriculum = Curriculum(config)
+    assert curriculum.stats["test_lesson"].training_stats.total_samples == 1
+    assert curriculum.stats["test_lesson"].training_stats.smoothed_reward == 1.0
 
     # Update eval stats
-    curriculum.update_eval_stats("test_lesson", success=0.85, reward=0.9, step=100)
+    eval_stats = create_test_rollout_stats(episode_reward=0.9, lesson_id="test_lesson")
+    curriculum.current_step = 100
+    curriculum.update_lesson_stats([eval_stats], mode="eval")
 
-    assert curriculum.stats["test_lesson"].eval_success == 0.85
-    assert curriculum.stats["test_lesson"].eval_reward == 0.9
-    assert curriculum.stats["test_lesson"].eval_step == 100
+    assert curriculum.stats["test_lesson"].eval_stats.total_samples == 1
+    assert curriculum.stats["test_lesson"].eval_stats.smoothed_reward == 0.9
+    assert curriculum.stats["test_lesson"].eval_stats.last_update_step == 100
 
 
 def test_curriculum_get_metrics():
     """Test get_metrics method."""
     config = CurriculumConfig(
-        lessons=[
-            LessonConfig(
-                lesson_name="lesson1",
+        lessons={
+            "lesson1": LessonConfig(
+                lesson_id="lesson1",
                 env_config=EnvConfig(env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "cats"}),
             ),
-            LessonConfig(
-                lesson_name="lesson2",
+            "lesson2": LessonConfig(
+                lesson_id="lesson2",
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "addition"}
                 ),
             ),
-        ]
+        }
     )
 
     curriculum = Curriculum(config)
