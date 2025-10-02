@@ -608,6 +608,7 @@ def resubmit_job(
         "ray",
         "job",
         "submit",
+        "--no-wait",
         "--working-dir",
         working_dir,
         *runtime_env_args,

@@ -363,8 +363,18 @@ def init_worker(ctx, name):
 @cli.command("dashboard")
 @click.option("--port", default=9999, help="Proxy dashboard port")
 @click.pass_context
-def open_multi_dashboard(ctx, port):
+def open_dashboard(ctx, port):
     """Open dashboard for all active Ray clusters."""
+    config_obj = ctx.obj.config_obj
+    if config_obj:
+        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)) as dashboard:
+            print(f"Connected to {config_obj.cluster_name} dashboard at {dashboard.get_dashboard_url()}")
+            try:
+                time.sleep(86400)
+            except KeyboardInterrupt:
+                print("\nShutting down...")
+        return
+
     with ray.ray_dashboard(ray.DashboardConfig(proxy_port=port)) as conn:
         if not conn.clusters:
             print("No active clusters found")
@@ -382,8 +392,7 @@ def open_multi_dashboard(ctx, port):
             print("\nPress Ctrl+C to stop")
 
             try:
-                while True:
-                    time.sleep(1)
+                time.sleep(86400)
             except KeyboardInterrupt:
                 print("\nShutting down...")
 
