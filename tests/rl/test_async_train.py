@@ -21,6 +21,7 @@ import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
+from datetime import timedelta
 from pathlib import Path
 
 import jax
@@ -316,53 +317,52 @@ def test_train_worker(ray_tpu_cluster, training_worker_config: TrainWorkerConfig
 
 
 @pytest.mark.slow("Integration test.")
-def test_inference_and_training_workers(
+def test_rollout_and_train_workers(
     ray_tpu_cluster,
-    training_worker_config,
-    rollout_worker_config,
+    training_worker_config: TrainWorkerConfig,
+    rollout_worker_config: RolloutWorkerConfig,
 ):
     """Test inference & training workers running together with checkpoint updates."""
 
     # The workers already use the same storage config from the fixtures, so they'll automatically share data
+    rollout_worker_config.weight_transfer.poll_interval_seconds = 0.1
+    rollout_worker_config.weight_transfer.sync_interval_steps = 1
 
-    rollout_worker_config.max_rollouts = 10
-    training_worker_config.trainer.num_train_steps = 10
-
-    # coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
-    # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
+    rollout_worker_config.max_rollouts = 100
+    training_worker_config.trainer.num_train_steps = 100
 
     with TrainWorkerRunner(training_worker_config) as training_runner:
         time.sleep(1)
-        inference_runner = RolloutWorkerRunner(rollout_worker_config)
+        rollout_runner = RolloutWorkerRunner(rollout_worker_config)
 
-        with inference_runner:
+        with rollout_runner:
             start_time = time.time()
 
             while time.time() - start_time < 60:
                 elapsed = time.time() - start_time
 
-                _print_worker_status(elapsed, inference_runner, training_runner)
+                _print_worker_status(elapsed, rollout_runner, training_runner)
 
-                if training_runner.done.is_set() and not inference_runner.done.is_set():
-                    inference_runner.stop()
+                if training_runner.done.is_set() and not rollout_runner.done.is_set():
+                    rollout_runner.stop()
                     break
 
-                if inference_runner.done.is_set() and training_runner.done.is_set():
+                if rollout_runner.done.is_set() and training_runner.done.is_set():
                     training_runner.stop()
                     break
 
                 time.sleep(1)
 
     assert (
-        inference_runner.rollouts_generated >= 1
-    ), f"Expected at least 1 rollouts, got {inference_runner.rollouts_generated}"
+        rollout_runner.rollouts_generated >= 1
+    ), f"Expected at least 1 rollouts, got {rollout_runner.rollouts_generated}"
     assert (
         training_runner.steps_completed >= 0
     ), f"Expected at least 0 training steps, got {training_runner.steps_completed}"
 
-    print(f"Weight transfers detected: {inference_runner.weight_transfers}")
-    assert inference_runner.weight_transfers >= 1, "Expected at least 1 weight transfer"
-    assert inference_runner.rollouts_generated > 0, "Should have generated at least one rollout"
+    print(f"Weight transfers detected: {rollout_runner.weight_transfers}")
+    assert rollout_runner.weight_transfers >= 1, "Expected at least 1 weight transfer"
+    assert rollout_runner.rollouts_generated > 0, "Should have generated at least one rollout"
 
 
 def validate_model(model, tokenizer) -> dict[str, str]:
@@ -541,6 +541,7 @@ def test_train_worker_checkpoint_restart(ray_tpu_cluster, training_worker_config
     # Phase 1: Initial training run - small number of steps
     initial_target_steps = 5
     training_worker_config.trainer.num_train_steps = initial_target_steps
+    training_worker_config.trainer.checkpointer.save_interval = timedelta(milliseconds=100)
 
     queue_writer = training_worker_config.rollout_storage.create_writer()
     tokenizer = DummyTokenizer()
