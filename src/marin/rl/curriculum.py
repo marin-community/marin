@@ -23,7 +23,8 @@ lessons and tracking progress to maximize learning efficiency.
 import json
 import logging
 import os
-from dataclasses import asdict, dataclass, field
+from collections import defaultdict
+from dataclasses import dataclass, field
 
 import fsspec
 import jax
@@ -42,17 +43,11 @@ MAX_REWARD_HISTORY = 200
 class PerformanceStats:
     """Statistics for a particular mode (training or eval)."""
 
-    smoothed_success: float = 0.0
-    """Exponentially smoothed success rate."""
-
-    smoothed_reward: float = 0.0
-    """Exponentially smoothed reward."""
-
     total_samples: int = 0
     """Total number of rollouts seen."""
 
-    reward_history: list[float] = field(default_factory=list)
-    """Recent reward history for plateau detection."""
+    reward_history: np.ndarray = field(default_factory=lambda: np.array([]))
+    """Recent reward history for plateau detection and computing success rate."""
 
     last_update_step: int = -1
     """Step at which this was last updated."""
@@ -93,9 +88,6 @@ class LessonConfig:
 
     dependencies: list[LessonDependency] = field(default_factory=list)
     """Prerequisites that must be satisfied before this lesson unlocks."""
-
-    initial_weight: float = 1.0
-    """Initial sampling weight before performance data is available."""
 
     start_threshold: float = 0.0
     """Minimum eval performance required to begin training on this lesson once unlocked."""
@@ -173,8 +165,38 @@ def _validate_dependencies(lesson_configs: dict[str, LessonConfig]):
                 raise ValueError(f"Lesson '{lesson_id}' depends on unknown lesson '{dep.dependency_id}'")
 
 
+def compute_smoothed_success(reward_history: np.ndarray, alpha: float = 0.1, prior_mean: float = 0.5) -> float:
+    """Compute exponentially smoothed success rate with Bayesian prior initialization.
+
+    The prior naturally decays as data accumulates due to the exponential smoothing:
+    - After ~10 samples: ~35% prior influence (with alpha=0.1)
+    - After ~20 samples: ~12% prior influence
+    - After ~50 samples: <1% prior influence
+
+    Args:
+        reward_history: Array of episode rewards.
+        alpha: Exponential smoothing parameter (higher = more weight on recent data).
+        prior_mean: Prior belief about success rate (default 0.5 = uncertain).
+
+    Returns:
+        Exponentially smoothed success rate.
+    """
+    if len(reward_history) == 0:
+        return prior_mean
+
+    # Convert rewards to binary success (reward > 0)
+    successes = (reward_history > 0).astype(float)
+
+    # Initialize EMA with prior
+    ema = prior_mean
+    for success in successes:
+        ema = (1 - alpha) * ema + alpha * success
+
+    return ema
+
+
 def update_performance_stats(
-    stats: PerformanceStats, rollout_stats: RolloutStats, current_step: int, alpha: float = 0.1
+    stats: PerformanceStats, rollout_stats: list[RolloutStats], current_step: int
 ) -> PerformanceStats:
     """Update performance statistics from rollout stats.
 
@@ -182,32 +204,20 @@ def update_performance_stats(
         stats: Current performance statistics.
         rollout_stats: Lightweight rollout statistics.
         current_step: Current training step for tracking staleness.
-        alpha: Exponential smoothing parameter (higher = more weight on new data).
 
     Returns:
         Updated performance statistics.
     """
-    # Compute success (binary: reward > 0)
-    success = 1.0 if rollout_stats.episode_reward > 0 else 0.0
+    # Append new rewards to history
+    new_rewards = np.array([rs.episode_reward for rs in rollout_stats])
+    reward_history = np.concatenate([stats.reward_history, new_rewards])
 
-    # Update exponential moving averages
-    if stats.total_samples == 0:
-        # First sample - initialize
-        smoothed_success = success
-        smoothed_reward = rollout_stats.episode_reward
-    else:
-        smoothed_success = (1 - alpha) * stats.smoothed_success + alpha * success
-        smoothed_reward = (1 - alpha) * stats.smoothed_reward + alpha * rollout_stats.episode_reward
-
-    reward_history = stats.reward_history.copy()
-    reward_history.append(float(rollout_stats.episode_reward))
+    # Trim to max history size
     if len(reward_history) > MAX_REWARD_HISTORY:
         reward_history = reward_history[-MAX_REWARD_HISTORY:]
 
     return PerformanceStats(
-        smoothed_success=smoothed_success,
-        smoothed_reward=smoothed_reward,
-        total_samples=stats.total_samples + 1,
+        total_samples=stats.total_samples + len(rollout_stats),
         reward_history=reward_history,
         last_update_step=current_step,
     )
@@ -215,7 +225,7 @@ def update_performance_stats(
 
 def compute_success_ratio(stats: LessonStats, current_step: int, max_staleness: int = 1000) -> float:
     """Get success rate for a lesson."""
-    return stats.training_stats.smoothed_success
+    return compute_smoothed_success(stats.training_stats.reward_history)
 
 
 def is_plateaued(stats: LessonStats, window: int = 50, threshold: float = 0.01) -> bool:
@@ -326,31 +336,23 @@ class Curriculum:
 
         for name in active_lessons:
             stats = self.stats[name]
-            config = self.config.lessons[name]
 
             # Get success rate for decisions
             success_rate = compute_success_ratio(stats, self.current_step)
 
             # Quadratic weight peaking at 50% success
             base_weight = max(0.0, -4 * success_rate**2 + 4 * success_rate)
-
-            # Use initial weight if we have no data yet (check both training and eval)
-            total_samples = stats.training_stats.total_samples + stats.eval_stats.total_samples
-            if total_samples == 0:
-                weights[name] = config.initial_weight
-            else:
-                # Apply exploration bonus for new lessons
-                exploration_bonus = 1.0 + np.exp(-0.01 * total_samples)
-                weights[name] = base_weight * exploration_bonus
+            total_samples = stats.training_stats.total_samples
+            exploration_bonus = 1.0 + np.exp(-0.01 * total_samples)
+            weights[name] = base_weight * exploration_bonus
 
         total = 1 + sum(weights.values())
         weights = {k: v / total for k, v in weights.items()}
 
-        # bump up to minimum probability
+        # bump up to minimum probability & renormalize
         for k in weights:
             weights[k] = max(weights[k], self.config.minimum_sample_probability)
 
-        # renormalize
         total = sum(weights.values())
         weights = {k: v / total for k, v in weights.items()}
         return weights
@@ -375,7 +377,7 @@ class Curriculum:
 
         return lesson_id
 
-    def update_lesson_stats(self, rollout_stats_list: list[RolloutStats], mode: str, current_step: int) -> None:
+    def update_lesson_stats(self, rollout_stats: list[RolloutStats], mode: str, current_step: int) -> None:
         """Update lesson statistics from rollout stats and trigger lesson state updates.
 
         Args:
@@ -387,22 +389,19 @@ class Curriculum:
 
         # Update current step (use max to handle potential concurrent updates from multiple workers)
         self.current_step = max(self.current_step, current_step)
+        stats_by_lesson = defaultdict(list)
+        for rs in rollout_stats:
+            stats_by_lesson[rs.lesson_id].append(rs)
 
-        for rollout_stats in rollout_stats_list:
-            assert rollout_stats.lesson_id in self.stats, f"Unknown lesson '{rollout_stats.lesson_id}'"
-
-            lesson_stats = self.stats[rollout_stats.lesson_id]
-
+        for lesson_id, stats in stats_by_lesson.items():
             if mode == "training":
-                lesson_stats.training_stats = update_performance_stats(
-                    lesson_stats.training_stats, rollout_stats, self.current_step
+                self.stats[lesson_id].training_stats = update_performance_stats(
+                    self.stats[lesson_id].training_stats, stats, self.current_step
                 )
             else:  # eval
-                lesson_stats.eval_stats = update_performance_stats(
-                    lesson_stats.eval_stats, rollout_stats, self.current_step
+                self.stats[lesson_id].eval_stats = update_performance_stats(
+                    self.stats[lesson_id].eval_stats, stats, self.current_step
                 )
-
-            self.stats[rollout_stats.lesson_id] = lesson_stats
 
         # Automatically update lesson states (unlocking/graduation) after updating stats
         self._unlock_and_graduate_lessons()
@@ -511,8 +510,27 @@ class Curriculum:
         fs.makedirs(checkpoint_dir, exist_ok=True)
         checkpoint_path = os.path.join(checkpoint_dir, filename)
 
+        # Convert stats to dict with numpy arrays converted to lists
+        stats_dict = {}
+        for name, stats in self.stats.items():
+            # Handle both np.array and list for reward_history
+            train_history = stats.training_stats.reward_history.tolist()
+            eval_history = stats.eval_stats.reward_history.tolist()
+            stats_dict[name] = {
+                "training_stats": {
+                    "total_samples": stats.training_stats.total_samples,
+                    "reward_history": train_history,
+                    "last_update_step": stats.training_stats.last_update_step,
+                },
+                "eval_stats": {
+                    "total_samples": stats.eval_stats.total_samples,
+                    "reward_history": eval_history,
+                    "last_update_step": stats.eval_stats.last_update_step,
+                },
+            }
+
         checkpoint_data = {
-            "stats": {name: asdict(stats) for name, stats in self.stats.items()},
+            "stats": stats_dict,
             "unlocked": list(self.unlocked),
             "graduated": list(self.graduated),
             "current_step": self.current_step,
@@ -542,14 +560,21 @@ class Curriculum:
         with fs.open(checkpoint_path) as f:
             checkpoint_data = json.load(f)
 
-        # Restore state in-place
-        self.stats = {
-            name: LessonStats(
-                training_stats=PerformanceStats(**stats_dict["training_stats"]),
-                eval_stats=PerformanceStats(**stats_dict["eval_stats"]),
+        # Restore state in-place, converting lists back to numpy arrays
+        self.stats = {}
+        for name, stats_dict in checkpoint_data["stats"].items():
+            self.stats[name] = LessonStats(
+                training_stats=PerformanceStats(
+                    total_samples=stats_dict["training_stats"]["total_samples"],
+                    reward_history=np.array(stats_dict["training_stats"]["reward_history"]),
+                    last_update_step=stats_dict["training_stats"]["last_update_step"],
+                ),
+                eval_stats=PerformanceStats(
+                    total_samples=stats_dict["eval_stats"]["total_samples"],
+                    reward_history=np.array(stats_dict["eval_stats"]["reward_history"]),
+                    last_update_step=stats_dict["eval_stats"]["last_update_step"],
+                ),
             )
-            for name, stats_dict in checkpoint_data["stats"].items()
-        }
         self.unlocked = set(checkpoint_data["unlocked"])
         self.graduated = set(checkpoint_data["graduated"])
         self.current_step = checkpoint_data["current_step"]

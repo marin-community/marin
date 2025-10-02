@@ -340,7 +340,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-010"),
+        rl_train(name="llama-1b-math-rl-test-011"),
     ]
 
     executor_main(
