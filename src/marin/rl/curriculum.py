@@ -27,8 +27,6 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 import fsspec
-import jax
-import jax.numpy as jnp
 import numpy as np
 
 from marin.rl.environments.base import EnvConfig
@@ -357,11 +355,11 @@ class Curriculum:
         weights = {k: v / total for k, v in weights.items()}
         return weights
 
-    def sample_lesson(self, prng_key: jax.Array) -> str:
+    def sample_lesson(self, seed: int) -> str:
         """Sample a lesson for training based on current weights.
 
         Args:
-            prng_key: Random key for sampling.
+            seed: Integer seed for random sampling.
 
         Returns:
             Lesson ID string.
@@ -371,9 +369,11 @@ class Curriculum:
             raise RuntimeError("No active lessons available for sampling")
 
         lesson_ids = list(weights.keys())
-        probs = jnp.array([weights[lesson_id] for lesson_id in lesson_ids])
-        idx = jax.random.choice(prng_key, len(lesson_ids), p=probs)
-        lesson_id = lesson_ids[int(idx)]
+        probs = np.array([weights[lesson_id] for lesson_id in lesson_ids])
+
+        rng = np.random.default_rng(seed)
+        idx = rng.choice(len(lesson_ids), p=probs)
+        lesson_id = lesson_ids[idx]
 
         return lesson_id
 
