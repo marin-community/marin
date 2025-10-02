@@ -483,7 +483,8 @@ class RolloutWorker:
                     self.tracker.log(log_metrics, step=step)
 
             logger.info("Generating rollout batch...")
-            rng, seed = jax.random.split(rng)
+            rng, seed_key = jax.random.split(rng)
+            seed = int(seed_key[0])
             lesson_id = ray.get(self.curriculum_actor.sample_lesson.remote(seed))
             logger.info(f"Sampled lesson '{lesson_id}' from curriculum")
 
