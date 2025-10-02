@@ -64,7 +64,7 @@ HQ_COOLDOWN_WEIGHTS = {
     "dolmino/pes2o": 0.0581,
     "dolmino/stackexchange": 0.0171,
     "dolmino/wiki": 0.00365,
-    "all_math": 0.00422 * 2,  # Double Weight in Starling
+    "all_math": 0.371,
     "arxiv_markdownified": 0.0581,
     "stackexchange_custom": 0.0171,
     "wikipedia_markdown": 0.00365,
@@ -78,14 +78,17 @@ megamath_total = sum(megamath_token_counts.values())
 
 mantis_hq_cooldown_weights = {
     **{k: v for k, v in HQ_COOLDOWN_WEIGHTS.items() if k != "all_math"},
-    **{split: all_math_weight * weight / megamath_total for split, weight in megamath_token_counts.items()},
+    **{
+        split: (all_math_weight if split != "megamath/web" else all_math_weight / 4) * weight / megamath_total
+        for split, weight in megamath_token_counts.items()
+    },
 }
 
 mantis_total_hq_weight = sum(mantis_hq_cooldown_weights.values())
 
 mantis_cooldown_weights = {
     **{k: v * 0.7 / nemotron_total for k, v in NEMOTRON_PT_MIX_WEIGHTS.items()},
-    **{k: v * 0.3 / mantis_total_hq_weight for k, v in mantis_hq_cooldown_weights.items()},
+    **{k: v * (0.3 / mantis_total_hq_weight) for k, v in mantis_hq_cooldown_weights.items()},
 }
 
 mantis_cooldown_mixture = lm_varying_mixture_data_config(
