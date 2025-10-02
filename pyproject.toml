@@ -142,8 +142,6 @@ torch = [
     { index = "pytorch-cu128", extra = "cuda12" },
 ]
 
-levanter = { path = "./submodules/levanter" }
-
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

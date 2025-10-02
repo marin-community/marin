@@ -21,6 +21,7 @@ lessons and tracking progress to maximize learning efficiency.
 """
 
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -28,8 +29,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from marin.rl.environments.base import EnvConfig, MarinEnv, load_environment_from_spec
+from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
+
+logger = logging.getLogger(__name__)
+
+MAX_REWARD_HISTORY = 200
 
 
 @dataclass
@@ -126,6 +131,9 @@ class CurriculumConfig:
     checkpoint_dir: str | None = None
     """Directory for saving curriculum checkpoints. If None, checkpointing is disabled."""
 
+    minimum_sample_probability: float = 0.1
+    """Minimum probability for sampling any active lesson."""
+
 
 def _validate_dependencies(lesson_configs: dict[str, LessonConfig]):
     """Validate that lesson dependencies form a valid DAG (no cycles)."""
@@ -192,8 +200,8 @@ def update_performance_stats(
 
     reward_history = stats.reward_history.copy()
     reward_history.append(float(rollout_stats.episode_reward))
-    if len(reward_history) > 100:
-        reward_history = reward_history[-100:]
+    if len(reward_history) > MAX_REWARD_HISTORY:
+        reward_history = reward_history[-MAX_REWARD_HISTORY:]
 
     return PerformanceStats(
         smoothed_success=smoothed_success,
@@ -205,53 +213,68 @@ def update_performance_stats(
 
 
 def compute_success_ratio(stats: LessonStats, current_step: int, max_staleness: int = 1000) -> float:
-    """Get success rate for a lesson.
-
-    Prefers eval stats when available and recent, falls back to training stats when stale.
-
-    Args:
-        stats: Lesson statistics containing training and eval performance.
-        current_step: Current training step.
-        max_staleness: Maximum steps since eval update before falling back to training stats.
-
-    Returns:
-        Success rate in [0, 1].
-    """
-    # Use eval stats if available and recent
-    if stats.eval_stats.last_update_step >= 0:
-        steps_since_eval = current_step - stats.eval_stats.last_update_step
-        if steps_since_eval <= max_staleness:
-            return stats.eval_stats.smoothed_success
-
-    # Fall back to training stats
+    """Get success rate for a lesson."""
     return stats.training_stats.smoothed_success
 
 
 def is_plateaued(stats: LessonStats, window: int = 50, threshold: float = 0.01) -> bool:
-    """Detect if reward has plateaued for `stats`."""
-    # Use eval stats if available and has data, otherwise training stats
-    perf_stats = stats.eval_stats if stats.eval_stats.last_update_step >= 0 else stats.training_stats
+    """Detect if reward has plateaued using conservative statistical tests.
+
+    Uses multiple criteria to robustly detect when learning has stopped improving.
+    Conservative approach requires ALL conditions to be met to avoid premature
+    graduation or dependency unlocking.
+
+    Args:
+        stats: Lesson statistics containing reward history.
+        window: Number of recent samples to analyze.
+        threshold: Relative slope threshold (slope/mean) for plateau detection.
+
+    Returns:
+        True if performance has plateaued (no significant improvement).
+    """
+    perf_stats = stats.training_stats
 
     if len(perf_stats.reward_history) < window:
         return False
 
-    # Get recent rewards
     recent = np.array(perf_stats.reward_history[-window:])
 
-    # Fit linear trend
+    # Linear regression to measure trend
     x = np.arange(len(recent))
-    coeffs = np.polyfit(x, recent, 1)
-    slope = coeffs[0]
+    from scipy import stats as scipy_stats
 
-    # Check if relative trend is flat
+    result = scipy_stats.linregress(x, recent)
+    slope = result.slope
+    p_value = result.pvalue
+
     mean_reward = np.mean(recent)
+    std_reward = np.std(recent)
+
+    # Condition 1: Slope must be small relative to mean (existing threshold logic)
     if abs(mean_reward) > 1e-6:
-        relative_trend = abs(slope) / abs(mean_reward)
-        return relative_trend < threshold
+        relative_slope = abs(slope) / abs(mean_reward)
+        slope_is_flat = relative_slope < threshold
+    else:
+        slope_is_flat = True
 
-    return True
+    # Condition 2: Coefficient of variation must be low (stable performance)
+    # CV < 0.1 indicates very stable values (conservative threshold)
+    if abs(mean_reward) > 1e-6:
+        cv = std_reward / abs(mean_reward)
+        cv_is_stable = cv < 0.1
+    else:
+        cv_is_stable = True
+
+    # Condition 3: Slope must be statistically insignificant (p > 0.1)
+    # Conservative: require strong evidence of NO trend
+    # Note: p_value can be NaN for perfectly flat data (zero variance)
+    slope_not_significant = np.isnan(p_value) or p_value > 0.1
+
+    # Conservative: Require ALL three conditions
+    return slope_is_flat and cv_is_stable and slope_not_significant
 
 
+@dataclass
 class Curriculum:
     """Manages adaptive curriculum learning with lesson progression and sampling.
 
@@ -260,36 +283,25 @@ class Curriculum:
     productive learning tasks.
     """
 
-    def __init__(self, config: CurriculumConfig):
-        """Initialize curriculum from configuration.
+    config: CurriculumConfig
 
-        Args:
-            config: Curriculum configuration with lesson specs.
-        """
-        _validate_dependencies(config.lessons)
-        self.config = config
+    def __post_init__(self):
+        _validate_dependencies(self.config.lessons)
 
         # Validate lesson_id matches dict key
-        for lesson_id, lesson_config in config.lessons.items():
+        for lesson_id, lesson_config in self.config.lessons.items():
             if lesson_config.lesson_id != lesson_id:
                 raise ValueError(f"Lesson dict key '{lesson_id}' must match lesson_id '{lesson_config.lesson_id}'")
 
-        self.lesson_configs = config.lessons
-
         # Initialize statistics for each lesson
-        self.stats: dict[str, LessonStats] = {lesson_id: LessonStats() for lesson_id in config.lessons}
-
-        # Load environments for each lesson
-        self.environments: dict[str, MarinEnv] = {
-            lesson_id: load_environment_from_spec(lesson.env_config) for lesson_id, lesson in config.lessons.items()
-        }
+        self.stats: dict[str, LessonStats] = {lesson_id: LessonStats() for lesson_id in self.config.lessons}
 
         # Lesson state tracking
         self.unlocked: set[str] = set()
         self.graduated: set[str] = set()
 
         # Unlock lessons without dependencies
-        for lesson_id, lesson in config.lessons.items():
+        for lesson_id, lesson in self.config.lessons.items():
             if not lesson.dependencies:
                 self.unlocked.add(lesson_id)
 
@@ -299,6 +311,7 @@ class Curriculum:
     def step(self):
         """Increment the curriculum step counter."""
         self.current_step += 1
+        self.update_lessons()
 
     def compute_sampling_weights(self) -> dict[str, float]:
         """Compute sampling weights for all active lessons.
@@ -314,17 +327,15 @@ class Curriculum:
             return {}
 
         weights = {}
-        min_prob = 0.01
 
         for name in active_lessons:
             stats = self.stats[name]
-            config = self.lesson_configs[name]
+            config = self.config.lessons[name]
 
             # Get success rate for decisions
             success_rate = compute_success_ratio(stats, self.current_step)
 
             # Quadratic weight peaking at 50% success
-            # w = 1 - 4(s - 0.5)^2 = -4s^2 + 4s
             base_weight = max(0.0, -4 * success_rate**2 + 4 * success_rate)
 
             # Use initial weight if we have no data yet (check both training and eval)
@@ -332,15 +343,20 @@ class Curriculum:
             if total_samples == 0:
                 weights[name] = config.initial_weight
             else:
-                # Apply exploration bonus for new lessons (decays to 1.0 after ~100 samples)
-                exploration_bonus = 1.0 + np.exp(-0.03 * total_samples)
-                weights[name] = max(base_weight * exploration_bonus, min_prob)
+                # Apply exploration bonus for new lessons
+                exploration_bonus = 1.0 + np.exp(-0.01 * total_samples)
+                weights[name] = base_weight * exploration_bonus
 
-        # Renormalize
+        total = 1 + sum(weights.values())
+        weights = {k: v / total for k, v in weights.items()}
+
+        # bump up to minimum probability
+        for k in weights:
+            weights[k] = max(weights[k], self.config.minimum_sample_probability)
+
+        # renormalize
         total = sum(weights.values())
-        if total > 0:
-            weights = {k: v / total for k, v in weights.items()}
-
+        weights = {k: v / total for k, v in weights.items()}
         return weights
 
     def sample_lesson(self, prng_seed: int) -> str:
@@ -408,7 +424,7 @@ class Curriculum:
 
         return {
             "step": self.current_step,
-            "total_lessons": len(self.lesson_configs),
+            "total_lessons": len(self.config.lessons),
             "unlocked_lessons": len(self.unlocked),
             "active_lessons": len(active),
             "graduated_lessons": len(self.graduated),
@@ -422,11 +438,12 @@ class Curriculum:
 
     def check_dependencies(self, lesson_id: str) -> bool:
         """Return true if all dependencies for a lesson are satisfied."""
-        lesson_config = self.lesson_configs[lesson_id]
+        lesson_config = self.config.lessons[lesson_id]
 
         for dep in lesson_config.dependencies:
             dep_id = dep.dependency_id
             dep_stats = self.stats[dep_id]
+            dep_config = self.config.lessons[dep_id]
 
             # Check if dependency has reached required threshold
             dep_success_rate = compute_success_ratio(dep_stats, self.current_step)
@@ -435,47 +452,49 @@ class Curriculum:
 
             # Check if dependency has plateaued (if threshold is met or is 0.0)
             if dep_success_rate >= dep.reward_threshold:
-                dep_config = self.lesson_configs[dep_id]
                 if not is_plateaued(dep_stats, window=dep_config.plateau_window, threshold=dep_config.plateau_threshold):
                     return False
 
         return True
 
-    def update_unlocked_lessons(self):
-        """Update which lessons are currently unlocked based on dependencies."""
-        for lesson_id in self.lesson_configs:
-            # Skip if already unlocked or graduated
-            if lesson_id in self.unlocked or lesson_id in self.graduated:
-                continue
-
-            # Check if dependencies are satisfied
-            if self.check_dependencies(lesson_id):
-                self.unlocked.add(lesson_id)
-
     def check_graduation(self, lesson_id: str) -> bool:
         """Return true if a lesson should graduate and be removed from active sampling."""
-        lesson_config = self.lesson_configs[lesson_id]
+        lesson_config = self.config.lessons[lesson_id]
         stats = self.stats[lesson_id]
+        logger.info("Checking graduation for lesson '%s' with stats %s", lesson_id, stats)
 
         # Must have evaluation data to graduate
         if stats.eval_stats.last_update_step < 0:
+            logger.info("Lesson '%s' cannot graduate: no eval data", lesson_id)
             return False
 
         # Check if performance meets graduation threshold
         lesson_success_rate = compute_success_ratio(stats, self.current_step)
         if lesson_success_rate < lesson_config.stop_threshold:
+            logger.info(
+                "Lesson '%s' cannot graduate: success rate %f < threshold %f",
+                lesson_id,
+                lesson_success_rate,
+                lesson_config.stop_threshold,
+            )
             return False
 
         # Check if performance has plateaued
         if not is_plateaued(stats, window=lesson_config.plateau_window, threshold=lesson_config.plateau_threshold):
+            logger.info("Lesson '%s' cannot graduate: performance not plateaued", lesson_id)
             return False
 
         return True
 
-    def update_graduated_lessons(self):
-        """Update which lessons have graduated (mastered and can be deprioritized)."""
-        for lesson_id in list(self.unlocked):
-            if lesson_id not in self.graduated and self.check_graduation(lesson_id):
+    def update_lessons(self):
+        """Update which lessons are currently available based on dependencies or graduation."""
+        for lesson_id in self.config.lessons:
+            if lesson_id not in self.unlocked and self.check_dependencies(lesson_id):
+                logger.info("Unlocking lesson '%s' with stats %s", lesson_id, self.stats[lesson_id])
+                self.unlocked.add(lesson_id)
+
+            if lesson_id in self.unlocked and lesson_id not in self.graduated and self.check_graduation(lesson_id):
+                logger.info("Graduating lesson '%s' with stats %s", lesson_id, self.stats[lesson_id])
                 self.graduated.add(lesson_id)
 
     def save_checkpoint(self, filename: str = "curriculum_state.json"):
@@ -487,6 +506,7 @@ class Curriculum:
         Raises:
             ValueError: If checkpoint_dir is not configured.
         """
+        logger.info("Saving curriculum checkpoint to %s at step %d", filename, self.current_step)
         if self.config.checkpoint_dir is None:
             raise ValueError("Cannot save checkpoint: checkpoint_dir not configured")
 
@@ -495,7 +515,6 @@ class Curriculum:
         checkpoint_path = checkpoint_dir / filename
 
         checkpoint_data = {
-            "lesson_configs": {name: asdict(config) for name, config in self.lesson_configs.items()},
             "stats": {name: asdict(stats) for name, stats in self.stats.items()},
             "unlocked": list(self.unlocked),
             "graduated": list(self.graduated),

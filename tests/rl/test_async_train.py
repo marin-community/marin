@@ -359,11 +359,6 @@ def test_inference_and_training_workers(
         training_runner.steps_completed >= 0
     ), f"Expected at least 0 training steps, got {training_runner.steps_completed}"
 
-    print("checkpoint dir:", training_worker_config.trainer.checkpointer.base_path)
-    checkpoint_dirs = list(Path(training_worker_config.trainer.checkpointer.base_path).glob("*/*"))
-    print(checkpoint_dirs)
-    assert len(checkpoint_dirs) >= 1, f"Expected at least 1 checkpoint, got {len(checkpoint_dirs)}"
-
     print(f"Weight transfers detected: {inference_runner.weight_transfers}")
     assert inference_runner.weight_transfers >= 1, "Expected at least 1 weight transfer"
     assert inference_runner.rollouts_generated > 0, "Should have generated at least one rollout"

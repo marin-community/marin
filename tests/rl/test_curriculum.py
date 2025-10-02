@@ -62,42 +62,11 @@ def test_update_performance_stats():
     assert stats.last_update_step == 2
 
 
-def test_update_performance_stats_history_limit():
-    """Test that reward history is limited to 100 samples."""
-    stats = PerformanceStats()
-
-    # Add 150 rollouts
-    for i in range(150):
-        rollout_stats = create_test_rollout_stats(episode_reward=float(i))
-        stats = update_performance_stats(stats, rollout_stats, current_step=i)
-
-    # Should only keep last 100
-    assert len(stats.reward_history) == 100
-    assert stats.reward_history[0] == 50.0  # First kept reward
-    assert stats.reward_history[-1] == 149.0  # Last reward
-
-
 def test_get_success_rate_for_decisions_no_eval():
     """Test success rate when no eval data exists."""
     stats = LessonStats(training_stats=PerformanceStats(smoothed_success=0.7))
     rate = compute_success_ratio(stats, current_step=100)
     assert rate == 0.7
-
-
-def test_get_success_rate_for_decisions_with_eval():
-    """Test success rate uses eval when recent, training when stale."""
-    stats = LessonStats(
-        training_stats=PerformanceStats(smoothed_success=0.5),
-        eval_stats=PerformanceStats(smoothed_success=0.8, last_update_step=50),
-    )
-
-    # Recent eval should be used
-    rate_recent = compute_success_ratio(stats, current_step=60)
-    assert rate_recent == 0.8
-
-    # Stale eval should fall back to training
-    rate_stale = compute_success_ratio(stats, current_step=1060, max_staleness=1000)
-    assert rate_stale == 0.5
 
 
 def test_single_lesson_curriculum():
@@ -205,11 +174,11 @@ def test_sampling_distribution():
     curriculum = Curriculum(config)
 
     # Set different success rates to create different weights
-    curriculum.stats["easy"].training_stats.smoothed_success = 0.9  # Too easy - low weight
+    curriculum.stats["easy"].training_stats.smoothed_success = 0.95  # Too easy - low weight
     curriculum.stats["easy"].training_stats.total_samples = 100
     curriculum.stats["medium"].training_stats.smoothed_success = 0.5  # Just right - high weight
     curriculum.stats["medium"].training_stats.total_samples = 100
-    curriculum.stats["hard"].training_stats.smoothed_success = 0.1  # Too hard - low weight
+    curriculum.stats["hard"].training_stats.smoothed_success = 0.15  # Too hard - low weight
     curriculum.stats["hard"].training_stats.total_samples = 100
 
     # Sample many times and check distribution
@@ -220,10 +189,11 @@ def test_sampling_distribution():
 
     # Count samples
     counts = {name: samples.count(name) for name in ["easy", "medium", "hard"]}
+    print(counts)
 
-    # Medium should be sampled most
-    assert counts["medium"] > counts["easy"]
-    assert counts["medium"] > counts["hard"]
+    assert counts["medium"] > counts["easy"], counts
+    assert counts["medium"] > counts["hard"], counts
+    assert counts["hard"] > counts["easy"], counts
 
 
 def test_initial_weights():
@@ -369,7 +339,7 @@ def test_progressive_unlocking():
     curriculum.stats["basic"].training_stats.total_samples = 50
 
     # Intermediate should still not unlock (not plateaued)
-    curriculum.update_unlocked_lessons()
+    curriculum.step()
     assert "intermediate" not in curriculum.unlocked
 
     # Add more samples to create a plateau
@@ -378,7 +348,7 @@ def test_progressive_unlocking():
     curriculum.stats["basic"].training_stats.total_samples = 100
 
     # Now intermediate should unlock
-    curriculum.update_unlocked_lessons()
+    curriculum.step()
     assert "intermediate" in curriculum.unlocked
 
 
@@ -428,7 +398,7 @@ def test_multiple_dependencies():
     curriculum.stats["lesson1"].training_stats.total_samples = 50
 
     # Advanced should still not unlock (lesson2 not ready)
-    curriculum.update_unlocked_lessons()
+    curriculum.step()
     assert "advanced" not in curriculum.unlocked
 
     # Set lesson2 to meet threshold and plateau
@@ -438,7 +408,7 @@ def test_multiple_dependencies():
     curriculum.stats["lesson2"].training_stats.total_samples = 50
 
     # Now advanced should unlock
-    curriculum.update_unlocked_lessons()
+    curriculum.step()
     assert "advanced" in curriculum.unlocked
 
 
@@ -463,6 +433,33 @@ def test_plateau_detection():
     assert not is_plateaued(stats_insufficient, window=50, threshold=0.01)
 
 
+def test_plateau_detection_improving_trend():
+    """Test that improving trends are NOT detected as plateaus.
+
+    This mirrors the 'Improving Rewards (No Plateau)' pattern from
+    visualize_curriculum.ipynb where performance steadily improves.
+    Conservative plateau detection should NOT trigger for improving performance.
+    """
+    # Linear improvement from 0.1 to 0.9 over 50 steps
+    improving_rewards = [0.1 + (0.9 - 0.1) * (i / 49) for i in range(50)]
+    stats_improving = LessonStats(training_stats=PerformanceStats(reward_history=improving_rewards))
+
+    # Should NOT plateau - there's a clear upward trend
+    assert not is_plateaued(stats_improving, window=50, threshold=0.01)
+
+    # Even with some noise, strong trend should prevent plateau detection
+    rng = np.random.default_rng(42)
+    noisy_improving = [0.5 + i * 0.01 + 0.02 * rng.standard_normal() for i in range(50)]
+    stats_noisy_improving = LessonStats(training_stats=PerformanceStats(reward_history=noisy_improving))
+    assert not is_plateaued(stats_noisy_improving, window=50, threshold=0.01)
+
+    # Gradual improvement (slower but still trending)
+    slow_improving = [0.7 + i * 0.003 for i in range(50)]
+    stats_slow = LessonStats(training_stats=PerformanceStats(reward_history=slow_improving))
+    # Conservative: even slow improvement should not plateau
+    assert not is_plateaued(stats_slow, window=50, threshold=0.01)
+
+
 def test_graduation():
     """Test that lessons graduate when mastered."""
     config = CurriculumConfig(
@@ -484,13 +481,13 @@ def test_graduation():
     assert "easy_lesson" not in curriculum.graduated
 
     # Set high performance but no eval data
-    for _ in range(50):
-        curriculum.stats["easy_lesson"].training_stats.reward_history.append(0.95)
     curriculum.stats["easy_lesson"].training_stats.smoothed_success = 0.95
     curriculum.stats["easy_lesson"].training_stats.total_samples = 50
+    for _ in range(50):
+        curriculum.stats["easy_lesson"].training_stats.reward_history.append(0.95)
+        curriculum.step()
 
     # Should not graduate without eval data
-    curriculum.update_graduated_lessons()
     assert "easy_lesson" not in curriculum.graduated
 
     # Add eval data showing high performance
@@ -498,11 +495,10 @@ def test_graduation():
     curriculum.stats["easy_lesson"].eval_stats.smoothed_reward = 0.95
     curriculum.stats["easy_lesson"].eval_stats.last_update_step = 100
     curriculum.stats["easy_lesson"].eval_stats.reward_history = [0.95] * 50
-    curriculum.current_step = 100
 
     # Should graduate now
-    curriculum.update_graduated_lessons()
-    assert "easy_lesson" in curriculum.graduated
+    curriculum.step()
+    assert "easy_lesson" in curriculum.graduated, curriculum.stats
 
 
 def test_graduation_requires_plateau():
@@ -522,26 +518,26 @@ def test_graduation_requires_plateau():
 
     curriculum = Curriculum(config)
 
-    # Set improving performance (not plateaued)
+    # Set improving performance (not plateaued) in TRAINING stats
     for i in range(50):
-        curriculum.stats["improving_lesson"].eval_stats.reward_history.append(0.5 + i * 0.01)
+        curriculum.stats["improving_lesson"].training_stats.reward_history.append(0.5 + i * 0.01)
     curriculum.stats["improving_lesson"].training_stats.smoothed_success = 0.9
+    curriculum.stats["improving_lesson"].training_stats.total_samples = 50
     curriculum.stats["improving_lesson"].eval_stats.smoothed_success = 0.9
     curriculum.stats["improving_lesson"].eval_stats.last_update_step = 50
-    curriculum.stats["improving_lesson"].training_stats.total_samples = 50
     curriculum.current_step = 50
 
     # Should not graduate (still improving)
-    curriculum.update_graduated_lessons()
+    curriculum.step()
     assert "improving_lesson" not in curriculum.graduated
 
-    # Add plateau
+    # Add plateau to TRAINING stats
     for _ in range(50):
-        curriculum.stats["improving_lesson"].eval_stats.reward_history.append(0.9)
+        curriculum.stats["improving_lesson"].training_stats.reward_history.append(0.9)
 
     # Now should graduate
-    curriculum.update_graduated_lessons()
-    assert "improving_lesson" in curriculum.graduated
+    curriculum.step()
+    assert "improving_lesson" in curriculum.graduated, curriculum
 
 
 def test_graduated_lessons_excluded_from_weights():

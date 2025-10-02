@@ -377,8 +377,6 @@ class RolloutWorker:
 
         # Update curriculum state via actor
         self.curriculum_actor.step.remote()
-        self.curriculum_actor.update_unlocked_lessons.remote()
-        self.curriculum_actor.update_graduated_lessons.remote()
 
         rollout_batch = RolloutBatch(
             groups=rollout_groups,
