@@ -69,11 +69,11 @@ class WeightUpdate:
 class WeightTransferConfig:
     mode: WeightTransferMode = WeightTransferMode.GCS_CHECKPOINT
     # Common settings
-    sync_interval_steps: int = 100
-    poll_interval_seconds: float = 30.0
+    sync_interval_steps: int = 4
+    poll_interval_seconds: float = 1.0
     coordinator_name: str = "weight_transfer_coordinator"
 
-    transfer_timeout: float = 5.0
+    transfer_timeout: float = 10.0
 
     # GCS Checkpoint specific
     checkpoint_dir: str = ""
@@ -82,8 +82,6 @@ class WeightTransferConfig:
     # Arrow Flight specific
     flight_host: str = "0.0.0.0"
     flight_port: int = 0  # 0 = auto-assign
-    flight_batch_size: int = 1024 * 1024 * 100  # 100MB chunks
-    flight_use_tls: bool = False
 
 
 class WeightTransferServer(ABC):
