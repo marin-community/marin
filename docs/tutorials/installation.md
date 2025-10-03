@@ -6,7 +6,7 @@ In this tutorial, you will install Marin on your local machine.
 
 Before you begin, ensure you have the following installed:
 
-- Python 3.11 or higher
+- Python 3.13 or higher
 - uv (Python package manager)
 - Git
 - On macOS, install additional build tools for SentencePiece:
@@ -30,13 +30,13 @@ If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
 
 2. Create and activate a virtual environment:
    ```bash
-   uv venv --python 3.11
+   uv venv --python 3.13
    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
    ```
 
    or with conda:
    ```bash
-   conda create --name marin python=3.11 pip
+   conda create --name marin python=3.13 pip
    conda activate marin
    ```
 
