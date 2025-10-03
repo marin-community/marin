@@ -96,6 +96,16 @@ class StreamingRolloutLoader:
 
     def __iter__(self):
         """Yield batches continuously from the replay buffer."""
+        # Compute pad_token_id from tokenizer
+        pad_token_id = self.config.tokenizer.pad_token_id
+        if pad_token_id is None:
+            pad_token_id = self.config.tokenizer.eos_token_id
+
+        # Compute max_tokens from curriculum lessons
+        max_tokens = max(
+            lesson.sampling_params.max_tokens for lesson in self.config.curriculum_config.lessons.values()
+        )
+
         while True:
             rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
             if not rollouts:
@@ -103,9 +113,7 @@ class StreamingRolloutLoader:
                 continue
 
             # Convert rollouts to training batch
-            batch = create_training_batch_from_rollouts(
-                rollouts, self.config.max_input_length, self.config.max_output_length, self.config.pad_token_id
-            )
+            batch = create_training_batch_from_rollouts(rollouts, max_tokens, max_tokens, pad_token_id)
             # shard onto the device mesh
             with self.config.trainer.device_mesh:
                 sharded_batch = hax.shard(batch, self.config.trainer.compute_axis_mapping)
@@ -140,10 +148,8 @@ class TrainWorker:
         levanter.initialize(config.trainer)
         self.config = config
         self._should_stop = False
-        if isinstance(config.model.tokenizer, str):
-            self.tokenizer = AutoTokenizer.from_pretrained(config.model.tokenizer)
-        else:
-            self.tokenizer = config.model.tokenizer
+        self.tokenizer = config.tokenizer
+        self.loss_module = config.loss
 
         self.rollout_reader = config.rollout_storage.create_reader()
 
@@ -213,12 +219,11 @@ class TrainWorker:
         config = self.config
         optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
+        loss_fn = self.loss_module.create_loss_fn(self.reference_model, None)
+
         @jax.jit
         def _loss_function(model, batch, key):
-            return rloo_loss_with_importance_sampling(
-                model, self.reference_model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.2
-            )
-            # return ppo_loss(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.5)
+            return loss_fn(model, batch, key)
 
         with (
             config.trainer.device_mesh,
@@ -262,7 +267,7 @@ class TrainWorker:
             checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
             self.curriculum_actor.save_checkpoint.remote(checkpoint_dir)
 
-        trainer.add_hook(_curriculum_checkpoint_hook, every=self.config.curriculum_checkpoint_interval)
+        trainer.add_hook(_curriculum_checkpoint_hook, every=self.config.curriculum_config.checkpoint_steps)
 
     def weight_transfer_hook(self, trainer: Trainer, info: levanter.callbacks.StepInfo):
         step = info.step
