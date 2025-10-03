@@ -20,6 +20,7 @@ References:
 
 """
 
+import contextlib
 import dataclasses
 import json
 import logging
@@ -1145,6 +1146,8 @@ def _compute_averages(outputs):
 
 
 def run_eval_harness_main(config: EvalHarnessMainConfig):
+    from levanter.callbacks import profile_ctx
+
     config.trainer.initialize()
     tokenizer = config.the_tokenizer
 
@@ -1177,15 +1180,27 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
 
         model = typing.cast(LmHeadModel, inference_mode(model, True))
 
+        # Set up profiling context if enabled
+        profiler_ctx = contextlib.nullcontext()
+        if config.trainer.profiler:
+            # Get the run_id that was set during initialize()
+            run_id = config.trainer._maybe_set_id()
+            profile_path = config.trainer.log_dir / run_id / "profiler"
+            profiler_ctx = profile_ctx(
+                str(profile_path),
+                create_perfetto_link=config.trainer.profiler_perfetto_link,
+            )
+
         logger.info("Running LM eval harness....")
-        outputs = run_lm_eval_harness(
-            config.eval_harness,
-            model,
-            tokenizer,
-            config.EvalBatch,
-            axis_resources=compute_axis_mapping,
-            mp=config.trainer.mp,
-        )
+        with profiler_ctx:
+            outputs = run_lm_eval_harness(
+                config.eval_harness,
+                model,
+                tokenizer,
+                config.EvalBatch,
+                axis_resources=compute_axis_mapping,
+                mp=config.trainer.mp,
+            )
 
         logger.info("Finished running LM eval harness")
 
