@@ -266,10 +266,6 @@ def test_rollout_worker(rollout_worker_config: RolloutWorkerConfig):
     # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
 
     rollout_worker_config.max_rollouts = 10
-    rollout_worker_config.n_generations = 1
-    rollout_worker_config.n_prompts_per_step = 1
-    rollout_worker_config.max_input_length = 8
-    rollout_worker_config.max_output_length = 8
 
     # Use context manager for cleaner test
     with RolloutWorkerRunner(rollout_worker_config) as runner:

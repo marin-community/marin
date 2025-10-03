@@ -110,7 +110,7 @@ class LessonConfig:
     plateau_threshold: float = 0.01
     """Relative slope threshold for detecting plateaus."""
 
-    sampling_params: SamplingParams
+    sampling_params: SamplingParams = field(default_factory=SamplingParams)
     """Per-lesson sampling configuration (overrides global defaults)."""
 
 
