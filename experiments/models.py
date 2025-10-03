@@ -153,7 +153,7 @@ olmo_2_base_8b = download_model_step(
 olmo_2_base_32b = download_model_step(
     ModelConfig(
         hf_repo_id="allenai/OLMo-2-0325-32B",
-        hf_revision="cc9d3cf",
+        hf_revision="stage2-ingredient2-step9000-tokens76B",
     )
 )
 
@@ -211,6 +211,13 @@ qwen3_8b = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-8B",
         hf_revision="b968826",
+    )
+)
+
+qwen3_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-32B",
+        hf_revision="9216db5",
     )
 )
 

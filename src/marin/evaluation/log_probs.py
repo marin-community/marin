@@ -120,17 +120,25 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
     # _separate_process_fn(eval_lm_main, (config,), {})
 
     try:
-        if config.hf_checkpoint and is_remote_path(config.hf_checkpoint):
-            local_path = os.path.join("/dev/shm/levanter-lm-eval", ckpt_path_to_step_name(config.hf_checkpoint))
-            download_from_gcs(
-                gcs_path=config.hf_checkpoint,
-                destination_path=local_path,
-            )
+        # empty shm
+        shutil.rmtree("/dev/shm", ignore_errors=True)
+        if config.hf_checkpoint:
+        # if config.hf_checkpoint and is_remote_path(config.hf_checkpoint):
+            local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.hf_checkpoint))
+            if not os.path.exists(local_path):
+                download_from_gcs(
+                    gcs_path=config.hf_checkpoint,
+                    destination_path=local_path,
+                )
             config.hf_checkpoint = local_path
             print(f"Downloaded model checkpoint to {local_path}: {os.listdir(local_path)}")
         elif config.checkpoint_path and is_remote_path(config.checkpoint_path):
-            config.checkpoint_path = discover_levanter_checkpoints(config.checkpoint_path)[-1]
-
+            local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.checkpoint_path))
+            download_from_gcs(
+                gcs_path=config.checkpoint_path,
+                destination_path=local_path,
+            )
+            config.checkpoint_path = discover_levanter_checkpoints(local_path)[-1]
         eval_lm_main(config)
     finally:
         if config.hf_checkpoint:
@@ -140,10 +148,9 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
             else:
                 shutil.rmtree(HUGGINGFACE_CACHE_PATH, ignore_errors=True)
                 print(f"Deleted local checkpoint at {HUGGINGFACE_CACHE_PATH}.")
-        local_path = os.path.join("/dev/shm/levanter-lm-eval", ckpt_path_to_step_name(config.hf_checkpoint))
-        if os.path.exists(local_path):
-            shutil.rmtree(local_path, ignore_errors=True)
-            print(f"Deleted local checkpoint at {local_path}.")
+        # if os.path.exists(local_path):
+        #     shutil.rmtree(local_path, ignore_errors=True)
+        #     print(f"Deleted local checkpoint at {local_path}.")
 
 
 def evaluate_lm_log_probs(config: EvalLmConfig) -> None:

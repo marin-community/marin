@@ -16,7 +16,10 @@ from experiments.llama import llama_3_2_1b as llama_3_2_1b_config, llama3_tokeni
 from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
-from experiments.paloma import paloma_tokenized
+# from experiments.paloma import paloma_tokenized
+from marin.processing.tokenize.data_configs import TokenizerStep
+from marin.processing.tokenize import TokenizeConfig
+from marin.resources import TpuPodConfig
 
 from dataclasses import dataclass
 from levanter.models.llama import LmConfig
@@ -25,6 +28,7 @@ from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
 from experiments.evals.task_configs import EvalTaskConfig
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
 from marin.execution.executor import ExecutorStep
+from experiments.defaults import default_tokenize
 from experiments.models import (
     llama_3_1_8b,
     olmo_2_base_8b,
@@ -48,6 +52,22 @@ from experiments.qwen3 import (
 from experiments.isoflop_sweep import generate_isoflop_sweep
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from experiments.uncheatable_eval import uncheatable_eval_tokenized
+
+UNCHEATABLE_EVAL_TO_FILE_PATTERN = {
+    "wikipedia_arabic": "wikipedia_arabic_*.jsonl.gz",
+    "wikipedia_english": "wikipedia_english_*.jsonl.gz",
+    "wikipedia_french": "wikipedia_french_*.jsonl.gz",
+    "wikipedia_german": "wikipedia_german_*.jsonl.gz",
+    "wikipedia_japanese": "wikipedia_japanese_*.jsonl.gz",
+    "wikipedia_spanish": "wikipedia_spanish_*.jsonl.gz",
+    "github_python": "github_python_*.jsonl.gz",
+    "github_cpp": "github_cpp_*.jsonl.gz",
+    "bbc_news": "bbc_news_*.jsonl.gz",
+    "arxiv_physics": "arxiv_physics_*.jsonl.gz",
+    "arxiv_computer_science": "arxiv_computer_science_*.jsonl.gz",
+    "ao3_chinese": "ao3_chinese_*.jsonl.gz",
+    "ao3_english": "ao3_english_*.jsonl.gz",
+}
 
 olmo_7b = Olmo2Config(
     seq_len=4096,
@@ -143,6 +163,10 @@ EVAL_TASKS = [
 ]
 
 steps = []
+isoflop_steps, isoflop_metadatas = generate_isoflop_sweep(
+    nemotron_mix,
+    experiment_name="nemo-wider-depth-adapt",
+)
 for isoflop_step, isoflop_metadata in zip(
     isoflop_steps, isoflop_metadatas, strict=False
 ):
@@ -150,7 +174,6 @@ for isoflop_step, isoflop_metadata in zip(
     paloma_tokenized_dict = paloma_tokenized(tokenizer=llama3_tokenizer)
     uncheatable_eval_tokenized_dict = uncheatable_eval_tokenized(tokenizer=llama3_tokenizer)
     eval_data = mixture_for_evaluation(paloma_tokenized_dict | uncheatable_eval_tokenized_dict)
-    eval_data = mixture_for_evaluation(uncheatable_eval_tokenized_dict)
     budget, hidden_size, num_layers, batch_size, train_steps = isoflop_metadata
     wandb_tags = (
         f"FLOPs={budget:.1e}",
@@ -177,7 +200,7 @@ for isoflop_step, isoflop_metadata in zip(
             model_path=isoflop_step,
             evals=EVAL_TASKS,
             resource_config=SINGLE_TPU_V5p_8_FULL,
-            wandb_tags=wandb_tags,
+            # wandb_tags=wandb_tags,
         )
     )
 
@@ -192,6 +215,7 @@ for model_config in model_with_config:
             checkpoint=model_config.model_name,
             model=model_config.model_config,
             data=eval_data,
+            resource_config=SINGLE_TPU_V5p_8_FULL,
             checkpoint_is_hf=True,
             per_device_batch_size=4,
             name=f"{directory_friendly_name}-paloma-uncheatable-eval-logprobs-v2",
@@ -212,7 +236,7 @@ for model_config in model_with_config:
                 EvalTaskConfig("math_500_loss", num_fewshot=0),
             ],
             resource_config=SINGLE_TPU_V5p_8_FULL,
-            wandb_tags=[f"M={model_config.model_name}", "eval=mmlu-5shot-sl"],
+            # wandb_tags=[f"M={model_config.model_name}", "eval=mmlu-5shot-sl"],
         )
     )
 
