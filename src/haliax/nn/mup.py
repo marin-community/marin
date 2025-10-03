@@ -97,6 +97,47 @@ class AbstractEmbeddingReparam(AbstractReparam):
     Embed: AxisSpec
     Vocab: AxisSpec
 
+    @property
+    @abstractmethod
+    def unembed_active_scale(self):
+        raise NotImplementedError
+
+
+class EmbeddingStandardParam(AbstractEmbeddingReparam):
+    @staticmethod
+    def init_scale(In: AxisSpec, Out: AxisSpec):
+        return 1 / hax.axis_size(Out)
+
+    @property
+    def active_scale(self):
+        return 1
+
+    @property
+    def lr_scale(self):
+        return 1
+
+    @property
+    def unembed_active_scale(self):
+        return 1 / hax.axis_size(self.Embed)
+
+
+class EmbeddingMup(AbstractEmbeddingReparam):
+    @staticmethod
+    def init_scale(In: AxisSpec, Out: AxisSpec):
+        return 1
+
+    @property
+    def active_scale(self):
+        return 1
+
+    @property
+    def lr_scale(self):
+        return 1
+
+    @property
+    def unembed_active_scale(self):
+        return 1 / hax.axis_size(self.Embed)
+
 
 class ReparamEnabled(ABC):
     reparam: eqx.AbstractVar[AbstractReparam]

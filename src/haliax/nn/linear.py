@@ -6,6 +6,7 @@
 import dataclasses
 import math
 from functools import partial
+from typing import Optional
 
 import equinox as eqx
 import jax
