@@ -66,32 +66,21 @@ class RolloutWorkerConfig:
     """Configuration for RolloutWorker."""
 
     inference_server_config: InferenceServerConfig
-
     trainer: TrainerConfig
     model: LmConfig
     curriculum_config: CurriculumConfig
     rollout_storage: RolloutStorageConfig
-    max_input_length: int
-    max_output_length: int
-    # TODO(power) Lift these out into SamplingConfig
-    pad_token_id: int
-    n_prompts_per_step: int
-    n_generations: int
-    temperature: float
-    log_freq: int
     weight_transfer: WeightTransferConfig
-
+    tokenizer: PreTrainedTokenizer
     run_id: str
-    """Run ID to pass into the tracker. (unclear why this can't be passed directly)"""
 
     max_rollouts: int | None = None
     """Maximum number of rollouts to generate before stopping. Defaults to running forever."""
 
-    stop_tokens: list[int] | None = None
-    """List of stop tokens to supply when performing auto-regression."""
-
-    # Initial checkpoint for the reference model (auto-detects HF repo vs local path)
     initial_checkpoint: str | None = None
+    """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
+
+    log_freq: int = 10
 
 
 def find_open_port() -> int:

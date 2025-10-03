@@ -32,7 +32,7 @@ import ray
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from marin.rl import weight_transfer
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
@@ -56,25 +56,14 @@ class TrainWorkerConfig:
     trainer: TrainerConfig
     optimizer: OptimizerConfig
     replay_buffer: ReplayBufferConfig
-
     weight_transfer: WeightTransferConfig
     curriculum_config: "CurriculumConfig"  # type: ignore
-
-    max_input_length: int
-    max_output_length: int
-    pad_token_id: int
-
-    # Unique run ID for checkpointing and logging
-    # (Not sure why this isn't part of TrainerConfig)
+    loss: "RLLossModule"  # type: ignore
+    tokenizer: PreTrainedTokenizer
     run_id: str
 
-    # Initial checkpoint for the reference model (auto-detects HF repo vs local path)
     initial_checkpoint: str | None = None
-
-    # Optimization parameters
-    kl_coef: float = 0.1
-
-    curriculum_checkpoint_interval: int = 100
+    """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
 
 
 class StreamingRolloutLoader:
