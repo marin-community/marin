@@ -46,6 +46,8 @@ from marin.resources import TpuPodConfig
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, LessonDependency
 from marin.rl.environments import EnvConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
+from marin.rl.rl_job import RLJobConfig, TrainParams
+from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
@@ -78,6 +80,16 @@ def stop_tokens(tokenizer_name: str):
 
 def create_math_curriculum(run_id: str) -> CurriculumConfig:
     """Create progressive math curriculum: comparison -> easy -> medium -> hard."""
+    from marin.rl.curriculum import SamplingParams
+
+    # Default sampling params for all lessons
+    default_sampling = SamplingParams(
+        temperature=0.7,
+        n_prompts=16,
+        n_generations_per_prompt=16,
+        max_tokens=MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS,
+        stop_tokens=stop_tokens(MODEL_TOKENIZER),
+    )
 
     lessons = {
         "number_comparison": LessonConfig(
@@ -87,6 +99,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
                 env_args={"task_type": "number_comparison", "seed": 42},
             ),
             dependencies=[],
+            sampling_params=default_sampling,
         ),
         "addition_easy": LessonConfig(
             lesson_id="addition_easy",
@@ -95,6 +108,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
                 env_args={"task_type": "addition", "difficulty": "easy", "seed": 42},
             ),
             dependencies=[LessonDependency(dependency_id="number_comparison")],
+            sampling_params=default_sampling,
         ),
         "addition_medium": LessonConfig(
             lesson_id="addition_medium",
@@ -103,6 +117,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
                 env_args={"task_type": "addition", "difficulty": "medium", "seed": 42},
             ),
             dependencies=[LessonDependency(dependency_id="addition_easy")],
+            sampling_params=default_sampling,
         ),
         "addition_hard": LessonConfig(
             lesson_id="addition_hard",
@@ -111,6 +126,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
                 env_args={"task_type": "addition", "difficulty": "hard", "seed": 42},
             ),
             dependencies=[LessonDependency(dependency_id="addition_medium")],
+            sampling_params=default_sampling,
         ),
     }
 
@@ -271,52 +287,38 @@ def rl_train(name: str) -> ExecutorStep:
         poll_interval_seconds=1,
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_TOKENIZER)
     curriculum_config = create_math_curriculum(RUN_ID)
 
-    train_worker = TrainWorkerConfig(
-        rollout_storage=rollout_storage,
-        weight_transfer=weight_transfer,
+    # Create RLJobConfig using the new unified interface
+    rl_job_config = RLJobConfig(
         model=model_config,
         trainer=trainer_config,
-        optimizer=opt_config,
-        max_input_length=MAX_INPUT_TOKENS,
-        max_output_length=MAX_OUTPUT_TOKENS,
-        pad_token_id=(tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id),
-        replay_buffer=ReplayBufferConfig(
-            capacity=4096,
-            alpha=3,
-            # Don't allow resampling.
-            max_samples=1,
-            # Explicitly drop rollouts from old weights.
+        train_params=TrainParams(
+            optimizer=opt_config,
+            num_train_steps=50000,
+            batch_size=8,
+            replay_buffer_capacity=4096,
+            replay_buffer_alpha=3,
+            max_samples_per_rollout=1,
             max_rollout_delay=32,
         ),
-        kl_coef=0.05,
+        curriculum=curriculum_config,
+        tokenizer=MODEL_TOKENIZER,
+        rl_loss=RLOOLoss(kl_coef=0.05, clip_epsilon=0.2),
         initial_checkpoint=MODEL_NAME,
+        num_rollout_workers=4,
+        rollout_storage=rollout_storage,
+        weight_transfer=weight_transfer,
+        inference_server_config=inference_server_config,
         run_id=RUN_ID,
-        curriculum_config=curriculum_config,
-        curriculum_checkpoint_interval=100,
+        log_freq=5,
     )
 
-    rollout_worker = RolloutWorkerConfig(
-        trainer=trainer_config,
-        inference_server_config=inference_server_config,
-        model=model_config,
-        curriculum_config=curriculum_config,
-        max_input_length=MAX_INPUT_TOKENS,
-        max_output_length=MAX_OUTPUT_TOKENS,
-        pad_token_id=(tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id),
-        n_prompts_per_step=16,
-        n_generations=16,
-        temperature=0.7,
-        log_freq=5,
-        max_rollouts=100000,
-        stop_tokens=stop_tokens(MODEL_TOKENIZER),
-        initial_checkpoint=MODEL_NAME,
-        weight_transfer=weight_transfer,
-        rollout_storage=rollout_storage,
-        run_id=RUN_ID,
-    )
+    # Convert to worker configs for pod deployment
+    from marin.rl.rl_job import RLJob
+
+    job = RLJob(rl_job_config)
+    train_worker, rollout_worker = job.to_worker_configs()
 
     config = RLTrainConfig(
         rollout_worker_config=rollout_worker,
