@@ -43,11 +43,12 @@ from marin.execution.executor import (
     executor_main,
 )
 from marin.resources import TpuPodConfig
+from marin.rl.curriculum import CurriculumConfig, LessonConfig, LessonDependency
+from marin.rl.environments import EnvConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
-from marin.rl.environments import EnvConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.training.training import (
     _add_run_env_variables,
@@ -56,9 +57,6 @@ from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
-ENVIRONMENT_CONFIG = EnvConfig(
-    env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "addition", "seed": 42}
-)
 MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 # MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 # MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
@@ -69,13 +67,58 @@ MODEL_TOKENIZER = MODEL_NAME
 MODEL_CHECKPOINT = MODEL_NAME
 MAX_INPUT_TOKENS = 128
 MAX_OUTPUT_TOKENS = 128
-RUN_ID = f"test-{MODEL_NAME.split('/')[-1]}-{ENVIRONMENT_CONFIG.env_args['task_type']}"
+RUN_ID = f"test-{MODEL_NAME.split('/')[-1]}-curriculum"
 
 
 def stop_tokens(tokenizer_name: str):
     """Infer the stop tokens from the given tokenizer."""
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     return [tokenizer.eos_token_id]
+
+
+def create_math_curriculum(run_id: str) -> CurriculumConfig:
+    """Create progressive math curriculum: comparison -> easy -> medium -> hard."""
+
+    lessons = {
+        "number_comparison": LessonConfig(
+            lesson_id="number_comparison",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.mock_env.MockEnv",
+                env_args={"task_type": "number_comparison", "seed": 42},
+            ),
+            dependencies=[],
+        ),
+        "addition_easy": LessonConfig(
+            lesson_id="addition_easy",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.mock_env.MockEnv",
+                env_args={"task_type": "addition", "difficulty": "easy", "seed": 42},
+            ),
+            dependencies=[LessonDependency(dependency_id="number_comparison")],
+        ),
+        "addition_medium": LessonConfig(
+            lesson_id="addition_medium",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.mock_env.MockEnv",
+                env_args={"task_type": "addition", "difficulty": "medium", "seed": 42},
+            ),
+            dependencies=[LessonDependency(dependency_id="addition_easy")],
+        ),
+        "addition_hard": LessonConfig(
+            lesson_id="addition_hard",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.mock_env.MockEnv",
+                env_args={"task_type": "addition", "difficulty": "hard", "seed": 42},
+            ),
+            dependencies=[LessonDependency(dependency_id="addition_medium")],
+        ),
+    }
+
+    return CurriculumConfig(
+        lessons=lessons,
+        eval_frequency=100,
+        actor_name=f"curriculum-{run_id}",
+    )
 
 
 @dataclass(frozen=True)
@@ -229,6 +272,7 @@ def rl_train(name: str) -> ExecutorStep:
     )
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_TOKENIZER)
+    curriculum_config = create_math_curriculum(RUN_ID)
 
     train_worker = TrainWorkerConfig(
         rollout_storage=rollout_storage,
@@ -244,22 +288,26 @@ def rl_train(name: str) -> ExecutorStep:
             alpha=3,
             # Don't allow resampling.
             max_samples=1,
+            # Explicitly drop rollouts from old weights.
+            max_rollout_delay=32,
         ),
         kl_coef=0.05,
         initial_checkpoint=MODEL_NAME,
         run_id=RUN_ID,
+        curriculum_config=curriculum_config,
+        curriculum_checkpoint_interval=100,
     )
 
     rollout_worker = RolloutWorkerConfig(
         trainer=trainer_config,
         inference_server_config=inference_server_config,
         model=model_config,
-        environment_spec=ENVIRONMENT_CONFIG,
+        curriculum_config=curriculum_config,
         max_input_length=MAX_INPUT_TOKENS,
         max_output_length=MAX_OUTPUT_TOKENS,
         pad_token_id=(tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id),
         n_prompts_per_step=16,
-        n_generations=4,
+        n_generations=16,
         temperature=0.7,
         log_freq=5,
         max_rollouts=100000,
@@ -294,7 +342,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-010"),
+        rl_train(name="llama-1b-math-rl-test-power-012"),
     ]
 
     executor_main(

@@ -217,6 +217,33 @@ def get_status(ctx):
         ray.print_cluster_status()
 
 
+@cli.command("cluster-info")
+@click.pass_context
+def cluster_info(ctx):
+    """Display cluster information. Shows all clusters if no config specified."""
+    config_path = ctx.obj.config_file
+
+    if config_path:
+        # Show info for specific cluster
+        info = ray.load_cluster_info(config_path)
+        clusters = {info.cluster_name: info}
+    else:
+        # Discover and show all active clusters
+        clusters = ray.discover_active_clusters()
+        if not clusters:
+            print("No active clusters found")
+            return
+
+    print(f"Active Clusters ({len(clusters)}):")
+    for name, info in sorted(clusters.items()):
+        print(f"\n{name}:")
+        print(f"  Config: {info.config_path}")
+        print(f"  Zone: {info.zone}")
+        print(f"  Project: {info.project}")
+        print(f"  Internal IP: {info.head_ip}")
+        print(f"  External IP: {info.external_ip}")
+
+
 @cli.command("list-configs")
 @click.pass_context
 def cluster_list_configs(ctx):
@@ -363,8 +390,18 @@ def init_worker(ctx, name):
 @cli.command("dashboard")
 @click.option("--port", default=9999, help="Proxy dashboard port")
 @click.pass_context
-def open_multi_dashboard(ctx, port):
+def open_dashboard(ctx, port):
     """Open dashboard for all active Ray clusters."""
+    config_obj = ctx.obj.config_obj
+    if config_obj:
+        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)) as dashboard:
+            print(f"Connected to {config_obj.cluster_name} dashboard at {dashboard.get_dashboard_url()}")
+            try:
+                time.sleep(86400)
+            except KeyboardInterrupt:
+                print("\nShutting down...")
+        return
+
     with ray.ray_dashboard(ray.DashboardConfig(proxy_port=port)) as conn:
         if not conn.clusters:
             print("No active clusters found")
@@ -376,14 +413,14 @@ def open_multi_dashboard(ctx, port):
             print(f"  - {name} ({info.zone})")
             print(f"    Dashboard: http://localhost:{port_info[0]}")
             print(f"    Internal IP: {info.head_ip}")
+            print(f"    External IP: {info.external_ip}")
 
         if conn.proxy:
             print(f"\n📊 Proxy dashboard: {conn.get_dashboard_url()}")
             print("\nPress Ctrl+C to stop")
 
             try:
-                while True:
-                    time.sleep(1)
+                time.sleep(86400)
             except KeyboardInterrupt:
                 print("\nShutting down...")
 
