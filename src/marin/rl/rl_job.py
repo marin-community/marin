@@ -118,6 +118,9 @@ class RLJob:
         Returns:
             Tuple of (TrainWorkerConfig, RolloutWorkerConfig)
         """
+        # Create tokenizer
+        tokenizer = make_tokenizer(self.config.tokenizer)
+
         # Create replay buffer config from train params
         replay_buffer = ReplayBufferConfig(
             capacity=self.config.train_params.replay_buffer_capacity,
@@ -126,9 +129,7 @@ class RLJob:
             max_rollout_delay=self.config.train_params.max_batch_latency,
         )
 
-        # Create inference server config if not provided
-
-        # scan over sampling params for max seqs & tokens etc
+        # Scan over sampling params for max seqs & tokens
         max_seqs = 0
         max_tokens_per_seq = 0
         for lesson in self.config.curriculum.lessons.values():
@@ -136,10 +137,11 @@ class RLJob:
             max_seqs = max(max_seqs, total_seqs)
             max_tokens_per_seq = max(max_tokens_per_seq, lesson.sampling_params.max_tokens)
 
+        # Create inference server config if not provided
         if self.config.inference_server_config is None:
             inference_server_config = InferenceServerConfig(
                 trainer=self.config.trainer,
-                tokenizer=getattr(self.config.model, "tokenizer", None),
+                tokenizer=tokenizer,
                 temperature=self.config.eval_sampling_params.temperature,
                 service=InferenceEngineConfig(
                     max_seqs=max_seqs,
@@ -160,7 +162,7 @@ class RLJob:
             trainer=self.config.trainer,
             optimizer=self.config.train_params.optimizer,
             loss=self.config.rl_loss,
-            tokenizer=make_tokenizer(self.config.tokenizer),
+            tokenizer=tokenizer,
             replay_buffer=replay_buffer,
             initial_checkpoint=self.config.initial_checkpoint,
             run_id=self.config.run_id,
@@ -173,7 +175,7 @@ class RLJob:
             inference_server_config=inference_server_config,
             model=self.config.model,
             curriculum_config=self.config.curriculum,
-            tokenizer=make_tokenizer(self.config.tokenizer),
+            tokenizer=tokenizer,
             log_freq=self.config.log_freq,
             max_rollouts=None,  # Run indefinitely by default
             initial_checkpoint=self.config.initial_checkpoint,
@@ -183,3 +185,11 @@ class RLJob:
         )
 
         return train_worker_config, rollout_worker_config
+
+    def _validate_config(self):
+        """Validate configuration consistency."""
+        # TODO: Add validation logic
+        # - Check curriculum dependencies form DAG
+        # - Validate batch_size >= num processes
+        # - Ensure all lessons have sampling_params
+        pass
