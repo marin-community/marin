@@ -60,7 +60,12 @@ def chunk_text(
     """
 
     text = example.get("text", "")
-    example_id = example.get("id")
+
+    if "id" in example:
+        example_id = example.get("id")
+    elif "metadata" in example:  # Extract from DCLM
+        example_id = example.get("metadata").get("WARC-Record-ID")
+
     results: list[dict[str, Any]] = []
 
     if strategy is ChunkStrategy.CHAR:
@@ -145,6 +150,7 @@ def chunk_text(
             if example_id is not None:
                 new_example["id"] = f"{example_id}_{idx}"
                 new_example_metadata["source_document_id"] = example_id
+                new_example_metadata["chunk_idx"] = idx
                 new_example["metadata"] = new_example_metadata
             results.append(new_example)
     else:

@@ -21,9 +21,10 @@ from marin.core.runtime import cached_or_construct_output
 from marin.processing.classification.classifier import (
     AutoClassifier,
     BaseClassifier,
+    AutoClassifierRayActor,
 )
 from marin.processing.classification.cleanup import Reaper
-from marin.processing.classification.config.inference_config import InferenceConfig
+from marin.processing.classification.config.inference_config import DatasetSchemaConfig, InferenceConfig
 from marin.utils import (
     fsspec_glob,
     fsspec_mkdirs,
@@ -175,6 +176,100 @@ def count_existing_rows(output_filename: str) -> int:
         return 0
 
 
+def get_id_from_row(row: dict, id_column: str | dict[str, str]) -> str:
+    """Get the ID from a row
+
+    Args:
+        row: The data row
+        id_column: Either a string column name, or a dict with nested column access
+                   e.g., {"metadata": "id"} means row["metadata"]["id"]
+
+    Returns:
+        The ID value from the row
+    """
+    if isinstance(id_column, dict):
+        # Handle nested column access
+        parent_key = next(iter(id_column.keys()))
+        child_key = next(iter(id_column.values()))
+        return row[parent_key][child_key]
+    else:
+        return row[id_column]
+
+
+def has_id_column(row: dict, id_column: str | dict[str, str]) -> bool:
+    """Check if a row has the required id column
+
+    Args:
+        row: The data row
+        id_column: Either a string column name, or a dict with nested column access
+
+    Returns:
+        True if the id column exists in the row
+    """
+    if isinstance(id_column, dict):
+        parent_key = next(iter(id_column.keys()))
+        child_key = next(iter(id_column.values()))
+        return parent_key in row and isinstance(row[parent_key], dict) and child_key in row[parent_key]
+    else:
+        return id_column in row
+
+
+def get_finished_ids(output_filename: str, id_column: str | dict[str, str]) -> set:
+    """Get the set of IDs that have already been processed in the output file
+
+    Args:
+        output_filename: Path to the output file
+        id_column: Name of the column containing the ID
+
+    Returns:
+        Set of IDs that have already been processed
+    """
+    import json
+    import fsspec
+
+    finished_ids = set()
+
+    try:
+        # Check if file exists on local or remote filesystem
+        fs, _ = fsspec.core.url_to_fs(output_filename)
+        if not fs.exists(output_filename):
+            return finished_ids
+
+        if output_filename.endswith((".jsonl.gz", ".jsonl.zst", ".jsonl")):
+            # Read JSON lines and extract IDs
+            with fsspec.open(output_filename, "rt", compression="infer") as f:
+                for line in f:
+                    try:
+                        row = json.loads(line)
+                        if has_id_column(row, id_column):
+                            finished_ids.add(get_id_from_row(row, id_column))
+                    except json.JSONDecodeError:
+                        continue
+        elif output_filename.endswith(".parquet"):
+            # Read parquet and extract IDs
+            import pyarrow.parquet as pq
+
+            with fsspec.open(output_filename, "rb") as f:
+                if isinstance(id_column, dict):
+                    # Handle nested column access
+                    parent_key = next(iter(id_column.keys()))
+                    child_key = next(iter(id_column.values()))
+                    table = pq.read_table(f, columns=[parent_key])
+                    # Extract child values from nested dicts
+                    for row in table.to_pylist():
+                        if parent_key in row and isinstance(row[parent_key], dict) and child_key in row[parent_key]:
+                            finished_ids.add(row[parent_key][child_key])
+                else:
+                    # Simple column access
+                    table = pq.read_table(f, columns=[id_column])
+                    finished_ids = set(table[id_column].to_pylist())
+
+        return finished_ids
+    except (FileNotFoundError, Exception) as e:
+        print(f"[!] Error reading finished IDs from {output_filename}: {e}")
+        return finished_ids
+
+
 def make_json_serializable(row: dict) -> dict:
     """Make a row JSON serializable"""
     for key, value in row.items():
@@ -197,6 +292,7 @@ def convert_batch_dict_to_output_rows(batch_dict: dict, output_column_names: lis
         output_rows.append(output_row)
 
     return output_rows
+
 
 def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = False):
     """Writes rows to a file in streaming fashion
@@ -415,25 +511,14 @@ def write_dataset(dataset, output_filename: str):
         raise ValueError(f"Unsupported filetype: {output_filename}")
 
 
-def get_input_dataset_column_names(input_filename: str) -> list[str]:
-    if "fineweb" in input_filename.lower():
-        return ["text", "id"]
-    elif "dclm" in input_filename.lower():
-        return ["text", "metadata"]
-    else:
-        logger.warning("We are assuming the input dataset has the following columns: text, id")
-        return ["text", "id"]
+def get_input_dataset_column_names(dataset_schema: DatasetSchemaConfig | None = None) -> list[str]:
+    schema = dataset_schema or DatasetSchemaConfig()
+    return schema.input_columns
 
 
-def get_output_dataset_column_names(input_filename: str) -> list[str]:
-    if "fineweb" in input_filename.lower():
-        return ["id", "attributes"]
-    elif "dclm" in input_filename.lower():
-        # HACK(chris): Either standardize or make the user specify the output columns
-        return ["metadata", "attributes", "generated_text", "text"]
-    else:
-        logger.warning("We are assuming the output dataset has the following columns: id, attributes")
-        return ["id", "attributes", "generated_text", "text"]
+def get_output_dataset_column_names(dataset_schema: DatasetSchemaConfig | None = None) -> list[str]:
+    schema = dataset_schema or DatasetSchemaConfig()
+    return schema.output_columns
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
@@ -448,37 +533,34 @@ def process_file_with_quality_classifier_streaming(
     batch_size: int = 512,
     resume: bool = True,
     use_autoscaling_actor_pool: bool = False,
-    classifier_actor_options: dict = {},
+    classifier_actor_options: dict | None = None,
+    dataset_schema: DatasetSchemaConfig | None = None,
 ):
     """Process a file with streaming I/O and resumption capability"""
     print(f"[*] Processing {input_filename} to {output_filename}")
 
-    # Check if we should resume from existing progress
-    rows_to_skip = 0
-    if resume:
-        rows_to_skip = count_existing_rows(output_filename)
-        if rows_to_skip > 0:
-            print(f"[*] Resuming from row {rows_to_skip}")
-        else:
-            print(f"[*] No existing rows found in {output_filename}")
+    # Initialize mutable defaults
+    if classifier_actor_options is None:
+        classifier_actor_options = {}
 
     # Get column names
-    input_column_names = get_input_dataset_column_names(input_filename)
-    output_column_names = get_output_dataset_column_names(input_filename)
+    input_column_names = get_input_dataset_column_names(dataset_schema)
+    output_column_names = get_output_dataset_column_names(dataset_schema)
+
+    # Check if we should resume from existing progress by loading finished IDs
+    finished_ids = set()
+    if resume:
+        finished_ids = get_finished_ids(output_filename, dataset_schema.id_column)
+        if finished_ids:
+            print(f"[*] Resuming: found {len(finished_ids)} already processed IDs")
+        else:
+            print(f"[*] No existing IDs found in {output_filename}")
 
     # Create streaming iterator
     row_iterator = read_dataset_streaming(input_filename, input_column_names)
 
-    # Skip already processed rows
-    for _ in range(rows_to_skip):
-        try:
-            next(row_iterator)
-        except StopIteration:
-            print(f"[*] File already fully processed: {input_filename}")
-            return
-
     # Initialize for batch processing
-    append_mode = rows_to_skip > 0
+    append_mode = len(finished_ids) > 0
 
     # For parquet, collect batches; for JSONL, stream asynchronously
     if output_filename.endswith(".parquet"):
@@ -488,18 +570,36 @@ def process_file_with_quality_classifier_streaming(
     # async_writer = AsyncJSONLWriter(output_filename, append=append_mode)
 
     batch = []
-    total_processed = rows_to_skip
+    total_processed = len(finished_ids)
+    total_skipped = 0
 
     task_queue = Queue()
     result_queue = Queue()
 
     if use_autoscaling_actor_pool:
-        pool = AutoscalingActorPool(AutoClassifier, model_name_or_path, attribute_name, model_type, task_queue, result_queue, actor_kwargs=classifier_kwargs, actor_options=classifier_actor_options)
+        pool = AutoscalingActorPool(
+            AutoClassifierRayActor,
+            model_name_or_path,
+            attribute_name,
+            model_type,
+            task_queue,
+            result_queue,
+            actor_kwargs=classifier_kwargs,
+            actor_options=classifier_actor_options,
+        )
     else:
-        quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type, **classifier_kwargs)
+        quality_classifier = AutoClassifier.from_model_path(
+            model_name_or_path, attribute_name, model_type, **classifier_kwargs
+        )
 
     num_batches = 0
     for row in row_iterator:
+        # Skip rows that have already been processed
+        row_id = get_id_from_row(row, dataset_schema.id_column)
+        if row_id in finished_ids:
+            total_skipped += 1
+            continue
+
         batch.append(row)
 
         if len(batch) >= batch_size:
@@ -517,10 +617,9 @@ def process_file_with_quality_classifier_streaming(
                 output_rows = convert_batch_dict_to_output_rows(processed_batch, output_column_names, len(batch))
                 write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
                 total_processed += len(batch)
-                logger.info(f"[*] Processed {total_processed} rows from {input_filename}")
-            
-            batch = []
+                logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
 
+            batch = []
 
     # Final batch that might not be of size batch_size
     if batch:
@@ -536,7 +635,7 @@ def process_file_with_quality_classifier_streaming(
             output_rows = convert_batch_dict_to_output_rows(processed_batch, output_column_names, len(batch))
             write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
             total_processed += len(batch)
-            logger.info(f"[*] Processed {total_processed} rows from {input_filename}")
+            logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
 
     if use_autoscaling_actor_pool:
         num_collected_batches = 0
@@ -545,15 +644,15 @@ def process_file_with_quality_classifier_streaming(
 
             num_collected_batches += 1
 
-            batch_size = len(processed_batch['text'])
+            batch_size = len(processed_batch["text"])
             output_rows = convert_batch_dict_to_output_rows(processed_batch, output_column_names, batch_size)
             write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
             total_processed += batch_size
-            logger.info(f"[*] Processed {total_processed} rows from {input_filename}")
-        
+            logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
+
         pool.shutdown()
 
-            # Write batch
+        # Write batch
     #         if output_filename.endswith(".parquet"):
     #             parquet_batches.extend(output_rows)
     #             # Write parquet in larger chunks to be efficient
@@ -606,7 +705,9 @@ def process_file_with_quality_classifier_streaming(
     # if async_writer is not None:
     #     async_writer.close()
 
-    print(f"[*] Completed processing {input_filename} - Total rows: {total_processed}")
+    print(
+        f"[*] Completed processing {input_filename} - Total rows: {total_processed} (skipped {total_skipped} already finished)"
+    )
 
 
 def _write_parquet_batch(rows: list, output_filename: str, append: bool):
@@ -654,15 +755,30 @@ def process_file_ray(
     resume: bool = True,
     queue: Queue | None = None,
     use_autoscaling_actor_pool: bool = False,
-    classifier_actor_options: dict = {},
+    classifier_actor_options: dict | None = None,
+    dataset_schema: DatasetSchemaConfig | None = None,
 ):
     try:
+        # Initialize mutable defaults
+        if classifier_actor_options is None:
+            classifier_actor_options = {}
+
         # quality_classifier = AutoClassifier.from_model_path(
         #     model_name_or_path, attribute_name, model_type, **classifier_kwargs
         # )
 
         process_file_with_quality_classifier_streaming(
-            input_filename, output_filename, model_name_or_path, attribute_name, model_type, classifier_kwargs, batch_size, resume, use_autoscaling_actor_pool, classifier_actor_options
+            input_filename,
+            output_filename,
+            model_name_or_path,
+            attribute_name,
+            model_type,
+            classifier_kwargs,
+            batch_size,
+            resume,
+            use_autoscaling_actor_pool,
+            classifier_actor_options,
+            dataset_schema=dataset_schema,
         )
 
     except Exception:
@@ -795,6 +911,7 @@ def run_inference(inference_config: InferenceConfig):
             queue,
             inference_config.use_autoscaling_actor_pool,
             inference_config.classifier_actor_options,
+            inference_config.dataset_schema,
         )
         pending_refs[ref] = input_fp
 

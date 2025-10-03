@@ -1,6 +1,14 @@
 from dataclasses import dataclass, field
-
 from marin.core.runtime import TaskConfig
+
+
+@dataclass
+class DatasetSchemaConfig:
+    input_columns: list[str] = field(default_factory=lambda: ["text", "id"])
+    output_columns: list[str] = field(default_factory=lambda: ["id", "attributes", "generated_text", "text"])
+
+    id_column: str | dict[str, str] = field(default_factory=lambda: "id")
+    """Unique identifier for what is considered an id for a row of the dataset"""
 
 
 @dataclass
@@ -47,3 +55,6 @@ class InferenceConfig:
     use_autoscaling_actor_pool: bool = False
 
     classifier_actor_options: dict = field(default_factory=dict)
+
+    # Dataset schema configuration (input/output columns)
+    dataset_schema: DatasetSchemaConfig = field(default_factory=DatasetSchemaConfig)

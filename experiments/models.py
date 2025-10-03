@@ -165,4 +165,4 @@ llama_3_2_3b_instruct = download_model_step(
 )
 
 if __name__ == "__main__":
-    executor_main([llama_3_2_3b_instruct, llama_3_2_1b_instruct])
+    executor_main([llama_3_2_3b_instruct, llama_3_2_1b_instruct, llama_3_1_8b_instruct])

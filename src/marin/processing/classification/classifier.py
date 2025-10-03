@@ -1,11 +1,12 @@
 import atexit
+import copy
 import hashlib
 import json
 import os
 import tempfile
 import time
 import urllib.parse
-from collections.abc import Callable
+import ray
 from typing import Any, ClassVar
 
 import torch
@@ -54,6 +55,23 @@ class DummyClassifier(BaseClassifier):
         scores = self.predict(batch["text"])
         batch.update({"attributes": [{"dummy-quality": score} for score in scores]})
         return batch
+
+
+class SlowClassifier(BaseClassifier):
+    def __init__(self, model_name: str, attribute_name: str, model_type: str, *args, **kwargs):
+        super().__init__(model_name, attribute_name)
+
+    def __call__(self, batch: dict[str, Any]):
+
+        print("Sleeping for 0.5 seconds")
+        time.sleep(0.5)
+        print("Done sleeping")
+        # context = ray.get_runtime_context()
+        result = dict(batch)
+        # result["processed"] = True
+        # result["actor_id"] = context.get_actor_id().hex()
+        print("Returning result")
+        return result
 
 
 class FasttextClassifier(BaseClassifier):
@@ -344,7 +362,7 @@ class vLLMClassifier(BaseClassifier):
         model_name: str,
         attribute_name: str,
         template: str,
-        score_extractor_fn: Callable | None = None,
+        post_process_fn: str | None = None,
         engine_kwargs: dict[str, Any] | None = None,
         generation_kwargs: dict[str, Any] | None = None,
         save_original_generation: bool = False,
@@ -361,6 +379,7 @@ class vLLMClassifier(BaseClassifier):
         # Import vLLM text generation pipeline
         from marin.generation.pipeline import vLLMTextGeneration
 
+        self.is_ready = False
         self.text_generator = vLLMTextGeneration(
             model_name=model_name,
             engine_kwargs=engine_kwargs,
@@ -372,25 +391,54 @@ class vLLMClassifier(BaseClassifier):
             max_doc_tokens=max_doc_tokens,
             generated_text_column_name=generated_text_column_name,
         )
+        self.is_ready = True  # after vllm instantiation, we set this to true
         self.save_original_generation = save_original_generation
-        self.score_extractor_fn = score_extractor_fn
+        self.post_process_fn = post_process_fn
         self.generated_text_column_name = generated_text_column_name
         self.prompt_column = prompt_column
 
-        if score_extractor_fn is None:
+        if post_process_fn is None:
             self.save_original_generation = True
 
-    def _default_score_extractor(self, generation: str) -> int:
+    def ping(self):
+        return self.is_ready
+
+    def _default_post_process_fn(self, generation: str) -> dict[str, Any]:
         """Default score extractor that looks for numbers 0-5."""
         import re
 
         # Try to extract a number from the generation
         numbers = re.findall(r"\b([0-5])\b", generation.strip())
         if numbers:
-            return int(numbers[0])
+            return {"score": int(numbers[0])}
         else:
             # Default to middle score if no valid number found
-            return -1
+            return {"score": -1}
+
+    def _default_parse_strategy_fn(self, generation: str) -> dict[str, Any]:
+        import re
+
+        # Extract strategy names from lines that start with '##'
+        # Example input:
+        # ## X
+        # ## Y
+        # ## Z
+        matches = list(re.finditer(r"(?m)^\s*##\s*(.+?)\s*$", generation))
+        strategies: list[str] = []
+        seen: set[str] = set()
+
+        for idx, match in enumerate(matches):
+            start = match.end()
+            end = matches[idx + 1].start() if idx + 1 < len(matches) else len(generation)
+            body = generation[start:end].strip()
+            strategy = match.group(1).strip()
+            if body:
+                strategy = f"{strategy}\n{body}"
+            if strategy and strategy not in seen:
+                strategies.append(strategy)
+                seen.add(strategy)
+
+        return {"strategies": strategies}
 
     def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
         """Process a batch of documents."""
@@ -401,12 +449,16 @@ class vLLMClassifier(BaseClassifier):
         attributes = []
         generated_texts = batch_with_generations[self.generated_text_column_name]
 
-        if self.score_extractor_fn is not None:
-            for generated_text in generated_texts:
-                score = self.score_extractor_fn(generated_text)
+        if self.post_process_fn is not None:
+            if self.post_process_fn == "score":
+                post_process_fn = self._default_post_process_fn
+            elif self.post_process_fn == "active_reading":
+                post_process_fn = self._default_parse_strategy_fn
+            else:
+                raise ValueError(f"Invalid post_process_fn: {self.post_process_fn}")
 
-                result = {"score": score}
-                attributes.append({self.attribute_name: result})
+            for generated_text in generated_texts:
+                attributes.append({self.attribute_name: post_process_fn(generated_text)})
 
             batch.update({"attributes": attributes})
 
@@ -419,6 +471,106 @@ class vLLMClassifier(BaseClassifier):
         return batch
 
 
+class vLLMClassifierWithDocsAndAttributes(vLLMClassifier):
+    def __init__(
+        self,
+        model_name: str,
+        attribute_name: str,
+        template: str,
+        attribute_list_within_attributes_name: str,
+        post_process_fn: str | None = None,
+        engine_kwargs: dict[str, Any] | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
+        save_original_generation: bool = False,
+        max_doc_tokens: int = 7000,
+        apply_chat_template: bool = True,
+        prompt_column: str = "text",
+        save_templated_prompt: bool = False,
+        generated_text_column_name: str = "generated_text",
+        *args,
+        **kwargs,
+    ):
+        super().__init__(
+            model_name,
+            attribute_name,
+            template,
+            post_process_fn,
+            engine_kwargs,
+            generation_kwargs,
+            save_original_generation,
+            max_doc_tokens,
+            apply_chat_template,
+            prompt_column,
+            save_templated_prompt,
+            generated_text_column_name,
+            *args,
+            **kwargs,
+        )
+        self.attribute_list_within_attributes_name = attribute_list_within_attributes_name
+        self.template = template
+
+    def _change_template_based_on_attributes(self, attribute: str) -> str:
+        # NOTE(Chris) If we don't clean this up, it will break if we have a placeholder in the template
+        # since it expects a string to replace it. for example, imagine the attribute contained \boxed{10}
+        # it would expect us to have a string.format(10=...) which is not valid.
+        cleaned_attribute = attribute.replace("{", "").replace("}", "")
+        return self.template.format(attribute=cleaned_attribute, example="{example}")  # keep example as placeholder
+
+    def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
+        """Process a batch of documents."""
+        # Use the text generation pipeline to generate responses
+        # batch_with_generations = self.text_generator(batch)
+
+        # Process the generated text to extract classification scores
+        attributes = []
+        attribute_dict_list = batch["attributes"]
+
+        # We assume that we want to change the prompt template based on what each attribute is.
+        # Number of strategies * number of text documents = number of flattened batches
+        templates = []
+        # print(f"attribute list: {attribute_dict_list}")
+        print(f"len of attributes: {len(attribute_dict_list)}")
+        print(f"len of batch: {len(batch)}")
+
+        # requires attributes as an input key
+        flattened_batch_keys_to_values = {key: [] for key in batch.keys()}
+        current_index = 0
+        for i in range(len(batch["text"])):
+            for attribute_idx, attribute in enumerate(
+                attribute_dict_list[i][self.attribute_name][self.attribute_list_within_attributes_name]
+            ):
+                for key, value in batch.items():
+                    if isinstance(value[i], dict):
+                        deepcopied_value = copy.deepcopy(value[i])
+                        flattened_batch_keys_to_values[key].append(deepcopied_value)
+                    else:
+                        flattened_batch_keys_to_values[key].append(value[i])
+                flattened_batch_keys_to_values["attributes"][current_index]["attribute_idx"] = attribute_idx
+                templates.append(self._change_template_based_on_attributes(attribute))
+                current_index += 1
+
+        # print(f"len of flattened batches: {len(flattened_batches)}")
+
+        self.text_generator.template = templates
+
+        print(f"flattened_batch_keys_to_values: {len(flattened_batch_keys_to_values)}")
+        print(f"len of templates: {len(templates)}")
+
+        # Generate text for each flattened batch
+        batch_with_generations = self.text_generator(flattened_batch_keys_to_values)
+        generated_texts = batch_with_generations[self.generated_text_column_name]
+        if self.post_process_fn is not None:
+            for generated_text in generated_texts:
+                attributes.append({self.attribute_name: self.post_process_fn(generated_text)})
+
+            flattened_batch_keys_to_values.update({"attributes": attributes})
+
+        if self.save_original_generation:
+            flattened_batch_keys_to_values[self.generated_text_column_name] = generated_texts
+
+        return flattened_batch_keys_to_values
+
+
 class AutoClassifier(BaseClassifier):
     _MODEL_NAME_TO_CLS_DICT: ClassVar[dict[str, BaseClassifier]] = {
         "fasttext": FasttextClassifier,
@@ -428,6 +580,7 @@ class AutoClassifier(BaseClassifier):
         "bert": BERTQualityClassifier,
         "vllm": vLLMClassifier,
         "dummy": DummyClassifier,
+        "vllm_with_docs_and_attributes": vLLMClassifierWithDocsAndAttributes,
     }
 
     def __init__(self, model_name: str, attribute_name: str, model_type: str | None, *args, **kwargs):
@@ -463,3 +616,13 @@ class AutoClassifier(BaseClassifier):
                 f"Model name {model_name_or_path} not supported. "
                 f"Must have one of {cls._MODEL_NAME_TO_CLS_DICT.keys()} in the name."
             ) from e
+
+
+@ray.remote(concurrency_groups={"ping": 2})
+class AutoClassifierRayActor(AutoClassifier):
+    def __init__(self, model_name: str, attribute_name: str, model_type: str | None, *args, **kwargs):
+        super().__init__(model_name, attribute_name, model_type, *args, **kwargs)
+
+    @ray.method(concurrency_group="ping")
+    def ping(self):
+        return True

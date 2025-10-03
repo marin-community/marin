@@ -1,13 +1,14 @@
 from experiments.datashop.datashop_datasets import dclm_baseline_global_shard_1_local_shard_1
+from marin.classifiers.utils import create_dataset, CreateDatasetConfig
 from marin.download.filesystem.transfer import TransferConfig, transfer_files
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, output_path_of
 from marin.generation.chunk_utils import ChunkingConfig, chunk_with_config, ChunkStrategy
-from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig
+from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig, DatasetSchemaConfig
 from marin.processing.classification.consolidate import consolidate, ConsolidateConfig, FilterConfig
 from marin.processing.classification.inference import run_inference
 
-from experiments.evals.resource_configs import SINGLE_TPU_V4_8
-from experiments.pretraining_datasets import dclm_baseline
+from experiments.pretraining_datasets import dclm_baseline, dolmino
+from marin.transform.dolmino.filter_dolmino import FilterDolminoConfig, filter_dolmino
 
 # Total files in this shard is 279. The total dataset is roughly 40B tokens. We want to sample
 # around 20 files first which equates to roughly 7B tokens.
@@ -339,6 +340,31 @@ synthetic_dclm_10B_subset_wrapqa_1b = ExecutorStep(
     ),
 )
 
+synthetic_dclm_10B_subset_wrapqa_8b = ExecutorStep(
+    name="documents/synthetic-dclm-subset-10B-wrapqa-8b",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=synthetic_dclm_10B_subset_chunked,
+        output_path=this_output_path(),
+        model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f",
+        model_type="vllm",
+        attribute_name="wrap_qa_rephrase",
+        filetype="jsonl.zst",
+        batch_size=512,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+        classifier_kwargs={
+            "template": WRAP_QA_REPHRASE_PROMPT,
+            "score_extractor_fn": None,
+            "engine_kwargs": engine_kwargs,
+            "generation_kwargs": generation_kwargs,
+            "save_original_generation": True,
+        },
+        # classifier_actor_options={"resources": {"TPU": 1}},
+        # use_autoscaling_actor_pool=True,
+    ),
+)
+
 # NOTE(chris): Does not work
 # synthetic_dclm_10B_subset_wrapqa_1b_ray_data = default_synthetic_data_generation(
 #     # datashop_runner.filtered_documents,
@@ -385,28 +411,7 @@ synthetic_dclm_25B_finewebedu_filtered = ExecutorStep(
 )
 
 synthetic_dclm_5B_high_quality_subset = ExecutorStep(
-        name=f"documents/quality_filtering/synthetic-dclm-25B-subset-fineweb-edu-top-20",
-        fn=consolidate,
-        config=ConsolidateConfig(
-            input_path=synthetic_dclm_25B_subset,
-            output_path=this_output_path(),
-            filters=[
-                FilterConfig(
-                    attribute_path=output_path_of(synthetic_dclm_25B_finewebedu_filtered),
-                    name=f"fineweb-edu-quality",
-                    type="classify",
-                    label="score",
-                    keep_fraction=0.2,
-                ),
-            ],
-            filetype="jsonl.zst",
-            ray_memory_limit_gb=12,
-        ),
-        pip_dependency_groups=["ddsketch"],
-    )
-
-synthetic_dclm_5B_low_quality_subset = ExecutorStep(
-    name=f"documents/quality_filtering/synthetic-dclm-25B-subset-fineweb-edu-bottom-20",
+    name="documents/quality_filtering/synthetic-dclm-25B-subset-fineweb-edu-top-20",
     fn=consolidate,
     config=ConsolidateConfig(
         input_path=synthetic_dclm_25B_subset,
@@ -414,7 +419,28 @@ synthetic_dclm_5B_low_quality_subset = ExecutorStep(
         filters=[
             FilterConfig(
                 attribute_path=output_path_of(synthetic_dclm_25B_finewebedu_filtered),
-                name=f"fineweb-edu-quality",
+                name="fineweb-edu-quality",
+                type="classify",
+                label="score",
+                keep_fraction=0.2,
+            ),
+        ],
+        filetype="jsonl.zst",
+        ray_memory_limit_gb=12,
+    ),
+    pip_dependency_groups=["ddsketch"],
+)
+
+synthetic_dclm_5B_low_quality_subset = ExecutorStep(
+    name="documents/quality_filtering/synthetic-dclm-25B-subset-fineweb-edu-bottom-20",
+    fn=consolidate,
+    config=ConsolidateConfig(
+        input_path=synthetic_dclm_25B_subset,
+        output_path=this_output_path(),
+        filters=[
+            FilterConfig(
+                attribute_path=output_path_of(synthetic_dclm_25B_finewebedu_filtered),
+                name="fineweb-edu-quality",
                 type="classify",
                 label="score",
                 keep_fraction=0.8,
@@ -498,11 +524,327 @@ synthetic_dclm_5B_low_quality_subset_wrapqa = ExecutorStep(
     ),
 )
 
+
+## BEGIN PERSONA HUB STYLE DATA ABLATIONS
+synthetic_dclm_annotation_subset_1b = ExecutorStep(
+    name="documents/datashop-datasets/synthetic-dclm-subset",
+    fn=transfer_files,
+    config=TransferConfig(
+        input_path=dclm_baseline_global_shard_1_local_shard_1,
+        output_path=this_output_path(),
+        num_random_files=20,
+    ),
+)
+
+dclm_data_chunked_1b = ExecutorStep(
+    name="documents/synthetic-dclm-subset-1b-chunk-350",
+    fn=chunk_with_config,
+    config=ChunkingConfig(
+        input_path=synthetic_dclm_annotation_subset,
+        output_path=this_output_path(),
+        filetype="jsonl.zst",
+        chunk_strategy=ChunkStrategy.PASSAGE,
+        chunk_size=350,  # 350 tokens per passage
+    ),
+)
+
+# From: https://huggingface.co/datasets/proj-persona/PersonaHub/viewer/knowledge?views%5B%5D=knowledge&row=2
+personas = [
+    (
+        "hs-teacher",
+        "A high school teacher of social studies preparing lessons on the \
+            development of political parties in the United States.",
+    ),
+    (
+        "food-enthusiast",
+        "A food enthusiast who enjoys exploring regional French cuisine, with a \
+            particular interest in cheeses from the Normandy and Picardy regions.",
+    ),
+    ("geologist", "A geologist studying sunken volcanoes and the geological history of Pacific islands."),
+    (
+        "manuscript-studies-scholar",
+        "A manuscript studies scholar or paleographer with expertise in early medieval European \
+        texts and handwriting. This expert would be intrigued by the ninth-century manuscript \
+        that contains copies of Theuthild's letters.",
+    ),
+]
+
+PERSONA_REWRITE_PROMPT = """
+Assume you are the persona described as follows. You are tasked with rewriting a text document and
+you will simulate the perspective and writing style of the persona given.
+
+<persona>
+{persona}
+</persona>
+
+<example>
+{example}
+</example>
+
+Now rewrite the example above given the persona described. Just rewrite the text and don't output anything else.
+"""
+
+persona_steps = []
+for persona_name, persona in personas:
+    persona_rewrite_prompt = PERSONA_REWRITE_PROMPT.format(persona=persona, example="{example}")
+    synthetic_dclm_annotation_subset_1b_persona = ExecutorStep(
+        name=f"documents/synthetic-dclm-subset-1b-data-1b-{persona_name}",
+        fn=run_inference,
+        config=InferenceConfig(
+            input_path=dclm_data_chunked_1b,
+            output_path=this_output_path(),
+            model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-1B-Instruct--c4219cc",
+            model_type="vllm",
+            attribute_name="persona_rewrite",
+            filetype="jsonl.zst",
+            batch_size=2048,
+            resume=True,
+            runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+            classifier_kwargs={
+                "template": persona_rewrite_prompt,
+                "score_extractor_fn": None,
+                "engine_kwargs": engine_kwargs,
+                "generation_kwargs": generation_kwargs,
+                "save_original_generation": True,
+            },
+        ),
+    )
+    persona_steps.append(synthetic_dclm_annotation_subset_1b_persona)
+
+
+### Experiment with active reading
+wiki_longer_than_256_chars = ExecutorStep(
+    name="documents/wiki-longer-than-256-chars",
+    fn=filter_dolmino,
+    config=FilterDolminoConfig(
+        input_path=dolmino.cd("bb54cab"),
+        output_path=this_output_path(),
+        split="wiki",
+        min_length=256,
+    ),
+)
+
+wikipedia_subset_5k = ExecutorStep(
+    name="documents/wikipedia-subset-5k",
+    fn=create_dataset,
+    config=CreateDatasetConfig(
+        input_doc_path=output_path_of(wiki_longer_than_256_chars),
+        output_dataset_path=this_output_path(),
+        max_sample_size=5_000,
+        filetype="jsonl.gz",
+        merge_dataset_shards=False,
+        columns_to_keep=["text", "id"],
+    ),
+)
+
+
+ACTIVE_READING_PROMPT = """
+Please consider the following document.
+What are some strategies specific to this document that I can use to help me learn and
+remember all of the information it contains?
+Use Markdown and prefix each strategy with ##.
+
+<example>
+{example}
+</example>
+"""
+
+active_reading_steps = ExecutorStep(
+    name="documents/wikipedia-subset-5k-active-reading-v2",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=wikipedia_subset_5k,
+        output_path=this_output_path(),
+        model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-1B-Instruct--c4219cc",
+        model_type="vllm",
+        attribute_name="active_reading",
+        filetype="jsonl.gz",
+        batch_size=512,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+        classifier_kwargs={
+            "template": ACTIVE_READING_PROMPT,
+            "post_process_fn": "active_reading",
+            "engine_kwargs": engine_kwargs,
+            "generation_kwargs": generation_kwargs,
+            "save_original_generation": True,
+        },
+        dataset_schema=DatasetSchemaConfig(
+            input_columns=["text", "id"],
+            output_columns=["id", "attributes", "generated_text", "text"],
+        ),
+    ),
+)
+
+ACTIVE_READING_REWRITE_PROMPT = """
+Here's a learning strategy:
+{attribute}
+
+Apply this strategy to the following document:
+<document>
+{example}
+</document>
+
+Use this learning strategy to rewrite the document. Do not include any other text.
+Do not just repeat the document -actively use the learning strategy to rewrite the document.
+"""
+
+active_reading_steps_1b_rewrite = ExecutorStep(
+    name="documents/wikipedia-subset-5k-active-reading-1b-rewrite-v2",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=active_reading_steps,
+        output_path=this_output_path(),
+        model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-1B-Instruct--c4219cc",
+        model_type="vllm_with_docs_and_attributes",
+        attribute_name="active_reading",
+        filetype="jsonl.gz",
+        batch_size=512,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+        classifier_kwargs={
+            "template": ACTIVE_READING_REWRITE_PROMPT,
+            "post_process_fn": None,
+            "attribute_list_within_attributes_name": "strategies",
+            "engine_kwargs": engine_kwargs,
+            "generation_kwargs": generation_kwargs,
+            "save_original_generation": True,
+        },
+        dataset_schema=DatasetSchemaConfig(
+            input_columns=["text", "id", "attributes"],
+            output_columns=["id", "attributes", "generated_text", "text"],
+        ),
+    ),
+)
+
+active_reading_steps_1b_rewrite_autoscale = ExecutorStep(
+    name="documents/wikipedia-subset-5k-active-reading-1b-rewrite-v2-autoscale",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=active_reading_steps,
+        output_path=this_output_path(),
+        model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-1B-Instruct--c4219cc",
+        model_type="vllm_with_docs_and_attributes",
+        attribute_name="active_reading",
+        filetype="jsonl.gz",
+        batch_size=512,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+        classifier_kwargs={
+            "template": ACTIVE_READING_REWRITE_PROMPT,
+            "post_process_fn": None,
+            "attribute_list_within_attributes_name": "strategies",
+            "engine_kwargs": engine_kwargs,
+            "generation_kwargs": generation_kwargs,
+            "save_original_generation": True,
+        },
+        dataset_schema=DatasetSchemaConfig(
+            input_columns=["text", "id", "attributes"],
+            output_columns=["id", "attributes", "generated_text", "text"],
+        ),
+        classifier_actor_options={"resources": {"TPU": 1}},
+        use_autoscaling_actor_pool=True,
+    ),
+)
+
+wikipedia_subset_1_5M = ExecutorStep(
+    name="documents/wikipedia-subset-1p5m",
+    fn=create_dataset,
+    config=CreateDatasetConfig(
+        input_doc_path=output_path_of(wiki_longer_than_256_chars),
+        output_dataset_path=this_output_path(),
+        max_sample_size=1_500_000,
+        filetype="jsonl.gz",
+        merge_dataset_shards=False,
+        columns_to_keep=["text", "id"],
+    ),
+)
+
+wikipedia_subset_1_5M_chunked = ExecutorStep(
+    name="documents/wikipedia-subset-1p5m-chunked",
+    fn=chunk_with_config,
+    config=ChunkingConfig(
+        input_path=wikipedia_subset_1_5M,
+        output_path=this_output_path(),
+        filetype="jsonl.gz",
+        chunk_strategy=ChunkStrategy.PASSAGE,
+        chunk_size=350,  # 350 tokens per passage
+    ),
+)
+
+active_reading_1_5M_with_attributes = ExecutorStep(
+    name="documents/wikipedia-subset-1p5m-active-reading-v2",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=wikipedia_subset_1_5M_chunked,
+        output_path=this_output_path(),
+        model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-1B-Instruct--c4219cc",
+        model_type="vllm",
+        attribute_name="active_reading",
+        filetype="jsonl.gz",
+        batch_size=512,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+        classifier_kwargs={
+            "template": ACTIVE_READING_PROMPT,
+            "post_process_fn": "active_reading",
+            "engine_kwargs": engine_kwargs,
+            "generation_kwargs": generation_kwargs,
+            "save_original_generation": True,
+        },
+        dataset_schema=DatasetSchemaConfig(
+            input_columns=["text", "id", "metadata"],
+            output_columns=["id", "attributes", "generated_text", "text", "metadata"],
+        ),
+        classifier_actor_options={"resources": {"TPU": 1}},
+        use_autoscaling_actor_pool=True,
+    ),
+)
+
+active_reading_steps_1_5M_rewrite = ExecutorStep(
+    name="documents/wikipedia-subset-1p5m-active-reading-1b-rewrite-v2",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=active_reading_1_5M_with_attributes,
+        output_path=this_output_path(),
+        model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-1B-Instruct--c4219cc",
+        model_type="vllm_with_docs_and_attributes",
+        attribute_name="active_reading",
+        filetype="jsonl.gz",
+        batch_size=512,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+        classifier_kwargs={
+            "template": ACTIVE_READING_REWRITE_PROMPT,
+            "post_process_fn": None,
+            "attribute_list_within_attributes_name": "strategies",
+            "engine_kwargs": engine_kwargs,
+            "generation_kwargs": generation_kwargs,
+            "save_original_generation": True,
+        },
+        dataset_schema=DatasetSchemaConfig(
+            input_columns=["text", "id", "attributes", "metadata"],
+            output_columns=["id", "attributes", "generated_text", "text", "metadata"],
+        ),
+        classifier_actor_options={"resources": {"TPU": 1}},
+        use_autoscaling_actor_pool=True,
+    ),
+)
+
 if __name__ == "__main__":
     # executor_main([synthetic_dclm_10B_subset_wrapqa])
-    executor_main([
-        # synthetic_dclm_25B_finewebedu_filtered,
-        # synthetic_dclm_5B_wrapqa,
-        synthetic_dclm_5B_low_quality_subset_wrapqa,
-        synthetic_dclm_5B_high_quality_subset_wrapqa,
-    ])
+    executor_main(
+        [
+            # synthetic_dclm_25B_finewebedu_filtered,
+            # synthetic_dclm_5B_wrapqa,
+            # synthetic_dclm_5B_low_quality_subset_wrapqa,
+            # synthetic_dclm_5B_high_quality_subset_wrapqa,
+            # synthetic_dclm_10B_subset_wrapqa_1b,
+            # synthetic_dclm_10B_subset_wrapqa_8b,
+            # *persona_steps,
+            # active_reading_steps_1b_rewrite_autoscale,
+            wikipedia_subset_1_5M,
+            active_reading_1_5M_with_attributes,
+            active_reading_steps_1_5M_rewrite,
+        ]
+    )
