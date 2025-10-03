@@ -217,6 +217,33 @@ def get_status(ctx):
         ray.print_cluster_status()
 
 
+@cli.command("cluster-info")
+@click.pass_context
+def cluster_info(ctx):
+    """Display cluster information. Shows all clusters if no config specified."""
+    config_path = ctx.obj.config_file
+
+    if config_path:
+        # Show info for specific cluster
+        info = ray.load_cluster_info(config_path)
+        clusters = {info.cluster_name: info}
+    else:
+        # Discover and show all active clusters
+        clusters = ray.discover_active_clusters()
+        if not clusters:
+            print("No active clusters found")
+            return
+
+    print(f"Active Clusters ({len(clusters)}):")
+    for name, info in sorted(clusters.items()):
+        print(f"\n{name}:")
+        print(f"  Config: {info.config_path}")
+        print(f"  Zone: {info.zone}")
+        print(f"  Project: {info.project}")
+        print(f"  Internal IP: {info.head_ip}")
+        print(f"  External IP: {info.external_ip}")
+
+
 @cli.command("list-configs")
 @click.pass_context
 def cluster_list_configs(ctx):
@@ -386,6 +413,7 @@ def open_dashboard(ctx, port):
             print(f"  - {name} ({info.zone})")
             print(f"    Dashboard: http://localhost:{port_info[0]}")
             print(f"    Internal IP: {info.head_ip}")
+            print(f"    External IP: {info.external_ip}")
 
         if conn.proxy:
             print(f"\n📊 Proxy dashboard: {conn.get_dashboard_url()}")
