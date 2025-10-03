@@ -1016,11 +1016,15 @@ class InferenceEngine:
             ),
         )
 
-    def generate(self, requests: Sequence[Request]) -> GenerationResult:
+    def generate(self, requests: Sequence[Request], step_callback=None) -> GenerationResult:
         """Generate tokens for a batch of Requests.
 
         Each Request provides prompt_tokens, decode_params, and n_generations (clones).
         Returns (outputs_per_sequence, total_generated_tokens).
+
+        Args:
+            requests: Sequence of generation requests
+            step_callback: Optional callback function called at each decode iteration with iteration number
         """
         # validate we don't have any sequences with n_generations exceeding max_seqs
         max_needed = max(int(r.n_generations) for r in requests)
@@ -1098,7 +1102,12 @@ class InferenceEngine:
             return True
 
         stagnant_iters = 0
+        decode_iteration = 0
         while not _all_done():
+            # Call step callback if provided
+            if step_callback is not None:
+                step_callback(decode_iteration)
+
             iter_start = time.time()
 
             fake_submit_start = time.time()
@@ -1157,6 +1166,9 @@ class InferenceEngine:
                     f"{tps_total:.2f} tok/s, {new_tokens} new"
                     f" (extract {extract_time:.3f}s, release {release_time:.3f}s)"
                 )
+
+            decode_iteration += 1
+
             # Safety: if nothing new was produced and queue is empty, avoid infinite loop
             if (
                 new_tokens == 0
