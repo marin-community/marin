@@ -22,6 +22,7 @@ and infrastructure concerns, letting users focus on the RL algorithm and hyperpa
 import uuid
 from dataclasses import dataclass, field
 
+import ray
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
@@ -33,8 +34,8 @@ from marin.rl.curriculum import CurriculumConfig, SamplingParams
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
-from marin.rl.rollout_worker import RolloutWorkerConfig
-from marin.rl.train_worker import TrainWorkerConfig
+from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
+from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 
 
@@ -110,7 +111,40 @@ class RLJob:
         Returns:
             The trained model
         """
-        raise NotImplementedError("RLJob.run() will be implemented in Phase 2")
+        # Get worker configurations
+        train_config, rollout_config = self.to_worker_configs()
+
+        # Create Ray remote tasks for workers
+        @ray.remote
+        def train_worker_task():
+            worker = TrainWorker(config=train_config)
+            worker.train()
+
+        @ray.remote
+        def rollout_worker_task():
+            worker = RolloutWorker(config=rollout_config)
+            worker.run()
+
+        # Launch training worker
+        train_task = train_worker_task.remote()
+
+        # Launch rollout workers
+        rollout_tasks = []
+        for _ in range(self.config.num_rollout_workers):
+            rollout_tasks.append(rollout_worker_task.remote())
+
+        # Wait for training to complete
+        try:
+            ray.get(train_task)
+        finally:
+            # Training completed or failed, stop rollout workers
+            # Note: rollout workers will stop naturally when training completes
+            # We don't need to explicitly stop them as they'll hit max rollouts or timeout
+            pass
+
+        # TODO: Return the trained model
+        # For now, training completion is signaled by train_task finishing
+        raise NotImplementedError("Model retrieval from training worker not yet implemented")
 
     def to_worker_configs(self) -> tuple[TrainWorkerConfig, RolloutWorkerConfig]:
         """Export worker configurations for inspection/testing.
