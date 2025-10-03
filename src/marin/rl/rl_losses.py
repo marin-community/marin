@@ -15,6 +15,7 @@
 """RL loss functions."""
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Protocol
 
 import equinox as eqx
@@ -214,3 +215,33 @@ def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     generator = np.random.default_rng()
     advantages += generator.normal(loc=0.0, scale=1e-6, size=advantages.shape)
     return advantages
+
+
+@dataclass
+class RLOOLoss:
+    """RLOO loss with importance sampling."""
+
+    kl_coef: float = 0.1
+    clip_epsilon: float = 0.2
+
+    def build(self, reference_model: eqx.Module) -> eqx.Module:
+        """Initialize any learned components (e.g., value heads)."""
+        return self  # No learned parameters
+
+    def compute_advantages(self, rollout_group: list[Rollout]) -> list[float]:
+        """Compute advantages for a group of rollouts."""
+        return compute_rloo_advantages(rollout_group)
+
+    def create_loss_fn(self, reference_model: eqx.Module, train_model: eqx.Module) -> Callable:
+        """Create the loss function for training."""
+
+        def loss_fn(model, batch, key):
+            return rloo_loss_with_importance_sampling(
+                model, reference_model, batch, key=key, kl_coef=self.kl_coef, clip_epsilon=self.clip_epsilon
+            )
+
+        return loss_fn
+
+    def to_config(self) -> dict:
+        """Serialize the loss module to a configuration dictionary."""
+        return {"kl_coef": self.kl_coef, "clip_epsilon": self.clip_epsilon}
