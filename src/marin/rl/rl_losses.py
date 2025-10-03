@@ -177,17 +177,7 @@ def rloo_loss_with_importance_sampling(
 
 
 def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
-    """Compute RLOO (Reward Leave-One-Out) advantages for a group of rollouts.
-
-    This is a standalone version of RolloutGroup.compute_rloo_advantages() that
-    can be used independently.
-
-    Args:
-        rollouts: List of rollouts to compute advantages for
-
-    Returns:
-        Array of advantages, one per rollout
-    """
+    """Compute RLOO (Reward Leave-One-Out) advantages for a group of rollouts."""
     rewards = np.array([r.episode_reward for r in rollouts])
     n = len(rewards)
     if n <= 1:
