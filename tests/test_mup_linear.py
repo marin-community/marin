@@ -11,7 +11,7 @@ import pytest
 
 import haliax as hax
 from haliax.nn import Linear
-from haliax.nn.mup import InputLinearMup, HiddenLinearMup, OutputLinearMup
+from haliax.nn.mup import InputLinearMup, LinearStandardParam, HiddenLinearMup, OutputLinearMup
 
 
 @pytest.mark.parametrize("out_first", [True, False])
@@ -37,8 +37,8 @@ def test_mup_linear_call_matches_linear():
     weight = hax.ones(hax.concat_axis_specs(Out, In)) * 0.5
     bias = hax.full(Out, 0.25)
 
-    linear = Linear(weight, bias, In, Out)
-    mup = Linear(weight, bias, In, Out, reparam_cls=InputLinearMup)
+    linear = Linear(weight, bias, In, Out, reparam=LinearStandardParam(In, Out))
+    mup = Linear(weight, bias, In, Out, reparam=InputLinearMup(In, Out))
 
     inputs = hax.full(hax.concat_axis_specs(Batch, In), 2.0)
 
@@ -93,7 +93,7 @@ def test_output_linear_state_dict_scales_weight():
     layer = dataclasses.replace(layer, weight=hax.ones(layer.weight.axes))
 
     state = layer.to_state_dict()
-    assert jnp.allclose(state["weight"], layer.weight.array * layer.mup_active_scale)
+    assert jnp.allclose(state["weight"], layer.weight.array * layer.reparam.active_scale)
 
     template = Linear.init(In, Out, key=jrandom.PRNGKey(4), use_bias=False, reparam_cls=OutputLinearMup)
     restored = template.from_state_dict(state)
@@ -109,8 +109,8 @@ def test_input_linear_behaves_like_base_linear():
     weight = hax.ones((Out, In)) * 0.1
     bias = hax.zeros(Out)
 
-    linear = Linear(weight, bias, In, Out)
-    input_linear = Linear(weight, bias, In, Out, reparam_cls=InputLinearMup)
+    linear = Linear(weight, bias, In, Out, reparam=LinearStandardParam(In, Out))
+    input_linear = Linear(weight, bias, In, Out, reparam=InputLinearMup(In, Out))
 
     inputs = hax.random.normal(jrandom.PRNGKey(5), (Batch, In))
 

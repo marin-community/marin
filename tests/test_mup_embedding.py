@@ -22,7 +22,8 @@ def test_mup_embedding_init_matches_embedding(init_scale: float):
     mup = Embedding.init(Vocab, Embed, key=key, init_scale=init_scale, reparam_cls=EmbeddingMup)
 
     assert mup.weight.axes == baseline.weight.axes
-    assert jnp.allclose(mup.weight.array, baseline.weight.array)
+    scale_factor = hax.axis_size(Embed)
+    assert jnp.allclose(mup.weight.array, baseline.weight.array * scale_factor)
 
 
 def test_mup_embedding_unembedding_scale():
@@ -32,11 +33,10 @@ def test_mup_embedding_unembedding_scale():
     weight = hax.ones(hax.concat_axis_specs(Vocab, Embed))
     layer = Embedding(weight=weight, Vocab=Vocab, Embed=Embed, reparam=EmbeddingMup(Embed, Vocab))
 
-    assert layer.unembedding_mup_active_scale == pytest.approx(1.0 / Embed[0].size)
-    assert jnp.allclose(
-        layer.unembedding_weight.array,
-        weight.array * layer.unembedding_mup_active_scale,
-    )
+    scale = layer.reparam.unembed_active_scale
+    assert scale == pytest.approx(1.0 / hax.axis_size(Embed))
+    assert layer.reparam.active_scale == pytest.approx(1.0)
+    assert jnp.allclose((layer.weight * scale).array, weight.array * scale)
 
     Batch = hax.Axis("B", 2)
     inputs = hax.ones((Batch, *Embed))
