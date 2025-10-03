@@ -36,9 +36,13 @@ from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from tests.rl.integration_test_config import (
     DummyTokenizer,
+    create_nano_llama_config,
+    create_nano_optimizer_config,
     create_nano_rollout_worker_config,
+    create_nano_trainer_config,
     create_nano_training_worker_config,
     create_rollout_batch,
+    create_test_curriculum_config,
     run_inference_with_engine,
 )
 
@@ -414,17 +418,41 @@ def validate_model(model, tokenizer) -> dict[str, str]:
 
 
 @pytest.mark.slow("Integration test with training loop")
-def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, training_worker_config):
+def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path, rollout_storage_config):
     """Test training worker with manually constructed cat-themed rollout batches.
 
     This test validates that the training worker can process rollout batches
     with varying rewards and learn to prefer high-reward (cat-heavy) responses.
     """
+    from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
+    from marin.rl.rl_losses import RLOOLoss
+
     target_steps = 200
-    queue_writer = training_worker_config.rollout_storage.create_writer()
-    training_worker_config.trainer.num_train_steps = target_steps
-    batch_size = training_worker_config.trainer.train_batch_size
     tokenizer = DummyTokenizer()
+
+    # Create RLJobConfig and get worker configs
+    job_config = RLJobConfig(
+        model=create_nano_llama_config(),
+        trainer=create_nano_trainer_config(tmp_path),
+        train_params=TrainParams(
+            optimizer=create_nano_optimizer_config(),
+            num_train_steps=target_steps,
+            batch_size=32,
+            replay_buffer_capacity=2048,
+            replay_buffer_alpha=3.0,
+            max_samples_per_rollout=4,
+        ),
+        curriculum=create_test_curriculum_config(),
+        tokenizer=tokenizer,
+        rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
+        rollout_storage=rollout_storage_config,
+    )
+
+    job = RLJob(job_config)
+    training_worker_config, _ = job.to_worker_configs()
+
+    queue_writer = training_worker_config.rollout_storage.create_writer()
+    batch_size = training_worker_config.trainer.train_batch_size
 
     with TrainWorkerRunner(training_worker_config) as runner:
         # Wait for worker to initialize and models to be available
@@ -470,14 +498,38 @@ def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, training_worker_
 @pytest.mark.slow("Long-running integration test.")
 def test_full_integration_moar_cats(
     ray_tpu_cluster,
-    training_worker_config,
-    rollout_worker_config,
+    tmp_path,
+    rollout_storage_config,
 ):
     """Long-running test to validate environment objective improves over time."""
-    # The workers already use the same storage config from the fixtures, so they'll automatically share data
+    from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
+    from marin.rl.rl_losses import RLOOLoss
 
     target_steps = 100
-    training_worker_config.trainer.num_train_steps = target_steps
+
+    # Create RLJobConfig and get worker configs
+    job_config = RLJobConfig(
+        model=create_nano_llama_config(),
+        trainer=create_nano_trainer_config(tmp_path),
+        train_params=TrainParams(
+            optimizer=create_nano_optimizer_config(),
+            num_train_steps=target_steps,
+            batch_size=32,
+        ),
+        curriculum=create_test_curriculum_config(),
+        tokenizer=DummyTokenizer(),
+        rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
+        rollout_storage=rollout_storage_config,
+    )
+
+    job = RLJob(job_config)
+    training_worker_config, rollout_worker_config = job.to_worker_configs()
+
+    # Apply test-specific overrides
+    rollout_worker_config.weight_transfer.poll_interval_seconds = 0.1
+    rollout_worker_config.weight_transfer.sync_interval_steps = 1
+    rollout_worker_config.max_rollouts = 100
+
     metrics_history = []
     with TrainWorkerRunner(training_worker_config) as training_runner:
         time.sleep(1)

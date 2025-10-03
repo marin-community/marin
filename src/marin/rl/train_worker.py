@@ -32,7 +32,7 @@ import ray
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
-from transformers import AutoTokenizer, PreTrainedTokenizer
+from transformers import PreTrainedTokenizer
 
 from marin.rl import weight_transfer
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
@@ -40,7 +40,7 @@ from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.weight_transfer import WeightTransferConfig
 
 from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader
-from .rl_losses import rloo_loss_with_importance_sampling
+from .rl_losses import RLLossModule
 from .rollout_storage import RolloutStorageConfig
 from .train_batch import create_training_batch_from_rollouts
 
@@ -57,8 +57,8 @@ class TrainWorkerConfig:
     optimizer: OptimizerConfig
     replay_buffer: ReplayBufferConfig
     weight_transfer: WeightTransferConfig
-    curriculum_config: "CurriculumConfig"  # type: ignore
-    loss: "RLLossModule"  # type: ignore
+    curriculum_config: CurriculumConfig
+    loss: RLLossModule
     tokenizer: PreTrainedTokenizer
     run_id: str
 
@@ -102,9 +102,7 @@ class StreamingRolloutLoader:
             pad_token_id = self.config.tokenizer.eos_token_id
 
         # Compute max_tokens from curriculum lessons
-        max_tokens = max(
-            lesson.sampling_params.max_tokens for lesson in self.config.curriculum_config.lessons.values()
-        )
+        max_tokens = max(lesson.sampling_params.max_tokens for lesson in self.config.curriculum_config.lessons.values())
 
         while True:
             rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
@@ -155,6 +153,7 @@ class TrainWorker:
 
         self.replay_buffer = ReplayBuffer(
             config=config.replay_buffer,
+            loss_module=self.loss_module,
             local_batch_size=config.trainer.train_batch_size,
             process_id=jax.process_index(),
             total_processes=jax.process_count(),

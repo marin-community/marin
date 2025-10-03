@@ -16,9 +16,10 @@
 
 import pytest
 
-from marin.rl.curriculum import CurriculumConfig, LessonConfig, LessonDependency
+from marin.rl.curriculum import CurriculumConfig, LessonConfig, LessonDependency, SamplingParams
 from marin.rl.environments import EnvConfig
-from marin.rl.rl_job import RLJobConfig, RLOOLoss, SamplingParams, TrainParams
+from marin.rl.rl_job import RLJobConfig, TrainParams
+from marin.rl.rl_losses import RLOOLoss
 from tests.rl.integration_test_config import (
     create_nano_llama_config,
     create_nano_optimizer_config,
@@ -76,6 +77,8 @@ def curriculum_with_dependencies():
 
 def test_rl_job_config_with_custom_loss(temp_dir, minimal_curriculum):
     """Test RLJobConfig with custom RL loss module."""
+    from tests.rl.integration_test_config import DummyTokenizer
+
     custom_loss = RLOOLoss(kl_coef=0.2, clip_epsilon=0.3)
 
     config = RLJobConfig(
@@ -87,6 +90,7 @@ def test_rl_job_config_with_custom_loss(temp_dir, minimal_curriculum):
             batch_size=32,
         ),
         curriculum=minimal_curriculum,
+        tokenizer=DummyTokenizer(),
         rl_loss=custom_loss,
     )
 
@@ -132,13 +136,19 @@ def test_per_lesson_sampling_params(temp_dir):
     assert curriculum.lessons["custom"].sampling_params.n_prompts == 16
     assert curriculum.lessons["custom"].sampling_params.n_generations_per_prompt == 8
 
-    # Verify other lesson has no override
-    assert curriculum.lessons["default"].sampling_params is None
+    # Verify other lesson uses default sampling params
+    assert curriculum.lessons["default"].sampling_params is not None
+    assert curriculum.lessons["default"].sampling_params.temperature == 1.0  # Default
+    assert curriculum.lessons["default"].sampling_params.n_prompts == 8  # Default
+    assert curriculum.lessons["default"].sampling_params.n_generations_per_prompt == 4  # Default
 
 
 def test_to_worker_configs_produces_valid_configs(temp_dir, minimal_curriculum):
     """Test that to_worker_configs() produces valid TrainWorkerConfig and RolloutWorkerConfig."""
     from marin.rl.rl_job import RLJob
+    from tests.rl.integration_test_config import DummyTokenizer
+
+    tokenizer = DummyTokenizer()
 
     config = RLJobConfig(
         model=create_nano_llama_config(),
@@ -153,8 +163,8 @@ def test_to_worker_configs_produces_valid_configs(temp_dir, minimal_curriculum):
             max_batch_latency=1000,
         ),
         curriculum=minimal_curriculum,
-        max_input_length=128,
-        max_output_length=128,
+        tokenizer=tokenizer,
+        rl_loss=RLOOLoss(),
     )
 
     job = RLJob(config)
@@ -164,24 +174,23 @@ def test_to_worker_configs_produces_valid_configs(temp_dir, minimal_curriculum):
     assert train_config.model == config.model
     assert train_config.trainer == config.trainer
     assert train_config.optimizer == config.train_params.optimizer
-    assert train_config.max_input_length == 128
-    assert train_config.max_output_length == 128
     assert train_config.replay_buffer.capacity == 2048
     assert train_config.replay_buffer.alpha == 3.0
     assert train_config.replay_buffer.max_samples == 4
     assert train_config.run_id == config.run_id
     assert train_config.curriculum_config == config.curriculum
+    assert train_config.tokenizer == tokenizer
+    assert train_config.loss == config.rl_loss
 
     # Verify rollout worker config
     assert rollout_config.model == config.model
     assert rollout_config.trainer == config.trainer
-    assert rollout_config.max_input_length == 128
-    assert rollout_config.max_output_length == 128
-    assert rollout_config.n_prompts_per_step == config.eval_sampling_params.n_prompts
-    assert rollout_config.n_generations == config.eval_sampling_params.n_generations_per_prompt
-    assert rollout_config.temperature == config.eval_sampling_params.temperature
     assert rollout_config.run_id == config.run_id
     assert rollout_config.curriculum_config == config.curriculum
+    assert rollout_config.tokenizer == tokenizer
+    assert rollout_config.log_freq == config.log_freq
+    assert rollout_config.max_rollouts is None  # Run indefinitely by default
+    assert rollout_config.inference_server_config is not None
 
     # Verify shared configs
     assert train_config.rollout_storage == rollout_config.rollout_storage

@@ -28,7 +28,7 @@ from levanter.inference.openai import InferenceServerConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.optim import OptimizerConfig
 from levanter.trainer import TrainerConfig
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from marin.rl.curriculum import CurriculumConfig, SamplingParams
 from marin.rl.replay_buffer import ReplayBufferConfig
@@ -56,8 +56,18 @@ class TrainParams:
     max_batch_latency: int = 1000  # Max age of rollouts in steps
 
 
-def make_tokenizer(tokenizer_name: str) -> AutoTokenizer:
-    return AutoTokenizer.from_pretrained(tokenizer_name)
+def make_tokenizer(tokenizer: str | PreTrainedTokenizer) -> PreTrainedTokenizer:
+    """Create or return tokenizer instance.
+
+    Args:
+        tokenizer: Either a HuggingFace model name string or a PreTrainedTokenizer instance
+
+    Returns:
+        PreTrainedTokenizer instance
+    """
+    if isinstance(tokenizer, str):
+        return AutoTokenizer.from_pretrained(tokenizer)
+    return tokenizer
 
 
 @dataclass
@@ -68,7 +78,7 @@ class RLJobConfig:
     trainer: TrainerConfig
     train_params: TrainParams
     curriculum: CurriculumConfig
-    tokenizer: str
+    tokenizer: str | PreTrainedTokenizer
     rl_loss: "RLLossModule"
 
     # Model & initialization (with defaults)

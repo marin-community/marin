@@ -27,7 +27,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .rl_losses import compute_rloo_advantages
+from marin.rl.rl_losses import RLLossModule
+
 from .rollout_storage import RolloutReader
 from .types import RolloutBatch, RolloutWithAdvantage
 
@@ -72,6 +73,7 @@ class ReplayBuffer:
     def __init__(
         self,
         config: ReplayBufferConfig,
+        loss_module: RLLossModule,
         local_batch_size: int,
         process_id: int,
         total_processes: int,
@@ -91,6 +93,7 @@ class ReplayBuffer:
         self.process_id = process_id
         self.max_samples = config.max_samples
         self.max_rollout_delay = config.max_rollout_delay
+        self.loss_module = loss_module
 
         self.rollout_storage: dict[str, list[RolloutWithCount]] = {}
         self._lock = threading.Lock()
@@ -143,7 +146,7 @@ class ReplayBuffer:
             weight_step = batch.metadata.weight_step
             for group in batch.groups:
                 # Compute RLOO advantages for the group
-                advantages = compute_rloo_advantages(group.rollouts)
+                advantages = self.loss_module.compute_advantages(group.rollouts)
                 for rollout, advantage in zip(group.rollouts, advantages, strict=True):
                     individual = RolloutWithCount(
                         rollout=rollout, advantage=advantage, usage_count=0, weight_step=weight_step
@@ -157,8 +160,8 @@ class ReplayBuffer:
                 else:
                     self.rollout_storage[env_name] = examples
 
-            if len(self.rollout_storage[env_name]) > self.capacity:
-                self.rollout_storage[env_name] = self.rollout_storage[env_name][-self.capacity :]
+                if len(self.rollout_storage[env_name]) > self.capacity:
+                    self.rollout_storage[env_name] = self.rollout_storage[env_name][-self.capacity :]
 
     def sample_rollouts(self) -> list[RolloutWithCount] | None:
         """Sample individual rollouts with balanced environment sampling.
