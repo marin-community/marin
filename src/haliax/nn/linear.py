@@ -17,6 +17,8 @@ from jaxtyping import PRNGKeyArray
 
 import haliax as hax
 
+
+from .mup import AbstractLinearReparam, ReparamEnabled, LinearStandardParam
 from .._src.state_dict import (
     Mod,
     ModuleWithStateDictSerialization,
@@ -27,7 +29,6 @@ from .._src.state_dict import (
 from ..axis import Axis, AxisSpec
 from ..core import NamedArray
 from ..jax_utils import named_call
-from ..mup import AbstractReparam, ReparamEnabled, LinearStandardParam
 from ..partitioning import ResourceAxis
 from ..quantization import DotGeneralOp
 from ..util import ensure_tuple
@@ -42,8 +43,8 @@ class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
 
     In: AxisSpec = eqx.field(static=True)
     Out: AxisSpec = eqx.field(static=True)
+    reparam: AbstractLinearReparam = eqx.field(static=True)
     dot_general: DotGeneralOp = eqx.field(default_factory=DotGeneralOp.default)
-    reparam: AbstractReparam = eqx.field(static=True)
 
     @staticmethod
     def init(
@@ -55,7 +56,7 @@ class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
         out_first: bool = True,
         dot_general: DotGeneralOp | None = None,
         init_scale: float = 1.0,
-        reparam: AbstractReparam = LinearStandardParam,
+        reparam_cls: type[AbstractLinearReparam] = LinearStandardParam,
     ) -> "Linear":
         """
         Args:
@@ -68,13 +69,13 @@ class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
             init_scale: float: The scale to use for initialization. We scale init by 1/sqrt(Input.size)*init_scale
         """
         joint_spec = hax.concat_axis_specs(Out, In) if out_first else hax.concat_axis_specs(In, Out)
-        weight = hax.random.truncated_normal(key, joint_spec, -3, 3) * (init_scale * reparam.init_scale(In, Out))
+        weight = hax.random.truncated_normal(key, joint_spec, -3, 3) * (init_scale * reparam_cls.init_scale(In, Out))
         bias = hax.zeros(Out) if use_bias else None
 
         if dot_general is None:
             dot_general = DotGeneralOp.default()
 
-        return Linear(weight, bias, In, Out, dot_general=dot_general, reparam=reparam)
+        return Linear(weight, bias, In, Out, dot_general=dot_general, reparam=reparam_cls(In, Out))
 
     @named_call
     def __call__(self, inputs, *, key: PRNGKeyArray | None = None):
@@ -84,7 +85,11 @@ class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
             key: Not used, but there for compat with other modules
         """
         del key
-        q = inputs.dot(self.weight, axis=self.In, dot_general=self.dot_general)
+        q = inputs.dot(
+            self.weight * self.reparam.active_scale,
+            axis=self.In,
+            dot_general=self.dot_general,
+        )
         q = hax.auto_sharded(q)
 
         if self.bias is not None:

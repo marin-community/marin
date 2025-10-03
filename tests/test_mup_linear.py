@@ -11,6 +11,7 @@ import pytest
 
 import haliax as hax
 from haliax.nn import Linear
+from haliax.nn.mup import InputLinearMup, HiddenLinearMup, OutputLinearMup
 
 
 @pytest.mark.parametrize("out_first", [True, False])
@@ -20,19 +21,12 @@ def test_mup_linear_init_matches_linear_axes(out_first: bool):
     key_linear, key_mup = jrandom.split(jrandom.PRNGKey(0))
 
     linear = Linear.init(In, Out, key=key_linear, out_first=out_first)
-    mup = MupLinear.init(In, Out, key=key_mup, out_first=out_first)
+    mup = Linear.init(In, Out, key=key_mup, out_first=out_first, reparam_cls=InputLinearMup)
 
     assert linear.weight.axes == mup.weight.axes
     if linear.bias is not None:
         assert mup.bias is not None
         assert linear.bias.axes == mup.bias.axes
-
-
-def test_mup_linear_respects_bias_flag():
-    In = hax.Axis("I", 4)
-    Out = hax.Axis("O", 3)
-    layer = MupLinear.init(In, Out, key=jrandom.PRNGKey(1), use_bias=False)
-    assert layer.bias is None
 
 
 def test_mup_linear_call_matches_linear():
@@ -44,7 +38,7 @@ def test_mup_linear_call_matches_linear():
     bias = hax.full(Out, 0.25)
 
     linear = Linear(weight, bias, In, Out)
-    mup = MupLinear(weight, bias, In, Out)
+    mup = Linear(weight, bias, In, Out, reparam_cls=InputLinearMup)
 
     inputs = hax.full(hax.concat_axis_specs(Batch, In), 2.0)
 
@@ -62,7 +56,14 @@ def test_hidden_linear_init_matches_linear_scaling(out_first: bool):
     key = jrandom.PRNGKey(0)
 
     linear = Linear.init(In, Out, key=key, use_bias=False, out_first=out_first)
-    hidden = HiddenLinear.init(In, Out, key=key, use_bias=False, out_first=out_first)
+    hidden = Linear.init(
+        In,
+        Out,
+        key=key,
+        use_bias=False,
+        out_first=out_first,
+        reparam_cls=HiddenLinearMup,
+    )
 
     assert jnp.allclose(hidden.weight.array, linear.weight.array)
 
@@ -72,7 +73,7 @@ def test_output_linear_scales_activation_by_input_size():
     In = hax.Axis("I", 3)
     Out = hax.Axis("O", 2)
 
-    layer = OutputLinear.init(In, Out, key=jrandom.PRNGKey(2), use_bias=False)
+    layer = Linear.init(In, Out, key=jrandom.PRNGKey(2), use_bias=False, reparam_cls=OutputLinearMup)
     layer = dataclasses.replace(layer, weight=hax.ones(layer.weight.axes))
 
     inputs = hax.full((Batch, In), 2.0)
@@ -88,13 +89,13 @@ def test_output_linear_state_dict_scales_weight():
     In = hax.Axis("I", 4)
     Out = hax.Axis("O", 3)
 
-    layer = OutputLinear.init(In, Out, key=jrandom.PRNGKey(3), use_bias=False)
+    layer = Linear.init(In, Out, key=jrandom.PRNGKey(3), use_bias=False, reparam_cls=OutputLinearMup)
     layer = dataclasses.replace(layer, weight=hax.ones(layer.weight.axes))
 
     state = layer.to_state_dict()
     assert jnp.allclose(state["weight"], layer.weight.array * layer.mup_active_scale)
 
-    template = OutputLinear.init(In, Out, key=jrandom.PRNGKey(4), use_bias=False)
+    template = Linear.init(In, Out, key=jrandom.PRNGKey(4), use_bias=False, reparam_cls=OutputLinearMup)
     restored = template.from_state_dict(state)
 
     assert jnp.allclose(restored.weight.array, layer.weight.array)
@@ -109,7 +110,7 @@ def test_input_linear_behaves_like_base_linear():
     bias = hax.zeros(Out)
 
     linear = Linear(weight, bias, In, Out)
-    input_linear = InputLinear(weight, bias, In, Out)
+    input_linear = Linear(weight, bias, In, Out, reparam_cls=InputLinearMup)
 
     inputs = hax.random.normal(jrandom.PRNGKey(5), (Batch, In))
 

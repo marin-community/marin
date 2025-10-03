@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from abc import ABC, abstractmethod
 import math
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import haliax as hax
 import equinox as eqx
@@ -18,83 +19,84 @@ class AbstractReparam(ABC):
     def init_scale(In: AxisSpec, Out: AxisSpec):
         raise NotImplementedError
 
+    @property
     @abstractmethod
     def lr_scale(self):
         raise NotImplementedError
 
+    @property
     @abstractmethod
     def active_scale(self):
         raise NotImplementedError
 
 
-class AbstractLinearMup(AbstractReparam):
+@dataclass
+class AbstractLinearReparam(AbstractReparam):
     In: AxisSpec
     Out: AxisSpec
 
 
-class DefaultLinearMup(AbstractLinearMup):
-    In: AxisSpec
-    Out: AxisSpec
-
-    @staticmethod
-    def init_scale(In: AxisSpec, Out: AxisSpec):
-        return 1 / hax.axis_size(In)
-
-    @abstractmethod
-    def active_scale(self):
-        return 1
-
-    @abstractmethod
-    def lr_scale(self):
-        return 1
-
-
-class StandardLinear(AbstractLinearMup):
-    @staticmethod
-    def init_scale(In: AxisSpec, Out: AxisSpec):
-        return 1
-
-    @abstractmethod
-    def active_scale(self):
-        return 1
-
-    @abstractmethod
-    def lr_scale(self):
-        return 1
-
-
-class HiddenLinearMup(AbstractLinearMup):
+class LinearStandardParam(AbstractLinearReparam):
     @staticmethod
     def init_scale(In: AxisSpec, Out: AxisSpec):
         return 1 / math.sqrt(hax.axis_size(In))
 
-    @abstractmethod
+    @property
     def active_scale(self):
         return 1
 
-    @abstractmethod
+    @property
     def lr_scale(self):
-        return 1 / hax.axis_size(self.In)
+        return 1
 
 
-class OutputLinearMup(AbstractLinearMup):
+class InputLinearMup(AbstractLinearReparam):
     @staticmethod
     def init_scale(In: AxisSpec, Out: AxisSpec):
         return 1
 
-    @abstractmethod
+    @property
     def active_scale(self):
-        return 1 / hax.axis_size(self.In)
+        return 1
 
-    @abstractmethod
+    @property
     def lr_scale(self):
         return 1
 
 
+class HiddenLinearMup(AbstractLinearReparam):
+    @staticmethod
+    def init_scale(In: AxisSpec, Out: AxisSpec):
+        return 1 / math.sqrt(hax.axis_size(In))
+
+    @property
+    def active_scale(self):
+        return 1
+
+    @property
+    def lr_scale(self):
+        return 1 / hax.axis_size(self.In)
+
+
+class OutputLinearMup(AbstractLinearReparam):
+    @staticmethod
+    def init_scale(In: AxisSpec, Out: AxisSpec):
+        return 1
+
+    @property
+    def active_scale(self):
+        return 1 / hax.axis_size(self.In)
+
+    @property
+    def lr_scale(self):
+        return 1
+
+
+@dataclass
 class AbstractEmbeddingReparam(AbstractReparam):
     Embed: AxisSpec
     Vocab: AxisSpec
 
 
 class ReparamEnabled(ABC):
-    mup_config: eqx.AbstractVar[AbstractReparam]
+    reparam: eqx.AbstractVar[AbstractReparam]

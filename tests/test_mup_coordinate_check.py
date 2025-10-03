@@ -16,7 +16,7 @@ import jax.random as jrandom
 import haliax as hax
 from haliax import Axis, NamedArray
 from haliax.nn import Linear, activations
-from haliax.nn.mup import HiddenLinear, InputLinear, OutputLinear
+from haliax.nn.mup import InputLinearMup, HiddenLinearMup, OutputLinearMup
 
 
 class TinyMLP(eqx.Module):
@@ -36,9 +36,9 @@ class TinyMLP(eqx.Module):
         k1, k2, k3 = jrandom.split(key, 3)
 
         if use_mup:
-            first = InputLinear.init((in_axis,), hidden, key=k1)
-            second = HiddenLinear.init(hidden, hidden2, key=k2)
-            third = OutputLinear.init(hidden2, (out_axis,), key=k3)
+            first = Linear.init((in_axis,), hidden, key=k1, reparam_cls=InputLinearMup)
+            second = Linear.init(hidden, hidden2, key=k2, reparam_cls=HiddenLinearMup)
+            third = Linear.init(hidden2, (out_axis,), key=k3, reparam_cls=OutputLinearMup)
         else:
             first = Linear.init((in_axis,), hidden, key=k1)
             second = Linear.init(hidden, hidden2, key=k2)
@@ -64,7 +64,7 @@ _loss_value = jax.jit(_loss_fn)
 
 def _apply_sgd(module: TinyMLP, grads: TinyMLP, *, base_lr: float, use_mup: bool) -> TinyMLP:
     def update_linear(layer: Linear, grad_layer: Linear) -> Linear:
-        lr_scale = getattr(layer, "mup_lr_scale", 1.0) if use_mup else 1.0
+        lr_scale = layer.reparam.lr_scale
         new_weight = layer.weight - (base_lr * lr_scale) * grad_layer.weight
         if layer.bias is None or grad_layer.bias is None:
             new_bias = layer.bias
