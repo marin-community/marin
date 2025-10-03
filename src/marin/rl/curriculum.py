@@ -81,6 +81,7 @@ class SamplingParams:
     temperature: float = 1.0
     n_prompts: int = 8
     n_generations_per_prompt: int = 4
+    max_tokens: int = 256
     stop_tokens: list[int] | None = None
 
 

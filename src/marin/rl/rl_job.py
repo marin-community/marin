@@ -68,9 +68,7 @@ class RLJobConfig:
     train_params: TrainParams
     curriculum: CurriculumConfig
     tokenizer: str
-
-    # RL & advantage calculation algorithm
-    rl_loss: RLLossModule
+    rl_loss: "RLLossModule"
 
     # Model & initialization (with defaults)
     initial_checkpoint: str | None = None
