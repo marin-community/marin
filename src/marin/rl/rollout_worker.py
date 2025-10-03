@@ -261,11 +261,8 @@ class RolloutWorker:
         self._shutdown_condition = threading.Condition()
         self._current_weight_step: int = 0
 
-        # for testing, we accept a tokenizer instance or a string
-        if isinstance(self.config.model.tokenizer, str):
-            self._tokenizer = AutoTokenizer.from_pretrained(self.config.model.tokenizer)
-        else:
-            self._tokenizer = cast(PreTrainedTokenizer, self.config.model.tokenizer)
+        # Tokenizer is now always an instance
+        self._tokenizer = config.tokenizer
 
         # Get or create curriculum actor
         self.curriculum_actor = get_or_create_curriculum_actor(config.curriculum_config)
@@ -302,12 +299,28 @@ class RolloutWorker:
     def _sample_batch(self, lesson_id: str, mode: str, rng) -> tuple[RolloutBatch, dict]:
         """Sample a batch of rollouts from the environment for the given lesson ID."""
         env = self._load_environment(lesson_id)
+        lesson_config = self.config.curriculum_config.lessons[lesson_id]
+
+        # Get sampling params from lesson or use eval defaults
+        if mode == "eval":
+            n_examples = self.config.curriculum_config.eval_n_examples
+            n_generations = self.config.curriculum_config.eval_n_generations
+            temperature = lesson_config.sampling_params.temperature
+            stop_tokens = lesson_config.sampling_params.stop_tokens
+        else:  # train
+            n_examples = lesson_config.sampling_params.n_prompts
+            n_generations = lesson_config.sampling_params.n_generations_per_prompt
+            temperature = lesson_config.sampling_params.temperature
+            stop_tokens = lesson_config.sampling_params.stop_tokens
+
+        # Get max_tokens from lesson
+        max_tokens = lesson_config.sampling_params.max_tokens
 
         policy_ctx = LevanterInferenceContext(
             tokenizer=self._tokenizer,
             inference_server=self._inference_server,
-            max_tokens=self.config.max_input_length + self.config.max_output_length,
-            stop_tokens=self.config.stop_tokens,
+            max_tokens=max_tokens,
+            stop_tokens=stop_tokens,
         )
 
         with (
@@ -317,9 +330,9 @@ class RolloutWorker:
             # Sample examples, generate responses, and create rollouts from selected lesson
             rollout_groups, metrics = env.sample(
                 inference_ctx=policy_ctx,
-                n_examples=self.config.n_prompts_per_step,
-                n_generations=self.config.n_generations,
-                temperature=self.config.temperature,
+                n_examples=n_examples,
+                n_generations=n_generations,
+                temperature=temperature,
                 prng_key=rng,
                 mode=mode,
             )
