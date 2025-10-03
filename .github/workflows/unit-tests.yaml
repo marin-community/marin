@@ -54,7 +54,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install "uv>=0.7.19" toml
           npm install -g pandiff
-          uv sync --dev --extra=cpu
+          uv sync --dev
+          uv pip install -e lib/marin[cpu]
       
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v1

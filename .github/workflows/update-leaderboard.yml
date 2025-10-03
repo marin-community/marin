@@ -27,9 +27,9 @@ jobs:
       - name: Generate leaderboard data
         run: |
           # Create temporary static directory if it doesn't exist
-          mkdir -p src/marin/speedrun/static/data
+          mkdir -p lib/marin/src/marin/speedrun/static/data
 
-          python src/marin/speedrun/create_leaderboard.py
+          python lib/marin/src/marin/speedrun/create_leaderboard.py
           echo "Generated updated runs.json file"
 
       # checkout the Speedrun repo into a separate directory
@@ -52,10 +52,10 @@ jobs:
       
       - name: Sync static files
         run: |
-          # src/marin/speedrun/static/data that we generate as a temp dir should mirror speedrun-repo/data/
+          # lib/marin/src/marin/speedrun/static/data that we generate as a temp dir should mirror speedrun-repo/data/
           # everything else in speedrun-repo/ should be left as-is
           rm -rf speedrun-repo/data/*
-          cp -r src/marin/speedrun/static/data/* speedrun-repo/data/
+          cp -r lib/marin/src/marin/speedrun/static/data/* speedrun-repo/data/
           
           # configure and commit changes
           cd speedrun-repo
