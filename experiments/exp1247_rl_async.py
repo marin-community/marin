@@ -288,6 +288,8 @@ def rl_train(name: str) -> ExecutorStep:
             alpha=3,
             # Don't allow resampling.
             max_samples=1,
+            # Explicitly drop rollouts from old weights.
+            max_rollout_delay=32,
         ),
         kl_coef=0.05,
         initial_checkpoint=MODEL_NAME,
@@ -305,7 +307,7 @@ def rl_train(name: str) -> ExecutorStep:
         max_output_length=MAX_OUTPUT_TOKENS,
         pad_token_id=(tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id),
         n_prompts_per_step=16,
-        n_generations=4,
+        n_generations=16,
         temperature=0.7,
         log_freq=5,
         max_rollouts=100000,
@@ -340,7 +342,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-011"),
+        rl_train(name="llama-1b-math-rl-test-power-012"),
     ]
 
     executor_main(
