@@ -240,6 +240,8 @@ def create_weight_transfer_config():
 
 def create_test_curriculum_config(actor_name: str = "test_curriculum") -> CurriculumConfig:
     """Create a minimal CurriculumConfig for testing."""
+    from marin.rl.curriculum import SamplingParams
+
     return CurriculumConfig(
         lessons={
             "cats": LessonConfig(
@@ -247,6 +249,9 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum") -> Curric
                 env_config=EnvConfig(
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats", "seed": 42},
+                ),
+                sampling_params=SamplingParams(
+                    temperature=1.0, n_prompts=8, n_generations_per_prompt=4, max_tokens=16
                 ),
             )
         },
@@ -259,6 +264,8 @@ def create_nano_training_worker_config(
     rollout_storage: RolloutStorageConfig, output_dir: str | Path
 ) -> TrainWorkerConfig:
     """Create a minimal TrainWorkerConfig for testing."""
+    from marin.rl.rl_losses import RLOOLoss
+
     return TrainWorkerConfig(
         run_id="test-0",
         rollout_storage=rollout_storage,
@@ -267,17 +274,14 @@ def create_nano_training_worker_config(
         optimizer=create_nano_optimizer_config(),
         weight_transfer=create_weight_transfer_config(),
         curriculum_config=create_test_curriculum_config(),
-        max_input_length=16,
-        max_output_length=16,
-        pad_token_id=0,
+        tokenizer=DummyTokenizer(),
         replay_buffer=ReplayBufferConfig(
             capacity=2048,
             alpha=3.0,
             max_samples=4,
         ),
-        # disable KL since we're training from scratch
-        kl_coef=0.0,
-        curriculum_checkpoint_interval=50,
+        loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
+        initial_checkpoint=None,
     )
 
 
@@ -317,15 +321,11 @@ def create_nano_rollout_worker_config(output_dir: str, rollout_storage: RolloutS
         model=model_config,
         curriculum_config=create_test_curriculum_config(),
         rollout_storage=rollout_storage,
-        max_input_length=8,
-        max_output_length=8,
-        pad_token_id=0,
-        n_prompts_per_step=4,
-        n_generations=4,
-        temperature=1.0,
+        tokenizer=DummyTokenizer(),
         log_freq=1,
         max_rollouts=1000,
         weight_transfer=create_weight_transfer_config(),
+        initial_checkpoint=None,
     )
 
 
