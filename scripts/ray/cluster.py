@@ -407,16 +407,24 @@ def open_dashboard(ctx, port):
             print("No active clusters found")
             return
 
+        if conn.proxy:
+            print(f"📊 Proxy dashboard: {conn.get_dashboard_url()}")
+            print()
+
         print(f"Connected to {len(conn.clusters)} clusters:")
         for name, info in conn.clusters.items():
-            port_info = conn.port_mappings[name]
-            print(f"  - {name} ({info.zone})")
-            print(f"    Dashboard: http://localhost:{port_info[0]}")
-            print(f"    Internal IP: {info.head_ip}")
-            print(f"    External IP: {info.external_ip}")
+            ports = conn.port_mappings[name]
+            direct_url = f"http://localhost:{ports.dashboard_port}"
+            proxy_url = f"http://localhost:{conn.proxy.proxy_port}/{name}/" if conn.proxy else ""
+            urls = f"{direct_url} | {proxy_url}" if proxy_url else direct_url
+            print(f"  {name} ({info.zone}) - {urls}")
+            print(f"    IP: {info.external_ip} ({info.head_ip})")
+            print(
+                f"    Dashboard: http://localhost:{ports.dashboard_port} | GCS: localhost:{ports.gcs_port} | API: localhost:{ports.api_port}"
+            )
+            print()
 
         if conn.proxy:
-            print(f"\n📊 Proxy dashboard: {conn.get_dashboard_url()}")
             print("\nPress Ctrl+C to stop")
 
             try:
