@@ -67,7 +67,7 @@ class WeightUpdate:
 
 @dataclass
 class WeightTransferConfig:
-    mode: WeightTransferMode = WeightTransferMode.GCS_CHECKPOINT
+    mode: WeightTransferMode = WeightTransferMode.ARROW_FLIGHT
     # Common settings
     sync_interval_steps: int = 4
     poll_interval_seconds: float = 1.0

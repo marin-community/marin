@@ -75,6 +75,16 @@ class LessonDependency:
 
 
 @dataclass
+class SamplingParams:
+    """Parameters for sampling rollouts from an environment."""
+
+    temperature: float = 1.0
+    n_prompts: int = 8
+    n_generations_per_prompt: int = 4
+    stop_tokens: list[int] | None = None
+
+
+@dataclass
 class LessonConfig:
     """Configuration for a single lesson in the curriculum."""
 
@@ -98,6 +108,9 @@ class LessonConfig:
 
     plateau_threshold: float = 0.01
     """Relative slope threshold for detecting plateaus."""
+
+    sampling_params: SamplingParams
+    """Per-lesson sampling configuration (overrides global defaults)."""
 
 
 @dataclass
@@ -124,6 +137,9 @@ class CurriculumConfig:
 
     minimum_sample_probability: float = 0.1
     """Minimum probability for sampling any active lesson."""
+
+    checkpoint_steps: int = 10
+    """How often to checkpoint curriculum state (in training steps)."""
 
 
 def _validate_dependencies(lesson_configs: dict[str, LessonConfig]):

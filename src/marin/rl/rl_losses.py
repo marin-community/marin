@@ -14,6 +14,10 @@
 
 """RL loss functions."""
 
+from collections.abc import Callable
+from typing import Protocol
+
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -24,6 +28,25 @@ from marin.rl.types import Rollout, TrainingBatch
 
 # TODO(power) - these should be refactored to accept the precomputed logits instead
 # of computing outputs themselves.
+
+
+class RLLossModule(Protocol):
+    """Defines the interface used for computing RL loss & advantages."""
+
+    def build(self, reference_model: eqx.Module) -> eqx.Module:
+        """Initialize any learned components (e.g., value heads)."""
+        ...
+
+    def compute_advantages(self, rollout_group: list[Rollout]) -> list[float]:
+        """Compute advantages for a group of rollouts."""
+        ...
+
+    def create_loss_fn(self, reference_model: eqx.Module, train_model: eqx.Module) -> Callable:
+        """Create the loss function for training."""
+        ...
+
+    def to_config(self) -> dict:
+        """Serialize the loss module to a configuration dictionary."""
 
 
 def ppo_loss(
