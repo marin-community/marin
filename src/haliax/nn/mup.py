@@ -18,8 +18,6 @@ from .._src.state_dict import (
     StateDict,
     default_eqx_module_from_state_dict,
     default_eqx_module_to_state_dict,
-    to_state_dict as _tree_to_state_dict,
-    with_prefix,
 )
 from ..axis import Axis, AxisSpec
 from ..jax_utils import named_call
@@ -29,21 +27,21 @@ from .embedding import Embedding
 from .linear import Linear
 
 
-class MupMixin(ABC):
+class AbstractMupMixin(ABC):
     @abstractmethod
     def mup_init_scale(In: AxisSpec, Out: AxisSpec):
-        return 1
+        raise NotImplementedError
 
     @abstractmethod
     def mup_lr_scale(self):
-        return 1
+        raise NotImplementedError
 
     @abstractmethod
     def mup_active_scale(self):
-        return 1
+        raise NotImplementedError
 
 
-class MupLinear(Linear, MupMixin):
+class AbstractMupLinear(Linear, AbstractMupMixin):
     @classmethod
     def init(
         cls,
@@ -55,7 +53,7 @@ class MupLinear(Linear, MupMixin):
         out_first: bool = True,
         dot_general: Optional[DotGeneralOp] = None,
         init_scale: float = 1.0,
-    ) -> "MupLinear":
+    ) -> "AbstractMupLinear":
         """
         Args:
             In: AxisSpec: The input axis spec
@@ -116,7 +114,7 @@ class MupLinear(Linear, MupMixin):
         )
 
 
-class InputLinear(MupLinear):
+class InputLinear(AbstractMupLinear):
     @property
     def mup_active_scale(self):
         return 1
@@ -130,7 +128,7 @@ class InputLinear(MupLinear):
         return 1
 
 
-class OutputLinear(MupLinear):
+class OutputLinear(AbstractMupLinear):
     @property
     def mup_active_scale(self):
         return 1 / hax.axis_size(self.In)
@@ -144,7 +142,7 @@ class OutputLinear(MupLinear):
         return 1
 
 
-class HiddenLinear(MupLinear):
+class HiddenLinear(AbstractMupLinear):
     @property
     def mup_active_scale(self):
         return 1
@@ -158,7 +156,7 @@ class HiddenLinear(MupLinear):
         return 1 / math.sqrt(hax.axis_size(In))
 
 
-class MupEmbedding(Embedding, MupMixin):
+class MupEmbedding(Embedding, AbstractMupMixin):
     """Embedding module with muP-aware scaling for tied embeddings."""
 
     @classmethod
