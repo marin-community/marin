@@ -17,16 +17,23 @@ from jaxtyping import PRNGKeyArray
 
 import haliax as hax
 
-from .._src.state_dict import Mod, ModuleWithStateDictSerialization
+from .._src.state_dict import (
+    Mod,
+    ModuleWithStateDictSerialization,
+    StateDict,
+    default_eqx_module_from_state_dict,
+    default_eqx_module_to_state_dict,
+)
 from ..axis import Axis, AxisSpec
 from ..core import NamedArray
 from ..jax_utils import named_call
+from ..mup import AbstractReparam, ReparamEnabled, LinearStandardParam
 from ..partitioning import ResourceAxis
 from ..quantization import DotGeneralOp
 from ..util import ensure_tuple
 
 
-class Linear(ModuleWithStateDictSerialization):
+class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
     """A named Linear layer. This module allows you to specify multiple named axes for both input
     and output, which is occasionally useful."""
 
@@ -36,10 +43,10 @@ class Linear(ModuleWithStateDictSerialization):
     In: AxisSpec = eqx.field(static=True)
     Out: AxisSpec = eqx.field(static=True)
     dot_general: DotGeneralOp = eqx.field(default_factory=DotGeneralOp.default)
+    reparam: AbstractReparam = eqx.field(static=True)
 
-    @classmethod
+    @staticmethod
     def init(
-        cls,
         In: AxisSpec,
         Out: AxisSpec,
         *,
@@ -48,6 +55,7 @@ class Linear(ModuleWithStateDictSerialization):
         out_first: bool = True,
         dot_general: DotGeneralOp | None = None,
         init_scale: float = 1.0,
+        reparam: AbstractReparam = LinearStandardParam,
     ) -> "Linear":
         """
         Args:
@@ -60,14 +68,13 @@ class Linear(ModuleWithStateDictSerialization):
             init_scale: float: The scale to use for initialization. We scale init by 1/sqrt(Input.size)*init_scale
         """
         joint_spec = hax.concat_axis_specs(Out, In) if out_first else hax.concat_axis_specs(In, Out)
-        input_size = hax.axis_size(In)
-        weight = hax.random.truncated_normal(key, joint_spec, -3, 3) * (init_scale / math.sqrt(input_size))
+        weight = hax.random.truncated_normal(key, joint_spec, -3, 3) * (init_scale * reparam.init_scale(In, Out))
         bias = hax.zeros(Out) if use_bias else None
 
         if dot_general is None:
             dot_general = DotGeneralOp.default()
 
-        return Linear(weight, bias, In, Out, dot_general=dot_general)
+        return Linear(weight, bias, In, Out, dot_general=dot_general, reparam=reparam)
 
     @named_call
     def __call__(self, inputs, *, key: PRNGKeyArray | None = None):
@@ -137,6 +144,14 @@ class Linear(ModuleWithStateDictSerialization):
             return self.weight.axes[-1] != self.Out
         else:
             return self.weight.axes[-len(self.Out) :] != self.Out
+
+    def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
+        scaled = dataclasses.replace(self, weight=self.weight * self.reparam.active_scale)
+        return default_eqx_module_to_state_dict(scaled, prefix)
+
+    def from_state_dict(self: Mod, state_dict: StateDict, prefix: Optional[str] = None) -> Mod:
+        unscaled = default_eqx_module_from_state_dict(self, state_dict, prefix)
+        return dataclasses.replace(unscaled, weight=unscaled.weight / self.reparam.active_scale)
 
 
 class MoELinear(eqx.Module):

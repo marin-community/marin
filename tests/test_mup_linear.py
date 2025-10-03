@@ -11,7 +11,6 @@ import pytest
 
 import haliax as hax
 from haliax.nn import Linear
-from haliax.nn.mup import HiddenLinear, InputLinear, MupLinear, OutputLinear
 
 
 @pytest.mark.parametrize("out_first", [True, False])
