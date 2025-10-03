@@ -61,7 +61,7 @@ class Embedding(eqx.Module, ReparamEnabled):
         weight = hax.random.truncated_normal(key, all_axes, -3, 3) * (
             init_scale * reparam_cls.init_scale(Vocab, Embed)
         )
-        return Embedding(weight=weight, Vocab=Vocab, Embed=Embed, reparam=reparam_cls(Vocab, Embed))
+        return Embedding(weight=weight, Vocab=Vocab, Embed=Embed, reparam=reparam_cls(Embed, Vocab))
 
     def __call__(self, input_ids: NamedArray, *, key: PRNGKeyArray | None = None):
         """Alias for `embed`. key is ignored."""
