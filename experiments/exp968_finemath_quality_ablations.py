@@ -53,6 +53,7 @@ finemath_raw_tokenized = default_tokenize(
 # TPU is used which is not available in us-central2
 cooldown_config = QualityAblationConfig(
     resources=TpuPodConfig(tpu_type="v4-128"),
+    permutation_type="linear",
 )
 
 finemath_crawl_ablation = default_quality_ablation(
@@ -88,6 +89,7 @@ crawl_control_lm_mixture_data_config = lm_mixture_data_config(
         "candidate_1": candidate_weight_1,
         "candidate_2": candidate_weight_2,
     },
+    permutation_type="linear",
 )
 
 crawl_control_lm_mixture_anneal_config = AnnealConfig(

@@ -83,6 +83,7 @@ anneal_config = AnnealConfig(
     dataset_config=lm_mixture_data_config(
         components=steps,
         weights=cooldown_mixture_weights,
+        permutation_type="linear",
     ),
     num_anneal_training_tokens=100_000_000_000,
 )
