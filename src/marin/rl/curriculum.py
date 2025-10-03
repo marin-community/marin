@@ -34,7 +34,7 @@ from marin.rl.types import RolloutStats
 
 logger = logging.getLogger(__name__)
 
-MAX_REWARD_HISTORY = 200
+MAX_REWARD_HISTORY = 1000
 
 
 @dataclass
@@ -210,7 +210,6 @@ def update_performance_stats(
     new_rewards = np.array([rs.episode_reward for rs in rollout_stats])
     reward_history = np.concatenate([stats.reward_history, new_rewards])
 
-    # Trim to max history size
     if len(reward_history) > MAX_REWARD_HISTORY:
         reward_history = reward_history[-MAX_REWARD_HISTORY:]
 
@@ -226,12 +225,8 @@ def compute_success_ratio(stats: LessonStats, current_step: int, max_staleness: 
     return compute_smoothed_success(stats.training_stats.reward_history)
 
 
-def is_plateaued(stats: LessonStats, window: int = 50, threshold: float = 0.01) -> bool:
+def is_plateaued(stats: LessonStats, window: int = 100, threshold: float = 0.01) -> bool:
     """Detect if reward has plateaued using conservative statistical tests.
-
-    Uses multiple criteria to robustly detect when learning has stopped improving.
-    Conservative approach requires ALL conditions to be met to avoid premature
-    graduation or dependency unlocking.
 
     Args:
         stats: Lesson statistics containing reward history.
@@ -256,10 +251,10 @@ def is_plateaued(stats: LessonStats, window: int = 50, threshold: float = 0.01) 
     slope = result.slope
     p_value = result.pvalue
 
-    mean_reward = np.mean(recent)
+    mean_reward = np.mean(np.abs(recent))
     std_reward = np.std(recent)
 
-    # Condition 1: Slope must be small relative to mean (existing threshold logic)
+    # Condition 1: Slope must be small or negative
     if abs(mean_reward) > 1e-6:
         relative_slope = abs(slope) / abs(mean_reward)
         slope_is_flat = relative_slope < threshold
@@ -454,6 +449,13 @@ class Curriculum:
                 if not is_plateaued(dep_stats, window=dep_config.plateau_window, threshold=dep_config.plateau_threshold):
                     return False
 
+        logger.info("All dependencies satisfied for lesson '%s'", lesson_id)
+        for dep in lesson_config.dependencies:
+            success_rate = compute_success_ratio(self.stats[dep.dependency_id], self.current_step)
+            logger.info(
+                f"  Dependency '{dep.dependency_id}' met. Success ratio: {success_rate}, recent rewards: %s",
+                self.stats[dep.dependency_id].training_stats.reward_history[-10:],
+            )
         return True
 
     def check_graduation(self, lesson_id: str) -> bool:
