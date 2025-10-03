@@ -26,7 +26,7 @@ import socket
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import haliax as hax
 import jax
@@ -40,7 +40,7 @@ from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
 from openai import AsyncOpenAI
-from transformers import AutoTokenizer, PreTrainedTokenizer
+from transformers import PreTrainedTokenizer
 
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
@@ -261,11 +261,8 @@ class RolloutWorker:
         self._shutdown_condition = threading.Condition()
         self._current_weight_step: int = 0
 
-        # Tokenizer is now always an instance
         self._tokenizer = config.tokenizer
-
-        # Get or create curriculum actor
-        self.curriculum_actor = get_or_create_curriculum_actor(config.curriculum_config)
+        self._curriculum_actor = get_or_create_curriculum_actor(config.curriculum_config)
 
         logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
         self._transfer_client = create_weight_transfer_client(
@@ -296,7 +293,7 @@ class RolloutWorker:
         self._environments[lesson_id] = env
         return env
 
-    def _sample_batch(self, lesson_id: str, mode: str, rng) -> tuple[RolloutBatch, dict]:
+    def _sample_batch(self, lesson_id: str, mode: str, rng) -> tuple[RolloutBatch | None, dict | None]:
         """Sample a batch of rollouts from the environment for the given lesson ID."""
         env = self._load_environment(lesson_id)
         lesson_config = self.config.curriculum_config.lessons[lesson_id]
@@ -434,7 +431,7 @@ class RolloutWorker:
             batch, _ = self._sample_batch(lesson_id, mode="eval", rng=rng)
             stats = _compute_batch_stats(batch, lesson_id)
 
-            self.curriculum_actor.update_lesson_stats.remote(stats.rollout_stats, mode="eval", current_step=step)
+            self._curriculum_actor.update_lesson_stats.remote(stats.rollout_stats, mode="eval", current_step=step)
 
             if stats.total_count > 0:
                 success_rate = stats.success_count / stats.total_count
@@ -491,7 +488,7 @@ class RolloutWorker:
             logger.info("Generating rollout batch...")
             rng, seed_key = jax.random.split(rng)
             seed = int(seed_key[0])
-            lesson_id = ray.get(self.curriculum_actor.sample_lesson.remote(seed))
+            lesson_id = ray.get(self._curriculum_actor.sample_lesson.remote(seed))
             logger.info(f"Sampled lesson '{lesson_id}' from curriculum")
 
             rng, input_rng = jax.random.split(rng)
@@ -501,7 +498,7 @@ class RolloutWorker:
             barrier_sync()
 
             stats = _compute_batch_stats(rollout_batch, lesson_id)
-            self.curriculum_actor.update_lesson_stats.remote(stats.rollout_stats, mode="training", current_step=step)
+            self._curriculum_actor.update_lesson_stats.remote(stats.rollout_stats, mode="training", current_step=step)
 
             step += 1
             self._rollout_writer.write_batch(rollout_batch)
