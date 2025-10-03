@@ -34,6 +34,7 @@ import jax.random as jrandom
 import levanter
 import numpy as np
 import ray
+from jax.experimental import multihost_utils
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
@@ -453,9 +454,12 @@ class RolloutWorker:
         logger.info("Starting inference worker...")
 
         step = 0
-        seed = 0
-        logger.info(f"Starting rollout worker with seed {seed}")
+
+        # compute the seed as the all-reduce across all hosts in the jax process
+        seed = abs(hash(f"{socket.gethostname()}-{os.getpid()}")) % (2**31 - 1)
         rng = jax.random.PRNGKey(seed)
+        rng = multihost_utils.broadcast_one_to_all(rng)
+        logger.info(f"Starting rollout worker with seed {seed}")
 
         last_weight_check = time.time()
 
