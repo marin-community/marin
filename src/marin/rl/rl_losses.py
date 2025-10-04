@@ -46,9 +46,6 @@ class RLLossModule(Protocol):
         """Create the loss function for training."""
         ...
 
-    def to_config(self) -> dict:
-        """Serialize the loss module to a configuration dictionary."""
-
 
 def rloo_loss_with_importance_sampling(
     model: LmHeadModel,
@@ -165,7 +162,3 @@ class RLOOLoss:
             )
 
         return loss_fn
-
-    def to_config(self) -> dict:
-        """Serialize the loss module to a configuration dictionary."""
-        return {"kl_coef": self.kl_coef, "clip_epsilon": self.clip_epsilon}
