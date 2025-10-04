@@ -177,7 +177,7 @@ def restart_cluster(ctx, preserve_jobs):
             print()
             print("=" * 60)
             print(
-                f"Failed to backup jobs from cluster {config_obj.cluster_name} ({e}) "
+                f"Failed to back up jobs from cluster {config_obj.cluster_name} ({e}) "
                 + "(disable with --preserve-jobs=0)"
             )
             print("=" * 60)
