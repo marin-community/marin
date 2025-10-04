@@ -142,6 +142,11 @@ class CurriculumConfig:
     checkpoint_steps: int = 10
     """How often to checkpoint curriculum state (in training steps)."""
 
+    @property
+    def max_tokens(self) -> int:
+        """Maximum tokens across all lessons in the curriculum."""
+        return max(lesson.sampling_params.max_tokens for lesson in self.lessons.values())
+
 
 def _validate_dependencies(lesson_configs: dict[str, LessonConfig]):
     """Validate that lesson dependencies form a valid DAG (no cycles)."""

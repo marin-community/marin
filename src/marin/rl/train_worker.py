@@ -91,10 +91,8 @@ class StreamingRolloutLoader:
         self.config = config
         self.timeout = 60.0
 
-        # Compute max_tokens from curriculum lessons once
-        self.max_tokens = max(
-            lesson.sampling_params.max_tokens for lesson in self.config.curriculum_config.lessons.values()
-        )
+        # Get max_tokens from curriculum
+        self.max_tokens = self.config.curriculum_config.max_tokens
 
         # Compute pad_token_id from tokenizer once
         self.pad_token_id = self.config.tokenizer.pad_token_id

@@ -38,7 +38,7 @@ class RLLossModule(Protocol):
         """Initialize any learned components (e.g., value heads)."""
         ...
 
-    def compute_advantages(self, rollout_group: list[Rollout]) -> list[float]:
+    def compute_advantages(self, rollout_group: list[Rollout]) -> np.ndarray:
         """Compute advantages for a group of rollouts."""
         ...
 

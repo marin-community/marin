@@ -232,6 +232,9 @@ class RLJob:
             total_seqs = lesson.sampling_params.n_generations_per_prompt * lesson.sampling_params.n_prompts
             max_seqs = max(max_seqs, total_seqs)
 
+        max_tokens = self.config.curriculum.max_tokens
+        assert max_tokens > 0, "Max tokens must be positive across curriculum lessons."
+
         # Create inference server config if not provided
         if self.config.inference_server_config is None:
             inference_server_config = InferenceServerConfig(
@@ -241,7 +244,7 @@ class RLJob:
                 service=InferenceEngineConfig(
                     max_seqs=max_seqs,
                     page_size=128,
-                    max_pages_per_seq=1 + self.max_tokens // 128,
+                    max_pages_per_seq=1 + max_tokens // 128,
                     enable_logprobs=True,
                 ),
                 port=0,
@@ -280,8 +283,3 @@ class RLJob:
         )
 
         return train_worker_config, rollout_worker_config
-
-    @property
-    def max_tokens(self) -> int:
-        """Maximum tokens across all lessons in the curriculum."""
-        return max(lesson.sampling_params.max_tokens for lesson in self.config.curriculum.lessons.values())
