@@ -95,8 +95,8 @@ class LevanterInferenceContext(InferenceContext):
 
     max_tokens: int
     _inference_server: InferenceServer
-    _tokenizer: Any
     _stop_tokens: list[int] | None = None
+    tokenizer: PreTrainedTokenizer
 
     def __init__(
         self,
