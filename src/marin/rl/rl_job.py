@@ -184,7 +184,7 @@ class RLJob:
                     max_pages_per_seq=1 + max_tokens_per_seq // 128,
                     enable_logprobs=True,
                 ),
-                port=-1,
+                port=0,
             )
         else:
             inference_server_config = self.config.inference_server_config

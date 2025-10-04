@@ -93,8 +93,8 @@ def find_open_port() -> int:
 class LevanterInferenceContext(InferenceContext):
     """Context that uses Levanter model and inference server."""
 
-    inference_server: InferenceServer
     max_tokens: int
+    _inference_server: InferenceServer
     _tokenizer: Any
     _stop_tokens: list[int] | None = None
 
@@ -105,17 +105,18 @@ class LevanterInferenceContext(InferenceContext):
         inference_server: InferenceServer,
         max_tokens: int,
     ):
-        self.inference_server = inference_server
-        self.max_tokens = max_tokens
+        self._inference_server = inference_server
         self._tokenizer = tokenizer
         self._stop_tokens = stop_tokens
+        self.max_tokens = max_tokens
 
     @property
     def tokenizer(self):
         return self._tokenizer
 
     def openai_client(self):
-        base_url = f"http://{self.inference_server.config.host}:{self.inference_server.config.port}/v1"
+        base_url = f"http://{self._inference_server.address()}/v1"
+        logger.info("Connecting to inference server at %s", base_url)
         return AsyncOpenAI(base_url=base_url, api_key="marin")
 
     def generate(
@@ -138,7 +139,7 @@ class LevanterInferenceContext(InferenceContext):
 
             for prompt in batch_prompts:
                 completion = client.chat.completions.create(
-                    model=getattr(self.inference_server.config, "model_name", "test-model"),
+                    model=getattr(self._inference_server.config, "model_name", "test-model"),
                     messages=[{"role": "user", "content": prompt}],
                     logprobs=True,
                     max_tokens=self.max_tokens,

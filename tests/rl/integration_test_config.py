@@ -37,10 +37,11 @@ from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
 
-from marin.rl.curriculum import CurriculumConfig, LessonConfig
+from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
 from marin.rl.environments.mock_env import MockEnv
 from marin.rl.replay_buffer import ReplayBufferConfig
+from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import (
     RolloutStorageConfig,
 )
@@ -240,8 +241,6 @@ def create_weight_transfer_config():
 
 def create_test_curriculum_config(actor_name: str = "test_curriculum") -> CurriculumConfig:
     """Create a minimal CurriculumConfig for testing."""
-    from marin.rl.curriculum import SamplingParams
-
     return CurriculumConfig(
         lessons={
             "cats": LessonConfig(
@@ -250,9 +249,7 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum") -> Curric
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats", "seed": 42},
                 ),
-                sampling_params=SamplingParams(
-                    temperature=1.0, n_prompts=8, n_generations_per_prompt=4, max_tokens=16
-                ),
+                sampling_params=SamplingParams(temperature=1.0, n_prompts=8, n_generations_per_prompt=4, max_tokens=16),
             )
         },
         eval_frequency=100,
@@ -260,12 +257,8 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum") -> Curric
     )
 
 
-def create_nano_training_worker_config(
-    rollout_storage: RolloutStorageConfig, output_dir: str | Path
-) -> TrainWorkerConfig:
+def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, output_dir: str | Path) -> TrainWorkerConfig:
     """Create a minimal TrainWorkerConfig for testing."""
-    from marin.rl.rl_losses import RLOOLoss
-
     return TrainWorkerConfig(
         run_id="test-0",
         rollout_storage=rollout_storage,
@@ -280,7 +273,7 @@ def create_nano_training_worker_config(
             alpha=3.0,
             max_samples=4,
         ),
-        loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
+        loss=RLOOLoss(kl_coef=0.0, clip_epsilon=5.0),
         initial_checkpoint=None,
     )
 

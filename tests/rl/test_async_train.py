@@ -28,6 +28,8 @@ import jax
 import numpy as np
 import pytest
 
+from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
+from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import (
     RolloutStorageConfig,
     StorageType,
@@ -39,8 +41,8 @@ from tests.rl.integration_test_config import (
     create_nano_llama_config,
     create_nano_optimizer_config,
     create_nano_rollout_worker_config,
+    create_nano_train_worker_config,
     create_nano_trainer_config,
-    create_nano_training_worker_config,
     create_rollout_batch,
     create_test_curriculum_config,
     run_inference_with_engine,
@@ -70,7 +72,7 @@ def rollout_storage_config():
 @pytest.fixture
 def training_worker_config(tmp_path, rollout_storage_config):
     """Create minimal training worker configuration for testing."""
-    return create_nano_training_worker_config(rollout_storage_config, tmp_path)
+    return create_nano_train_worker_config(rollout_storage_config, tmp_path)
 
 
 @pytest.fixture
@@ -424,9 +426,6 @@ def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path, rollou
     This test validates that the training worker can process rollout batches
     with varying rewards and learn to prefer high-reward (cat-heavy) responses.
     """
-    from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
-    from marin.rl.rl_losses import RLOOLoss
-
     target_steps = 200
     tokenizer = DummyTokenizer()
 
@@ -504,9 +503,6 @@ def test_full_integration_moar_cats(
     rollout_storage_config,
 ):
     """Long-running test to validate environment objective improves over time."""
-    from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
-    from marin.rl.rl_losses import RLOOLoss
-
     target_steps = 100
 
     # Create trainer config with target steps
@@ -588,8 +584,6 @@ def test_full_integration_moar_cats(
 @pytest.mark.slow("Integration test with checkpoint restart")
 def test_train_worker_checkpoint_restart(ray_tpu_cluster, training_worker_config):
     """Test that training worker correctly restarts from checkpoint without repeating steps."""
-    from pathlib import Path
-
     # Phase 1: Initial training run - small number of steps
     initial_target_steps = 5
     training_worker_config.trainer.num_train_steps = initial_target_steps
