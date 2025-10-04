@@ -26,7 +26,7 @@ import socket
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import haliax as hax
 import jax
@@ -40,7 +40,7 @@ from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
 from openai import AsyncOpenAI
-from transformers import AutoTokenizer, PreTrainedTokenizer
+from transformers import PreTrainedTokenizer
 
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
@@ -66,32 +66,21 @@ class RolloutWorkerConfig:
     """Configuration for RolloutWorker."""
 
     inference_server_config: InferenceServerConfig
-
     trainer: TrainerConfig
     model: LmConfig
     curriculum_config: CurriculumConfig
     rollout_storage: RolloutStorageConfig
-    max_input_length: int
-    max_output_length: int
-    # TODO(power) Lift these out into SamplingConfig
-    pad_token_id: int
-    n_prompts_per_step: int
-    n_generations: int
-    temperature: float
-    log_freq: int
     weight_transfer: WeightTransferConfig
-
+    tokenizer: PreTrainedTokenizer
     run_id: str
-    """Run ID to pass into the tracker. (unclear why this can't be passed directly)"""
 
     max_rollouts: int | None = None
     """Maximum number of rollouts to generate before stopping. Defaults to running forever."""
 
-    stop_tokens: list[int] | None = None
-    """List of stop tokens to supply when performing auto-regression."""
-
-    # Initial checkpoint for the reference model (auto-detects HF repo vs local path)
     initial_checkpoint: str | None = None
+    """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
+
+    log_freq: int = 10
 
 
 def find_open_port() -> int:
@@ -104,8 +93,8 @@ def find_open_port() -> int:
 class LevanterInferenceContext(InferenceContext):
     """Context that uses Levanter model and inference server."""
 
-    inference_server: InferenceServer
     max_tokens: int
+    _inference_server: InferenceServer
     _tokenizer: Any
     _stop_tokens: list[int] | None = None
 
@@ -116,17 +105,14 @@ class LevanterInferenceContext(InferenceContext):
         inference_server: InferenceServer,
         max_tokens: int,
     ):
-        self.inference_server = inference_server
-        self.max_tokens = max_tokens
-        self._tokenizer = tokenizer
+        self._inference_server = inference_server
+        self.tokenizer = tokenizer
         self._stop_tokens = stop_tokens
-
-    @property
-    def tokenizer(self):
-        return self._tokenizer
+        self.max_tokens = max_tokens
 
     def openai_client(self):
-        base_url = f"http://{self.inference_server.config.host}:{self.inference_server.config.port}/v1"
+        base_url = f"http://{self._inference_server.address()}/v1"
+        logger.info("Connecting to inference server at %s", base_url)
         return AsyncOpenAI(base_url=base_url, api_key="marin")
 
     def generate(
@@ -149,7 +135,7 @@ class LevanterInferenceContext(InferenceContext):
 
             for prompt in batch_prompts:
                 completion = client.chat.completions.create(
-                    model=getattr(self.inference_server.config, "model_name", "test-model"),
+                    model=getattr(self._inference_server.config, "model_name", "test-model"),
                     messages=[{"role": "user", "content": prompt}],
                     logprobs=True,
                     max_tokens=self.max_tokens,
@@ -272,14 +258,8 @@ class RolloutWorker:
         self._shutdown_condition = threading.Condition()
         self._current_weight_step: int = 0
 
-        # for testing, we accept a tokenizer instance or a string
-        if isinstance(self.config.model.tokenizer, str):
-            self._tokenizer = AutoTokenizer.from_pretrained(self.config.model.tokenizer)
-        else:
-            self._tokenizer = cast(PreTrainedTokenizer, self.config.model.tokenizer)
-
-        # Get or create curriculum actor
-        self.curriculum_actor = get_or_create_curriculum_actor(config.curriculum_config)
+        self._tokenizer = config.tokenizer
+        self._curriculum_actor = get_or_create_curriculum_actor(config.curriculum_config)
 
         logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
         self._transfer_client = create_weight_transfer_client(
@@ -310,15 +290,31 @@ class RolloutWorker:
         self._environments[lesson_id] = env
         return env
 
-    def _sample_batch(self, lesson_id: str, mode: str, rng) -> tuple[RolloutBatch, dict]:
+    def _sample_batch(self, lesson_id: str, mode: str, rng) -> tuple[RolloutBatch | None, dict | None]:
         """Sample a batch of rollouts from the environment for the given lesson ID."""
         env = self._load_environment(lesson_id)
+        lesson_config = self.config.curriculum_config.lessons[lesson_id]
+
+        # Get sampling params from lesson or use eval defaults
+        if mode == "eval":
+            n_examples = self.config.curriculum_config.eval_n_examples
+            n_generations = self.config.curriculum_config.eval_n_generations
+            temperature = lesson_config.sampling_params.temperature
+            stop_tokens = lesson_config.sampling_params.stop_tokens
+        else:  # train
+            n_examples = lesson_config.sampling_params.n_prompts
+            n_generations = lesson_config.sampling_params.n_generations_per_prompt
+            temperature = lesson_config.sampling_params.temperature
+            stop_tokens = lesson_config.sampling_params.stop_tokens
+
+        # Get max_tokens from lesson
+        max_tokens = lesson_config.sampling_params.max_tokens
 
         policy_ctx = LevanterInferenceContext(
             tokenizer=self._tokenizer,
             inference_server=self._inference_server,
-            max_tokens=self.config.max_input_length + self.config.max_output_length,
-            stop_tokens=self.config.stop_tokens,
+            max_tokens=max_tokens,
+            stop_tokens=stop_tokens,
         )
 
         with (
@@ -328,9 +324,9 @@ class RolloutWorker:
             # Sample examples, generate responses, and create rollouts from selected lesson
             rollout_groups, metrics = env.sample(
                 inference_ctx=policy_ctx,
-                n_examples=self.config.n_prompts_per_step,
-                n_generations=self.config.n_generations,
-                temperature=self.config.temperature,
+                n_examples=n_examples,
+                n_generations=n_generations,
+                temperature=temperature,
                 prng_key=rng,
                 mode=mode,
             )
@@ -432,7 +428,7 @@ class RolloutWorker:
             batch, _ = self._sample_batch(lesson_id, mode="eval", rng=rng)
             stats = _compute_batch_stats(batch, lesson_id)
 
-            self.curriculum_actor.update_lesson_stats.remote(stats.rollout_stats, mode="eval", current_step=step)
+            self._curriculum_actor.update_lesson_stats.remote(stats.rollout_stats, mode="eval", current_step=step)
 
             if stats.total_count > 0:
                 success_rate = stats.success_count / stats.total_count
@@ -489,7 +485,7 @@ class RolloutWorker:
             logger.info("Generating rollout batch...")
             rng, seed_key = jax.random.split(rng)
             seed = int(seed_key[0])
-            lesson_id = ray.get(self.curriculum_actor.sample_lesson.remote(seed))
+            lesson_id = ray.get(self._curriculum_actor.sample_lesson.remote(seed))
             logger.info(f"Sampled lesson '{lesson_id}' from curriculum")
 
             rng, input_rng = jax.random.split(rng)
@@ -499,7 +495,7 @@ class RolloutWorker:
             barrier_sync()
 
             stats = _compute_batch_stats(rollout_batch, lesson_id)
-            self.curriculum_actor.update_lesson_stats.remote(stats.rollout_stats, mode="training", current_step=step)
+            self._curriculum_actor.update_lesson_stats.remote(stats.rollout_stats, mode="training", current_step=step)
 
             step += 1
             self._rollout_writer.write_batch(rollout_batch)

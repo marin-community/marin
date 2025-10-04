@@ -27,7 +27,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .rl_losses import compute_rloo_advantages
+from marin.rl.rl_losses import RLLossModule
+
 from .rollout_storage import RolloutReader
 from .types import RolloutBatch, RolloutWithAdvantage
 
@@ -72,6 +73,7 @@ class ReplayBuffer:
     def __init__(
         self,
         config: ReplayBufferConfig,
+        loss_module: RLLossModule,
         local_batch_size: int,
         process_id: int,
         total_processes: int,
@@ -91,6 +93,7 @@ class ReplayBuffer:
         self.process_id = process_id
         self.max_samples = config.max_samples
         self.max_rollout_delay = config.max_rollout_delay
+        self.loss_module = loss_module
 
         self.rollout_storage: dict[str, list[RolloutWithCount]] = {}
         self._lock = threading.Lock()
@@ -118,7 +121,7 @@ class ReplayBuffer:
 
             if total_removed > 0:
                 logger.info(
-                    f"Filtered {total_removed} stale rollouts (min_step={min_step}), " f"{total_remaining} remaining"
+                    f"Filtered {total_removed} stale rollouts (min_step={min_step}), {total_remaining} remaining"
                 )
 
     def _retire_overused_rollouts(self):
@@ -143,7 +146,7 @@ class ReplayBuffer:
             weight_step = batch.metadata.weight_step
             for group in batch.groups:
                 # Compute RLOO advantages for the group
-                advantages = compute_rloo_advantages(group.rollouts)
+                advantages = self.loss_module.compute_advantages(group.rollouts)
                 for rollout, advantage in zip(group.rollouts, advantages, strict=True):
                     individual = RolloutWithCount(
                         rollout=rollout, advantage=advantage, usage_count=0, weight_step=weight_step
