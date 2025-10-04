@@ -124,7 +124,7 @@ class LevanterInferenceContext(InferenceContext):
         """Generate responses for a batch of prompts."""
         stop_strings = None
         if self._stop_tokens is not None:
-            stop_strings = [self._tokenizer.decode([token]) for token in self._stop_tokens]
+            stop_strings = [self.tokenizer.decode([token]) for token in self._stop_tokens]
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)

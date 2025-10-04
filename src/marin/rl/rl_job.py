@@ -89,14 +89,6 @@ class TrainParams:
 
 
 def make_tokenizer(tokenizer: str | PreTrainedTokenizer) -> PreTrainedTokenizer:
-    """Create or return tokenizer instance.
-
-    Args:
-        tokenizer: Either a HuggingFace model name string or a PreTrainedTokenizer instance
-
-    Returns:
-        PreTrainedTokenizer instance
-    """
     if isinstance(tokenizer, str):
         return AutoTokenizer.from_pretrained(tokenizer)
     return tokenizer

@@ -49,8 +49,7 @@ MODEL_TYPE = "llama"
 WANDB_PROJECT = f"rl_testing_{MODEL_NAME.split('/')[-1].lower()}"
 MODEL_TOKENIZER = MODEL_NAME
 MODEL_CHECKPOINT = MODEL_NAME
-MAX_INPUT_TOKENS = 128
-MAX_OUTPUT_TOKENS = 128
+MAX_TOKENS = 256
 RUN_ID = f"test-{MODEL_NAME.split('/')[-1]}-curriculum"
 
 
@@ -69,7 +68,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
         temperature=0.7,
         n_prompts=16,
         n_generations_per_prompt=16,
-        max_tokens=MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS,
+        max_tokens=MAX_TOKENS,
         stop_tokens=stop_tokens(MODEL_TOKENIZER),
     )
 
@@ -124,11 +123,12 @@ def rl_train(name: str) -> ExecutorStep:
     config = LlamaConfig.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    model_config = dataclasses.replace(config, seq_len=MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS, tokenizer=MODEL_TOKENIZER)
+    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=MODEL_TOKENIZER)
 
     _ = WandbConfig
 
     trainer_config = TrainerConfig(
+        # wandb is persistently crashing
         # tracker=WandbConfig(
         #     project="marin_rl_testing",
         #     name=name,
@@ -140,7 +140,7 @@ def rl_train(name: str) -> ExecutorStep:
         log_xla_hlo=False,
         log_jaxprs=False,
         mp=jmp.get_policy("p=f32,c=bfloat16"),
-        train_batch_size=8,
+        train_batch_size=64,
         num_train_steps=50000,
         steps_per_eval=100,
         checkpointer=CheckpointerConfig(
@@ -166,7 +166,7 @@ def rl_train(name: str) -> ExecutorStep:
     )
     weight_transfer = WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
-        sync_interval_steps=4,
+        sync_interval_steps=1,
         poll_interval_seconds=1,
     )
 
@@ -182,7 +182,7 @@ def rl_train(name: str) -> ExecutorStep:
             replay_buffer_capacity=4096,
             replay_buffer_alpha=3,
             max_samples_per_rollout=1,
-            max_batch_latency=32,
+            max_batch_latency=4,
         ),
         curriculum=curriculum_config,
         tokenizer=MODEL_TOKENIZER,
@@ -214,7 +214,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-power-013"),
+        rl_train(name="llama-1b-math-rl-test-power-014"),
     ]
 
     executor_main(
