@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import abc
 from abc import ABC
 from dataclasses import dataclass
@@ -45,8 +48,7 @@ class Callback(ABC, Generic[S]):
     """
 
     @abc.abstractmethod
-    def on_step(self, info: StepInfo[S], force: bool = False):
-        ...
+    def on_step(self, info: StepInfo[S], force: bool = False): ...
 
 
 class LambdaCallback(Callback[S]):

@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import abc
 import dataclasses
 import functools
@@ -459,11 +462,13 @@ class AudioTextDataset(MappedAsyncDataset[AudioTextDict, AudioTextExample]):
 
         sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
 
-        @functools.partial(eqx.filter_jit, out_shardings=sharding)
+        @functools.partial(eqx.filter_jit)
         def _convert_example(inputs: AudioTextDict) -> "AudioTextExample":
             tokens = hax.named(inputs["input_ids"], self.TextPos)
             audio_features = hax.named(inputs["input_features"], self.AudioPos)
-            return AudioTextExample.init(audio_features, tokens, ignore_id=self.ignore_id)
+            out = AudioTextExample.init(audio_features, tokens, ignore_id=self.ignore_id)
+            out = jax.lax.with_sharding_constraint(out, sharding)
+            return out
 
         super().__init__(self.dataset, _convert_example)
 

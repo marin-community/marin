@@ -1,4 +1,4 @@
-ARG IMAGE=ghcr.io/stanford-crfm/levanter-base
+ARG IMAGE=ghcr.io/marin-community/levanter-base
 ARG TAG=latest
 
 FROM ${IMAGE}:${TAG}

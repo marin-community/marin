@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 import tempfile
 from pathlib import Path
@@ -278,7 +281,7 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
         ex = packed_ds[0]
         assert ex.tokens.axes == (Pos,)
         assert ex.loss_mask.axes == (Pos,)
-        assert ex.attn_mask.segment_ids.axes == (Pos,)
+        assert ex.attn_mask.segment_ids[0].axes == (Pos,)
 
         assert_loss_mask_matches_all_assistants(ex, tokenizer)
 
@@ -292,7 +295,7 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
             # basic structural checks
             assert ex.tokens.axes == (Pos,)
             assert ex.loss_mask.axes == (Pos,)
-            assert ex.attn_mask.segment_ids.axes == (Pos,)
+            assert ex.attn_mask.segment_ids[0].axes == (Pos,)
 
             # loss_mask should coincide with assistant tokens only
             assert_loss_mask_matches_all_assistants(ex, tokenizer)
@@ -363,14 +366,14 @@ def test_supervised_processor_and_cache(dummy_supervised_file, hf_tokenizer):
         # Axis checks
         assert ex.tokens.axes == (Pos,)
         assert ex.loss_mask.axes == (Pos,)
-        assert ex.attn_mask.segment_ids.axes == (Pos,)
+        assert ex.attn_mask.segment_ids[0].axes == (Pos,)
 
         # -----------------------------------------------------------
         #  Verify that for every segment:
         #    * leading tokens (input) have loss_mask==0
         #    * trailing tokens (answer) have loss_mask==1
         # -----------------------------------------------------------
-        seg_ids: np.ndarray = ex.attn_mask.segment_ids.array
+        seg_ids: np.ndarray = ex.attn_mask.segment_ids[0].array
         mask: np.ndarray = ex.loss_mask.array
 
         for seg in np.unique(seg_ids):
@@ -406,10 +409,10 @@ def test_supervised_processor_and_cache(dummy_supervised_file, hf_tokenizer):
             # basic structural checks
             assert ex.tokens.axes == (Pos,)
             assert ex.loss_mask.axes == (Pos,)
-            assert ex.attn_mask.segment_ids.axes == (Pos,)
+            assert ex.attn_mask.segment_ids[0].axes == (Pos,)
 
-            assert set(int(i) for i in np.unique(ex.attn_mask.segment_ids.array)) == {idx, -1}
+            assert set(int(i) for i in np.unique(ex.attn_mask.segment_ids[0].array)) == {idx, -1}
 
-            assert ex.loss_mask.array.sum() == len(ex.attn_mask.segment_ids.array) - raw_ex["sources_len"] - np.sum(
-                ex.attn_mask.segment_ids.array == -1
+            assert ex.loss_mask.array.sum() == len(ex.attn_mask.segment_ids[0].array) - raw_ex["sources_len"] - np.sum(
+                ex.attn_mask.segment_ids[0].array == -1
             )

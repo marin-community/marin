@@ -1,10 +1,13 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import functools
 import math
 
 import equinox
+import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-import jax.sharding
 import pytest
 from chex import assert_trees_all_close
 
@@ -14,6 +17,7 @@ import haliax.nn as hnn
 import levanter.layers.attention
 from levanter.layers.attention import AttentionMask, simple_attention_with_dropout
 from levanter.models.flash_attention import flash_attention
+from test_utils import use_test_mesh
 
 
 BLOCK_SIZE = 64
@@ -164,7 +168,7 @@ def test_tpu_flash_attention(soft_cap):
     Key = hax.Axis("Key", 128)
     QPos = hax.Axis("QPos", BLOCK_SIZE * 4)
     KPos = hax.Axis("KPos", BLOCK_SIZE * 4)
-    with jax.sharding.Mesh(jax.devices(), ("dp",)):
+    with use_test_mesh():
         mask = AttentionMask.causal()
 
         q = hax.random.normal(jrandom.PRNGKey(0), (QPos, Key))

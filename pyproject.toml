@@ -7,7 +7,7 @@ name = "levanter"
 version = "1.2"
 description = "Scalable Training for Foundation Models with Named Tensors and JAX"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 
 authors = [
     { name = "David Hall", email = "dlwh@cs.stanford.edu" },
@@ -28,8 +28,9 @@ classifiers = [
 ]
 
 dependencies = [
-    "haliax>=1.4.dev351",
+    "haliax>=1.4.dev419",
     "equinox>=0.11.7,!=0.12.0",
+    "jax>=0.6.2,!=0.7.0,!=0.7.1",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
     "transformers>=4.53.0,<5.0",
@@ -46,7 +47,7 @@ dependencies = [
     "tensorstore>=0.1.73",
     "pytimeparse>=1.1.8",
     "humanfriendly==10.0",
-    "safetensors[numpy]>=0.4.2,<0.6.0",
+    "safetensors[numpy]>=0.4.2,<0.7.0",
     "matplotlib>=3.7.0",
     "tblib>=1.7.0,<4.0.0",
     "dataclasses-json~=0.6.4",
@@ -57,8 +58,8 @@ dependencies = [
     "tqdm-loggable>=0.2",
     "deepdiff",
     "lenses",
-  "jinja2",  # needed for apply_chat_template
-  "protobuf<7",  # causes issues with ray if newer
+    "jinja2",  # needed for apply_chat_template
+    "protobuf>=6,<7",  # ensure TB/XProf compatibility; avoid 7+ due to ray
   # "lm-eval==0.4.2",
   # "lm-eval @ git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch"
 ]
@@ -68,11 +69,34 @@ Homepage = "https://github.com/stanford-crfm/levanter"
 "Bug Tracker" = "https://github.com/stanford-crfm/levanter/issues"
 
 [project.optional-dependencies]
-gpu = ["jax[cuda12]>=0.5"]
-tpu = ["jax[tpu]>=0.5"]
+gpu = ["jax[cuda12]>=0.6.2"]
+tpu = ["jax[tpu]>=0.6.2"]
 torch_test = [
   "torch>=2.7.0",
   "peft>=0.12.0",
+]
+profiling = [
+    "xprof",
+  # TensorBoard UI for viewing traces and profiles
+  "tensorboard>=2.16",
+  # Writer used by the TensorBoard tracker implementation
+  "tensorboardX>=2.6",
+]
+serve = [
+  "fastapi>=0.100.0",
+  "uvicorn[standard]>=0.23.0",
+  "openai>=1.0.0",
+]
+
+lm_eval = [
+  "lm-eval",
+]
+
+gcp = [
+    "google-api-python-client>=2.175.0",
+    "google-cloud-storage",
+    "google-cloud-storage-transfer",
+    "google-auth",
 ]
 
 [dependency-groups]
@@ -84,6 +108,9 @@ test = [
   "librosa",
   "tensorboardX>=2.6",
   "chex>=0.1.86",
+  "httpx>=0.28.1",
+  "pytest-profiling>=1.8.1",
+  "trackio",
 ]
 
 docs = [
@@ -101,6 +128,8 @@ docs = [
 dev = [
   "pygments",
   "pre-commit",
+  "click>=8.0.0",
+  "prompt_toolkit>=3.0.0",
 ]
 
 [tool.uv]
@@ -114,16 +143,20 @@ conflicts = [
 
 [tool.ruff]
 line-length = 119
-target-version = "py310"
+target-version = "py311"
 extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
 ignore = [
-  "E203", "E501", "W605", "F821", "E266", "E722", "E731", "E741"
+  "E203", "E501", "W605", "F821", "E266", "F722", "E731", "E741"
 ]
 
+[tool.black]
+line-length = 119
+target-version = ["py311"]
+
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 mypy_path = ["src"]
 
 [tool.mypy-haliax.core]

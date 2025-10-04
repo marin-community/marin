@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import abc
 import asyncio
 import dataclasses
@@ -166,10 +169,12 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
 
         sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
 
-        @functools.partial(eqx.filter_jit, out_shardings=sharding)
+        @functools.partial(eqx.filter_jit)
         def _create_lm_example(tokens):
             tokens = hax.named(tokens, self.Pos)
             example = LmExample.causal(tokens=tokens, ignore_id=self.ignore_id, eos_id=eos_id)
+
+            example = jax.lax.with_sharding_constraint(example, sharding)
 
             return example
 
@@ -1551,7 +1556,7 @@ class MultiturnChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, Processed
         sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
         self.mask_user_turns = mask_user_turns
 
-        @functools.partial(eqx.filter_jit, out_shardings=sharding)
+        @functools.partial(eqx.filter_jit)
         def _create_lm_example(e: tuple[ProcessedChatDict, ProcessedChatDict]) -> LmExample:
             example, seg_ids = e
             tokens = hax.named(example["input_ids"], self.Pos)
@@ -1567,7 +1572,9 @@ class MultiturnChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, Processed
 
             seg_ids = hax.named(seg_ids["input_ids"], self.Pos)
 
-            return LmExample.causal(tokens=tokens, loss_mask=loss_mask, segment_ids=seg_ids)
+            out = LmExample.causal(tokens=tokens, loss_mask=loss_mask, segment_ids=seg_ids)
+            out = jax.lax.with_sharding_constraint(out, sharding)
+            return out
 
         super().__init__(self.packed, _create_lm_example)
 

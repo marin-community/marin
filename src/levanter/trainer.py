@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import atexit
 import copy
 import functools
@@ -9,7 +12,21 @@ import warnings
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple, TypeVar, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+    ContextManager,
+)
 
 import equinox as eqx
 import fsspec
@@ -224,20 +241,16 @@ class Trainer:
         return self.config.num_train_steps
 
     @typing.overload
-    def add_hook(self, fn: Callable[[StepInfo], Any], *, every: int = 1):
-        ...
+    def add_hook(self, fn: Callable[[StepInfo], Any], *, every: int = 1): ...
 
     @typing.overload
-    def add_hook(self, fn: JitCallback, *, every: int = 1):
-        ...
+    def add_hook(self, fn: JitCallback, *, every: int = 1): ...
 
     @typing.overload
-    def add_hook(self, fn: Callback, *, every: int = 1):
-        ...
+    def add_hook(self, fn: Callback, *, every: int = 1): ...
 
     @typing.overload
-    def add_hook(self, *, every: int = 1):
-        ...
+    def add_hook(self, *, every: int = 1): ...
 
     def add_hook(self, fn: Optional[Callable[[StepInfo], Any] | Callback | JitCallback] = None, *, every: int = 1):
         return self.hooks.add_hook(fn, every=every)
@@ -271,7 +284,7 @@ class Trainer:
 
         self._cmanagers = [
             levanter.current_tracker(self.tracker),
-            self.device_mesh,
+            haliax.partitioning.set_mesh(self.device_mesh),
             hax.axis_mapping(self.parameter_axis_mapping),
         ]
 
@@ -575,10 +588,10 @@ class Trainer:
                     hook_infos = self.hooks.run_jit_hooks(state, jit_info, force=False)
 
         if _no_hooks:
-            return hax.shard_with_axis_mapping( (loss, new_state, metrics, None), self.parameter_axis_mapping)
+            return hax.shard_with_axis_mapping((loss, new_state, metrics, None), self.parameter_axis_mapping)
         else:
             # return loss, new_state, metrics, hook_infos
-            return hax.shard_with_axis_mapping( (loss, new_state, metrics, hook_infos), self.parameter_axis_mapping)
+            return hax.shard_with_axis_mapping((loss, new_state, metrics, hook_infos), self.parameter_axis_mapping)
 
     def _compute_gradients_microbatched(self, loss_fn, model: M, *batch, **batch_kwargs) -> tuple[Scalar, M]:
         Batch = _resolve_axis_in_tree((batch, batch_kwargs), self.config.batch_axis)
@@ -805,6 +818,15 @@ class TrainerConfig:
             self.replica_dcn_axis_size,
             self.data_dcn_axis_size,
         )
+
+    def use_device_mesh(self) -> ContextManager[None]:
+        """
+        Context manager that sets the device mesh for jax, using Haliax's wrapper.
+
+        In recent jax, this is the same as `jax.set_mesh(self.device_mesh)`, but we use Haliax's wrapper for
+        compatibility with older jax versions.
+        """
+        return haliax.partitioning.set_mesh(self.device_mesh)
 
     @property
     def eval_batch_size(self):

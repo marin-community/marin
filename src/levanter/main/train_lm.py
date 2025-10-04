@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 import functools
 import gc
@@ -198,7 +201,7 @@ def main(config: TrainLmConfig):
         )
         # trainer.add_hook(callbacks.GradWatchCallback(include_histograms=True), every=5)
 
-        if config.hf_save_path is not None:
+        if config.hf_save_path is not None and config.hf_save_steps is not None:
             # bit gross to reach this far into the config, but it's fine
             if config.trainer.checkpointer.append_run_id_to_base_path:
                 full_save_path = os.path.join(config.hf_save_path, trainer.run_id)

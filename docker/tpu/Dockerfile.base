@@ -1,4 +1,4 @@
-FROM python:3.10 AS build
+FROM python:3.11 AS build
 RUN apt-get update && apt-get install -y clang
 RUN pip install virtualenv
 
@@ -16,7 +16,7 @@ RUN mkdir -p /tmp/src/levanter
 RUN touch /tmp/src/levanter/__init__.py || true
 RUN uv pip install -e .[test,tpu]
 
-FROM python:3.10
+FROM python:3.11
 
 WORKDIR /opt/levanter
 # reinstall uv

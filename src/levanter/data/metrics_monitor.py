@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 import logging as pylogging
 import time
@@ -21,8 +24,7 @@ class InProgressCacheMetrics:
 
 
 class MetricsMonitor(Protocol):
-    def __call__(self, metrics: InProgressCacheMetrics):
-        ...
+    def __call__(self, metrics: InProgressCacheMetrics): ...
 
 
 class LoggingMetricsMonitor(MetricsMonitor):

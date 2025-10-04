@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 __all__ = [
     "cb_compute_entropies",
     "cb_compute_top2_gap",

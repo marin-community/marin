@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import abc
 import contextlib
 import dataclasses
@@ -16,16 +19,23 @@ import draccus
 import equinox as eqx
 import fsspec
 import huggingface_hub
+import humanfriendly
 import jax
 import jax.numpy as jnp
 import mergedeep
+import numpy as np
 import safetensors
 import safetensors.numpy
 import transformers.utils.hub
 from fsspec import AbstractFileSystem
+from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
+from haliax.jax_utils import is_jax_array_like
+from haliax.state_dict import StateDict
 from huggingface_hub import HfApi, hf_hub_download, repo_exists, snapshot_download
 from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError, RepositoryNotFoundError
+from jax import ShapeDtypeStruct
+from jax._src.partition_spec import PartitionSpec
 from jax.experimental.multihost_utils import sync_global_devices
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
@@ -34,7 +44,7 @@ from tqdm import tqdm
 import haliax
 from haliax import Axis
 from haliax.partitioning import ResourceMapping
-from haliax.state_dict import from_torch_compatible_state_dict, save_state_dict, to_torch_compatible_state_dict
+from haliax.state_dict import from_torch_compatible_state_dict, save_state_dict
 
 from levanter.callbacks import StepInfo
 from levanter.models.asr_model import ASRMixin
@@ -205,6 +215,46 @@ def _load_safe_tensors(path, dtype):
             d[key] = _maybe_shard_best_effort(tensor_slice, dtype)
 
     return d
+
+
+# NB: for large models this will be jitted several times (once for each unique subset of keys at least)
+# but it means we get to benefit from dead code elimination and other goodness
+@eqx.filter_jit
+def _to_state_dict_with_dtype(
+    model: ModelWithHfSerializationMixin, dtype, subset: tuple[str, ...] | None
+) -> StateDict:
+    """
+    Convert a model to a torch-compatible state dict, optionally converting floating-point arrays to a given dtype
+    and optionally subsetting to a given set of keys.
+    """
+    # We don't want to directly use to_torch_compatible_state_dict because it will convert everything to numpy.
+    # we don't want to do that here because we want to keep things as jax arrays so we can eval_shape and control
+    # sharding
+
+    # state_dict = to_torch_compatible_state_dict(model)
+    # to_torch_compatible_state_dict is mostly these three steps (except it also converts to numpy)
+    model = eqx.filter(model, is_jax_array_like)
+    model = flatten_modules_for_export(model)
+    state_dict = to_state_dict(model)
+
+    if subset is not None:
+        out = {}
+        for k in subset:
+            out[k] = state_dict[k]
+        state_dict = out
+
+    if dtype is not None:
+        logger.info(f"Converting floating-point arrays in state_dict to {dtype}")
+        for k, v in state_dict.items():
+            if jnp.issubdtype(v.dtype, jnp.floating):
+                state_dict[k] = v.astype(dtype)
+            else:
+                logger.debug(f"Skipping dtype conversion for non-floating point array {k} with dtype {v.dtype}")
+
+    # deshard. We could be smarter here and use a process mesh or host offloading, but this is simpler for now
+    state_dict = jax.lax.with_sharding_constraint(state_dict, PartitionSpec())
+
+    return state_dict
 
 
 @dataclass_with_default_init(frozen=True)
@@ -591,7 +641,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         just_use_cpu = _should_use_cpu_for_checkpoint_loading()
         if just_use_cpu:
             # if we only have 1 device, use CPU ram
-            contexts.enter_context(use_cpu_device())
+            contexts.enter_context(local_cpu_mesh())
 
         with contexts:
             # TODO: in an ideal world, we would only load the part of the array we needed, but
@@ -631,12 +681,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
             return lev_model
 
         if just_use_cpu:
-            cpu_device = jax.local_devices(backend="cpu")[0]
             with local_cpu_mesh():
                 lev_model = eqx.filter_eval_shape(lm_model_cls.init, Vocab, config, key=PRNGKey(0))
-                lev_model = eqx.filter_jit(load_from_state_dict, donate="all", device=cpu_device)(
-                    lev_model, state_dict
-                )
+                lev_model = eqx.filter_jit(load_from_state_dict, donate="all")(lev_model, state_dict)
 
             del state_dict
             # gotta move it to the accelerator now (assuming there is one!)
@@ -650,67 +697,31 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         return lev_model
 
-    def _save_pretrained_local(
-        self,
-        model: ModelWithHfSerializationMixin,
-        path: str,
-        save_tokenizer: bool,
-        save_reference_code: Optional[bool],
-        max_shard_size: int,
-        save_feature_extractor: bool = False,
-        dtype: Optional[jnp.dtype] = None,
-    ):
-        """
-        Saves a HF-compatible checkpoint to a local path.
-        :param model: The model to convert and save
-        :param path: The path to save the output to
-        :param save_tokenizer: Save the tokenizer to the checkpoint
-        :param save_reference_code: Save any code from the reference checkpoint
-        :return:
-        """
-        logger.info(f"Saving HF-compatible checkpoint to {path}")
-        os.makedirs(path, exist_ok=True)
-
-        # if save_reference_code is None, we save code for models that aren't in the HF repo.
+    def _resolve_save_reference_code(self, save_reference_code: Optional[bool]) -> bool:
+        """Determine whether reference code should be bundled with the checkpoint."""
+        #  the way we determine this is if the config class is in the HF package or not
         if save_reference_code is None:
-            #  the way we determine this is if the config class is in the HF package or not
-            save_reference_code = not self.HfConfigClass.__module__.startswith("transformers.")
+            return not self.HfConfigClass.__module__.startswith("transformers.")
 
-        # save code first because we'll likely be overwriting it
-        if save_reference_code:
-            logger.info(f"Copying reference code from {self.reference_checkpoint}")
-            self._save_code_local(path)
+        return save_reference_code
 
-        if save_tokenizer:
-            logger.info("Saving tokenizer")
-            self.tokenizer.save_pretrained(path)
-
-        if save_feature_extractor and self.feature_extractor is not None:
-            logger.info("Saving feature extractor")
-            self.feature_extractor.save_pretrained(path)
-
-        # Config
+    def _build_hf_config_dict(self, model: ModelWithHfSerializationMixin) -> dict:
+        """Construct the Hugging Face config dictionary for the provided model."""
         config = model.config.to_hf_config(model.Vocab.size)
         dict_config = config.to_dict()
 
-        # copy over the default keys
         try:
             for k in KEYS_TO_COPY_FROM_BASE_CONFIG:
                 attr = getattr(self.default_hf_config, k, None)
                 if attr is not None:
                     dict_config[k] = attr
-        # except GatedRepoError:
-        #     warnings.warn("Could not copy keys from base config because the repo is gated. Making assumptions.")
-        except Exception as e:  # noqa
+        except Exception as e:  # noqa: BLE001
             if isinstance(e, GatedRepoError) or isinstance(e.__cause__, GatedRepoError):
                 warnings.warn("Could not copy keys from base config because the repo is gated. Making assumptions.")
-
-                # this is probably llama, but in general we just need to set the auto_map and architectures
                 dict_config["auto_map"] = {
                     "AutoModelForCausalLM": self.HFAutoModelClass(AutoModelForCausalLM).__qualname__,
                     "AutoConfig": self.HfConfigClass.__qualname__,
                 }
-
                 dict_config["architectures"] = [self.HFAutoModelClass(AutoModelForCausalLM).__name__]
             else:
                 raise
@@ -730,41 +741,12 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 suppress_tokens.append(self.tokenizer.bos_token_id)
             if len(suppress_tokens) > 0:
                 tokenizer_dependent_config["begin_suppress_tokens"] = list(set(suppress_tokens))
-            dict_config = mergedeep.merge(
-                {},
-                dict_config,
-                tokenizer_dependent_config,
-            )
+            dict_config = mergedeep.merge({}, dict_config, tokenizer_dependent_config)
 
         if self.config_overrides:
             dict_config = mergedeep.merge({}, dict_config, self.config_overrides)
 
-        with open(os.path.join(path, "config.json"), "w") as f:
-            json.dump(dict_config, f, cls=ConfigJSONEncoder)
-
-        # Model
-        state_dict = to_torch_compatible_state_dict(model)
-
-        if dtype is not None:
-            logger.info(f"Converting floating-point arrays in state_dict to {dtype}")
-            for k, v in state_dict.items():
-                if jnp.issubdtype(v.dtype, jnp.floating):
-                    state_dict[k] = v.astype(dtype)
-                else:
-                    logger.debug(f"Skipping dtype conversion for non-floating point array {k} with dtype {v.dtype}")
-
-        shards, index = _shard_hf_checkpoint(state_dict, max_shard_size, SAFE_TENSORS_MODEL)
-        if index is None:
-            save_state_dict(state_dict, os.path.join(path, SAFE_TENSORS_MODEL))
-        else:
-            for k, v in shards.items():
-                save_state_dict(v, os.path.join(path, k))
-            with open(os.path.join(path, SAFE_TENSORS_INDEX_NAME), "w") as f:
-                json.dump(index, f)
-
-            logger.info(f"Saved a sharded checkpoint with {len(shards)} shards, max size {max_shard_size} bytes")
-
-        logger.info(f"Finished saving HF-compatible checkpoint to {path}")
+        return dict_config
 
     def save_pretrained(
         self,
@@ -796,30 +778,175 @@ class HFCheckpointConverter(Generic[LevConfig]):
         architecture code being present (using trust_remote_code=True). "Code" here means anything not stored in LFS.
         If None, will save code for models that aren't in the HF repo.
         """
-        with temp_dir_before_upload(path) as local_path:
-            if path != local_path:
-                logger.info(f"Saving model to {path} via temp path {local_path}")
+        logger.info(f"Saving HF-compatible checkpoint to {path}")
 
-            self._save_pretrained_local(
-                model,
-                local_path,
-                save_reference_code=save_reference_code,
-                save_tokenizer=save_tokenizer,
-                save_feature_extractor=save_feature_extractor,
-                max_shard_size=max_shard_size,
-                dtype=dtype,
+        save_reference_code_flag = self._resolve_save_reference_code(save_reference_code)
+        dict_config = self._build_hf_config_dict(model)
+
+        if not _is_url_like(path):
+            os.makedirs(path, exist_ok=True)
+
+        hf_repo_ref: Optional[RepoRef] = None
+        if upload_to_hf is True:
+            if self.reference_checkpoint is None:
+                raise ValueError("No reference checkpoint provided, so no repo name to upload to")
+            upload_to_hf = self.reference_checkpoint
+
+        if not isinstance(upload_to_hf, bool):
+            repo_ref = _coerce_to_rr(upload_to_hf)
+            if not repo_exists(repo_ref.model_name_or_path, repo_type="model"):
+                api = HfApi()
+                api.create_repo(repo_id=repo_ref.model_name_or_path, repo_type="model", exist_ok=True, private=True)
+            hf_repo_ref = repo_ref
+
+        if hf_repo_ref is None:
+            logger.info(f"Saving checkpoint to {path}")
+        else:
+            logger.info(f"Uploading checkpoint to {hf_repo_ref} from {path}")
+
+        state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None)
+        model_size = sum(v.size * v.dtype.itemsize for v in state_dict_shape.values())
+        pbar = tqdm(
+            total=model_size,
+            unit="B",
+            unit_scale=True,
+            desc="Checkpoint size",
+        )
+
+        shards, index = _shard_hf_checkpoint(state_dict_shape, max_shard_size, SAFE_TENSORS_MODEL)
+
+        shard_specs = [(shard_name, tuple(weight_map.keys())) for shard_name, weight_map in shards.items()]
+        this_max_shard_size = max(
+            sum(v.size * v.dtype.itemsize for v in shards[shard_name].values()) for shard_name in shards.keys()
+        )
+        logger.info(
+            "Will save %d shards with max size %s", len(shard_specs), humanfriendly.format_size(this_max_shard_size)
+        )
+
+        def _maybe_upload(
+            local_dir: str,
+            *,
+            files: Optional[list[str]] = None,
+            commit_message: Optional[str] = None,
+            source_is_temp: bool,
+        ):
+            if hf_repo_ref is None:
+                return
+
+            upload_kwargs = hf_upload_kwargs.copy()
+            if commit_message is not None and "commit_message" not in upload_kwargs:
+                upload_kwargs["commit_message"] = commit_message
+
+            if files is not None and len(files) == 0:
+                return
+
+            if files is None or source_is_temp:
+                upload_to_hub(local_dir, hf_repo_ref, **upload_kwargs)
+                return
+
+            # if we're not sure source_is_temp, we have to be more careful to only upload the files we want
+
+            repo_type = upload_kwargs.pop("repo_type", "model")
+            token = upload_kwargs.pop("token", None)
+            revision = upload_kwargs.pop("revision", hf_repo_ref.revision)
+            create_pr = upload_kwargs.pop("create_pr", False)
+            commit_message_arg = upload_kwargs.pop("commit_message", None) or commit_message
+
+            for relative_path in files:
+                file_path = os.path.join(local_dir, relative_path)
+                huggingface_hub.upload_file(
+                    path_or_fileobj=file_path,
+                    path_in_repo=relative_path,
+                    repo_id=hf_repo_ref.model_name_or_path,
+                    repo_type=repo_type,
+                    token=token,
+                    revision=revision,
+                    commit_message=commit_message_arg,
+                    create_pr=create_pr,
+                )
+
+        def _list_relative_files(directory: str) -> set[str]:
+            rel_files: set[str] = set()
+            for root, _, filenames in os.walk(directory):
+                for filename in filenames:
+                    full_path = os.path.join(root, filename)
+                    rel_files.add(os.path.relpath(full_path, directory))
+            return rel_files
+
+        for shard_name, subset_keys in shard_specs:
+            with temp_dir_before_upload(path) as local_path:
+                if path != local_path:
+                    logger.info(f"Saving shard {shard_name} to {path} via temp path {local_path}")
+
+                os.makedirs(local_path, exist_ok=True)
+                subset_arg: Optional[tuple[str, ...]]
+                if len(subset_keys) == 0:
+                    subset_arg = None
+                else:
+                    subset_arg = subset_keys
+
+                shard_weights = _to_state_dict_with_dtype(model, dtype, subset_arg)
+                shard_numpy = {k: np.asarray(v) for k, v in shard_weights.items()}
+                bytes_this_time = sum(v.nbytes for v in shard_numpy.values())
+                logger.info(
+                    "Saving shard %s (%s, %.2f%% of model)",
+                    shard_name,
+                    humanfriendly.format_size(bytes_this_time),
+                    100 * bytes_this_time / model_size,
+                )
+                save_state_dict(shard_numpy, os.path.join(local_path, shard_name))
+
+                _maybe_upload(
+                    local_path,
+                    files=[shard_name],
+                    commit_message=f"Upload shard {shard_name} from Levanter",
+                    source_is_temp=path != local_path,
+                )
+                pbar.update(bytes_this_time)
+
+        if index is not None:
+            logger.info(
+                f"Saved a sharded checkpoint with {len(shard_specs)} shards, max size {humanfriendly.format_size(this_max_shard_size)}"
             )
 
-            if upload_to_hf is True:
-                if self.reference_checkpoint is None:
-                    raise ValueError("No reference checkpoint provided, so no repo name to upload to")
-                upload_to_hf = self.reference_checkpoint
-            if not isinstance(upload_to_hf, bool):
-                assert isinstance(upload_to_hf, (str, RepoRef))
-                if isinstance(upload_to_hf, str) and not repo_exists(upload_to_hf, repo_type="model"):
-                    api = HfApi()
-                    api.create_repo(repo_id=upload_to_hf, repo_type="model", exist_ok=True, private=True)
-                upload_to_hub(local_path, upload_to_hf, **hf_upload_kwargs)
+        with temp_dir_before_upload(path) as local_path:
+            if path != local_path:
+                logger.info(f"Saving metadata to {path} via temp path {local_path}")
+
+            os.makedirs(local_path, exist_ok=True)
+
+            files_before = _list_relative_files(local_path)
+
+            if save_reference_code_flag:
+                logger.info(f"Copying reference code from {self.reference_checkpoint}")
+                self._save_code_local(local_path)
+
+            if save_tokenizer:
+                logger.info("Saving tokenizer")
+                self.tokenizer.save_pretrained(local_path)
+
+            if save_feature_extractor and self.feature_extractor is not None:
+                logger.info("Saving feature extractor")
+                self.feature_extractor.save_pretrained(local_path)
+
+            with open(os.path.join(local_path, "config.json"), "w") as f:
+                json.dump(dict_config, f, cls=ConfigJSONEncoder)
+
+            if index is not None:
+                with open(os.path.join(local_path, SAFE_TENSORS_INDEX_NAME), "w") as f:
+                    json.dump(index, f)
+
+            files_after = _list_relative_files(local_path)
+            new_files = sorted(files_after - files_before)
+
+            _maybe_upload(
+                local_path,
+                files=new_files,
+                commit_message="Upload config and metadata from Levanter",
+                source_is_temp=path != local_path,
+            )
+
+        logger.info(f"Finished saving HF-compatible checkpoint to {path}")
 
     def _save_code_local(self, path):
         if self.reference_checkpoint is None:
@@ -1023,10 +1150,10 @@ def _patch_missing_buffers_for_deser(lev_model, lm_model_cls, Vocab, config, key
 
 
 def _shard_hf_checkpoint(
-    state_dict: dict[str, Array],
+    state_dict: dict[str, Array | ShapeDtypeStruct],
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
     weights_name: str = SAFE_TENSORS_MODEL,
-):
+) -> tuple[dict[str, dict[str, Array]], dict | None]:
     """
     Splits a model state dictionary in sub-checkpoints so that the final size of each sub-checkpoint does not exceed a
     given size.
@@ -1062,7 +1189,7 @@ def _shard_hf_checkpoint(
     total_size = 0
 
     for key, weight in state_dict.items():
-        weight_size = weight.size * weight.itemsize
+        weight_size = weight.size * weight.dtype.itemsize
 
         # If this weight is going to tip up over the maximal size, we split, but only if we have put at least one
         # weight in the current shard.
@@ -1080,7 +1207,7 @@ def _shard_hf_checkpoint(
 
     # Otherwise, let's build the index
     weight_map = {}
-    shards = {}
+    shards: dict[str, dict[str, Array]] = {}
     for idx, shard in enumerate(sharded_state_dicts):
         # NOTE(dlwh): this is how it is in the HF code. it hurts me
         shard_file = weights_name.replace(".bin", f"-{idx + 1:05d}-of-{len(sharded_state_dicts):05d}.bin")

@@ -1,5 +1,5 @@
 # This dockerfile is used to build the docker image for using Ray to manage TPU slices.
-ARG IMAGE=ghcr.io/stanford-crfm/levanter-base
+ARG IMAGE=ghcr.io/marin-community/levanter-base
 ARG TAG=latest
 
 FROM ${IMAGE}:${TAG}
@@ -68,7 +68,7 @@ USER levanter
 # HACK until https://github.com/ray-project/ray/issues/47769 is resolved
 RUN pip install 'ray[default,gcp]==2.34.0'
 RUN git clone https://github.com/dlwh/ray.git ~/ray --branch tpu_docker_2.34 --depth 1
-RUN cp ~/ray/python/ray/autoscaler/_private/gcp/tpu_command_runner.py /opt/levanter/.venv/lib/python3.10/site-packages/ray/autoscaler/_private/gcp/tpu_command_runner.py
+RUN cp ~/ray/python/ray/autoscaler/_private/gcp/tpu_command_runner.py /opt/levanter/.venv/lib/python3.11/site-packages/ray/autoscaler/_private/gcp/tpu_command_runner.py
 
 
 WORKDIR /opt/levanter

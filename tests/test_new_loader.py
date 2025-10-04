@@ -1,10 +1,12 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import asyncio
 from typing import Optional, Sequence
 
 import jax
 import numpy as np
 import pytest
-from jax.sharding import Mesh
 
 import haliax
 from haliax import Axis
@@ -14,7 +16,7 @@ from levanter.data.dataset import AsyncDataset, ListAsyncDataset
 from levanter.data.loader import DataLoader, check_sharded_consistency
 from levanter.schedule import ScheduleStep
 
-from .test_utils import skip_if_not_enough_devices
+from .test_utils import skip_if_not_enough_devices, use_test_mesh
 
 
 def _small_dataset(seq_len=128, num_sequences=200) -> AsyncDataset[Sequence[int]]:
@@ -28,11 +30,7 @@ def test_local_batched_data_loading_model_axis_2():
     devices = jax.devices()
     model_axis_size = 2
 
-    mesh = Mesh(
-        np.array(devices).reshape(-1, model_axis_size),
-        (ResourceAxis.DATA, ResourceAxis.MODEL),
-    )
-    with mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+    with use_test_mesh(tensor_parallelism=model_axis_size) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
 
         seq_len = 128
         cache = _small_dataset(seq_len)
@@ -47,11 +45,7 @@ def test_local_batched_data_loading_model_axis_1():
     devices = jax.devices()
     model_axis_size = 1
 
-    mesh = Mesh(
-        np.array(devices).reshape(-1, model_axis_size),
-        (ResourceAxis.DATA, ResourceAxis.MODEL),
-    )
-    with mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+    with use_test_mesh(tensor_parallelism=model_axis_size) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
 
         seq_len = 128
         cache = _small_dataset(seq_len)
@@ -102,11 +96,7 @@ def test_structured_batches_model_axis_1():
     devices = jax.devices()
     model_axis_size = 1
 
-    mesh = Mesh(
-        np.array(devices).reshape(-1, model_axis_size),
-        (ResourceAxis.DATA, ResourceAxis.MODEL),
-    )
-    with mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+    with use_test_mesh(tensor_parallelism=model_axis_size) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
         seq_len = 128
         dataset = StructuredDataset(seq_len)
         loader = DataLoader(dataset, len(devices), max_buffered_batches=10, mesh=mesh, axis_resources=None)
@@ -121,11 +111,7 @@ def test_structured_batches_model_axis_2():
     devices = jax.devices()
     model_axis_size = 2
 
-    mesh = Mesh(
-        np.array(devices).reshape(-1, model_axis_size),
-        (ResourceAxis.DATA, ResourceAxis.MODEL),
-    )
-    with mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+    with use_test_mesh(tensor_parallelism=model_axis_size) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
         seq_len = 128
         dataset = StructuredDataset(seq_len)
         loader = DataLoader(dataset, len(devices), max_buffered_batches=10, mesh=mesh, axis_resources=None)
@@ -188,11 +174,7 @@ def test_structured_batches_model_axis_1_with_names():
     devices = jax.devices()
     model_axis_size = 1
 
-    mesh = Mesh(
-        np.array(devices).reshape(-1, model_axis_size),
-        (ResourceAxis.DATA, ResourceAxis.MODEL),
-    )
-    with mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+    with use_test_mesh(tensor_parallelism=model_axis_size) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
         Height = Axis("Height", 16)
         Width = Axis("Width", 16)
         dataset = StructuredDatasetWithNames(Height, Width, 0, len(devices) * 10, 1)
@@ -207,14 +189,7 @@ def test_structured_batches_model_axis_1_with_names():
 
 @skip_if_not_enough_devices(2)
 def test_structured_batches_model_axis_1_non_divisible_batch_size():
-    devices = jax.devices()
-    model_axis_size = 1
-
-    mesh = Mesh(
-        np.array(devices).reshape(-1, model_axis_size),
-        (ResourceAxis.DATA, ResourceAxis.MODEL),
-    )
-    with mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+    with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
         Height = Axis("Height", 16)
         Width = Axis("Width", 16)
         dataset = StructuredDatasetWithNames(Height, Width, 0, 10, 1)
@@ -240,11 +215,7 @@ def test_structured_batches_model_axis_2_with_names():
     devices = jax.devices()
     model_axis_size = 2
 
-    mesh = Mesh(
-        np.array(devices).reshape(-1, model_axis_size),
-        (ResourceAxis.DATA, ResourceAxis.MODEL),
-    )
-    with mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+    with use_test_mesh(tensor_parallelism=model_axis_size) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
         Height = Axis("Height", 16)
         Width = Axis("Width", 16)
         dataset = StructuredDatasetWithNames(Height, Width, 0, 256, 1)
@@ -261,13 +232,12 @@ def test_structured_batches_model_axis_2_subsharded():
     devices = jax.devices()
     model_axis_size = 2
 
-    mesh = Mesh(
-        np.array(devices).reshape(-1, model_axis_size),
-        (ResourceAxis.DATA, ResourceAxis.MODEL),
-    )
     Height = Axis("Height", 16)
     Width = Axis("Width", 16)
-    with mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA, Height.name: ResourceAxis.MODEL}):
+    with (
+        use_test_mesh(tensor_parallelism=model_axis_size) as mesh,
+        haliax.axis_mapping({"batch": ResourceAxis.DATA, Height.name: ResourceAxis.MODEL}),
+    ):
         dataset = StructuredDatasetWithNames(Height, Width, 0, 256, 1)
         loader = DataLoader(dataset, len(devices), max_buffered_batches=10, mesh=mesh, axis_resources=None)
 
@@ -285,14 +255,7 @@ def test_loader_with_batch_scheduler(model_axis_size):
     if 32 % (len(jax.devices()) // model_axis_size) != 0:
         pytest.skip("This test requires the number of devices to divide 32")
 
-    devices = jax.devices()
-
-    mesh = Mesh(
-        np.array(devices).reshape(-1, model_axis_size),
-        (ResourceAxis.DATA, ResourceAxis.MODEL),
-    )
-
-    with mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+    with use_test_mesh(tensor_parallelism=model_axis_size) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
         seq_len = 128
         cache = _small_dataset(seq_len, num_sequences=1000)
         loader = DataLoader(
@@ -321,14 +284,7 @@ def test_padded_final_batch(model_axis_size):
     if 32 % (len(jax.devices()) // model_axis_size) != 0:
         pytest.skip("This test requires the number of devices to divide 32")
 
-    devices = jax.devices()
-
-    mesh = Mesh(
-        np.array(devices).reshape(-1, model_axis_size),
-        (ResourceAxis.DATA, ResourceAxis.MODEL),
-    )
-
-    with mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+    with use_test_mesh(tensor_parallelism=model_axis_size) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
         seq_len = 128
         cache = _small_dataset(seq_len, num_sequences=1007)
         loader = DataLoader(

@@ -1,4 +1,7 @@
 #!/usr/bin/python
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Similar to launch.py, but this instead launches on a Ray cluster configured with auto-scaling TPUs
 
 import argparse
@@ -19,7 +22,7 @@ def main():
     parser = argparse.ArgumentParser()
     config = cli.load_config()
 
-    cli.add_arg(parser, config, ["--docker_base_image"], default="ghcr.io/stanford-crfm/levanter-base:latest")
+    cli.add_arg(parser, config, ["--docker_base_image"], default="ghcr.io/marin-community/levanter-base:latest")
     cli.add_arg(parser, config, ["--docker_repository"], default="levanter")
     cli.add_arg(parser, config, ["--address"], default=None)
     cli.add_arg(parser, config, ["--image_name"], default=f"levanter-{getpass.getuser()}")

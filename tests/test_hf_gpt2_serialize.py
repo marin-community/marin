@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 import tempfile
 from typing import Optional, cast
@@ -23,6 +26,7 @@ from levanter.models.lm_model import LmExample, LmHeadModel, compute_next_token_
 from levanter.optim import AdamConfig
 from levanter.utils.tree_utils import inference_mode
 from test_utils import arrays_only, skip_if_no_torch
+from tests.test_utils import use_test_mesh
 
 
 @skip_if_no_torch
@@ -195,10 +199,10 @@ def test_hf_save_to_fs_spec():
     converter = HFCheckpointConverter(Gpt2Config, "gpt2", HfGpt2Config, ignore_prefix="transformer")
     simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
 
-    converter.save_pretrained(simple_model, "memory://model")
+    with use_test_mesh():
+        converter.save_pretrained(simple_model, "memory://model")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-
         # now copy the model to tmp because loading from memory doesn't work
         fs: AbstractFileSystem = fsspec.filesystem("memory")
         fs.get("model/", f"{tmpdir}/test", recursive=True)

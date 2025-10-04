@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 import typing
 from typing import TYPE_CHECKING, Callable, Generic, Optional, TypeVar

@@ -75,7 +75,7 @@ if ! grep -q TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES /etc/environment; then
   echo "TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES=1024" | sudo tee -a /etc/environment > /dev/null
 fi
 
-# install python 3.10, latest git
+# install python 3.11, latest git
 sudo systemctl stop unattended-upgrades  # this frequently holds the apt lock
 sudo systemctl disable unattended-upgrades
 sudo apt remove -y unattended-upgrades
@@ -89,14 +89,14 @@ retry sudo apt-get install -y software-properties-common
 retry sudo add-apt-repository -y ppa:deadsnakes/ppa
 retry sudo add-apt-repository -y ppa:git-core/ppa
 retry sudo apt-get -qq update
-retry sudo apt-get -qq install -y python3.10-full python3.10-dev git
+retry sudo apt-get -qq install -y python3.11-full python3.11-dev git
 
-# make absolutely sure we're installing into Python 3.10
-python3.10 -m pip install --upgrade pip wheel uv || exit 1
+# make absolutely sure we're installing into Python 3.11
+python3.11 -m pip install --upgrade pip wheel uv || exit 1
 
 # ensure the script-directory is on PATH
 # on Ubuntu, that is usually ~/.local/bin
-export PATH="$(python3.10 -m site --user-base)/bin:$PATH"
+export PATH="$(python3.11 -m site --user-base)/bin:$PATH"
 
 # clone levanter
 if [ -d levanter ]; then

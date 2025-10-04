@@ -1,21 +1,33 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import dataclasses
 import functools
+import logging
 import math
 import warnings
 from dataclasses import dataclass
 from enum import Enum
+from numbers import Integral
 from typing import Optional, Union, overload
 
 import equinox as eqx
 import jax
-import jax.numpy as jnp
 import jax.random as jrandom
-from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds
-from jax.experimental.shard_map import shard_map
-from jax.sharding import PartitionSpec
-from jaxtyping import PRNGKeyArray
+from jax import numpy as jnp
+
+from ..inference.utils import is_valid
+
+try:
+    from jax.experimental.pallas.ops.tpu.ragged_paged_attention import (
+        ragged_paged_attention as tpu_ragged_paged_attention,
+    )
+except Exception:  # pragma: no cover - optional dep
+    tpu_ragged_paged_attention = None
 
 import haliax
 import haliax as hax
+import haliax.haxtyping as ht
 import haliax.nn as hnn
 from haliax import Axis, AxisSelection, AxisSelector, NamedArray, axis_name
 from haliax.jax_utils import maybe_rng_split, named_call
@@ -23,9 +35,16 @@ from haliax.nn.attention import causal_mask, combine_masks_and, combine_masks_or
 from haliax.nn.normalization import LayerNormBase
 from haliax.partitioning import pspec_for_axis
 from haliax.types import PrecisionLike
+from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds
+from jax.experimental.shard_map import shard_map
+from jax.sharding import PartitionSpec
+from jaxtyping import PRNGKeyArray
 
+from ..inference.page_table import PageBatchInfo, PageTable
 from .normalization import LayerNormConfigBase
 from .rotary import RotaryEmbeddings, RotaryEmbeddingsConfig
+
+logger = logging.getLogger(__name__)
 
 
 class AttentionBackend(Enum):
@@ -306,8 +325,8 @@ def dot_product_attention_with_sink(
 
 
 def simple_attention_with_dropout(
-    QPos: Axis,
-    KPos: Axis,
+    QPos: AxisSelector,
+    KPos: AxisSelector,
     Key: Axis,
     query: NamedArray,
     key: NamedArray,
@@ -453,8 +472,12 @@ def _te_flash_attention(
     scaling_factor: float,
     logits_soft_cap: Optional[float] = None,
 ):
-    from transformer_engine.jax.attention import fused_attn  # noqa: F401
-    from transformer_engine.jax.attention import AttnBiasType, AttnMaskType, QKVLayout  # noqa: F401
+    from transformer_engine.jax.attention import (  # noqa: F401
+        AttnBiasType,
+        AttnMaskType,
+        QKVLayout,
+        fused_attn,  # noqa: F401
+    )
 
     if logits_soft_cap is not None:
         raise NotImplementedError(
@@ -556,21 +579,28 @@ def _te_materialize_mask(KPos, QPos, batch_size, mask):
             "Custom NamedArray masks are not implemented for flash attention. Please pass an AttentionMask object"
         )
     elif isinstance(mask, AttentionMask):
-        if mask.causal():
+        if mask.is_causal:
+            # NVTE fused attention does not support non-zero causal offsets.
+            if mask.causal_offset is not None:
+                raise NotImplementedError(
+                    "Causal offset is not supported for NVTE fused attention. Please use the JAX reference"
+                    " implementation."
+                )
             attn_mask_type = AttnMaskType.CAUSAL_MASK
 
             fused_attn_mask = mask.materialize(QPos, KPos)
 
-            assert fused_attn_mask is not None, (
-                "If AttentionMask is causal, the materialized array should never be None. Something is wrong."
-            )
+            assert (
+                fused_attn_mask is not None
+            ), "If AttentionMask is causal, the materialized array should never be None. Something is wrong."
 
             fused_attn_mask = fused_attn_mask.array
             fused_attn_mask = jnp.dstack([fused_attn_mask] * batch_size)
 
         else:
             raise NotImplementedError(
-                "Non-Causal masks are not implemented for flash attention. Please pass an AttentionMask object"
+                "Non-causal AttentionMask is not supported for NVTE fused attention."
+                " Please use the JAX reference implementation."
             )
     else:
         attn_mask_type = AttnMaskType.NO_MASK
@@ -691,15 +721,23 @@ def _unflatten_bshd(attn_output, q_class, v_class):
     return attn_output
 
 
-def _materialize_segment_mask(segment_ids, QPos, KPos, q_slice, k_slice) -> NamedArray:
+def _materialize_segment_mask(
+    segment_ids: NamedArray | tuple[NamedArray, NamedArray], QPos, KPos, q_slice, k_slice
+) -> NamedArray:
     """
     Make a segment mask for attention. This is a mask that prevents attention between different segments.
     """
-    kv_segment_ids = segment_ids.rename({QPos: KPos})[KPos, k_slice]
-    q_segment_ids = segment_ids[QPos, q_slice]
-    sub_KPos = kv_segment_ids.resolve_axis(KPos.name)
+    if isinstance(segment_ids, tuple):
+        if len(segment_ids) != 2:
+            raise ValueError("segment_ids must be a tuple of two NamedArrays")
+        q_segment_ids, kv_segment_ids = segment_ids
+        kv_segment_ids = kv_segment_ids.rename({QPos.name: KPos.name})[KPos.name, k_slice]
+        q_segment_ids = q_segment_ids.rename({QPos.name: QPos})[QPos.name, q_slice]
+    else:
+        kv_segment_ids = segment_ids.rename({QPos.name: KPos.name})[KPos.name, k_slice]
+        q_segment_ids = segment_ids[QPos.name, q_slice]
 
-    return q_segment_ids.broadcast_axis(sub_KPos) == kv_segment_ids
+    return q_segment_ids.broadcast_axis(kv_segment_ids.axes) == kv_segment_ids
 
 
 def _materialize_sliding_window_mask(
@@ -740,9 +778,13 @@ class AttentionMask(eqx.Module):
 
     """
 
-    is_causal: bool = eqx.field(static=True)
+    # If ``is_causal`` is True we apply a lower-triangular causal mask. If ``causal_offset`` is not ``None``
+    # we apply a shifted causal mask such that a query at position *i* can attend to key *j* whenever
+    # ``j <= i + causal_offset``. A ``None`` offset means a static offset of 0 (i.e., standard causal masking).
+    is_causal: bool = eqx.field(default=False, static=True)
+    causal_offset: None | NamedArray = None
     explicit_mask: Optional[NamedArray] = None
-    segment_ids: Optional[NamedArray] = None
+    segment_ids: tuple[NamedArray, NamedArray] | None = None
     sliding_window: Optional[int] = eqx.field(default=None, static=True)
     # CF https://github.com/jax-ml/jax/blob/47858c4ac2fd4757a3b6fc5bb2981b71a71f00c2/jax/experimental/pallas/ops/tpu/flash_attention.py#L34
     # TODO: add prefixlm
@@ -761,7 +803,24 @@ class AttentionMask(eqx.Module):
             k_slice = haliax.dslice(0, KPos.size)
 
         if self.is_causal:
-            causal = causal_mask(QPos.resize(q_slice.size), KPos.resize(k_slice.size), q_slice.start, k_slice.start)
+            # None means static 0 offset
+            offset = 0 if self.causal_offset is None else self.causal_offset
+            shifted_k_start = k_slice.start - offset
+            if isinstance(shifted_k_start, NamedArray):
+                # need to vmap
+                causal = hax.vmap(causal_mask, shifted_k_start.axes)(
+                    QPos.resize(q_slice.size),
+                    KPos.resize(k_slice.size),
+                    q_slice.start,
+                    shifted_k_start,  # type: ignore
+                )
+            else:
+                causal = causal_mask(
+                    QPos.resize(q_slice.size),
+                    KPos.resize(k_slice.size),
+                    q_slice.start,
+                    shifted_k_start,
+                )
         else:
             causal = None
 
@@ -784,25 +843,54 @@ class AttentionMask(eqx.Module):
 
         return mask
 
+    # Static constructors --------------------------------------------------
+
     @staticmethod
-    def causal(sliding_window: Optional[int] = None) -> "AttentionMask":
+    def causal(*, sliding_window: Optional[int] = None, offset: int | NamedArray | None = None) -> "AttentionMask":
         """Create a causal AttentionMask.
 
         Args:
             sliding_window: If provided, restrict each query position to attend only to keys within
                 ``sliding_window`` previous positions.
+            For ``offset == 0`` this is identical to the old ``AttentionMask.causal()``
+            behaviour; larger offsets loosen the restriction so that each query can
+            see ``offset`` additional future tokens.
         """
-        return AttentionMask(is_causal=True, sliding_window=sliding_window)
+        if isinstance(offset, int | Integral):
+            causal_offset = hax.named(offset, ())
+        else:
+            causal_offset = offset
+
+        return AttentionMask(is_causal=True, causal_offset=causal_offset, sliding_window=sliding_window)
 
     @staticmethod
     def explicit(mask: NamedArray) -> "AttentionMask":
-        return AttentionMask(is_causal=False, explicit_mask=mask)
+        return AttentionMask(is_causal=False, causal_offset=None, explicit_mask=mask)
 
-    def with_segment_ids(self, segment_ids: NamedArray) -> "AttentionMask":
+    def __post_init__(self):
+        # Normalize legacy single-array segment_ids to a tuple for consistency
+        if self.segment_ids is not None and not isinstance(self.segment_ids, tuple):
+            warnings.warn("Storing segment_ids as a single NamedArray is deprecated. Use a tuple instead.")
+            object.__setattr__(self, "segment_ids", (self.segment_ids, self.segment_ids))
+
+    def with_segment_ids(self, segment_ids: NamedArray, kv_segment_ids: NamedArray | None = None) -> "AttentionMask":
+        """Attach segment ids to the mask.
+
+        Always stores segment ids internally as a tuple ``(q_segment_ids, kv_segment_ids)``.
+        If only a single array is provided, it is used for both queries and keys/values.
+        """
+        # Always store as a tuple; duplicate if only one provided.
+        seg_field: tuple[NamedArray, NamedArray]
+        if kv_segment_ids is None:
+            seg_field = (segment_ids, segment_ids)
+        else:
+            seg_field = (segment_ids, kv_segment_ids)
+
         return AttentionMask(
             is_causal=self.is_causal,
+            causal_offset=self.causal_offset,
             explicit_mask=self.explicit_mask,
-            segment_ids=segment_ids,
+            segment_ids=seg_field,
             sliding_window=self.sliding_window,
         )
 
@@ -810,13 +898,34 @@ class AttentionMask(eqx.Module):
         """Return a copy of this mask with ``sliding_window`` applied."""
         return AttentionMask(
             is_causal=self.is_causal,
+            causal_offset=self.causal_offset,
             explicit_mask=self.explicit_mask,
             segment_ids=self.segment_ids,
             sliding_window=sliding_window,
         )
 
     def __and__(self, other) -> "AttentionMask":
-        is_causal = self.is_causal or other.is_causal
+        # Conjunction: causal if either component is causal.
+        if self.is_causal and other.is_causal:
+            # If both are causal, offsets must agree if both specified; otherwise take the specified one.
+            if self.causal_offset is not None and other.causal_offset is not None:
+                causal_offset = eqx.error_if(
+                    self.causal_offset,
+                    self.causal_offset != other.causal_offset,
+                    "Mismatched causal offsets cannot be combined with &",
+                )
+            else:
+                causal_offset = self.causal_offset if self.causal_offset is not None else other.causal_offset
+            is_causal = True
+        elif self.is_causal:
+            causal_offset = self.causal_offset
+            is_causal = True
+        elif other.is_causal:
+            causal_offset = other.causal_offset
+            is_causal = True
+        else:
+            causal_offset = None
+            is_causal = False
         explicit_mask = combine_masks_and(self.explicit_mask, other.explicit_mask)
         segment_ids = self._check_for_same_segment_ids(other)
         if self.sliding_window is None:
@@ -828,13 +937,27 @@ class AttentionMask(eqx.Module):
 
         return AttentionMask(
             is_causal=is_causal,
+            causal_offset=causal_offset,
             explicit_mask=explicit_mask,
             segment_ids=segment_ids,
             sliding_window=sliding_window,
         )
 
     def __or__(self, other) -> "AttentionMask":
-        is_causal = self.is_causal and other.is_causal
+        # Union: causal only if both are causal with the same offset; otherwise non-causal
+        if (
+            self.is_causal
+            and other.is_causal
+            and (
+                (self.causal_offset is None and other.causal_offset is None)
+                or (self.causal_offset is not None and self.causal_offset == other.causal_offset)
+            )
+        ):
+            is_causal = True
+            causal_offset = self.causal_offset
+        else:
+            is_causal = False
+            causal_offset = None
         explicit_mask = combine_masks_or(self.explicit_mask, other.explicit_mask)
         segment_ids = self._check_for_same_segment_ids(other)
         if self.sliding_window is None or other.sliding_window is None:
@@ -843,26 +966,38 @@ class AttentionMask(eqx.Module):
             sliding_window = max(self.sliding_window, other.sliding_window)
         return AttentionMask(
             is_causal=is_causal,
+            causal_offset=causal_offset,
             explicit_mask=explicit_mask,
             segment_ids=segment_ids,
             sliding_window=sliding_window,
         )
 
     def _check_for_same_segment_ids(self, other):
-        if self.segment_ids is not None and other.segment_ids is not None:
+        # Normalize possibly non-tuple representations to tuples for comparison.
+        def _as_tuple(si):
+            if si is None:
+                return None
+            if isinstance(si, tuple):
+                return si
+            else:
+                return (si, si)
+
+        self_si = _as_tuple(self.segment_ids)
+        other_si = _as_tuple(other.segment_ids)
+
+        if self_si is not None and other_si is not None:
             # only one segment mask is allowed
             # b/c we might do this in jit, we use eqx.error_if
             # in theory we can do this one by just assigning unique ids to each unique pair...
             # (but i don't really anticipate needing this)
             segment_ids = eqx.error_if(
-                self.segment_ids,
-                not haliax.all(self.segment_ids == other.segment_ids),
+                hax.logical_or(self_si[0] != other_si[0], self_si[1] != other_si[1]),
                 "Only one segment mask is allowed",
             )
-        elif self.segment_ids is not None:
-            segment_ids = self.segment_ids
+        elif self_si is not None:
+            segment_ids = self_si
         else:
-            segment_ids = other.segment_ids
+            segment_ids = other_si
         return segment_ids
 
 
@@ -1006,7 +1141,10 @@ def _tpu_splash_attention(
     scaling_factor: float,
     logits_soft_cap: float | None = None,
 ) -> Optional[NamedArray]:
-    from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
+    from jax.experimental.pallas.ops.tpu.splash_attention import (
+        splash_attention_kernel,
+        splash_attention_mask,
+    )
 
     # Splash attention requires BHSD format
     # We need to reshape the input to match this format
@@ -1077,19 +1215,32 @@ def _tpu_splash_attention(
     physical_axes_k = _physical_axis_for_binning(k_class)
     physical_axes_v = _physical_axis_for_binning(v_class)
 
-    # segment_ids
+    # segment_ids: handle both the new tuple form and legacy single-array form for robustness
     segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-    physical_axes_segments = pspec_for_axis(segment_ids.axes) if segment_ids is not None else None
+    if segment_ids is not None:
+        if isinstance(segment_ids, tuple):
+            _seg_axes = segment_ids[0].axes
+        else:
+            _seg_axes = segment_ids.axes
+        physical_axes_segments = pspec_for_axis(_seg_axes)
+    else:
+        physical_axes_segments = None
     # do we have a batch axis in segment_ids? (needed for vmap below)
     if segment_ids is not None:
-        index_of_seq_dim = segment_ids.axes.index(QPos)
-        other_indices = [i for i in range(len(segment_ids.axes)) if i != index_of_seq_dim]
-        if len(other_indices) > 1:
-            raise NotImplementedError(
-                f"Only one batch axis is supported in segment_ids right now (got {segment_ids.axes})"
-            )
-        elif len(other_indices) == 1:
-            segment_batch_axis = other_indices[0]
+        if isinstance(segment_ids, tuple):
+            q_segment_ids, kv_segment_ids = segment_ids
+            kv_segment_ids = kv_segment_ids
+        else:
+            assert segment_ids is not None
+            q_segment_ids, kv_segment_ids = segment_ids, segment_ids
+
+        segment_ids = SegmentIds(q_segment_ids.array, kv_segment_ids.array)
+
+        q_segment_batch_axis = _find_batch_axis_for_segment_ids(QPos, q_segment_ids)
+        kv_segment_batch_axis = _find_batch_axis_for_segment_ids(QPos, kv_segment_ids)
+
+        if q_segment_batch_axis is not None or kv_segment_batch_axis is not None:
+            segment_batch_axis = SegmentIds(q_segment_batch_axis, kv_segment_batch_axis)  # type: ignore
         else:
             segment_batch_axis = None
     else:
@@ -1127,16 +1278,15 @@ def _tpu_splash_attention(
             block_kv_dq=min(block_size, Sq),
         )
 
-        if mask.segment_ids is not None:
-            # for now only support self attention
-            segment_ids = segment_ids.array
-            segment_ids = SegmentIds(segment_ids, segment_ids)
-
         if mask is None:
             base_mask = splash_attention_mask.FullMask(_shape=(Sq, Sk))
         elif isinstance(mask, AttentionMask):
             if mask.is_causal:
-                base_mask = splash_attention_mask.CausalMask(shape=(Sq, Sk))
+                if mask.causal_offset is not None:
+                    raise NotImplementedError(
+                        "Causal offsets are not supported for splash attention. Please use a standard causal mask."
+                    )
+                base_mask = splash_attention_mask.CausalMask((Sq, Sk), 0)
             else:
                 base_mask = splash_attention_mask.FullMask(_shape=(Sq, Sk))
             if mask.sliding_window is not None:
@@ -1203,6 +1353,21 @@ def _tpu_splash_attention(
     return attn_output
 
 
+def _find_batch_axis_for_segment_ids(Pos, segment_ids) -> Optional[int]:
+    index_of_seq_dim = segment_ids.axes.index(Pos)
+    other_indices = [i for i in range(len(segment_ids.axes)) if i != index_of_seq_dim]
+    if len(other_indices) > 1:
+        raise NotImplementedError(
+            f"Only one batch axis is supported in segment_ids right now (got {segment_ids.axes})"
+        )
+    elif len(other_indices) == 1:
+        segment_batch_axis = other_indices[0]
+    else:
+        segment_batch_axis = None
+
+    return segment_batch_axis
+
+
 @dataclass(frozen=True)
 class AttentionConfig:
     """Configuration for the Attention module.
@@ -1237,9 +1402,9 @@ class AttentionConfig:
     """Configuration for QK normalization. If None, no normalization is applied."""
 
     def __post_init__(self):
-        assert self.num_heads % self.num_kv_heads == 0, (
-            f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
-        )
+        assert (
+            self.num_heads % self.num_kv_heads == 0
+        ), f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
 
     @property
     def head_size(self) -> int:
@@ -1253,7 +1418,7 @@ class AttentionConfig:
 
     @property
     def KVHeads(self) -> Axis:
-        return Axis("kv_heads", self.num_kv_heads)
+        return Axis("kv_head", self.num_kv_heads)
 
     @property
     def Heads(self) -> Axis:
@@ -1275,12 +1440,18 @@ class AttentionConfig:
             return default_attention_type() != AttentionBackend.VANILLA
         return self.attn_backend != AttentionBackend.VANILLA
 
+    # ---------------------------------------------------------------------------------
+    # KV-cache helper (paged only)
+    # ---------------------------------------------------------------------------------
+
 
 class Attention(eqx.Module):
     """A multi-head attention layer that uses dot product attention.
 
     This is a general-purpose attention layer that can be used in various transformer architectures.
     It supports multi-head attention (MHA), multi-query attention (MQA), and grouped-query attention (GQA).
+
+    Supports ROPE and QK normalization. We should probably not add much more stuff.
     """
 
     config: AttentionConfig = eqx.field(static=True)
@@ -1290,7 +1461,7 @@ class Attention(eqx.Module):
     o_proj: hnn.Linear
     q_norm: Optional[LayerNormBase] = None
     k_norm: Optional[LayerNormBase] = None
-    rot_embs: Optional[RotaryEmbeddings] = eqx.field(default=None)
+    rot_embs: Optional[RotaryEmbeddings] = None
 
     @staticmethod
     def init(config: AttentionConfig, *, key) -> "Attention":
@@ -1325,38 +1496,34 @@ class Attention(eqx.Module):
 
         return Attention(config, q_proj, k_proj, v_proj, o_proj, q_norm, k_norm, rot_embs)
 
+    def empty_page_cache(self, page_table: PageTable, *, dtype) -> "KvPageCache":
+        return KvPageCache.init(
+            page_table,
+            self.config.KVHeads,
+            self.config.HeadSize,
+            dtype=dtype,
+        )
+
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
+        self,
+        x: NamedArray,
+        mask: Optional[NamedArray | AttentionMask],
+        *,
+        key=None,
+        pos_ids: NamedArray | None = None,
     ) -> NamedArray:
-        key_q, key_k, key_v, key_o = maybe_rng_split(key, 4)
+        key_proj, key_o = maybe_rng_split(key, 2)
 
-        # Project to query, key, value
-        q_proj = self.q_proj(x, key=key_q)
-        k_proj = self.k_proj(x, key=key_k)
-        v = self.v_proj(x, key=key_v)
+        # Shared computation of q, k, v
+        q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
 
-        # Apply QK normalization if enabled
-        if self.config.qk_norm is not None:
-            q = self.q_norm(q_proj)  # type: ignore[misc]
-            k = self.k_norm(k_proj)  # type: ignore[misc]
-        else:
-            q = q_proj
-            k = k_proj
+        # Reshape for attention kernels (convert embed → heads/head_size)
+        q = q.rearrange((..., "kv_head", "q_heads_per_group", "position", "head_size"))
+        k = k.rearrange((..., "kv_head", "position", "head_size"))
+        v = v.rearrange((..., "kv_head", "position", "head_size"))
 
-        # Reshape for attention
-        q = q.rearrange((..., "kv_heads", "q_heads_per_group", "position", "head_size"))
-        k = k.rearrange((..., "kv_heads", "position", "head_size"))
-        v = v.rearrange((..., "kv_heads", "position", "head_size"))
-
-        # Apply rotary position embeddings if configured
-        if self.rot_embs is not None:
-            if pos_ids is None:
-                pos_ids = hax.arange(x.resolve_axis("position"), dtype=jnp.int32)
-            q = self.rot_embs(q, pos_ids)
-            k = self.rot_embs(k, pos_ids)
-
-        # Rename position axis for attention
+        # Distinguish key sequence axis for attention
         k = k.rename({"position": "key_position"})
         v = v.rename({"position": "key_position"})
 
@@ -1374,17 +1541,456 @@ class Attention(eqx.Module):
             flash_block_size=self.config.flash_attention_block_size,
             scaling_factor=self.config.scaling_factor,
             logits_soft_cap=self.config.logits_soft_cap,
-            dropout=0.0,  # TODO: support dropout
-            inference=True,  # TODO: support training
+            inference=True,
             prng=key,
         )
 
         # Flatten heads and apply output projection
-        attn_output = attn_output.flatten_axes(("kv_heads", "q_heads_per_group"), "heads")
+        attn_output = attn_output.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
         attn_output = attn_output.astype(x.dtype)
         attn_output = self.o_proj(attn_output, key=key_o)
 
         return attn_output
+
+    # Note: the non-paged decode path has been removed. Use paged_decode.
+
+    @named_call
+    @jax.profiler.annotate_function
+    def paged_decode(
+        self,
+        x: NamedArray,
+        kv_cache: "KvPageCache",
+        batch_info: PageBatchInfo,
+        *,
+        pos_ids: NamedArray,
+        key=None,
+    ) -> tuple[NamedArray, "KvPageCache"]:
+        """Decode-time forward pass using a paged KV cache.
+
+        This method is intended for autoregressive decoding and prefill.  ``batch_info``
+        describes where the new keys and values should be written in ``kv_cache``.
+        Currently only causal masks are supported.
+        """
+
+        key_proj, key_o = maybe_rng_split(key, 2)
+
+        q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
+
+        kv_cache = kv_cache.update(batch_info, k, v)
+
+        sm_scale = (
+            self.config.scaling_factor
+            if self.config.scaling_factor is not None
+            else 1.0 / math.sqrt(self.config.HeadSize.size)
+        )
+
+        attn_tokens = ragged_paged_attention(
+            q,
+            kv_cache.kv_pages,
+            batch_info.seq_lens,
+            batch_info.page_indices,
+            batch_info.cu_q_lens,
+            batch_info.num_seqs,
+            sm_scale=sm_scale,
+            soft_cap=self.config.logits_soft_cap,
+        )
+
+        attn_output = attn_tokens.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
+        attn_output = attn_output.astype(x.dtype)
+        attn_output = self.o_proj(attn_output, key=key_o)
+
+        return attn_output, kv_cache
+
+    @named_call
+    def _compute_qkv(
+        self,
+        x: NamedArray,
+        *,
+        key,
+        pos_ids: NamedArray | None = None,
+    ) -> tuple[NamedArray, NamedArray, NamedArray]:
+        """Project *x* to Q, K and V and apply all per-head processing."""
+
+        # Split the projection key into three – one for each of Q, K, V
+        key_q, key_k, key_v = maybe_rng_split(key, 3)
+
+        # Linear projections
+        q = self.q_proj(x, key=key_q)
+        k = self.k_proj(x, key=key_k)
+        v = self.v_proj(x, key=key_v)
+
+        # Optional QK layer-norm
+        if self.config.qk_norm is not None:
+            q = self.q_norm(q)  # type: ignore[misc]
+            k = self.k_norm(k)  # type: ignore[misc]
+
+        # Apply rotary embeddings if configured
+        if self.rot_embs is not None:
+            if pos_ids is None:
+                pos_ids = hax.arange(x.resolve_axis("position"))
+            q = self.rot_embs(q, pos_ids)
+            k = self.rot_embs(k, pos_ids)
+
+        return q, k, v
+
+
+class KvPageCache(eqx.Module):
+    """
+    KvPageCache for paged attention. It contains keys and values for all pages, including
+    potentially sequences that are not currently active.
+
+    Contains a global view of all pages and their sequences. This can't be usefully used
+    with an accompanying PageTable.
+    """
+
+    kv_pages: NamedArray  # [Page, Slot, 2 * KVHeads, Embed]
+
+    @staticmethod
+    def init(page_table: PageTable, kv_heads: Axis, head_size: Axis, dtype=jnp.float32) -> "KvPageCache":
+        """
+        Initialize a KvPageCache with the given page table and dimensions.
+
+        Args:
+            page_table: The PageTable instance that defines the pages.
+            kv_heads: Axis for key/value heads.
+            head_size: Axis for head size.
+            dtype: Data type for the cache.
+        """
+        kv_pages = hax.zeros(
+            {
+                "page": page_table.num_pages,
+                "slot": page_table.page_size,
+                "kv_head": 2 * kv_heads.size,
+                head_size.name: head_size.size,
+            },
+            dtype=dtype,
+        )
+        return KvPageCache(kv_pages)
+
+    @named_call
+    def update(
+        self,
+        batch_info: PageBatchInfo,
+        new_k: NamedArray,  # [Tok, KvHeads, HeadDim]
+        new_v: NamedArray,  # [Tok, KvHeads, HeadDim]
+    ) -> "KvPageCache":
+        """Append keys and values to the paged cache using *batch_info* to locate pages."""
+
+        page_size = self.kv_pages.array.shape[1]
+
+        assert page_size == batch_info.page_size, (
+            f"Page size mismatch: {page_size} != {batch_info.page_size}. "
+            "Ensure that the page size in batch_info matches the kv_pages."
+        )
+
+        t_pages, t_slots = batch_info.pages_and_slots()
+
+        # jax.debug.print("Updating kv_pages at pages {t_pages} and slots {t_slots}",
+        #                 t_pages=t_pages, t_slots=t_slots)
+
+        new_k = new_k.astype(self.kv_pages.dtype)
+        new_v = new_v.astype(self.kv_pages.dtype)
+        kv_pages = eqx.error_if(self.kv_pages, hax.any(hax.isnan(self.kv_pages)).scalar(), "NaN in kv_pages pre")
+        kv_pages = kv_pages.at["page", t_pages, "slot", t_slots, "kv_head", 0::2].set(new_k, mode="drop")
+        kv_pages = kv_pages.at["page", t_pages, "slot", t_slots, "kv_head", 1::2].set(new_v, mode="drop")
+
+        kv_pages = eqx.error_if(kv_pages, hax.any(hax.isnan(kv_pages)).scalar(), "NaN in kv_pages")
+
+        return dataclasses.replace(self, kv_pages=kv_pages)
+
+    def copy_page(self, src_page: int, dst_page: int) -> "KvPageCache":
+        """Copy the entire contents of page ``src_page`` into ``dst_page``.
+
+        This is used when creating clones that should have an identical last partial page, but mapped to a fresh page.
+        """
+        new_k = self.kv_pages.at["page", dst_page].set(self.kv_pages["page", src_page])
+        return dataclasses.replace(self, kv_pages=new_k)
+
+
+@named_call
+def ragged_paged_attention(
+    q: NamedArray,  # [Tok, KVHeads, QHeadsPerGroup, HeadSize]
+    kv_pages: NamedArray,  # [Page, PageSize, 2 * KVHeads, HeadDim]
+    kv_lens: NamedArray,  # i32[Seq]
+    page_indices: NamedArray,  # i32[Seq, PagePerSeq]
+    cu_q_lens: NamedArray,  # i32[Seq + 1] <-- cumulative lengths for the sequences, including new tokens
+    num_seqs: jnp.ndarray,
+    sm_scale: float = 1.0,
+    soft_cap: float | None = None,
+) -> NamedArray:
+    """Ragged attention for paged KV caches.
+
+    This function dispatches to the TPU implementation when available and
+    supported, otherwise it falls back to :func:`default_ragged_paged_attention`.
+    """
+
+    def _tpu_rpa_available() -> bool:
+        if tpu_ragged_paged_attention is None:
+            return False
+        if jax.default_backend() != "tpu":
+            return False
+        kind = str(getattr(jax.devices()[0], "device_kind", "")).lower()
+        if "tpu v2" in kind or "tpu v3" in kind:
+            return False
+        return True
+
+    if _tpu_rpa_available():
+        try:
+            out = _do_tpu_ragged_paged_attention(
+                q,
+                kv_pages,
+                kv_lens,
+                page_indices,
+                cu_q_lens,
+                num_seqs,
+                sm_scale=sm_scale,
+                soft_cap=soft_cap,
+            )
+            return out
+        except Exception:  # pragma: no cover - fall back if kernel fails
+            warnings.warn("TPU ragged paged attention failed. Falling back to reference implementation.")
+            logger.warning("Failed to use TPU ragged paged attention. Falling back to reference", exc_info=True)
+
+    return default_ragged_paged_attention(
+        q,
+        kv_pages,
+        kv_lens,
+        page_indices,
+        cu_q_lens.array,
+        num_seqs,
+        sm_scale=sm_scale,
+        soft_cap=soft_cap,
+    )
+
+
+def _do_tpu_ragged_paged_attention(
+    q: ht.Float[NamedArray, "position kv_head q_heads_per_group head_size"],
+    kv_pages: ht.Float[NamedArray, "page page_size kv_head head_size"],
+    kv_lens: ht.i32[NamedArray, " seq"],  # type: ignore[name-defined]
+    page_indices: ht.i32[NamedArray, "seq page"],
+    cu_q_lens: ht.i32[NamedArray, " seq"],  # type: ignore[name-defined]
+    num_seqs: jnp.ndarray,  # scalar int32
+    sm_scale: float = 1.0,
+    soft_cap: float | None = None,
+) -> NamedArray:
+    # Usual shardmap dance
+    # Ensure last dimension (head_size) is a multiple of 128 for Pallas kernels
+    orig_head_size = q.axis_size("head_size")
+    padded_head_size = ((orig_head_size + 127) // 128) * 128
+
+    if padded_head_size != orig_head_size:
+        pad_amount = padded_head_size - orig_head_size
+        # Pad query on the head_size axis with zeros
+        q_padded = hax.concatenate(
+            "head_size",
+            [q, hax.zeros_like(q["head_size", hax.ds(0, pad_amount)])],
+        )
+        # Pad kv_pages on the head_size axis with zeros to match
+        kv_pages_padded = hax.concatenate(
+            "head_size",
+            [kv_pages, hax.zeros_like(kv_pages["head_size", hax.ds(0, pad_amount)])],
+        )
+    else:
+        q_padded = q
+        kv_pages_padded = kv_pages
+
+    # The TPU kernel expects the second dimension of the query tensor to be the total number of query heads.
+    q_flat = q_padded.flatten_axes(("kv_head", "q_heads_per_group"), "kv_head")
+    if num_seqs.ndim == 0:
+        this_num_seqs = num_seqs.reshape((1,))
+    else:
+        this_num_seqs = num_seqs
+
+    # the INVALIDs make the TPU sad. mask them with 0:
+    this_num_seqs = jnp.where(this_num_seqs < 0, 0, this_num_seqs)
+    page_indices = hax.where(~is_valid(page_indices), 0, page_indices)
+    kv_lens = hax.where(~is_valid(kv_lens), 0, kv_lens)
+
+    o = shard_map(
+        functools.partial(tpu_ragged_paged_attention, sm_scale=sm_scale, soft_cap=soft_cap),
+        haliax.partitioning._get_mesh(),
+        in_specs=(
+            haliax.partitioning.pspec_for_axis(q_flat.axes),
+            haliax.partitioning.pspec_for_axis(kv_pages_padded.axes),
+            haliax.partitioning.pspec_for_axis(kv_lens.axes),
+            haliax.partitioning.pspec_for_axis(page_indices.axes),
+            haliax.partitioning.pspec_for_axis(cu_q_lens.axes),
+            # haliax.partitioning.pspec_for_axis(num_seqs)
+            PartitionSpec(),  # num_seqs
+        ),
+        out_specs=pspec_for_axis(
+            (
+                "position",
+                "kv_head",
+                "head_size",
+            )
+        ),
+        check_rep=False,
+    )(
+        q_flat.array,
+        kv_pages_padded.array,
+        kv_lens.array,
+        page_indices.array,
+        cu_q_lens.array,
+        this_num_seqs,
+    )
+
+    out = hax.named(
+        o,
+        ("position", "kv_head", "head_size"),
+    )
+    out = out.unflatten_axis(
+        "kv_head",
+        (
+            q.resolve_axis("kv_head"),
+            q.resolve_axis("q_heads_per_group"),
+        ),
+    )
+
+    # If we padded head_size for the kernel, slice back to the original size
+    if padded_head_size != orig_head_size:
+        out = out["head_size", hax.ds(0, orig_head_size)]
+
+    return out
+
+
+def default_ragged_paged_attention(
+    q: NamedArray,  # [tok, KVHeads, QHeadsPerGroup, HeadSize]
+    kv_pages: NamedArray,  # [Page, PageSize, 2 * KVHeads, HeadDim]
+    kv_lens: NamedArray,  # i32[Seq]
+    page_indices: NamedArray,  # i32[Seq, PagePerSeq]
+    cu_q_lens: jnp.ndarray,  # i32[Seq + 1] <-- cumulative lengths for the sequences, including new tokens
+    num_seqs: jnp.ndarray,  # scalar int32
+    sm_scale: float,
+    soft_cap: float | None = None,
+) -> NamedArray:
+    """Default implementation of ragged paged attention.
+    This implementation is not optimized for performance and is intended for testing purposes.
+
+    It does each sequence independently
+    """
+
+    Q_BS = min(1, q.axis_size("position"))  # block size for query
+    KV_BS = min(2, page_indices.axis_size("page"))  # block size for key-value
+    Q_B = hax.Axis("position", Q_BS)
+
+    H = q.resolve_axis("kv_head")
+    Q_H = q.resolve_axis("q_heads_per_group")
+
+    D = q.resolve_axis("head_size")
+
+    page_size = kv_pages.array.shape[1]
+
+    q = q * sm_scale
+
+    # pad by at least ``Q_BS`` positions so that any block starting within the
+    # original array has enough headroom for a full block slice. This avoids the
+    # clamping behavior of ``jax.lax.dynamic_slice`` when ``start + size``
+    # exceeds the array length.
+    padding_amount = (Q_BS - q.axis_size("position") % Q_BS) % Q_BS
+    if padding_amount != 0:
+        padded_q = hax.concatenate(
+            "position",
+            [q, hax.zeros_like(q["position", hax.ds(0, padding_amount)])],
+        )
+    else:
+        padded_q = q
+
+    q_orig = q
+    q = padded_q
+
+    output = hax.zeros_like(q)
+
+    def _compute_attention_for_seq(seq_id, carry):
+        o = carry
+        # have to be careful since we're in jit
+        q_len = cu_q_lens[seq_id + 1] - cu_q_lens[seq_id]
+        num_q_blocks = (q_len + Q_BS - 1) // Q_BS
+
+        def _compute_attention_for_q_block(q_block_id, carry):
+            o = carry
+            q_start = cu_q_lens[seq_id] + q_block_id * Q_BS
+            q_block = q.at["position", hax.ds(q_start, Q_B)].get(mode="fill", fill_value=float("nan"))
+            kv_len = kv_lens["seq", seq_id].scalar()
+
+            # q_start indexes into the global query tensor, so we need to
+            # convert it to the token position within this sequence.
+            # kv_len is the total length of the sequence in the KV cache,
+            # including any prefix tokens. q_len is just the number of query
+            # tokens for this sequence. The position of the first query token
+            # within the sequence is therefore ``kv_len - q_len``. Adding the
+            # block offset ``q_start - cu_q_lens[seq_id]`` yields the absolute
+            # position of the current block within the sequence.
+            q_pos_id_start = kv_len - q_len + q_start - cu_q_lens[seq_id]
+            q_pos_id_end = q_pos_id_start + q_len
+            q_tok = hax.arange(q_block.resolve_axis("position"), start=q_pos_id_start)
+
+            kv_pos_per_block = page_size * KV_BS  # how many tokens per kv block
+
+            num_kv_blocks = (kv_len + kv_pos_per_block - 1) // kv_pos_per_block
+
+            def _compute_attention_for_kv_block(kv_block_id, carry):
+                o_b, sum_exp_b, max_b = carry
+
+                kv_page_start = kv_block_id * KV_BS
+                block_page_idx = page_indices["seq", seq_id, "page", hax.ds(kv_page_start, KV_BS)]
+
+                kv_pos_start = kv_page_start * page_size
+
+                slots = kv_pages["page", block_page_idx, "slot", :]
+                kv_block = slots.flatten_axes(("page", "slot"), "kv_position")
+
+                kv_tok = hax.arange(kv_block.resolve_axis("kv_position"), start=kv_pos_start)
+                k_block = kv_block["kv_head", 0::2]
+                v_block = kv_block["kv_head", 1::2]
+
+                attn_b = hax.dot(q_block, k_block, axis=(D,))
+
+                if soft_cap is not None:
+                    attn_b = hax.tanh(attn_b / soft_cap) * soft_cap
+
+                attn_mask = kv_tok.broadcast_axis(q_tok.axes) <= q_tok  # causal
+                attn_mask = attn_mask & (kv_tok < kv_len) & (q_tok < q_pos_id_end)  # stay within bounds
+
+                attn_b = hax.where(attn_mask, attn_b, -1e10)
+
+                new_max_b = hax.maximum(max_b, hax.max(attn_b, "kv_position"))
+                P_ij = hax.exp(attn_b - new_max_b)
+                P_ij = hax.where(attn_mask, P_ij, 0.0)
+
+                exp_diff = hax.exp(max_b - new_max_b)
+                sum_exp_b = exp_diff * sum_exp_b + hax.sum(P_ij, axis="kv_position")
+
+                o_b = exp_diff * o_b + hax.dot(P_ij, v_block, axis="kv_position")
+
+                return o_b, sum_exp_b, new_max_b
+
+            # standard flashattention loop with fancy paging
+            o_b = o.at["position", hax.ds(q_start, Q_BS)].get(mode="fill", fill_value=float("nan"))
+            sum_exp_b = hax.zeros((Q_B, H, Q_H))
+            max_b = hax.full((Q_B, H, Q_H), -jnp.inf)
+
+            o_b, sum_exp_b, max_b = jax.lax.fori_loop(
+                0, num_kv_blocks, _compute_attention_for_kv_block, (o_b, sum_exp_b, max_b)
+            )
+
+            # Normalize
+            sum_exp_b = hax.maximum(sum_exp_b, 1e-10)
+            o_b = o_b / sum_exp_b
+            # mask out anything not in the original query range
+            o_b = hax.where(q_tok < q_pos_id_end, o_b, 0.0)
+            o = o.at["position", hax.ds(q_start, Q_BS)].set(o_b, mode="drop")
+            return o
+
+        o = jax.lax.fori_loop(0, num_q_blocks, _compute_attention_for_q_block, o)
+
+        return o
+
+    output = jax.lax.fori_loop(0, num_seqs, _compute_attention_for_seq, output)
+    output = output["position", 0 : q_orig.axis_size("position")]
+
+    return output
+
 
 @dataclass(frozen=True)
 class MultiHeadLatentAttentionConfig:
@@ -1556,9 +2162,9 @@ class MultiHeadLatentAttention(eqx.Module):
         if self.config.q_lora_rank is None:
             q = self.q_proj(x, key=k_q_a)
         else:
-            assert self.q_a_proj is not None and self.q_a_norm is not None and self.q_b_proj is not None, (
-                "q_lora_rank defined, but LoRA matrices are not."
-            )
+            assert (
+                self.q_a_proj is not None and self.q_a_norm is not None and self.q_b_proj is not None
+            ), "q_lora_rank defined, but LoRA matrices are not."
             q = self.q_a_proj(x, key=k_q_a)
             q = self.q_a_norm(q)
             q = self.q_b_proj(q, key=k_q_b)
@@ -1607,6 +2213,7 @@ class MultiHeadLatentAttention(eqx.Module):
         attn_output = self.o_proj(attn_output, key=k_o)
         return attn_output
 
+
 class AttentionWithSink(Attention):
     """Attention module that includes a learned sink term per head.
 
@@ -1650,9 +2257,9 @@ class AttentionWithSink(Attention):
             q = q_proj
             k = k_proj
 
-        q = q.rearrange((..., "kv_heads", "q_heads_per_group", "position", "head_size"))
-        k = k.rearrange((..., "kv_heads", "position", "head_size"))
-        v = v.rearrange((..., "kv_heads", "position", "head_size"))
+        q = q.rearrange((..., "kv_head", "q_heads_per_group", "position", "head_size"))
+        k = k.rearrange((..., "kv_head", "position", "head_size"))
+        v = v.rearrange((..., "kv_head", "position", "head_size"))
 
         if self.rot_embs is not None:
             if pos_ids is None:
@@ -1682,7 +2289,7 @@ class AttentionWithSink(Attention):
             prng=key,
         )
 
-        attn_output = attn_output.flatten_axes(("kv_heads", "q_heads_per_group"), "heads")
+        attn_output = attn_output.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
         attn_output = attn_output.astype(x.dtype)
         attn_output = self.o_proj(attn_output, key=key_o)
 
