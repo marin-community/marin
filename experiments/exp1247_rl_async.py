@@ -20,8 +20,6 @@ import os
 import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.distributed import RayConfig
-from levanter.inference.engine import InferenceEngineConfig
-from levanter.inference.openai import InferenceServerConfig
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.tensorboard import TensorboardConfig
@@ -162,19 +160,6 @@ def rl_train(name: str) -> ExecutorStep:
         lr_schedule="constant",
     )
 
-    inference_server_config = InferenceServerConfig(
-        # Turn on tensor parallelism for inference
-        trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=4),
-        tokenizer=MODEL_TOKENIZER,
-        temperature=1.0,
-        service=InferenceEngineConfig(
-            max_seqs=16,
-            max_pages_per_seq=32,
-            page_size=32,
-            max_seqs_in_prefill=16,
-        ),
-    )
-
     rollout_storage = RolloutStorageConfig(
         storage_type=StorageType.FILE,
         path=OutputName("rollouts"),
@@ -204,7 +189,6 @@ def rl_train(name: str) -> ExecutorStep:
         initial_checkpoint=MODEL_NAME,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
-        inference_server_config=inference_server_config,
         run_id=RUN_ID,
         log_freq=5,
         run_config=RunConfig(
@@ -218,7 +202,7 @@ def rl_train(name: str) -> ExecutorStep:
     return ExecutorStep(
         name=f"rl_testing/{name}",
         description=f"Async RL training: {name}",
-        fn=RLJob(config).run,
+        fn=RLJob.make_step_fn(),
         config=config,
         pip_dependency_groups=["post_training"],
     )

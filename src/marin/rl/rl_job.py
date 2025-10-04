@@ -19,6 +19,7 @@ This module provides a high-level interface that abstracts away worker managemen
 and infrastructure concerns, letting users focus on the RL algorithm and hyperparameters.
 """
 
+import dataclasses
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -147,6 +148,11 @@ class RLJob:
     def __init__(self, config: RLJobConfig):
         self.config = config
 
+    # Helper, as Ray doesn't accept method instances for ray.remote
+    @staticmethod
+    def make_step_fn():
+        return lambda config: RLJob(config).run()
+
     def run(self):
         """Run with TPU pod deployment using run_on_pod_ray."""
         run_config = self.config.run_config
@@ -238,7 +244,9 @@ class RLJob:
         # Create inference server config if not provided
         if self.config.inference_server_config is None:
             inference_server_config = InferenceServerConfig(
-                trainer=self.config.trainer,
+                trainer=dataclasses.replace(
+                    self.config.trainer, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=4
+                ),
                 tokenizer=tokenizer,
                 temperature=self.config.eval_sampling_params.temperature,
                 service=InferenceEngineConfig(
@@ -248,6 +256,9 @@ class RLJob:
                     enable_logprobs=True,
                 ),
                 port=0,
+            )
+            logger.info(
+                "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_tokens=%d", max_seqs, max_tokens
             )
         else:
             inference_server_config = self.config.inference_server_config
