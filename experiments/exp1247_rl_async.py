@@ -12,29 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Async RL training experiment for with math environment.
-"""
-
 import dataclasses
 import datetime
 import logging
 import os
-from dataclasses import dataclass
 
 import jmp
-import ray
 from levanter.checkpoint import CheckpointerConfig
 from levanter.distributed import RayConfig
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
-from levanter.infra.ray_tpu import run_on_pod_ray
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.tensorboard import TensorboardConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from ray.runtime_env import RuntimeEnv
 from transformers import AutoConfig, AutoTokenizer
 
 from marin.execution.executor import (
@@ -42,19 +34,12 @@ from marin.execution.executor import (
     OutputName,
     executor_main,
 )
-from marin.resources import TpuPodConfig
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, LessonDependency
 from marin.rl.environments import EnvConfig
-from marin.rl.rl_job import RLJobConfig, TrainParams
+from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
-from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
-from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
-from marin.training.training import (
-    _add_run_env_variables,
-)
-from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
@@ -136,91 +121,6 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
     )
 
 
-@dataclass(frozen=True)
-class RLTrainConfig:
-    """Configuration for async RL training on pods."""
-
-    rollout_worker_config: RolloutWorkerConfig
-    train_worker_config: TrainWorkerConfig
-    inference_tpu_type: str
-    train_tpu_type: str
-    num_inference_workers: int
-    num_train_slices: int
-
-
-def run_rl_training_on_pod(config: RLTrainConfig):
-    """
-    Run async RL training with separate inference and training workers.
-    """
-    env = {}
-    env = _add_run_env_variables(env)
-    env["EQX_ON_ERROR"] = "nan"
-
-    # if "JAX_COMPILATION_CACHE_DIR" not in env:
-    #     marin_prefix = os.environ.get("MARIN_PREFIX")
-    #     if marin_prefix:
-    #         env["JAX_COMPILATION_CACHE_DIR"] = os.path.join(marin_prefix, "compilation-cache")
-    #         logger.info(f"JAX compilation cache enabled at: {env['JAX_COMPILATION_CACHE_DIR']}")
-    #     else:
-    #         logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
-
-    runtime_env = RuntimeEnv()
-
-    train_pod_config = TpuPodConfig(tpu_type=config.train_tpu_type, runtime_env=runtime_env)
-    rollout_pod_config = TpuPodConfig(tpu_type=config.inference_tpu_type, runtime_env=runtime_env)
-
-    rollout_hw_config = rollout_pod_config.with_env_vars(env)
-    train_hw_config = train_pod_config.with_env_vars(env)
-
-    train_kwargs = dict(max_calls=1, **train_hw_config.as_remote_kwargs())
-    rollout_kwargs = dict(max_calls=1, **rollout_hw_config.as_remote_kwargs())
-
-    @ray.remote(**train_kwargs)
-    def train_worker_task():
-        with remove_tpu_lockfile_on_exit():
-            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-            worker = TrainWorker(
-                config=config.train_worker_config,
-            )
-            worker.train()
-
-    @ray.remote(**rollout_kwargs)
-    def inference_worker_task():
-        with remove_tpu_lockfile_on_exit():
-            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-            worker = RolloutWorker(
-                config=config.rollout_worker_config,
-            )
-            worker.run()
-
-    train_tasks = []
-    logger.info("Running train worker on TPU type: %s", config.train_tpu_type)
-    train_tasks.append(
-        run_on_pod_ray.remote(
-            train_worker_task,
-            config.train_tpu_type,
-            num_slices=config.num_train_slices,
-            max_retries_failure=10,
-            max_retries_preemption=10,
-        )
-    )
-
-    inference_tasks = []
-    for _ in range(config.num_inference_workers):
-        logger.info("Running inference worker on TPU type: %s", config.inference_tpu_type)
-        inference_tasks.append(
-            run_on_pod_ray.remote(
-                inference_worker_task,
-                config.inference_tpu_type,
-                num_slices=1,
-                max_retries_failure=10,
-                max_retries_preemption=10,
-            )
-        )
-
-    return ray.get(inference_tasks + train_tasks)
-
-
 def rl_train(name: str) -> ExecutorStep:
     hf_config = AutoConfig.from_pretrained(MODEL_NAME)
     config = LlamaConfig.from_hf_config(hf_config)
@@ -280,7 +180,6 @@ def rl_train(name: str) -> ExecutorStep:
         path=OutputName("rollouts"),
     )
     weight_transfer = WeightTransferConfig(
-        # mode=WeightTransferMode.JAX_TRANSFER_SERVER,
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=4,
         poll_interval_seconds=1,
@@ -289,7 +188,7 @@ def rl_train(name: str) -> ExecutorStep:
     curriculum_config = create_math_curriculum(RUN_ID)
 
     # Create RLJobConfig using the new unified interface
-    rl_job_config = RLJobConfig(
+    config = RLJobConfig(
         model=model_config,
         trainer=trainer_config,
         train_params=TrainParams(
@@ -303,33 +202,23 @@ def rl_train(name: str) -> ExecutorStep:
         curriculum=curriculum_config,
         tokenizer=MODEL_TOKENIZER,
         initial_checkpoint=MODEL_NAME,
-        num_rollout_workers=4,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         inference_server_config=inference_server_config,
         run_id=RUN_ID,
         log_freq=5,
-    )
-
-    # Convert to worker configs for pod deployment
-    from marin.rl.rl_job import RLJob
-
-    job = RLJob(rl_job_config)
-    train_worker, rollout_worker = job.to_worker_configs()
-
-    config = RLTrainConfig(
-        rollout_worker_config=rollout_worker,
-        train_worker_config=train_worker,
-        inference_tpu_type="v5litepod-4",
-        train_tpu_type="v5litepod-4",
-        num_inference_workers=4,
-        num_train_slices=1,
+        run_config=RunConfig(
+            train_tpu_type="v5litepod-4",
+            num_rollout_workers=4,
+            inference_tpu_type="v5litepod-4",
+            num_train_slices=1,
+        ),
     )
 
     return ExecutorStep(
         name=f"rl_testing/{name}",
         description=f"Async RL training: {name}",
-        fn=run_rl_training_on_pod,
+        fn=RLJob(config).run,
         config=config,
         pip_dependency_groups=["post_training"],
     )
@@ -341,7 +230,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-power-012"),
+        rl_train(name="llama-1b-math-rl-test-power-013"),
     ]
 
     executor_main(

@@ -19,17 +19,21 @@ This module provides a high-level interface that abstracts away worker managemen
 and infrastructure concerns, letting users focus on the RL algorithm and hyperparameters.
 """
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 
 import ray
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.infra.ray_tpu import run_on_pod_ray
+from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import TrainerConfig
+from ray.runtime_env import RuntimeEnv
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
+from marin.resources import TpuPodConfig
 from marin.rl.curriculum import CurriculumConfig, SamplingParams
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
@@ -37,6 +41,36 @@ from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
+from marin.training.training import _add_run_env_variables
+from marin.utils import remove_tpu_lockfile_on_exit
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RunConfig:
+    """Configuration for deploying RL workers on TPU pods."""
+
+    train_tpu_type: str
+    """TPU type for training workers (e.g., 'v5litepod-4')"""
+
+    num_rollout_workers: int = 4
+    """Number of rollout workers to launch"""
+
+    inference_tpu_type: str | None = None
+    """TPU type for inference workers. Defaults to train_tpu_type if not specified."""
+
+    num_train_slices: int = 1
+    """Number of TPU slices for training worker"""
+
+    max_retries_failure: int = 10
+    """Maximum retries on worker failure"""
+
+    max_retries_preemption: int = 10
+    """Maximum retries on preemption"""
+
+    runtime_env: RuntimeEnv | None = None
+    """Optional Ray runtime environment for workers"""
 
 
 @dataclass
@@ -81,7 +115,6 @@ class RLJobConfig:
     initial_checkpoint: str | None = None
 
     # Infrastructure
-    num_rollout_workers: int = 1
     rollout_storage: RolloutStorageConfig = field(
         default_factory=lambda: RolloutStorageConfig(
             storage_type=StorageType.FILE,
@@ -89,6 +122,10 @@ class RLJobConfig:
         )
     )
     weight_transfer: WeightTransferConfig = field(default_factory=WeightTransferConfig)
+
+    # Deployment configuration
+    run_config: RunConfig | None = None
+    """Configuration for TPU pod deployment. If None, uses simple Ray actors."""
 
     # Inference server (auto-configured by default)
     inference_server_config: "InferenceServerConfig | None" = None  # type: ignore
@@ -109,43 +146,68 @@ class RLJob:
 
     def __init__(self, config: RLJobConfig):
         self.config = config
-        self._validate_config()
 
-    def run(self) -> LmHeadModel:
-        """Run the RL training job to completion, creating Ray workers as needed."""
-        train_config, rollout_config = self.to_worker_configs()
+    def run(self):
+        """Run with TPU pod deployment using run_on_pod_ray."""
+        run_config = self.config.run_config
+        train_worker_config, rollout_worker_config = self.to_worker_configs()
 
-        # Create Ray remote tasks for workers
-        @ray.remote
+        # Setup environment
+        env = {}
+        env = _add_run_env_variables(env)
+        env["EQX_ON_ERROR"] = "nan"
+
+        runtime_env = run_config.runtime_env or RuntimeEnv()
+
+        # Create pod configs
+        inference_tpu_type = run_config.inference_tpu_type or run_config.train_tpu_type
+        train_pod_config = TpuPodConfig(tpu_type=run_config.train_tpu_type, runtime_env=runtime_env)
+        rollout_pod_config = TpuPodConfig(tpu_type=inference_tpu_type, runtime_env=runtime_env)
+
+        rollout_hw_config = rollout_pod_config.with_env_vars(env)
+        train_hw_config = train_pod_config.with_env_vars(env)
+
+        train_kwargs = dict(max_calls=1, **train_hw_config.as_remote_kwargs())
+        rollout_kwargs = dict(max_calls=1, **rollout_hw_config.as_remote_kwargs())
+
+        # Define remote tasks
+        @ray.remote(**train_kwargs)
         def train_worker_task():
-            worker = TrainWorker(config=train_config)
-            worker.train()
+            with remove_tpu_lockfile_on_exit():
+                logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+                worker = TrainWorker(config=train_worker_config)
+                worker.train()
 
-        @ray.remote
-        def rollout_worker_task():
-            worker = RolloutWorker(config=rollout_config)
-            worker.run()
+        @ray.remote(**rollout_kwargs)
+        def inference_worker_task():
+            with remove_tpu_lockfile_on_exit():
+                logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+                worker = RolloutWorker(config=rollout_worker_config)
+                worker.run()
 
-        # Launch training worker
-        train_task = train_worker_task.remote()
+        train_tasks = [
+            run_on_pod_ray.remote(
+                train_worker_task,
+                run_config.train_tpu_type,
+                num_slices=run_config.num_train_slices,
+                max_retries_failure=run_config.max_retries_failure,
+                max_retries_preemption=run_config.max_retries_preemption,
+            )
+        ]
 
-        # Launch rollout workers
-        rollout_tasks = []
-        for _ in range(self.config.num_rollout_workers):
-            rollout_tasks.append(rollout_worker_task.remote())
+        inference_tasks = []
+        for _ in range(run_config.num_rollout_workers):
+            inference_tasks.append(
+                run_on_pod_ray.remote(
+                    inference_worker_task,
+                    inference_tpu_type,
+                    num_slices=1,
+                    max_retries_failure=run_config.max_retries_failure,
+                    max_retries_preemption=run_config.max_retries_preemption,
+                )
+            )
 
-        # Wait for training to complete
-        try:
-            ray.get(train_task)
-        finally:
-            # Training completed or failed, stop rollout workers
-            # Note: rollout workers will stop naturally when training completes
-            # We don't need to explicitly stop them as they'll hit max rollouts or timeout
-            pass
-
-        # TODO: Return the trained model
-        # For now, training completion is signaled by train_task finishing
-        raise NotImplementedError("Model retrieval from training worker not yet implemented")
+        return ray.get(inference_tasks + train_tasks)
 
     def to_worker_configs(self) -> tuple[TrainWorkerConfig, RolloutWorkerConfig]:
         """Export worker configurations for inspection/testing.
@@ -223,11 +285,3 @@ class RLJob:
     def max_tokens(self) -> int:
         """Maximum tokens across all lessons in the curriculum."""
         return max(lesson.sampling_params.max_tokens for lesson in self.config.curriculum.lessons.values())
-
-    def _validate_config(self):
-        """Validate configuration consistency."""
-        # TODO: Add validation logic
-        # - Check curriculum dependencies form DAG
-        # - Validate batch_size >= num processes
-        # - Ensure all lessons have sampling_params
-        pass
