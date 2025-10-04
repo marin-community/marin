@@ -121,7 +121,7 @@ class ReplayBuffer:
 
             if total_removed > 0:
                 logger.info(
-                    f"Filtered {total_removed} stale rollouts (min_step={min_step}), " f"{total_remaining} remaining"
+                    f"Filtered {total_removed} stale rollouts (min_step={min_step}), {total_remaining} remaining"
                 )
 
     def _retire_overused_rollouts(self):
@@ -160,8 +160,8 @@ class ReplayBuffer:
                 else:
                     self.rollout_storage[env_name] = examples
 
-                if len(self.rollout_storage[env_name]) > self.capacity:
-                    self.rollout_storage[env_name] = self.rollout_storage[env_name][-self.capacity :]
+            if len(self.rollout_storage[env_name]) > self.capacity:
+                self.rollout_storage[env_name] = self.rollout_storage[env_name][-self.capacity :]
 
     def sample_rollouts(self) -> list[RolloutWithCount] | None:
         """Sample individual rollouts with balanced environment sampling.

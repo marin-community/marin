@@ -36,9 +36,9 @@ from marin.rl.types import (
 )
 
 
-def rollouts_to_training_batch(rollouts, max_input_length=16, max_output_length=16, pad_token_id=0):
+def rollouts_to_training_batch(rollouts, max_tokens=32, pad_token_id=0):
     """Helper function to convert rollouts to training batch for testing."""
-    return train_batch.create_training_batch_from_rollouts(rollouts, max_input_length, max_output_length, pad_token_id)
+    return train_batch.create_training_batch_from_rollouts(rollouts, max_tokens, pad_token_id)
 
 
 def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16, env_name: str | None = None) -> RolloutBatch:

@@ -164,13 +164,11 @@ class RLJob:
             max_rollout_delay=self.config.train_params.max_batch_latency,
         )
 
-        # Scan over sampling params for max seqs & tokens
+        # Scan over sampling params for max seqs
         max_seqs = 0
-        max_tokens_per_seq = 0
         for lesson in self.config.curriculum.lessons.values():
             total_seqs = lesson.sampling_params.n_generations_per_prompt * lesson.sampling_params.n_prompts
             max_seqs = max(max_seqs, total_seqs)
-            max_tokens_per_seq = max(max_tokens_per_seq, lesson.sampling_params.max_tokens)
 
         # Create inference server config if not provided
         if self.config.inference_server_config is None:
@@ -181,7 +179,7 @@ class RLJob:
                 service=InferenceEngineConfig(
                     max_seqs=max_seqs,
                     page_size=128,
-                    max_pages_per_seq=1 + max_tokens_per_seq // 128,
+                    max_pages_per_seq=1 + self.max_tokens // 128,
                     enable_logprobs=True,
                 ),
                 port=0,
@@ -220,6 +218,11 @@ class RLJob:
         )
 
         return train_worker_config, rollout_worker_config
+
+    @property
+    def max_tokens(self) -> int:
+        """Maximum tokens across all lessons in the curriculum."""
+        return max(lesson.sampling_params.max_tokens for lesson in self.config.curriculum.lessons.values())
 
     def _validate_config(self):
         """Validate configuration consistency."""

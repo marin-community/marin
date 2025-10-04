@@ -85,25 +85,24 @@ class StreamingRolloutLoader:
 
         Args:
             data_loader: The replay data loader to get rollouts from
-            config: Trainer config with mesh and axis mapping information
-            max_input_length: Maximum input sequence length for padding
-            max_output_length: Maximum output sequence length for padding
-            pad_token_id: Token ID to use for padding
+            config: Train worker config with tokenizer and curriculum information
         """
         self.data_loader = data_loader
         self.config = config
         self.timeout = 60.0
 
+        # Compute max_tokens from curriculum lessons once
+        self.max_tokens = max(
+            lesson.sampling_params.max_tokens for lesson in self.config.curriculum_config.lessons.values()
+        )
+
+        # Compute pad_token_id from tokenizer once
+        self.pad_token_id = self.config.tokenizer.pad_token_id
+        if self.pad_token_id is None:
+            self.pad_token_id = self.config.tokenizer.eos_token_id
+
     def __iter__(self):
         """Yield batches continuously from the replay buffer."""
-        # Compute pad_token_id from tokenizer
-        pad_token_id = self.config.tokenizer.pad_token_id
-        if pad_token_id is None:
-            pad_token_id = self.config.tokenizer.eos_token_id
-
-        # Compute max_tokens from curriculum lessons
-        max_tokens = max(lesson.sampling_params.max_tokens for lesson in self.config.curriculum_config.lessons.values())
-
         while True:
             rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
             if not rollouts:
@@ -111,7 +110,7 @@ class StreamingRolloutLoader:
                 continue
 
             # Convert rollouts to training batch
-            batch = create_training_batch_from_rollouts(rollouts, max_tokens, max_tokens, pad_token_id)
+            batch = create_training_batch_from_rollouts(rollouts, self.max_tokens, self.pad_token_id)
             # shard onto the device mesh
             with self.config.trainer.device_mesh:
                 sharded_batch = hax.shard(batch, self.config.trainer.compute_axis_mapping)

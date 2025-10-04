@@ -106,13 +106,9 @@ class LevanterInferenceContext(InferenceContext):
         max_tokens: int,
     ):
         self._inference_server = inference_server
-        self._tokenizer = tokenizer
+        self.tokenizer = tokenizer
         self._stop_tokens = stop_tokens
         self.max_tokens = max_tokens
-
-    @property
-    def tokenizer(self):
-        return self._tokenizer
 
     def openai_client(self):
         base_url = f"http://{self._inference_server.address()}/v1"
