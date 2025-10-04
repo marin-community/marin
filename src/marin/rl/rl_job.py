@@ -41,9 +41,10 @@ from marin.rl.weight_transfer import WeightTransferConfig
 
 @dataclass
 class TrainParams:
-    """Training configuration parameters."""
+    """RL-specific training configuration parameters."""
 
     optimizer: OptimizerConfig
+    rl_loss: "RLLossModule"
 
     # Replay buffer
     replay_buffer_capacity: int = 10000
@@ -75,7 +76,6 @@ class RLJobConfig:
     train_params: TrainParams
     curriculum: CurriculumConfig
     tokenizer: str | PreTrainedTokenizer
-    rl_loss: "RLLossModule"
 
     # Model & initialization (with defaults)
     initial_checkpoint: str | None = None
@@ -196,7 +196,7 @@ class RLJob:
             model=self.config.model,
             trainer=self.config.trainer,
             optimizer=self.config.train_params.optimizer,
-            loss=self.config.rl_loss,
+            loss=self.config.train_params.rl_loss,
             tokenizer=tokenizer,
             replay_buffer=replay_buffer,
             initial_checkpoint=self.config.initial_checkpoint,

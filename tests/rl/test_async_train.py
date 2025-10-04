@@ -439,13 +439,13 @@ def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path, rollou
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
+            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
             replay_buffer_capacity=2048,
             replay_buffer_alpha=3.0,
             max_samples_per_rollout=4,
         ),
         curriculum=create_test_curriculum_config(),
         tokenizer=tokenizer,
-        rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
         rollout_storage=rollout_storage_config,
     )
 
@@ -515,10 +515,10 @@ def test_full_integration_moar_cats(
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
+            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
         ),
         curriculum=create_test_curriculum_config(),
         tokenizer=DummyTokenizer(),
-        rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
         rollout_storage=rollout_storage_config,
     )
 

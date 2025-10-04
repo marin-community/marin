@@ -45,7 +45,6 @@ from marin.execution.executor import (
 from marin.resources import TpuPodConfig
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, LessonDependency
 from marin.rl.environments import EnvConfig
-from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJobConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
@@ -295,16 +294,14 @@ def rl_train(name: str) -> ExecutorStep:
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=opt_config,
-            num_train_steps=50000,
-            batch_size=8,
+            rl_loss=RLOOLoss(kl_coef=0.05, clip_epsilon=0.2),
             replay_buffer_capacity=4096,
             replay_buffer_alpha=3,
             max_samples_per_rollout=1,
-            max_rollout_delay=32,
+            max_batch_latency=32,
         ),
         curriculum=curriculum_config,
         tokenizer=MODEL_TOKENIZER,
-        rl_loss=RLOOLoss(kl_coef=0.05, clip_epsilon=0.2),
         initial_checkpoint=MODEL_NAME,
         num_rollout_workers=4,
         rollout_storage=rollout_storage,

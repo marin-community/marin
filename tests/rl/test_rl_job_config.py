@@ -86,14 +86,14 @@ def test_rl_job_config_with_custom_loss(temp_dir, minimal_curriculum):
         trainer=create_nano_trainer_config(temp_dir),
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
+            rl_loss=custom_loss,
         ),
         curriculum=minimal_curriculum,
         tokenizer=DummyTokenizer(),
-        rl_loss=custom_loss,
     )
 
-    assert config.rl_loss.kl_coef == 0.2
-    assert config.rl_loss.clip_epsilon == 0.3
+    assert config.train_params.rl_loss.kl_coef == 0.2
+    assert config.train_params.rl_loss.clip_epsilon == 0.3
 
 
 def test_per_lesson_sampling_params(temp_dir):
@@ -153,6 +153,7 @@ def test_to_worker_configs_produces_valid_configs(temp_dir, minimal_curriculum):
         trainer=create_nano_trainer_config(temp_dir),
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
+            rl_loss=RLOOLoss(),
             replay_buffer_capacity=2048,
             replay_buffer_alpha=3.0,
             max_samples_per_rollout=4,
@@ -160,7 +161,6 @@ def test_to_worker_configs_produces_valid_configs(temp_dir, minimal_curriculum):
         ),
         curriculum=minimal_curriculum,
         tokenizer=tokenizer,
-        rl_loss=RLOOLoss(),
     )
 
     job = RLJob(config)
@@ -176,7 +176,7 @@ def test_to_worker_configs_produces_valid_configs(temp_dir, minimal_curriculum):
     assert train_config.run_id == config.run_id
     assert train_config.curriculum_config == config.curriculum
     assert train_config.tokenizer == tokenizer
-    assert train_config.loss == config.rl_loss
+    assert train_config.loss == config.train_params.rl_loss
 
     # Verify rollout worker config
     assert rollout_config.model == config.model

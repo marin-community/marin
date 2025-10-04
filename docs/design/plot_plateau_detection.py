@@ -15,11 +15,11 @@
 
 """Visualize plateau detection on various reward trajectories."""
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 import seaborn as sns
 
-from marin.rl.curriculum import is_plateaued, LessonStats, PerformanceStats
+from marin.rl.curriculum import LessonStats, PerformanceStats, is_plateaued
 
 sns.set_theme(style="darkgrid")
 sns.set_palette("husl")
@@ -28,52 +28,53 @@ sns.set_palette("husl")
 def generate_trajectories(n_steps: int = 200) -> dict[str, np.ndarray]:
     """Generate various reward trajectory patterns."""
     trajectories = {}
+    rng = np.random.default_rng(seed=42)
 
     # 1. Linear growth then plateau (high)
     t = np.arange(n_steps)
-    traj = np.clip(t / 50, -1, 0.8) + np.random.normal(0, 0.05, n_steps)
+    traj = np.clip(t / 50, -1, 0.8) + rng.normal(0, 0.05, n_steps)
     trajectories["Linear → Plateau (high)"] = traj
 
     # 2. Linear growth then plateau (low noise)
-    traj = np.clip(t / 60, -1, 0.7) + np.random.normal(0, 0.02, n_steps)
+    traj = np.clip(t / 60, -1, 0.7) + rng.normal(0, 0.02, n_steps)
     trajectories["Linear → Plateau (low noise)"] = traj
 
     # 3. Fast growth then plateau
     traj = np.clip(t / 30, -1, 0.9)
-    traj[100:] = 0.9 + np.random.normal(0, 0.03, n_steps - 100)
+    traj[100:] = 0.9 + rng.normal(0, 0.03, n_steps - 100)
     trajectories["Fast growth → Plateau"] = traj
 
     # 4. Sinusoidal meandering (no clear plateau)
-    traj = 0.3 * np.sin(t / 15) + 0.01 * t + np.random.normal(0, 0.05, n_steps)
+    traj = 0.3 * np.sin(t / 15) + 0.01 * t + rng.normal(0, 0.05, n_steps)
     trajectories["Sinusoidal meandering"] = np.clip(traj, -1, 1)
 
     # 5. Damped oscillation converging
     traj = 0.8 * np.exp(-t / 40) * np.sin(t / 5) + 0.5
-    traj += np.random.normal(0, 0.03, n_steps)
+    traj += rng.normal(0, 0.03, n_steps)
     trajectories["Damped oscillation"] = np.clip(traj, -1, 1)
 
     # 6. Flat from start (no progress)
-    traj = np.zeros(n_steps) + np.random.normal(0, 0.05, n_steps)
+    traj = np.zeros(n_steps) + rng.normal(0, 0.05, n_steps)
     trajectories["Flat (no progress)"] = traj
 
     # 7. Flat at low value
-    traj = -0.5 * np.ones(n_steps) + np.random.normal(0, 0.03, n_steps)
+    traj = -0.5 * np.ones(n_steps) + rng.normal(0, 0.03, n_steps)
     trajectories["Flat (low, stable)"] = traj
 
     # 8. Slow continuous growth (not plateaued)
-    traj = -0.5 + 0.008 * t + np.random.normal(0, 0.04, n_steps)
+    traj = -0.5 + 0.008 * t + rng.normal(0, 0.04, n_steps)
     trajectories["Slow continuous growth"] = np.clip(traj, -1, 1)
 
     # 9. Noisy plateau (high variance)
     traj = np.ones(n_steps) * 0.6
     traj[:50] = np.linspace(-0.3, 0.6, 50)
-    traj += np.random.normal(0, 0.15, n_steps)
+    traj += rng.normal(0, 0.15, n_steps)
     trajectories["Noisy plateau (high var)"] = np.clip(traj, -1, 1)
 
     # 10. Step function (sudden plateau)
     traj = -0.5 * np.ones(n_steps)
     traj[80:] = 0.7
-    traj += np.random.normal(0, 0.04, n_steps)
+    traj += rng.normal(0, 0.04, n_steps)
     trajectories["Step → Plateau"] = traj
 
     return trajectories
@@ -179,7 +180,7 @@ def plot_trajectories():
         recent = traj[-100:] if len(traj) >= 100 else traj
         mean_recent = np.mean(recent)
         std_recent = np.std(recent)
-        stats_text = f"μ={mean_recent:.3f}\nσ={std_recent:.3f}"
+        stats_text = f"mu={mean_recent:.3f}\n theta={std_recent:.3f}"
         if plateau_idx is not None:
             stats_text += f"\nplateau@{plateau_idx}"
         ax.text(
