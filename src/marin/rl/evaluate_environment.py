@@ -33,7 +33,6 @@ from marin.rl.environments.base import MarinEnv
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.rollout_worker import LevanterInferenceContext
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -81,7 +80,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     levanter.initialize(trainer_config)
 
     # Load tokenizer
-    logger.info(f"Loading tokenizer for evaluation")
+    logger.info("Loading tokenizer for evaluation")
     if hasattr(config.env, "tokenizer"):
         tokenizer = config.env.tokenizer
     else:
@@ -153,7 +152,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             mode="eval",
         )
 
-    logger.info(f"Evaluation completed")
+    logger.info("Evaluation completed")
 
     # Compute summary statistics
     total_reward = sum(rollout.episode_reward for group in rollout_groups for rollout in group.rollouts)

@@ -120,7 +120,9 @@ class PrimeIntellectEnv(MarinEnv):
             max_concurrent=self.max_concurrent,
         )
 
-        processed_outputs = vf_env.process_env_results_vllm(result.prompt, result.completion, result.state, inference_ctx.tokenizer)
+        processed_outputs = vf_env.process_env_results_vllm(
+            result.prompt, result.completion, result.state, inference_ctx.tokenizer
+        )
 
         # Convert to RolloutGroups
         rollout_groups = []
