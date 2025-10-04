@@ -170,8 +170,23 @@ def restart_cluster(ctx, preserve_jobs):
     # Backup jobs
     print("Backing up jobs...")
     with tempfile.TemporaryDirectory() as backup_dir:
-        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-            ray.backup_jobs(config_path, backup_dir)
+        try:
+            with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
+                ray.backup_jobs(config_path, backup_dir)
+        except Exception as e:
+            print()
+            print("=" * 60)
+            print(
+                f"Failed to backup jobs from cluster {config_obj.cluster_name} ({e}) "
+                + "(disable with --preserve-jobs=0)"
+            )
+            print("=" * 60)
+            print("Proceed with shutdown? (y/n): ", end="")
+            choice = input().strip().lower()
+            if choice != "y":
+                print("Aborting cluster restart.")
+                return
+            print("Proceeding with cluster restart without job preservation.")
 
         # Restart cluster using proper stop sequence
         print("Stopping cluster...")
