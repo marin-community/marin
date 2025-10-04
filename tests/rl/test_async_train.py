@@ -430,14 +430,16 @@ def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path, rollou
     target_steps = 200
     tokenizer = DummyTokenizer()
 
+    # Create trainer config with target steps
+    trainer_config = create_nano_trainer_config(tmp_path)
+    trainer_config.num_train_steps = target_steps
+
     # Create RLJobConfig and get worker configs
     job_config = RLJobConfig(
         model=create_nano_llama_config(),
-        trainer=create_nano_trainer_config(tmp_path),
+        trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            num_train_steps=target_steps,
-            batch_size=32,
             replay_buffer_capacity=2048,
             replay_buffer_alpha=3.0,
             max_samples_per_rollout=4,
@@ -507,14 +509,16 @@ def test_full_integration_moar_cats(
 
     target_steps = 100
 
+    # Create trainer config with target steps
+    trainer_config = create_nano_trainer_config(tmp_path)
+    trainer_config.num_train_steps = target_steps
+
     # Create RLJobConfig and get worker configs
     job_config = RLJobConfig(
         model=create_nano_llama_config(),
-        trainer=create_nano_trainer_config(tmp_path),
+        trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            num_train_steps=target_steps,
-            batch_size=32,
         ),
         curriculum=create_test_curriculum_config(),
         tokenizer=DummyTokenizer(),

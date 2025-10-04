@@ -44,10 +44,6 @@ class TrainParams:
     """Training configuration parameters."""
 
     optimizer: OptimizerConfig
-    num_train_steps: int
-
-    # Batch sizing
-    batch_size: int  # Global batch size (divided across processes)
 
     # Replay buffer
     replay_buffer_capacity: int = 10000
@@ -116,12 +112,7 @@ class RLJob:
         self._validate_config()
 
     def run(self) -> LmHeadModel:
-        """Run the RL training job to completion.
-
-        Returns:
-            The trained model
-        """
-        # Get worker configurations
+        """Run the RL training job to completion, creating Ray workers as needed."""
         train_config, rollout_config = self.to_worker_configs()
 
         # Create Ray remote tasks for workers

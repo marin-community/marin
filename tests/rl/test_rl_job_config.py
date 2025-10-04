@@ -86,8 +86,6 @@ def test_rl_job_config_with_custom_loss(temp_dir, minimal_curriculum):
         trainer=create_nano_trainer_config(temp_dir),
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            num_train_steps=100,
-            batch_size=32,
         ),
         curriculum=minimal_curriculum,
         tokenizer=DummyTokenizer(),
@@ -155,8 +153,6 @@ def test_to_worker_configs_produces_valid_configs(temp_dir, minimal_curriculum):
         trainer=create_nano_trainer_config(temp_dir),
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            num_train_steps=100,
-            batch_size=32,
             replay_buffer_capacity=2048,
             replay_buffer_alpha=3.0,
             max_samples_per_rollout=4,
