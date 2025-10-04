@@ -23,9 +23,8 @@ import jax.numpy as jnp
 import numpy as np
 import verifiers as vf
 
+from marin.rl.environments import MarinEnv
 from marin.rl.types import InferenceContext, Rollout, RolloutGroup
-
-from .base import MarinEnv
 
 logger = logging.getLogger("ray")
 
@@ -121,27 +120,25 @@ class PrimeIntellectEnv(MarinEnv):
             max_concurrent=self.max_concurrent,
         )
 
-        # Access tokenizer from inference context
-        tokenizer = inference_ctx.tokenizer
+        processed_outputs = vf_env.process_env_results_vllm(result.prompt, result.completion, result.state, inference_ctx.tokenizer)
 
         # Convert to RolloutGroups
         rollout_groups = []
-        for prompt_idx in range(len(result.prompt)):
+        for prompt_idx in range(len(processed_outputs.prompt_ids)):
             rollouts = []
             for gen_idx in range(n_generations):
                 overall_idx = prompt_idx * n_generations + gen_idx
-                if overall_idx >= len(result.completion):
+                if overall_idx >= len(processed_outputs.completion_ids):
                     break
 
-                completion = result.completion[overall_idx]
-                reward = result.reward[overall_idx] if overall_idx < len(result.reward) else 0.0
+                reward = processed_outputs.rewards[overall_idx] if overall_idx < len(processed_outputs.rewards) else 0.0
 
                 # Use tokenizer from inference context
-                prompt_tokens = tokenizer.encode(result.prompt[prompt_idx])
-                response_tokens = tokenizer.encode(completion)
+                prompt_tokens = processed_outputs.prompt_ids[prompt_idx]
+                response_tokens = processed_outputs.completion_ids[overall_idx]
 
                 token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
-                response_logprobs = jnp.zeros(len(response_tokens), dtype=jnp.float32)
+                response_logprobs = processed_outputs.completion_logprobs[overall_idx]
 
                 rollout = Rollout(
                     env_name=f"prime_intellect:{self.env_id}",
