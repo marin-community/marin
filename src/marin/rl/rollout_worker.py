@@ -34,6 +34,7 @@ import jax.random as jrandom
 import levanter
 import numpy as np
 import ray
+import ray.exceptions
 from jax.experimental import multihost_utils
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmConfig
@@ -466,6 +467,16 @@ class RolloutWorker:
                 logger.info(f"Reached max rollouts ({self.config.max_rollouts}), stopping")
                 break
 
+            logger.info("Generating rollout batch...")
+            rng, seed_key = jax.random.split(rng)
+            seed = int(seed_key[0])
+            try:
+                lesson_id = ray.get(self._curriculum_actor.sample_lesson.remote(seed))
+            except Exception as e:
+                logger.warning(f"Failed to sample lesson from curriculum: {e}, will try again...")
+                time.sleep(10.0)
+                continue
+
             if time.time() - last_weight_check > self.config.weight_transfer.poll_interval_seconds:
                 self._sync_weights()
                 last_weight_check = time.time()
@@ -482,10 +493,6 @@ class RolloutWorker:
                     logger.info(f"Logging eval metrics at step {step}... {log_metrics}")
                     self.tracker.log(log_metrics, step=step)
 
-            logger.info("Generating rollout batch...")
-            rng, seed_key = jax.random.split(rng)
-            seed = int(seed_key[0])
-            lesson_id = ray.get(self._curriculum_actor.sample_lesson.remote(seed))
             logger.info(f"Sampled lesson '{lesson_id}' from curriculum")
 
             rng, input_rng = jax.random.split(rng)

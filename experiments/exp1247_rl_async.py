@@ -140,7 +140,11 @@ def rl_train(name: str) -> ExecutorStep:
         log_xla_hlo=False,
         log_jaxprs=False,
         mp=jmp.get_policy("p=f32,c=bfloat16"),
-        train_batch_size=64,
+        # Set the train batch size to num_rollout_workers * n_generations * n_prompts
+        # to ensure we accept an entire training batch from the rollout workers.
+        train_batch_size=64 * 4,
+        # microbatch to avoid OOM
+        per_device_parallelism=16,
         num_train_steps=50000,
         steps_per_eval=100,
         checkpointer=CheckpointerConfig(
