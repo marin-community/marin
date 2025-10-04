@@ -206,12 +206,132 @@ class MoarCatsTask:
         return (num_cats + (10 * love_cats)) / np.sqrt(1 + len(actual_response))
 
 
+class SequentialDigitsTask:
+    """Train model to produce digits in sequential order.
+
+    Rewards responses that contain increasing digit sequences.
+    Examples:
+      - "12345" = high reward
+      - "0123456789" = very high reward
+      - "5231" = low/negative reward
+      - "catcat" = very negative reward
+    """
+
+    def __init__(self, difficulty: str = "medium"):
+        # Difficulty controls sequence length requirements
+        self.difficulty = difficulty
+        if difficulty == "easy":
+            self.min_sequence_length = 3  # e.g., "123"
+            self.target_sequence_length = 5
+        elif difficulty == "medium":
+            self.min_sequence_length = 5  # e.g., "12345"
+            self.target_sequence_length = 7
+        else:  # hard
+            self.min_sequence_length = 7
+            self.target_sequence_length = 10  # full "0123456789"
+
+    def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
+        """Generate training examples that ask for sequential digits."""
+        examples = []
+        prompts = [
+            "Count from 0:",
+            "List digits in order:",
+            "Sequence:",
+            "0 1 2 3",
+            "Give me sequential digits:",
+        ]
+
+        # Perfect answers vary by difficulty
+        perfect_answers = [
+            "0123456789",  # Full sequence
+            "12345678",  # Partial sequences
+            "234567",
+            "01234",
+            "56789",
+        ]
+
+        for _ in range(n_examples):
+            prompt = rng.choice(prompts)
+            # Use perfect answers as targets (model will learn to generate these)
+            answer = perfect_answers[rng.integers(0, len(perfect_answers))]
+            examples.append({"prompt": prompt, "answer": answer})
+
+        return examples
+
+    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
+        """Generate evaluation examples with held-out prompts."""
+        examples = []
+        eval_prompts = [
+            "Numbers in order:",
+            "Sequential:",
+            "Count up:",
+        ]
+
+        for _ in range(n_examples):
+            prompt = rng.choice(eval_prompts)
+            answer = "0123456789"  # Always expect full sequence for eval
+            examples.append({"prompt": prompt, "answer": answer})
+
+        return examples
+
+    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
+        """Compute reward based on sequential digit quality.
+
+        Reward structure:
+          - Heavily reward increasing sequential digits
+          - Penalize non-digits
+          - Penalize decreasing or out-of-order digits
+          - Bonus for longer sequences
+        """
+        if not actual_response:
+            return -1.0
+
+        # Extract digits from response
+        digits = [c for c in actual_response if c.isdigit()]
+
+        if not digits:
+            # No digits at all = very bad
+            return -2.0
+
+        # Count sequential increasing pairs
+        sequential_count = 0
+        for i in range(len(digits) - 1):
+            curr = int(digits[i])
+            next_digit = int(digits[i + 1])
+
+            # Perfect sequence: next digit is curr + 1 (with wraparound)
+            if next_digit == (curr + 1) % 10:
+                sequential_count += 1
+            # Also accept wraparound (9 -> 0)
+            elif curr == 9 and next_digit == 0:
+                sequential_count += 1
+
+        # Count non-sequential or backwards transitions (penalty)
+        non_sequential_count = len(digits) - 1 - sequential_count
+
+        # Base reward from sequential pairs
+        base_reward = sequential_count * 1.0 - non_sequential_count * 0.5
+
+        # Length bonus (encourage longer sequences)
+        length_bonus = min(len(digits) / 10.0, 1.0) * 0.5
+
+        # Penalty for non-digit characters
+        non_digit_chars = len(actual_response) - len(digits)
+        non_digit_penalty = non_digit_chars * 0.1
+
+        total_reward = base_reward + length_bonus - non_digit_penalty
+
+        # Normalize to reasonable range [-2, 2]
+        return max(-2.0, min(2.0, total_reward))
+
+
 # Task mappings
 TASKS = {
     "cats": MoarCatsTask,
     "addition": AdditionTask,
     "opposites": OppositesTask,
     "number_comparison": NumberComparisonTask,
+    "sequential_digits": SequentialDigitsTask,
 }
 
 

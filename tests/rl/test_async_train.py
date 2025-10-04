@@ -404,6 +404,94 @@ def validate_model(model, tokenizer) -> dict[str, str]:
     return {prompt: response for prompt, response in zip(test_prompts, texts, strict=True)}
 
 
+def validate_sequential_digits_model(model, tokenizer) -> dict[str, str]:
+    """Test trained model on sequential digit generation."""
+    print("\n" + "=" * 60)
+    print("Testing trained model for sequential digit generation:")
+    print("=" * 60)
+
+    test_prompts = [
+        # Training-like prompts
+        "Count from 0:",
+        "List digits in order:",
+        "Sequence:",
+        # Novel prompts
+        "Numbers:",
+        "0 1 2 3",
+        "",  # Empty prompt test
+    ]
+
+    _, texts = run_inference_with_engine(
+        model=model,
+        prompts=test_prompts,
+        tokenizer=tokenizer,
+        max_tokens=16,
+        temperature=0.8,
+    )
+
+    results = {}
+    total_sequential_score = 0
+
+    for i, (prompt, response) in enumerate(zip(test_prompts, texts, strict=True)):
+        print(f"\nPrompt {i + 1}: '{prompt}'")
+        print(f"Response: '{response}'")
+
+        # Analyze response
+        digits = [c for c in response if c.isdigit()]
+        sequential_pairs = 0
+
+        if len(digits) >= 2:
+            for j in range(len(digits) - 1):
+                curr = int(digits[j])
+                next_d = int(digits[j + 1])
+                if next_d == (curr + 1) % 10 or (curr == 9 and next_d == 0):
+                    sequential_pairs += 1
+
+        digit_ratio = len(digits) / max(len(response), 1)
+        sequence_score = sequential_pairs / max(len(digits) - 1, 1) if len(digits) > 1 else 0
+
+        print(f"  Digits: {digits}")
+        print(f"  Sequential pairs: {sequential_pairs}/{max(len(digits) - 1, 0)}")
+        print(f"  Digit ratio: {digit_ratio:.2f}")
+        print(f"  Sequence score: {sequence_score:.2f}")
+
+        if sequence_score >= 0.5:
+            print("  ✓ Good sequential structure!")
+        elif len(digits) > 0:
+            print("  ~ Some digits present")
+        else:
+            print("  ✗ No digits found")
+
+        results[prompt] = response
+        total_sequential_score += sequence_score
+
+    # Validation assertions
+    avg_sequence_score = total_sequential_score / len(test_prompts)
+    print(f"\n{'=' * 60}")
+    print(f"Average sequence score: {avg_sequence_score:.2f}")
+    print(f"{'=' * 60}")
+
+    # Count responses with good sequential structure
+    good_responses = 0
+    for response in texts:
+        digits = [c for c in response if c.isdigit()]
+        if len(digits) > 1:
+            seq_pairs = 0
+            for j in range(len(digits) - 1):
+                curr = int(digits[j])
+                next_d = int(digits[j + 1])
+                if next_d == (curr + 1) % 10 or (curr == 9 and next_d == 0):
+                    seq_pairs += 1
+            score = seq_pairs / (len(digits) - 1)
+            if score >= 0.5:
+                good_responses += 1
+
+    assert good_responses >= 3, f"Expected at least 3 responses with good sequential structure, got {good_responses}"
+    assert avg_sequence_score >= 0.3, f"Expected average sequence score >= 0.3, got {avg_sequence_score:.2f}"
+
+    return results
+
+
 @pytest.mark.slow("Integration test with training loop")
 def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path, rollout_storage_config):
     """Test training worker with manually constructed cat-themed rollout batches.
@@ -649,3 +737,90 @@ def test_train_worker_checkpoint_restart(ray_tpu_cluster, training_worker_config
     assert (
         max_step_second_run > max_step_first_run
     ), f"Second run should progress beyond first run: first max={max_step_first_run}, second max={max_step_second_run}"
+
+
+@pytest.mark.slow("Integration test with training loop")
+def test_train_worker_with_sequential_digits(ray_tpu_cluster, tmp_path):
+    """Test training worker learns to generate sequential digits.
+
+    This test validates that the training worker can learn a simple pattern
+    requiring the model to produce digits in sequential order (0,1,2,3...).
+    """
+    # Create storage and configs
+    import uuid
+
+    from marin.rl.curriculum import CurriculumConfig, LessonConfig
+    from marin.rl.environments import EnvConfig
+    from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
+    from tests.rl.integration_test_config import (
+        create_nano_training_worker_config,
+        create_sequential_digits_rollout_batch,
+    )
+
+    test_id = uuid.uuid4().hex[:8]
+    rollout_storage_config = RolloutStorageConfig(storage_type=StorageType.IN_MEMORY, queue_name=f"test_seq_{test_id}")
+
+    # Create curriculum with sequential digits task
+    curriculum_config = CurriculumConfig(
+        lessons={
+            "sequential_digits": LessonConfig(
+                lesson_id="sequential_digits",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.mock_env.MockEnv",
+                    env_args={"task_type": "sequential_digits", "seed": 42, "difficulty": "medium"},
+                ),
+            )
+        },
+        eval_frequency=100,
+        actor_name=f"test_curriculum_seq_{test_id}",
+    )
+
+    # Create training config
+    training_worker_config = create_nano_training_worker_config(rollout_storage_config, tmp_path)
+    training_worker_config.curriculum_config = curriculum_config
+    training_worker_config.trainer.num_train_steps = 300  # More steps for this harder task
+
+    queue_writer = rollout_storage_config.create_writer()
+    batch_size = training_worker_config.trainer.train_batch_size
+    tokenizer = DummyTokenizer()
+
+    with TrainWorkerRunner(training_worker_config) as runner:
+        # Wait for worker to initialize
+        while not runner.worker:
+            time.sleep(0.1)
+
+        # Create initial batch to prime the trainer
+        batch = create_sequential_digits_rollout_batch(
+            policy_model=runner.reference_model,
+            batch_size=batch_size,
+            tokenizer=tokenizer,
+        )
+        queue_writer.write_batch(batch)
+
+        # Continuously feed batches using current model
+        while not runner.done.is_set():
+            if not runner.trained_model:
+                logger.warning("Waiting for trained model to be available...")
+            else:
+                batch = create_sequential_digits_rollout_batch(
+                    policy_model=runner.trained_model,
+                    batch_size=batch_size,
+                    tokenizer=tokenizer,
+                )
+                queue_writer.write_batch(batch)
+            time.sleep(1)
+
+    # Validate training completed successfully
+    assert all(not np.isnan(loss) for loss in runner.losses), "Loss should not be NaN"
+    assert all(loss < 10.0 for loss in runner.losses), f"Loss should be reasonable, got {runner.losses}"
+
+    print(f"\n{'=' * 60}")
+    print("Training Statistics:")
+    print(f"  Steps completed: {runner.steps_completed}")
+    print(f"  Initial loss: {runner.losses[0]:.4f}")
+    print(f"  Final loss: {runner.losses[-1]:.4f}")
+    print(f"  Loss improvement: {runner.losses[0] - runner.losses[-1]:.4f}")
+    print(f"{'=' * 60}")
+
+    # Test the trained model
+    validate_sequential_digits_model(runner.trained_model, tokenizer)

@@ -73,6 +73,16 @@ class DummyTokenizer:
         "me",
         "moar",
         "you",
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
     ]
 
     def __init__(self, pad_token_id=0):
@@ -561,5 +571,170 @@ def create_rollout_batch(
     group = RolloutGroup(rollouts=rollouts)
 
     # Use a fixed large step number to ensure these batches are never discarded
+    metadata = RolloutMetadata(worker_id=worker_id, timestamp=time.time(), weight_step=10000)
+    return RolloutBatch(groups=[group], metadata=metadata)
+
+
+def compute_sequential_digits_reward(response: str) -> float:
+    """Compute reward for sequential digit responses.
+
+    Mirrors the logic in SequentialDigitsTask.compute_reward()
+
+    Args:
+        response: Generated response text
+
+    Returns:
+        Reward score based on sequential digit quality
+    """
+    if not response:
+        return -1.0
+
+    # Extract digits from response
+    digits = [c for c in response if c.isdigit()]
+
+    if not digits:
+        return -2.0
+
+    # Count sequential increasing pairs
+    sequential_count = 0
+    for i in range(len(digits) - 1):
+        curr = int(digits[i])
+        next_digit = int(digits[i + 1])
+
+        if next_digit == (curr + 1) % 10 or (curr == 9 and next_digit == 0):
+            sequential_count += 1
+
+    non_sequential_count = len(digits) - 1 - sequential_count
+    base_reward = sequential_count * 1.0 - non_sequential_count * 0.5
+    length_bonus = min(len(digits) / 10.0, 1.0) * 0.5
+    non_digit_chars = len(response) - len(digits)
+    non_digit_penalty = non_digit_chars * 0.1
+
+    total_reward = base_reward + length_bonus - non_digit_penalty
+    return max(-2.0, min(2.0, total_reward))
+
+
+def create_sequential_digits_rollout_batch(
+    policy_model,
+    batch_size: int,
+    tokenizer=None,
+    max_input_length: int = 16,
+    max_output_length: int = 16,
+    pad_token_id: int = 0,
+    worker_id: str = "test_worker",
+) -> RolloutBatch:
+    """Create a rollout batch with sequential digit examples.
+
+    Args:
+        policy_model: Policy model for logprob computation
+        batch_size: Number of examples in the batch
+        tokenizer: Tokenizer to use (defaults to DummyTokenizer)
+        max_input_length: Maximum input sequence length
+        max_output_length: Maximum output sequence length
+        pad_token_id: Padding token ID
+        worker_id: Worker identifier
+
+    Returns:
+        RolloutBatch with sequential digit data and real computed logprobs
+    """
+    if tokenizer is None:
+        tokenizer = DummyTokenizer()
+
+    # Generate synthetic prompt/response examples
+    prompts = [
+        "Count from 0:",
+        "List digits in order:",
+        "Sequence:",
+        "0 1 2 3",
+    ]
+
+    # Positive responses: sequential digits
+    positive_responses = [
+        "0123456789",
+        "12345678",
+        "234567",
+        "01234",
+        "56789",
+    ]
+
+    # Negative responses: random/backwards digits, or text
+    negative_responses = [
+        "97531",
+        "42",
+        "9876543210",
+        "5231",
+        "cats",
+        "cats cats",
+    ]
+
+    examples = []
+    rng = np.random.default_rng(42)
+
+    for _ in range(batch_size):
+        prompt = rng.choice(prompts)
+        # 60% chance of positive (sequential) response
+        if rng.random() < 0.6:
+            response = rng.choice(positive_responses)
+        else:
+            response = rng.choice(negative_responses)
+        examples.append((prompt, response))
+
+    # Encode examples
+    encoded_examples = []
+    for prompt_text, response_text in examples:
+        encoded = encode_prompt_and_response(
+            prompt_text,
+            response_text,
+            tokenizer,
+            max_input_length=max_input_length,
+            max_output_length=max_output_length,
+            pad_token_id=pad_token_id,
+        )
+        encoded_examples.append(encoded)
+
+    # Stack arrays for logprob computation
+    prompt_tokens = np.stack([ex["prompt_tokens"] for ex in encoded_examples])
+    prompt_masks = np.stack([ex["prompt_attention_mask"] for ex in encoded_examples])
+    response_tokens = np.stack([ex["response_tokens"] for ex in encoded_examples])
+    response_masks = np.stack([ex["response_attention_mask"] for ex in encoded_examples])
+
+    policy_logprobs = compute_model_logprobs(
+        policy_model,
+        prompt_tokens,
+        prompt_masks,
+        response_tokens,
+        response_masks,
+    )
+
+    # Create individual rollouts
+    rollouts = []
+    for i in range(len(examples)):
+        prompt_text, response_text = examples[i]
+        encoded_ex = encoded_examples[i]
+        episode_reward = compute_sequential_digits_reward(response_text)
+
+        # Extract individual arrays (remove batch dimension)
+        individual_prompt = encoded_ex["prompt_tokens"][prompt_masks[i] == 1]
+        individual_response = encoded_ex["response_tokens"][response_masks[i] == 1]
+        individual_logprobs = policy_logprobs[i][response_masks[i] == 1]
+
+        # Token rewards (use episode reward for all response tokens)
+        token_rewards = np.full(len(individual_response), episode_reward, dtype=np.float32)
+
+        rollout = Rollout(
+            env_name="mock:sequential_digits",
+            env_example_id=f"seq_digits_example_{i}",
+            prompt_tokens=individual_prompt,
+            response_tokens=individual_response,
+            response_logprobs=individual_logprobs,
+            token_rewards=token_rewards,
+            episode_reward=episode_reward,
+        )
+        rollouts.append(rollout)
+
+    # Group rollouts
+    group = RolloutGroup(rollouts=rollouts)
+
+    # Use fixed large step number to ensure batches are never discarded
     metadata = RolloutMetadata(worker_id=worker_id, timestamp=time.time(), weight_step=10000)
     return RolloutBatch(groups=[group], metadata=metadata)
