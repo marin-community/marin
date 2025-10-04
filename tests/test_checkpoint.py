@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 import datetime
 import pathlib
@@ -27,7 +30,7 @@ from levanter.checkpoint import (
     save_checkpoint,
 )
 from levanter.trainer_state import TrainerState
-from test_utils import MLP, arrays_only, assert_trees_not_close
+from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 
 def _dummy_step_info(step):
@@ -332,7 +335,7 @@ def test_load_from_checkpoint_or_initialize():
     is_checkpointed1 = hax.tree_util.tree_map(lambda _: False, model1)
     is_checkpointed1 = eqx.tree_at(lambda t: t.layers[-1], is_checkpointed1, replace=True)
 
-    with jax.sharding.Mesh(jax.devices(), ("devices",)), tempfile.TemporaryDirectory() as tmpdir:
+    with use_test_mesh(), tempfile.TemporaryDirectory() as tmpdir:
         filtered = eqx.filter(model0, is_checkpointed)
         save_checkpoint(filtered, step=0, checkpoint_path=tmpdir)
 
@@ -384,7 +387,7 @@ def test_load_from_checkpoint_or_initialize_works_if_file_not_found():
     is_checkpointed = jtu.tree_map(lambda _: False, model0)
     is_checkpointed = eqx.tree_at(lambda t: t.layers[-1], is_checkpointed, replace=True)
 
-    with jax.sharding.Mesh(jax.devices(), ("devices",)):
+    with use_test_mesh():
         loaded = load_checkpoint_or_initialize(init_fn, "kanmfklafnmjlkanfjklanfjkh", is_checkpointed=is_checkpointed)(
             k1
         )
@@ -418,7 +421,7 @@ def test_load_from_checkpoint_allows_partial_checkpoints():
 
     is_checkpointed = True
 
-    with jax.sharding.Mesh(jax.devices(), ("devices",)), tempfile.TemporaryDirectory() as tmpdir:
+    with use_test_mesh(), tempfile.TemporaryDirectory() as tmpdir:
 
         save_checkpoint(eqx.filter(model0, is_checkpointed), step=0, checkpoint_path=tmpdir)
 

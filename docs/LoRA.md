@@ -115,17 +115,20 @@ class TrainArgs:
 
     # ... some other stuff
     hf_save_path: Optional[str] = None  # Path to save the HuggingFace checkpoint.
-    hf_upload: bool|str = False  # Name of the HuggingFace repo to upload to (if any).
+    hf_upload: bool | str = False  # Name of the HuggingFace repo to upload to (if any).
     hf_save_steps: int = 1000  # How often to save the HuggingFace checkpoint.
 
     # should we save merged (i.e. not peft) checkpoints?
     merged_hf_save_path: Optional[str] = None  # path to save merged hf checkpoints
     merged_hf_upload: Optional[str] = None
+
+
 ...
+
 
 def train(config: TrainArgs):
     ...
-    with config.trainer.device_mesh:
+    with config.trainer.use_device_mesh():
         ...
 
         @hax.named_jit(axis_resources=parameter_axis_mapping, donate_args=(True))
@@ -148,7 +151,7 @@ using the `lora_trainable_params_filter` function, which takes a model and retur
 ```python
 def train(config: TrainArgs):
     ...
-    with config.trainer.device_mesh:
+    with config.trainer.use_device_mesh():
         ...
 
         lora_param_filter = lora_trainable_params_filter(model)

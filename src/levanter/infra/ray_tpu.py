@@ -1,4 +1,6 @@
-from abc import ABC, abstractmethod
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 import logging
 import multiprocessing
@@ -7,9 +9,10 @@ import socket
 import subprocess
 import tempfile
 import time
+from abc import ABC, abstractmethod
 from asyncio import QueueEmpty
 from dataclasses import dataclass
-from typing import Callable, Generic, Optional, Sequence, TypeVar
+from typing import Callable, Generic, List, Optional, Sequence, TypeVar
 
 import draccus
 import mergedeep
@@ -34,6 +37,27 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from levanter.infra.docker import make_docker_run_command
 from levanter.utils.ray_utils import ser_exc_info
+
+logger = logging.getLogger("ray")
+
+
+def _get_current_tpu_pod_type() -> str:
+    """Return the TPU pod type for the current node across Ray versions."""
+
+    if hasattr(TPUAcceleratorManager, "_get_current_node_tpu_pod_type"):
+        return TPUAcceleratorManager._get_current_node_tpu_pod_type()
+    if hasattr(TPUAcceleratorManager, "get_current_node_tpu_pod_type"):
+        return TPUAcceleratorManager.get_current_node_tpu_pod_type()
+    raise AttributeError("TPUAcceleratorManager is missing TPU pod type helpers")
+
+
+def _get_current_node_tpu_worker_id() -> int | None:
+    """Return the TPU worker ID for the current node across Ray versions."""
+    if hasattr(TPUAcceleratorManager, "_get_current_node_tpu_worker_id"):
+        return TPUAcceleratorManager._get_current_node_tpu_worker_id()
+    if hasattr(TPUAcceleratorManager, "get_current_node_tpu_worker_id"):
+        return TPUAcceleratorManager.get_current_node_tpu_worker_id()
+    raise AttributeError("TPUAcceleratorManager is missing TPU worker ID helpers")
 
 
 # CF https://gist.github.com/allenwang28/e3400b9e9212b50aa1cda55ebeccea60
@@ -89,7 +113,78 @@ from levanter.utils.ray_utils import ser_exc_info
 # TODO: look into https://github.com/jax-ml/jax/blob/main/jax/experimental/transfer.py to see if we
 #  can avoid crashing (probably doing some kind of diloco thing) Or we just go full parameter server
 
-logger = logging.getLogger("ray")
+
+# TPU configurations are complicated. The number of chips per host is
+# always the same for a particular generation, but the number of VMs per host
+# can vary based on the pod size.
+#
+# Even more confusingly, Google sometimes refers to TPU cores
+# as chips and vice-versa: v4 and v5p topologies refer to "core", but
+# v5e and v6e topologies refer to "chips". It's doubly confusing as some
+# topologies split 2 VMs per host, while others do not. We just write them
+# all down here.
+@dataclass(frozen=True)
+class TPUConfig:
+    name: str
+    chip_count: int
+    host_count: int
+    vm_count: int
+    chips_per_vm: int
+
+
+TPU_CONFIGS: List[TPUConfig] = [
+    # https://cloud.google.com/tpu/docs/v4
+    TPUConfig("v4-8", 4, 1, 1, 4),
+    TPUConfig("v4-16", 8, 2, 2, 4),
+    TPUConfig("v4-32", 16, 4, 4, 4),
+    TPUConfig("v4-64", 32, 8, 8, 4),
+    TPUConfig("v4-128", 64, 16, 16, 4),
+    TPUConfig("v4-256", 128, 32, 32, 4),
+    TPUConfig("v4-512", 256, 64, 64, 4),
+    TPUConfig("v4-1024", 512, 128, 128, 4),
+    TPUConfig("v4-2048", 1024, 256, 256, 4),
+    TPUConfig("v4-4096", 2048, 512, 512, 4),
+    # https://cloud.google.com/tpu/docs/v5e
+    TPUConfig("v5litepod-1", 1, 1, 1, 1),
+    TPUConfig("v5litepod-2", 2, 1, 1, 2),
+    TPUConfig("v5litepod-4", 4, 1, 1, 4),
+    TPUConfig("v5litepod-8", 8, 1, 1, 8),
+    TPUConfig("v5litepod-16", 16, 2, 4, 4),
+    TPUConfig("v5litepod-32", 32, 4, 8, 4),
+    TPUConfig("v5litepod-64", 64, 8, 16, 4),
+    TPUConfig("v5litepod-128", 128, 16, 32, 4),
+    TPUConfig("v5litepod-256", 256, 32, 64, 4),
+    # https://cloud.google.com/tpu/docs/v5p
+    TPUConfig("v5p-8", 4, 1, 1, 4),
+    TPUConfig("v5p-16", 8, 2, 2, 4),
+    TPUConfig("v5p-32", 16, 4, 4, 4),
+    TPUConfig("v5p-64", 32, 8, 8, 4),
+    TPUConfig("v5p-128", 64, 16, 16, 4),
+    TPUConfig("v5p-256", 128, 32, 32, 4),
+    TPUConfig("v5p-512", 256, 64, 64, 4),
+    TPUConfig("v5p-1024", 512, 128, 128, 4),
+    TPUConfig("v5p-2048", 1024, 256, 256, 4),
+    TPUConfig("v5p-4096", 2048, 512, 512, 4),
+    TPUConfig("v5p-8192", 4096, 1024, 1024, 4),
+    TPUConfig("v5p-12288", 6144, 1536, 1536, 4),
+    # https://cloud.google.com/tpu/docs/v6e
+    TPUConfig("v6e-1", 1, 1, 1, 1),
+    TPUConfig("v6e-4", 4, 1, 1, 4),
+    TPUConfig("v6e-8", 8, 1, 1, 8),
+    TPUConfig("v6e-16", 16, 4, 4, 4),
+    TPUConfig("v6e-32", 32, 8, 8, 4),
+    TPUConfig("v6e-64", 64, 16, 16, 4),
+    TPUConfig("v6e-128", 128, 32, 32, 4),
+    TPUConfig("v6e-256", 256, 64, 64, 4),
+]
+
+
+def get_tpu_config(tpu_type: str) -> TPUConfig:
+    """Get TPU configuration by type name."""
+    for config in TPU_CONFIGS:
+        if config.name == tpu_type:
+            return config
+    raise ValueError(f"Unknown TPU type: {tpu_type}")
 
 
 # My kingdom for ADTs
@@ -148,9 +243,9 @@ class SliceInfo:
     """
 
     slice_name: str
-    num_hosts: int
+    num_vms: int
     ip_address: str
-    num_tpus_per_host: int
+    num_tpus_per_vm: int
 
 
 @dataclass(frozen=True)
@@ -198,7 +293,7 @@ def _multislice_info_to_env_vars(multislice: MultisliceInfo) -> dict[str, str]:
     return mxla_env
 
 
-ActorInfoT = TypeVar('ActorInfoT')
+ActorInfoT = TypeVar("ActorInfoT")
 
 
 @dataclass(frozen=True)
@@ -233,20 +328,36 @@ class ResourcePoolManager(ABC, Generic[ActorInfoT]):
         return self._actor_pool.copy()
 
     def _remove_unhealthy_members_from_actor_pool(self) -> None:
-        logger.info(f"{self.get_actor_pool_name()} actor pool members before removing unhealthy members: {[self.get_actor_name_from_actor_info(member.actor_info) for member in self._actor_pool]}")
+        logger.info(
+            f"{self.get_actor_pool_name()} actor pool members before removing unhealthy members: {[self.get_actor_name_from_actor_info(member.actor_info) for member in self._actor_pool]}"
+        )
         members_and_health = [(member, member.actor.healthy.remote()) for member in self._actor_pool]
         healthy_members: list[ActorPoolMember[ActorInfoT]] = []
         unhealthy_members: list[ActorPoolMember[ActorInfoT]] = []
-        ray.wait([health for _, health in members_and_health], num_returns=len(members_and_health), timeout=_HEALTH_CHECK_TIMEOUT)
+        ray.wait(
+            [health for _, health in members_and_health],
+            num_returns=len(members_and_health),
+            timeout=_HEALTH_CHECK_TIMEOUT,
+        )
         for member, health in members_and_health:
             try:
                 if ray.get(health, timeout=0):
                     healthy_members.append(member)
                 else:
-                    logger.warning(f"{self.get_actor_pool_name()} actor pool member {self.get_actor_name_from_actor_info(member.actor_info)} is unhealthy. Removing from actor pool.")
+                    logger.warning(
+                        f"{self.get_actor_pool_name()} actor pool member {self.get_actor_name_from_actor_info(member.actor_info)} is unhealthy. Removing from actor pool."
+                    )
                     unhealthy_members.append(member)
-            except (RayActorError, RayTaskError, ActorDiedError, ActorUnavailableError, GetTimeoutError) as e:
-                logger.warning(f"{self.get_actor_pool_name()} actor pool member {self.get_actor_name_from_actor_info(member.actor_info)} is dead or unavailable. Removing from actor pool. Error: {e}")
+            except (
+                RayActorError,
+                RayTaskError,
+                ActorDiedError,
+                ActorUnavailableError,
+                GetTimeoutError,
+            ) as e:
+                logger.warning(
+                    f"{self.get_actor_pool_name()} actor pool member {self.get_actor_name_from_actor_info(member.actor_info)} is dead or unavailable. Removing from actor pool. Error: {e}"
+                )
                 unhealthy_members.append(member)
 
         # NOTE: For simplicity, we serially process the unhealthy actors, rather than doing it in parallel.
@@ -255,14 +366,22 @@ class ResourcePoolManager(ABC, Generic[ActorInfoT]):
             _stop_actor(unhealthy_member.actor)
 
         self._actor_pool = healthy_members
-        logger.info(f"{self.get_actor_pool_name()} actor pool members after unhealthy members: {[self.get_actor_name_from_actor_info(member.actor_info) for member in self._actor_pool]}")
+        logger.info(
+            f"{self.get_actor_pool_name()} actor pool members after unhealthy members: {[self.get_actor_name_from_actor_info(member.actor_info) for member in self._actor_pool]}"
+        )
 
     def _add_members_to_actor_pool(self, desired_num_actors: int) -> None:
-        logger.info(f"{self.get_actor_pool_name()} actor pool has {len(self._actor_pool)} members, scaling up to {desired_num_actors} members; current members: {[self.get_actor_name_from_actor_info(member.actor_info) for member in self._actor_pool]}")
+        logger.info(
+            f"{self.get_actor_pool_name()} actor pool has {len(self._actor_pool)} members, scaling up to {desired_num_actors} members; current members: {[self.get_actor_name_from_actor_info(member.actor_info) for member in self._actor_pool]}"
+        )
         actors = [self.create_actor() for _ in range(desired_num_actors - len(self._actor_pool))]
         actors_and_actor_info_awaitables = [(actor, actor.get_info.remote()) for actor in actors]
         logger.info(f"{self.get_actor_pool_name()} actor pool waiting for {len(actors)} new actors to start...")
-        ray.wait([actor_info_awaitable for _, actor_info_awaitable in actors_and_actor_info_awaitables], num_returns=len(actors_and_actor_info_awaitables), timeout=_START_ACTOR_TIMEOUT)
+        ray.wait(
+            [actor_info_awaitable for _, actor_info_awaitable in actors_and_actor_info_awaitables],
+            num_returns=len(actors_and_actor_info_awaitables),
+            timeout=_START_ACTOR_TIMEOUT,
+        )
         for actor, actor_info_awaitable in actors_and_actor_info_awaitables:
             try:
                 actor_info: ActorInfoT = ray.get(actor_info_awaitable, timeout=0)
@@ -270,18 +389,28 @@ class ResourcePoolManager(ABC, Generic[ActorInfoT]):
                 logger.exception(f"{self.get_actor_pool_name()} actor pool actor {actor} failed to start: {e}")
                 _stop_actor(actor)
                 continue
-            logger.info(f"{self.get_actor_pool_name()} actor pool member {self.get_actor_name_from_actor_info(actor_info)} started.")
+            logger.info(
+                f"{self.get_actor_pool_name()} actor pool member {self.get_actor_name_from_actor_info(actor_info)} started."
+            )
             self._actor_pool.append(ActorPoolMember[ActorInfoT](actor, actor_info))
-        logger.info(f"{self.get_actor_pool_name()} actor pool scaled up to {len(self._actor_pool)} members: {[self.get_actor_name_from_actor_info(member.actor_info) for member in self._actor_pool]}")
+        logger.info(
+            f"{self.get_actor_pool_name()} actor pool scaled up to {len(self._actor_pool)} members: {[self.get_actor_name_from_actor_info(member.actor_info) for member in self._actor_pool]}"
+        )
 
     def _remove_members_from_actor_pool(self, desired_num_actors: int) -> None:
-        logger.info(f"{self.get_actor_pool_name()} actor pool has {len(self._actor_pool)} members; scaling down to {desired_num_actors} members; current members: {[self.get_actor_name_from_actor_info(member.actor_info) for member in self._actor_pool]}")
+        logger.info(
+            f"{self.get_actor_pool_name()} actor pool has {len(self._actor_pool)} members; scaling down to {desired_num_actors} members; current members: {[self.get_actor_name_from_actor_info(member.actor_info) for member in self._actor_pool]}"
+        )
         members_to_remove = self._actor_pool[desired_num_actors:]
         self._actor_pool = self._actor_pool[:desired_num_actors]
         for member in members_to_remove:
-            logger.info(f"{self.get_actor_pool_name()} actor pool member {self.get_actor_name_from_actor_info(member.actor_info)} stopping.")
+            logger.info(
+                f"{self.get_actor_pool_name()} actor pool member {self.get_actor_name_from_actor_info(member.actor_info)} stopping."
+            )
             _stop_actor(member.actor)
-        logger.info(f"{self.get_actor_pool_name()} actor pool scaled down to {len(self._actor_pool)} members: {[self.get_actor_name_from_actor_info(member.actor_info) for member in self._actor_pool]}")
+        logger.info(
+            f"{self.get_actor_pool_name()} actor pool scaled down to {len(self._actor_pool)} members: {[self.get_actor_name_from_actor_info(member.actor_info) for member in self._actor_pool]}"
+        )
 
     def _scale_actor_pool(self, desired_num_actors: int) -> None:
         # NOTE: There is no retry loop in this function.
@@ -293,16 +422,19 @@ class ResourcePoolManager(ABC, Generic[ActorInfoT]):
         elif len(self._actor_pool) > desired_num_actors:
             self._remove_members_from_actor_pool(desired_num_actors)
         else:
-            logger.info(f"{self.get_actor_pool_name()} actor pool already has {len(self._actor_pool)} members, and we wanted {desired_num_actors}. Skipping scaling.")
+            logger.info(
+                f"{self.get_actor_pool_name()} actor pool already has {len(self._actor_pool)} members, and we wanted {desired_num_actors}. Skipping scaling."
+            )
             return
         if len(self._actor_pool) != desired_num_actors:
-            raise Exception(f"{self.get_actor_pool_name()} actor pool wanted to scale to {desired_num_actors} actors, but scaled to {len(self._actor_pool)} actors instead")
+            raise Exception(
+                f"{self.get_actor_pool_name()} actor pool wanted to scale to {desired_num_actors} actors, but scaled to {len(self._actor_pool)} actors instead"
+            )
 
     def drain_actor_pool(self) -> None:
         logger.info(f"{self.get_actor_pool_name()} actor pool members draining.")
         self._remove_members_from_actor_pool(0)
         logger.info(f"{self.get_actor_pool_name()} actor pool drained.")
-
 
 
 class SlicePoolManager(ResourcePoolManager[SliceInfo]):
@@ -311,7 +443,6 @@ class SlicePoolManager(ResourcePoolManager[SliceInfo]):
         self._tpu_type = tpu_type
         self._last_scale_multislice_time: Optional[float] = None
         self._last_check_should_scale_up_multislice_time: Optional[float] = None
-
 
     # CHAOS MONKEY: Simulate randomly not getting enough slices
     # def _add_members_to_actor_pool(self, desired_num_actors: int) -> None:
@@ -344,7 +475,9 @@ class SlicePoolManager(ResourcePoolManager[SliceInfo]):
         # if len(self._actor_pool) == 0:
         #     max_valid_size -= 1
 
-        logger.info(f"Attempting to scale to {max_valid_size} slices based on the maximum of valid sizes: {sorted_valid_sizes}")
+        logger.info(
+            f"Attempting to scale to {max_valid_size} slices based on the maximum of valid sizes: {sorted_valid_sizes}"
+        )
         try:
             self._scale_actor_pool(max_valid_size)
             # self.scale_actor_pool(max_valid_size)
@@ -358,10 +491,14 @@ class SlicePoolManager(ResourcePoolManager[SliceInfo]):
         feasible_sizes = [size for size in sorted_valid_sizes if size <= current_size]
 
         if not feasible_sizes:
-            raise Exception(f"Only got {current_size} slices, which is not enough for minimum of valid sizes: {sorted_valid_sizes}")
+            raise Exception(
+                f"Only got {current_size} slices, which is not enough for minimum of valid sizes: {sorted_valid_sizes}"
+            )
 
         max_feasible_size = feasible_sizes[-1]
-        logger.warning(f"Attempting to scale to {max_feasible_size} slices based on a feasible size in valid sizes: {sorted_valid_sizes}")
+        logger.warning(
+            f"Attempting to scale to {max_feasible_size} slices based on a feasible size in valid sizes: {sorted_valid_sizes}"
+        )
         try:
             self._scale_actor_pool(max_feasible_size)
         except Exception as e:
@@ -369,7 +506,6 @@ class SlicePoolManager(ResourcePoolManager[SliceInfo]):
 
         if len(self._actor_pool) not in num_slices:
             raise Exception(f"Could not scale to {max_feasible_size} slices")
-
 
     def check_should_scale_up_multislice(self, num_slices: int | Sequence[int]) -> bool:
         if isinstance(num_slices, int):
@@ -384,7 +520,10 @@ class SlicePoolManager(ResourcePoolManager[SliceInfo]):
         if last_check_time is None or current_time - last_check_time < _SCALE_UP_MULTISLICE_CHECK_INTERVAL:
             return False
 
-        if self._last_scale_multislice_time is None or current_time - self._last_scale_multislice_time < _SCALE_UP_MULTISLICE_INTERVAL:
+        if (
+            self._last_scale_multislice_time is None
+            or current_time - self._last_scale_multislice_time < _SCALE_UP_MULTISLICE_INTERVAL
+        ):
             return False
 
         # Want to scale to the next largest desired size that is bigger than the current size.
@@ -398,13 +537,17 @@ class SlicePoolManager(ResourcePoolManager[SliceInfo]):
         # Attempt to start enough slice actors to go up to the next largest desired size
         # If we don't succeed, release the new slice actors
         previous_size = len(self._actor_pool)
-        logger.info(f"Currently have {previous_size} slices; next larger size is {next_larger_size} (valid sizes: {num_slices}). Trying to acquire more slices.")
+        logger.info(
+            f"Currently have {previous_size} slices; next larger size is {next_larger_size} (valid sizes: {num_slices}). Trying to acquire more slices."
+        )
         self._add_members_to_actor_pool(next_larger_size)
         if len(self._actor_pool) == next_larger_size:
             logger.info(f"Successfully acquired more slices; now have {next_larger_size} slices.")
             return True
         else:
-            logger.info(f"Wanted {next_larger_size} slices but could only get {len(self._actor_pool)} slices; scaling slices back down to previous size {previous_size}.")
+            logger.info(
+                f"Wanted {next_larger_size} slices but could only get {len(self._actor_pool)} slices; scaling slices back down to previous size {previous_size}."
+            )
             self._remove_members_from_actor_pool(previous_size)
             return False
 
@@ -414,6 +557,7 @@ class SliceActor(ResourcePoolManager[TPUHostInfo]):
     """
     Actor that manages a single TPU slice.
     """
+
     def __init__(self):
         super().__init__()
         self._failed = False
@@ -445,34 +589,35 @@ class SliceActor(ResourcePoolManager[TPUHostInfo]):
 
     def get_info(self) -> SliceInfo:
         pod_name = ray.util.accelerators.tpu.get_current_pod_name()
-        num_hosts = ray.util.accelerators.tpu.get_current_pod_worker_count()
-        num_tpus_per_host = TPUAcceleratorManager.get_current_node_num_accelerators()
-        tpe = TPUAcceleratorManager._get_current_node_tpu_pod_type()
-        # there seems to be a bug with some version of ray here
-        if tpe.startswith("v4") or tpe.startswith("v5"):
-            num_cores = int(tpe.split("-")[1])
-            num_tpus_per_host = 4
-            # "v5litepod-4" should still create 1 host, not 0
-            num_hosts = max(1, num_cores // 8)
+        tpe = _get_current_tpu_pod_type()
+
+        config = get_tpu_config(tpe)
+
         ip_address = socket.gethostbyname(socket.gethostname())
+
+        logger.info(f"TPU type: {tpe}, {config}")
+
         self._slice_info = SliceInfo(
             slice_name=pod_name,
-            num_hosts=num_hosts,
-            num_tpus_per_host=num_tpus_per_host,
+            num_vms=config.vm_count,
+            num_tpus_per_vm=config.chips_per_vm,
             ip_address=ip_address,
         )
-        self._scale_actor_pool(num_hosts)
+        self._scale_actor_pool(config.vm_count)
         return self._slice_info
 
     def run_remote_fn(self, remote_fn: RemoteFunction, runtime_env: dict) -> list[ray.ObjectRef]:
         """Run the remote function on this slice.
 
         NOTE: This runs the remote function in a different task. It does not block on the remote function call.
-        NOTE: This returns a list of Ray futures. If calling this method on a remote Actor, you will get a future of a list of futures."""
+        NOTE: This returns a list of Ray futures. If calling this method on a remote Actor, you will get a future of a list of futures.
+        """
         actors = self.get_all_actors_in_pool()
-        if not self._slice_info or len(actors) < self._slice_info.num_hosts:
+        if not self._slice_info or len(actors) < self._slice_info.num_vms:
             raise Exception("Insufficient host actors; call setup() before calling run_remote_fn()")
-        futures_of_futures: list[ray.ObjectRef] = [actor.run_remote_fn.remote(remote_fn, runtime_env) for actor in actors]
+        futures_of_futures: list[ray.ObjectRef] = [
+            actor.run_remote_fn.remote(remote_fn, runtime_env) for actor in actors
+        ]
         return [ray.get(future_of_future) for future_of_future in futures_of_futures]
 
     def teardown(self):
@@ -503,11 +648,14 @@ class TPUHostActor:
         if self._host_info:
             return self._host_info
 
+        worker_id = _get_current_node_tpu_worker_id()
+        if worker_id is None:
+            raise Exception("Could not get TPU worker ID. This should never happen.")
         self._host_info = TPUHostInfo(
-            slice_name = self._slice_info.slice_name,
-            worker_index = TPUAcceleratorManager._get_current_node_tpu_worker_id(),
-            node_id = ray.get_runtime_context().get_node_id(),
-            num_tpus = self._slice_info.num_tpus_per_host,
+            slice_name=self._slice_info.slice_name,
+            worker_index=worker_id,
+            node_id=ray.get_runtime_context().get_node_id(),
+            num_tpus=self._slice_info.num_tpus_per_vm,
         )
         return self._host_info
 
@@ -515,7 +663,8 @@ class TPUHostActor:
         """Run the remote function on this host.
 
         NOTE: This runs the remote function in a different task. It does not block on the remote function call.
-        NOTE: This returns a Ray future. If calling this method on a remote Actor, you will get a future of a future."""
+        NOTE: This returns a Ray future. If calling this method on a remote Actor, you will get a future of a future.
+        """
         if not self._host_info:
             raise Exception("Call setup() before calling run_remote_fn()")
 
@@ -588,7 +737,7 @@ def run_on_pod(
 def run_on_pod_ray(
     remote_fn: RemoteFunction,
     tpu_type: str,
-    num_slices: int | Sequence[int] = 1 ,
+    num_slices: int | Sequence[int] = 1,
     max_retries_preemption: int = 10000,
     max_retries_failure: int = 10,
 ):
@@ -621,7 +770,9 @@ def run_on_pod_ray(
 
     try:
         while num_failures <= max_retries_failure and num_preemptions <= max_retries_preemption:
-            logger.info(f"Running on {num_slices} x TPU {tpu_type}. Previous failures: {num_failures}. Previous pre-emptions: {num_preemptions}.")
+            logger.info(
+                f"Running on {num_slices} x TPU {tpu_type}. Previous failures: {num_failures}. Previous pre-emptions: {num_preemptions}."
+            )
             problems.clear()
 
             # prune all bad actors from pool
@@ -825,7 +976,9 @@ def _stop_actor(actor: ActorHandle) -> None:
         # so the task will never succeed.
         pass
     except GetTimeoutError as e:
-        logger.warning(f"Failed to gracefully shut down actor in {_TERMINATE_ACTOR_TIMEOUT} seconds; killing it instead: {e}")
+        logger.warning(
+            f"Failed to gracefully shut down actor in {_TERMINATE_ACTOR_TIMEOUT} seconds; killing it instead: {e}"
+        )
     finally:
         ray.kill(actor)
 
@@ -852,7 +1005,9 @@ def _cancel_tasks_and_wait(tasks: list[ray.ObjectRef]) -> None:
         logger.info(f"Cancelled {len(cancel_ready)} tasks")
 
 
-def _start_fn_on_slice(slice_actor: ActorHandle, remote_fn: RemoteFunction, mxla_env: dict | None) -> list[ray.ObjectRef]:
+def _start_fn_on_slice(
+    slice_actor: ActorHandle, remote_fn: RemoteFunction, mxla_env: dict | None
+) -> list[ray.ObjectRef]:
     """
     Start the remote function on a slice of the TPU pod.
     """
@@ -920,7 +1075,9 @@ def _handle_ray_error(e: RayError):
 #     for
 
 
-def run_on_pod_multislice(remote_fn: RemoteFunction | Callable, tpu_type: str, num_slices: Sequence[int]) -> list[ray.ObjectRef]:
+def run_on_pod_multislice(
+    remote_fn: RemoteFunction | Callable, tpu_type: str, num_slices: Sequence[int]
+) -> list[ray.ObjectRef]:
     """
     Run a remote function on multiple TPU slices.
 
@@ -933,11 +1090,22 @@ def run_on_pod_multislice(remote_fn: RemoteFunction | Callable, tpu_type: str, n
         A Ray ObjectRef that represents the result of the function
     """
     return ray.get(
-        run_on_pod(remote_fn, tpu_type, num_slices=num_slices, max_retries_failure=0, max_retries_preemption=0)
+        run_on_pod(
+            remote_fn,
+            tpu_type,
+            num_slices=num_slices,
+            max_retries_failure=0,
+            max_retries_preemption=0,
+        )
     )
 
 
-def run_on_pod_resumable(remote_fn: RemoteFunction | Callable, tpu_type: str, max_retries_preemption: int = 1_000_000, max_retries_failure: int = 10):
+def run_on_pod_resumable(
+    remote_fn: RemoteFunction | Callable,
+    tpu_type: str,
+    max_retries_preemption: int = 1_000_000,
+    max_retries_failure: int = 10,
+):
     """
     Repeatedly run a function on a TPU pod until it succeeds or a maximum number of retries is reached.
 
@@ -961,7 +1129,11 @@ def run_on_pod_resumable(remote_fn: RemoteFunction | Callable, tpu_type: str, ma
 
 
 def run_on_pod_multislice_resumable(
-    remote_fn: RemoteFunction | Callable, tpu_type: str, num_slices: int | Sequence[int], max_retries_preemption: int = 1_000_000, max_retries_failure: int = 10
+    remote_fn: RemoteFunction | Callable,
+    tpu_type: str,
+    num_slices: int | Sequence[int],
+    max_retries_preemption: int = 1_000_000,
+    max_retries_failure: int = 10,
 ):
     """
     Repeatedly run a function on a TPU pod until it succeeds or a maximum number of retries is reached.
@@ -991,7 +1163,14 @@ def _run_command(*args, **kwargs):
 
 
 def run_docker_on_pod(
-    image_id: str, command: Sequence[str], *, tpu_type: str, num_slices: int | Sequence[int], env: dict, name: str = "levanter", retries: int = 10
+    image_id: str,
+    command: Sequence[str],
+    *,
+    tpu_type: str,
+    num_slices: int | Sequence[int],
+    env: dict,
+    name: str = "levanter",
+    retries: int = 10,
 ):
     env = _massage_env(env)
 
@@ -1020,7 +1199,6 @@ def _kill_old_container(name):
         _run_command("sudo", "docker", "rm", "-f", name)
     except subprocess.CalledProcessError:
         pass
-
 
 
 def _separate_process_fn(underlying_function, args, kwargs):

@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 ## Script to aid in cleaning up old checkpoints from a directory of runs. just prints directories that can be deleted.
 ## Doesn't delete the latest complete checkpoint or the latest one with step ending in '000'.
 # You can pass this to gsutil to delete the directories, e.g.:

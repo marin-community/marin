@@ -4,6 +4,9 @@
 .levanter.yaml
 .levanter.yaml
 
+# log files from tests
+logs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

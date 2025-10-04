@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import os.path
 import tempfile
 
@@ -244,7 +247,7 @@ def test_lora_merged_load_in_hf():
 
     causal_mask = AttentionMask.causal()
 
-    with (tempfile.TemporaryDirectory() as tmpdir):
+    with tempfile.TemporaryDirectory() as tmpdir:
         converter.save_pretrained(model, f"{tmpdir}/model")
 
         lora_config = LoraConfig(r=8, target_modules=["c_attn"])

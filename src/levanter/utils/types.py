@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from typing import Any, Callable, Optional, Protocol, Tuple, TypeVar, Union
 
 from jaxtyping import PyTree
@@ -15,21 +18,17 @@ try:
 except ImportError:
 
     class BlockFoldable(Protocol[M]):  # type: ignore
-        def fold(self, *args, **kwargs):
-            ...
+        def fold(self, *args, **kwargs): ...
 
-        def scan(self, *args, **kwargs):
-            ...
+        def scan(self, *args, **kwargs): ...
 
 
 class ValAndGradFn(Protocol[M, X]):
-    def __call__(self, model: M, *inputs: X, **input_kwargs) -> Tuple[Scalar, M]:
-        ...
+    def __call__(self, model: M, *inputs: X, **input_kwargs) -> Tuple[Scalar, M]: ...
 
 
 class ValFn(Protocol[M_con, X]):
-    def __call__(self, model: M_con, *inputs: X, **input_kwargs) -> Scalar:
-        ...
+    def __call__(self, model: M_con, *inputs: X, **input_kwargs) -> Scalar: ...
 
 
 FilterSpec = Union[bool, Callable[[Any], bool]]
@@ -55,5 +54,4 @@ class ComputeLossFunction(Protocol[M_con, X]):
         reduction: Optional[hax.ReductionFunction] = hax.mean,
         reduction_axis: Optional[hax.AxisSelection] = None,
         **kwargs,
-    ) -> Scalar | hax.NamedArray:
-        ...
+    ) -> Scalar | hax.NamedArray: ...

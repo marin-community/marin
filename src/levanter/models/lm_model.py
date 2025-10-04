@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import abc
 from dataclasses import dataclass
 from typing import Generic, Optional, Type, TypeVar

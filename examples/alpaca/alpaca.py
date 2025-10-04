@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # levanter version of https://github.com/tatsu-lab/stanford_alpaca/blob/main/train.py
 import json
 import logging

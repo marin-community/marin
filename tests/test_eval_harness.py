@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from transformers import AutoTokenizer
 
 from levanter.data.packing import PromptCompletion
@@ -38,7 +41,7 @@ def test_iterate_tokenized_requests_with_chat_template():
     batch_size = 2
 
     # Run with chat template
-    results = list(_iterate_tokenized_requests(requests, hf_tokenizer, max_len, batch_size, apply_chat_template=True))
+    results = list(_iterate_tokenized_requests(requests, hf_tokenizer, max_len, batch_size))
 
     # Verify the results
     assert len(results) == len(requests)

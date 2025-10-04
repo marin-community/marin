@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Type, Union
@@ -16,8 +19,14 @@ from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.layers import RmsNormConfig
-from levanter.layers.attention import AttentionBackend, AttentionConfig, AttentionMask, dot_product_attention
-from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddings, RotaryEmbeddingsConfig
+from levanter.layers.attention import (
+    Attention,
+    AttentionBackend,
+    AttentionConfig,
+    AttentionMask,
+    dot_product_attention,
+)
+from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
@@ -81,7 +90,7 @@ class Olmo2Config(HFCompatConfig):
     KeyPos = property(lambda self: self.Pos.alias("key_position"))
     Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
     Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
-    KVHeads = property(lambda self: Axis(name="kv_heads", size=self.num_kv_heads))
+    KVHeads = property(lambda self: Axis(name="kv_head", size=self.num_kv_heads))
     Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
     Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
     HeadSize = property(lambda self: Axis(name="head_size", size=self.hidden_dim // self.num_heads))
@@ -280,76 +289,80 @@ class Olmo2MLP(eqx.Module):
         return outputs
 
 
-class Olmo2Attention(ModuleWithStateDictSerialization, eqx.Module):
-    config: Olmo2Config = eqx.field(static=True)
-    q_proj: hnn.Linear  # projection from Embed to query
-    k_proj: hnn.Linear  # projection from Embed to key
-    v_proj: hnn.Linear  # projection from Embed to value
-    o_proj: hnn.Linear  # projection from Heads to output
-    q_norm: hnn.RmsNorm  # normalization for query
-    k_norm: hnn.RmsNorm  # normalization for key
-    rot_embs: Optional[RotaryEmbeddings] = eqx.field(default=None)
+class Olmo2Attention(ModuleWithStateDictSerialization, Attention):
+    use_flash_attention: Optional[bool] = eqx.field(static=True, default=None)
+    attention_dropout: float = eqx.field(static=True, default=0.0)
 
     @staticmethod
-    def init(config: Olmo2Config, *, key) -> "Olmo2Attention":
-        use_bias = config.attention_bias
-        Embed = config.Embed
-        QHeadsPerGroup = hax.Axis("q_heads_per_group", config.num_heads // config.num_kv_heads)
-        HeadSize = config.HeadSize
+    def init(config: Olmo2Config, *, key) -> "Olmo2Attention":  # type: ignore[override]
+        attn_config = config.attention_config()
+        use_bias = attn_config.use_bias
+        use_output_bias = attn_config.use_output_bias if attn_config.use_output_bias is not None else use_bias
 
         k_q, k_k, k_v, k_o = jrandom.split(key, 4)
-        # should this be the same os o_proj
         q_proj = hnn.Linear.init(
-            In=Embed, Out=(config.KVHeads, QHeadsPerGroup, HeadSize), key=k_q, use_bias=use_bias, out_first=True
+            In=attn_config.Embed,
+            Out=(attn_config.KVHeads, attn_config.QHeadsPerGroup, attn_config.HeadSize),
+            key=k_q,
+            use_bias=use_bias,
+            out_first=True,
         )
-        k_proj = hnn.Linear.init(In=Embed, Out=(config.KVHeads, HeadSize), key=k_k, use_bias=use_bias, out_first=True)
-        v_proj = hnn.Linear.init(In=Embed, Out=(config.KVHeads, HeadSize), key=k_v, use_bias=use_bias, out_first=True)
-        o_proj = hnn.Linear.init(In=(config.Heads, HeadSize), Out=Embed, key=k_o, use_bias=use_bias, out_first=True)
+        k_proj = hnn.Linear.init(
+            In=attn_config.Embed,
+            Out=(attn_config.KVHeads, attn_config.HeadSize),
+            key=k_k,
+            use_bias=use_bias,
+            out_first=True,
+        )
+        v_proj = hnn.Linear.init(
+            In=attn_config.Embed,
+            Out=(attn_config.KVHeads, attn_config.HeadSize),
+            key=k_v,
+            use_bias=use_bias,
+            out_first=True,
+        )
+        o_proj = hnn.Linear.init(
+            In=(attn_config.Heads, attn_config.HeadSize),
+            Out=attn_config.Embed,
+            key=k_o,
+            use_bias=use_output_bias,
+            out_first=True,
+        )
 
-        # For q_norm, normalization is over the entire hidden dimension
-        q_norm = config.mk_LayerNorm((config.KVHeads, QHeadsPerGroup, HeadSize))
-        k_norm = config.mk_LayerNorm((config.KVHeads, HeadSize))
+        q_norm = config.mk_LayerNorm((attn_config.KVHeads, attn_config.QHeadsPerGroup, attn_config.HeadSize))
+        k_norm = config.mk_LayerNorm((attn_config.KVHeads, attn_config.HeadSize))
 
-        # Build rotary embeddings once during initialization if configured
-        rot_embs = config.rope.build(config.HeadSize) if config.rope is not None else None
+        rot_embs = attn_config.rope.build(attn_config.HeadSize) if attn_config.rope is not None else None
 
-        return Olmo2Attention(config, q_proj, k_proj, v_proj, o_proj, q_norm, k_norm, rot_embs)
+        return Olmo2Attention(
+            config=attn_config,
+            q_proj=q_proj,
+            k_proj=k_proj,
+            v_proj=v_proj,
+            o_proj=o_proj,
+            q_norm=q_norm,
+            k_norm=k_norm,
+            rot_embs=rot_embs,
+            use_flash_attention=config.use_flash_attention,
+            attention_dropout=config.attention_dropout,
+        )
 
     @named_call
     def __call__(
         self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
     ) -> NamedArray:
-        key_q, key_k, key_v, key_o = maybe_rng_split(key, 4)
+        key_proj, key_o = maybe_rng_split(key, 2)
 
-        # OLMo2 project for q and k and then normalizes
-        q_proj = self.q_proj(x, key=key_q)
-        q = self.q_norm(q_proj)
+        q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
 
-        # Project to key
-        k_proj = self.k_proj(x, key=key_k)
-        k = self.k_norm(k_proj)
+        q = q.rearrange((..., "kv_head", "q_heads_per_group", "position", "head_size"))
+        k = k.rearrange((..., "kv_head", "position", "head_size"))
+        v = v.rearrange((..., "kv_head", "position", "head_size"))
 
-        # Regular projection for value
-        v = self.v_proj(x, key=key_v)
-
-        # Reshape for attention
-        q = q.rearrange((..., "kv_heads", "q_heads_per_group", "position", "head_size"))
-        k = k.rearrange((..., "kv_heads", "position", "head_size"))
-        v = v.rearrange((..., "kv_heads", "position", "head_size"))
-
-        # Apply rotary position embeddings if configured
-        if self.rot_embs is not None:
-            if pos_ids is None:
-                pos_ids = hax.arange(x.resolve_axis("position"))
-            q = self.rot_embs(q, pos_ids)
-            k = self.rot_embs(k, pos_ids)
-
-        # Rename position axis for attention
         k = k.rename({"position": "key_position"})
         v = v.rename({"position": "key_position"})
 
-        # Apply attention
-        c = self.config
+        dropout = self.attention_dropout
         attn_output = dot_product_attention(
             "position",
             "key_position",
@@ -359,16 +372,17 @@ class Olmo2Attention(ModuleWithStateDictSerialization, eqx.Module):
             v,
             mask,
             attention_dtype=jnp.float32 if self.config.upcast_attn else x.dtype,
-            use_flash=c.use_flash_attention,
+            use_flash=self.use_flash_attention,
             attn_backend=self.config.attn_backend,
-            flash_block_size=c.flash_attention_block_size,
-            dropout=self.config.attention_dropout,
-            inference=not self.config.attention_dropout > 0,
+            flash_block_size=self.config.flash_attention_block_size,
+            scaling_factor=self.config.scaling_factor,
+            logits_soft_cap=self.config.logits_soft_cap,
+            dropout=dropout,
+            inference=dropout <= 0,
             prng=key,
         )
 
-        # Flatten heads and apply output projection
-        attn_output = attn_output.flatten_axes(("kv_heads", "q_heads_per_group"), "heads")
+        attn_output = attn_output.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
         attn_output = attn_output.astype(x.dtype)
         attn_output = self.o_proj(attn_output, key=key_o)
 

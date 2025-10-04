@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # test_cross_entropy.py
 import math
 
@@ -263,7 +266,10 @@ def test_gradient_block_cross_entropy(block_size, test_data):
 
         return (a.mean() + b.mean()).scalar()
 
-    g_embed, g_head, = equinox.filter_grad(
+    (
+        g_embed,
+        g_head,
+    ) = equinox.filter_grad(
         custom_fn
     )((pred_embeddings, pred_lm_head))
 
@@ -304,7 +310,10 @@ def test_grad_loss_without_logz(test_data):
 
         return a.mean().scalar()
 
-    g_embed, g_head, = equinox.filter_grad(
+    (
+        g_embed,
+        g_head,
+    ) = equinox.filter_grad(
         custom_fn
     )((pred_embeddings, pred_lm_head))
 

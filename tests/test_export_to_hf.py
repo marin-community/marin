@@ -1,5 +1,10 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import contextlib
 import os
 import tempfile
+from types import SimpleNamespace
 
 import equinox as eqx
 import jax
@@ -38,10 +43,16 @@ def test_export_lm_to_hf():
         save_checkpoint({"model": trainable}, 0, f"{tmpdir}/ckpt")
 
         try:
+            trainer = SimpleNamespace(
+                device_mesh=contextlib.nullcontext(),
+                parameter_axis_mapping={},
+            )
             config = export_lm_to_hf.ConvertLmConfig(
+                trainer=trainer,
                 checkpoint_path=f"{tmpdir}/ckpt",
                 output_dir=f"{tmpdir}/output",
                 model=model_config,
+                use_cpu=True,
             )
             export_lm_to_hf.main(config)
 

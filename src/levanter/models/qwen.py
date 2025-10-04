@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 from dataclasses import dataclass
 from typing import Dict, Optional, Type
@@ -311,17 +314,13 @@ class Qwen3Config(LlamaConfig):
     ) -> HFCheckpointConverter["Qwen3Config"]:  # type: ignore
         return HFCheckpointConverter(
             self.__class__,
-            reference_checkpoint=self.reference_checkpoint
-            if ref_checkpoint is None
-            else ref_checkpoint,
+            reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
             trust_remote_code=True,
             tokenizer=ref_checkpoint if self.tokenizer is None else self.tokenizer,
             HfConfigClass=HfQwen3Config,
         )
 
-    def to_hf_config(
-        self, vocab_size: int, config_overrides: Optional[Dict] = None
-    ) -> HfQwen3Config:
+    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfQwen3Config:
         if config_overrides is None:
             config_overrides = {}
 

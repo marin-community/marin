@@ -276,6 +276,15 @@ trainer:
         logdir: logs
 ```
 
+Install the optional dependencies for TensorBoard support with one of:
+
+- `pip install "levanter[profiling]"`
+- `uv sync --extra profiling`
+
+Viewing profiles: when profiling is enabled, JAX writes traces under `<logdir>/plugins/profile/<timestamp>`.
+Launch the UI with `tensorboard --logdir <logdir>` and open http://localhost:6006/#profile.
+If running remotely, forward the port: `ssh -L 6006:localhost:6006 <host>`.
+
 ### Multiple Trackers
 
 In some cases, you may want to use multiple trackers at once.

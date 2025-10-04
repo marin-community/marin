@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, Generic, Iterable, Mapping, Sequence, TypeVar, Union
 

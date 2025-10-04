@@ -1,5 +1,9 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import math
 
+import equinox
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -7,10 +11,12 @@ import numpy as np
 import pytest
 import equinox as eqx
 from chex import assert_trees_all_close
-from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from jax.lax import Precision
+from jax.sharding import NamedSharding, PartitionSpec
 
 import haliax as hax
 from haliax import Axis
+from haliax.partitioning import ResourceAxis
 
 from levanter.layers.attention import (
     AttentionBackend,
@@ -23,7 +29,7 @@ from levanter.layers.attention import (
     dot_product_attention,
     dot_product_attention_with_sink,
 )
-from test_utils import skip_if_module_missing, skip_if_no_torch
+from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
 
 
 @pytest.mark.skip
@@ -267,6 +273,35 @@ def test_gpt2_attention_uses_te():
     assert_trees_all_close(out.array, 0.0)
 
 
+@skip_if_module_missing("transformer_engine")
+def test_te_flash_attention_non_causal_mask_raises():
+    QPos = hax.Axis("position", 16)
+    KPos = hax.Axis("key_position", 16)
+    B = hax.Axis("batch", 2)
+    Head = hax.Axis("heads", 2)
+    D = hax.Axis("head_size", 8)
+
+    q = hax.zeros((B, Head, QPos, D), dtype=jnp.bfloat16)
+    k = hax.zeros((B, Head, KPos, D), dtype=jnp.bfloat16)
+    v = hax.zeros((B, Head, KPos, D), dtype=jnp.bfloat16)
+
+    explicit = hax.ones((QPos, KPos))
+    mask = AttentionMask.explicit(explicit)
+
+    with pytest.raises(NotImplementedError):
+        _te_flash_attention(
+            "position",
+            "key_position",
+            "head_size",
+            q,
+            k,
+            v,
+            mask,
+            attention_dtype=jnp.bfloat16,
+            scaling_factor=1 / math.sqrt(D.size),
+        )
+
+
 def test_tpu_splash_attention():
     if jax.default_backend() != "tpu":
         pytest.skip("TPU only")
@@ -284,7 +319,7 @@ def test_tpu_splash_attention():
 
     mask = AttentionMask.causal()
 
-    with jax.sharding.Mesh(jax.devices(), ("dp",)):
+    with use_test_mesh():
         flash_out = _tpu_splash_attention(
             QPos,
             KPos,
@@ -319,7 +354,7 @@ def test_tpu_splash_attention_sliding_window():
 
     mask = AttentionMask.causal(sliding_window=BLOCK_SIZE)
 
-    with jax.sharding.Mesh(jax.devices(), ("dp",)):
+    with use_test_mesh():
         flash_out = _tpu_splash_attention(
             QPos,
             KPos,
@@ -358,23 +393,111 @@ def test_segment_ids_are_respected(impl):
     keys = hax.named(keys, (KPos, Head))
     values = hax.named(values, (KPos, Head))
 
-    dp_mesh = Mesh(jax.devices(), ("dp",))
-    query, keys, values = jax.device_put([query, keys, values], NamedSharding(dp_mesh, PartitionSpec("dp", None)))
+    with use_test_mesh() as dp_mesh:
+        query, keys, values = jax.device_put(
+            [query, keys, values], NamedSharding(dp_mesh, PartitionSpec(ResourceAxis.DATA, None))
+        )
 
-    segment_ids = np.array([0, 0, 0] + [1] * (L - 3), dtype=np.int32)
-    segment_ids = jax.device_put(segment_ids, NamedSharding(dp_mesh, PartitionSpec("dp")))
-    segment_ids = hax.named(segment_ids, (Pos,))
-    mask = AttentionMask(is_causal=True, segment_ids=segment_ids)
+        segment_ids = np.array([0, 0, 0] + [1] * (L - 3), dtype=np.int32)
+        segment_ids = jax.device_put(segment_ids, NamedSharding(dp_mesh, PartitionSpec(ResourceAxis.DATA)))
+        segment_ids = hax.named(segment_ids, (Pos,))
+        mask = AttentionMask(causal_offset=0, segment_ids=segment_ids)
 
-    with dp_mesh:
-        result = hax.named_jit(dot_product_attention)(
-            Pos, KPos, Head, query, keys, values, attn_backend=AttentionBackend(impl), mask=mask, flash_block_size=128
+        result = jit_dpa(
+            Pos,
+            KPos,
+            Head,
+            query,
+            keys,
+            values,
+            attn_backend=AttentionBackend(impl),
+            mask=mask,
+            flash_block_size=128,
         )
 
     # the first 3 positions should all have a value of 300.0
     assert_trees_all_close(result.array[0:3, 1], 300.0, atol=1e-3, rtol=1e-3)
     # the rest should be 0
     assert_trees_all_close(result.array[3:, 1], 0.0, atol=1e-3, rtol=1e-3)
+
+
+# TODO: fix flash attention for offsets
+@pytest.mark.parametrize("impl", ["vanilla"])
+def test_causal_offset_cross_attention(impl):
+    """Verify that a positive causal *offset* relaxes the masking during cross-attention.
+
+    We compare the output of ``dot_product_attention`` when provided the structured
+    ``AttentionMask`` with *offset* against the output obtained when passing the
+    *materialised* boolean mask explicitly – they should be identical.
+    """
+
+    offset = 2
+    FullPos = Axis("pos", 6)
+    Pos = FullPos.resize(offset)
+    KeyPos = Axis("key_pos", 6)
+    Head = Axis("head", 2)
+    KeyDim = Axis("embed", 4)
+
+    k = hax.random.normal(jrandom.PRNGKey(1), (KeyPos, Head, KeyDim))
+    v = hax.random.normal(jrandom.PRNGKey(2), (KeyPos, Head, KeyDim))
+    q = hax.random.normal(jrandom.PRNGKey(0), (FullPos, Head, KeyDim))
+    q_sub = q["pos", 4:6]
+
+    struct_mask = AttentionMask.causal(offset=FullPos.size - offset)
+
+    offset_out = jit_dpa(
+        Pos,
+        KeyPos,
+        KeyDim,
+        q_sub,
+        k,
+        v,
+        mask=struct_mask,
+        inference=True,
+        attn_backend=AttentionBackend(impl),
+        flash_block_size=1,
+        precision=Precision.HIGHEST,
+    )
+
+    mask = AttentionMask.causal()
+
+    full_out = jit_dpa(
+        FullPos,
+        KeyPos,
+        KeyDim,
+        q,
+        k,
+        v,
+        mask=mask,
+        flash_block_size=1,
+        precision=Precision.HIGHEST,
+    )
+
+    # The output should be the same, since the mask is relaxed by the offset
+    assert_trees_all_close(offset_out.array, full_out.array[4:6, :], atol=3e-3, rtol=3e-3)
+
+    # sanity check: output should be wrong if we don't use the offset
+    wrong_out = jit_dpa(
+        Pos,
+        KeyPos,
+        KeyDim,
+        q_sub,
+        k,
+        v,
+        mask=mask,
+        inference=True,
+        attn_backend=AttentionBackend(impl),
+        flash_block_size=1,
+        precision=Precision.HIGHEST,
+    )
+
+    assert not jnp.allclose(
+        offset_out.array, wrong_out.array, atol=2e-3, rtol=2e-3
+    ), "Output should differ without offset"
+
+
+# This is a bottleneck in tests
+jit_dpa = equinox.filter_jit(dot_product_attention)
 
 
 # Reference implementation of Attention Sink with Sliding Window from https://github.com/openai/gpt-oss/blob/main/gpt_oss/triton/attention.py
@@ -508,8 +631,13 @@ def test_attention_equivalence(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     q = torch.randn(
-        batch_size, num_queries, num_key_value_heads, num_key_value_groups, head_dim,
-        device=device, dtype=torch.bfloat16,
+        batch_size,
+        num_queries,
+        num_key_value_heads,
+        num_key_value_groups,
+        head_dim,
+        device=device,
+        dtype=torch.bfloat16,
     )
     k = torch.randn(batch_size, num_keys, num_key_value_heads, head_dim, device=device, dtype=torch.bfloat16)
     v = torch.randn(batch_size, num_keys, num_key_value_heads, head_dim, device=device, dtype=torch.bfloat16)

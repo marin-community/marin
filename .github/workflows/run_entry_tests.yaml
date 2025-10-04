@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10"]
+        python-version: ["3.11"]
 
     steps:
       - uses: actions/checkout@v4
@@ -25,5 +25,5 @@ jobs:
         run: uv sync --dev
       - name: Test with pytest
         run: |
-          PYTHONPATH=tests:src:. uv run pytest tests -m "entry"
+          PYTHONPATH=tests:src:. uv run pytest tests -m "entry" --durations=20
 

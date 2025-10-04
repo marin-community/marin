@@ -1,11 +1,16 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import glob
 import os
 from functools import reduce
 from typing import Any, Callable, Dict, List, Optional, Sequence, TypeVar
+from contextlib import contextmanager
 
 import draccus
 import equinox as eqx
 import jax
+from jax.sharding import Mesh
 import numpy as np
 import pytest
 from chex import assert_trees_all_close
@@ -14,6 +19,7 @@ from jax._src.random import PRNGKey
 from transformers import AutoConfig, BatchEncoding
 
 import haliax as hax
+from haliax.partitioning import ResourceAxis, set_mesh
 
 from levanter.checkpoint import _get_fs_and_plain_path
 from levanter.data._preprocessor import BatchProcessor
@@ -128,6 +134,7 @@ def has_soundlibs():
     try:
         import librosa  # noqa F401
         import soundfile  # noqa F401
+        import torchcodec  # noqa F401
 
         return True
     except ImportError:
@@ -270,3 +277,35 @@ def _stack_batch_encodings(a: BatchEncoding, b: BatchEncoding) -> BatchEncoding:
             return [x]
 
     return BatchEncoding({k: _ensure_batched(a[k]) + _ensure_batched(b[k]) for k in a.keys()})
+
+
+def create_test_mesh(tensor_parallelism: int = 1, skip_ok: bool = False) -> Mesh:
+    """Create a Mesh with separate data and tensor parallel axes."""
+
+    if tensor_parallelism < 1:
+        raise ValueError("tensor_parallelism must be at least 1")
+
+    devices = jax.devices()
+    if not devices:
+        raise RuntimeError("No JAX devices available for creating a mesh")
+
+    if len(devices) % tensor_parallelism != 0:
+        if skip_ok:
+            pytest.skip(
+                f"Cannot create mesh with tensor_parallelism={tensor_parallelism} using {len(devices)} devices"
+            )
+        raise ValueError(
+            f"Cannot create mesh with tensor_parallelism={tensor_parallelism} using {len(devices)} devices"
+        )
+
+    mesh_devices = np.array(devices).reshape(-1, tensor_parallelism)
+    return Mesh(mesh_devices, (ResourceAxis.DATA, ResourceAxis.MODEL))
+
+
+@contextmanager
+def use_test_mesh(tensor_parallelism: int = 1, *, mesh: Optional[Mesh] = None, skip_ok: bool = False):
+    """Context manager that activates a data/model Mesh and sets haliax's global mesh."""
+    if mesh is None:
+        mesh = create_test_mesh(tensor_parallelism, skip_ok=skip_ok)
+    with set_mesh(mesh):
+        yield mesh

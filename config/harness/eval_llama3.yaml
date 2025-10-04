@@ -31,7 +31,7 @@ eval_harness:
       # requires generation
 ##    - task: squadv2  # reading comprehension benchmark
 #      num_fewshot: 10
-  max_eval_length: 4096
+  max_length: 4096
 tokenizer: meta-llama/Meta-Llama-3-8B
 model:
   type: llama
@@ -45,7 +45,7 @@ trainer:
   per_device_parallelism: -1
   train_batch_size: 512
 
-  tensor_parallel_axes: ["mlp", "heads"]
+  tensor_parallel_axes: ["mlp", "kv_head", "vocab"]
   fsdp_axis: "embed"
   batch_axis: "batch"
   ray:

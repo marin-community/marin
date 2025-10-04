@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Implements sequence packing, mostly for doing evaluation on lots of short sequences.
 
@@ -176,6 +179,9 @@ def per_segment_loss(
     assert packed_example.attn_mask.segment_ids is not None, "segment_ids must be set in the AttentionMask"
 
     segment_ids = packed_example.attn_mask.segment_ids
+    if isinstance(segment_ids, tuple):
+        segment_ids = segment_ids[0]
+
     assert (
         segment_ids.ndim == 1
     ), f"Expected segment_ids to be 1D, got {segment_ids.ndim}. Use vmap if you have multiple examples"
@@ -222,6 +228,9 @@ def per_segment_correct(
     assert packed_example.attn_mask.segment_ids is not None, "segment_ids must be set in the AttentionMask"
 
     segment_ids = packed_example.attn_mask.segment_ids
+    if isinstance(segment_ids, tuple):
+        segment_ids = segment_ids[0]
+
     assert (
         segment_ids.ndim == 1
     ), f"Expected segment_ids to be 1D, got {segment_ids.ndim}. Use vmap if you have multiple examples"

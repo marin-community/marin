@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import logging
 from dataclasses import dataclass, field
 from typing import Optional
@@ -74,7 +77,7 @@ def main(config: EvalLmConfig):
     if config.checkpoint_path is not None and config.hf_checkpoint is not None:
         raise ValueError("Must specify either checkpoint_path or hf_checkpoint, not both")
 
-    with config.trainer.device_mesh, hax.axis_mapping(parameter_axis_mapping):
+    with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
         evaluator = TaggedEvaluator(
             Batch, datasets, tokenizer, max_examples_per_dataset=max_examples, axis_mapping=compute_axis_mapping
         )

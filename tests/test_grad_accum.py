@@ -1,14 +1,19 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import equinox as eqx
 import jax
 import pytest
 from chex import assert_trees_all_close
-from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from jax.sharding import NamedSharding, PartitionSpec
 
 import haliax
 import haliax as hax
 import haliax.nn as hnn
+from haliax.partitioning import ResourceAxis
 
 from levanter.grad_accum import microbatched
+from test_utils import use_test_mesh
 
 
 class Mlp(eqx.Module):
@@ -49,12 +54,7 @@ def test_accumulate_gradients_sharded(parallelism, accum_steps):
 
     x = hax.random.normal(jax.random.PRNGKey(0), (Batch, In))
 
-    mesh_shard = Mesh(jax.devices(), ("data",))
-    x = jax.device_put(x, NamedSharding(mesh_shard, PartitionSpec("data", None)))
-
-    axis_mapping = {"Batch": "data"}
-
-    mesh = Mesh(jax.devices(), ("data",))
+    axis_mapping = {"Batch": ResourceAxis.DATA}
 
     @hax.partitioning.named_jit(axis_resources=axis_mapping)
     def jit_grad_accum(mlp, x):
@@ -66,7 +66,9 @@ def test_accumulate_gradients_sharded(parallelism, accum_steps):
         )
         return acc_v, acc_g
 
-    with mesh:
+    with use_test_mesh() as mesh:
+        x = jax.device_put(x, NamedSharding(mesh, PartitionSpec(ResourceAxis.DATA, None)))
+
         mlp = haliax.shard(mlp, axis_mapping)
         x = haliax.shard(x, axis_mapping)
         grad_fn = eqx.filter_value_and_grad(loss_fn)

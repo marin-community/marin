@@ -1,18 +1,20 @@
 eval_harness:
-#  task_spec: ["hellaswag"]
-  task_spec:
-#    - mmlu
-    - task: mmlu
-      num_fewshot: 1
-      task_alias: mmlu_1shot
-tokenizer: "gpt2"
+ task_spec: ["gsm8k"]
+ max_length: 2048
+#  max_examples: 1
+tokenizer: "meta-llama/Llama-3.2-1B-Instruct"
 model:
-  type: gpt2
-  hidden_dim: 32
-  num_heads: 4
-  num_layers: 2
+  type: llama
+  hidden_dim: 2048
+  intermediate_dim: 8192
+  num_heads: 32
+  num_kv_heads: 8
+  num_layers: 16
+  seq_len: 2048
+  gradient_checkpointing: true
+  tie_word_embeddings: true
 trainer:
-  mp: f32
+  mp: p=bfloat16,c=bfloat16
   num_train_steps: 100
   profiler: true
 
@@ -24,6 +26,7 @@ trainer:
   per_device_parallelism: -1
   train_batch_size: 32
 
-  tensor_parallel_axes: ["mlp", "heads"]
+  tensor_parallel_axes: ["mlp", "heads", "kv_head", "vocab"]
+  model_axis_size: 4
   fsdp_axis: "embed"
   batch_axis: "batch"

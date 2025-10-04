@@ -6,7 +6,7 @@ model:
   num_heads: 4
   num_layers: 2
 trainer:
-  mp: f32
+  mp: bfloat16
   num_train_steps: 100
 
   checkpointer:

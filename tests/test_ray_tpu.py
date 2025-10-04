@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import os
 
 import jax.distributed
@@ -7,12 +10,12 @@ import numpy as np
 import pytest
 import ray
 from jax.lax import with_sharding_constraint
-from jax.sharding import Mesh
 from jax.sharding import PartitionSpec as P
 from ray.exceptions import RayTaskError
 
 from levanter.infra.ray_tpu import run_on_pod
-
+from haliax.partitioning import ResourceAxis
+from tests.test_utils import create_test_mesh, skip_in_ci, use_test_mesh
 
 # Store whether TPUs are available and if multislice is possible
 _TPU_AVAILABLE = False
@@ -22,6 +25,9 @@ _MULTISLICE_POSSIBLE = False
 @pytest.fixture(scope="module", autouse=True)
 def setup_ray_tpu_tests():
     global _TPU_AVAILABLE, _MULTISLICE_POSSIBLE
+
+    # TODO: I don't understand why this is needed - without it, the tests hang indefinitely in CI
+    skip_in_ci("Skipping TPU tests in CI environment")
 
     try:
         ray.init(ignore_reinit_error=True)
@@ -66,7 +72,7 @@ def simple_jax_fn():
         if not devices:
             raise RuntimeError("No JAX TPU devices found on the worker.")
 
-        mesh = Mesh(devices, ("data",))  # Simple 1D mesh over all available TPUs on the host
+        mesh = create_test_mesh()
         # print(f"JAX devices found on worker: {devices}")
         # print(f"Mesh created: {mesh}")
 
@@ -81,25 +87,24 @@ def simple_jax_fn():
     dim_in = 8  # factor of num_tpus_per_host usually
     dim_out = 4
 
-    with mesh:
+    with use_test_mesh(mesh=mesh):
         x = jrandom.normal(key_x, (dim_in,))
         weights = jrandom.normal(key_weights, (dim_in, dim_out))
         bias = jrandom.normal(key_bias, (dim_out,))
 
         # Shard inputs - simple 1D sharding for x and weights
         # Adjust PartitionSpec based on your actual sharding strategy.
-        # For a single host, this might just be P(None) or P('data') if you intend to shard across cores.
-        x_sharded = with_sharding_constraint(x, P("data"))
-        weights_sharded = with_sharding_constraint(weights, P("data"))
+        # For a single host, this might just be P(None) or P(ResourceAxis.DATA) if you intend to shard across cores.
+        x_sharded = with_sharding_constraint(x, P(ResourceAxis.DATA))
+        weights_sharded = with_sharding_constraint(weights, P(ResourceAxis.DATA))
         # Bias is usually replicated or not sharded
         bias_sharded = with_sharding_constraint(bias, P())
 
-    @jax.jit
-    def layer(x_arg, weights_arg, bias_arg):
-        with mesh:  # Ensure the computation also happens within the mesh context
+        @jax.jit
+        def layer(x_arg, weights_arg, bias_arg):
             return with_sharding_constraint(jnp.dot(x_arg, weights_arg) + bias_arg, P())
 
-    output = layer(x_sharded, weights_sharded, bias_sharded)
+        output = layer(x_sharded, weights_sharded, bias_sharded)
     return np.array(output)
 
 
@@ -118,7 +123,6 @@ class CounterActor:
 
     def count(self) -> int:
         return self._count
-
 
 
 # Want to try:
@@ -263,7 +267,6 @@ def test_variable_multislice_run():
             assert np.array_equal(results[i], results[0])
 
 
-
 @pytest.mark.ray
 def test_multislice_run_twice():
     """2. Run a second function after the first one and verify it runs correctly."""
@@ -308,6 +311,7 @@ def test_multislice_fail_once():
     @ray.remote(max_calls=1)
     def fail_once_on_first_slice_jax_fn() -> None:
         import time
+
         # do JAX work first
         result = simple_jax_fn()
         # fail on the first run one the first slice

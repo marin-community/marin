@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from tempfile import TemporaryDirectory
 from typing import Any
 
@@ -12,7 +15,7 @@ from chex import assert_trees_all_close
 import haliax as hax
 
 from levanter.tensorstore_serialization import tree_deserialize_leaves_tensorstore, tree_serialize_leaves_tensorstore
-from test_utils import MLP, arrays_only, assert_trees_not_close
+from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 
 def test_tensorstore_checkpoint_simple():
@@ -46,8 +49,7 @@ def test_tensorstore_checkpoint_simple():
 
 
 def test_checkpoint_steps():
-    mesh = jax.sharding.Mesh(jax.devices(), ("device",))
-    with mesh:
+    with use_test_mesh():
         key0 = jax.random.PRNGKey(0)
         key1 = jax.random.PRNGKey(1)
 
@@ -100,8 +102,7 @@ def test_checkpoint_steps():
 
 
 def test_tensorstore_gpt2_mlp():
-    mesh = jax.sharding.Mesh(jax.devices(), ("device",))
-    with mesh:
+    with use_test_mesh():
         from levanter.models.gpt2 import Gpt2Mlp
 
         key0 = jax.random.PRNGKey(0)
@@ -136,8 +137,7 @@ def test_tensorstore_gpt2_mlp():
 
 
 def test_tensorstore_ok_with_nones():
-    mesh = jax.sharding.Mesh(jax.devices(), ("device",))
-    with mesh:
+    with use_test_mesh():
         A = hax.Axis("A", 10)
 
         class MyModule(eqx.Module):
@@ -161,8 +161,7 @@ def test_tensorstore_ok_with_nones():
 
 
 def test_tensorstore_ok_with_missing():
-    mesh = jax.sharding.Mesh(jax.devices(), ("device",))
-    with mesh:
+    with use_test_mesh():
         A = hax.Axis("A", 10)
 
         class MyModule(eqx.Module):

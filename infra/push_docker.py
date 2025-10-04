@@ -1,5 +1,8 @@
 #!/usr/bin/python
 
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Build and deploy the Levanter base image to Artifact Registry or Docker Hub.
 

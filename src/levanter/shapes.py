@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from dataclasses import dataclass
 from math import prod
 from typing import Optional, Tuple, Type, TypeAlias, Union

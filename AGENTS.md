@@ -23,7 +23,7 @@ repository. Follow these notes when implementing new features or fixing bugs.
 
 ## Code Style
 
-* **Python version**: the project targets Python >=3.10.
+* **Python version**: the project targets Python >=3.11.
 * **Formatting and Linting**: We use `ruff` via `pre-commit`.
 * **Typing**: the code base uses `mypy` for static type checking. `mypy` is run by pre‑commit and the
   configuration is found in `pyproject.toml`.

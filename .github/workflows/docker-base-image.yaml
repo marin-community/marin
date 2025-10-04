@@ -8,6 +8,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -36,12 +40,12 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.DOCKER_PUSH_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Push Docker image
         run: |
-          docker buildx build --file docker/tpu/Dockerfile.base --tag ghcr.io/${{ github.repository_owner }}/levanter-base:latest --tag ghcr.io/${{ github.repository_owner }}/levanter-base:${{ env.DATE }} --push .
+          docker buildx build --file docker/tpu/Dockerfile.base --tag ghcr.io/${{ github.repository }}-base:latest --tag ghcr.io/${{ github.repository }}-base:${{ env.DATE }} --push .
 
       - name: Build and Push Incremental Docker image
         run: |
-          docker buildx build --file docker/tpu/Dockerfile.incremental --tag ghcr.io/${{ github.repository_owner }}/levanter-tpu:latest --tag ghcr.io/${{ github.repository_owner }}/levanter-tpu:${{ env.DATE }} --push .
+          docker buildx build --file docker/tpu/Dockerfile.incremental --tag ghcr.io/${{ github.repository }}-tpu:latest --tag ghcr.io/${{ github.repository }}-tpu:${{ env.DATE }} --push .

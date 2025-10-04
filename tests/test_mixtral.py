@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import tempfile
 
 import jax
@@ -9,10 +12,8 @@ import numpy as np
 import pytest
 import transformers
 from jax import random
-from jax._src.mesh import Mesh
 
 import haliax as hax
-from haliax.partitioning import ResourceAxis
 
 from levanter.layers.attention import AttentionMask
 
@@ -22,6 +23,7 @@ from test_utils import (  # , check_model_works_with_seqlen
     check_load_config,
     parameterize_with_configs,
     skip_if_no_torch,
+    use_test_mesh,
 )
 
 
@@ -291,9 +293,7 @@ def test_mixtral_roundtrip():
             return hax.nn.softmax(model_output, axis=model.Vocab)
 
         compute = jax.jit(compute)
-        with Mesh(
-            np.array(jax.devices()).reshape(1, -1, 1), (ResourceAxis.REPLICA, ResourceAxis.DATA, ResourceAxis.MODEL)
-        ):
+        with use_test_mesh():
             jax_out = compute(input).array
 
         assert torch_out.shape == jax_out.shape, f"{torch_out.shape} != {jax_out.shape}"
