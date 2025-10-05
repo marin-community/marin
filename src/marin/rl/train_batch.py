@@ -128,6 +128,11 @@ def create_training_batch_from_rollouts(
     for key in training_examples[0].keys():
         stacked[key] = jnp.stack([ex[key] for ex in training_examples], axis=0)
 
+    assert stacked["loss_masks"].sum() > 0, (
+        "All loss masks are zero in the batch, this will trigger NaNs during training."
+        "You probably have prompts > max_tokens - increase max_tokens."
+    )
+
     batch = TrainingBatch(
         input_ids=hax.named(stacked["input_ids"], ["batch", "position"]),
         attention_mask=hax.named(stacked["attention_mask"], ["batch", "position"]),

@@ -20,7 +20,6 @@ weight transfer implementations.
 """
 
 import logging
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -133,33 +132,15 @@ class WeightTransferClient(ABC):
 
 
 def get_or_create_actor(actor_class, name: str, *args, **kwargs):
-    """Fetch an existing actor reference or create it if it doesn't exist.
+    """Get or create actor. Ray handles restarts automatically with max_restarts=-1.
 
     Args:
-        actor_class: Ray remote class (e.g., RayWeightCoordinator, WeightTransferCoordinator)
+        actor_class: Ray remote class (e.g., ArrowFlightCoordinator, WeightTransferCoordinator)
         name: Actor name for registration
         *args: Arguments to pass to actor constructor
-        max_retries: Number of retry attempts
         **kwargs: Keyword arguments to pass to actor constructor
 
     Returns:
         Ray actor handle
     """
-    max_retries = 5
-
-    for attempt in range(max_retries):
-        logger.info("Retrieving or creating actor '%s' (attempt %d)", name, attempt + 1)
-        try:
-            return actor_class.options(name=name, get_if_exists=True, max_restarts=-1).remote(*args, **kwargs)
-        except ValueError:
-            # Another process might have created it, wait and retry
-            if attempt < max_retries - 1:
-                retry_timeout = 0.1 * (attempt**2)
-                logger.info(
-                    "Actor '%s' not found, retrying in %.2f seconds (attempt %d)", name, retry_timeout, attempt + 1
-                )
-                time.sleep(retry_timeout)
-                continue
-            raise
-
-    raise RuntimeError(f"Failed to get or create actor '{name}' after {max_retries} attempts")
+    return actor_class.options(name=name, get_if_exists=True, max_restarts=-1).remote(*args, **kwargs)

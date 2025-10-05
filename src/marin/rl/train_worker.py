@@ -28,8 +28,6 @@ import haliax as hax
 import jax
 import jax.random as jrandom
 import levanter
-import ray
-import ray.actor
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -173,22 +171,15 @@ class TrainWorker:
             axis_mapping=self.config.trainer.compute_axis_mapping,
         )
 
-        # Restore curriculum state from checkpoint if it exists
+        # Create curriculum actor with auto-restore from checkpoint
         checkpoint_dir = config.trainer.checkpointer.expanded_path(config.run_id)
-        ray.get(self.curriculum_actor().restore_checkpoint.remote(checkpoint_dir))
+        self._curriculum_actor = get_or_create_curriculum_actor(
+            self.config.curriculum_config, checkpoint_path=checkpoint_dir
+        )
 
         logger.info("Connected to curriculum actor: %s", config.curriculum_config.actor_name)
 
         self._build_models()
-
-    def curriculum_actor(self):
-        # Ray is broken: https://github.com/ray-project/ray/issues/7815
-        # If an actor ever fails, it seems like our actor handle becomes invalid until
-        # we explicitly request a new actor. We cannot directly return the actor handle
-        # unfortunately, as Ray will try to GC if before it can be used. Thus we cache
-        # the reference here.
-        self._curriculum_actor = get_or_create_curriculum_actor(self.config.curriculum_config)
-        return self._curriculum_actor
 
     def _build_models(self):
         """Build reference and initial policy models."""
@@ -270,7 +261,7 @@ class TrainWorker:
         def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
             checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
             try:
-                self.curriculum_actor().save_checkpoint.remote(checkpoint_dir)
+                self._curriculum_actor.save_checkpoint.remote(checkpoint_dir)
             except Exception as e:
                 logger.error(f"Failed to save curriculum checkpoint: {e}")
 

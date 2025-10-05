@@ -282,10 +282,8 @@ class RolloutWorker:
 
         self._environments = {}
 
-    def curriculum_actor(self):
-        # Ray is broken: https://github.com/ray-project/ray/issues/7815
+        # Create curriculum actor (no checkpoint path for rollout workers)
         self._curriculum_actor = get_or_create_curriculum_actor(self.config.curriculum_config)
-        return self._curriculum_actor
 
     def _load_environment(self, lesson_id: str) -> MarinEnv:
         """Load environment from lesson ID."""
@@ -435,7 +433,7 @@ class RolloutWorker:
             batch, _ = self._sample_batch(lesson_id, mode="eval", rng=rng)
             stats = _compute_batch_stats(batch, lesson_id)
 
-            self.curriculum_actor().update_lesson_stats.remote(stats.rollout_stats, mode="eval", current_step=step)
+            self._curriculum_actor.update_lesson_stats.remote(stats.rollout_stats, mode="eval", current_step=step)
 
             if stats.total_count > 0:
                 success_rate = stats.success_count / stats.total_count
@@ -477,7 +475,7 @@ class RolloutWorker:
             rng, seed_key = jax.random.split(rng)
             seed = int(seed_key[0])
             try:
-                lesson_id = ray.get(self.curriculum_actor().sample_lesson.remote(seed))
+                lesson_id = ray.get(self._curriculum_actor.sample_lesson.remote(seed))
             except Exception as e:
                 logger.warning(f"Failed to sample lesson from curriculum: {e}, will try again...")
                 time.sleep(10.0)
@@ -508,7 +506,7 @@ class RolloutWorker:
             barrier_sync()
 
             stats = _compute_batch_stats(rollout_batch, lesson_id)
-            self.curriculum_actor().update_lesson_stats.remote(stats.rollout_stats, mode="training", current_step=step)
+            self._curriculum_actor.update_lesson_stats.remote(stats.rollout_stats, mode="training", current_step=step)
 
             step += 1
             self._rollout_writer.write_batch(rollout_batch)

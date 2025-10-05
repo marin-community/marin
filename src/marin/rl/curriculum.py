@@ -565,21 +565,16 @@ class Curriculum:
             json.dump(checkpoint_data, f, indent=2)
 
     def restore_checkpoint(self, checkpoint_dir: str, filename: str = "curriculum_state.json"):
-        """Restore curriculum state from checkpoint in-place.
+        """Restore curriculum state from latest checkpoint in directory.
 
         Args:
             checkpoint_dir: Directory containing the checkpoint.
-            filename: Name of the checkpoint file to load.
+            filename: Name of the checkpoint file to load (default pattern).
         """
-        import os
-
-        import fsspec
-
         fs, _ = fsspec.core.url_to_fs(checkpoint_dir)
         checkpoint_path = os.path.join(checkpoint_dir, filename)
 
         if not fs.exists(checkpoint_path):
-            logger.info("No curriculum checkpoint found at %s, starting fresh", checkpoint_path)
             return
 
         with fs.open(checkpoint_path) as f:
@@ -607,5 +602,23 @@ class Curriculum:
         logger.info("Restored curriculum checkpoint from %s at step %d", checkpoint_path, self.current_step)
 
 
-def get_or_create_curriculum_actor(config: CurriculumConfig):
-    return ray.remote(Curriculum).options(name=config.actor_name, get_if_exists=True, max_restarts=-1).remote(config)
+def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: str | None = None):
+    """Get or create curriculum actor, auto-restoring from checkpoint if path provided.
+
+    Args:
+        config: Curriculum configuration.
+        checkpoint_path: Optional path to checkpoint directory for auto-restore.
+
+    Returns:
+        Ray actor handle to the curriculum.
+    """
+    actor = ray.remote(Curriculum).options(name=config.actor_name, get_if_exists=True, max_restarts=-1).remote(config)
+
+    # Auto-restore from checkpoint if path provided
+    if checkpoint_path:
+        try:
+            ray.get(actor.restore_checkpoint.remote(checkpoint_path))
+        except Exception as e:
+            logger.warning(f"Failed to restore curriculum checkpoint from {checkpoint_path}: {e}, starting fresh")
+
+    return actor

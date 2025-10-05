@@ -357,10 +357,7 @@ class ArrowFlightServer(WeightTransferServer):
             logger.info(f"Arrow Flight server {i} started at {server_location}")
 
         self.metrics = WeightTransferServerMetrics()
-
-    def coordinator(self):
         self._coordinator = get_or_create_actor(ArrowFlightCoordinator, self.config.coordinator_name)
-        return self._coordinator
 
     def serve_weights(self, weight_id: int, model: PyTree) -> None:
         """Serve weights via Arrow Flight using Haliax state_dict serialization.
@@ -393,7 +390,7 @@ class ArrowFlightServer(WeightTransferServer):
                 param_names = list(params_dict.keys())
                 actual_host = self.config.flight_host if self.config.flight_host != "0.0.0.0" else socket.gethostname()
                 server_locations = [(actual_host, server.port) for server in self._flight_servers]
-                ray.get(self.coordinator().update_server.remote(weight_id, param_names, server_locations))
+                ray.get(self._coordinator.update_server.remote(weight_id, param_names, server_locations))
                 update_time = time.time()
 
                 self.metrics.successful_transfers += 1
@@ -451,10 +448,7 @@ class ArrowFlightClient(WeightTransferClient):
 
         self.metrics = WeightTransferClientMetrics()
         self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_SERVERS)
-
-    def coordinator(self):
         self._coordinator = get_or_create_actor(ArrowFlightCoordinator, self.config.coordinator_name)
-        return self._coordinator
 
     def _connect_to_servers(self, new_locations) -> bool:
         """Connect to all Arrow Flight servers."""
@@ -511,7 +505,7 @@ class ArrowFlightClient(WeightTransferClient):
             start_time = time.time()
 
             # Fetch server info from coordinator
-            server_info = ray.get(self.coordinator().fetch_server.remote())
+            server_info = ray.get(self._coordinator.fetch_server.remote())
 
             if not server_info:
                 logger.info("No Arrow Flight server info available from coordinator.")
