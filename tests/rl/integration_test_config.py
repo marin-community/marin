@@ -98,6 +98,7 @@ class DummyTokenizer:
 
     def __init__(self, pad_token_id=0):
         self.vocab_size = len(self.TOKENS)
+        self.TOKENS.sort(key=len, reverse=True)  # Sort by length for greedy matching
         self.pad_token_id = pad_token_id
         self.eos_token = "</s>"
         self.bos_token = "<s>"
@@ -114,7 +115,7 @@ class DummyTokenizer:
                     text = text[len(token) :]
                     break
             else:
-                raise ValueError(f"Unknown token in text: {text[:5]}...")
+                raise ValueError(f"Unknown token in text: '{text}'")
 
         return tokens
 

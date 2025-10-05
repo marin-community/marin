@@ -53,6 +53,18 @@ pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping integrati
 logger = logging.getLogger(__name__)
 
 
+def disable_noisy_loggers():
+    """Disable verbose INFO logging from inference engine and HTTP clients."""
+    noisy_loggers = [
+        "levanter.inference.engine",
+        "levanter.inference.openai",
+        "httpx",
+        "uvicorn.access",
+    ]
+    for logger_name in noisy_loggers:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
+
 @pytest.fixture
 def temp_checkpoint_dir(tmp_path):
     """Create temporary directory for mock checkpoints."""
@@ -173,6 +185,7 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
 
     def _create_and_run_worker(self):
         """Create and run the rollout worker with tracking hooks."""
+        disable_noisy_loggers()
         self.worker = RolloutWorker(
             config=self.rollout_worker_config,
         )
@@ -224,6 +237,7 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
 
     def _create_and_run_worker(self):
         """Create and run the training worker with tracking hooks."""
+        disable_noisy_loggers()
         self.worker = TrainWorker(config=self.training_worker_config)
 
         self.reference_model = self.trained_model = jax.device_get(self.worker.reference_model)
@@ -742,27 +756,23 @@ def test_train_worker_checkpoint_restart(ray_tpu_cluster, training_worker_config
 
 
 @pytest.mark.slow("Integration test with training loop")
-def test_train_worker_with_sequential_digits(ray_tpu_cluster, tmp_path):
+def test_train_worker_with_sequential_digits(ray_tpu_cluster, tmp_path, rollout_storage_config):
     """Test training worker learns to generate sequential digits.
 
     This test validates that the training worker can learn a simple pattern
     requiring the model to produce digits in sequential order (0,1,2,3...).
     """
-    # Create storage and configs
     import uuid
 
-    from marin.rl.curriculum import CurriculumConfig, LessonConfig
+    from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
     from marin.rl.environments import EnvConfig
-    from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
-    from tests.rl.integration_test_config import (
-        create_nano_training_worker_config,
-        create_sequential_digits_rollout_batch,
-    )
+    from tests.rl.integration_test_config import create_sequential_digits_rollout_batch
 
-    test_id = uuid.uuid4().hex[:8]
-    rollout_storage_config = RolloutStorageConfig(storage_type=StorageType.IN_MEMORY, queue_name=f"test_seq_{test_id}")
+    target_steps = 500
+    tokenizer = DummyTokenizer()
 
     # Create curriculum with sequential digits task
+    test_id = uuid.uuid4().hex[:8]
     curriculum_config = CurriculumConfig(
         lessons={
             "sequential_digits": LessonConfig(
@@ -771,20 +781,38 @@ def test_train_worker_with_sequential_digits(ray_tpu_cluster, tmp_path):
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "sequential_digits", "seed": 42, "difficulty": "medium"},
                 ),
+                sampling_params=SamplingParams(temperature=1.0, n_prompts=8, n_generations_per_prompt=4, max_tokens=64),
             )
         },
         eval_frequency=100,
         actor_name=f"test_curriculum_seq_{test_id}",
     )
 
-    # Create training config
-    training_worker_config = create_nano_training_worker_config(rollout_storage_config, tmp_path)
-    training_worker_config.curriculum_config = curriculum_config
-    training_worker_config.trainer.num_train_steps = 500  # More steps for this harder task
+    # Create trainer config with target steps
+    trainer_config = create_nano_trainer_config(tmp_path)
+    trainer_config.num_train_steps = target_steps
 
-    queue_writer = rollout_storage_config.create_writer()
+    # Create RLJobConfig and get worker configs
+    job_config = RLJobConfig(
+        model=create_nano_llama_config(),
+        trainer=trainer_config,
+        train_params=TrainParams(
+            optimizer=create_nano_optimizer_config(),
+            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
+            replay_buffer_capacity=2048,
+            replay_buffer_alpha=3.0,
+            max_samples_per_rollout=4,
+        ),
+        curriculum=curriculum_config,
+        tokenizer=tokenizer,
+        rollout_storage=rollout_storage_config,
+    )
+
+    job = RLJob(job_config)
+    training_worker_config, _ = job.to_worker_configs()
+
+    queue_writer = training_worker_config.rollout_storage.create_writer()
     batch_size = training_worker_config.trainer.train_batch_size
-    tokenizer = DummyTokenizer()
 
     with TrainWorkerRunner(training_worker_config) as runner:
         # Wait for worker to initialize
