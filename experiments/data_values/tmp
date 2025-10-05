@@ -1,0 +1,14 @@
+sampark@t1v-n-1b120a4a-w-0:/tmp/ray/session_latest/logs$ ls -lht worker-*.err | head -n 30
+-rw-r--r-- 1 ubuntu users   42 Sep 23 09:26 worker-6f82b2850130dca23060d8018baf132bba197a9b1543867b9013ad7f-1a000000-60299.err
+-rw-r--r-- 1 ubuntu users 1.2K Sep 23 09:26 worker-3e45e470b57d70cfd8a3d3d89096c239856ad061684e128101517653-1a000000-43496.err
+-rw-r--r-- 1 ubuntu users 6.9K Sep 23 09:26 worker-937491c2e701733638903b30f02291eb757bb45ed99a39dd655c10d1-1a000000-59248.err
+-rw-r--r-- 1 ubuntu users 6.9K Sep 23 09:25 worker-a5793c8214e3c0915d6342439c36f3db2847c8662ad11c3ab69c03a8-1a000000-58198.err
+-rw-r--r-- 1 ubuntu users 6.9K Sep 23 09:25 worker-6fa0b1954b1344e490abbf009b9d97534dc69e34c1b65191d4e8b93f-1a000000-57148.err
+-rw-r--r-- 1 ubuntu users 6.9K Sep 23 09:25 worker-0a4c00867ed59ec798358598b3feb34092e735f6022c60936d2aac00-1a000000-56089.err
+-rw-r--r-- 1 ubuntu users 6.9K Sep 23 09:25 worker-acc78b1916c0eb388e6945ebe5a170943e02f3b7e231e7c37bf1e9b1-1a000000-55039.err
+-rw-r--r-- 1 ubuntu users 6.9K Sep 23 09:24 worker-b4982d80a60cf35d147a52b4d038c1b7c4b00e2d5340fc4c82bd2052-1a000000-53998.err
+-rw-r--r-- 1 ubuntu users 6.9K Sep 23 09:24 worker-3f3999ea7b3f310f5fe5074c6d8e3f62e6180c7d8e0bdc06fdebfc42-1a000000-52942.err
+-rw-r--r-- 1 ubuntu users 6.9K Sep 23 09:24 worker-a9908dc54e72d9fa746fa8745cd16cacd98f7d95d5ed750e20a02eb0-1a000000-51898.err
+-rw-r--r-- 1 ubuntu users 6.9K Sep 23 09:23 worker-0488a4003a2a3edf4a232dcaece63bd508d9a87e085f9cfbd053d670-1a000000-50844.err
+-rw-r--r-- 1 ubuntu users 6.9K Sep 23 09:23 worker-df081353abf6bcf8bc07e08b87c27130d8fe32ca864abeef15ecdbcf-1a000000-49793.err
+-rw-r--r-- 1 ubuntu users 6.9K Sep 23 09:23 worker-62ee7ead544aaee2b03c6ea1ba7d95406f8ca6d2bdb1dceaa8ba4d2b-1a000000-48795.err
