@@ -60,14 +60,17 @@ class DummyTokenizer:
         ",",
         ".",
         "?",
+        ":",
         "</s>",
         "<s>",
         "cats",
         "do",
         "feel",
         "for",
+        "from",
         "give",
         "i",
+        "in",
         "like",
         "love",
         "me",
@@ -83,6 +86,14 @@ class DummyTokenizer:
         "7",
         "8",
         "9",
+        "Count",
+        "List",
+        "digits",
+        "order",
+        "Sequence",
+        "Numbers",
+        "Sequential",
+        "up",
     ]
 
     def __init__(self, pad_token_id=0):
@@ -202,11 +213,11 @@ def create_nano_llama_config() -> LlamaConfig:
     """Create a tiny LlamaConfig for fast testing."""
     return LlamaConfig(
         seq_len=64,
-        hidden_dim=16,
-        intermediate_dim=16,
-        num_heads=4,
-        num_kv_heads=4,
-        num_layers=2,
+        hidden_dim=64,
+        intermediate_dim=128,
+        num_heads=8,
+        num_kv_heads=8,
+        num_layers=4,
         tokenizer=DummyTokenizer(),
     )
 
@@ -643,9 +654,9 @@ def create_sequential_digits_rollout_batch(
     # Generate synthetic prompt/response examples
     prompts = [
         "Count from 0:",
-        "List digits in order:",
         "Sequence:",
         "0 1 2 3",
+        "digits:",
     ]
 
     # Positive responses: sequential digits

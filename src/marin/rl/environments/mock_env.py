@@ -235,10 +235,9 @@ class SequentialDigitsTask:
         examples = []
         prompts = [
             "Count from 0:",
-            "List digits in order:",
             "Sequence:",
             "0 1 2 3",
-            "Give me sequential digits:",
+            "digits:",
         ]
 
         # Perfect answers vary by difficulty
@@ -262,7 +261,7 @@ class SequentialDigitsTask:
         """Generate evaluation examples with held-out prompts."""
         examples = []
         eval_prompts = [
-            "Numbers in order:",
+            "Numbers:",
             "Sequential:",
             "Count up:",
         ]
