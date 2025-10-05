@@ -131,6 +131,9 @@ def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     total = rewards.sum()
     leave_one_out_baselines = (total - rewards) / (n - 1)
     advantages = rewards - leave_one_out_baselines
+
+    generator = np.random.default_rng()
+    advantages += generator.normal(loc=0.0, scale=1e-6, size=advantages.shape)
     return advantages
 
 

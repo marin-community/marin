@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 
 import fsspec
 import numpy as np
+import ray
 
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
@@ -607,6 +608,4 @@ class Curriculum:
 
 
 def get_or_create_curriculum_actor(config: CurriculumConfig):
-    import ray
-
     return ray.remote(Curriculum).options(name=config.actor_name, get_if_exists=True, max_restarts=-1).remote(config)

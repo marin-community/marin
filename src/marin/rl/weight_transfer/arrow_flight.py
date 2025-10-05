@@ -43,6 +43,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
 import ray
+import ray.actor
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree
@@ -315,7 +316,6 @@ class ArrowFlightServer(WeightTransferServer):
     _flight_servers: list[MarinFlightServer]
     _server_threads: list[threading.Thread]
     _server_locations: list[str]
-    coordinator: ray.actor.ActorHandle
     metrics: WeightTransferServerMetrics
 
     def __init__(
@@ -356,10 +356,10 @@ class ArrowFlightServer(WeightTransferServer):
 
             logger.info(f"Arrow Flight server {i} started at {server_location}")
 
-        # Get coordinator
-        self.coordinator = get_or_create_actor(ArrowFlightCoordinator, config.coordinator_name)
-
         self.metrics = WeightTransferServerMetrics()
+
+    def coordinator(self):
+        return get_or_create_actor(ArrowFlightCoordinator, self.config.coordinator_name)
 
     def serve_weights(self, weight_id: int, model: PyTree) -> None:
         """Serve weights via Arrow Flight using Haliax state_dict serialization.
@@ -392,7 +392,7 @@ class ArrowFlightServer(WeightTransferServer):
                 param_names = list(params_dict.keys())
                 actual_host = self.config.flight_host if self.config.flight_host != "0.0.0.0" else socket.gethostname()
                 server_locations = [(actual_host, server.port) for server in self._flight_servers]
-                ray.get(self.coordinator.update_server.remote(weight_id, param_names, server_locations))
+                ray.get(self.coordinator().update_server.remote(weight_id, param_names, server_locations))
                 update_time = time.time()
 
                 self.metrics.successful_transfers += 1
