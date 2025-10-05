@@ -109,7 +109,7 @@ available_node_types:
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
     max_workers: 1024
-    min_workers: 4
+    min_workers: 8
     node_config:
       acceleratorType: v5litepod-4
       runtimeVersion: v2-alpha-tpuv5-lite

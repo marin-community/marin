@@ -28,11 +28,10 @@ import haliax as hax
 import jax
 import jax.random as jrandom
 import levanter
-import ray
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
-from transformers import AutoTokenizer
+from transformers import PreTrainedTokenizer
 
 from marin.rl import weight_transfer
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
@@ -40,7 +39,7 @@ from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.weight_transfer import WeightTransferConfig
 
 from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader
-from .rl_losses import rloo_loss_with_importance_sampling
+from .rl_losses import RLLossModule
 from .rollout_storage import RolloutStorageConfig
 from .train_batch import create_training_batch_from_rollouts
 
@@ -56,25 +55,14 @@ class TrainWorkerConfig:
     trainer: TrainerConfig
     optimizer: OptimizerConfig
     replay_buffer: ReplayBufferConfig
-
     weight_transfer: WeightTransferConfig
-    curriculum_config: "CurriculumConfig"  # type: ignore
-
-    max_input_length: int
-    max_output_length: int
-    pad_token_id: int
-
-    # Unique run ID for checkpointing and logging
-    # (Not sure why this isn't part of TrainerConfig)
+    curriculum_config: CurriculumConfig
+    loss: RLLossModule
+    tokenizer: PreTrainedTokenizer
     run_id: str
 
-    # Initial checkpoint for the reference model (auto-detects HF repo vs local path)
     initial_checkpoint: str | None = None
-
-    # Optimization parameters
-    kl_coef: float = 0.1
-
-    curriculum_checkpoint_interval: int = 100
+    """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
 
 
 class StreamingRolloutLoader:
@@ -96,14 +84,19 @@ class StreamingRolloutLoader:
 
         Args:
             data_loader: The replay data loader to get rollouts from
-            config: Trainer config with mesh and axis mapping information
-            max_input_length: Maximum input sequence length for padding
-            max_output_length: Maximum output sequence length for padding
-            pad_token_id: Token ID to use for padding
+            config: Train worker config with tokenizer and curriculum information
         """
         self.data_loader = data_loader
         self.config = config
         self.timeout = 60.0
+
+        # Get max_tokens from curriculum
+        self.max_tokens = self.config.curriculum_config.max_tokens
+
+        # Compute pad_token_id from tokenizer once
+        self.pad_token_id = self.config.tokenizer.pad_token_id
+        if self.pad_token_id is None:
+            self.pad_token_id = self.config.tokenizer.eos_token_id
 
     def __iter__(self):
         """Yield batches continuously from the replay buffer."""
@@ -114,9 +107,7 @@ class StreamingRolloutLoader:
                 continue
 
             # Convert rollouts to training batch
-            batch = create_training_batch_from_rollouts(
-                rollouts, self.config.max_input_length, self.config.max_output_length, self.config.pad_token_id
-            )
+            batch = create_training_batch_from_rollouts(rollouts, self.max_tokens, self.pad_token_id)
             # shard onto the device mesh
             with self.config.trainer.device_mesh:
                 sharded_batch = hax.shard(batch, self.config.trainer.compute_axis_mapping)
@@ -151,15 +142,14 @@ class TrainWorker:
         levanter.initialize(config.trainer)
         self.config = config
         self._should_stop = False
-        if isinstance(config.model.tokenizer, str):
-            self.tokenizer = AutoTokenizer.from_pretrained(config.model.tokenizer)
-        else:
-            self.tokenizer = config.model.tokenizer
+        self.tokenizer = config.tokenizer
+        self.loss_module = config.loss
 
         self.rollout_reader = config.rollout_storage.create_reader()
 
         self.replay_buffer = ReplayBuffer(
             config=config.replay_buffer,
+            loss_module=self.loss_module,
             local_batch_size=config.trainer.train_batch_size,
             process_id=jax.process_index(),
             total_processes=jax.process_count(),
@@ -181,11 +171,11 @@ class TrainWorker:
             axis_mapping=self.config.trainer.compute_axis_mapping,
         )
 
-        self.curriculum_actor = get_or_create_curriculum_actor(config.curriculum_config)
-
-        # Restore curriculum state from checkpoint if it exists
+        # Create curriculum actor with auto-restore from checkpoint
         checkpoint_dir = config.trainer.checkpointer.expanded_path(config.run_id)
-        ray.get(self.curriculum_actor.restore_checkpoint.remote(checkpoint_dir))
+        self._curriculum_actor = get_or_create_curriculum_actor(
+            self.config.curriculum_config, checkpoint_path=checkpoint_dir
+        )
 
         logger.info("Connected to curriculum actor: %s", config.curriculum_config.actor_name)
 
@@ -224,12 +214,11 @@ class TrainWorker:
         config = self.config
         optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
+        loss_fn = self.loss_module.create_loss_fn(self.reference_model, None)
+
         @jax.jit
         def _loss_function(model, batch, key):
-            return rloo_loss_with_importance_sampling(
-                model, self.reference_model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.2
-            )
-            # return ppo_loss(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.5)
+            return loss_fn(model, batch, key)
 
         with (
             config.trainer.device_mesh,
@@ -271,9 +260,12 @@ class TrainWorker:
 
         def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
             checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
-            self.curriculum_actor.save_checkpoint.remote(checkpoint_dir)
+            try:
+                self._curriculum_actor.save_checkpoint.remote(checkpoint_dir)
+            except Exception as e:
+                logger.error(f"Failed to save curriculum checkpoint: {e}")
 
-        trainer.add_hook(_curriculum_checkpoint_hook, every=self.config.curriculum_checkpoint_interval)
+        trainer.add_hook(_curriculum_checkpoint_hook, every=self.config.curriculum_config.checkpoint_steps)
 
     def weight_transfer_hook(self, trainer: Trainer, info: levanter.callbacks.StepInfo):
         step = info.step

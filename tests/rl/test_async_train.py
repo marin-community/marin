@@ -28,6 +28,8 @@ import jax
 import numpy as np
 import pytest
 
+from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
+from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import (
     RolloutStorageConfig,
     StorageType,
@@ -36,9 +38,13 @@ from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from tests.rl.integration_test_config import (
     DummyTokenizer,
+    create_nano_llama_config,
+    create_nano_optimizer_config,
     create_nano_rollout_worker_config,
-    create_nano_training_worker_config,
+    create_nano_train_worker_config,
+    create_nano_trainer_config,
     create_rollout_batch,
+    create_test_curriculum_config,
     run_inference_with_engine,
 )
 
@@ -66,21 +72,13 @@ def rollout_storage_config():
 @pytest.fixture
 def training_worker_config(tmp_path, rollout_storage_config):
     """Create minimal training worker configuration for testing."""
-    return create_nano_training_worker_config(rollout_storage_config, tmp_path)
+    return create_nano_train_worker_config(rollout_storage_config, tmp_path)
 
 
 @pytest.fixture
 def rollout_worker_config(tmp_path, rollout_storage_config):
     """Create minimal inference worker configuration for testing."""
     return create_nano_rollout_worker_config(tmp_path, rollout_storage_config)
-
-
-def _print_worker_status(elapsed, inference_runner, training_runner):
-    """Helper function to print detailed worker status during monitoring."""
-    print(f"[{elapsed:.1f}s] Status:")
-    print(f"  Rollouts generated: {inference_runner.rollouts_generated}")
-    print(f"  Training steps: {training_runner.steps_completed}")
-    print(f"  Weight transfers: {inference_runner.weight_transfers}")
 
 
 class ThreadedWorkerRunner(ABC):
@@ -266,10 +264,6 @@ def test_rollout_worker(rollout_worker_config: RolloutWorkerConfig):
     # coordinator = create_coordinator(WeightTransferMode.GCS_CHECKPOINT, name=coordinator_name)
 
     rollout_worker_config.max_rollouts = 10
-    rollout_worker_config.n_generations = 1
-    rollout_worker_config.n_prompts_per_step = 1
-    rollout_worker_config.max_input_length = 8
-    rollout_worker_config.max_output_length = 8
 
     # Use context manager for cleaner test
     with RolloutWorkerRunner(rollout_worker_config) as runner:
@@ -333,16 +327,9 @@ def test_rollout_and_train_workers(
 
     with TrainWorkerRunner(training_worker_config) as training_runner:
         time.sleep(1)
-        rollout_runner = RolloutWorkerRunner(rollout_worker_config)
-
-        with rollout_runner:
+        with RolloutWorkerRunner(rollout_worker_config) as rollout_runner:
             start_time = time.time()
-
             while time.time() - start_time < 60:
-                elapsed = time.time() - start_time
-
-                _print_worker_status(elapsed, rollout_runner, training_runner)
-
                 if training_runner.done.is_set() and not rollout_runner.done.is_set():
                     rollout_runner.stop()
                     break
@@ -388,7 +375,7 @@ def validate_model(model, tokenizer) -> dict[str, str]:
         model=model,
         prompts=test_prompts,
         tokenizer=tokenizer,
-        max_tokens=16,
+        max_tokens=64,
         temperature=0.8,
     )
 
@@ -418,17 +405,40 @@ def validate_model(model, tokenizer) -> dict[str, str]:
 
 
 @pytest.mark.slow("Integration test with training loop")
-def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, training_worker_config):
+def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path, rollout_storage_config):
     """Test training worker with manually constructed cat-themed rollout batches.
 
     This test validates that the training worker can process rollout batches
     with varying rewards and learn to prefer high-reward (cat-heavy) responses.
     """
     target_steps = 200
-    queue_writer = training_worker_config.rollout_storage.create_writer()
-    training_worker_config.trainer.num_train_steps = target_steps
-    batch_size = training_worker_config.trainer.train_batch_size
     tokenizer = DummyTokenizer()
+
+    # Create trainer config with target steps
+    trainer_config = create_nano_trainer_config(tmp_path)
+    trainer_config.num_train_steps = target_steps
+
+    # Create RLJobConfig and get worker configs
+    job_config = RLJobConfig(
+        model=create_nano_llama_config(),
+        trainer=trainer_config,
+        train_params=TrainParams(
+            optimizer=create_nano_optimizer_config(),
+            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
+            replay_buffer_capacity=2048,
+            replay_buffer_alpha=3.0,
+            max_samples_per_rollout=4,
+        ),
+        curriculum=create_test_curriculum_config(),
+        tokenizer=tokenizer,
+        rollout_storage=rollout_storage_config,
+    )
+
+    job = RLJob(job_config)
+    training_worker_config, _ = job.to_worker_configs()
+
+    queue_writer = training_worker_config.rollout_storage.create_writer()
+    batch_size = training_worker_config.trainer.train_batch_size
 
     with TrainWorkerRunner(training_worker_config) as runner:
         # Wait for worker to initialize and models to be available
@@ -474,14 +484,37 @@ def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, training_worker_
 @pytest.mark.slow("Long-running integration test.")
 def test_full_integration_moar_cats(
     ray_tpu_cluster,
-    training_worker_config,
-    rollout_worker_config,
+    tmp_path,
+    rollout_storage_config,
 ):
     """Long-running test to validate environment objective improves over time."""
-    # The workers already use the same storage config from the fixtures, so they'll automatically share data
-
     target_steps = 100
-    training_worker_config.trainer.num_train_steps = target_steps
+
+    # Create trainer config with target steps
+    trainer_config = create_nano_trainer_config(tmp_path)
+    trainer_config.num_train_steps = target_steps
+
+    # Create RLJobConfig and get worker configs
+    job_config = RLJobConfig(
+        model=create_nano_llama_config(),
+        trainer=trainer_config,
+        train_params=TrainParams(
+            optimizer=create_nano_optimizer_config(),
+            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
+        ),
+        curriculum=create_test_curriculum_config(),
+        tokenizer=DummyTokenizer(),
+        rollout_storage=rollout_storage_config,
+    )
+
+    job = RLJob(job_config)
+    training_worker_config, rollout_worker_config = job.to_worker_configs()
+
+    # Apply test-specific overrides
+    rollout_worker_config.weight_transfer.poll_interval_seconds = 0.1
+    rollout_worker_config.weight_transfer.sync_interval_steps = 1
+    rollout_worker_config.max_rollouts = 100
+
     metrics_history = []
     with TrainWorkerRunner(training_worker_config) as training_runner:
         time.sleep(1)
@@ -536,8 +569,6 @@ def test_full_integration_moar_cats(
 @pytest.mark.slow("Integration test with checkpoint restart")
 def test_train_worker_checkpoint_restart(ray_tpu_cluster, training_worker_config):
     """Test that training worker correctly restarts from checkpoint without repeating steps."""
-    from pathlib import Path
-
     # Phase 1: Initial training run - small number of steps
     initial_target_steps = 5
     training_worker_config.trainer.num_train_steps = initial_target_steps
