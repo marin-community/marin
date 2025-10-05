@@ -22,6 +22,7 @@ import pytest
 try:
     from marin.rl import train_batch
     from marin.rl.replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader
+    from marin.rl.rl_losses import RLOOLoss
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 from marin.rl.rollout_storage import (
@@ -35,9 +36,9 @@ from marin.rl.types import (
 )
 
 
-def rollouts_to_training_batch(rollouts, max_input_length=16, max_output_length=16, pad_token_id=0):
+def rollouts_to_training_batch(rollouts, max_tokens=32, pad_token_id=0):
     """Helper function to convert rollouts to training batch for testing."""
-    return train_batch.create_training_batch_from_rollouts(rollouts, max_input_length, max_output_length, pad_token_id)
+    return train_batch.create_training_batch_from_rollouts(rollouts, max_tokens, pad_token_id)
 
 
 def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16, env_name: str | None = None) -> RolloutBatch:
@@ -96,6 +97,7 @@ def test_replay_buffer():
 
     replay_buffer = ReplayBuffer(
         config=ReplayBufferConfig(capacity=100, alpha=3.0, max_samples=-1),
+        loss_module=RLOOLoss(),
         local_batch_size=4,
         process_id=0,
         total_processes=1,
@@ -142,6 +144,7 @@ def test_replay_buffer_recency_bias():
 
     replay_buffer = ReplayBuffer(
         config=ReplayBufferConfig(capacity=100, alpha=10.0, max_samples=-1),  # Very strong recency bias
+        loss_module=RLOOLoss(),
         local_batch_size=50,
         process_id=0,
         total_processes=1,
@@ -172,6 +175,7 @@ def test_replay_buffer_capacity_eviction():
     """Test that replay buffer respects capacity limits and evicts old data."""
     replay_buffer = ReplayBuffer(
         config=ReplayBufferConfig(capacity=3, alpha=2.0, max_samples=-1),
+        loss_module=RLOOLoss(),
         local_batch_size=4,
         process_id=0,
         total_processes=1,
@@ -194,6 +198,7 @@ def test_replay_buffer_max_resamples():
     """Test that examples are retired after max_resamples uses."""
     replay_buffer = ReplayBuffer(
         config=ReplayBufferConfig(capacity=100, alpha=1.0, max_samples=3),  # Uniform sampling for predictable behavior
+        loss_module=RLOOLoss(),
         local_batch_size=2,
         process_id=0,
         total_processes=1,
@@ -227,6 +232,7 @@ def test_replay_buffer_max_resamples_disabled():
     """Test that max_resamples=-1 disables retirement."""
     replay_buffer = ReplayBuffer(
         config=ReplayBufferConfig(capacity=100, alpha=1.0, max_samples=-1),  # Disabled
+        loss_module=RLOOLoss(),
         local_batch_size=2,
         process_id=0,
         total_processes=1,
@@ -256,6 +262,7 @@ def test_replay_buffer_max_resamples_multiple_envs():
     """Test max_resamples with multiple environments."""
     replay_buffer = ReplayBuffer(
         config=ReplayBufferConfig(capacity=100, alpha=1.0, max_samples=2),
+        loss_module=RLOOLoss(),
         local_batch_size=3,
         process_id=0,
         total_processes=1,
@@ -291,6 +298,7 @@ def test_replay_buffer_max_resamples_multiple_envs():
 def test_replay_buffer_weight_step_filtering():
     replay_buffer = ReplayBuffer(
         config=ReplayBufferConfig(capacity=100, alpha=2.0, max_samples=-1, max_rollout_delay=30),
+        loss_module=RLOOLoss(),
         local_batch_size=4,
         process_id=0,
         total_processes=1,

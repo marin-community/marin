@@ -42,16 +42,13 @@ def trim_and_pad(ary: np.ndarray, max_seq_len: int, pad_token_id: int) -> np.nda
     return ary
 
 
-def convert_rollout_to_training_format(
-    rollout: Rollout, advantage: float, max_input_length: int, max_output_length: int, pad_token_id: int
-) -> dict:
+def convert_rollout_to_training_format(rollout: Rollout, advantage: float, max_tokens: int, pad_token_id: int) -> dict:
     """Convert a single rollout to training format with advantage.
 
     Args:
         rollout: The rollout data to convert
         advantage: Precomputed advantage value for this rollout
-        max_input_length: Maximum input sequence length for padding
-        max_output_length: Maximum output sequence length for padding
+        max_tokens: Maximum sequence length for padding
         pad_token_id: Token ID to use for padding
 
     Returns:
@@ -87,7 +84,7 @@ def convert_rollout_to_training_format(
         [np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32), rollout.response_logprobs.astype(np.float32)]
     )
 
-    max_seq_len = max_input_length + max_output_length
+    max_seq_len = max_tokens
 
     return {
         "input_ids": trim_and_pad(input_tokens, max_seq_len, pad_token_id),
@@ -101,14 +98,13 @@ def convert_rollout_to_training_format(
 
 
 def create_training_batch_from_rollouts(
-    individual_rollouts: list[RolloutWithAdvantage], max_input_length: int, max_output_length: int, pad_token_id: int
+    individual_rollouts: list[RolloutWithAdvantage], max_tokens: int, pad_token_id: int
 ) -> TrainingBatch:
     """Create a training batch from a list of individual rollouts.
 
     Args:
         individual_rollouts: List of RolloutWithAdvantage objects with precomputed advantages
-        max_input_length: Maximum input sequence length for padding
-        max_output_length: Maximum output sequence length for padding
+        max_tokens: Maximum sequence length for padding
         pad_token_id: Token ID to use for padding
 
     Returns:
@@ -122,8 +118,7 @@ def create_training_batch_from_rollouts(
         training_example = convert_rollout_to_training_format(
             individual.rollout,
             individual.advantage,
-            max_input_length,
-            max_output_length,
+            max_tokens,
             pad_token_id,
         )
         training_examples.append(training_example)
@@ -133,7 +128,12 @@ def create_training_batch_from_rollouts(
     for key in training_examples[0].keys():
         stacked[key] = jnp.stack([ex[key] for ex in training_examples], axis=0)
 
-    return TrainingBatch(
+    assert stacked["loss_masks"].sum() > 0, (
+        "All loss masks are zero in the batch, this will trigger NaNs during training."
+        "You probably have prompts > max_tokens - increase max_tokens."
+    )
+
+    batch = TrainingBatch(
         input_ids=hax.named(stacked["input_ids"], ["batch", "position"]),
         attention_mask=hax.named(stacked["attention_mask"], ["batch", "position"]),
         position_ids=hax.named(stacked["position_ids"], ["batch", "position"]),
@@ -142,3 +142,5 @@ def create_training_batch_from_rollouts(
         loss_masks=hax.named(stacked["loss_masks"], ["batch", "position"]),
         policy_logprobs=hax.named(stacked["policy_logprobs"], ["batch", "position"]),
     )
+
+    return batch

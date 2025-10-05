@@ -29,6 +29,7 @@ import haliax.haxtyping as ht
 import jax
 import numpy as np
 from haliax import NamedArray
+from transformers import PreTrainedTokenizer
 
 
 @dataclass
@@ -55,10 +56,7 @@ class InferenceContext(Protocol):
     This decouples the backend (Flax vs Levanter) during our transition period.
     """
 
-    @property
-    def tokenizer(self):
-        """Return the tokenizer."""
-        ...
+    tokenizer: PreTrainedTokenizer
 
     def generate(self, prompts: list[str], temperature: float, n_generations: int) -> list[InferenceResponse]:
         """Generate responses for a batch of prompts.
