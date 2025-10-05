@@ -69,10 +69,10 @@ class StorageType(Enum):
 _MEMORY_QUEUES: dict[str, "InMemoryRolloutQueue"] = {}
 
 
-def _get_or_create_queue(queue_name: str) -> "InMemoryRolloutQueue":
+def _get_or_create_queue(queue_name: str, maxlen: int | None = None) -> "InMemoryRolloutQueue":
     """Get or create a named in-memory queue."""
     if queue_name not in _MEMORY_QUEUES:
-        _MEMORY_QUEUES[queue_name] = InMemoryRolloutQueue()
+        _MEMORY_QUEUES[queue_name] = InMemoryRolloutQueue(maxlen=maxlen)
     return _MEMORY_QUEUES[queue_name]
 
 
@@ -87,6 +87,7 @@ class RolloutStorageConfig:
     max_rollout_files: int = 32
     # For in-memory storage
     queue_name: str | None = None
+    queue_maxlen: int | None = 4  # None for unbounded queue
 
     def create_reader(self) -> "RolloutReader":
         if self.storage_type == StorageType.FILE:
@@ -96,7 +97,7 @@ class RolloutStorageConfig:
         else:
             if self.queue_name is None:
                 raise ValueError("queue_name must be specified for IN_MEMORY storage type")
-            return _get_or_create_queue(self.queue_name).reader()
+            return _get_or_create_queue(self.queue_name, self.queue_maxlen).reader()
 
     def create_writer(self) -> "RolloutWriter":
         if self.storage_type == StorageType.FILE:
@@ -106,7 +107,7 @@ class RolloutStorageConfig:
         else:
             if self.queue_name is None:
                 raise ValueError("queue_name must be specified for IN_MEMORY storage type")
-            return _get_or_create_queue(self.queue_name).writer()
+            return _get_or_create_queue(self.queue_name, self.queue_maxlen).writer()
 
 
 class RolloutReader(ABC):
@@ -295,11 +296,56 @@ class FileRolloutWriter(RolloutWriter):
 
 
 class InMemoryRolloutQueue:
-    """In-memory rollout queue for testing and development."""
+    """In-memory rollout queue for testing and development.
 
-    def __init__(self):
+    Can be bounded (blocks on push when full) or unbounded.
+    Use maxlen=None for unbounded queue (legacy behavior).
+    """
+
+    def __init__(self, maxlen: int | None = None):
         self._queue: list[RolloutBatch] = []
+        self._maxlen = maxlen
         self._lock = threading.Lock()
+        self._not_full = threading.Condition(self._lock)
+        self._not_empty = threading.Condition(self._lock)
+
+    def push(self, batch: RolloutBatch) -> None:
+        """Push batch to queue, blocking if full (when bounded)."""
+        with self._not_full:
+            if self._maxlen is not None:
+                while len(self._queue) >= self._maxlen:
+                    self._not_full.wait()
+            self._queue.append(batch)
+            self._not_empty.notify()
+
+    def pop(self, timeout: float | None = None) -> RolloutBatch | None:
+        """Pop batch from queue, optionally blocking with timeout.
+
+        Returns None if queue is empty and timeout expires or no timeout given.
+        """
+        with self._not_empty:
+            if timeout is None or timeout <= 0:
+                if not self._queue:
+                    return None
+            else:
+                start_time = time.time()
+                while not self._queue:
+                    remaining = timeout - (time.time() - start_time)
+                    if remaining <= 0:
+                        return None
+                    self._not_empty.wait(timeout=remaining)
+
+            batch = self._queue.pop(0)
+            self._not_full.notify()
+            return batch
+
+    def pop_all(self) -> list[RolloutBatch]:
+        """Pop all available batches without blocking."""
+        with self._lock:
+            batches = self._queue[:]
+            self._queue.clear()
+            self._not_full.notify_all()
+            return batches
 
     def reader(self) -> "InMemoryRolloutReader":
         """Create a reader for this queue."""
@@ -320,36 +366,14 @@ class InMemoryRolloutReader(RolloutReader):
 
     def __init__(self, queue: InMemoryRolloutQueue):
         self._queue = queue
-        self._read_index = 0
 
     def read_batch(self, timeout: float | None = None) -> RolloutBatch | None:
         """Read a single batch with optional timeout."""
-        start_time = time.time()
-
-        while True:
-            with self._queue._lock:
-                if self._read_index < len(self._queue._queue):
-                    batch = self._queue._queue[self._read_index]
-                    self._read_index += 1
-                    return batch
-
-            # No new batches available
-            if timeout is None or timeout <= 0:
-                return None
-
-            # Check timeout
-            if time.time() - start_time >= timeout:
-                return None
-
-            # Wait a bit before checking again
-            time.sleep(min(0.01, timeout - (time.time() - start_time)))
+        return self._queue.pop(timeout)
 
     def read_all_available(self) -> list[RolloutBatch]:
         """Read all currently available batches without blocking."""
-        with self._queue._lock:
-            batches = self._queue._queue[self._read_index :]
-            self._read_index = len(self._queue._queue)
-            return batches
+        return self._queue.pop_all()
 
 
 class InMemoryRolloutWriter(RolloutWriter):
@@ -359,6 +383,5 @@ class InMemoryRolloutWriter(RolloutWriter):
         self._queue = queue
 
     def write_batch(self, batch: RolloutBatch) -> None:
-        """Write batch to memory queue."""
-        with self._queue._lock:
-            self._queue._queue.append(batch)
+        """Write batch to memory queue, blocking if full."""
+        self._queue.push(batch)

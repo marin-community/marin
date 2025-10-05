@@ -28,6 +28,7 @@ from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from tests.rl.integration.config import (
     DummyTokenizer,
+    RolloutBatchFeeder,
     TrainWorkerRunner,
     create_nano_llama_config,
     create_nano_optimizer_config,
@@ -93,31 +94,14 @@ def test_train_worker_with_sequential_digits(ray_tpu_cluster, tmp_path):
 
     with TrainWorkerRunner.from_job(job) as runner:
         queue_writer = runner.training_worker_config.rollout_storage.create_writer()
-        batch_size = runner.training_worker_config.trainer.train_batch_size
-        # Wait for worker to initialize
-        while not runner.worker:
-            time.sleep(0.1)
 
-        # Create initial batch to prime the trainer
-        batch = create_sequential_digits_rollout_batch(
-            policy_model=runner.reference_model,
-            batch_size=batch_size,
+        with RolloutBatchFeeder(
+            runner=runner,
+            batch_generator=create_sequential_digits_rollout_batch,
+            queue_writer=queue_writer,
             tokenizer=tokenizer,
-        )
-        queue_writer.write_batch(batch)
-
-        # Continuously feed batches using current model
-        while not runner.done.is_set():
-            if not runner.trained_model:
-                logger.warning("Waiting for trained model to be available...")
-            else:
-                batch = create_sequential_digits_rollout_batch(
-                    policy_model=runner.trained_model,
-                    batch_size=batch_size,
-                    tokenizer=tokenizer,
-                )
-                queue_writer.write_batch(batch)
-            time.sleep(0.5)
+        ):
+            runner.done.wait()
 
     # Validate training completed successfully
     assert all(not np.isnan(loss) for loss in runner.losses), "Loss should not be NaN"

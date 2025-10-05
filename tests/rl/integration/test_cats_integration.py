@@ -16,7 +16,6 @@
 
 import logging
 import os
-import time
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +25,7 @@ from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from tests.rl.integration.config import (
     DummyTokenizer,
+    RolloutBatchFeeder,
     RolloutWorkerRunner,
     TrainWorkerRunner,
     create_nano_llama_config,
@@ -76,30 +76,14 @@ def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path):
 
     with TrainWorkerRunner.from_job(job) as runner:
         queue_writer = runner.training_worker_config.rollout_storage.create_writer()
-        batch_size = runner.training_worker_config.trainer.train_batch_size
-        # Wait for worker to initialize and models to be available
-        while not runner.worker:
-            time.sleep(0.1)
 
-        # create an initial batch to prime the trainer
-        batch = create_cats_rollout_batch(
-            policy_model=runner.reference_model,
-            batch_size=batch_size,
+        with RolloutBatchFeeder(
+            runner=runner,
+            batch_generator=create_cats_rollout_batch,
+            queue_writer=queue_writer,
             tokenizer=tokenizer,
-        )
-        queue_writer.write_batch(batch)
-
-        while not runner.done.is_set():
-            if not runner.trained_model:
-                logger.warning("Waiting for trained model to be available...")
-            else:
-                batch = create_cats_rollout_batch(
-                    policy_model=runner.trained_model,
-                    batch_size=batch_size,
-                    tokenizer=tokenizer,
-                )
-                queue_writer.write_batch(batch)
-            time.sleep(1)
+        ):
+            runner.done.wait()
 
         assert all(not np.isnan(loss) for loss in runner.losses), "Loss should not be NaN"
         assert all(loss < 10.0 for loss in runner.losses), f"Loss should be reasonable, got {runner.losses}"
@@ -151,28 +135,26 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
     inference_runner.rollout_worker_config.max_rollouts = 100
 
     metrics_history = []
-    with training_runner:
-        time.sleep(1)
+    with training_runner, inference_runner:
+        # Collect metrics periodically until training completes
+        while not training_runner.done.is_set():
+            metrics_history.append(
+                {
+                    "rollouts_generated": inference_runner.rollouts_generated,
+                    "steps_completed": training_runner.steps_completed,
+                    "weight_transfers": inference_runner.weight_transfers,
+                }
+            )
+            training_runner.done.wait(timeout=1)
 
-        with inference_runner:
-            while True:
-                metrics_history.append(
-                    {
-                        "rollouts_generated": inference_runner.rollouts_generated,
-                        "steps_completed": training_runner.steps_completed,
-                        "weight_transfers": inference_runner.weight_transfers,
-                    }
-                )
-
-                if training_runner.done.is_set() and not inference_runner.done.is_set():
-                    inference_runner.stop()
-                    break
-
-                if inference_runner.done.is_set() and training_runner.done.is_set():
-                    training_runner.stop()
-                    break
-
-                time.sleep(1)
+        # Collect final metrics
+        metrics_history.append(
+            {
+                "rollouts_generated": inference_runner.rollouts_generated,
+                "steps_completed": training_runner.steps_completed,
+                "weight_transfers": inference_runner.weight_transfers,
+            }
+        )
 
     # Validate we ran for sufficient time and generated data
     assert len(metrics_history) >= 2, "Test should run long enough to collect multiple metric snapshots"

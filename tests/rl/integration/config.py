@@ -18,10 +18,13 @@ import datetime
 import logging
 import sys
 import threading
+import time
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import haliax as hax
 import jax
@@ -550,7 +553,7 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
 
         def counting_sample_batch(lesson_id, mode, rng):
             batch_data, metrics = original_sample_batch(lesson_id, mode=mode, rng=rng)
-            if batch_data is None:
+            if batch_data is None or metrics is None:
                 return None, None
             self._track_rollout_generation()
             # Add metadata about rollout
@@ -616,3 +619,56 @@ class TrainWorkerRunner(ThreadedWorkerRunner):
 
         self.worker._configure_training_hooks = patched_configure_hooks
         self.worker.train()
+
+
+@dataclass
+class RolloutBatchFeeder:
+    """Continuously generates and writes rollout batches in background thread.
+
+    Automatically uses the runner's trained model (or reference model as fallback)
+    to generate batches. Stops when runner completes.
+    """
+
+    runner: TrainWorkerRunner
+    batch_generator: Callable
+    queue_writer: Any
+    tokenizer: Any = None
+
+    def __post_init__(self):
+        self.thread = None
+        self.stop_flag = threading.Event()
+
+    def _run(self):
+        """Thread target - continuously generate batches until runner completes."""
+        # Wait for worker to initialize
+        while not self.runner.worker and not self.runner.done.is_set():
+            time.sleep(0.1)
+
+        if not self.runner.worker:
+            return
+
+        # Generate initial batch with reference model
+        model = self.runner.reference_model
+        batch_size = self.runner.training_worker_config.trainer.train_batch_size
+
+        # Continuously generate batches
+        while not self.runner.done.is_set() and not self.stop_flag.is_set():
+            # Use trained model if available, otherwise reference
+            if self.runner.trained_model:
+                model = self.runner.trained_model
+
+            batch = self.batch_generator(policy_model=model, batch_size=batch_size, tokenizer=self.tokenizer)
+            self.queue_writer.write_batch(batch)
+
+    def __enter__(self):
+        """Start batch generation thread."""
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Stop batch generation and wait for thread."""
+        self.stop_flag.set()
+        if self.thread:
+            self.thread.join(timeout=2)
+        return False

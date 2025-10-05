@@ -37,7 +37,9 @@ pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping integrati
 @pytest.mark.slow("Integration test.")
 def test_rollout_worker(tmp_path):
     """Test inference worker generates rollouts to in-memory queue."""
+    # Use unbounded queue since we're reading all at the end
     rollout_storage_config = create_test_rollout_storage_config()
+    rollout_storage_config.queue_maxlen = None
     queue_reader = rollout_storage_config.create_reader()
 
     trainer_config = create_nano_trainer_config(tmp_path)
