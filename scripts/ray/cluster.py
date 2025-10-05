@@ -170,8 +170,23 @@ def restart_cluster(ctx, preserve_jobs):
     # Backup jobs
     print("Backing up jobs...")
     with tempfile.TemporaryDirectory() as backup_dir:
-        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-            ray.backup_jobs(config_path, backup_dir)
+        try:
+            with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
+                ray.backup_jobs(config_path, backup_dir)
+        except Exception as e:
+            print()
+            print("=" * 60)
+            print(
+                f"Failed to back up jobs from cluster {config_obj.cluster_name} ({e}) "
+                + "(disable with --preserve-jobs=0)"
+            )
+            print("=" * 60)
+            print("Proceed with shutdown? (y/n): ", end="")
+            choice = input().strip().lower()
+            if choice != "y":
+                print("Aborting cluster restart.")
+                return
+            print("Proceeding with cluster restart without job preservation.")
 
         # Restart cluster using proper stop sequence
         print("Stopping cluster...")
@@ -215,6 +230,33 @@ def get_status(ctx):
     """Get cluster status."""
     with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         ray.print_cluster_status()
+
+
+@cli.command("cluster-info")
+@click.pass_context
+def cluster_info(ctx):
+    """Display cluster information. Shows all clusters if no config specified."""
+    config_path = ctx.obj.config_file
+
+    if config_path:
+        # Show info for specific cluster
+        info = ray.load_cluster_info(config_path)
+        clusters = {info.cluster_name: info}
+    else:
+        # Discover and show all active clusters
+        clusters = ray.discover_active_clusters()
+        if not clusters:
+            print("No active clusters found")
+            return
+
+    print(f"Active Clusters ({len(clusters)}):")
+    for name, info in sorted(clusters.items()):
+        print(f"\n{name}:")
+        print(f"  Config: {info.config_path}")
+        print(f"  Zone: {info.zone}")
+        print(f"  Project: {info.project}")
+        print(f"  Internal IP: {info.head_ip}")
+        print(f"  External IP: {info.external_ip}")
 
 
 @cli.command("list-configs")
@@ -363,27 +405,45 @@ def init_worker(ctx, name):
 @cli.command("dashboard")
 @click.option("--port", default=9999, help="Proxy dashboard port")
 @click.pass_context
-def open_multi_dashboard(ctx, port):
+def open_dashboard(ctx, port):
     """Open dashboard for all active Ray clusters."""
+    config_obj = ctx.obj.config_obj
+    if config_obj:
+        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)) as dashboard:
+            print(f"Connected to {config_obj.cluster_name} dashboard at {dashboard.get_dashboard_url()}")
+            try:
+                time.sleep(86400)
+            except KeyboardInterrupt:
+                print("\nShutting down...")
+        return
+
     with ray.ray_dashboard(ray.DashboardConfig(proxy_port=port)) as conn:
         if not conn.clusters:
             print("No active clusters found")
             return
 
+        if conn.proxy:
+            print(f"📊 Proxy dashboard: {conn.get_dashboard_url()}")
+            print()
+
         print(f"Connected to {len(conn.clusters)} clusters:")
         for name, info in conn.clusters.items():
-            port_info = conn.port_mappings[name]
-            print(f"  - {name} ({info.zone})")
-            print(f"    Dashboard: http://localhost:{port_info[0]}")
-            print(f"    Internal IP: {info.head_ip}")
+            ports = conn.port_mappings[name]
+            direct_url = f"http://localhost:{ports.dashboard_port}"
+            proxy_url = f"http://localhost:{conn.proxy.proxy_port}/{name}/" if conn.proxy else ""
+            urls = f"{direct_url} | {proxy_url}" if proxy_url else direct_url
+            print(f"  {name} ({info.zone}) - {urls}")
+            print(f"    IP: {info.external_ip} ({info.head_ip})")
+            print(
+                f"    Dashboard: http://localhost:{ports.dashboard_port} | GCS: localhost:{ports.gcs_port} | API: localhost:{ports.api_port}"
+            )
+            print()
 
         if conn.proxy:
-            print(f"\n📊 Proxy dashboard: {conn.get_dashboard_url()}")
             print("\nPress Ctrl+C to stop")
 
             try:
-                while True:
-                    time.sleep(1)
+                time.sleep(86400)
             except KeyboardInterrupt:
                 print("\nShutting down...")
 

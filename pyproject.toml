@@ -23,14 +23,14 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-storage-transfer",
     "jax==0.6.2",
-    "haliax>=1.4.dev381",
-    "levanter[serve]@git+https://github.com/marin-community/levanter.git",
+    "haliax>=1.4.dev418",
+    "levanter[serve] @ git+https://github.com/marin-community/levanter.git",
     "lz4",
     "multiprocess==0.70.16",
     "numpy",
     "openai",
-    "pandas",                            # Only needed by Fileprovider in inference.py
-    "pyarrow",                           # # Only needed by Fileprovider in inference.py
+    "pandas", # Only needed by Fileprovider in inference.py
+    "pyarrow", # # Only needed by Fileprovider in inference.py
     "ray==2.45",
     "regex",
     "requests",
@@ -245,6 +245,11 @@ tokenize_train = [
     "tiktoken",
 ]
 
+rl = [
+    "prime",
+    "sympy",
+    "verifiers",
+]
 
 post_training = [
     "gcsfs",
@@ -262,7 +267,6 @@ post_training = [
     "datasets",
     "scalax@git+https://github.com/Sea-Snell/scalax.git",
     "swebench ; sys_platform != 'darwin'",
-    "verifiers"
 ]
 
 data_browser = ["zstandard==0.23.0"]
