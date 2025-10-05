@@ -43,6 +43,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
 import ray
+import ray.actor
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree
@@ -315,7 +316,6 @@ class ArrowFlightServer(WeightTransferServer):
     _flight_servers: list[MarinFlightServer]
     _server_threads: list[threading.Thread]
     _server_locations: list[str]
-    coordinator: ray.actor.ActorHandle
     metrics: WeightTransferServerMetrics
 
     def __init__(
@@ -356,10 +356,8 @@ class ArrowFlightServer(WeightTransferServer):
 
             logger.info(f"Arrow Flight server {i} started at {server_location}")
 
-        # Get coordinator
-        self.coordinator = get_or_create_actor(ArrowFlightCoordinator, config.coordinator_name)
-
         self.metrics = WeightTransferServerMetrics()
+        self._coordinator = get_or_create_actor(ArrowFlightCoordinator, self.config.coordinator_name)
 
     def serve_weights(self, weight_id: int, model: PyTree) -> None:
         """Serve weights via Arrow Flight using Haliax state_dict serialization.
@@ -392,7 +390,7 @@ class ArrowFlightServer(WeightTransferServer):
                 param_names = list(params_dict.keys())
                 actual_host = self.config.flight_host if self.config.flight_host != "0.0.0.0" else socket.gethostname()
                 server_locations = [(actual_host, server.port) for server in self._flight_servers]
-                ray.get(self.coordinator.update_server.remote(weight_id, param_names, server_locations))
+                ray.get(self._coordinator.update_server.remote(weight_id, param_names, server_locations))
                 update_time = time.time()
 
                 self.metrics.successful_transfers += 1
@@ -411,13 +409,12 @@ class ArrowFlightServer(WeightTransferServer):
         except Exception as e:
             self.metrics.failed_transfers += 1
             logger.error(f"Failed to serve weights {weight_id} via Arrow Flight: {e}")
-            raise
 
     def cleanup(self) -> None:
         """Cleanup Flight server resources."""
         # shutdown servers in parallel in threads to avoid blocking on shutdown
         for flight_server in self._flight_servers:
-            logger.info(f"Shutting down Arrow Flight server at {flight_server._location}...")
+            logger.debug(f"Shutting down Arrow Flight server at {flight_server._location}...")
             threading.Thread(target=flight_server.shutdown, daemon=True).start()
 
     def get_metrics(self) -> WeightTransferServerMetrics:
@@ -445,15 +442,13 @@ class ArrowFlightClient(WeightTransferClient):
         self.mesh = mesh
         self.axis_mapping = axis_mapping
 
-        # Get coordinator
-        self._coordinator = get_or_create_actor(ArrowFlightCoordinator, config.coordinator_name)
-
         self._last_weight_id = None
         self._flight_clients = []
         self._server_locations = []
 
         self.metrics = WeightTransferClientMetrics()
         self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_SERVERS)
+        self._coordinator = get_or_create_actor(ArrowFlightCoordinator, self.config.coordinator_name)
 
     def _connect_to_servers(self, new_locations) -> bool:
         """Connect to all Arrow Flight servers."""
