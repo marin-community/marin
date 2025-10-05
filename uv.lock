@@ -4079,7 +4079,7 @@ wheels = [
 [[package]]
 name = "levanter"
 version = "1.2"
-source = { git = "https://github.com/marin-community/levanter.git#08f9a4ae6b9054e3e7dbf7ab59a9ba8edd07486b" }
+source = { git = "https://github.com/marin-community/levanter.git#e11c2d29cab419c57a9ef4c06fb2dab1cbcdff64" }
 dependencies = [
     { name = "async-lru" },
     { name = "braceexpand" },
