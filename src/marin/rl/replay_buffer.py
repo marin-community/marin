@@ -160,8 +160,8 @@ class ReplayBuffer:
                 else:
                     self.rollout_storage[env_name] = examples
 
-            if len(self.rollout_storage[env_name]) > self.capacity:
-                self.rollout_storage[env_name] = self.rollout_storage[env_name][-self.capacity :]
+                if len(self.rollout_storage[env_name]) > self.capacity:
+                    self.rollout_storage[env_name] = self.rollout_storage[env_name][-self.capacity :]
 
     def sample_rollouts(self) -> list[RolloutWithCount] | None:
         """Sample individual rollouts with balanced environment sampling.
@@ -176,6 +176,10 @@ class ReplayBuffer:
             env_names = [name for name, rollouts in self.rollout_storage.items() if rollouts]
             if not env_names:
                 return None
+
+            # log all env sizes
+            for env_name in env_names:
+                logger.info(f"Env '{env_name}' has {len(self.rollout_storage[env_name])} rollouts available.")
 
             # Sample individual rollouts
             sampled = []

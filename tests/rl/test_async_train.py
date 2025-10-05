@@ -81,14 +81,6 @@ def rollout_worker_config(tmp_path, rollout_storage_config):
     return create_nano_rollout_worker_config(tmp_path, rollout_storage_config)
 
 
-def _print_worker_status(elapsed, inference_runner, training_runner):
-    """Helper function to print detailed worker status during monitoring."""
-    print(f"[{elapsed:.1f}s] Status:")
-    print(f"  Rollouts generated: {inference_runner.rollouts_generated}")
-    print(f"  Training steps: {training_runner.steps_completed}")
-    print(f"  Weight transfers: {inference_runner.weight_transfers}")
-
-
 class ThreadedWorkerRunner(ABC):
     """Base class for managing workers in separate threads with error handling."""
 
@@ -335,16 +327,9 @@ def test_rollout_and_train_workers(
 
     with TrainWorkerRunner(training_worker_config) as training_runner:
         time.sleep(1)
-        rollout_runner = RolloutWorkerRunner(rollout_worker_config)
-
-        with rollout_runner:
+        with RolloutWorkerRunner(rollout_worker_config) as rollout_runner:
             start_time = time.time()
-
             while time.time() - start_time < 60:
-                elapsed = time.time() - start_time
-
-                _print_worker_status(elapsed, rollout_runner, training_runner)
-
                 if training_runner.done.is_set() and not rollout_runner.done.is_set():
                     rollout_runner.stop()
                     break
@@ -390,7 +375,7 @@ def validate_model(model, tokenizer) -> dict[str, str]:
         model=model,
         prompts=test_prompts,
         tokenizer=tokenizer,
-        max_tokens=16,
+        max_tokens=64,
         temperature=0.8,
     )
 

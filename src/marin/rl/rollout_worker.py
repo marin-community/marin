@@ -160,11 +160,13 @@ class LevanterInferenceContext(InferenceContext):
                         content = choice.message.content
                         tokens = self.tokenizer.encode(content)
                         logprobs = [t.logprob for t in choice.logprobs.content]
+                        logprobs = np.array(logprobs, dtype=np.float32)
+                        assert np.all(logprobs != 0), f"Logprobs contain zero values {choice}"
                         choices.append(
                             InferenceChoice(
                                 response_text=content,
                                 response_tokens=np.array(tokens, dtype=np.int32),
-                                logprobs=np.array(logprobs, dtype=np.float32),
+                                logprobs=logprobs,
                             )
                         )
 

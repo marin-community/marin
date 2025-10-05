@@ -235,7 +235,7 @@ def create_weight_transfer_config():
     return WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
-        poll_interval_seconds=1,
+        poll_interval_seconds=0.1,
     )
 
 
@@ -249,7 +249,7 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum") -> Curric
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats", "seed": 42},
                 ),
-                sampling_params=SamplingParams(temperature=1.0, n_prompts=8, n_generations_per_prompt=4, max_tokens=16),
+                sampling_params=SamplingParams(temperature=1.0, n_prompts=8, n_generations_per_prompt=4, max_tokens=64),
             )
         },
         eval_frequency=100,
@@ -326,7 +326,7 @@ def run_inference_with_engine(
     model,
     prompts: list[str],
     tokenizer=None,
-    max_tokens: int = 32,
+    max_tokens: int = 64,
     temperature: float = 1.0,
     enable_logprobs: bool = False,
 ) -> tuple[list[list[int]], list[str]]:

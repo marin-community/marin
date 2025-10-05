@@ -128,7 +128,7 @@ def create_training_batch_from_rollouts(
     for key in training_examples[0].keys():
         stacked[key] = jnp.stack([ex[key] for ex in training_examples], axis=0)
 
-    return TrainingBatch(
+    batch = TrainingBatch(
         input_ids=hax.named(stacked["input_ids"], ["batch", "position"]),
         attention_mask=hax.named(stacked["attention_mask"], ["batch", "position"]),
         position_ids=hax.named(stacked["position_ids"], ["batch", "position"]),
@@ -137,3 +137,5 @@ def create_training_batch_from_rollouts(
         loss_masks=hax.named(stacked["loss_masks"], ["batch", "position"]),
         policy_logprobs=hax.named(stacked["policy_logprobs"], ["batch", "position"]),
     )
+
+    return batch

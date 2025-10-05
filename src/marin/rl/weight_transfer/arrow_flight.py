@@ -359,7 +359,8 @@ class ArrowFlightServer(WeightTransferServer):
         self.metrics = WeightTransferServerMetrics()
 
     def coordinator(self):
-        return get_or_create_actor(ArrowFlightCoordinator, self.config.coordinator_name)
+        self._coordinator = get_or_create_actor(ArrowFlightCoordinator, self.config.coordinator_name)
+        return self._coordinator
 
     def serve_weights(self, weight_id: int, model: PyTree) -> None:
         """Serve weights via Arrow Flight using Haliax state_dict serialization.
@@ -416,7 +417,7 @@ class ArrowFlightServer(WeightTransferServer):
         """Cleanup Flight server resources."""
         # shutdown servers in parallel in threads to avoid blocking on shutdown
         for flight_server in self._flight_servers:
-            logger.info(f"Shutting down Arrow Flight server at {flight_server._location}...")
+            logger.debug(f"Shutting down Arrow Flight server at {flight_server._location}...")
             threading.Thread(target=flight_server.shutdown, daemon=True).start()
 
     def get_metrics(self) -> WeightTransferServerMetrics:
@@ -444,15 +445,16 @@ class ArrowFlightClient(WeightTransferClient):
         self.mesh = mesh
         self.axis_mapping = axis_mapping
 
-        # Get coordinator
-        self._coordinator = get_or_create_actor(ArrowFlightCoordinator, config.coordinator_name)
-
         self._last_weight_id = None
         self._flight_clients = []
         self._server_locations = []
 
         self.metrics = WeightTransferClientMetrics()
         self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_SERVERS)
+
+    def coordinator(self):
+        self._coordinator = get_or_create_actor(ArrowFlightCoordinator, self.config.coordinator_name)
+        return self._coordinator
 
     def _connect_to_servers(self, new_locations) -> bool:
         """Connect to all Arrow Flight servers."""
@@ -509,7 +511,7 @@ class ArrowFlightClient(WeightTransferClient):
             start_time = time.time()
 
             # Fetch server info from coordinator
-            server_info = ray.get(self._coordinator.fetch_server.remote())
+            server_info = ray.get(self.coordinator().fetch_server.remote())
 
             if not server_info:
                 logger.info("No Arrow Flight server info available from coordinator.")
