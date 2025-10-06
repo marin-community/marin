@@ -158,7 +158,7 @@ class TrainWorker:
         self.replay_loader = ReplayDataLoader(
             rollout_reader=self.rollout_reader,
             replay_buffer=self.replay_buffer,
-            rollout_fetch_interval=1.0,
+            rollout_fetch_interval=0.1,
         )
 
         self.data_loader = StreamingRolloutLoader(
