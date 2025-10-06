@@ -81,10 +81,13 @@ class TrainParams:
     optimizer: OptimizerConfig
     rl_loss: "RLLossModule"
 
-    # Replay buffer
-    max_samples_per_rollout: int
+    # Replay buffer settings
+    # By default we make the rollout_delay and max_samples conservative, effectively
+    # mimicking on-policy training.
+    max_samples_per_rollout: int = 1
     """How many times to use each rollout."""
-    max_rollout_delay: int
+
+    max_rollout_delay: int = 1
     """Max age of rollouts in steps."""
 
     replay_buffer_capacity: int = 4096

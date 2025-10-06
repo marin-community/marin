@@ -22,6 +22,7 @@ from typing import Any, ClassVar, Protocol
 import jax
 import jax.numpy as jnp
 import numpy as np
+from transformers import PreTrainedTokenizer
 
 from marin.rl.types import InferenceContext, Rollout, RolloutGroup
 
@@ -47,15 +48,11 @@ class MockEnvExample:
 class Task(Protocol):
     """Protocol for task implementations."""
 
-    def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        """Generate training examples."""
+    def generate_examples(self, n_examples: int, rng: np.random.Generator, tokenizer=None) -> list[dict[str, str]]:
+        """Generate examples."""
         ...
 
-    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        """Generate evaluation examples."""
-        ...
-
-    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
+    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer=None) -> float:
         """Compute reward for a response."""
         ...
 
@@ -75,7 +72,7 @@ class AdditionTask:
         self.difficulty = difficulty
         self.min_val, self.max_val = self.DIFFICULTY_RANGES[difficulty]
 
-    def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
+    def generate_examples(self, n_examples: int, rng: np.random.Generator, tokenizer=None) -> list[dict[str, str]]:
         examples = []
         for _ in range(n_examples):
             a = rng.integers(self.min_val, self.max_val)
@@ -86,10 +83,7 @@ class AdditionTask:
             examples.append({"prompt": prompt, "answer": answer})
         return examples
 
-    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        return self.generate_training_examples(n_examples, rng)
-
-    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
+    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer=None) -> float:
         return compute_soft_reward(correct_answer, actual_response)
 
 
@@ -113,7 +107,7 @@ class OppositesTask:
         # Difficulty not used for this task
         pass
 
-    def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
+    def generate_examples(self, n_examples: int, rng: np.random.Generator, tokenizer=None) -> list[dict[str, str]]:
         examples = []
         for _ in range(n_examples):
             word, opposite = self.OPPOSITES[rng.integers(len(self.OPPOSITES))]
@@ -122,10 +116,7 @@ class OppositesTask:
             examples.append({"prompt": prompt, "answer": answer})
         return examples
 
-    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        return self.generate_training_examples(n_examples, rng)
-
-    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
+    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer=None) -> float:
         return compute_soft_reward(correct_answer, actual_response)
 
 
@@ -136,7 +127,7 @@ class NumberComparisonTask:
         # Difficulty not used for this task
         pass
 
-    def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
+    def generate_examples(self, n_examples: int, rng: np.random.Generator, tokenizer=None) -> list[dict[str, str]]:
         examples = []
         for _ in range(n_examples):
             a = rng.integers(1, 100)
@@ -151,10 +142,7 @@ class NumberComparisonTask:
                 examples.append({"prompt": prompt, "answer": answer})
         return examples
 
-    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        return self.generate_training_examples(n_examples, rng)
-
-    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
+    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer=None) -> float:
         format_score = 1.0 if actual_response.strip().isdigit() else 0.0
         return 0.1 * format_score + 0.9 * compute_soft_reward(correct_answer, actual_response)
 
@@ -187,18 +175,16 @@ class MoarCatsTask:
         # Difficulty not used for this task
         pass
 
-    def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
+    def generate_examples(self, n_examples: int, rng: np.random.Generator, tokenizer=None) -> list[dict[str, str]]:
         examples = []
         for _ in range(n_examples):
             prompt = "i like cats, i love cats, give me moar cats."
-            answer = "cats"
+            num_cats = int(rng.integers(1, 5))
+            answer = "cats" * num_cats + " love cats" * int(num_cats > 1)
             examples.append({"prompt": prompt, "answer": answer})
         return examples
 
-    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        return self.generate_training_examples(n_examples, rng)
-
-    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
+    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer=None) -> float:
         # how many cats
         num_cats = actual_response.lower().count("cat")
         love_cats = actual_response.lower().count("love cats")
@@ -218,62 +204,22 @@ class SequentialDigitsTask:
     """
 
     def __init__(self, difficulty: str = "medium"):
-        # Difficulty controls sequence length requirements
-        self.difficulty = difficulty
-        if difficulty == "easy":
-            self.min_sequence_length = 3  # e.g., "123"
-            self.target_sequence_length = 5
-        elif difficulty == "medium":
-            self.min_sequence_length = 5  # e.g., "12345"
-            self.target_sequence_length = 7
-        else:  # hard
-            self.min_sequence_length = 7
-            self.target_sequence_length = 10  # full "0123456789"
+        pass
 
-    def generate_training_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        """Generate training examples that ask for sequential digits."""
+    def generate_examples(self, n_examples: int, rng: np.random.Generator, tokenizer=None) -> list[dict[str, str]]:
+        """Generate examples that ask for sequential digits."""
         examples = []
-        prompts = [
-            "Count from 0:",
-            "Sequence:",
-            "0 1 2 3",
-            "digits:",
-        ]
-
-        # Perfect answers vary by difficulty
-        perfect_answers = [
-            "0123456789",  # Full sequence
-            "12345678",  # Partial sequences
-            "234567",
-            "01234",
-            "56789",
-        ]
 
         for _ in range(n_examples):
-            prompt = rng.choice(prompts)
-            # Use perfect answers as targets (model will learn to generate these)
-            answer = perfect_answers[rng.integers(0, len(perfect_answers))]
+            start_idx = rng.integers(0, 5)
+            end_idx = start_idx + rng.integers(start_idx, 9)
+            prompt = f"{start_idx} to {end_idx}:"
+            answer = "".join(str(i) for i in range(start_idx, end_idx))
             examples.append({"prompt": prompt, "answer": answer})
 
         return examples
 
-    def generate_eval_examples(self, n_examples: int, rng: np.random.Generator) -> list[dict[str, str]]:
-        """Generate evaluation examples with held-out prompts."""
-        examples = []
-        eval_prompts = [
-            "Numbers:",
-            "Sequential:",
-            "Count up:",
-        ]
-
-        for _ in range(n_examples):
-            prompt = rng.choice(eval_prompts)
-            answer = "0123456789"  # Always expect full sequence for eval
-            examples.append({"prompt": prompt, "answer": answer})
-
-        return examples
-
-    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
+    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer: PreTrainedTokenizer) -> float:
         """Compute reward based on sequential digit quality.
 
         Reward structure:
@@ -283,45 +229,24 @@ class SequentialDigitsTask:
           - Bonus for longer sequences
         """
         if not actual_response:
-            return -1.0
+            return 0
 
-        # Extract digits from response
-        digits = [c for c in actual_response if c.isdigit()]
+        actual_tokens = tokenizer.encode(actual_response, add_special_tokens=False)
 
-        if not digits:
-            # No digits at all = very bad
-            return -2.0
+        # score is a function of how many digits & how sequential they are
+        digit_count = 0
+        order_count = 0
+        last_digit = -1
+        for token in actual_tokens:
+            token_str = tokenizer.decode([token])
+            if token_str.isdigit():
+                digit = int(token_str)
+                digit_count += 1
+                if digit > last_digit:
+                    order_count += 1
+                last_digit = digit
 
-        # Count sequential increasing pairs
-        sequential_count = 0
-        for i in range(len(digits) - 1):
-            curr = int(digits[i])
-            next_digit = int(digits[i + 1])
-
-            # Perfect sequence: next digit is curr + 1 (with wraparound)
-            if next_digit == (curr + 1) % 10:
-                sequential_count += 1
-            # Also accept wraparound (9 -> 0)
-            elif curr == 9 and next_digit == 0:
-                sequential_count += 1
-
-        # Count non-sequential or backwards transitions (penalty)
-        non_sequential_count = len(digits) - 1 - sequential_count
-
-        # Base reward from sequential pairs
-        base_reward = sequential_count * 1.0 - non_sequential_count * 0.5
-
-        # Length bonus (encourage longer sequences)
-        length_bonus = min(len(digits) / 10.0, 1.0) * 0.5
-
-        # Penalty for non-digit characters
-        non_digit_chars = len(actual_response) - len(digits)
-        non_digit_penalty = non_digit_chars * 0.1
-
-        total_reward = base_reward + length_bonus - non_digit_penalty
-
-        # Normalize to reasonable range [-2, 2]
-        return max(-2.0, min(2.0, total_reward))
+        return digit_count / len(actual_tokens) + order_count / len(actual_tokens)
 
 
 # Task mappings
@@ -350,8 +275,8 @@ class MockEnv(MarinEnv):
 
         # Generate examples using the task
         rng = np.random.default_rng(seed)
-        self.train_examples = self.task.generate_training_examples(NUM_TRAIN_EXAMPLES, rng)
-        self.eval_examples = self.task.generate_eval_examples(NUM_EVAL_EXAMPLES, rng)
+        self.train_examples = self.task.generate_examples(NUM_TRAIN_EXAMPLES, rng)
+        self.eval_examples = self.task.generate_examples(NUM_EVAL_EXAMPLES, rng)
 
         difficulty_str = f" (difficulty={difficulty})" if task_type == "addition" else ""
         print(
@@ -420,7 +345,7 @@ class MockEnv(MarinEnv):
                     actual_response = choice.response_text
 
                 # Compute reward
-                reward = self.task.compute_reward(example["answer"], actual_response)
+                reward = self.task.compute_reward(example["answer"], actual_response, tokenizer=inference_ctx.tokenizer)
 
                 # Create rollout
                 prompt_tokens = response.prompt_tokens[-max_input_length:]

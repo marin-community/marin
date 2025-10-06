@@ -79,6 +79,7 @@ class DummyTokenizer:
         "me",
         "moar",
         "you",
+        "to",
         "0",
         "1",
         "2",
@@ -89,14 +90,6 @@ class DummyTokenizer:
         "7",
         "8",
         "9",
-        "Count",
-        "List",
-        "digits",
-        "order",
-        "Sequence",
-        "Numbers",
-        "Sequential",
-        "up",
     ]
 
     def __init__(self, pad_token_id=0):
@@ -186,7 +179,7 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
 def create_nano_optimizer_config() -> AdamConfig:
     """Create a minimal AdamConfig for testing."""
     return AdamConfig(
-        learning_rate=1e-3,
+        learning_rate=1e-2,
         weight_decay=0.00,
         warmup=0.0,
         lr_schedule="constant",
@@ -635,25 +628,29 @@ class RolloutBatchFeeder:
 
     def _run(self):
         """Thread target - continuously generate batches until runner completes."""
-        # Wait for worker to initialize
-        while not self.runner.worker and not self.runner.done.is_set():
-            time.sleep(0.1)
+        try:
+            while not self.runner.worker and not self.runner.done.is_set():
+                time.sleep(0.1)
 
-        if not self.runner.worker:
-            return
+            if not self.runner.worker:
+                return
 
-        # Generate initial batch with reference model
-        model = self.runner.reference_model
-        batch_size = self.runner.training_worker_config.trainer.train_batch_size
+            # Generate initial batch with reference model
+            model = self.runner.reference_model
+            batch_size = self.runner.training_worker_config.trainer.train_batch_size
 
-        # Continuously generate batches
-        while not self.runner.done.is_set() and not self.stop_flag.is_set():
-            # Use trained model if available, otherwise reference
-            if self.runner.trained_model:
-                model = self.runner.trained_model
+            # Continuously generate batches
+            while not self.runner.done.is_set() and not self.stop_flag.is_set():
+                # Use trained model if available, otherwise reference
+                if self.runner.trained_model:
+                    model = self.runner.trained_model
 
-            batch = self.batch_generator(policy_model=model, batch_size=batch_size, tokenizer=self.tokenizer)
-            self.queue_writer.write_batch(batch)
+                batch = self.batch_generator(policy_model=model, batch_size=batch_size, tokenizer=self.tokenizer)
+                self.queue_writer.write_batch(batch)
+        except Exception:
+            logger.error("RolloutBatchFeeder failed", exc_info=True)
+        finally:
+            logger.info("RolloutBatchFeeder exiting")
 
     def __enter__(self):
         """Start batch generation thread."""

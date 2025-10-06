@@ -15,7 +15,6 @@
 """Test training worker with manual rollouts."""
 
 import os
-import time
 
 import pytest
 
@@ -23,6 +22,7 @@ from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from tests.rl.integration.config import (
     DummyTokenizer,
+    RolloutBatchFeeder,
     TrainWorkerRunner,
     create_nano_llama_config,
     create_nano_optimizer_config,
@@ -42,6 +42,7 @@ def test_train_worker(ray_tpu_cluster, tmp_path):
     queue_writer = rollout_storage_config.create_writer()
 
     trainer_config = create_nano_trainer_config(tmp_path)
+    trainer_config.num_train_steps = 10
 
     job_config = RLJobConfig(
         model=create_nano_llama_config(),
@@ -58,23 +59,15 @@ def test_train_worker(ray_tpu_cluster, tmp_path):
     job = RLJob(job_config)
 
     with TrainWorkerRunner.from_job(job) as runner:
-        batch_size = runner.training_worker_config.trainer.train_batch_size
+        queue_writer = runner.training_worker_config.rollout_storage.create_writer()
         tokenizer = DummyTokenizer()
-        # Wait for worker to initialize and models to be available
-        while not runner.worker:
-            time.sleep(0.1)
-
-        for _ in range(5):
-            batch = create_cats_rollout_batch(
-                policy_model=runner.reference_model,
-                batch_size=batch_size,
-                tokenizer=tokenizer,
-            )
-            queue_writer.write_batch(batch)
-
-        # Wait for training to complete
-        while not runner.done.is_set() and runner.steps_completed < 10:
-            time.sleep(0.1)
+        with RolloutBatchFeeder(
+            runner=runner,
+            batch_generator=create_cats_rollout_batch,
+            queue_writer=queue_writer,
+            tokenizer=tokenizer,
+        ):
+            runner.done.wait()
 
     # Verify results
     assert runner.steps_completed >= 1, f"Expected at least 1 training step, got {runner.steps_completed}"

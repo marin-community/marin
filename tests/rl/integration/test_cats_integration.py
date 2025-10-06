@@ -118,6 +118,8 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
             rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
+            max_samples_per_rollout=1,
+            max_rollout_delay=4,
         ),
         curriculum=create_test_curriculum_config(),
         tokenizer=DummyTokenizer(),
@@ -131,7 +133,6 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
 
     # Apply test-specific overrides
     inference_runner.rollout_worker_config.weight_transfer.sync_interval_steps = 1
-    inference_runner.rollout_worker_config.max_rollouts = 100
 
     metrics_history = []
     with training_runner, inference_runner:
