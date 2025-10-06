@@ -95,6 +95,39 @@ class ReplayBuffer:
     def __post_init__(self):
         self._rng = np.random.default_rng(seed=self.process_id + 42)
 
+    @classmethod
+    def from_config(
+        cls,
+        config: ReplayBufferConfig,
+        local_batch_size: int,
+        total_processes: int,
+        process_id: int,
+        loss_module: RLLossModule,
+    ) -> "ReplayBuffer":
+        """Create ReplayBuffer from configuration.
+
+        Args:
+            config: Replay buffer configuration.
+            local_batch_size: Batch size for sampling.
+            total_processes: Total number of processes.
+            process_id: ID of this process.
+            loss_module: Loss module for computing advantages.
+
+        Returns:
+            Configured ReplayBuffer instance.
+        """
+        return cls(
+            capacity=config.capacity,
+            local_batch_size=local_batch_size,
+            alpha=config.alpha,
+            total_processes=total_processes,
+            process_id=process_id,
+            max_samples=config.max_samples,
+            max_rollout_step_delay=config.max_rollout_step_delay,
+            max_rollout_timestamp_delay=config.max_rollout_timestamp_delay,
+            loss_module=loss_module,
+        )
+
     def set_current_step(self, step: int) -> None:
         """Set current training step and filter stale rollouts."""
         self._current_step = step
