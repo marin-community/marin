@@ -64,7 +64,7 @@ class RunConfig:
     num_train_slices: int = 1
     """Number of TPU slices for training worker"""
 
-    max_retries_failure: int = 10
+    max_retries_failure: int = 3
     """Maximum retries on worker failure"""
 
     max_retries_preemption: int = 10
