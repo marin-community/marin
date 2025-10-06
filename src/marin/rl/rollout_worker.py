@@ -336,7 +336,6 @@ class RolloutWorker:
         metrics = {
             f"{prefix}/sample_prompt": prompt_text,
             f"{prefix}/sample_response": response_text,
-            f"{prefix}/sample_reward": float(sample.episode_reward),
             f"{prefix}/sample_example_id": sample.env_example_id,
         }
         self.tracker.log(metrics, step=step)
@@ -456,6 +455,7 @@ class RolloutWorker:
             self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
                 stats.rollout_stats, mode="training", current_step=step
             )
+            self._build_eval_metrics(prefix="inference.train", lesson_id=lesson_id, batch=rollout_batch)
 
             step += 1
             self._rollout_writer.write_batch(rollout_batch)
