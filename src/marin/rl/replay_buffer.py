@@ -19,6 +19,7 @@ This module provides a replay buffer that manages rollout data for training,
 with balanced sampling across environments and configurable prioritization.
 """
 
+import dataclasses
 import logging
 import threading
 import time
@@ -50,8 +51,11 @@ class ReplayBufferConfig:
     max_samples: int
     """Maximum number of times to use an example before retiring."""
 
-    max_rollout_delay: int
-    """Maximum age of rollouts in training steps."""
+    max_rollout_step_delay: int
+    """Maximum age of rollouts in training steps, rollouts earlier than this will be dropped."""
+
+    max_rollout_timestamp_delay: float = 3600.0
+    """Maximum age of rollouts in seconds."""
 
 
 @dataclass
@@ -62,6 +66,7 @@ class RolloutWithCount(RolloutWithAdvantage):
     weight_step: int = 0
 
 
+@dataclass
 class ReplayBuffer:
     """The replay buffer manages incoming rollout data and produces training batches.
 
@@ -70,59 +75,54 @@ class ReplayBuffer:
     rollout array which is sampled from to produce training batches.
     """
 
-    def __init__(
-        self,
-        config: ReplayBufferConfig,
-        loss_module: RLLossModule,
-        local_batch_size: int,
-        process_id: int,
-        total_processes: int,
-    ):
-        """Initialize replay buffer.
+    capacity: int
+    local_batch_size: int
+    recency_alpha: float
+    total_processes: int
+    process_id: int
+    max_samples: int
+    max_rollout_step_delay: int
+    max_rollout_timestamp_delay: float
+    loss_module: RLLossModule
 
-        Args:
-            config: Configuration for buffer capacity, recency bias, and sampling limits.
-            local_batch_size: Target size for training batches.
-            process_id: Identifier for this process. Used to sample across processes.
-            total_processes: Total number of training processes.
-        """
-        self.capacity = config.capacity
-        self.local_batch_size = local_batch_size
-        self.recency_alpha = config.alpha
-        self.total_processes = total_processes
-        self.process_id = process_id
-        self.max_samples = config.max_samples
-        self.max_rollout_delay = config.max_rollout_delay
-        self.loss_module = loss_module
+    _total_batches_added: int = 0
+    _total_batches_sampled: int = 0
+    _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
+    _current_step: int = 0
+    _rng: np.random.Generator = dataclasses.field(init=False)
+    rollout_storage: dict[str, list[RolloutWithCount]] = dataclasses.field(default_factory=dict)
 
-        self.rollout_storage: dict[str, list[RolloutWithCount]] = {}
-        self._lock = threading.Lock()
-
-        self._total_batches_added = 0
-        self._total_batches_sampled = 0
-        self._current_step: int = 0
-
-        self._rng = np.random.default_rng(seed=process_id + 42)
+    def __post_init__(self):
+        self._rng = np.random.default_rng(seed=self.process_id + 42)
 
     def set_current_step(self, step: int) -> None:
         """Set current training step and filter stale rollouts."""
         self._current_step = step
-        min_step = step - self.max_rollout_delay
-        logger.info("Discarding rollouts older than step %d (current step %d)", min_step, step)
+        min_time = time.time() - self.max_rollout_timestamp_delay
+        min_step = step - self.max_rollout_step_delay
+        logger.info(
+            "Discarding rollouts older than step %d or timestamp %.0f (current step %d)", min_step, min_time, step
+        )
 
         with self._lock:
             total_removed = 0
             for env_name in self.rollout_storage:
                 rollouts = self.rollout_storage[env_name]
                 before = len(rollouts)
-                self.rollout_storage[env_name] = [r for r in rollouts if r.weight_step >= min_step]
+                self.rollout_storage[env_name] = [
+                    r
+                    for r in rollouts
+                    if (r.rollout.metadata.weight_step >= min_step and r.rollout.metadata.timestamp > min_time)
+                ]
                 total_removed += before - len(self.rollout_storage[env_name])
 
             total_remaining = sum(len(rollouts) for rollouts in self.rollout_storage.values())
 
             if total_removed > 0:
                 logger.info(
-                    f"Filtered {total_removed} stale rollouts (min_step={min_step}), {total_remaining} remaining"
+                    f"Filtered {total_removed} stale rollouts "
+                    f"(min_step={min_step}, min_time={min_time:.0f}), "
+                    f"{total_remaining} remaining"
                 )
 
     def _retire_overused_rollouts(self):
@@ -143,13 +143,21 @@ class ReplayBuffer:
         """
         env_examples: dict[str, list[RolloutWithCount]] = defaultdict(list)
         for batch in new_batches:
-            weight_step = batch.metadata.weight_step
-            if weight_step < self._current_step - self.max_rollout_delay:
+            if not batch.groups or not batch.groups[0].rollouts:
+                continue
+
+            # Read weight_step from first rollout's metadata
+            first_rollout = batch.groups[0].rollouts[0]
+            weight_step = first_rollout.metadata.weight_step
+
+            if weight_step < self._current_step - self.max_rollout_step_delay:
                 logger.info(
                     f"Skipping stale rollout batch (weight_step={weight_step}, current_step={self._current_step})"
                 )
                 continue
+
             self._total_batches_added += 1
+
             for group in batch.groups:
                 # Compute RLOO advantages for the group
                 advantages = self.loss_module.compute_advantages(group.rollouts)

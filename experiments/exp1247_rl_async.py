@@ -66,8 +66,8 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
     # Default sampling params for all lessons
     default_sampling = SamplingParams(
         temperature=0.7,
-        n_prompts=16,
-        n_generations_per_prompt=16,
+        n_prompts=8,
+        n_generations_per_prompt=8,
         max_tokens=MAX_TOKENS,
         stop_tokens=stop_tokens(MODEL_TOKENIZER),
     )
@@ -217,7 +217,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-power-014"),
+        rl_train(name="llama-1b-math-rl-test-power-016"),
     ]
 
     executor_main(

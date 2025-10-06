@@ -90,6 +90,9 @@ class TrainParams:
     max_rollout_delay: int = 1
     """Max age of rollouts in steps."""
 
+    max_rollout_timestamp_delay: float = 3600.0
+    """Maximum age of rollouts in seconds."""
+
     replay_buffer_capacity: int = 4096
     """How many examples to store per environment in the replay buffer."""
     replay_buffer_alpha: float = 3.0
@@ -229,13 +232,14 @@ class RLJob:
             capacity=self.config.train_params.replay_buffer_capacity,
             alpha=self.config.train_params.replay_buffer_alpha,
             max_samples=self.config.train_params.max_samples_per_rollout,
-            max_rollout_delay=self.config.train_params.max_rollout_delay,
+            max_rollout_step_delay=self.config.train_params.max_rollout_delay,
+            max_rollout_timestamp_delay=self.config.train_params.max_rollout_timestamp_delay,
         )
 
-        # Scan over sampling params for max seqs
+        # Scan over sampling params for max seqs, must be able to fit a single lesson prompt
         max_seqs = 0
         for lesson in self.config.curriculum.lessons.values():
-            total_seqs = lesson.sampling_params.n_generations_per_prompt * lesson.sampling_params.n_prompts
+            total_seqs = lesson.sampling_params.n_generations_per_prompt
             max_seqs = max(max_seqs, total_seqs)
 
         max_tokens = self.config.curriculum.max_tokens

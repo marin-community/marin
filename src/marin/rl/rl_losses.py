@@ -114,7 +114,7 @@ def rloo_loss_with_importance_sampling(
     reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)
 
     # KL regularization
-    kl_penalty = jnp.exp(current_logprobs) * (current_logprobs - reference_logprobs_array)
+    kl_penalty = current_logprobs - reference_logprobs_array
     kl_loss = kl_coef * jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
 
     loss = reinforce_loss + kl_loss
