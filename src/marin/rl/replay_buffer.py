@@ -77,7 +77,7 @@ class ReplayBuffer:
 
     capacity: int
     local_batch_size: int
-    recency_alpha: float
+    alpha: float
     total_processes: int
     process_id: int
     max_samples: int
@@ -220,7 +220,7 @@ class ReplayBuffer:
             for env_name, count in env_count.items():
                 rollouts = self.rollout_storage[env_name]
                 weights = np.arange(len(rollouts)) + 1
-                weights = weights**self.recency_alpha
+                weights = weights**self.alpha
                 weights = weights / weights.sum()
 
                 # Sample rollout index

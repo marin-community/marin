@@ -110,7 +110,7 @@ def test_replay_buffer():
     replay_buffer = ReplayBuffer(
         capacity=100,
         local_batch_size=4,
-        recency_alpha=3.0,
+        alpha=3.0,
         total_processes=1,
         process_id=0,
         max_samples=-1,
@@ -161,7 +161,7 @@ def test_replay_buffer_recency_bias():
     replay_buffer = ReplayBuffer(
         capacity=100,
         local_batch_size=50,
-        recency_alpha=10.0,
+        alpha=10.0,
         total_processes=1,
         process_id=0,
         max_samples=-1,
@@ -196,7 +196,7 @@ def test_replay_buffer_capacity_eviction():
     replay_buffer = ReplayBuffer(
         capacity=3,
         local_batch_size=4,
-        recency_alpha=2.0,
+        alpha=2.0,
         total_processes=1,
         process_id=0,
         max_samples=-1,
@@ -223,7 +223,7 @@ def test_replay_buffer_max_resamples():
     replay_buffer = ReplayBuffer(
         capacity=100,
         local_batch_size=2,
-        recency_alpha=1.0,
+        alpha=1.0,
         total_processes=1,
         process_id=0,
         max_samples=3,
@@ -261,7 +261,7 @@ def test_replay_buffer_max_resamples_disabled():
     replay_buffer = ReplayBuffer(
         capacity=100,
         local_batch_size=2,
-        recency_alpha=1.0,
+        alpha=1.0,
         total_processes=1,
         process_id=0,
         max_samples=-1,
@@ -295,7 +295,7 @@ def test_replay_buffer_max_resamples_multiple_envs():
     replay_buffer = ReplayBuffer(
         capacity=100,
         local_batch_size=3,
-        recency_alpha=1.0,
+        alpha=1.0,
         total_processes=1,
         process_id=0,
         max_samples=2,
@@ -335,7 +335,7 @@ def test_replay_buffer_weight_step_filtering():
     replay_buffer = ReplayBuffer(
         capacity=100,
         local_batch_size=4,
-        recency_alpha=2.0,
+        alpha=2.0,
         total_processes=1,
         process_id=0,
         max_samples=-1,
@@ -378,7 +378,7 @@ def test_replay_buffer_rollout_delay_progressive():
     replay_buffer = ReplayBuffer(
         capacity=100,
         local_batch_size=2,
-        recency_alpha=2.0,
+        alpha=2.0,
         total_processes=1,
         process_id=0,
         max_samples=-1,

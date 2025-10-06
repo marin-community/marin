@@ -192,7 +192,7 @@ class ReplayBufferConfig:
 class ReplayBuffer:
     capacity: int
     local_batch_size: int
-    recency_alpha: float
+    alpha: float
     total_processes: int
     process_id: int
     max_samples: int
@@ -299,7 +299,7 @@ Update ReplayBuffer instantiation to use renamed parameter:
 self.replay_buffer = ReplayBuffer(
     capacity=config.replay_buffer.capacity,
     local_batch_size=config.trainer.train_batch_size,
-    recency_alpha=config.replay_buffer.alpha,
+    alpha=config.replay_buffer.alpha,
     total_processes=jax.process_count(),
     process_id=jax.process_index(),
     max_samples=config.replay_buffer.max_samples,
@@ -391,7 +391,7 @@ Also update all ReplayBuffer instantiations in tests to use the new parameter na
 replay_buffer = ReplayBuffer(
     capacity=100,
     local_batch_size=4,
-    recency_alpha=3.0,
+    alpha=3.0,
     total_processes=1,
     process_id=0,
     max_samples=-1,

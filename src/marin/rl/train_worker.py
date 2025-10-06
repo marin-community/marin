@@ -150,7 +150,7 @@ class TrainWorker:
         self.replay_buffer = ReplayBuffer(
             capacity=config.replay_buffer.capacity,
             local_batch_size=config.trainer.train_batch_size,
-            recency_alpha=config.replay_buffer.alpha,
+            alpha=config.replay_buffer.alpha,
             total_processes=jax.process_count(),
             process_id=jax.process_index(),
             max_samples=config.replay_buffer.max_samples,
