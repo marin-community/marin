@@ -220,7 +220,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-power-016"),
+        rl_train(name="llama-1b-math-rl-test-power-017"),
     ]
 
     executor_main(
