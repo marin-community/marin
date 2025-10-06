@@ -342,15 +342,15 @@ class RolloutWorker:
         self.tracker.log(metrics, step=step)
         logger.info(f"Eval sample for lesson {lesson_id} at step {step}: {metrics}")
 
-    def _build_eval_metrics(self, lesson_id: str, batch: RolloutBatch) -> dict[str, Any]:
+    def _build_eval_metrics(self, prefix: str, lesson_id: str, batch: RolloutBatch) -> dict[str, Any]:
         metrics = {}
         stats = _compute_batch_stats(batch, lesson_id)
         if stats.total_count == 0:
             return metrics
         success_rate = stats.success_count / stats.total_count
-        metrics[f"{lesson_id}/success_rate"] = success_rate
-        metrics[f"{lesson_id}/avg_reward"] = stats.avg_reward
-        metrics[f"{lesson_id}/total_count"] = stats.total_count
+        metrics[f"{prefix}/{lesson_id}/success_rate"] = success_rate
+        metrics[f"{prefix}/{lesson_id}/avg_reward"] = stats.avg_reward
+        metrics[f"{prefix}/{lesson_id}/total_count"] = stats.total_count
         return metrics
 
     def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> dict:
@@ -364,12 +364,14 @@ class RolloutWorker:
         )
         stats = _compute_batch_stats(batch, lesson_id)
         self._log_prompt_example(lesson_id, batch, step, eval_type=eval_type)
-        metrics = self._build_eval_metrics(lesson_id, batch)
+        metrics = self._build_eval_metrics(prefix=f"inference.{eval_type}", lesson_id=lesson_id, batch=batch)
         self.tracker.log(metrics, step=step)
         logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, step, metrics)
         # only update curriculum for full evals
         if eval_type == "eval":
-            self._curriculum_actor.update_lesson_stats.remote(stats.rollout_stats, mode="eval", current_step=step)
+            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
+                stats.rollout_stats, mode="eval", current_step=step
+            )
         return stats
 
     def _evaluate_curriculum(self, rng, step: int) -> dict:
@@ -411,7 +413,7 @@ class RolloutWorker:
             rng, seed_key = jax.random.split(rng)
             seed = int(seed_key[0])
             try:
-                lesson_id = ray.get(self._curriculum_actor.sample_lesson.remote(seed))
+                lesson_id = ray.get(self._curriculum_actor.sample_lesson.options(enable_task_events=False).remote(seed))
             except Exception as e:
                 logger.warning(f"Failed to sample lesson from curriculum: {e}, will try again...")
                 time.sleep(10.0)
@@ -451,14 +453,15 @@ class RolloutWorker:
             barrier_sync()
 
             stats = _compute_batch_stats(rollout_batch, lesson_id)
-            self._curriculum_actor.update_lesson_stats.remote(stats.rollout_stats, mode="training", current_step=step)
+            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
+                stats.rollout_stats, mode="training", current_step=step
+            )
 
             step += 1
             self._rollout_writer.write_batch(rollout_batch)
 
             if self.config.log_freq > 0 and step % self.config.log_freq == 0:
                 log_metrics = {}
-                log_metrics.update(jax.device_get(metrics))
                 log_metrics.update(self._transfer_client.get_metrics())
                 log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
                 logger.info(f"Logging metrics at step {step}... {log_metrics}")
