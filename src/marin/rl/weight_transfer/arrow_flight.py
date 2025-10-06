@@ -366,7 +366,6 @@ class ArrowFlightServer(WeightTransferServer):
         """
         self.metrics.total_transfers += 1
 
-        logger.info(f"Serving weights for weight_id {weight_id} via {self.num_servers} Arrow Flight servers...")
         start_time = time.time()
         try:
             barrier_sync()

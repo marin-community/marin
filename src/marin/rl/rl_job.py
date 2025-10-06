@@ -81,11 +81,19 @@ class TrainParams:
     optimizer: OptimizerConfig
     rl_loss: "RLLossModule"
 
-    # Replay buffer
-    replay_buffer_capacity: int = 10000
-    replay_buffer_alpha: float = 3.0  # Recency bias
-    max_samples_per_rollout: int = 4  # How many times to use each rollout
-    max_batch_latency: int = 1000  # Max age of rollouts in steps
+    # Replay buffer settings
+    # By default we make the rollout_delay and max_samples conservative, effectively
+    # mimicking on-policy training.
+    max_samples_per_rollout: int = 1
+    """How many times to use each rollout."""
+
+    max_rollout_delay: int = 1
+    """Max age of rollouts in steps."""
+
+    replay_buffer_capacity: int = 4096
+    """How many examples to store per environment in the replay buffer."""
+    replay_buffer_alpha: float = 3.0
+    """Recency bias for the replay buffer."""
 
 
 def make_tokenizer(tokenizer: str | PreTrainedTokenizer) -> PreTrainedTokenizer:
@@ -221,7 +229,7 @@ class RLJob:
             capacity=self.config.train_params.replay_buffer_capacity,
             alpha=self.config.train_params.replay_buffer_alpha,
             max_samples=self.config.train_params.max_samples_per_rollout,
-            max_rollout_delay=self.config.train_params.max_batch_latency,
+            max_rollout_delay=self.config.train_params.max_rollout_delay,
         )
 
         # Scan over sampling params for max seqs

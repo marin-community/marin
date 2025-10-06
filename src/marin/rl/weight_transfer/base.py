@@ -69,7 +69,6 @@ class WeightTransferConfig:
     mode: WeightTransferMode = WeightTransferMode.ARROW_FLIGHT
     # Common settings
     sync_interval_steps: int = 4
-    poll_interval_seconds: float = 1.0
     coordinator_name: str = "weight_transfer_coordinator"
 
     transfer_timeout: float = 10.0

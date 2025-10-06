@@ -96,7 +96,7 @@ def test_replay_buffer():
             writer.write_batch(batch)
 
     replay_buffer = ReplayBuffer(
-        config=ReplayBufferConfig(capacity=100, alpha=3.0, max_samples=-1),
+        config=ReplayBufferConfig(capacity=100, alpha=3.0, max_samples=-1, max_rollout_delay=1000),
         loss_module=RLOOLoss(),
         local_batch_size=4,
         process_id=0,
@@ -143,7 +143,9 @@ def test_replay_buffer_recency_bias():
         batches.append(batch)
 
     replay_buffer = ReplayBuffer(
-        config=ReplayBufferConfig(capacity=100, alpha=10.0, max_samples=-1),  # Very strong recency bias
+        config=ReplayBufferConfig(
+            capacity=100, alpha=10.0, max_samples=-1, max_rollout_delay=1000
+        ),  # Very strong recency bias
         loss_module=RLOOLoss(),
         local_batch_size=50,
         process_id=0,
@@ -174,7 +176,7 @@ def test_replay_buffer_recency_bias():
 def test_replay_buffer_capacity_eviction():
     """Test that replay buffer respects capacity limits and evicts old data."""
     replay_buffer = ReplayBuffer(
-        config=ReplayBufferConfig(capacity=3, alpha=2.0, max_samples=-1),
+        config=ReplayBufferConfig(capacity=3, alpha=2.0, max_samples=-1, max_rollout_delay=1000),
         loss_module=RLOOLoss(),
         local_batch_size=4,
         process_id=0,
@@ -197,7 +199,9 @@ def test_replay_buffer_capacity_eviction():
 def test_replay_buffer_max_resamples():
     """Test that examples are retired after max_resamples uses."""
     replay_buffer = ReplayBuffer(
-        config=ReplayBufferConfig(capacity=100, alpha=1.0, max_samples=3),  # Uniform sampling for predictable behavior
+        config=ReplayBufferConfig(
+            capacity=100, alpha=1.0, max_samples=3, max_rollout_delay=1000
+        ),  # Uniform sampling for predictable behavior
         loss_module=RLOOLoss(),
         local_batch_size=2,
         process_id=0,
@@ -231,7 +235,7 @@ def test_replay_buffer_max_resamples():
 def test_replay_buffer_max_resamples_disabled():
     """Test that max_resamples=-1 disables retirement."""
     replay_buffer = ReplayBuffer(
-        config=ReplayBufferConfig(capacity=100, alpha=1.0, max_samples=-1),  # Disabled
+        config=ReplayBufferConfig(capacity=100, alpha=1.0, max_samples=-1, max_rollout_delay=1000),  # Disabled
         loss_module=RLOOLoss(),
         local_batch_size=2,
         process_id=0,
@@ -261,7 +265,7 @@ def test_replay_buffer_max_resamples_disabled():
 def test_replay_buffer_max_resamples_multiple_envs():
     """Test max_resamples with multiple environments."""
     replay_buffer = ReplayBuffer(
-        config=ReplayBufferConfig(capacity=100, alpha=1.0, max_samples=2),
+        config=ReplayBufferConfig(capacity=100, alpha=1.0, max_samples=2, max_rollout_delay=1000),
         loss_module=RLOOLoss(),
         local_batch_size=3,
         process_id=0,
@@ -336,3 +340,53 @@ def test_replay_buffer_weight_step_filtering():
     # Set current step to 190, min_step=160, should filter out weight_step=150
     replay_buffer.set_current_step(190)
     assert replay_buffer.size() == 3
+
+
+def test_replay_buffer_rollout_delay_progressive():
+    """Test rollout delay with progressive step advancement and stale batch rejection."""
+    replay_buffer = ReplayBuffer(
+        config=ReplayBufferConfig(capacity=100, alpha=2.0, max_samples=-1, max_rollout_delay=10),
+        loss_module=RLOOLoss(),
+        local_batch_size=2,
+        process_id=0,
+        total_processes=1,
+    )
+
+    # Add initial batches at steps 0, 5, 10
+    for step in [0, 5, 10]:
+        batch = create_test_batch(step, batch_size=2, max_seq_len=16, env_name="test_env")
+        batch = RolloutBatch(
+            groups=batch.groups, metadata=RolloutMetadata(worker_id="test", timestamp=time.time(), weight_step=step)
+        )
+        replay_buffer.add_batches([batch])
+
+    assert replay_buffer.size() == 6
+
+    # Advance to step 15, min_step=5, should filter out step 0
+    replay_buffer.set_current_step(15)
+    assert replay_buffer.size() == 4
+
+    # Try to add a stale batch (step 3 < min_step=5), should be rejected
+    stale_batch = create_test_batch(3, batch_size=2, max_seq_len=16, env_name="test_env")
+    stale_batch = RolloutBatch(
+        groups=stale_batch.groups, metadata=RolloutMetadata(worker_id="test", timestamp=time.time(), weight_step=3)
+    )
+    replay_buffer.add_batches([stale_batch])
+    assert replay_buffer.size() == 4  # Size unchanged
+
+    # Add a fresh batch (step 14 >= min_step=5), should be accepted
+    fresh_batch = create_test_batch(14, batch_size=3, max_seq_len=16, env_name="test_env")
+    fresh_batch = RolloutBatch(
+        groups=fresh_batch.groups, metadata=RolloutMetadata(worker_id="test", timestamp=time.time(), weight_step=14)
+    )
+    replay_buffer.add_batches([fresh_batch])
+    assert replay_buffer.size() == 7
+
+    # Advance to step 20, min_step=10, should filter out step 5
+    replay_buffer.set_current_step(20)
+    assert replay_buffer.size() == 5  # Only steps 10 and 14 remain
+
+    # Verify we can still sample from remaining data
+    sample = replay_buffer.sample_rollouts()
+    assert sample is not None
+    assert len(sample) == 2
