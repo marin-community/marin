@@ -318,19 +318,19 @@ def gmm_sharded(lhs_: jnp.ndarray, rhs_: jnp.ndarray, group_sizes_: jnp.ndarray,
     return out
 
 
-def input(use_mup: bool = True) -> type[AbstractLinearReparam]:
+def input_reparam(use_mup: bool = True) -> type[AbstractLinearReparam]:
     """Return the reparameterization class for an input linear layer."""
 
     return mup.InputLinearMup if use_mup else mup.LinearStandardParam
 
 
-def hidden(use_mup: bool = True) -> type[AbstractLinearReparam]:
+def hidden_reparam(use_mup: bool = True) -> type[AbstractLinearReparam]:
     """Return the reparameterization class for a hidden linear layer."""
 
     return mup.HiddenLinearMup if use_mup else mup.LinearStandardParam
 
 
-def output(use_mup: bool = True) -> type[AbstractLinearReparam]:
+def output_reparam(use_mup: bool = True) -> type[AbstractLinearReparam]:
     """Return the reparameterization class for an output linear layer."""
 
     return mup.OutputLinearMup if use_mup else mup.LinearStandardParam
