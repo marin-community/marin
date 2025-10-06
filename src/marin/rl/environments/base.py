@@ -12,10 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from marin.rl.types import InferenceContext, RolloutGroup
+import numpy as np
+from levanter.inference.openai import InferenceServer
+from openai import AsyncOpenAI
+from transformers import PreTrainedTokenizer
+
+from marin.rl.types import InferenceChoice, InferenceContext, InferenceResponse, RolloutGroup
+
+logger = logging.getLogger(__name__)
 
 
 class MarinEnv(ABC):
@@ -71,3 +80,112 @@ def load_environment_from_spec(config: EnvConfig) -> MarinEnv:
     env_module = __import__(module_name, fromlist=[class_name])
     env_class = getattr(env_module, class_name)
     return env_class(**env_args)
+
+
+class LevanterInferenceContext(InferenceContext):
+    """Context that uses Levanter model and inference server."""
+
+    max_tokens: int
+    _inference_server: InferenceServer
+    _stop_tokens: list[int] | None = None
+    tokenizer: PreTrainedTokenizer
+
+    def __init__(
+        self,
+        tokenizer,
+        stop_tokens: list[int] | None,
+        inference_server: InferenceServer,
+        max_tokens: int,
+    ):
+        self._inference_server = inference_server
+        self.tokenizer = tokenizer
+        self._stop_tokens = stop_tokens
+        self.max_tokens = max_tokens
+
+    def openai_client(self):
+        base_url = f"http://{self._inference_server.address()}/v1"
+        return AsyncOpenAI(base_url=base_url, api_key="marin")
+
+    def generate(
+        self,
+        prompts: list[str],
+        temperature: float,
+        n_generations: int,
+    ) -> list[InferenceResponse]:
+        """Generate responses for a batch of prompts."""
+        stop_strings = None
+        if self._stop_tokens is not None:
+            stop_strings = [self.tokenizer.decode([token]) for token in self._stop_tokens]
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        client = self.openai_client()
+
+        def _process_batch(batch_prompts: list[str]) -> list[InferenceResponse]:
+            batch_completions = []
+
+            for prompt in batch_prompts:
+                completion = client.chat.completions.create(
+                    model=getattr(self._inference_server.config, "model_name", "test-model"),
+                    messages=[{"role": "user", "content": prompt}],
+                    logprobs=True,
+                    max_tokens=self.max_tokens,
+                    temperature=temperature,
+                    n=n_generations,
+                    stop=stop_strings,
+                    timeout=30,
+                )
+                batch_completions.append(completion)
+
+            completions = loop.run_until_complete(asyncio.gather(*batch_completions, return_exceptions=True))
+
+            batch_results = []
+            for prompt, completion in zip(batch_prompts, completions, strict=True):
+                choices = []
+                # drop responses that failed.
+                if isinstance(completion, BaseException):
+                    logger.error(f"Error during generation: {completion}")
+                else:
+                    for choice in completion.choices:
+                        content = choice.message.content
+                        tokens = self.tokenizer.encode(content)
+                        logprobs = [t.logprob for t in choice.logprobs.content]
+                        logprobs = np.array(logprobs, dtype=np.float32)
+                        if np.all(logprobs == 0):
+                            logger.warning(
+                                f"All logprobs zero for {prompt}, choice: {choice}. This can result in NaN loss."
+                            )
+                        choices.append(
+                            InferenceChoice(
+                                response_text=content,
+                                response_tokens=np.array(tokens, dtype=np.int32),
+                                logprobs=logprobs,
+                            )
+                        )
+
+                # Create InferenceResponse with prompt tokens
+                prompt_tokens = self.tokenizer.encode(prompt, add_special_tokens=True)
+                batch_results.append(
+                    InferenceResponse(
+                        prompt=prompt,
+                        prompt_tokens=np.array(prompt_tokens, dtype=np.int32),
+                        choices=choices,
+                    )
+                )
+            return batch_results
+
+        # Process prompts in batches to limit concurrent requests
+        # Each prompt with n_generations counts as n_generations requests
+        max_concurrent_requests = 8
+        batch_size = max(1, max_concurrent_requests // n_generations)
+        all_results = []
+
+        for i in range(0, len(prompts), batch_size):
+            batch_prompts = prompts[i : i + batch_size]
+            batch_results = _process_batch(batch_prompts)
+            all_results.extend(batch_results)
+
+        loop.run_until_complete(client.close())
+
+        loop.close()
+        return all_results

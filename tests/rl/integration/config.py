@@ -206,7 +206,7 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum"):
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats", "seed": 42},
                 ),
-                sampling_params=SamplingParams(temperature=1.0, n_prompts=8, n_generations_per_prompt=4, max_tokens=64),
+                sampling_params=SamplingParams(temperature=1.0, n_prompts=8, n_generations_per_prompt=4, max_tokens=32),
             )
         },
         eval_frequency=100,
@@ -229,7 +229,7 @@ def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, outpu
             capacity=2048,
             alpha=3.0,
             max_samples=1,
-            max_rollout_delay=2,
+            max_rollout_step_delay=2,
         ),
         loss=RLOOLoss(kl_coef=0.0, clip_epsilon=5.0),
         initial_checkpoint=None,

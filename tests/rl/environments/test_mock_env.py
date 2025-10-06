@@ -61,14 +61,12 @@ def test_compute_soft_reward_format_loss():
     assert compute_soft_reward("42", "42") > compute_soft_reward("42", "42 extra words")
     assert compute_soft_reward("42", "42") > compute_soft_reward("42", "wrong")
 
-    assert compute_soft_reward("42", "42") == pytest.approx(1.2)
-    assert compute_soft_reward("42", "wrong") == pytest.approx(0.2)
+    assert compute_soft_reward("42", "42") == pytest.approx(1.0)
+    assert compute_soft_reward("42", "wrong") == pytest.approx(0.0)
 
     short_format_score = compute_soft_reward("42", "43")
     long_format_score = compute_soft_reward("42", "43 with lots of extra words")
-    assert short_format_score > long_format_score
-    assert short_format_score == pytest.approx(0.2)
-    assert long_format_score == pytest.approx(0.2 / 6)
+    assert short_format_score == long_format_score == 0.0
 
 
 def test_addition_task_reward():
@@ -77,10 +75,10 @@ def test_addition_task_reward():
     assert len(examples) == 10
     assert all("+" in ex["prompt"] for ex in examples)
 
-    assert task.compute_reward("42", "42") == pytest.approx(1.2)
-    assert task.compute_reward("42", "43") == pytest.approx(0.2)
-    assert task.compute_reward("42", "-") == pytest.approx(0.2)
-    assert task.compute_reward("42", "-2") == pytest.approx(0.2)
+    assert task.compute_reward("42", "42") == pytest.approx(1.0)
+    assert task.compute_reward("42", "43") == pytest.approx(0.0)
+    assert task.compute_reward("42", "-") == pytest.approx(0.0)
+    assert task.compute_reward("42", "-2") == pytest.approx(0.0)
 
 
 def test_opposites_task_reward():
@@ -88,8 +86,8 @@ def test_opposites_task_reward():
     examples = task.generate_examples(10, np.random.default_rng(42))
     assert len(examples) == 10
 
-    assert task.compute_reward("cold", "cold") == pytest.approx(1.2)
-    assert task.compute_reward("cold", "warm") == pytest.approx(0.2)
+    assert task.compute_reward("cold", "cold") == pytest.approx(1.0)
+    assert task.compute_reward("cold", "warm") == pytest.approx(0.0)
 
 
 def test_number_comparison_task_format_bonus():
@@ -99,8 +97,8 @@ def test_number_comparison_task_format_bonus():
     non_digit_reward = task.compute_reward("42", "forty-two")
 
     assert digit_reward > non_digit_reward
-    assert digit_reward == pytest.approx(1.18)
-    assert non_digit_reward == pytest.approx(0.18)
+    assert digit_reward == pytest.approx(1.0)
+    assert non_digit_reward == pytest.approx(0.0)
 
 
 def test_cats_task_reward():

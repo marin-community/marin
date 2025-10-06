@@ -143,14 +143,13 @@ class NumberComparisonTask:
         return examples
 
     def compute_reward(self, correct_answer: str, actual_response: str, tokenizer=None) -> float:
-        format_score = 1.0 if actual_response.strip().isdigit() else 0.0
-        return 0.1 * format_score + 0.9 * compute_soft_reward(correct_answer, actual_response)
+        return compute_soft_reward(correct_answer, actual_response)
 
 
 def compute_soft_reward(correct_answer: str, actual_response: str) -> float:
     """Compute soft reward with partial credit for correctness and format."""
     if not actual_response:
-        return 0.0
+        return 0
 
     # remove commas from numbers
     correct_answer = correct_answer.replace(",", "").lower()
@@ -164,8 +163,7 @@ def compute_soft_reward(correct_answer: str, actual_response: str) -> float:
             correct_score = 1
             break
 
-    format_score = min(1.0, 1 / max(len(tokens), 1))
-    return correct_score + 0.2 * format_score
+    return correct_score / len(tokens)
 
 
 class MoarCatsTask:
@@ -327,7 +325,6 @@ class MockEnv(MarinEnv):
         )
 
         # Evaluate and create rollouts
-        max_input_length = 2048  # Default, will use what we can get from responses
         rollout_groups = []
         correct_count = 0
         total_count = 0
@@ -337,8 +334,6 @@ class MockEnv(MarinEnv):
             rollouts = []
 
             for choice in response.choices:
-                # Extract response text (already decoded by inference context)
-                # Note: response_text may include the prompt, so extract the actual response
                 if choice.response_text.startswith(example["prompt"]):
                     actual_response = choice.response_text[len(example["prompt"]) :]
                 else:
@@ -348,7 +343,7 @@ class MockEnv(MarinEnv):
                 reward = self.task.compute_reward(example["answer"], actual_response, tokenizer=inference_ctx.tokenizer)
 
                 # Create rollout
-                prompt_tokens = response.prompt_tokens[-max_input_length:]
+                prompt_tokens = response.prompt_tokens
                 token_rewards = jnp.full(len(choice.response_tokens), reward, dtype=jnp.float32)
 
                 rollout = Rollout(
@@ -394,7 +389,7 @@ class MockEnv(MarinEnv):
             yield MockEnvExample(
                 raw_prompt=example["prompt"],
                 raw_answer=example["answer"],
-                processed_prompt=example["prompt"],  # MockEnv doesn't transform
+                processed_prompt=example["prompt"],
                 processed_answer=example["answer"],
                 metadata={"task_type": self.task_type},
             )
@@ -405,7 +400,7 @@ class MockEnv(MarinEnv):
             yield MockEnvExample(
                 raw_prompt=example["prompt"],
                 raw_answer=example["answer"],
-                processed_prompt=example["prompt"],  # MockEnv doesn't transform
+                processed_prompt=example["prompt"],
                 processed_answer=example["answer"],
                 metadata={"task_type": self.task_type},
             )
