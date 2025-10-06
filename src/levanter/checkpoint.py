@@ -24,7 +24,6 @@ from draccus import field
 from fsspec import AbstractFileSystem
 from haliax.jax_utils import is_in_jit, is_jax_array_like
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
-from jax.experimental.multihost_utils import broadcast_one_to_all
 from jaxtyping import PyTree
 
 from levanter.tensorstore_serialization import (
@@ -33,6 +32,7 @@ from levanter.tensorstore_serialization import (
 )
 from levanter.utils import fsspec_utils
 from levanter.utils.types import FilterSpec
+from levanter.utils.jax_utils import broadcast_one_to_all
 
 logger = logging.getLogger(__name__)
 
