@@ -15,10 +15,12 @@ dependencies = [
 members = [
     "lib/marin",
     "lib/data_browser",
+    "lib/levanter",
 ]
 
 [tool.uv.sources]
 marin = { workspace = true }
+levanter = { workspace = true }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

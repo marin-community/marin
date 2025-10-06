@@ -1,0 +1,23 @@
+eval_harness:
+ # Reference generation: https://huggingface.co/datasets/meta-llama/Llama-3.1-8B-Instruct-evals/viewer/Llama-3.1-8B-Instruct-evals__gsm8k__details
+ task_spec: ["gsm8k_cot_llama"]
+ apply_chat_template: true
+ fewshot_as_multiturn: true
+ generation_kwargs:
+   max_gen_toks: 1024
+   temperature: 0.0
+   n: 1
+   seed: 42
+ max_length: 4096
+#  max_examples: 10
+tokenizer: meta-llama/Meta-Llama-3.1-8B-Instruct
+model:
+  type: llama
+checkpoint_path: meta-llama/Meta-Llama-3.1-8B-Instruct
+checkpoint_is_hf: true
+trainer:
+  mp: p=bfloat16,c=bfloat16
+  ray:
+    auto_start_cluster: false
+  tensor_parallel_axes: ["mlp", "heads", "kv_head", "vocab"]
+  model_axis_size: 4

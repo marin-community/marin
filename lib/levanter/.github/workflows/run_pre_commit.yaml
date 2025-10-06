@@ -1,0 +1,28 @@
+name: Pre-Commit
+
+on: [push, pull_request]
+
+jobs:
+  pre_commit:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
+
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+        jax-version: ["0.5.2"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install
+      - name: "Run Pre-commit"
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+
+
