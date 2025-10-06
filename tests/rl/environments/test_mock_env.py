@@ -73,7 +73,7 @@ def test_compute_soft_reward_format_loss():
 
 def test_addition_task_reward():
     task = AdditionTask()
-    examples = task.generate_training_examples(10, np.random.default_rng(42))
+    examples = task.generate_examples(10, np.random.default_rng(42))
     assert len(examples) == 10
     assert all("+" in ex["prompt"] for ex in examples)
 
@@ -85,7 +85,7 @@ def test_addition_task_reward():
 
 def test_opposites_task_reward():
     task = OppositesTask()
-    examples = task.generate_training_examples(10, np.random.default_rng(42))
+    examples = task.generate_examples(10, np.random.default_rng(42))
     assert len(examples) == 10
 
     assert task.compute_reward("cold", "cold") == pytest.approx(1.2)
