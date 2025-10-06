@@ -41,16 +41,16 @@ logger = logging.getLogger(__name__)
 class ReplayBufferConfig:
     """Configuration for the replay buffer."""
 
-    capacity: int = 10000
+    capacity: int
     """Maximum number of examples per environment in the buffer."""
 
-    alpha: float = 3.0
+    alpha: float
     """Recency bias for sampling, higher values favor newer examples."""
 
-    max_samples: int = 4
+    max_samples: int
     """Maximum number of times to use an example before retiring."""
 
-    max_rollout_delay: int = 1000
+    max_rollout_delay: int
     """Maximum age of rollouts in training steps."""
 
 
@@ -108,6 +108,7 @@ class ReplayBuffer:
         """Set current training step and filter stale rollouts."""
         self._current_step = step
         min_step = step - self.max_rollout_delay
+        logger.info("Discarding rollouts older than step %d (current step %d)", min_step, step)
 
         with self._lock:
             total_removed = 0
@@ -142,8 +143,13 @@ class ReplayBuffer:
         """
         env_examples: dict[str, list[RolloutWithCount]] = defaultdict(list)
         for batch in new_batches:
-            self._total_batches_added += 1
             weight_step = batch.metadata.weight_step
+            if weight_step < self._current_step - self.max_rollout_delay:
+                logger.info(
+                    f"Skipping stale rollout batch (weight_step={weight_step}, current_step={self._current_step})"
+                )
+                continue
+            self._total_batches_added += 1
             for group in batch.groups:
                 # Compute RLOO advantages for the group
                 advantages = self.loss_module.compute_advantages(group.rollouts)
@@ -177,30 +183,43 @@ class ReplayBuffer:
             if not env_names:
                 return None
 
-            # log all env sizes
+            # sample environments N times without replacement
+            # we fill the array with the number of rollouts in each env
+            total_count = 0
+            env_choices = []
             for env_name in env_names:
-                logger.info(f"Env '{env_name}' has {len(self.rollout_storage[env_name])} rollouts available.")
+                env_choices.extend([env_name] * len(self.rollout_storage[env_name]))
+                total_count += len(self.rollout_storage[env_name])
 
-            # Sample individual rollouts
-            sampled = []
-            for _ in range(self.local_batch_size):
-                # Select environment (balanced sampling)
-                env_name = self._rng.choice(env_names)
+            # not enough samples to fill a batch
+            if total_count < self.local_batch_size:
+                return None
+
+            env_choices = np.array(env_choices)
+            env_indices = self._rng.choice(
+                env_choices,
+                size=self.local_batch_size,
+                replace=False,
+            )
+
+            # count the number of times each env is chosen
+            env_count = defaultdict(int)
+            for env_name in env_indices:
+                env_count[env_name] += 1
+
+            # now sample from each env according to recency weights & number of times chosen
+            sampled: list[RolloutWithCount] = []
+            for env_name, count in env_count.items():
                 rollouts = self.rollout_storage[env_name]
-
-                # Compute recency weights
                 weights = np.arange(len(rollouts)) + 1
                 weights = weights**self.recency_alpha
                 weights = weights / weights.sum()
 
                 # Sample rollout index
-                idx = self._rng.choice(len(rollouts), p=weights)
-                individual = rollouts[idx]
-
-                sampled.append(individual)
-
-                # Update usage count
-                individual.usage_count += 1
+                idx = self._rng.choice(len(rollouts), p=weights, size=count, replace=False)
+                for i in idx:
+                    sampled.append(rollouts[i])
+                    rollouts[i].usage_count += 1
 
             # Retire overused rollouts
             self._retire_overused_rollouts()

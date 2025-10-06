@@ -138,7 +138,6 @@ def weight_transfer_config(transfer_mode):
         config = WeightTransferConfig(
             mode=transfer_mode,
             sync_interval_steps=1,
-            poll_interval_seconds=0.1,
             checkpoint_dir=temp_dir,
         )
         yield config
@@ -214,7 +213,6 @@ def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
     weight_transfer_config = WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
-        poll_interval_seconds=0.1,
         checkpoint_dir=tempfile.mkdtemp(),
     )
 

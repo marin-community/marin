@@ -61,7 +61,6 @@ def test_rollout_and_train_workers(ray_tpu_cluster, tmp_path):
     rollout_runner = RolloutWorkerRunner.from_job(job)
 
     # Apply test-specific overrides
-    rollout_runner.rollout_worker_config.weight_transfer.poll_interval_seconds = 0.1
     rollout_runner.rollout_worker_config.weight_transfer.sync_interval_steps = 1
     rollout_runner.rollout_worker_config.max_rollouts = 100
 

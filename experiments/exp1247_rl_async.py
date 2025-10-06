@@ -171,7 +171,6 @@ def rl_train(name: str) -> ExecutorStep:
     weight_transfer = WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
-        poll_interval_seconds=1,
     )
 
     curriculum_config = create_math_curriculum(RUN_ID)
@@ -186,7 +185,7 @@ def rl_train(name: str) -> ExecutorStep:
             replay_buffer_capacity=4096,
             replay_buffer_alpha=3,
             max_samples_per_rollout=1,
-            max_batch_latency=4,
+            max_rollout_delay=4,
         ),
         curriculum=curriculum_config,
         tokenizer=MODEL_TOKENIZER,

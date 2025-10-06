@@ -197,7 +197,6 @@ def create_weight_transfer_config():
     return WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
-        poll_interval_seconds=0.1,
     )
 
 
@@ -236,7 +235,8 @@ def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, outpu
         replay_buffer=ReplayBufferConfig(
             capacity=2048,
             alpha=3.0,
-            max_samples=4,
+            max_samples=1,
+            max_rollout_delay=1,
         ),
         loss=RLOOLoss(kl_coef=0.0, clip_epsilon=5.0),
         initial_checkpoint=None,
@@ -416,11 +416,6 @@ def run_inference_with_engine(
         generated_texts.append(generated_text)
 
     return result.tokens, generated_texts
-
-
-# ============================================================================
-# Worker Runners
-# ============================================================================
 
 
 def disable_noisy_loggers():

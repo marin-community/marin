@@ -83,7 +83,6 @@ class RolloutStorageConfig:
     storage_type: StorageType
     # For file storage
     path: str | None = None
-    poll_interval: float = 1.0
     max_rollout_files: int = 32
     # For in-memory storage
     queue_name: str | None = None
@@ -93,7 +92,7 @@ class RolloutStorageConfig:
         if self.storage_type == StorageType.FILE:
             if self.path is None:
                 raise ValueError("path must be specified for FILE storage type")
-            return FileRolloutReader(self.path, self.poll_interval)
+            return FileRolloutReader(self.path)
         else:
             if self.queue_name is None:
                 raise ValueError("queue_name must be specified for IN_MEMORY storage type")
@@ -154,16 +153,13 @@ class FileRolloutReader(RolloutReader):
     def __init__(
         self,
         path: str,
-        poll_interval: float = 1.0,
     ):
         """Initialize file-based rollout reader.
 
         Args:
             path: Storage directory or GCS bucket
-            poll_interval: Interval in seconds between polls when waiting.
         """
         self.path = path.rstrip("/")
-        self.poll_interval = poll_interval
 
         # Create filesystem instance
         storage_options = fsspec.utils.infer_storage_options(path)  # type: ignore[attr-defined]
@@ -213,7 +209,7 @@ class FileRolloutReader(RolloutReader):
                         logger.error(f"Failed to read rollout file {file_path}: {e}")
                         continue
 
-            time.sleep(self.poll_interval)
+            time.sleep(1.0)
 
     def read_all_available(self) -> list[RolloutBatch]:
         """Read all currently available batches without blocking."""
