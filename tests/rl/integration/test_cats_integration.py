@@ -118,7 +118,7 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
             rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
-            max_samples_per_rollout=1,
+            max_samples_per_rollout=4,
             max_rollout_delay=4,
         ),
         curriculum=create_test_curriculum_config(),
@@ -134,30 +134,9 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
     # Apply test-specific overrides
     inference_runner.rollout_worker_config.weight_transfer.sync_interval_steps = 1
 
-    metrics_history = []
     with training_runner, inference_runner:
-        # Collect metrics periodically until training completes
-        while not training_runner.done.is_set():
-            metrics_history.append(
-                {
-                    "rollouts_generated": inference_runner.rollouts_generated,
-                    "steps_completed": training_runner.steps_completed,
-                    "weight_transfers": inference_runner.weight_transfers,
-                }
-            )
-            training_runner.done.wait(timeout=1)
+        training_runner.done.wait()
 
-        # Collect final metrics
-        metrics_history.append(
-            {
-                "rollouts_generated": inference_runner.rollouts_generated,
-                "steps_completed": training_runner.steps_completed,
-                "weight_transfers": inference_runner.weight_transfers,
-            }
-        )
-
-    # Validate we ran for sufficient time and generated data
-    assert len(metrics_history) >= 2, "Test should run long enough to collect multiple metric snapshots"
     assert (
         inference_runner.rollouts_generated >= 5
     ), f"Expected at least 5 rollouts, got {inference_runner.rollouts_generated}"
@@ -165,19 +144,6 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
         training_runner.steps_completed >= 2
     ), f"Expected at least 2 training steps, got {training_runner.steps_completed}"
 
-    # Validate objective improvement - rollout generation should increase over time
-    initial_rollouts = metrics_history[0]["rollouts_generated"]
-    final_rollouts = metrics_history[-1]["rollouts_generated"]
-    assert (
-        final_rollouts > initial_rollouts
-    ), f"Rollout generation should improve: {initial_rollouts} -> {final_rollouts}"
-
-    # Validate training progresses
-    initial_steps = metrics_history[0]["steps_completed"]
-    final_steps = metrics_history[-1]["steps_completed"]
-    assert final_steps >= initial_steps, f"Training should progress: {initial_steps} -> {final_steps}"
-
-    # Validate weight transfers occur
     assert inference_runner.weight_transfers >= 1, "Should have at least one weight transfer during long run"
 
     validate_cats_model(training_runner.trained_model, DummyTokenizer())

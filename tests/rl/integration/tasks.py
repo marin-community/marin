@@ -58,7 +58,7 @@ def create_cats_rollout_batch(
         "cats",
         "moar cats",
     ]
-    positive_words = ["cats", "love"]
+    positive_words = ["cats", "love cats"]
     negative_words = ["like", "feel", "for", "give", "me", "moar"]
 
     examples = []

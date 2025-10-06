@@ -179,7 +179,7 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
 def create_nano_optimizer_config() -> AdamConfig:
     """Create a minimal AdamConfig for testing."""
     return AdamConfig(
-        learning_rate=1e-2,
+        learning_rate=1e-3,
         weight_decay=0.00,
         warmup=0.0,
         lr_schedule="constant",
@@ -229,7 +229,7 @@ def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, outpu
             capacity=2048,
             alpha=3.0,
             max_samples=1,
-            max_rollout_delay=1,
+            max_rollout_delay=2,
         ),
         loss=RLOOLoss(kl_coef=0.0, clip_epsilon=5.0),
         initial_checkpoint=None,
