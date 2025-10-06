@@ -113,7 +113,6 @@ class LevanterInferenceContext(InferenceContext):
 
     def openai_client(self):
         base_url = f"http://{self._inference_server.address()}/v1"
-        logger.info("Connecting to inference server at %s", base_url)
         return AsyncOpenAI(base_url=base_url, api_key="marin")
 
     def generate(
@@ -340,6 +339,13 @@ class RolloutWorker:
             logger.warning("No valid rollouts generated in this batch...")
             return None, None
 
+        logger.info(
+            "Generated rollout with %d groups from lesson %s at step %d",
+            len(rollout_groups),
+            lesson_id,
+            self._current_weight_step,
+        )
+
         rollout_batch = RolloutBatch(
             groups=rollout_groups,
             metadata=RolloutMetadata(
@@ -462,8 +468,6 @@ class RolloutWorker:
         rng = multihost_utils.broadcast_one_to_all(rng)
         logger.info(f"Starting rollout worker with seed {seed}")
 
-        last_weight_check = time.time()
-
         while self._running:
             barrier_sync()
 
@@ -481,9 +485,7 @@ class RolloutWorker:
                 time.sleep(10.0)
                 continue
 
-            if time.time() - last_weight_check > self.config.weight_transfer.poll_interval_seconds:
-                self._sync_weights()
-                last_weight_check = time.time()
+            self._sync_weights()
 
             if step > 0 and step % self.config.curriculum_config.eval_frequency == 0:
                 rng, eval_rng = jrandom.split(rng)
