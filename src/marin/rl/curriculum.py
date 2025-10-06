@@ -122,10 +122,10 @@ class CurriculumConfig:
     lessons: dict[str, LessonConfig]
     """Dictionary mapping lesson names to lesson configurations."""
 
-    eval_frequency: int = 1000
+    eval_frequency: int = 100
     """How often to run full evaluation across all lessons (in rollout worker steps)."""
 
-    eval_n_examples: int = 32
+    eval_n_examples: int = 64
     """Number of examples to use for each lesson during full evaluation."""
 
     micro_eval_frequency: int = 10
