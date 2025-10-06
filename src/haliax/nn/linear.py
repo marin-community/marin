@@ -160,6 +160,24 @@ class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
         unscaled = default_eqx_module_from_state_dict(self, state_dict, prefix)
         return dataclasses.replace(unscaled, weight=unscaled.weight / self.reparam.active_scale)
 
+    @staticmethod
+    def input_reparam(use_mup: bool = True) -> type[AbstractLinearReparam]:
+        """Return the reparameterization class for an input linear layer."""
+
+        return mup.InputLinearMup if use_mup else mup.LinearStandardParam
+
+    @staticmethod
+    def hidden_reparam(use_mup: bool = True) -> type[AbstractLinearReparam]:
+        """Return the reparameterization class for a hidden linear layer."""
+
+        return mup.HiddenLinearMup if use_mup else mup.LinearStandardParam
+
+    @staticmethod
+    def output_reparam(use_mup: bool = True) -> type[AbstractLinearReparam]:
+        """Return the reparameterization class for an output linear layer."""
+
+        return mup.OutputLinearMup if use_mup else mup.LinearStandardParam
+
 
 class MoELinear(eqx.Module):
     """A named Linear layer for MoE. This module allows you to specify multiple named axes for both input
@@ -316,21 +334,3 @@ def gmm_sharded(lhs_: jnp.ndarray, rhs_: jnp.ndarray, group_sizes_: jnp.ndarray,
         out = out[: hs_shape[0]]
 
     return out
-
-
-def input_reparam(use_mup: bool = True) -> type[AbstractLinearReparam]:
-    """Return the reparameterization class for an input linear layer."""
-
-    return mup.InputLinearMup if use_mup else mup.LinearStandardParam
-
-
-def hidden_reparam(use_mup: bool = True) -> type[AbstractLinearReparam]:
-    """Return the reparameterization class for a hidden linear layer."""
-
-    return mup.HiddenLinearMup if use_mup else mup.LinearStandardParam
-
-
-def output_reparam(use_mup: bool = True) -> type[AbstractLinearReparam]:
-    """Return the reparameterization class for an output linear layer."""
-
-    return mup.OutputLinearMup if use_mup else mup.LinearStandardParam
