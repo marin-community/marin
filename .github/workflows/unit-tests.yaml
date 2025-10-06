@@ -54,7 +54,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install "uv>=0.7.19" toml
           npm install -g pandiff
-          uv sync --dev --extra=cpu
+          uv sync
+          uv sync --package marin --extra cpu --group test
       
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v1
@@ -71,4 +72,4 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           CI: true
         run: |
-          PYTHONPATH=tests:. uv run --extra=cpu pytest -n3 --durations=5 --tb=no -m 'not slow' -vv tests/
+          PYTHONPATH=tests:. uv run pytest -n3 --durations=5 --tb=no -m 'not slow' -vv tests/

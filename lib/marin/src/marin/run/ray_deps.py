@@ -84,6 +84,8 @@ def compute_frozen_packages(extra: list[str] | None = None) -> PackageSpec:
     cmd = [
         "uv",
         "export",
+        "--package",
+        "marin",
         "--no-default-groups",
         "--no-annotate",
         "--no-hashes",
