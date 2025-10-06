@@ -123,13 +123,16 @@ class CurriculumConfig:
     """Dictionary mapping lesson names to lesson configurations."""
 
     eval_frequency: int = 1000
-    """How often to run evaluation (in rollout worker steps)."""
+    """How often to run full evaluation across all lessons (in rollout worker steps)."""
 
     eval_n_examples: int = 32
-    """Number of examples to use for each lesson during evaluation."""
+    """Number of examples to use for each lesson during full evaluation."""
 
-    eval_n_generations: int = 1
-    """Number of generations per example during evaluation."""
+    micro_eval_frequency: int = 10
+    """How often to run micro-evaluation on the current lesson (in rollout worker steps)."""
+
+    micro_eval_n_examples: int = 4
+    """Number of examples for micro-evaluation (keep small for speed)."""
 
     temperature: float = 1.0
     """Temperature for sampling weight distribution."""

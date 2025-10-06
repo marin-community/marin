@@ -184,24 +184,16 @@ class RolloutWorker:
         self._environments[lesson_id] = env
         return env
 
-    def _sample_batch(self, lesson_id: str, mode: str, rng) -> tuple[RolloutBatch | None, dict | None]:
+    def _sample_batch(
+        self, lesson_id: str, n_examples: int, n_generations: int, mode: str, rng
+    ) -> tuple[RolloutBatch | None, dict | None]:
         """Sample a batch of rollouts from the environment for the given lesson ID."""
         env = self._load_environment(lesson_id)
         lesson_config = self.config.curriculum_config.lessons[lesson_id]
 
-        # Get sampling params from lesson or use eval defaults
-        if mode == "eval":
-            n_examples = self.config.curriculum_config.eval_n_examples
-            n_generations = self.config.curriculum_config.eval_n_generations
-            temperature = lesson_config.sampling_params.temperature
-            stop_tokens = lesson_config.sampling_params.stop_tokens
-        else:  # train
-            n_examples = lesson_config.sampling_params.n_prompts
-            n_generations = lesson_config.sampling_params.n_generations_per_prompt
-            temperature = lesson_config.sampling_params.temperature
-            stop_tokens = lesson_config.sampling_params.stop_tokens
-
-        # Get max_tokens from lesson
+        # Get sampling params from lesson config
+        temperature = lesson_config.sampling_params.temperature
+        stop_tokens = lesson_config.sampling_params.stop_tokens
         max_tokens = lesson_config.sampling_params.max_tokens
 
         policy_ctx = LevanterInferenceContext(
@@ -320,45 +312,79 @@ class RolloutWorker:
             logger.info("No new weights available")
             return None
 
-    def _evaluate_curriculum(self, rng, step: int) -> dict:
-        """Evaluate all lessons and update the curriculum actor.
+    def _log_prompt_example(self, lesson_id: str, batch: RolloutBatch, step: int, eval_type: str = "eval") -> None:
+        """Log a single representative sample from an evaluation batch.
 
-        Returns:
-            Dictionary of evaluation metrics for logging.
+        Args:
+            lesson_id: ID of the evaluated lesson
+            batch: The rollout batch containing samples
+            step: Current training step
+            mode: Either "eval" or "micro_eval"
         """
-        barrier_sync()
+        if not batch or not batch.groups:
+            return
 
-        # Evaluate all lessons, not just active ones
+        # Take first rollout from first group as representative
+        sample = batch.groups[0].rollouts[0]
+
+        # Decode tokens to human-readable text
+        prompt_text = self._tokenizer.decode(sample.prompt_tokens, skip_special_tokens=True)
+        response_text = self._tokenizer.decode(sample.response_tokens, skip_special_tokens=True)
+
+        # Log with structured keys
+        prefix = f"inference.{eval_type}/{lesson_id}"
+        metrics = {
+            f"{prefix}/sample_prompt": prompt_text,
+            f"{prefix}/sample_response": response_text,
+            f"{prefix}/sample_reward": float(sample.episode_reward),
+            f"{prefix}/sample_example_id": sample.env_example_id,
+        }
+        self.tracker.log(metrics, step=step)
+        logger.info(f"Eval sample for lesson {lesson_id} at step {step}: {metrics}")
+
+    def _build_eval_metrics(self, lesson_id: str, batch: RolloutBatch) -> dict[str, Any]:
+        metrics = {}
+        stats = _compute_batch_stats(batch, lesson_id)
+        if stats.total_count == 0:
+            return metrics
+        success_rate = stats.success_count / stats.total_count
+        metrics[f"{lesson_id}/success_rate"] = success_rate
+        metrics[f"{lesson_id}/avg_reward"] = stats.avg_reward
+        metrics[f"{lesson_id}/total_count"] = stats.total_count
+        return metrics
+
+    def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> dict:
+        """Evaluate a single lesson and log metrics."""
+        batch, _ = self._sample_batch(
+            lesson_id=lesson_id,
+            n_examples=n_examples,
+            n_generations=1,
+            mode="eval",
+            rng=rng,
+        )
+        stats = _compute_batch_stats(batch, lesson_id)
+        self._log_prompt_example(lesson_id, batch, step, eval_type=eval_type)
+        metrics = self._build_eval_metrics(lesson_id, batch)
+        self.tracker.log(metrics, step=step)
+        logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, step, metrics)
+        # only update curriculum for full evals
+        if eval_type == "eval":
+            self._curriculum_actor.update_lesson_stats.remote(stats)
+        return stats
+
+    def _evaluate_curriculum(self, rng, step: int) -> dict:
+        """Evaluate all lessons and update the curriculum actor."""
         lesson_names = list(self.config.curriculum_config.lessons.keys())
-
         if not lesson_names:
             logger.info("No lessons to evaluate")
             return {}
 
         logger.info(f"Evaluating {len(lesson_names)} lessons")
 
-        eval_metrics = {}
-
         for lesson_id in lesson_names:
-            batch, _ = self._sample_batch(lesson_id, mode="eval", rng=rng)
-            stats = _compute_batch_stats(batch, lesson_id)
-
-            self._curriculum_actor.update_lesson_stats.remote(stats.rollout_stats, mode="eval", current_step=step)
-
-            if stats.total_count > 0:
-                success_rate = stats.success_count / stats.total_count
-
-                logger.info(
-                    f"Eval {lesson_id}: success={stats.success_count}/{stats.total_count} "
-                    f"({100 * success_rate:.1f}%), reward={stats.avg_reward:.3f}"
-                )
-
-                eval_metrics[f"eval/{lesson_id}/success_rate"] = success_rate
-                eval_metrics[f"eval/{lesson_id}/avg_reward"] = stats.avg_reward
-                eval_metrics[f"eval/{lesson_id}/total_count"] = stats.total_count
+            self._evaluate_lesson(lesson_id, self.config.curriculum_config.eval_n_examples, "eval", rng, step)
 
         barrier_sync()
-        return eval_metrics
 
     def run(self):
         """Main inference worker loop."""
@@ -391,22 +417,33 @@ class RolloutWorker:
 
             self._sync_weights()
 
+            # Micro-eval: feedback on current lesson
+            if step > 0 and step % self.config.curriculum_config.micro_eval_frequency == 0:
+                rng, micro_eval_rng = jrandom.split(rng)
+                self._evaluate_lesson(
+                    lesson_id,
+                    self.config.curriculum_config.micro_eval_n_examples,
+                    eval_type="micro_eval",
+                    rng=micro_eval_rng,
+                    step=step,
+                )
+
+            # Full eval: comprehensive check on all lessons
             if step > 0 and step % self.config.curriculum_config.eval_frequency == 0:
                 rng, eval_rng = jrandom.split(rng)
-                eval_metrics = self._evaluate_curriculum(eval_rng, step)
-
-                # Log eval metrics
-                if jax.process_index() == 0 and eval_metrics:
-                    log_metrics = {"step": step}
-                    log_metrics.update(jax.device_get(eval_metrics))
-                    log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
-                    logger.info(f"Logging eval metrics at step {step}... {log_metrics}")
-                    self.tracker.log(log_metrics, step=step)
+                self._evaluate_curriculum(eval_rng, step)
 
             logger.info(f"Sampled lesson '{lesson_id}' from curriculum")
 
             rng, input_rng = jax.random.split(rng)
-            rollout_batch, metrics = self._sample_batch(lesson_id, mode="train", rng=input_rng)
+            lesson_config = self.config.curriculum_config.lessons[lesson_id]
+            rollout_batch, metrics = self._sample_batch(
+                lesson_id=lesson_id,
+                n_examples=lesson_config.sampling_params.n_prompts,
+                n_generations=lesson_config.sampling_params.n_generations_per_prompt,
+                mode="train",
+                rng=input_rng,
+            )
             if rollout_batch is None:
                 continue
             barrier_sync()
@@ -417,14 +454,13 @@ class RolloutWorker:
             step += 1
             self._rollout_writer.write_batch(rollout_batch)
 
-            if jax.process_index() == 0:
-                if self.config.log_freq > 0 and step % self.config.log_freq == 0:
-                    log_metrics = {"step": step}
-                    log_metrics.update(jax.device_get(metrics))
-                    log_metrics.update(self._transfer_client.get_metrics())
-                    log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
-                    logger.info(f"Logging metrics at step {step}... {log_metrics}")
-                    self.tracker.log(log_metrics, step=step)
+            if self.config.log_freq > 0 and step % self.config.log_freq == 0:
+                log_metrics = {}
+                log_metrics.update(jax.device_get(metrics))
+                log_metrics.update(self._transfer_client.get_metrics())
+                log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
+                logger.info(f"Logging metrics at step {step}... {log_metrics}")
+                self.tracker.log(log_metrics, step=step)
 
         logger.info(f"Inference worker completed after generating {step} rollouts")
         barrier_sync()

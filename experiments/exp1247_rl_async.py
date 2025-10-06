@@ -22,7 +22,6 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
-from levanter.tracker.tensorboard import TensorboardConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from transformers import AutoConfig, AutoTokenizer
@@ -130,14 +129,14 @@ def rl_train(name: str) -> ExecutorStep:
 
     trainer_config = TrainerConfig(
         # wandb is persistently crashing
-        # tracker=WandbConfig(
-        #     project="marin_rl_testing",
-        #     name=name,
-        #     tags=["rl", "math", MODEL_NAME.split("/")[-1]],
-        # ),
-        tracker=TensorboardConfig(
-            logdir=OutputName("tblogs"),
+        tracker=WandbConfig(
+            project="marin_rl_testing",
+            name=name,
+            tags=["rl", "math", MODEL_NAME.split("/")[-1]],
         ),
+        # tracker=TensorboardConfig(
+        #     logdir=OutputName("tblogs"),
+        # ),
         log_xla_hlo=False,
         log_jaxprs=False,
         mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -159,7 +158,7 @@ def rl_train(name: str) -> ExecutorStep:
     )
 
     opt_config = AdamConfig(
-        learning_rate=1e-5,
+        learning_rate=1e-7,
         weight_decay=1e-2,
         warmup=100,
         lr_schedule="constant",
@@ -182,7 +181,7 @@ def rl_train(name: str) -> ExecutorStep:
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=opt_config,
-            rl_loss=RLOOLoss(kl_coef=0.05, clip_epsilon=0.2),
+            rl_loss=RLOOLoss(kl_coef=0.01, clip_epsilon=0.2),
             replay_buffer=ReplayBufferConfig(
                 capacity=4096,
                 alpha=3,
@@ -196,7 +195,7 @@ def rl_train(name: str) -> ExecutorStep:
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         run_id=RUN_ID,
-        log_freq=5,
+        log_freq=10,
         run_config=RunConfig(
             train_tpu_type="v5litepod-4",
             num_rollout_workers=4,
@@ -220,7 +219,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-power-017"),
+        rl_train(name="llama-1b-math-rl-test-power-018"),
     ]
 
     executor_main(

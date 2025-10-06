@@ -539,8 +539,8 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
 
         original_sample_batch = self.worker._sample_batch
 
-        def counting_sample_batch(lesson_id, mode, rng):
-            batch_data, metrics = original_sample_batch(lesson_id, mode=mode, rng=rng)
+        def counting_sample_batch(lesson_id, n_examples, n_generations, mode, rng):
+            batch_data, metrics = original_sample_batch(lesson_id, n_examples, n_generations, mode, rng)
             if batch_data is None or metrics is None:
                 return None, None
             self._track_rollout_generation()
