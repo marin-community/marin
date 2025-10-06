@@ -223,7 +223,7 @@ class TrainWorker:
         with (
             config.trainer.device_mesh,
             hax.axis_mapping(config.trainer.compute_axis_mapping),
-            Trainer(config.trainer, optimizer, _loss_function) as trainer,
+            Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer,
             self.replay_loader,
         ):
             seed = config.trainer.seed

@@ -210,6 +210,9 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum"):
             )
         },
         eval_frequency=100,
+        eval_n_examples=4,
+        micro_eval_frequency=10,
+        micro_eval_n_examples=1,
         actor_name=actor_name,
     )
 
@@ -539,8 +542,8 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
 
         original_sample_batch = self.worker._sample_batch
 
-        def counting_sample_batch(lesson_id, mode, rng):
-            batch_data, metrics = original_sample_batch(lesson_id, mode=mode, rng=rng)
+        def counting_sample_batch(lesson_id, n_examples, n_generations, mode, rng):
+            batch_data, metrics = original_sample_batch(lesson_id, n_examples, n_generations, mode, rng)
             if batch_data is None or metrics is None:
                 return None, None
             self._track_rollout_generation()
