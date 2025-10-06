@@ -147,12 +147,12 @@ class TrainWorker:
 
         self.rollout_reader = config.rollout_storage.create_reader()
 
-        self.replay_buffer = ReplayBuffer(
+        self.replay_buffer = ReplayBuffer.from_config(
             config=config.replay_buffer,
-            loss_module=self.loss_module,
             local_batch_size=config.trainer.train_batch_size,
-            process_id=jax.process_index(),
             total_processes=jax.process_count(),
+            process_id=jax.process_index(),
+            loss_module=self.loss_module,
         )
 
         self.replay_loader = ReplayDataLoader(

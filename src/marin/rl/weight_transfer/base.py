@@ -68,10 +68,10 @@ class WeightUpdate:
 class WeightTransferConfig:
     mode: WeightTransferMode = WeightTransferMode.ARROW_FLIGHT
     # Common settings
-    sync_interval_steps: int = 4
+    sync_interval_steps: int = 1
     coordinator_name: str = "weight_transfer_coordinator"
 
-    transfer_timeout: float = 10.0
+    transfer_timeout: float = 30.0
 
     # GCS Checkpoint specific
     checkpoint_dir: str = ""

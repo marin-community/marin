@@ -19,7 +19,6 @@ This worker loads model checkpoints, generates rollouts from a single environmen
 and writes the rollout data to files for training workers to consume.
 """
 
-import asyncio
 import logging
 import os
 import socket
@@ -28,11 +27,11 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import equinox as eqx
 import haliax as hax
 import jax
 import jax.random as jrandom
 import levanter
-import numpy as np
 import ray
 import ray.exceptions
 from jax.experimental import multihost_utils
@@ -40,20 +39,17 @@ from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
-from openai import AsyncOpenAI
 from transformers import PreTrainedTokenizer
 
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
-from marin.rl.environments.base import load_environment_from_spec
+from marin.rl.environments.base import LevanterInferenceContext, load_environment_from_spec
 from marin.rl.model_utils import load_model_from_checkpoint
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .types import (
-    InferenceChoice,
-    InferenceContext,
-    InferenceResponse,
     RolloutBatch,
+    RolloutGroup,
     RolloutMetadata,
     RolloutStats,
 )
@@ -89,112 +85,6 @@ def find_open_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("", 0))
         return s.getsockname()[1]
-
-
-class LevanterInferenceContext(InferenceContext):
-    """Context that uses Levanter model and inference server."""
-
-    max_tokens: int
-    _inference_server: InferenceServer
-    _stop_tokens: list[int] | None = None
-    tokenizer: PreTrainedTokenizer
-
-    def __init__(
-        self,
-        tokenizer,
-        stop_tokens: list[int] | None,
-        inference_server: InferenceServer,
-        max_tokens: int,
-    ):
-        self._inference_server = inference_server
-        self.tokenizer = tokenizer
-        self._stop_tokens = stop_tokens
-        self.max_tokens = max_tokens
-
-    def openai_client(self):
-        base_url = f"http://{self._inference_server.address()}/v1"
-        return AsyncOpenAI(base_url=base_url, api_key="marin")
-
-    def generate(
-        self,
-        prompts: list[str],
-        temperature: float,
-        n_generations: int,
-    ) -> list[InferenceResponse]:
-        """Generate responses for a batch of prompts."""
-        stop_strings = None
-        if self._stop_tokens is not None:
-            stop_strings = [self.tokenizer.decode([token]) for token in self._stop_tokens]
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        client = self.openai_client()
-
-        def _process_batch(batch_prompts: list[str]) -> list[InferenceResponse]:
-            batch_completions = []
-
-            for prompt in batch_prompts:
-                completion = client.chat.completions.create(
-                    model=getattr(self._inference_server.config, "model_name", "test-model"),
-                    messages=[{"role": "user", "content": prompt}],
-                    logprobs=True,
-                    max_tokens=self.max_tokens,
-                    temperature=temperature,
-                    n=n_generations,
-                    stop=stop_strings,
-                    timeout=30,
-                )
-                batch_completions.append(completion)
-
-            completions = loop.run_until_complete(asyncio.gather(*batch_completions, return_exceptions=True))
-
-            batch_results = []
-            for prompt, completion in zip(batch_prompts, completions, strict=True):
-                choices = []
-                # drop responses that failed.
-                if isinstance(completion, Exception):
-                    logger.error(f"Error during generation: {completion}")
-                else:
-                    for choice in completion.choices:
-                        content = choice.message.content
-                        tokens = self.tokenizer.encode(content)
-                        logprobs = [t.logprob for t in choice.logprobs.content]
-                        logprobs = np.array(logprobs, dtype=np.float32)
-                        assert np.all(logprobs != 0), f"Logprobs contain zero values {choice}"
-                        choices.append(
-                            InferenceChoice(
-                                response_text=content,
-                                response_tokens=np.array(tokens, dtype=np.int32),
-                                logprobs=logprobs,
-                            )
-                        )
-
-                # Create InferenceResponse with prompt tokens
-                prompt_tokens = self.tokenizer.encode(prompt, add_special_tokens=True)
-                batch_results.append(
-                    InferenceResponse(
-                        prompt=prompt,
-                        prompt_tokens=np.array(prompt_tokens, dtype=np.int32),
-                        choices=choices,
-                    )
-                )
-            return batch_results
-
-        # Process prompts in batches to limit concurrent requests
-        # Each prompt with n_generations counts as n_generations requests
-        max_concurrent_requests = 8
-        batch_size = max(1, max_concurrent_requests // n_generations)
-        all_results = []
-
-        for i in range(0, len(prompts), batch_size):
-            batch_prompts = prompts[i : i + batch_size]
-            batch_results = _process_batch(batch_prompts)
-            all_results.extend(batch_results)
-
-        loop.run_until_complete(client.close())
-
-        loop.close()
-        return all_results
 
 
 @dataclass
@@ -346,13 +236,27 @@ class RolloutWorker:
             self._current_weight_step,
         )
 
+        # Create metadata once for this batch
+        batch_metadata = RolloutMetadata(
+            worker_id=f"{socket.gethostname()}_{os.getpid()}",
+            timestamp=time.time(),
+            weight_step=self._current_weight_step,
+        )
+
+        # Attach metadata to each rollout in each group
+        rollout_groups_with_metadata = []
+        for group in rollout_groups:
+            rollouts_with_metadata = []
+            for rollout in group.rollouts:
+                # Create new rollout with metadata attached
+                rollout_with_meta = eqx.tree_at(lambda r: r.metadata, rollout, batch_metadata)
+                rollouts_with_metadata.append(rollout_with_meta)
+
+            rollout_groups_with_metadata.append(RolloutGroup(rollouts=rollouts_with_metadata))
+
         rollout_batch = RolloutBatch(
-            groups=rollout_groups,
-            metadata=RolloutMetadata(
-                worker_id=f"{socket.gethostname()}_{os.getpid()}",
-                timestamp=time.time(),
-                weight_step=self._current_weight_step,
-            ),
+            groups=rollout_groups_with_metadata,
+            metadata=batch_metadata,
         )
         return rollout_batch, metrics
 

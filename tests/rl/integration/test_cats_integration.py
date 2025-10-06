@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from tests.rl.integration.config import (
@@ -63,9 +64,12 @@ def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path):
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
             rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
-            replay_buffer_capacity=2048,
-            replay_buffer_alpha=3.0,
-            max_samples_per_rollout=4,
+            replay_buffer=ReplayBufferConfig(
+                capacity=2048,
+                alpha=3.0,
+                max_samples=4,
+                max_rollout_step_delay=1,
+            ),
         ),
         curriculum=create_test_curriculum_config(),
         tokenizer=tokenizer,
@@ -118,8 +122,12 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
             rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
-            max_samples_per_rollout=4,
-            max_rollout_delay=4,
+            replay_buffer=ReplayBufferConfig(
+                capacity=4096,
+                alpha=3.0,
+                max_samples=4,
+                max_rollout_step_delay=4,
+            ),
         ),
         curriculum=create_test_curriculum_config(),
         tokenizer=DummyTokenizer(),

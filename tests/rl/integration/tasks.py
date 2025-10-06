@@ -122,6 +122,11 @@ def create_cats_rollout_batch(
             response_logprobs=individual_logprobs,
             token_rewards=token_rewards,
             episode_reward=episode_reward,
+            metadata=RolloutMetadata(
+                worker_id=worker_id,
+                timestamp=time.time(),
+                weight_step=10000,
+            ),
         )
         rollouts.append(rollout)
 
@@ -306,6 +311,11 @@ def create_sequential_digits_rollout_batch(
             response_logprobs=individual_logprobs,
             token_rewards=token_rewards,
             episode_reward=episode_reward,
+            metadata=RolloutMetadata(
+                worker_id=worker_id,
+                timestamp=time.time(),
+                weight_step=10000,
+            ),
         )
         rollouts.append(rollout)
 

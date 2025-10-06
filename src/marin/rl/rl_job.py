@@ -80,20 +80,15 @@ class TrainParams:
 
     optimizer: OptimizerConfig
     rl_loss: "RLLossModule"
-
-    # Replay buffer settings
-    # By default we make the rollout_delay and max_samples conservative, effectively
-    # mimicking on-policy training.
-    max_samples_per_rollout: int = 1
-    """How many times to use each rollout."""
-
-    max_rollout_delay: int = 1
-    """Max age of rollouts in steps."""
-
-    replay_buffer_capacity: int = 4096
-    """How many examples to store per environment in the replay buffer."""
-    replay_buffer_alpha: float = 3.0
-    """Recency bias for the replay buffer."""
+    replay_buffer: ReplayBufferConfig = field(
+        default_factory=lambda: ReplayBufferConfig(
+            capacity=4096,
+            alpha=3.0,
+            max_samples=1,
+            max_rollout_step_delay=1,
+            max_rollout_timestamp_delay=3600.0,
+        )
+    )
 
 
 def make_tokenizer(tokenizer: str | PreTrainedTokenizer) -> PreTrainedTokenizer:
@@ -224,18 +219,10 @@ class RLJob:
         # Create tokenizer
         tokenizer = make_tokenizer(self.config.tokenizer)
 
-        # Create replay buffer config from train params
-        replay_buffer = ReplayBufferConfig(
-            capacity=self.config.train_params.replay_buffer_capacity,
-            alpha=self.config.train_params.replay_buffer_alpha,
-            max_samples=self.config.train_params.max_samples_per_rollout,
-            max_rollout_delay=self.config.train_params.max_rollout_delay,
-        )
-
-        # Scan over sampling params for max seqs
+        # Scan over sampling params for max seqs, must be able to fit a single lesson prompt
         max_seqs = 0
         for lesson in self.config.curriculum.lessons.values():
-            total_seqs = lesson.sampling_params.n_generations_per_prompt * lesson.sampling_params.n_prompts
+            total_seqs = lesson.sampling_params.n_generations_per_prompt
             max_seqs = max(max_seqs, total_seqs)
 
         max_tokens = self.config.curriculum.max_tokens
@@ -272,7 +259,7 @@ class RLJob:
             optimizer=self.config.train_params.optimizer,
             loss=self.config.train_params.rl_loss,
             tokenizer=tokenizer,
-            replay_buffer=replay_buffer,
+            replay_buffer=self.config.train_params.replay_buffer,
             initial_checkpoint=self.config.initial_checkpoint,
             run_id=self.config.run_id,
             curriculum_config=self.config.curriculum,

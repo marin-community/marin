@@ -24,6 +24,7 @@ import pytest
 
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
+from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from tests.rl.integration.config import (
@@ -82,10 +83,12 @@ def test_train_worker_with_sequential_digits(ray_tpu_cluster, tmp_path):
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
             rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
-            replay_buffer_capacity=2048,
-            replay_buffer_alpha=3.0,
-            max_samples_per_rollout=1,
-            max_rollout_delay=1,
+            replay_buffer=ReplayBufferConfig(
+                capacity=2048,
+                alpha=3.0,
+                max_samples=1,
+                max_rollout_step_delay=1,
+            ),
         ),
         curriculum=curriculum_config,
         tokenizer=tokenizer,
@@ -125,7 +128,7 @@ def test_train_worker_with_sequential_digits(ray_tpu_cluster, tmp_path):
 def test_full_integration_sequential_digits(ray_tpu_cluster, tmp_path):
     """Full integration test with rollout and train workers for sequential digits task."""
     rollout_storage_config = create_test_rollout_storage_config()
-    target_steps = 100
+    target_steps = 500
 
     # Create curriculum with sequential digits task
     test_id = uuid.uuid4().hex[:8]
@@ -154,9 +157,13 @@ def test_full_integration_sequential_digits(ray_tpu_cluster, tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
-            max_samples_per_rollout=1,
-            max_rollout_delay=1,
+            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=1.0),
+            replay_buffer=ReplayBufferConfig(
+                capacity=4096,
+                alpha=3.0,
+                max_samples=1,
+                max_rollout_step_delay=2,
+            ),
         ),
         curriculum=curriculum_config,
         tokenizer=DummyTokenizer(),
@@ -170,7 +177,7 @@ def test_full_integration_sequential_digits(ray_tpu_cluster, tmp_path):
 
     # Apply test-specific overrides
     inference_runner.rollout_worker_config.weight_transfer.sync_interval_steps = 1
-    inference_runner.rollout_worker_config.max_rollouts = 200
+    inference_runner.rollout_worker_config.max_rollouts = 2000
 
     with training_runner, inference_runner:
         while not training_runner.done.is_set():
