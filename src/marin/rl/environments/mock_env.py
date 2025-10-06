@@ -143,14 +143,13 @@ class NumberComparisonTask:
         return examples
 
     def compute_reward(self, correct_answer: str, actual_response: str, tokenizer=None) -> float:
-        format_score = 1.0 if actual_response.strip().isdigit() else 0.0
-        return 0.1 * format_score + 0.9 * compute_soft_reward(correct_answer, actual_response)
+        return compute_soft_reward(correct_answer, actual_response)
 
 
 def compute_soft_reward(correct_answer: str, actual_response: str) -> float:
     """Compute soft reward with partial credit for correctness and format."""
     if not actual_response:
-        return 0.0
+        return 0
 
     # remove commas from numbers
     correct_answer = correct_answer.replace(",", "").lower()
@@ -164,8 +163,7 @@ def compute_soft_reward(correct_answer: str, actual_response: str) -> float:
             correct_score = 1
             break
 
-    format_score = min(1.0, 1 / max(len(tokens), 1))
-    return correct_score + 0.2 * format_score
+    return correct_score / len(tokens)
 
 
 class MoarCatsTask:
