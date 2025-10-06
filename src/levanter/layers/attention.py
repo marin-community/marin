@@ -1690,11 +1690,12 @@ class KvPageCache(eqx.Module):
 
         new_k = new_k.astype(self.kv_pages.dtype)
         new_v = new_v.astype(self.kv_pages.dtype)
-        kv_pages = eqx.error_if(self.kv_pages, hax.any(hax.isnan(self.kv_pages)).scalar(), "NaN in kv_pages pre")
+        # kv_pages = eqx.error_if(self.kv_pages, hax.any(hax.isnan(self.kv_pages)).scalar(), "NaN in kv_pages pre")
+        kv_pages = self.kv_pages
         kv_pages = kv_pages.at["page", t_pages, "slot", t_slots, "kv_head", 0::2].set(new_k, mode="drop")
         kv_pages = kv_pages.at["page", t_pages, "slot", t_slots, "kv_head", 1::2].set(new_v, mode="drop")
 
-        kv_pages = eqx.error_if(kv_pages, hax.any(hax.isnan(kv_pages)).scalar(), "NaN in kv_pages")
+        # kv_pages = eqx.error_if(kv_pages, hax.any(hax.isnan(kv_pages)).scalar(), "NaN in kv_pages")
 
         return dataclasses.replace(self, kv_pages=kv_pages)
 
