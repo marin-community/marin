@@ -19,6 +19,7 @@ from jaxtyping import PRNGKeyArray
 import haliax as hax
 
 
+from . import mup
 from .mup import AbstractLinearReparam, ReparamEnabled, LinearStandardParam
 from .._src.state_dict import (
     Mod,
@@ -315,3 +316,21 @@ def gmm_sharded(lhs_: jnp.ndarray, rhs_: jnp.ndarray, group_sizes_: jnp.ndarray,
         out = out[: hs_shape[0]]
 
     return out
+
+
+def input(use_mup: bool = True) -> type[AbstractLinearReparam]:
+    """Return the reparameterization class for an input linear layer."""
+
+    return mup.InputLinearMup if use_mup else mup.LinearStandardParam
+
+
+def hidden(use_mup: bool = True) -> type[AbstractLinearReparam]:
+    """Return the reparameterization class for a hidden linear layer."""
+
+    return mup.HiddenLinearMup if use_mup else mup.LinearStandardParam
+
+
+def output(use_mup: bool = True) -> type[AbstractLinearReparam]:
+    """Return the reparameterization class for an output linear layer."""
+
+    return mup.OutputLinearMup if use_mup else mup.LinearStandardParam
