@@ -219,7 +219,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-power-018"),
+        rl_train(name="llama-1b-math-rl-test-power-019"),
     ]
 
     executor_main(

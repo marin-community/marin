@@ -369,7 +369,7 @@ class RolloutWorker:
         logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, step, metrics)
         # only update curriculum for full evals
         if eval_type == "eval":
-            self._curriculum_actor.update_lesson_stats.remote(stats)
+            self._curriculum_actor.update_lesson_stats.remote(stats.rollout_stats, mode="eval", current_step=step)
         return stats
 
     def _evaluate_curriculum(self, rng, step: int) -> dict:
@@ -382,7 +382,9 @@ class RolloutWorker:
         logger.info(f"Evaluating {len(lesson_names)} lessons")
 
         for lesson_id in lesson_names:
-            self._evaluate_lesson(lesson_id, self.config.curriculum_config.eval_n_examples, "eval", rng, step)
+            self._evaluate_lesson(
+                lesson_id, self.config.curriculum_config.eval_n_examples, eval_type="eval", rng=rng, step=step
+            )
 
         barrier_sync()
 

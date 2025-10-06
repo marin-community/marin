@@ -210,6 +210,8 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum"):
             )
         },
         eval_frequency=100,
+        micro_eval_frequency=10,
+        micro_eval_n_examples=1,
         actor_name=actor_name,
     )
 
