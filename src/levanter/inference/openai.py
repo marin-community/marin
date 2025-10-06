@@ -126,7 +126,7 @@ class InferenceServerConfig:
     batch_timeout: float = 0.1  # seconds to wait for more requests before processing batch
 
     host: str = "localhost"
-    port: int = 10243
+    port: int = 0  # auto-assign port
 
 
 @dataclass
@@ -654,6 +654,11 @@ class InferenceServer:
     Provides OpenAI compatible endpoints for text and chat completions.
     """
 
+    _server: uvicorn.Server | None
+    app: FastAPI
+    config: InferenceServerConfig
+    inference_context: InferenceContext
+
     def __init__(self, config: InferenceServerConfig, inference_context: InferenceContext, app: FastAPI):
         """Initialize the inference server with pre-built components.
 
@@ -662,6 +667,7 @@ class InferenceServer:
         self.config = config
         self.inference_context = inference_context
         self.app = app
+        self._server = None
 
     @staticmethod
     def create(config: InferenceServerConfig, model: LmHeadModel, tokenizer: HfTokenizer) -> "InferenceServer":
@@ -712,10 +718,36 @@ class InferenceServer:
         """
         self.inference_context.reload(weight_callback)
 
+    def address(self):
+        """Get the full address the server is running on."""
+        for server in self._server.servers:
+            for sock in server.sockets:
+                addr = sock.getsockname()
+                host, port = addr[0], addr[1]
+                # handle weird ipv6 localhost address which confuses clients
+                if host == "::1" or host == ":1":
+                    host = "localhost"
+                return f"{host}:{port}"
+        return None
+
+    def port(self):
+        """Get the port the server is running on."""
+        if self.config.port > 0:
+            return self.config.port
+
+        # query the uvicorn server socket list for the port
+        for server in self._server.servers:
+            for sock in server.sockets:
+                addr = sock.getsockname()
+                return addr[1]
+
+        return None
+
     def serve(self):
         try:
             logger.info(f"Starting Levanter inference server on {self.config.host}:{self.config.port}")
-            uvicorn.run(self.app, host=self.config.host, port=self.config.port)
+            self._server = uvicorn.Server(uvicorn.Config(self.app, host=self.config.host, port=self.config.port))
+            self._server.run()
         finally:
             self.shutdown()
 
@@ -723,8 +755,8 @@ class InferenceServer:
         try:
             logger.info(f"Starting Levanter inference server on {self.config.host}:{self.config.port}")
             config = uvicorn.Config(self.app, host=self.config.host, port=self.config.port)
-            server = uvicorn.Server(config)
-            await server.serve()
+            self._server = uvicorn.Server(config)
+            await self._server.serve()
         finally:
             self.shutdown()
 
