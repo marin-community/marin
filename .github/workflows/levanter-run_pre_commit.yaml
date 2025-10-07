@@ -1,12 +1,25 @@
-name: Pre-Commit
+name: Levanter - Pre-Commit
 
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'lib/levanter/**'
+      - '.github/workflows/levanter-run_pre_commit.yaml'
+  pull_request:
+    paths:
+      - 'lib/levanter/**'
+      - '.github/workflows/levanter-run_pre_commit.yaml'
 
 jobs:
   pre_commit:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
 
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lib/levanter
     strategy:
       matrix:
         python-version: ["3.11"]
@@ -20,9 +33,10 @@ jobs:
           version: "0.7.20"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
+          working-directory: lib/levanter
       - name: Set up Python
         run: uv python install
       - name: "Run Pre-commit"
-        run: uv run pre-commit run --all-files --show-diff-on-failure
+        run: uv run --package levanter pre-commit run --all-files --show-diff-on-failure
 
 
