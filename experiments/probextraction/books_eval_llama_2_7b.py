@@ -55,7 +55,7 @@ llama2_7b_config = LlamaConfig(
 # Select hardware + batch size based on model size (~7B for Llama-2-7B)
 _TPU_TYPE, _EVAL_BATCH = choose_hw_and_batch(7.0)
 
-_TPU_TYPE = "v4-64"  # override for now, since v4-64 seems unavailable
+_TPU_TYPE = "v4-128"  # override for now, since v4-64 seems unavailable
 base_pz_config = PzEvalConfig(
     tokenizer_name="meta-llama/Llama-2-7b-hf",
     model=llama2_7b_config,
@@ -88,9 +88,11 @@ base_pz_config = PzEvalConfig(
 # Parallel single-book P(z) evaluation over many books (Llama-2-7B)
 # -----------------------------------------------------------------------------
 # Build one ExecutorStep per book to let Executor manage concurrency and waiting.
-BOOKS_PATH = "gs://marin-us-central2/documents/books/50_books/"
+# BOOKS_PATH = "gs://marin-us-central2/documents/books/50_books/"
 # BOOKS_PATH = "gs://marin-us-central2/books_evals/2_books/"  # debug
-# BOOKS_PATH = "gs://marin-us-central2/books_evals/1_books/harry_potter_1.txt"  # debug single file
+BOOKS_PATH = (
+    "gs://marin-us-central2/documents/books/50_books/harry_potter_and_the_sorcerer_s_stone.txt"  # debug single file
+)
 
 book_steps: list[ExecutorStep[PzEvalConfig]] = []
 for book_title, txt_path in list_books(BOOKS_PATH):
@@ -101,7 +103,7 @@ for book_title, txt_path in list_books(BOOKS_PATH):
         base_tracker,
         name=f"llama2_7b_pz_{book_title}",
         group="llama2_7b_pz_books",
-        tags=(list(getattr(base_tracker, "tags", [])) + ["pz", "llama2_7b", f"book:{book_title}"]),
+        tags=(*getattr(base_tracker, "tags", []), "pz", "llama2_7b", f"book:{book_title}"),
     )
     book_trainer = replace(base_pz_config.trainer, tracker=book_tracker)
 

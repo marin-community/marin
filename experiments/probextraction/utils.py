@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Shared utilities for probextraction experiments.
 
@@ -10,7 +24,6 @@ Shared utilities for probextraction experiments.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, Tuple
 import os
 
 import ray
@@ -29,7 +42,7 @@ def list_books(gcp_path: str) -> list[tuple[str, str]]:
     - Else, glob `*.txt` under the directory (works with gs:// via fsspec).
     """
     txt_files = [gcp_path] if gcp_path.endswith(".txt") else fsspec_glob(f"{gcp_path.rstrip('/')}/*.txt")
-    out: list[Tuple[str, str]] = []
+    out: list[tuple[str, str]] = []
     for txt_path in txt_files:
         filename = Path(txt_path).stem
         book_title = filename
@@ -100,10 +113,10 @@ def make_run_eval_pz_fn(tpu_type: str = "v4-128", slice_count: int = 1):
 # a reasonable eval batch size for P(z). Tweak as needed per environment.
 HW_PRESETS: list[tuple[float, str, int]] = [
     # (max_params_b, tpu_type, eval_batch_size)
-    (8.0, "v4-64", 256),    # ~7B–8B
-    (15.0, "v4-128", 512),  # ~13B–15B
-    (35.0, "v4-128", 512),  # ~30B
-    (80.0, "v4-256", 256),  # ~65B–70B
+    (8.0, "v4-64", 256),
+    (15.0, "v4-128", 512),
+    (35.0, "v4-128", 512),
+    (80.0, "v4-256", 256),
 ]
 
 
