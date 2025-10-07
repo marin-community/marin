@@ -86,6 +86,7 @@ def dot_product_attention(
     scaling_factor: float | None = None,
     inference: bool = True,
     prng: PRNGKeyArray | None = None,
+    attn_sink: Optional[NamedArray] = None,
 ):
     """
     This method is similar to [haliax.nn.attention.dot_product_attention][] but it can use different backends for
@@ -151,6 +152,8 @@ def dot_product_attention(
     if scaling_factor is None:
         scaling_factor = 1 / math.sqrt(query.resolve_axis(Key).size)
 
+    attention_out = None
+
     match attn_backend:
         case AttentionBackend.NVTE:
             attention_out = _try_te_attention(
@@ -160,10 +163,10 @@ def dot_product_attention(
                 query,
                 key,
                 value,
-                mask,
-                bias,
-                dropout,
-                inference,
+                mask=mask,
+                bias=bias,
+                dropout=dropout,
+                inference=inference,
                 prng=prng,
                 attention_dtype=attention_dtype,
                 precision=precision,
@@ -171,45 +174,103 @@ def dot_product_attention(
                 force_te=not was_default,
                 scaling_factor=scaling_factor,
                 logits_soft_cap=logits_soft_cap,
+                attn_sink=attn_sink,
             )
+
         case AttentionBackend.SPLASH:
-            attention_out = _try_tpu_splash_attention(
-                QPos,
-                KPos,
-                Key,
-                query,
-                key,
-                value,
-                mask,
-                bias,
-                dropout,
-                inference,
-                force_flash=not was_default,
-                prng=prng,
-                attention_dtype=attention_dtype,
-                precision=precision,
-                block_size=flash_block_size,
-                scaling_factor=scaling_factor,
-                logits_soft_cap=logits_soft_cap,
-            )
+            if attn_sink is None:
+                attention_out = _try_tpu_splash_attention(
+                    QPos,
+                    KPos,
+                    Key,
+                    query,
+                    key,
+                    value,
+                    mask,
+                    bias,
+                    dropout,
+                    inference,
+                    force_flash=not was_default,
+                    prng=prng,
+                    attention_dtype=attention_dtype,
+                    precision=precision,
+                    block_size=flash_block_size,
+                    scaling_factor=scaling_factor,
+                    logits_soft_cap=logits_soft_cap,
+                )
+            else:
+                try:
+                    attention_out = _tpu_splash_attention(  # type: ignore[call-arg]
+                        QPos,
+                        KPos,
+                        Key,
+                        query,
+                        key,
+                        value,
+                        mask=mask,
+                        bias=bias,
+                        inference=inference,
+                        block_size=flash_block_size,
+                        scaling_factor=scaling_factor,
+                        logits_soft_cap=logits_soft_cap,
+                        sinks=attn_sink,  # TODO: support after upgrade to JAX 0.7.2
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "TPU Splash w/ sinks unavailable (%s). Falling back to JAX Flash.",
+                        e,
+                    )
+                    attention_out = None
+
         case AttentionBackend.VANILLA:
-            attention_out = simple_attention_with_dropout(
-                QPos,
-                KPos,
-                Key,
-                query,
-                key,
-                value,
-                mask,
-                bias,
-                inference,
-                dropout,
-                attention_dtype,
-                precision,
-                prng=prng,
-                scaling_factor=scaling_factor,
-                logits_soft_cap=logits_soft_cap,
-            )
+            if attn_sink is None:
+                attention_out = simple_attention_with_dropout(
+                    QPos,
+                    KPos,
+                    Key,
+                    query,
+                    key,
+                    value,
+                    mask,
+                    bias,
+                    inference,
+                    dropout,
+                    attention_dtype,
+                    precision,
+                    prng=prng,
+                    scaling_factor=scaling_factor,
+                    logits_soft_cap=logits_soft_cap,
+                )
+            else:
+                key2, value2, mask2, bias2, KPosPlus = _materialize_sink_as_dummy_kv(
+                    QPos=QPos,
+                    KPos=KPos,
+                    Key=Key,
+                    query=query,
+                    key=key,
+                    value=value,
+                    attn_sink=attn_sink,
+                    mask=mask,
+                    bias=bias,
+                )
+                attention_out = simple_attention_with_dropout(
+                    QPos,
+                    KPosPlus,
+                    Key,
+                    query,
+                    key2,
+                    value2,
+                    mask2,
+                    bias2,
+                    inference,
+                    dropout,
+                    attention_dtype,
+                    precision,
+                    prng=prng,
+                    scaling_factor=scaling_factor,
+                    logits_soft_cap=logits_soft_cap,
+                )
+
         case _:
             attention_out = None
 
@@ -236,10 +297,12 @@ def dot_product_attention(
             precision=precision,
             scaling_factor=scaling_factor,
             logits_soft_cap=logits_soft_cap,
+            attn_sink=attn_sink,
         )
 
 
-def dot_product_attention_with_sink(
+def _materialize_sink_as_dummy_kv(
+    *,
     QPos: AxisSelector,
     KPos: AxisSelection,
     Key: AxisSelector,
@@ -247,21 +310,11 @@ def dot_product_attention_with_sink(
     key: NamedArray,
     value: NamedArray,
     attn_sink: NamedArray,
-    mask: Optional[Union["AttentionMask", NamedArray]] = None,
-    bias: Optional[NamedArray] = None,
-    attention_dtype: Optional[jnp.dtype] = None,
-    precision: PrecisionLike = None,
-    use_flash: Optional[bool] = None,
-    attn_backend: Optional[AttentionBackend] = None,
-    flash_block_size: Optional[int] = None,
-    dropout: float = 0.0,
-    *,
-    logits_soft_cap: float | None = None,
-    scaling_factor: float | None = None,
-    inference: bool = True,
-    prng: PRNGKeyArray | None = None,
+    mask: Optional[Union["AttentionMask", NamedArray]],
+    bias: Optional[NamedArray],
 ):
-    """Dot-product attention variant with a learned sink term per head.
+    """
+    Preprocess for dot-product attention variant with a learned sink term per head.
 
     The sink is implemented by appending a dummy key/value of zeros and
     inserting the sink logit via the bias term at the final key position.
@@ -302,26 +355,7 @@ def dot_product_attention_with_sink(
         zero_bias = hax.zeros(zero_bias_axes, dtype=sink_bias.dtype)
         bias = hax.concatenate(KPosPlus, [zero_bias, sink_bias])
 
-    return dot_product_attention(
-        QPos,
-        KPosPlus,
-        Key,
-        query,
-        key,
-        value,
-        m,
-        bias,
-        attention_dtype,
-        precision,
-        use_flash,
-        attn_backend,
-        flash_block_size,
-        dropout,
-        logits_soft_cap=logits_soft_cap,
-        scaling_factor=scaling_factor,
-        inference=inference,
-        prng=prng,
-    )
+    return key, value, m, bias, KPosPlus
 
 
 def simple_attention_with_dropout(
@@ -395,7 +429,20 @@ def _try_te_attention(
     force_te: bool,
     scaling_factor: float,
     logits_soft_cap: Optional[float] = None,
+    attn_sink: Optional[NamedArray] = None,  # NEW
 ):
+    """
+    Try NVTE fused attention. If unsupported, either raise (when forced) or warn and return None.
+    Also rejects `attn_sink` since NVTE doesn't support it yet. (Centralizing this logic
+    matches the review suggestion to keep the 'forced backend must raise' contract here.)
+    """
+    if attn_sink is not None:
+        msg = "NVTE fused attention does not support attention sinks; falling back to reference."
+        if force_te:
+            raise NotImplementedError("NVTE fused attention does not support attention sinks.")
+        warnings.warn(msg)
+        return None
+
     try:
         return _te_flash_attention(
             QPos,
@@ -441,12 +488,16 @@ def _try_te_attention(
             msg = "NVTE doesn't work with these arguments. Falling back to the reference implementation.\n"
             "Check nvte_get_fused_attn_backend for supported configurations:\n"
             "https://github.com/NVIDIA/TransformerEngine/blob/main/transformer_engine/common/fused_attn/fused_attn.cpp#L71"
-            if _dtype not in (jnp.float16, jnp.bfloat16, jnp.float8_e5m2, jnp.float8_e4m3fn):
+            if _dtype not in (
+                jnp.float16,
+                jnp.bfloat16,
+                jnp.float8_e5m2,
+                jnp.float8_e4m3fn,
+            ):
                 msg += f"In particular, NVTE doesn't support {_dtype} yet."
 
             if force_te:
                 raise NotImplementedError(msg)
-
             warnings.warn(msg)
         else:
             raise
@@ -722,7 +773,11 @@ def _unflatten_bshd(attn_output, q_class, v_class):
 
 
 def _materialize_segment_mask(
-    segment_ids: NamedArray | tuple[NamedArray, NamedArray], QPos, KPos, q_slice, k_slice
+    segment_ids: NamedArray | tuple[NamedArray, NamedArray],
+    QPos,
+    KPos,
+    q_slice,
+    k_slice,
 ) -> NamedArray:
     """
     Make a segment mask for attention. This is a mask that prevents attention between different segments.
@@ -791,7 +846,11 @@ class AttentionMask(eqx.Module):
     # cf https://github.com/google-research/t5x/blob/51a99bff8696c373cc03918707ada1e98cbca407/t5x/examples/decoder_only/layers.py#L978
 
     def materialize(
-        self, QPos: Axis, KPos: Axis, q_slice: Optional[haliax.dslice] = None, k_slice: Optional[haliax.dslice] = None
+        self,
+        QPos: Axis,
+        KPos: Axis,
+        q_slice: Optional[haliax.dslice] = None,
+        k_slice: Optional[haliax.dslice] = None,
     ) -> Optional[NamedArray]:
         """
         Materialize the mask as a NamedArray. This is useful for attention functions that don't support masks,
@@ -1320,7 +1379,8 @@ def _tpu_splash_attention(
         k = k.astype(attention_dtype)
         v = v.astype(attention_dtype)
         return jax.vmap(
-            lambda q, k, v, si: splash_kernel(q, k, v, segment_ids=si), in_axes=(0, 0, 0, segment_batch_axis)
+            lambda q, k, v, si: splash_kernel(q, k, v, segment_ids=si),
+            in_axes=(0, 0, 0, segment_batch_axis),
         )(q, k, v, segment_ids)
 
     attn_output = wrap_flash_attention(q_, k_, v_, segment_ids)
@@ -1476,13 +1536,25 @@ class Attention(eqx.Module):
             out_first=True,
         )
         k_proj = hnn.Linear.init(
-            In=config.Embed, Out=(config.KVHeads, config.HeadSize), key=k_k, use_bias=use_bias, out_first=True
+            In=config.Embed,
+            Out=(config.KVHeads, config.HeadSize),
+            key=k_k,
+            use_bias=use_bias,
+            out_first=True,
         )
         v_proj = hnn.Linear.init(
-            In=(config.Embed), Out=(config.KVHeads, config.HeadSize), key=k_v, use_bias=use_bias, out_first=True
+            In=(config.Embed),
+            Out=(config.KVHeads, config.HeadSize),
+            key=k_v,
+            use_bias=use_bias,
+            out_first=True,
         )
         o_proj = hnn.Linear.init(
-            In=(config.Heads, config.HeadSize), Out=config.Embed, key=k_o, use_bias=use_output_bias, out_first=True
+            In=(config.Heads, config.HeadSize),
+            Out=config.Embed,
+            key=k_o,
+            use_bias=use_output_bias,
+            out_first=True,
         )
 
         q_norm = None
@@ -1750,7 +1822,10 @@ def ragged_paged_attention(
             return out
         except Exception:  # pragma: no cover - fall back if kernel fails
             warnings.warn("TPU ragged paged attention failed. Falling back to reference implementation.")
-            logger.warning("Failed to use TPU ragged paged attention. Falling back to reference", exc_info=True)
+            logger.warning(
+                "Failed to use TPU ragged paged attention. Falling back to reference",
+                exc_info=True,
+            )
 
     return default_ragged_paged_attention(
         q,
@@ -1972,7 +2047,10 @@ def default_ragged_paged_attention(
             max_b = hax.full((Q_B, H, Q_H), -jnp.inf)
 
             o_b, sum_exp_b, max_b = jax.lax.fori_loop(
-                0, num_kv_blocks, _compute_attention_for_kv_block, (o_b, sum_exp_b, max_b)
+                0,
+                num_kv_blocks,
+                _compute_attention_for_kv_block,
+                (o_b, sum_exp_b, max_b),
             )
 
             # Normalize
@@ -2243,7 +2321,12 @@ class AttentionWithSink(Attention):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
+        self,
+        x: NamedArray,
+        mask: Optional[NamedArray | AttentionMask],
+        *,
+        key=None,
+        pos_ids: NamedArray | None = None,
     ) -> NamedArray:
         key_q, key_k, key_v, key_o = maybe_rng_split(key, 4)
 
@@ -2271,14 +2354,13 @@ class AttentionWithSink(Attention):
         k = k.rename({"position": "key_position"})
         v = v.rename({"position": "key_position"})
 
-        attn_output = dot_product_attention_with_sink(
+        attn_output = dot_product_attention(
             "position",
             "key_position",
             "head_size",
             q,
             k,
             v,
-            self.sinks,
             mask,
             attention_dtype=jnp.float32 if self.config.upcast_attn else x.dtype,
             attn_backend=self.config.attn_backend,
@@ -2288,6 +2370,7 @@ class AttentionWithSink(Attention):
             dropout=0.0,
             inference=True,
             prng=key,
+            attn_sink=self.sinks,
         )
 
         attn_output = attn_output.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
