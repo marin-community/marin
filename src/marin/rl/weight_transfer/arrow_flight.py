@@ -50,6 +50,8 @@ from jax.sharding import Mesh
 from jaxtyping import PyTree
 from levanter.utils.jax_utils import barrier_sync
 
+from marin.rl.robust_actor import RobustActor
+
 from .base import (
     WeightTransferClient,
     WeightTransferClientMetrics,
@@ -57,7 +59,6 @@ from .base import (
     WeightTransferServer,
     WeightTransferServerMetrics,
     WeightUpdate,
-    get_or_create_actor,
 )
 
 logger = logging.getLogger(__name__)
@@ -208,7 +209,6 @@ def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -
         return res
 
 
-@ray.remote(num_cpus=0)
 class ArrowFlightCoordinator:
     """Ray actor for coordinating Arrow Flight weight transfers."""
 
@@ -363,7 +363,7 @@ class ArrowFlightServer(WeightTransferServer):
             logger.info(f"Arrow Flight server {i} started at {server_location}")
 
         self.metrics = WeightTransferServerMetrics()
-        self._coordinator = get_or_create_actor(ArrowFlightCoordinator, self.config.coordinator_name)
+        self._coordinator = RobustActor.create(ArrowFlightCoordinator, actor_name=self.config.coordinator_name)
 
     def serve_weights(self, weight_id: int, model: PyTree) -> None:
         """Serve weights via Arrow Flight using Haliax state_dict serialization.
@@ -455,7 +455,7 @@ class ArrowFlightClient(WeightTransferClient):
 
         self.metrics = WeightTransferClientMetrics()
         self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_RECEIVES)
-        self._coordinator = get_or_create_actor(ArrowFlightCoordinator, self.config.coordinator_name)
+        self._coordinator = RobustActor.create(ArrowFlightCoordinator, actor_name=self.config.coordinator_name)
 
     def _connect_to_servers(self, new_locations) -> bool:
         """Connect to all Arrow Flight servers."""
