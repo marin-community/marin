@@ -12,16 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""10M seed set runs for us-east5 using shared utils."""
+# Copyright 2025 The Marin Authors
+
+"""10M seed set runs for us-central1 using shared utils."""
 
 from marin.execution.executor import executor_main
 
 from experiments.memorize.utils import make_runner_10m
 
-REGION = "east5"
+REGION = "central1"
 runner = make_runner_10m(REGION)
 
-# Representative epoch counts; adjust as needed
+# Representative epoch counts
 train_1epoch = runner(1)
 train_10epoch = runner(10)
 train_20epoch = runner(20)
@@ -29,30 +31,18 @@ train_50epoch = runner(50)
 train_75epoch = runner(75)
 train_100epoch = runner(100)
 train_200epoch = runner(200)
-train_375epoch = runner(375)
-train_500epoch = runner(500)
-train_750epoch = runner(750)
-train_1000epoch = runner(1000)
-train_1500epoch = runner(1500)
-train_3000epoch = runner(3000)
 
 
 if __name__ == "__main__":
     executor_main(
         steps=[
-            # train_1epoch,
-            # train_10epoch,
-            # train_20epoch,
-            # train_50epoch,
-            # train_75epoch,
-            # train_100epoch,
-            # train_200epoch,
-            # train_375epoch,
-            train_500epoch,
-            train_750epoch,
-            train_1000epoch,
-            train_1500epoch,
-            train_3000epoch,
+            train_1epoch,
+            train_10epoch,
+            train_20epoch,
+            train_50epoch,
+            train_75epoch,
+            train_100epoch,
+            train_200epoch,
         ],
-        description="150M on ~10M COMMA seed set (us-east5).",
+        description="150M on ~10M COMMA seed set (us-central1).",
     )

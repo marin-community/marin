@@ -14,29 +14,21 @@
 
 # Copyright 2025 The Marin Authors
 
-"""100M seed set runs for us-east5 using shared utils."""
+"""1M (Wikimedia-only) seed set runs for us-east1-d using shared utils."""
 
 from marin.execution.executor import executor_main
 
-from experiments.memorize.utils import make_runner_100m
+from experiments.memorize.utils import make_runner_1m_wikimedia
 
-REGION = "east5"
-runner = make_runner_100m(REGION)
+REGION = "east1d"
+runner = make_runner_1m_wikimedia(REGION)
 
 train_1epoch = runner(1)
-train_2epoch = runner(2)
-train_5epoch = runner(5)
 train_10epoch = runner(10)
-train_20epoch = runner(20)
-train_50epoch = runner(50)
-train_75epoch = runner(75)
-train_100epoch = runner(100)
-train_200epoch = runner(200)
 
 
 if __name__ == "__main__":
     executor_main(
-        # steps=[train_1epoch, train_2epoch, train_5epoch, train_10epoch, train_20epoch, train_50epoch, train_75epoch, train_100epoch], # noqa: E501
-        steps=[train_20epoch, train_50epoch, train_75epoch, train_100epoch, train_200epoch],
-        description="150M on ~100M COMMA seed set (us-east5).",
+        steps=[train_1epoch, train_10epoch],
+        description="150M on ~1M Wikimedia-only seed set (us-east1-d).",
     )

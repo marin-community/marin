@@ -43,6 +43,8 @@ REGION_TPU_DEFAULTS: dict[str, str] = {
     "central1": "v5p-8",
     "east5": "v5p-8",
     "central2": "v4-64",
+    # us-east1-d small slice used in 1M Wikimedia runs
+    "east1d": "v6e-8",
 }
 
 

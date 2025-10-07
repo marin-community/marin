@@ -14,13 +14,13 @@
 
 # Copyright 2025 The Marin Authors
 
-"""1M (Wikimedia-only) seed set runs for us-central2 using shared utils."""
+"""1M (Wikimedia-only) seed set runs for us-central1 using shared utils."""
 
 from marin.execution.executor import executor_main
 
 from experiments.memorize.utils import make_runner_1m_wikimedia
 
-REGION = "central2"
+REGION = "central1"
 runner = make_runner_1m_wikimedia(REGION)
 
 # Baseline epoch runs
@@ -32,7 +32,7 @@ train_75epoch = runner(75)
 train_100epoch = runner(100)
 train_200epoch = runner(200)
 
-# Fixed-step parity runs (matching 10M seed step counts)
+# Fixed-step parity runs (matching 10M seed step counts in total tokens)
 train_150epoch = runner(150)
 train_375epoch = runner(375)
 train_562epoch = runner(562)
@@ -45,7 +45,7 @@ train_6000epoch = runner(6000)
 if __name__ == "__main__":
     executor_main(
         steps=[
-            # train_1epoch,
+            train_1epoch,
             train_10epoch,
             train_20epoch,
             train_50epoch,
@@ -58,7 +58,7 @@ if __name__ == "__main__":
             train_750epoch,
             train_1500epoch,
             train_3000epoch,
-            # train_6000epoch,
+            train_6000epoch,
         ],
-        description="150M on ~1M Wikimedia seed set (us-central2).",
+        description="150M on ~1M Wikimedia seed set (us-central1).",
     )

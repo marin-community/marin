@@ -210,13 +210,13 @@ def run_ray_command(
                     stderr=result.stderr or "",
                 )
         else:
-            logger.info(f"Ray command completed successfully")
+            logger.info("Ray command completed successfully")
             if capture_output and result.stdout:
                 logger.debug(f"STDOUT: {result.stdout}")
 
         return result
 
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired:
         if timeout is None:
             logger.error("Ray command timed out with no timeout configured")
         else:
@@ -623,9 +623,10 @@ def submit_job(
         # Create a temporary file for the runtime environment
         import tempfile
         import os
-        fd, runtime_env_file = tempfile.mkstemp(suffix='.json')
+
+        fd, runtime_env_file = tempfile.mkstemp(suffix=".json")
         try:
-            with os.fdopen(fd, 'w') as f:
+            with os.fdopen(fd, "w") as f:
                 json.dump(runtime_env, f)
         except:
             os.close(fd)
@@ -636,7 +637,8 @@ def submit_job(
         for resource, amount in resources.items():
             cmd.extend([f"--{resource}", str(amount)])
 
-    cmd.extend(["--"] + shlex.split(entrypoint))
+    # Use argument unpacking instead of list concatenation for clarity and style (RUF005)
+    cmd.extend(["--", *shlex.split(entrypoint)])
 
     try:
         result = run_ray_command(cmd, timeout=None)
@@ -998,7 +1000,8 @@ export BUCKET="{bucket}"
 
 echo 'Checking for head node IP...'
 gcloud compute instances list \\
-  --filter="labels.ray-cluster-name:{cluster_name} AND labels.ray-node-type=head AND name~'ray-{cluster_name}-head-.*'" \\
+  --filter="labels.ray-cluster-name:{cluster_name} AND labels.ray-node-type=head AND \\
+name~'ray-{cluster_name}-head-.*'" \\
   --format="value(networkInterfaces[0].networkIP)" > /tmp/head_ip
 
 HEAD_IP=$(cat /tmp/head_ip | head -1 | awk '{{print $1}}' || true)

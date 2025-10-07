@@ -204,6 +204,39 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         # doesn't need to be a TPU because ray insists that all VMs are in the same region
         ray.get(ray.remote(_doublecheck_paths).options(runtime_env=hw_config.runtime_env, num_cpus=0.1).remote(config))
 
+    def _log_tpu_jax_versions():
+        """Log JAX/JAXLIB versions and PJRT-relevant env; fail fast on errors."""
+        import jax
+        import jaxlib
+
+        info = {
+            "jax": jax.__version__,
+            "jaxlib": getattr(
+                getattr(jaxlib, "version", None), "__version__", getattr(jaxlib, "__version__", "unknown")
+            ),
+            "JAX_PLATFORMS": os.environ.get("JAX_PLATFORMS"),
+            "JAX_PLATFORM_NAME": os.environ.get("JAX_PLATFORM_NAME"),
+            "PJRT_DEVICE": os.environ.get("PJRT_DEVICE"),
+            "XLA_FLAGS": os.environ.get("XLA_FLAGS"),
+        }
+
+        print(f"[JAX DIAG] JAX/PJRT environment: {info}", flush=True)
+        logger.info("JAX/PJRT environment: %s", info)
+        # Also print JAX's detailed environment info and capture it, in case stdout isn't surfaced by Ray.
+        import io
+        import contextlib
+
+        print("[JAX DIAG] jax.print_environment_info() output:", flush=True)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            jax.print_environment_info()
+        details = buf.getvalue()
+        # Emit to both stdout (flushed) and logger
+        if details:
+            print(details, flush=True)
+            for line in details.splitlines():
+                logger.info("[JAX DIAG] %s", line)
+
     @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1)
     def train_lm_task():
         train_lm.main(train_config)
