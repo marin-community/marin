@@ -55,7 +55,7 @@ def rloo_loss_with_importance_sampling(
     key: jax.Array | None,
     kl_coef: float,
     clip_epsilon: float,
-) -> jax.Array:
+) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Compute RLOO (Reward Leave-One-Out) loss with importance sampling for off-policy data.
 
     Args:
@@ -114,11 +114,18 @@ def rloo_loss_with_importance_sampling(
     reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)
 
     # KL regularization
-    kl_penalty = current_logprobs - reference_logprobs_array
+    log_ratio = current_logprobs - reference_logprobs_array
+    # https://github.com/openai/lm-human-preferences/blob/cbfd210bb8b08f6bc5c26878c10984b90f516c66/lm_human_preferences/train_policy.py#L151
+    kl_penalty = log_ratio**2
     kl_loss = kl_coef * jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
 
     loss = reinforce_loss + kl_loss
-    return loss
+    return loss, {
+        "ratio_mean": jnp.mean(ratio),
+        "reinforce_loss": reinforce_loss,
+        "kl_loss": kl_loss,
+        "kl_penalty": jnp.mean(kl_penalty),
+    }
 
 
 def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:

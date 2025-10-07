@@ -169,6 +169,9 @@ class RolloutWorker:
         self._inference_thread = threading.Thread(target=lambda: self._inference_server.serve(), daemon=True)
         self._inference_thread.start()
 
+        # TODO(power) -- replace this with a wait_until_ready() on the levanter inference server
+        time.sleep(1.0)
+
         self._environments = {}
 
         # Create curriculum actor (no checkpoint path for rollout workers)

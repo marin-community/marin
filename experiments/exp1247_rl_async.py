@@ -65,7 +65,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
 
     # Default sampling params for all lessons
     default_sampling = SamplingParams(
-        temperature=0.7,
+        temperature=1.0,
         n_prompts=8,
         n_generations_per_prompt=8,
         max_tokens=MAX_TOKENS,
@@ -130,7 +130,7 @@ def rl_train(name: str) -> ExecutorStep:
     trainer_config = TrainerConfig(
         # wandb is persistently crashing
         tracker=WandbConfig(
-            project="marin_rl_testing",
+            project="marin_mockenv_testing",
             name=name,
             tags=["rl", "math", MODEL_NAME.split("/")[-1]],
         ),
@@ -219,7 +219,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-power-019"),
+        rl_train(name="llama-1b-math-rl-test-power-024"),
     ]
 
     executor_main(
