@@ -115,6 +115,22 @@ class SampleLoggingConfig:
         return current_count < self.max_samples_per_benchmark
 
 
+@dataclass(frozen=True)
+class ProfilerConfig:
+    """Configuration for JAX profiler during evaluation."""
+
+    enabled: bool = False
+    """If True, enable profiling during evaluation."""
+    start_step: int = 0
+    """Step at which to start profiling."""
+    num_steps: int = 0
+    """Number of steps to profile."""
+    profile_path: str = "/tmp/levanter_profile"
+    """Path to save profiler traces."""
+    perfetto_link: bool = False
+    """If True, create a Perfetto link for the trace."""
+
+
 # OK, so LM-Eval-Harness is not deterministic. This means we can't just run it on different workers and expect the
 # order of requests to be the same. Sorting doesn't even seem to be correct (?!?!?) so we need to only run it on one
 # process.
@@ -144,7 +160,7 @@ class _LmEvalHarnessWorker:
         max_packed_segments,
         generation_kwargs=None,
         sample_logging_config: SampleLoggingConfig | None = None,
-        profiler_config: Optional[dict] = None,
+        profiler_config: ProfilerConfig | None = None,
     ):
         self.tokenizer = tokenizer
         self.max_packed_segments = max_packed_segments
@@ -156,7 +172,7 @@ class _LmEvalHarnessWorker:
         self.max_packed_segments = max_packed_segments
         self._generation_kwargs = generation_kwargs or {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
         self.sample_logging_config = sample_logging_config or SampleLoggingConfig()
-        self.profiler_config = profiler_config or {}
+        self.profiler_config = profiler_config or ProfilerConfig()
 
         self._dummy_batch = _make_dummy_batch(EvalBatch, EvalPos)
 
@@ -398,26 +414,32 @@ class LevanterHarnessLM(TemplateLM):
 
         return None
 
+    def _log_profiler_artifact(self):
+        """Log profiler artifact to the tracker."""
+        levanter.tracker.current_tracker().log_artifact(self.profiler_config.profile_path, type="jax_profile")
+
     def _handle_profiler_step(self):
         """Check if we should start or stop the profiler at this step."""
-        if not self.profiler_config.get("enabled", False):
+        if not self.profiler_config.enabled:
             return
 
-        start_step = self.profiler_config.get("start_step", 0)
-        num_steps = self.profiler_config.get("num_steps", 0)
+        start_step = self.profiler_config.start_step
+        num_steps = self.profiler_config.num_steps
         end_step = start_step + num_steps
 
         # Start profiler at start_step
         if self._current_step == start_step and not self._profiler_started:
-            profile_path = self.profiler_config.get("profile_path", "/tmp/profile")
-            perfetto_link = self.profiler_config.get("perfetto_link", False)
-            _create_perfetto_link = perfetto_link and jax.process_index() == 0
+            _create_perfetto_link = self.profiler_config.perfetto_link and jax.process_index() == 0
 
             import os
-            os.makedirs(profile_path, exist_ok=True)
+            os.makedirs(self.profiler_config.profile_path, exist_ok=True)
 
             logger.info(f"Starting profiler at step {self._current_step} (will profile until step {end_step})")
-            jax.profiler.start_trace(profile_path, create_perfetto_link=_create_perfetto_link, create_perfetto_trace=True)
+            jax.profiler.start_trace(
+                self.profiler_config.profile_path,
+                create_perfetto_link=_create_perfetto_link,
+                create_perfetto_trace=True,
+            )
             self._profiler_started = True
 
         # Stop profiler at end_step
@@ -425,10 +447,7 @@ class LevanterHarnessLM(TemplateLM):
             logger.info(f"Stopping profiler at step {self._current_step}")
             jax.profiler.stop_trace()
             self._profiler_started = False
-
-            # Log artifact
-            profile_path = self.profiler_config.get("profile_path", "/tmp/profile")
-            levanter.tracker.current_tracker().log_artifact(profile_path, type="jax_profile")
+            self._log_profiler_artifact()
 
     def _stop_profiler_if_needed(self):
         """Ensure profiler is stopped if it was started."""
@@ -436,10 +455,7 @@ class LevanterHarnessLM(TemplateLM):
             logger.info("Stopping profiler (end of evaluation).")
             jax.profiler.stop_trace()
             self._profiler_started = False
-
-            # Log artifact
-            profile_path = self.profiler_config.get("profile_path", "/tmp/profile")
-            levanter.tracker.current_tracker().log_artifact(profile_path, type="jax_profile")
+            self._log_profiler_artifact()
 
     def _loglikelihood_tokens(self, requests, disable_tqdm: bool = False):
         raise NotImplementedError("_loglikelihood_tokens is not yet supported")
@@ -752,7 +768,7 @@ class LevanterHarnessLM(TemplateLM):
             self._current_step = saved_step
 
         # Pass the callback to the engine if profiling is enabled
-        step_callback = decode_step_callback if self.profiler_config.get("enabled", False) else None
+        step_callback = decode_step_callback if self.profiler_config.enabled else None
         result = engine.generate(gen_requests, step_callback=step_callback)
 
         # Decode first generation per request (LM Harness expects one string per request)
@@ -1065,13 +1081,13 @@ def run_lm_eval_harness(
     EvalBatch,
     axis_resources,
     mp: jmp.Policy | None,
-    profiler_config: Optional[dict] = None,
+    profiler_config: ProfilerConfig | None = None,
 ) -> dict | None:
     """
     Run the LM Eval Harness on the given model and tasks.
 
     Args:
-        profiler_config: Optional dict with keys 'enabled', 'start_step', 'num_steps', 'profile_path', 'perfetto_link'
+        profiler_config: Optional ProfilerConfig for profiling during evaluation
 
     Returns:
         If running on process 0, returns the outputs of the LM Eval Harness with the following extra keys.
@@ -1095,7 +1111,7 @@ def _actually_run_eval_harness(
     EvalBatch: haliax.Axis,
     axis_resources: ResourceMapping,
     mp: jmp.Policy | None,
-    profiler_config: Optional[dict] = None,
+    profiler_config: ProfilerConfig | None = None,
 ) -> dict | None:
     """
     Actually run the LM Eval Harness on the given model and tasks. This is a separate function so that it can be used
@@ -1264,13 +1280,13 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
             # Get the run_id that was set during initialize()
             run_id = config.trainer._maybe_set_id()
             profile_path = config.trainer.log_dir / run_id / "profiler"
-            profiler_config = {
-                "enabled": True,
-                "start_step": config.trainer.profiler_start_step,
-                "num_steps": config.trainer.profiler_num_steps,
-                "profile_path": str(profile_path),
-                "perfetto_link": config.trainer.profiler_perfetto_link,
-            }
+            profiler_config = ProfilerConfig(
+                enabled=True,
+                start_step=config.trainer.profiler_start_step,
+                num_steps=config.trainer.profiler_num_steps,
+                profile_path=str(profile_path),
+                perfetto_link=config.trainer.profiler_perfetto_link,
+            )
 
         logger.info("Running LM eval harness....")
         outputs = run_lm_eval_harness(
