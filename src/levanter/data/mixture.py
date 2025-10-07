@@ -8,10 +8,10 @@ from typing import List, Mapping, Optional, Sequence, Tuple, TypeVar
 import jax
 import numpy as np
 from async_lru import alru_cache
-from jax.random import PRNGKey
 from jaxtyping import PRNGKeyArray
 
 from haliax.util import StringHolderEnum
+from levanter.utils.jax_utils import local_cpu_mesh
 
 from levanter.data import AsyncDataset
 from levanter.schedule import BatchSchedule
@@ -93,10 +93,13 @@ class MixtureDataset(AsyncDataset[T]):
 
         self.randomize_blocks = randomize_blocks
 
-        if isinstance(key, int):
-            key = PRNGKey(key)
-
-        self.key = key
+        # this stupid dance is to ensure that the key is on CPU so we don't end up with weird device placement issues
+        # in recent JAX.
+        with local_cpu_mesh():
+            if isinstance(key, int):
+                self.key = jax.random.PRNGKey(key)
+            else:
+                self.key = jax.device_put(jax.device_get(key))
 
         if stop_strategy not in StopStrategy:  # type: ignore
             raise ValueError(f"Stop strategy {stop_strategy} is not supported.")
