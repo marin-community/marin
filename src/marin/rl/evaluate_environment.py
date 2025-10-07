@@ -33,7 +33,7 @@ from marin.rl.environments.base import MarinEnv
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.rollout_worker import LevanterInferenceContext
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 @dataclass
