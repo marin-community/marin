@@ -36,7 +36,7 @@ from levanter.models.lm_model import LmExample
 from levanter.schedule import BatchSchedule, IntSchedule
 from levanter.shapes import NamedShapeSpec, ShapeSpec, to_raw_shape
 from levanter.utils.background_iterable import BackgroundIterator
-from levanter.utils.jax_utils import local_cpu_mesh, use_cpu_device
+from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.thread_utils import AsyncIteratorWrapper, blocking_wait
 
 
@@ -265,45 +265,51 @@ class DataLoaderIterator(Iterator[Ex]):
             self._batches.stop()
 
     async def _produce_batches(self):
-        batch_number = self._start_from_batch or 0
-        done = False
-        while not done:
-            # we try to prefetch multiple batches at a time
-            target_next_batch_number = batch_number + self.dl.prefetch_size
-            max_achievable_batch_number, final_batch_size = await self._dataset_get_available_batch_number(
-                target_next_batch_number
-            )
-
-            assert batch_number <= max_achievable_batch_number <= target_next_batch_number
-
-            if max_achievable_batch_number < target_next_batch_number:
-                done = True
-
-            next_batch_numbers = list(range(batch_number, min(target_next_batch_number, max_achievable_batch_number)))
-
-            if len(next_batch_numbers) == 0:
-                logger.debug(f"Breaking because no more data available at batch number {batch_number}")
-                break
-
-            batches = [
-                _Batch(
-                    bn, self.dl.scheduler.global_data_offset_by_step(bn), self.dl.scheduler.batch_size_at_step(bn), {}
+        with local_cpu_mesh():
+            batch_number = self._start_from_batch or 0
+            done = False
+            while not done:
+                # we try to prefetch multiple batches at a time
+                target_next_batch_number = batch_number + self.dl.prefetch_size
+                max_achievable_batch_number, final_batch_size = await self._dataset_get_available_batch_number(
+                    target_next_batch_number
                 )
-                for bn in next_batch_numbers
-            ]
 
-            if final_batch_size is not None:
-                batches[-1] = dataclasses.replace(batches[-1], global_size=final_batch_size)
+                assert batch_number <= max_achievable_batch_number <= target_next_batch_number
 
-            batch_of_batches: list[_Batch[Ex]] = await self._do_retrieve_batch_of_batches(batches)
+                if max_achievable_batch_number < target_next_batch_number:
+                    done = True
 
-            for batch in batch_of_batches:
-                batch = self._batchify_local_data(batch)
-                yield batch
+                next_batch_numbers = list(
+                    range(batch_number, min(target_next_batch_number, max_achievable_batch_number))
+                )
 
-            batch_number = next_batch_numbers[-1] + 1
+                if len(next_batch_numbers) == 0:
+                    logger.debug(f"Breaking because no more data available at batch number {batch_number}")
+                    break
 
-        logger.debug(f"DataLoaderIterator finished at batch number {batch_number}")
+                batches = [
+                    _Batch(
+                        bn,
+                        self.dl.scheduler.global_data_offset_by_step(bn),
+                        self.dl.scheduler.batch_size_at_step(bn),
+                        {},
+                    )
+                    for bn in next_batch_numbers
+                ]
+
+                if final_batch_size is not None:
+                    batches[-1] = dataclasses.replace(batches[-1], global_size=final_batch_size)
+
+                batch_of_batches: list[_Batch[Ex]] = await self._do_retrieve_batch_of_batches(batches)
+
+                for batch in batch_of_batches:
+                    batch = self._batchify_local_data(batch)
+                    yield batch
+
+                batch_number = next_batch_numbers[-1] + 1
+
+            logger.debug(f"DataLoaderIterator finished at batch number {batch_number}")
 
     async def _dataset_get_available_batch_number(self, target_max_batch_number: int) -> tuple[int, int | None]:
         """
@@ -520,7 +526,7 @@ def stack_batches(example_iterator, Pos, Batch):
         A batch of examples.
     """
     # add timer here as well and profile
-    with use_cpu_device():
+    with local_cpu_mesh():
         for batch in batched(example_iterator, Batch.size):
             if len(batch) < Batch.size:
                 dummy_instance = _make_dummy_instance(batch, Pos)
