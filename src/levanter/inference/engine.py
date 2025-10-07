@@ -105,10 +105,26 @@ class InferenceEngineConfig:
     enable_logprobs: bool = False
     """Enable computing logprobs for generated tokens."""
 
+    def __post_init__(self):
+        # this one is only required because of clones. If we really care, we could relax this
+        if self.max_queued_tokens < self.max_seqs:
+            raise ValueError("max_queued_tokens must be >= max_seqs")
+
+        if self.max_queued_tokens < self.imputed_max_tokens_per_round:
+            raise ValueError("max_queued_tokens must be >= max_tokens_per_round")
+
+        if self.max_queued_tokens < self.max_seqs_in_prefill:
+            raise ValueError("max_queued_tokens must be >= max_seqs_in_prefill")
+
     @property
     def imputed_max_pages(self) -> int:
         """Return explicit `max_pages` or compute `max_seqs * max_pages_per_seq` when unset."""
         return int(self.max_pages) if self.max_pages is not None else int(self.max_seqs * self.max_pages_per_seq)
+
+    @property
+    def imputed_max_tokens_per_round(self) -> int:
+        """Return explicit `max_tokens_per_round` or default to `max_seqs` when unset."""
+        return self.max_tokens_per_round if self.max_tokens_per_round is not None else self.max_seqs
 
 
 class GenState(eqx.Module):
@@ -1129,7 +1145,7 @@ class InferenceEngine:
                 self.model,
                 self.sampler,
                 # TODO: tune max_tokens_per_round
-                self.config.max_tokens_per_round or self.config.max_seqs,
+                self.config.imputed_max_tokens_per_round,
                 self.config.max_rounds,
             )
             submit_done = time.time()
