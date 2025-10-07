@@ -101,7 +101,6 @@ def default_lm_log_probs(
             max_samples_per_dataset=max_samples_per_dataset,
             wandb_tags=wandb_tags,
         ),
-        pip_dependency_groups=["default_lm_log_probs"],
     )
 
 
