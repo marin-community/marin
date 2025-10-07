@@ -28,6 +28,7 @@ We can likely extract a bit more performance by:
 
 import dataclasses
 import logging
+import os
 import socket
 import threading
 import time
@@ -77,12 +78,15 @@ class ServerInfo:
 MAX_ELEMENTS_PER_RECORD = (2000 * 1000 * 1000) // 4
 
 # Thread pool configuration for parallel serving and fetching
-NUM_PARALLEL_SERVERS = 16
+_CPU_COUNT = os.cpu_count() or 1
+NUM_PARALLEL_SERVERS = max(1, _CPU_COUNT // 4)
+NUM_PARALLEL_RECEIVES = max(2, _CPU_COUNT // 2)
 
 
 def _create_binary_array(buffer_data: np.ndarray) -> pa.Array:
     """Construct a single element Arrow LargeBinary array from numpy buffer data without copies"""
-    block = pa.py_buffer(buffer_data)
+    buffer_info = buffer_data.__array_interface__
+    block = pa.foreign_buffer(buffer_info["data"][0], buffer_data.nbytes, base=buffer_data)
     return pa.Array.from_buffers(
         pa.large_binary(),
         1,  # length
@@ -91,7 +95,7 @@ def _create_binary_array(buffer_data: np.ndarray) -> pa.Array:
 
 
 def state_dict_to_batches(
-    state_dict: dict[str, np.ndarray], weight_id: int
+    state_dict: dict[str, np.ndarray], shape_dict: dict[str, tuple[int, ...]], weight_id: int
 ) -> dict[str, tuple[pa.Schema, Sequence[pa.RecordBatch]]]:
     """Convert state_dict to Arrow RecordBatch per parameter using Haliax state_dict for efficient transfer.
 
@@ -120,7 +124,7 @@ def state_dict_to_batches(
     )
 
     for name, value in state_dict.items():
-        shape = value.shape
+        shape = shape_dict[name]
         is_scalar = len(shape) == 0
         dtype = value.dtype
         sz += value.nbytes
@@ -129,7 +133,8 @@ def state_dict_to_batches(
             splits = [value]
             total_parts = 1
         else:
-            splits = np.array_split(value.flatten(), max(1, value.size // MAX_ELEMENTS_PER_RECORD))
+            assert value.ndim == 1, f"Expected flattened array for parameter {value.shape}"
+            splits = np.array_split(value, max(1, value.size // MAX_ELEMENTS_PER_RECORD))
             total_parts = len(splits)
 
         # Create batches for each split
@@ -373,11 +378,13 @@ class ArrowFlightServer(WeightTransferServer):
             if jax.process_index() == 0:
                 # Fetching the entire state dict to CPU allows JAX to parallelize the individual transfers
                 state_dict = hsd.to_state_dict(model)
-                state_dict = jax.device_get(state_dict)
+                shape_dict = jax.tree.map(lambda y: y.shape, state_dict)
+                flat_dict = jax.tree.map(lambda y: y.reshape(-1), state_dict)
+                flat_dict = jax.device_get(flat_dict)
                 copy_time = time.time()
 
                 # Convert to Arrow RecordBatch per parameter
-                params_dict = state_dict_to_batches(state_dict, weight_id)
+                params_dict = state_dict_to_batches(flat_dict, shape_dict, weight_id)
                 serialize_time = time.time()
 
                 for flight_server in self._flight_servers:
@@ -446,7 +453,7 @@ class ArrowFlightClient(WeightTransferClient):
         self._server_locations = []
 
         self.metrics = WeightTransferClientMetrics()
-        self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_SERVERS)
+        self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_RECEIVES)
         self._coordinator = get_or_create_actor(ArrowFlightCoordinator, self.config.coordinator_name)
 
     def _connect_to_servers(self, new_locations) -> bool:
@@ -566,13 +573,6 @@ class ArrowFlightClient(WeightTransferClient):
             logger.info("Thread pool shutdown completed")
         except Exception as e:
             logger.warning(f"Error shutting down thread pool: {e}")
-
-        logger.info("Closing Arrow Flight client connection...")
-        for client in self._flight_clients:
-            try:
-                client.close()
-            except Exception as e:
-                logger.warning(f"Error during Arrow Flight client cleanup: {e}")
 
     def get_metrics(self) -> dict:
         return dataclasses.asdict(self.metrics)
