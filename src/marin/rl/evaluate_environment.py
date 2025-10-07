@@ -173,6 +173,7 @@ def evaluate_environment(model: str, env: MarinEnv, name: str = None) -> Executo
     Args:
         model: Path to model checkpoint or ExecutorStep producing a model
         env: Environment to evaluate on
+        name: Name of the evaluation
 
     Returns:
         ExecutorStep that runs the evaluation
@@ -183,7 +184,7 @@ def evaluate_environment(model: str, env: MarinEnv, name: str = None) -> Executo
     )
 
     return ExecutorStep(
-        name=name or f"evaluate-{env.__class__.__name__}-{model}-{env.env_id}",
+        name=name or f"evaluate-{env.__class__.__name__}-{model}-{getattr(env, 'env_id', 'unknown')}",
         fn=_run_evaluation,
         config=config,
         description=f"Evaluate model on {env.__class__.__name__}",
