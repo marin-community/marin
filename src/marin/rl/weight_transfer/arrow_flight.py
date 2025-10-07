@@ -80,13 +80,14 @@ MAX_ELEMENTS_PER_RECORD = (2000 * 1000 * 1000) // 4
 # Thread pool configuration for parallel serving and fetching
 _CPU_COUNT = os.cpu_count() or 1
 NUM_PARALLEL_SERVERS = max(1, _CPU_COUNT // 4)
-NUM_PARALLEL_RECEIVES = max(2, _CPU_COUNT // 2)
+NUM_PARALLEL_RECEIVES = max(1, _CPU_COUNT // 4)
 
 
 def _create_binary_array(buffer_data: np.ndarray) -> pa.Array:
     """Construct a single element Arrow LargeBinary array from numpy buffer data without copies"""
-    buffer_info = buffer_data.__array_interface__
-    block = pa.foreign_buffer(buffer_info["data"][0], buffer_data.nbytes, base=buffer_data)
+    # buffer_info = buffer_data.__array_interface__
+    # block = pa.foreign_buffer(buffer_info["data"][0], buffer_data.nbytes, base=buffer_data)
+    block = pa.py_buffer(buffer_data)
     return pa.Array.from_buffers(
         pa.large_binary(),
         1,  # length
