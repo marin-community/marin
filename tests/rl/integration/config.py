@@ -40,7 +40,7 @@ from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
-from levanter.tracker import NoopConfig
+from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
 
@@ -160,7 +160,7 @@ def create_nano_llama_config() -> LlamaConfig:
 def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
     """Create a minimal TrainerConfig for testing."""
     return TrainerConfig(
-        tracker=NoopConfig(),
+        tracker=JsonLoggerConfig(),
         mp=jmp.get_policy("p=f32"),
         train_batch_size=32,
         num_train_steps=1000,

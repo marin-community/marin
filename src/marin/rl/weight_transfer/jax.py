@@ -39,6 +39,8 @@ from jaxtyping import PyTree
 from ray.actor import ActorHandle
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
+from marin.rl.robust_actor import RobustActor
+
 from .base import (
     WeightTransferClient,
     WeightTransferClientMetrics,
@@ -46,7 +48,6 @@ from .base import (
     WeightTransferServer,
     WeightTransferServerMetrics,
     WeightUpdate,
-    get_or_create_actor,
 )
 
 logger = logging.getLogger(__name__)
@@ -96,7 +97,6 @@ class _EnqueuedWeightTransferRequest:
 # -- Actual Coordinator --
 
 
-@ray.remote
 class WeightTransferCoordinator:
     """
     WeightTransferCoordinator is a Ray actor that coordinates weight transfers between a server and clients.
@@ -365,7 +365,7 @@ class JAXTransferServer(WeightTransferServer):
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
 
-        self.coordinator = get_or_create_actor(WeightTransferCoordinator, config.coordinator_name)
+        self.coordinator = RobustActor.create(WeightTransferCoordinator, actor_name=config.coordinator_name)
 
         # Start transfer server and register its address with coordinator
         self.transfer_server = start_transfer_server()
@@ -454,7 +454,7 @@ class JAXTransferClient(WeightTransferClient):
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
 
-        self.coordinator = get_or_create_actor(WeightTransferCoordinator, config.coordinator_name)
+        self.coordinator = RobustActor.create(WeightTransferCoordinator, actor_name=config.coordinator_name)
 
         # Start transfer server for client (doesn't register address with coordinator)
         self.transfer_server = start_transfer_server()
