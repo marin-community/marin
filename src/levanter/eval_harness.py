@@ -432,6 +432,7 @@ class LevanterHarnessLM(TemplateLM):
             _create_perfetto_link = self.profiler_config.perfetto_link and jax.process_index() == 0
 
             import os
+
             os.makedirs(self.profiler_config.profile_path, exist_ok=True)
 
             logger.info(f"Starting profiler at step {self._current_step} (will profile until step {end_step})")

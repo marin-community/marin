@@ -2,18 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import equinox as eqx
-import jax
-import pytest
-from chex import assert_trees_all_close
-from jax.sharding import NamedSharding, PartitionSpec
-
 import haliax
 import haliax as hax
 import haliax.nn as hnn
+import jax
+import pytest
+from chex import assert_trees_all_close
 from haliax.partitioning import ResourceAxis
+from jax.sharding import NamedSharding, PartitionSpec
+from test_utils import use_test_mesh
 
 from levanter.grad_accum import microbatched
-from test_utils import use_test_mesh
 
 
 class Mlp(eqx.Module):
@@ -50,7 +49,7 @@ def test_accumulate_gradients_sharded(parallelism, accum_steps):
     mlp = Mlp.init(In, Out, Mid, key=jax.random.PRNGKey(0))
 
     def loss_fn(mlp, x):
-        return mlp(x).mean().scalar()
+        return mlp(x).mean().scalar(), {}
 
     x = hax.random.normal(jax.random.PRNGKey(0), (Batch, In))
 
@@ -58,9 +57,9 @@ def test_accumulate_gradients_sharded(parallelism, accum_steps):
 
     @hax.partitioning.named_jit(axis_resources=axis_mapping)
     def jit_grad_accum(mlp, x):
-        grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=False)
+        grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
         grad_fn = microbatched(grad_fn, Batch, parallelism, axis_mapping, axis_mapping)
-        acc_v, acc_g = grad_fn(
+        (acc_v, acc_aux), acc_g = grad_fn(
             mlp,
             x,
         )
@@ -71,9 +70,9 @@ def test_accumulate_gradients_sharded(parallelism, accum_steps):
 
         mlp = haliax.shard(mlp, axis_mapping)
         x = haliax.shard(x, axis_mapping)
-        grad_fn = eqx.filter_value_and_grad(loss_fn)
+        grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
         acc_v, acc_g = jit_grad_accum(mlp, x)
-        v, g = grad_fn(mlp, x)
+        (v, aux), g = grad_fn(mlp, x)
 
         assert_trees_all_close(acc_v, v, atol=1e-3, rtol=1e-3)
 

@@ -19,7 +19,6 @@ from levanter.tracker import log_optimizer_hyperparams
 from levanter.utils import flop_utils
 from levanter.utils.jax_utils import jnp_to_python
 
-
 logger = pylogging.getLogger(__name__)
 
 
