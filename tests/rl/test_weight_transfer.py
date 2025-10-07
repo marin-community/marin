@@ -15,6 +15,7 @@
 import os
 import tempfile
 import uuid
+from functools import partial
 
 import equinox as eqx
 import haliax as hax
@@ -218,19 +219,24 @@ def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
 
     server, client = create_test_weight_transfer_pair(weight_transfer_config)
     # 5k * 5k * 4bytes = ~100MB per layer, 40 layers = ~4GB total
-    large_params = create_sample_pytree(seed=789, hidden_size=1000, layers=40)
+    large_params = create_sample_pytree(seed=789, hidden_size=5000, layers=40)
 
     # put the params on the TPU to test real transfer, shard across the devices
     print("Creating mesh for large params transfer...")
-    # mesh = create_mesh(devices=jax.devices("tpu"))
-    mesh = create_mesh(devices=jax.local_devices())
+    mesh = create_mesh(devices=jax.devices("tpu"))
+    # mesh = create_mesh(devices=jax.local_devices())
     with mesh:
         large_params = jax.device_put(large_params)
     print("Mesh created with devices:", mesh.devices)
 
+    @partial(jax.jit, donate_argnums=0)
+    def _bump_params(params):
+        return jax.tree.map(lambda x: x + 1, params)
+
     try:
         for i in range(10):
             print(i)
+            large_params = _bump_params(large_params)
             server.serve_weights(i, large_params)
             update = client.receive_weights(large_params)
 
