@@ -24,10 +24,13 @@ provider:
 
 
 docker:
-    image: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20250821"
+    image: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20250923"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
+      # always restart the worker if it happens to crash
+      - --restart=on-failure
+      - --rm=0  # Ray likes to add --rm which doesn't work with --restart=on-failure
       - --privileged
       - --ulimit memlock=-1:-1  #
       - --ulimit nofile=1048576:1048576
@@ -44,8 +47,8 @@ docker:
 
 
 initialization_commands:
-  - yes | gcloud auth configure-docker us-east5-docker.pkg.dev
   - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
+  - yes | gcloud auth configure-docker us-east5-docker.pkg.dev
   # always run this because ray doesn't run with sudo
   - sudo usermod -aG docker $USER
   # we want to launch docker containers from inside docker, which means we need to loosen the permissions on the docker
@@ -72,9 +75,14 @@ setup_commands:
   - mkdir -p /home/ray/.ssh && gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > /home/ray/.ssh/authorized_keys && chmod 600 /home/ray/.ssh/authorized_keys
   - gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
+worker_setup_commands:
+  # delete any old ray session data
+  # We keep the /tmp/ray directory in case we are running on the head node.
+  # This shouldn't be a concern on new clusters where driver jobs are disabled on the head node.
+  - rm -rf /tmp/ray/session_*/runtime_resources/
+
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
-
 
 # List of Available Node Types
 available_node_types:
@@ -101,7 +109,7 @@ available_node_types:
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
     max_workers: 1024
-    min_workers: 4
+    min_workers: 8
     node_config:
       acceleratorType: v5p-8
       runtimeVersion: v2-alpha-tpuv5
@@ -149,7 +157,7 @@ available_node_types:
 
   tpu_slice_v5p_64:
     max_workers: 1024
-    min_workers: 0
+    min_workers: 4
     node_config:
       acceleratorType: v5p-64
       runtimeVersion: v2-alpha-tpuv5
@@ -209,7 +217,7 @@ available_node_types:
 
   tpu_slice_v5p_2048:
     max_workers: 1024
-    min_workers: 2
+    min_workers: 0
     node_config:
       acceleratorType: v5p-2048
       runtimeVersion: v2-alpha-tpuv5

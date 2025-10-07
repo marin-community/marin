@@ -17,6 +17,7 @@ import logging
 import os
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from pathlib import PurePath
 
 import draccus
 import levanter.infra.cli_helpers
@@ -227,7 +228,7 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
     Double-check that we're not using local paths in some of the standard places that Levanter sets defaults.
     Also check that the paths are in the same region as the VM, to avoid performance issues and billing surprises.
 
-    This function recursively examines all strings in the config to identify GCS paths and checks their regions.
+    This function recursively examines all strings/paths in the config to identify GCS paths and checks their regions.
     """
     # Determine if we're running locally or if path checks should be bypassed
     allow_out_of_region = config.allow_out_of_region
@@ -250,7 +251,7 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
 
 def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_region):
     """
-    Recursively check all strings in the config object that look like GCS paths.
+    Check all strings in the config object that look like GCS paths appear to respect same-region constraints.
 
     Args:
         obj: The object to check (could be a dict, list, or other object)
@@ -268,21 +269,32 @@ def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_re
         for i, item in enumerate(obj):
             new_prefix = f"{path_prefix}[{i}]"
             _check_paths_recursively(item, new_prefix, region, local_ok, allow_out_of_region)
-    elif isinstance(obj, str) and obj.startswith("gs://"):
-        # This is a GCS path, check if it's in the right region
-        is_allow_listed_path = any(path_prefix.startswith(p) for p in allow_out_of_region)
-        # whitelist train and validation urls because we are always cached
-        if "train_urls" in path_prefix or "validation_urls" in path_prefix:
-            is_allow_listed_path = True
+    elif isinstance(obj, str | os.PathLike):
+        if isinstance(obj, os.PathLike):
+            path_str = os.fspath(obj)
+            if isinstance(obj, PurePath):
+                parts = obj.parts
+                if parts and parts[0] == "gs:" and not path_str.startswith("gs://"):
+                    remainder = "/".join(parts[1:])
+                    path_str = f"gs://{remainder}" if remainder else "gs://"
+        else:
+            path_str = obj
 
-        # Determine if this path should be checked
-        if not is_allow_listed_path:
-            _check_path_in_region(
-                path_prefix,
-                obj,
-                region=region,
-                local_ok=local_ok,
-            )
+        if path_str.startswith("gs://"):
+            # This is a GCS path, check if it's in the right region
+            is_allow_listed_path = any(path_prefix.startswith(p) for p in allow_out_of_region)
+            # whitelist train and validation urls because we are always cached
+            if "train_urls" in path_prefix or "validation_urls" in path_prefix:
+                is_allow_listed_path = True
+
+            # Determine if this path should be checked
+            if not is_allow_listed_path:
+                _check_path_in_region(
+                    path_prefix,
+                    path_str,
+                    region=region,
+                    local_ok=local_ok,
+                )
     elif dataclasses.is_dataclass(obj):
         for field in dataclasses.fields(obj):
             new_prefix = f"{path_prefix}.{field.name}" if path_prefix else field.name
@@ -318,11 +330,18 @@ def _add_run_env_variables(env: dict):
     """
     env = deepcopy(env)
 
-    if "GIT_COMMIT" not in env:
+    git_commit = env.get("GIT_COMMIT") or os.environ.get("GIT_COMMIT")
+
+    if not git_commit:
         try:
-            env["GIT_COMMIT"] = levanter.infra.cli_helpers.get_git_commit()
+            git_commit = levanter.infra.cli_helpers.get_git_commit()
         except:  # noqa
-            logger.warning("Could not infer git commit.")
+            pass
+
+    if git_commit:
+        env["GIT_COMMIT"] = git_commit
+    else:
+        logger.warning("Failed to find or infer git commit for logging.")
 
     # required for internal evals to run some tasks
     if "HF_DATASETS_TRUST_REMOTE_CODE" not in env:

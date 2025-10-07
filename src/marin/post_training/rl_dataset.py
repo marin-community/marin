@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from typing import Any
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
 from .environments.marin_env import EnvStep
@@ -89,26 +88,20 @@ class RLDataset:
     def from_env_step(
         cls,
         env_step: EnvStep,
-        reference_params: Any,
-        get_logprobs_fn: Callable,
-        reference_logprobs_bsize: int,
+        reference_ctx,
         max_input_length: int,
         max_output_length: int,
         pad_token_id: int,
-        tokenizer: AutoTokenizer,
         kl_coef: float = 0.0,
     ) -> "RLDataset":
         """Create RLDataset from environment step.
 
         Args:
             env_step: Environment step containing examples, samples, and rewards
-            reference_params: Parameters for the reference model
-            get_logprobs_fn: Function to compute log probabilities
-            reference_logprobs_bsize: Batch size for reference logprob computation
+            reference_ctx: Reference model context with tokenizer and logprobs function
             max_input_length: Maximum input sequence length
             max_output_length: Maximum output sequence length
             pad_token_id: ID of the padding token
-            tokenizer: Tokenizer for processing text
             kl_coef: KL divergence coefficient (for future use)
 
         Returns:
@@ -117,6 +110,9 @@ class RLDataset:
         examples = env_step.examples
         responses = env_step.responses
         rewards = env_step.rewards
+
+        # Get tokenizer from reference context
+        tokenizer = reference_ctx.tokenizer
 
         # Prepare data to compute reference logprobs
         batch_items = []
@@ -142,57 +138,28 @@ class RLDataset:
                     }
                 )
 
-        true_batch_items_len = len(batch_items)
+        # Prepare all data as numpy arrays
+        all_prompt_tokens = np.concatenate([item["prompt_tokens"] for item in batch_items])
+        all_prompt_masks = np.concatenate([item["prompt_attention_mask"] for item in batch_items])
+        all_answer_tokens = np.concatenate([item["answer_tokens"] for item in batch_items])
+        all_answer_masks = np.concatenate([item["answer_attention_mask"] for item in batch_items])
+        all_policy_logprobs = np.concatenate([item["answer_logprobs"] for item in batch_items])
 
-        # Pad batch_items to be divisible by reference_logprobs_bsize
-        if true_batch_items_len % reference_logprobs_bsize != 0:
-            padding_needed = reference_logprobs_bsize - (true_batch_items_len % reference_logprobs_bsize)
-            for _ in range(padding_needed):
-                batch_items.append(
-                    {
-                        "prompt_tokens": np.full((1, max_input_length), pad_token_id, dtype=np.int32),
-                        "prompt_attention_mask": np.zeros((1, max_input_length), dtype=np.int32),
-                        "answer_tokens": np.full((1, max_output_length), pad_token_id, dtype=np.int32),
-                        "answer_attention_mask": np.zeros((1, max_output_length), dtype=np.int32),
-                        "answer_logprobs": np.zeros((1, max_output_length), dtype=np.float32),
-                    }
-                )
+        # Compute reference logprobs using reference context (context handles batching internally)
+        reference_logprobs = reference_ctx.compute_logprobs(
+            all_prompt_tokens,
+            all_prompt_masks,
+            all_answer_tokens,
+            all_answer_masks,
+        )
 
-        # Compute reference logprobs in batches
-        all_reference_logprobs, all_logprobs = [], []
-        prompt_tokens_list, prompt_masks_list = [], []
-        output_tokens_list, output_masks_list = [], []
-
-        for i in tqdm(range(0, len(batch_items), reference_logprobs_bsize)):
-            curr_batch = batch_items[i : (i + reference_logprobs_bsize)]
-            curr_batch = {k: np.concatenate([item[k] for item in curr_batch], axis=0) for k in curr_batch[0].keys()}
-
-            reference_logprobs = np.asarray(
-                get_logprobs_fn(
-                    reference_params,
-                    curr_batch["prompt_tokens"],
-                    curr_batch["prompt_attention_mask"],
-                    curr_batch["answer_tokens"],
-                    curr_batch["answer_attention_mask"],
-                )
-            )
-
-            # Determine the actual batch size for this iteration
-            if (i // reference_logprobs_bsize) == (len(batch_items) // reference_logprobs_bsize) - 1:
-                true_batch_size = true_batch_items_len % reference_logprobs_bsize
-                if true_batch_size == 0:
-                    true_batch_size = reference_logprobs.shape[0]
-            else:
-                true_batch_size = reference_logprobs.shape[0]
-
-            # Only keep the non-padded examples
-            for x in range(true_batch_size):
-                all_reference_logprobs.append(reference_logprobs[x])
-                all_logprobs.append(curr_batch["answer_logprobs"][x])
-                output_masks_list.append(curr_batch["answer_attention_mask"][x])
-                output_tokens_list.append(curr_batch["answer_tokens"][x])
-                prompt_tokens_list.append(curr_batch["prompt_tokens"][x])
-                prompt_masks_list.append(curr_batch["prompt_attention_mask"][x])
+        # Split back into lists for consistency with rest of function
+        all_reference_logprobs = [reference_logprobs[i] for i in range(len(batch_items))]
+        all_logprobs = [all_policy_logprobs[i] for i in range(len(batch_items))]
+        output_masks_list = [all_answer_masks[i] for i in range(len(batch_items))]
+        output_tokens_list = [all_answer_tokens[i] for i in range(len(batch_items))]
+        prompt_tokens_list = [all_prompt_tokens[i] for i in range(len(batch_items))]
+        prompt_masks_list = [all_prompt_masks[i] for i in range(len(batch_items))]
 
         # Stack all arrays
         all_reference_logprobs = np.stack(all_reference_logprobs, axis=0)
@@ -202,7 +169,6 @@ class RLDataset:
         prompt_tokens = np.stack(prompt_tokens_list, axis=0)
         prompt_masks = np.stack(prompt_masks_list, axis=0)
 
-        # Compute RLOO advantages
         all_rloo_advantages = []
         for rewards_group in rewards:
             advantages = compute_rloo_advantages_for_group(rewards_group)
@@ -300,64 +266,15 @@ class RLDataset:
 
             Where seq_len = max_input_length + max_output_length
         """
-        # Concatenate prompt and output tokens
-        full_tokens = np.concatenate((examples["prompt_tokens"], examples["output_tokens"]), axis=1)
-        full_attention_mask = np.concatenate((examples["prompt_masks"], examples["output_masks"]), axis=1)
-
-        # Create position IDs
-        full_position_ids = np.maximum(np.cumsum(full_attention_mask, axis=1) - 1, 0)
-
-        # Prepare input and target sequences for language modeling
-        input_tokens = full_tokens[:, :-1]
-        input_attention_mask = full_attention_mask[:, :-1]
-        target_tokens = full_tokens[:, 1:]
-        position_ids = full_position_ids[:, :-1]
-
-        # Create loss masks (only compute loss on output tokens, not prompt tokens)
-        loss_masks = np.concatenate(
-            [
-                np.zeros(
-                    (examples["prompt_masks"].shape[0], examples["prompt_masks"].shape[1] - 1),
-                    dtype=np.float32,
-                ),
-                examples["output_masks"].astype(np.float32),
-            ],
-            axis=1,
+        return prepare_training_batch(
+            prompt_tokens=examples["prompt_tokens"],
+            prompt_masks=examples["prompt_masks"],
+            output_tokens=examples["output_tokens"],
+            output_masks=examples["output_masks"],
+            loss_weights=examples["returns"],
+            reference_logprobs=examples["reference_logprobs"],
+            policy_logprobs=examples["policy_logprobs"],
         )
-
-        # Create loss weights (advantages/returns for policy gradient)
-        loss_weights = np.concatenate(
-            [
-                np.zeros(
-                    (examples["prompt_masks"].shape[0], examples["prompt_masks"].shape[1] - 1),
-                    dtype=np.float32,
-                ),
-                examples["returns"].astype(np.float32),
-            ],
-            axis=1,
-        )
-
-        # Create reference logprobs for KL penalty
-        reference_logprobs = np.concatenate(
-            [
-                np.zeros(
-                    (examples["prompt_masks"].shape[0], examples["prompt_masks"].shape[1] - 1),
-                    dtype=np.float32,
-                ),
-                examples["reference_logprobs"].astype(np.float32),
-            ],
-            axis=1,
-        )
-
-        return {
-            "input_ids": input_tokens,
-            "attention_mask": input_attention_mask,
-            "position_ids": position_ids,
-            "target_ids": target_tokens,
-            "loss_masks": loss_masks,
-            "loss_weights": loss_weights,
-            "reference_logprobs": reference_logprobs,
-        }
 
 
 def compute_rloo_advantages_for_group(rewards: np.ndarray) -> np.ndarray:
@@ -369,66 +286,178 @@ def compute_rloo_advantages_for_group(rewards: np.ndarray) -> np.ndarray:
     Returns:
         Normalized advantages
     """
-    advantages = (rewards - rewards.mean()) / np.clip(rewards.std(), 1e-8, None)
+    n = len(rewards)
+    if n <= 1:
+        return np.zeros_like(rewards)
+
+    total = rewards.sum()
+    leave_one_out_baselines = (total - rewards) / (n - 1)
+    advantages = rewards - leave_one_out_baselines
+
+    # Add random noise to avoid failure cases when all rewards are identical/zero
+    generator = np.random.default_rng()
+    advantages += generator.normal(loc=0.0, scale=1e-6, size=advantages.shape)
     return advantages
+
+
+def prepare_training_batch(
+    prompt_tokens: np.ndarray,
+    prompt_masks: np.ndarray,
+    output_tokens: np.ndarray,
+    output_masks: np.ndarray,
+    loss_weights: np.ndarray,
+    reference_logprobs: np.ndarray,
+    policy_logprobs: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Prepare training batch from prompt/output components for RLOO training.
+
+    Takes prompt and output tokens/masks along with loss weights and logprobs,
+    and transforms them into the format needed for language model training with
+    RLOO policy gradient losses.
+
+    Args:
+        prompt_tokens: (batch_size, max_input_length) tokenized prompts
+        prompt_masks: (batch_size, max_input_length) attention masks for prompts
+        output_tokens: (batch_size, max_output_length) tokenized model outputs
+        output_masks: (batch_size, max_output_length) attention masks for outputs
+        loss_weights: (batch_size, max_output_length) advantage values for each output token
+        reference_logprobs: (batch_size, max_output_length) log probs from reference model
+        policy_logprobs: (batch_size, max_output_length) log probs from policy model
+
+    Returns:
+        Dictionary containing processed batch ready for language model training:
+            - input_ids: (batch_size, seq_len-1) input token sequences
+            - attention_mask: (batch_size, seq_len-1) attention masks for inputs
+            - position_ids: (batch_size, seq_len-1) position indices for each token
+            - target_ids: (batch_size, seq_len-1) target tokens (shifted by 1 for next-token prediction)
+            - loss_masks: (batch_size, seq_len-1) binary masks indicating which positions to compute loss on
+              (1 for output tokens, 0 for prompt tokens)
+            - loss_weights: (batch_size, seq_len-1) advantage values used as weights in policy gradient loss
+            - reference_logprobs: (batch_size, seq_len-1) reference model logprobs for KL penalty computation
+            - policy_logprobs: (batch_size, seq_len-1) policy model logprobs
+
+        Where seq_len = max_input_length + max_output_length
+    """
+    # Concatenate prompt and output tokens
+    full_tokens = np.concatenate((prompt_tokens, output_tokens), axis=1)
+    full_attention_mask = np.concatenate((prompt_masks, output_masks), axis=1)
+
+    # Create position IDs
+    full_position_ids = np.maximum(np.cumsum(full_attention_mask, axis=1) - 1, 0)
+
+    # Prepare input and target sequences for language modeling
+    input_tokens = full_tokens[:, :-1]
+    input_attention_mask = full_attention_mask[:, :-1]
+    target_tokens = full_tokens[:, 1:]
+    position_ids = full_position_ids[:, :-1]
+
+    # Create loss masks (only compute loss on output tokens, not prompt tokens)
+    loss_masks = np.concatenate(
+        [
+            np.zeros(
+                (prompt_masks.shape[0], prompt_masks.shape[1] - 1),
+                dtype=np.float32,
+            ),
+            output_masks.astype(np.float32),
+        ],
+        axis=1,
+    )
+
+    # Create loss weights (advantages/returns for policy gradient)
+    formatted_loss_weights = np.concatenate(
+        [
+            np.zeros(
+                (prompt_masks.shape[0], prompt_masks.shape[1] - 1),
+                dtype=np.float32,
+            ),
+            loss_weights.astype(np.float32),
+        ],
+        axis=1,
+    )
+
+    # Create reference logprobs for KL penalty
+    formatted_reference_logprobs = np.concatenate(
+        [
+            np.zeros(
+                (prompt_masks.shape[0], prompt_masks.shape[1] - 1),
+                dtype=np.float32,
+            ),
+            reference_logprobs.astype(np.float32),
+        ],
+        axis=1,
+    )
+
+    formatted_policy_logprobs = np.concatenate(
+        [
+            np.zeros(
+                (prompt_masks.shape[0], prompt_masks.shape[1] - 1),
+                dtype=np.float32,
+            ),
+            policy_logprobs.astype(np.float32),
+        ],
+        axis=1,
+    )
+
+    return {
+        "input_ids": input_tokens,
+        "attention_mask": input_attention_mask,
+        "position_ids": position_ids,
+        "target_ids": target_tokens,
+        "loss_masks": loss_masks,
+        "loss_weights": formatted_loss_weights,
+        "reference_logprobs": formatted_reference_logprobs,
+        "policy_logprobs": formatted_policy_logprobs,
+    }
 
 
 def create_dataset_from_environment(
     environment,
-    sampler,
-    params,
-    reference_params,
-    get_logprobs_fn,
+    policy_ctx,
+    reference_ctx,
     n_examples: int,
     prng_key,
-    reference_logprobs_bsize: int,
+    n_generations: int,
     max_input_length: int,
     max_output_length: int,
     pad_token_id: int,
-    tokenizer: AutoTokenizer,
-    n_generations: int,
     mode: str = "train",
+    temperature: float = 1.0,
 ) -> tuple["RLDataset", dict[str, float]]:
     """Create RLDataset by stepping through the environment.
 
     Args:
         environment: Environment to step through
-        sampler: Inference sampler
-        params: Current model parameters
-        reference_params: Reference model parameters
-        get_logprobs_fn: Function to compute log probabilities
-        n_examples: Number of examples to sample
+        policy_ctx: Context wrapping policy model (includes tokenizer, params, etc.)
+        reference_ctx: Context wrapping reference model
+        n_examples: Number of examples to process
         prng_key: Random key for sampling
-        reference_logprobs_bsize: Batch size for reference logprob computation
-        max_input_length: Maximum input sequence length
-        max_output_length: Maximum output sequence length
-        pad_token_id: ID of the padding token
-        tokenizer: Tokenizer for processing text
-        mode: Mode for environment stepping ("train" or "eval")
+        n_generations: Number of generations per example
+        max_input_length: Maximum input length for padding
+        max_output_length: Maximum output length for padding
+        pad_token_id: Padding token ID
+        mode: "train" or "eval"
+        temperature: Generation temperature
 
     Returns:
-        Tuple of (RLDataset, metrics from environment)
+        RLDataset and metrics dictionary
     """
-    # Get environment step
+    # Step environment with policy context
     env_step = environment.step(
-        sampler=sampler,
-        params=params,
+        inference_ctx=policy_ctx,
         n_examples=n_examples,
         prng_key=prng_key,
         mode=mode,
         n_generations=n_generations,
+        temperature=temperature,
     )
 
     # Create dataset from environment step
     dataset = RLDataset.from_env_step(
         env_step=env_step,
-        reference_params=reference_params,
-        get_logprobs_fn=get_logprobs_fn,
-        reference_logprobs_bsize=reference_logprobs_bsize,
+        reference_ctx=reference_ctx,
         max_input_length=max_input_length,
         max_output_length=max_output_length,
         pad_token_id=pad_token_id,
-        tokenizer=tokenizer,
     )
 
     return dataset, env_step.metrics

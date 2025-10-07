@@ -31,7 +31,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
     """For `Evaluator`s that runs inference with Levanter (primarily Lm Eval Harness) on TPUs."""
 
     # Where to store checkpoints, cache inference results, etc.
-    CACHE_PATH: str = "/tmp/levanter-lm-eval"
+    CACHE_PATH: str = "/opt/gcsfuse_mount/models"
 
     @staticmethod
     def download_model(model: ModelConfig) -> str:
@@ -41,8 +41,11 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         downloaded_path: str | None = model.ensure_downloaded(
             local_path=os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
         )
+
+        print(f"IN TPU: {downloaded_path}")
         # Use the model name if a path is not specified (e.g., for Hugging Face models)
         model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
+
         return model_name_or_path
 
     @staticmethod
@@ -60,7 +63,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         Returns the runtime environment to run the evaluator on the Ray cluster.
         """
         return build_runtime_env_for_packages(
-            extra=["eval"],
+            extra=["eval", "tpu"],
             env_vars={
                 "HF_DATASETS_TRUST_REMOTE_CODE": "1",
                 "TOKENIZERS_PARALLELISM": "false",
@@ -74,13 +77,17 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         output_path: str,
         max_eval_instances: int | None = None,
         resource_config: ResourceConfig | None = None,
+        wandb_tags: list[str] | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
         """
 
         @ray.remote(
-            scheduling_strategy=self._get_scheduling_strategy(resource_config),
+            resources={
+                "TPU": resource_config.num_tpu,
+                f"{resource_config.tpu_type}-head": 1,
+            },
             runtime_env=self.get_runtime_env(),
             max_calls=1,
         )
@@ -90,7 +97,8 @@ class LevanterTpuEvaluator(Evaluator, ABC):
             evals: list[EvalTaskConfig],
             output_path: str,
             max_eval_instances: int | None = None,
+            wandb_tags: list[str] | None = None,
         ) -> None:
-            self.evaluate(model, evals, output_path, max_eval_instances)
+            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
 
-        ray.get(launch.remote(model, evals, output_path, max_eval_instances))
+        ray.get(launch.remote(model, evals, output_path, max_eval_instances, wandb_tags))

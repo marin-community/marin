@@ -16,7 +16,6 @@ import os
 import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import ClassVar
 
 from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -79,21 +78,22 @@ class ModelConfig:
 
     def destroy(self) -> None:
         """Deletes the model checkpoint."""
-        if self.path and os.path.exists(self.path):
+        if self.path and os.path.exists(self.path) and "gcsfuse" not in self.path:
             shutil.rmtree(self.path, ignore_errors=True)
             print(f"Deleted local checkpoint at {self.path}.")
 
 
 class Evaluator(ABC):
-
-    _pip_packages: ClassVar[list[Dependency]]
-    _py_modules: ClassVar[list[Dependency]]
-
     def _get_scheduling_strategy(self, resource_config: ResourceConfig | None):
         if resource_config is None:
             fn = None
         else:
-            fn = scheduling_strategy_fn(resource_config.num_tpu, resource_config.strategy)
+            fn = scheduling_strategy_fn(
+                resource_config.num_tpu,
+                resource_config.strategy,
+                resource_config.tpu_type,
+                resource_config.include_head_in_scheduling_strategy,
+            )
 
         return fn
 
@@ -105,6 +105,7 @@ class Evaluator(ABC):
         output_path: str,
         max_eval_instances: int | None = None,
         resource_config: ResourceConfig | None = None,
+        wandb_tags: list[str] | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
@@ -115,6 +116,7 @@ class Evaluator(ABC):
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
             step (ExecutorStep | None): The step to evaluate. Used to get the config for the model and the trainer.
+            wandb_tags (list[str] | None): The tags to add to the wandb run.
         """
         pass
 
@@ -125,6 +127,7 @@ class Evaluator(ABC):
         evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,
+        wandb_tags: list[str] | None = None,
     ) -> None:
         """What to run to evaluate."""
         pass

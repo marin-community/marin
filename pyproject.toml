@@ -1,7 +1,7 @@
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 
 [project]
 name = "marin"
@@ -9,7 +9,7 @@ version = "0.1.0"
 readme = "README.md"
 license = { file = "LICENSE" }
 
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "braceexpand",
     "cryptography>=45",
@@ -17,18 +17,20 @@ dependencies = [
     "deepdiff",
     "draccus>=0.11.5",
     "fasteners>=0.19",
+    "flask",
     "gcsfs",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "haliax>=1.4.dev381",
-    "levanter>=1.2.dev1500",             # We have levanter deps for now. @TODO :: Remove them
+    "jax==0.6.2",
+    "haliax>=1.4.dev418",
+    "levanter[serve] @ git+https://github.com/marin-community/levanter.git",
     "lz4",
     "multiprocess==0.70.16",
     "numpy",
     "openai",
-    "pandas",                            # Only needed by Fileprovider in inference.py
-    "pyarrow",                           # # Only needed by Fileprovider in inference.py
+    "pandas", # Only needed by Fileprovider in inference.py
+    "pyarrow", # # Only needed by Fileprovider in inference.py
     "ray==2.45",
     "regex",
     "requests",
@@ -38,7 +40,7 @@ dependencies = [
     "torch>=2.7.0",
     "tqdm",
     "tqdm-loggable",
-    "wandb<=0.19.9",
+    "wandb",
 ]
 
 [dependency-groups]
@@ -49,6 +51,7 @@ test = [
     "pytest-xdist",
     "pytest-timeout",
     "pytest-cov",
+    "pytest-profiling",
     # need this for integration tests
     "pip",
     "openai-responses",
@@ -138,10 +141,7 @@ torch = [
     # CUDA12 index only when --extra cuda12
     { index = "pytorch-cu128", extra = "cuda12" },
 ]
-sentencepiece = { git = "https://github.com/google/sentencepiece/", subdirectory = "python" }
 
-
-resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
@@ -164,11 +164,11 @@ gcp = [
     "google-cloud-compute",
 ]
 
-cuda12 = ["jax[cuda12]>=0.6.2", "torch"]
+cuda12 = ["jax[cuda12]==0.6.2", "torch"]
 
-tpu = ["jax[tpu]>=0.6.2", "torch"]
+tpu = ["jax[tpu]==0.6.2", "torch"]
 
-cpu = ["jax>=0.6.2", "torch"]
+cpu = ["jax==0.6.2", "torch"]
 
 crawl = [
     "w3lib",
@@ -238,7 +238,6 @@ quality_dedup_consolidate = [
 
 tokenize_train = [
     "multiprocess==0.70.16",
-    "levanter>=1.2.dev1359",
     "haliax>=1.4.dev348",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
     "tblib",
@@ -246,6 +245,11 @@ tokenize_train = [
     "tiktoken",
 ]
 
+rl = [
+    "prime",
+    "sympy",
+    "verifiers",
+]
 
 post_training = [
     "gcsfs",
@@ -268,8 +272,11 @@ post_training = [
 data_browser = ["zstandard==0.23.0"]
 
 eval = [
-    "levanter>=1.2.dev1359",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
+]
+
+pm = [
+  "PyGithub>=2.3.0"
 ]
 
 
@@ -321,3 +328,9 @@ filterwarnings = ["ignore::DeprecationWarning"]
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 log_cli_level = "INFO"
+markers = [
+    "slow: mark tests as slow for CI - use -m 'not slow'"
+]
+
+# Make sure we timeout before CI kills us
+addopts = "--session-timeout=500 --dist=worksteal"

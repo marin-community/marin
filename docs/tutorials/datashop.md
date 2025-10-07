@@ -13,7 +13,7 @@ We use vLLM to run fast model inference to annotate each document given a rubric
 VLLM=1 make cluster_docker
 ```
 
-Then, edit the DOCKER_TAGS in infra/update-cluster-configs.py file with the correct image commit id that was created in the previous step.
+Then, edit the DOCKER_TAGS in src/marin/ray/config.py file with the correct image commit id that was created in the previous step.
 
 ```bash
 # Then run this command to update the cluster configs.
