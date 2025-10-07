@@ -13,7 +13,6 @@ from levanter.tracker.histogram import Histogram
 from levanter.tracker.tracker import TrackerConfig
 from levanter.utils.jax_utils import jnp_to_python
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -35,7 +34,12 @@ def _to_jsonable(value: Any):
         }
     if isinstance(value, jax.Array):
         return jnp_to_python(value)
-    return value
+
+    if isinstance(value, str | int | float | bool | type(None)):
+        return value
+
+    # coerce to string as a last resort
+    return str(value)
 
 
 def _flatten(metrics: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
@@ -60,51 +64,64 @@ class JsonLoggerTracker(Tracker):
         self._summary_metrics: dict[str, Any] = {}
 
     def log_hyperparameters(self, hparams: dict[str, Any]):
-        record = {
-            "tracker": self.name,
-            "event": "hparams",
-            "hparams": _to_jsonable(hparams),
-        }
-        self.logger.info(json.dumps(record))
+        record = _to_jsonable(
+            {
+                "tracker": self.name,
+                "event": "hparams",
+                "hparams": hparams,
+            }
+        )
+        try:
+            self.logger.info(json.dumps(record))
+        except TypeError as e:
+            logger.info(f"Oh noes... {e}")
 
     def log(self, metrics: Mapping[str, Any], *, step: Optional[int], commit: Optional[bool] = None):
         del commit
-        record = {
-            "tracker": self.name,
-            "event": "log",
-            "step": step,
-            "metrics": _to_jsonable(metrics),
-        }
+        record = _to_jsonable(
+            {
+                "tracker": self.name,
+                "event": "log",
+                "step": step,
+                "metrics": metrics,
+            }
+        )
         self.logger.info(json.dumps(record))
         if step is not None:
             self._last_metrics.update(_flatten(metrics))
 
     def log_summary(self, metrics: Mapping[str, Any]):
-        record = {
-            "tracker": self.name,
-            "event": "summary",
-            "metrics": _to_jsonable(metrics),
-        }
+        record = _to_jsonable(
+            {
+                "tracker": self.name,
+                "event": "summary",
+                "metrics": metrics,
+            }
+        )
         self.logger.info(json.dumps(record))
         self._summary_metrics.update(_flatten(metrics))
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
-        record = {
-            "tracker": self.name,
-            "event": "artifact",
-            "path": artifact_path,
-            "name": name,
-            "artifact_type": type,
-        }
+        record = _to_jsonable(
+            {
+                "tracker": self.name,
+                "event": "artifact",
+                "path": artifact_path,
+                "name": name,
+                "artifact_type": type,
+            }
+        )
         self.logger.info(json.dumps(record))
 
     def finish(self):
         summary = {**self._summary_metrics, **self._last_metrics}
-        record = {
-            "tracker": self.name,
-            "event": "finish",
-            "summary": _to_jsonable(summary),
-        }
+        record = _to_jsonable(
+            {
+                "tracker": self.name,
+                "event": "finish",
+                "summary": summary,
+            }
+        )
         self.logger.info(json.dumps(record))
 
 
