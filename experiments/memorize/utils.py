@@ -167,6 +167,25 @@ def mk_run(
     pz_steps = max(1, int((seed_set_batches * epochs) / 100 + 0.5))
     z_loss = 0 if (z_loss_zero_if_upto_10 and epochs <= 10) else 1e-4
 
+    # Derive seed size tag (e.g., 1M, 10M, 100M) from the name prefix
+    _prefix_tail = name_prefix.split("/")[-1]
+    _parts = _prefix_tail.split("_")
+    seed_tag = next((p for p in _parts if p.endswith("M") and p[:-1].isdigit()), None)
+
+    # Include dataset qualifier if present in prefix (e.g., wikimedia)
+    dataset_tag = "wikimedia" if any(p == "wikimedia" for p in _parts) else None
+
+    tags = [
+        "memorize",
+        "comma",
+        "150m",
+    ]
+    if seed_tag:
+        tags.append(seed_tag)
+    if dataset_tag:
+        tags.append(dataset_tag)
+    tags.extend([region, tpu_type])
+
     return default_train(
         name=f"{name_prefix}_{epochs}epoch_{region}",
         tokenized=mixture,
@@ -188,7 +207,7 @@ def mk_run(
             steps_per_task_eval=None,
             seed=0,
         ),
-        tags=["memorize", "comma", "150m", name_prefix.split("/")[-1].split("_")[0], region, tpu_type],
+        tags=tags,
         eval_harness_tasks=(),
         pz_eval_config=make_pz_eval_config(),
         pz_eval_steps=pz_steps,

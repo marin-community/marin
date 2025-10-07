@@ -24,6 +24,8 @@ REGION = "central2"
 runner = make_runner_1m_wikimedia(REGION)
 
 # Baseline epoch runs
+train_1_epoch = runner(1)
+train_2_epoch = runner(2)
 train_10epoch = runner(10)
 train_20epoch = runner(20)
 train_50epoch = runner(50)
@@ -38,23 +40,26 @@ train_562epoch = runner(562)
 train_750epoch = runner(750)
 train_1500epoch = runner(1500)
 train_3000epoch = runner(3000)
+train_6000epoch = runner(6000)
 
 
 if __name__ == "__main__":
     executor_main(
         steps=[
-            train_10epoch,
-            train_20epoch,
-            train_50epoch,
-            train_75epoch,
-            train_100epoch,
-            train_200epoch,
-            train_150epoch,
-            train_375epoch,
-            train_562epoch,
-            train_750epoch,
-            train_1500epoch,
-            train_3000epoch,
+            #train_2_epoch
+            # train_10epoch,
+            # train_20epoch,
+            # train_50epoch,
+            # train_75epoch,
+            # train_100epoch,
+            # train_200epoch,
+            # train_150epoch,
+            # train_375epoch,
+            # train_562epoch,
+            # train_750epoch,
+            # train_1500epoch,
+            # train_3000epoch,
+            # train_6000epoch
         ],
         description="150M on ~1M Wikimedia seed set (us-central2).",
     )
