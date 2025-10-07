@@ -14,6 +14,7 @@ import haliax.partitioning
 import jax
 import numpy as np
 from jax import numpy as jnp
+from jax._src.mesh import get_concrete_mesh
 from jax.experimental import mesh_utils
 from jax.experimental.multihost_utils import host_local_array_to_global_array
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
@@ -284,7 +285,8 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
         devices = jax.devices()
 
     if mesh is None:
-        mesh = jax.sharding.get_abstract_mesh()
+        # TODO: we shouldn't be getting a concrete mesh here. Need to fix/remove this whole function
+        mesh = get_concrete_mesh()
         if mesh is not None and mesh.shape == ():
             mesh = None
 
@@ -308,8 +310,7 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
         return sharding
     else:
         # get the existing mesh and find the FSDP axis
-        fsdp_axis = mesh.axis_names.index(hax.partitioning.ResourceAxis.DATA)
-        num_devices = mesh.devices.shape[fsdp_axis]
+        num_devices = mesh.shape[hax.partitioning.ResourceAxis.DATA]
 
         for i in range(len(shape) - 1, -1, -1):
             shape_i = shape[i]
