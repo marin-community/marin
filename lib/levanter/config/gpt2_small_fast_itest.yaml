@@ -1,0 +1,28 @@
+data: !include data/openwebtext_source.yaml
+model:
+  type: gpt2
+  hidden_dim: 768
+  num_heads: 12
+  num_layers: 12
+  seq_len: 1024
+  gradient_checkpointing: true
+  scale_attn_by_inverse_layer_idx: true
+trainer:
+  tracker:
+    - type: wandb
+      project: "levanter"
+      tags: [ "openwebtext", "gpt2", "itest"]
+
+  mp: p=f32,c=bfloat16
+  model_axis_size: 1
+  per_device_parallelism: -1
+
+  train_batch_size: 256
+  num_train_steps: 10000
+
+#  tensor_parallel_axes: ["position", "key_position"]
+#  tensor_parallel_axes: ["heads", "mlp"]
+optimizer:
+  learning_rate: 2E-3
+  weight_decay: 0.1
+  warmup: 0.01

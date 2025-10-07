@@ -1,0 +1,55 @@
+name: CI with GCP TPU
+
+on: [pull_request]
+
+jobs:
+  test:
+    if: (github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    env:
+      TPU_ZONE: "us-central2-b"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Google Cloud
+        run: |
+          gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Create VM
+        run: |
+          export TPU_NAME=ci-run-${{ github.run_id }}
+          eval "$(ssh-agent -s)"
+          TRUE_SHA=${{ github.event.pull_request.head.sha }}
+          bash infra/spin-up-vm.sh $TPU_NAME -z ${TPU_ZONE} -t v4-8 --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${TRUE_SHA} --retries 1
+#          infra/babysit-tpu-vm.sh $TPU_NAME -z ${{ TPU_ZONE }} -t v4-8 --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${{ github.sha }} --retries 1 -- \
+#            PYTHONPATH=$PYTHONPATH:levanter/tests bash levanter/infra/run.sh pytest levanter/tests -m "not entry"
+
+      - name: Run most tests
+        run: |
+          export TPU_NAME=ci-run-${{ github.run_id }}
+          gcloud compute tpus tpu-vm ssh $TPU_NAME --zone ${TPU_ZONE} --command "JAX_TRACEBACK_FILTERING=off PYTHONPATH=$PYTHONPATH:levanter/tests CI=1 bash levanter/infra/run.sh pytest levanter/tests -m 'not entry and not ray' --durations=20"
+# Something's wrong with these
+#
+#      - name: Run forked tests
+#        run: |
+#          export TPU_NAME=ci-run-${{ github.run_id }}
+#          gcloud compute tpus tpu-vm ssh $TPU_NAME --zone ${TPU_ZONE} --command "PYTHONPATH=$PYTHONPATH:levanter/tests bash levanter/infra/run.sh pytest --forked levanter/tests -m 'entry'"
+#
+      - name: Cleanup
+        if: ${{ always() }}
+        run: |
+          export TPU_NAME=ci-run-${{ github.run_id }}
+          echo gcloud compute tpus tpu-vm delete $TPU_NAME --zone ${TPU_ZONE} --quiet
+          gcloud compute tpus tpu-vm delete $TPU_NAME --zone ${TPU_ZONE} --quiet

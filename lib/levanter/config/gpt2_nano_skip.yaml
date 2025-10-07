@@ -1,0 +1,26 @@
+data:
+  id: dlwh/wikitext_103_detokenized
+model:
+  type: gpt2
+  hidden_dim: 32
+  num_heads: 4
+  num_layers: 2
+trainer:
+  mp: f32
+  num_train_steps: 100
+
+  checkpointer:
+    keep:
+      - every: 50
+    save_interval: 5m
+
+  per_device_parallelism: -1
+  train_batch_size: 32
+
+  tensor_parallel_axes: ["mlp", "heads"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+
+
+optimizer:
+  skip_bad_steps: true

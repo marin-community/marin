@@ -1,0 +1,34 @@
+# cf https://github.com/tatsu-lab/stanford_alpaca#fine-tuning
+model_name_or_path: NousResearch/Llama-2-7b-hf
+trainer:
+  mp: p=f32,c=bfloat16
+  wandb:
+    project: "levanter-alpaca"
+    tags: ["llama2"]
+  num_train_steps: 1218  # 128 * 1218 = 155904, which is almost but not quite 3 epochs, which is what alpaca did
+  train_batch_size: 128
+
+  # if using model parallelism, this is useful:
+  tensor_parallel_axes: ["mlp", "heads"]
+optimizer:
+  learning_rate: 2e-5
+  weight_decay: 0.0
+prompts:
+  # |- means multiline string, keeping all but the final newline
+  prompt_input: |-
+    Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
+
+    ### Instruction:
+    {instruction}
+
+    ### Input:
+    {input}
+
+    ### Response:
+  prompt_no_input: |-
+    Below is an instruction that describes a task. Write a response that appropriately completes the request.
+
+    ### Instruction:
+    {instruction}
+
+    ### Response:

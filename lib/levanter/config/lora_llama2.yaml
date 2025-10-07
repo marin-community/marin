@@ -1,0 +1,23 @@
+data:
+  # you should set a data.id or train_urls and validation_urls
+  # id: math-ai/AutoMathText
+  # You may also want to set cache_dir if using more than one machine
+  # cache_dir:
+  tokenizer: "NousResearch/Llama-2-7b-hf"
+initialize_from_hf: "NousResearch/Llama-2-7b-hf"
+peft_save_path: "lora_llama2"
+max_train_length: 2048  # train on sequences of this length to reduce memory usage
+trainer:
+  mp: p=f32,c=bfloat16
+  wandb:
+    project: "levanter-lora"
+    tags: ["lora", "llama2"]
+  num_train_steps: 5000  # tune to suit your needs
+  train_batch_size: -1  # set to -1 so effective bs is per_device * num_devices (no grad accum)
+  per_device_parallelism: 4  # set for a 40GB device, but can go up a lot if you have multiple devices or a bigger device
+
+  # if using model parallelism, this is useful:
+  tensor_parallel_axes: ["mlp", "heads"]
+optimizer:
+  learning_rate: 3e-4
+  weight_decay: 0.1

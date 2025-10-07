@@ -1,0 +1,23 @@
+hf_checkpoint: "meta-llama/Llama-3.1-8B-Instruct"
+tokenizer: "meta-llama/Llama-3.1-8B-Instruct"
+n_rounds: 1
+profile: true
+trainer:
+  tracker:
+    type: wandb
+    project: levanter-inference-bench
+  ray:
+    auto_start_cluster: false
+  mp: p=bfloat16,c=bfloat16
+  tensor_parallel_axes: ["mlp", "heads", "kv_head", "vocab"]
+  model_axis_size: 4
+
+engine:
+  max_pages: 16384
+  max_seqs: 256
+  page_size: 8
+  max_pages_per_seq: 512
+  max_queued_tokens: 256
+  max_seqs_in_prefill: 16
+  max_prefill_size: 4096
+  max_rounds: 32
