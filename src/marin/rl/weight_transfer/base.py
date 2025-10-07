@@ -128,18 +128,3 @@ class WeightTransferClient(ABC):
     @abstractmethod
     def get_metrics(self) -> dict:
         pass
-
-
-def get_or_create_actor(actor_class, name: str, *args, **kwargs):
-    """Get or create actor. Ray handles restarts automatically with max_restarts=-1.
-
-    Args:
-        actor_class: Ray remote class (e.g., ArrowFlightCoordinator, WeightTransferCoordinator)
-        name: Actor name for registration
-        *args: Arguments to pass to actor constructor
-        **kwargs: Keyword arguments to pass to actor constructor
-
-    Returns:
-        Ray actor handle
-    """
-    return actor_class.options(name=name, get_if_exists=True, max_restarts=-1).remote(*args, **kwargs)

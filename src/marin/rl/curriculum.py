@@ -31,6 +31,7 @@ import numpy as np
 import ray
 
 from marin.rl.environments.base import EnvConfig
+from marin.rl.robust_actor import RobustActor
 from marin.rl.types import RolloutStats
 
 logger = logging.getLogger(__name__)
@@ -606,16 +607,16 @@ class Curriculum:
 
 
 def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: str | None = None):
-    """Get or create curriculum actor, auto-restoring from checkpoint if path provided.
+    """Get or create curriculum actor with automatic recovery on failure.
 
     Args:
         config: Curriculum configuration.
         checkpoint_path: Optional path to checkpoint directory for auto-restore.
 
     Returns:
-        Ray actor handle to the curriculum.
+        Robust actor handle that automatically retries on actor death.
     """
-    actor = ray.remote(Curriculum).options(name=config.actor_name, get_if_exists=True, max_restarts=-1).remote(config)
+    actor = RobustActor.create(Curriculum, actor_name=config.actor_name, actor_args=(config,))
 
     # Auto-restore from checkpoint if path provided
     if checkpoint_path:

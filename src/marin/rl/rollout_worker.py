@@ -412,7 +412,7 @@ class RolloutWorker:
             rng, seed_key = jax.random.split(rng)
             seed = int(seed_key[0])
             try:
-                lesson_id = ray.get(self._curriculum_actor.sample_lesson.options(enable_task_events=False).remote(seed))
+                lesson_id = ray.get(self._curriculum_actor.sample_lesson.remote(seed))
             except Exception as e:
                 logger.warning(f"Failed to sample lesson from curriculum: {e}, will try again...")
                 time.sleep(10.0)
