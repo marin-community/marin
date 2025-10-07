@@ -358,7 +358,6 @@ class DecodeState(eqx.Module):
         new_tokens = purge(new_tokens, should_purge)
         pos_ids = purge(pos_ids, should_purge)
         num_new_tokens_to_queue = hax.sum((~should_purge).astype(jnp.int32)).scalar()
-        # jax.debug.print("after {} {} {} {}", local_slot_ids, new_tokens, pos_ids, num_new_tokens_to_queue)
 
         # Enqueue tokens and their corresponding position ids into the queue
         new_tqueue = self.tqueue.enqueue_tokens(new_tokens, local_slot_ids, pos_ids, num_new_tokens_to_queue)
@@ -443,7 +442,7 @@ max_num_tokens: {max_num_tokens}
             ),
             temperature=hax.ones({"seq": max_seqs}, dtype=jnp.float32),
             prng_keys=jax.vmap(jax.random.PRNGKey, axis_size=max_seqs, in_axes=None)(0),
-            tqueue=TokenQueue.init(max_queued_tokens) if max_queued_tokens > 0 else TokenQueue.init(0),
+            tqueue=TokenQueue.init(max_queued_tokens),
             finished=hax.zeros({"seq": max_seqs}, dtype=bool),
         )
 
@@ -490,6 +489,9 @@ class TokenQueue(eqx.Module):
     ) -> "TokenQueue":
         """Append ``new_tokens`` and ``new_slot_ids`` to the queue."""
         # jax.debug.print("Enqueueing tokens {} {} {} {}", new_tokens, new_slot_ids, new_pos_ids, num_new_tokens)
+        assert (
+            new_tokens.axis_size("position") <= self.max_queued_tokens
+        ), f"Too many new tokens to enqueue {new_tokens.axis_size('position')} > {self.max_queued_tokens}"
 
         new_q_tokens = masked_set(
             self.queued_tokens,
