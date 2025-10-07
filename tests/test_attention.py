@@ -27,7 +27,6 @@ from levanter.layers.attention import (
     _tpu_splash_attention,
     AttentionWithSink,
     dot_product_attention,
-    dot_product_attention_with_sink,
 )
 from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
 
@@ -93,14 +92,14 @@ def test_attention_sink():
     v = hax.ones((Head, KeyPos, D))
     sink = hax.zeros((Head, QHead))
 
-    out = dot_product_attention_with_sink(
+    out = dot_product_attention(
         Pos.name,
         KeyPos.name,
         D.name,
         q,
         k,
         v,
-        sink,
+        attn_sink=sink,
     )
 
     expected = np.full((1, 1, 2, 1), 2.0 / 3)
@@ -395,7 +394,8 @@ def test_segment_ids_are_respected(impl):
 
     with use_test_mesh() as dp_mesh:
         query, keys, values = jax.device_put(
-            [query, keys, values], NamedSharding(dp_mesh, PartitionSpec(ResourceAxis.DATA, None))
+            [query, keys, values],
+            NamedSharding(dp_mesh, PartitionSpec(ResourceAxis.DATA, None)),
         )
 
         segment_ids = np.array([0, 0, 0] + [1] * (L - 3), dtype=np.int32)
@@ -551,7 +551,11 @@ def sink_attention(
     sinks,
     sm_scale: float = 0.125,
     sliding_window: int | None = None,
-    start_q=0,
+    start_q: int = 0,
+    *,
+    attn_backend: AttentionBackend | None = None,
+    block_size: int | None = None,
+    inference: bool = True,
 ):
     import torch
 
@@ -563,7 +567,8 @@ def sink_attention(
     k_jax = jnp.array(key.to(torch.float32).cpu().numpy(), dtype=jnp.float32)
     v_jax = jnp.array(value.to(torch.float32).cpu().numpy(), dtype=jnp.float32)
     sink_jax = jnp.array(
-        sinks.view(num_key_value_heads, num_key_value_groups).to(torch.float32).cpu().numpy(), dtype=jnp.float32
+        sinks.view(num_key_value_heads, num_key_value_groups).to(torch.float32).cpu().numpy(),
+        dtype=jnp.float32,
     )
 
     Batch = Axis("batch", batch_size)
@@ -585,22 +590,73 @@ def sink_attention(
         mask_arr &= pos_queries[:, None] - sliding_window + 1 <= pos_keys[None, :]
     mask = hax.named(mask_arr, (QPos, KPos))
 
-    out = dot_product_attention_with_sink(
+    out = dot_product_attention(
         QPos,
         KPos,
         D,
         q,
         k,
         v,
-        sink,
         mask=mask,
         scaling_factor=sm_scale,
+        attn_backend=attn_backend,
+        flash_block_size=block_size,
+        inference=inference,
+        attn_sink=sink,
     )
 
     out_np = np.asarray(out.array, dtype=np.float32)
     out_torch = torch.from_numpy(out_np).to(query.device)
     out_torch = out_torch.view(batch_size, num_queries, num_key_value_heads, num_key_value_groups, head_dim)
     return out_torch.reshape(batch_size, num_queries, -1).bfloat16()
+
+
+def sink_attention_vanilla(
+    query,
+    key,
+    value,
+    sinks,
+    sm_scale: float = 0.125,
+    sliding_window: int | None = None,
+    start_q=0,
+):
+    return sink_attention(
+        query,
+        key,
+        value,
+        sinks,
+        sm_scale,
+        sliding_window,
+        start_q,
+        attn_backend=None,
+        block_size=None,
+        inference=True,
+    )
+
+
+def sink_attention_jax_flash(
+    query,
+    key,
+    value,
+    sinks,
+    sm_scale: float = 0.125,
+    sliding_window: int | None = None,
+    start_q: int = 0,
+    *,
+    block_size: int = 64,
+):
+    return sink_attention(
+        query,
+        key,
+        value,
+        sinks,
+        sm_scale,
+        sliding_window,
+        start_q,
+        attn_backend=AttentionBackend.JAX_FLASH,
+        block_size=block_size,
+        inference=True,
+    )
 
 
 @skip_if_no_torch
@@ -639,11 +695,91 @@ def test_attention_equivalence(
         device=device,
         dtype=torch.bfloat16,
     )
-    k = torch.randn(batch_size, num_keys, num_key_value_heads, head_dim, device=device, dtype=torch.bfloat16)
-    v = torch.randn(batch_size, num_keys, num_key_value_heads, head_dim, device=device, dtype=torch.bfloat16)
+    k = torch.randn(
+        batch_size,
+        num_keys,
+        num_key_value_heads,
+        head_dim,
+        device=device,
+        dtype=torch.bfloat16,
+    )
+    v = torch.randn(
+        batch_size,
+        num_keys,
+        num_key_value_heads,
+        head_dim,
+        device=device,
+        dtype=torch.bfloat16,
+    )
     sinks = torch.randn(num_key_value_heads * num_key_value_groups, device=device, dtype=torch.bfloat16)
 
-    o1 = sink_attention(q, k, v, sinks, sm_scale, sliding_window, start_q)
+    o1 = sink_attention_vanilla(q, k, v, sinks, sm_scale, sliding_window, start_q)
+    o2 = sink_attention_ref_gpt_oss(q, k, v, sinks, sm_scale, sliding_window, start_q)
+
+    torch.testing.assert_close(o1, o2)
+
+
+@skip_if_no_torch
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("num_queries", [128])
+@pytest.mark.parametrize("num_keys", [128])
+@pytest.mark.parametrize("num_key_value_heads", [8])
+@pytest.mark.parametrize("num_key_value_groups", [8])
+@pytest.mark.parametrize("head_dim", [64])
+@pytest.mark.parametrize("sm_scale", [0.125])
+@pytest.mark.parametrize("sliding_window", [None, 64])
+@pytest.mark.parametrize("start_q", [0, 5])
+@pytest.mark.parametrize("block_size", [64, 128])
+def test_attention_equivalence_jax_flash(
+    batch_size,
+    num_queries,
+    num_keys,
+    num_key_value_heads,
+    num_key_value_groups,
+    head_dim,
+    sm_scale,
+    sliding_window,
+    start_q,
+    block_size,
+):
+    """Make sure the JAX backend is tested"""
+    import torch
+
+    if num_queries > num_keys:
+        pytest.skip("too many queries")
+    if (num_queries % block_size) != 0 or (num_keys % block_size) != 0:
+        pytest.skip("block size must divide sequence lengths for JAX Flash path")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    q = torch.randn(
+        batch_size,
+        num_queries,
+        num_key_value_heads,
+        num_key_value_groups,
+        head_dim,
+        device=device,
+        dtype=torch.bfloat16,
+    )
+    k = torch.randn(
+        batch_size,
+        num_keys,
+        num_key_value_heads,
+        head_dim,
+        device=device,
+        dtype=torch.bfloat16,
+    )
+    v = torch.randn(
+        batch_size,
+        num_keys,
+        num_key_value_heads,
+        head_dim,
+        device=device,
+        dtype=torch.bfloat16,
+    )
+    sinks = torch.randn(num_key_value_heads * num_key_value_groups, device=device, dtype=torch.bfloat16)
+
+    o1 = sink_attention_jax_flash(q, k, v, sinks, sm_scale, sliding_window, start_q, block_size=block_size)
     o2 = sink_attention_ref_gpt_oss(q, k, v, sinks, sm_scale, sliding_window, start_q)
 
     torch.testing.assert_close(o1, o2)
