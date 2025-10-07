@@ -36,7 +36,6 @@ from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError, RepositoryNotFoundError
 from jax import ShapeDtypeStruct
 from jax._src.partition_spec import PartitionSpec
-from jax.experimental.multihost_utils import sync_global_devices
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
 from tqdm import tqdm
@@ -52,7 +51,7 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils import jax_utils
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.hf_utils import HfTokenizer
-from levanter.utils.jax_utils import best_effort_sharding, local_cpu_mesh, use_cpu_device
+from levanter.utils.jax_utils import best_effort_sharding, local_cpu_mesh, use_cpu_device, sync_global_devices
 from levanter.utils.json_utils import ConfigJSONEncoder
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.py_utils import dataclass_with_default_init, logical_cpu_memory_size

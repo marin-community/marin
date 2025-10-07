@@ -15,8 +15,8 @@ import fsspec
 import jax
 import requests  # type: ignore
 from fsspec import AbstractFileSystem
-from jax.experimental.multihost_utils import sync_global_devices
 
+from levanter.utils.jax_utils import sync_global_devices
 
 logger = logging.getLogger(__name__)
 
