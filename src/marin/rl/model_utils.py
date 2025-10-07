@@ -87,7 +87,8 @@ def load_model_from_checkpoint(
         converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
         with ExitStack() as stack:
             if mesh is not None:
-                stack.enter_context(mesh)
+                logger.info(f"Setting up mesh for HF checkpoint loading: {mesh}")
+                stack.enter_context(hax.partitioning.set_mesh(mesh))
 
             model = converter.load_pretrained(
                 model_config.model_type,

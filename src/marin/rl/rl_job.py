@@ -124,7 +124,7 @@ class RLJobConfig:
     """Configuration for TPU pod deployment. If None, uses simple Ray actors."""
 
     # Inference server (auto-configured by default)
-    inference_server_config: "InferenceServerConfig | None" = None  # type: ignore
+    inference_server_config: InferenceServerConfig | None = None  # type: ignore
 
     # Sampling configuration
     eval_sampling_params: SamplingParams = field(default_factory=SamplingParams)
@@ -232,7 +232,10 @@ class RLJob:
         if self.config.inference_server_config is None:
             inference_server_config = InferenceServerConfig(
                 trainer=dataclasses.replace(
-                    self.config.trainer, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=1
+                    self.config.trainer,
+                    tensor_parallel_axes=["mlp", "kv_head"],
+                    # TODO(power) - infer this from the TPU type
+                    model_axis_size=4,
                 ),
                 tokenizer=tokenizer,
                 temperature=self.config.eval_sampling_params.temperature,

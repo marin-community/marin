@@ -130,7 +130,7 @@ def rl_train(name: str) -> ExecutorStep:
     trainer_config = TrainerConfig(
         # wandb is persistently crashing
         tracker=WandbConfig(
-            project="marin_mockenv_testing",
+            project="rl-mockenv-testing",
             name=name,
             tags=["rl", "math", MODEL_NAME.split("/")[-1]],
         ),
@@ -219,7 +219,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-power-024"),
+        rl_train(name="llama-1b-math-rl-test-power-025"),
     ]
 
     executor_main(
