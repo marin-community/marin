@@ -283,8 +283,8 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
         devices = jax.devices()
 
     if mesh is None:
-        mesh = hax.partitioning._get_mesh()
-        if mesh is not None and mesh.devices.shape == ():
+        mesh = jax.sharding.get_abstract_mesh()
+        if mesh is not None and mesh.shape == ():
             mesh = None
 
     if mesh is None:
