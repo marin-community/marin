@@ -25,11 +25,11 @@ from marin.rl.evaluate_environment import evaluate_environment
 logger = logging.getLogger(__name__)
 
 
-def main():
+def create_eval_step():
     """Main function to run environment evaluation experiments."""
 
     # Example model checkpoint path - update this to a real checkpoint
-    model_checkpoint = "Qwen/Qwen3-32B"
+    model_checkpoint = "Qwen/Qwen3-4B"
 
     # Configure PrimeIntellect environment for testing
     env = PrimeIntellectEnv(
@@ -46,12 +46,9 @@ def main():
         env=env,
     )
 
-    # Run the evaluation
-    executor_main(
-        steps=[eval_step],
-        description="Test environment evaluation on math tasks",
-    )
+    return eval_step
 
 
 if __name__ == "__main__":
-    main()
+    eval_step = create_eval_step()
+    executor_main(steps=[eval_step])

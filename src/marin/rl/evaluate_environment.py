@@ -68,7 +68,7 @@ class EnvironmentEvalConfig:
     """Random seed for evaluation."""
 
 
-@ray.remote()
+@ray.remote(max_retries=3)
 def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     """Run environment evaluation."""
 
@@ -91,10 +91,6 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     logger.info(f"Loading model from {config.model_checkpoint}")
     hf_config = AutoConfig.from_pretrained(config.model_checkpoint)
     model_config = LlamaConfig.from_hf_config(hf_config)
-    model_config = model_config.replace(
-        seq_len=config.max_input_length + config.max_output_length,
-        tokenizer=config.model_checkpoint,
-    )
 
     vocab_size = tokenizer.vocab_size
     Vocab = hax.Axis("vocab", vocab_size)
@@ -171,7 +167,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     }
 
 
-def evaluate_environment(model: str, env: MarinEnv) -> ExecutorStep:
+def evaluate_environment(model: str, env: MarinEnv, name: str = None) -> ExecutorStep:
     """Create an executor step for evaluating a model on an environment.
 
     Args:
@@ -187,8 +183,9 @@ def evaluate_environment(model: str, env: MarinEnv) -> ExecutorStep:
     )
 
     return ExecutorStep(
-        name=f"evaluate-{env.__class__.__name__}",
+        name=name or f"evaluate-{env.__class__.__name__}-{model}-{env.env_id}",
         fn=_run_evaluation,
         config=config,
         description=f"Evaluate model on {env.__class__.__name__}",
+        pip_dependency_groups=["post_training", "rl"],
     )
