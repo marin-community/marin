@@ -19,6 +19,7 @@ import numpy
 from jax import Array
 from jax import numpy as jnp
 from jax import tree_util as jtu
+from jax._src.mesh import get_concrete_mesh
 from jax.experimental import multihost_utils
 from jax.sharding import Mesh, PartitionSpec
 from jaxtyping import PyTree
@@ -107,7 +108,7 @@ class DataLoader(Iterable[Ex]):
         self.data_store = data
 
         if mesh is None:
-            mesh = hax.partitioning._get_mesh()
+            mesh = get_concrete_mesh()
         self.mesh = mesh
 
         if isinstance(batch_size, hax.Axis):

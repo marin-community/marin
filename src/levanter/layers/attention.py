@@ -1252,7 +1252,7 @@ def _tpu_splash_attention(
     # copied from MaxText
     @functools.partial(
         shard_map,
-        mesh=haliax.partitioning._get_mesh(),
+        mesh=jax.sharding.get_abstract_mesh(),
         in_specs=(
             physical_axes_q,
             physical_axes_k,

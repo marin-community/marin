@@ -190,7 +190,7 @@ def zeropower_via_newtonschulz5(X, steps=5, eps=1e-7):
     # really do something even fancier.
     # It would be even smarter to stack similar layers together, but that would require more even more work
     # Let's call this good enough until we think it's not good enough
-    if len(haliax.partitioning._get_mesh().devices):
+    if not jax.sharding.get_abstract_mesh().empty:
         X = jax.lax.with_sharding_constraint(X, PartitionSpec(None, ("data", "model")))
 
     for i in range(steps):
