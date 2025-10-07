@@ -6,18 +6,18 @@ import functools
 from typing import Callable, Optional, ParamSpec, TypeVar
 
 import equinox as eqx
+import haliax as hax
 import jax
 import jax.numpy as jnp
-from jax.lax import with_sharding_constraint
-from jax.sharding import PartitionSpec
-
-import haliax as hax
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
 from haliax.util import is_named_array
+from jax.lax import with_sharding_constraint
+from jax.sharding import PartitionSpec
 
+from levanter.metrics import Metric
+from levanter.metrics import fold as fold_metric
 from levanter.utils.jax_utils import zeros_like_tree
-
 
 Args = ParamSpec("Args")
 R = TypeVar("R")
@@ -118,11 +118,29 @@ def microbatched(
                 this_r = fn(*microbatch, **microbatch_kwargs)
 
             with jax.named_scope("accum"):
+                # Unpack structure: ((loss, metrics_dict), grads)
+                (this_loss, this_metrics), this_grads = this_r
+                (acc_loss, acc_metrics), acc_grads = acc
+
+                # Accumulate loss (scalar)
+                new_loss = acc_loss + this_loss
+
+                new_metrics = jax.tree_util.tree_map(
+                    lambda a, b: fold_metric(a, b),
+                    acc_metrics,
+                    this_metrics,
+                    is_leaf=lambda x: isinstance(x, Metric),
+                )
+
+                # Accumulate gradients with quantization
                 import haliax.quantization as hq
 
                 # TODO: this uses the latest value for the scale for fp8, which seems not ideal but probably ok?
-                overwrites, updates = hq.partition_for_grad_overwrite(this_r)
-                acc = hq.apply_updates(acc, updates, overwrites)
+                overwrites, updates = hq.partition_for_grad_overwrite(this_grads)
+                new_grads = hq.apply_updates(acc_grads, updates, overwrites)
+
+                # Repack and shard
+                acc = ((new_loss, new_metrics), new_grads)
                 acc = hax.shard_with_axis_mapping(acc, accum_axis_mapping)
 
             return acc
@@ -131,7 +149,12 @@ def microbatched(
             acc = hax.fold(loop, AccumStep)(acc, (args, kwargs, key))
 
             if reduce == ReductionType.MEAN:
-                acc = jax.tree_util.tree_map(lambda x: x / num_micro_steps, acc)
+                # Unpack, divide loss and grads, repack
+                # Metrics handle their own reduction internally
+                (loss, metrics), grads = acc
+                loss = loss / num_micro_steps
+                grads = jax.tree_util.tree_map(lambda x: x / num_micro_steps, grads)
+                acc = ((loss, metrics), grads)
 
         return acc
 

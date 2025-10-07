@@ -1,12 +1,12 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import sys
 import threading
 import time
-from typing import Callable, Optional
 from contextlib import contextmanager
-import os
+from typing import Callable, Optional
 
 import jax
 from tqdm_loggable.auto import tqdm
@@ -22,15 +22,21 @@ from levanter.callbacks._metrics import (
     pbar_logger,
 )
 from levanter.data import DataLoader
+from levanter.metrics import LossFunctionWithMetrics, unwrap_metrics
+from levanter.metrics import fold as fold_metric
 from levanter.tracker.wandb import WandbConfig
 from levanter.utils.jax_utils import barrier_sync
 from levanter.utils.logging import save_xla_dumps_to_wandb
 
 
-def eval_loss_loop(loss_fn, model, dataset, max_batches: Optional[int] = None, name: Optional[str] = None):
+def eval_loss_loop(
+    loss_fn: LossFunctionWithMetrics, model, dataset, max_batches: Optional[int] = None, name: Optional[str] = None
+) -> tuple[float, dict[str, float]]:
+
     total_loss = 0.0
     total_load_time = 0.0
     total_loss_time = 0.0
+    accumulated_metrics = {}
     n = 0
 
     if name is not None:
@@ -49,7 +55,17 @@ def eval_loss_loop(loss_fn, model, dataset, max_batches: Optional[int] = None, n
             break
         load_time = time.time() - time_in
         total_load_time += load_time
-        loss = loss_fn(model, batch)
+
+        # loss_fn returns (loss, wrapped_metrics) where wrapped_metrics is Dict[str, Metric]
+        loss, wrapped_metrics = loss_fn(model, batch)
+
+        # Use fold() to accumulate Metric objects
+        for key, metric in wrapped_metrics.items():
+            if key not in accumulated_metrics:
+                accumulated_metrics[key] = metric
+            else:
+                accumulated_metrics[key] = fold_metric(accumulated_metrics[key], metric)
+
         total_loss += loss.item()
         n += 1
         loss_time = time.time() - time_in - load_time
@@ -63,22 +79,28 @@ def eval_loss_loop(loss_fn, model, dataset, max_batches: Optional[int] = None, n
     if n > 0:
         total_loss /= n
 
-    return total_loss
+    # Unwrap metrics before returning
+    plain_metrics = unwrap_metrics(accumulated_metrics)
+    return total_loss, plain_metrics
 
 
 def compute_validation_loss(
-    loss_fn: Callable,  # [[M, ...], jax.numpy.ndarray],
+    loss_fn: LossFunctionWithMetrics,
     dataset: DataLoader,
     max_batches: Optional[int] = None,
     name: Optional[str] = None,
 ):
     def compute_loss(info: StepInfo):
-        loss = eval_loss_loop(loss_fn, info.eval_model, dataset, max_batches=max_batches, name=name)
+        loss, metrics = eval_loss_loop(loss_fn, info.eval_model, dataset, max_batches=max_batches, name=name)
 
         prefix = "eval"
         if name:
             prefix += "/" + name
-        levanter.tracker.log({f"{prefix}/loss": loss}, step=info.step)
+
+        # Log loss and metrics
+        to_log = {f"{prefix}/loss": loss}
+        to_log.update({f"{prefix}/{k}": v for k, v in metrics.items()})
+        levanter.tracker.log(to_log, step=info.step)
 
         if name:
             logger.info(f"{name} validation loss: {loss:.3f}")
