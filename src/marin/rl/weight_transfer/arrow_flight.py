@@ -397,7 +397,7 @@ class ArrowFlightServer(WeightTransferServer):
                 param_names = list(params_dict.keys())
                 actual_host = self.config.flight_host if self.config.flight_host != "0.0.0.0" else socket.gethostname()
                 server_locations = [(actual_host, server.port) for server in self._flight_servers]
-                ray.get(self._coordinator.update_server.remote(weight_id, param_names, server_locations))
+                self._coordinator.update_server.call(weight_id, param_names, server_locations)
                 update_time = time.time()
 
                 self.metrics.successful_transfers += 1
@@ -512,7 +512,7 @@ class ArrowFlightClient(WeightTransferClient):
             start_time = time.time()
 
             # Fetch server info from coordinator
-            server_info = ray.get(self._coordinator.fetch_server.remote())
+            server_info = self._coordinator.fetch_server.call()
 
             if not server_info:
                 logger.info("No Arrow Flight server info available from coordinator.")

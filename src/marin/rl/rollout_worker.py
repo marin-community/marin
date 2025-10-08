@@ -33,8 +33,6 @@ import haliax as hax
 import jax
 import jax.random as jrandom
 import levanter
-import ray
-import ray.exceptions
 from jax.experimental import multihost_utils
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmConfig
@@ -392,7 +390,7 @@ class RolloutWorker:
         logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, step, metrics)
         # only update curriculum for full evals
         if eval_type == "eval":
-            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
+            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
                 stats.rollout_stats, mode="eval", current_step=step
             )
         return stats
@@ -435,7 +433,7 @@ class RolloutWorker:
             rng, seed_key = jax.random.split(rng)
             seed = int(seed_key[0])
             try:
-                lesson_id = ray.get(self._curriculum_actor.sample_lesson.remote(seed))
+                lesson_id = self._curriculum_actor.sample_lesson.call(seed)
             except Exception as e:
                 logger.warning(f"Failed to sample lesson from curriculum: {e}, will try again...")
                 time.sleep(10.0)
@@ -472,7 +470,7 @@ class RolloutWorker:
                 continue
 
             stats = _compute_batch_stats(rollout_batch, lesson_id)
-            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
+            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
                 stats.rollout_stats, mode="training", current_step=step
             )
             eval_metrics = self._build_eval_metrics(prefix="rollout", lesson_id=lesson_id, batch=rollout_batch)
