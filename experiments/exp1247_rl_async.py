@@ -173,7 +173,7 @@ def rl_train(name: str) -> ExecutorStep:
         sync_interval_steps=1,
     )
 
-    curriculum_config = create_math_curriculum(RUN_ID)
+    curriculum_config = create_math_curriculum(name)
 
     # Create RLJobConfig using the new unified interface
     config = RLJobConfig(
@@ -194,7 +194,7 @@ def rl_train(name: str) -> ExecutorStep:
         initial_checkpoint=MODEL_NAME,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
-        run_id=RUN_ID,
+        run_id=name,
         log_freq=10,
         run_config=RunConfig(
             train_tpu_type="v5litepod-4",
@@ -218,8 +218,10 @@ def main():
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
+    datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-power-025"),
+        rl_train(name=f"llama-1b-math-rl-test-power-{datestamp}"),
     ]
 
     executor_main(

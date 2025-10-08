@@ -28,6 +28,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
+import haliax as hax
 import jax
 import jax.experimental.transfer as jax_transfer
 import numpy as np
@@ -393,7 +394,7 @@ class JAXTransferServer(WeightTransferServer):
     def _transfer_to_cpu(self, model) -> PyTree:
         """Transfer params to CPU devices."""
         try:
-            with self.cpu_mesh:
+            with hax.set_mesh(self.cpu_mesh):
                 cpu_devices = jax.devices("cpu")
                 return jax.device_put(model, cpu_devices[0])
         except Exception as e:

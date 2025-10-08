@@ -20,7 +20,6 @@ including both local Levanter checkpoints and HuggingFace repositories.
 """
 
 import logging
-from contextlib import ExitStack
 
 import equinox as eqx
 import haliax as hax
@@ -85,11 +84,7 @@ def load_model_from_checkpoint(
         hf_checkpoint = RepoRef.from_string(checkpoint)
         converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
         converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
-        with ExitStack() as stack:
-            if mesh is not None:
-                logger.info(f"Setting up mesh for HF checkpoint loading: {mesh}")
-                stack.enter_context(hax.partitioning.set_mesh(mesh))
-
+        with hax.partitioning.set_mesh(mesh):
             model = converter.load_pretrained(
                 model_config.model_type,
                 ref=hf_checkpoint,

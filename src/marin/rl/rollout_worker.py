@@ -443,7 +443,7 @@ class RolloutWorker:
 
             rng, input_rng = jax.random.split(rng)
             lesson_config = self.config.curriculum_config.lessons[lesson_id]
-            rollout_batch, metrics = self._sample_batch(
+            rollout_batch, env_metrics = self._sample_batch(
                 lesson_id=lesson_id,
                 n_examples=lesson_config.sampling_params.n_prompts,
                 n_generations=lesson_config.sampling_params.n_generations_per_prompt,
@@ -452,20 +452,20 @@ class RolloutWorker:
             )
             if rollout_batch is None:
                 continue
-            barrier_sync()
 
             stats = _compute_batch_stats(rollout_batch, lesson_id)
             self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
                 stats.rollout_stats, mode="training", current_step=step
             )
-            self._build_eval_metrics(prefix="inference.train", lesson_id=lesson_id, batch=rollout_batch)
+            eval_metrics = self._build_eval_metrics(prefix="rollout", lesson_id=lesson_id, batch=rollout_batch)
 
             step += 1
             self._rollout_writer.write_batch(rollout_batch)
 
             if self.config.log_freq > 0 and step % self.config.log_freq == 0:
-                log_metrics = {}
+                log_metrics = eval_metrics
                 log_metrics.update(self._transfer_client.get_metrics())
+                log_metrics.update({f"env.{k}": v for k, v in (env_metrics or {}).items()})
                 log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
                 logger.info(f"Logging metrics at step {step}... {log_metrics}")
                 self.tracker.log(log_metrics, step=step)

@@ -148,8 +148,13 @@ class LevanterInferenceContext(InferenceContext):
                 else:
                     for choice in completion.choices:
                         content = choice.message.content
-                        tokens = self.tokenizer.encode(content)
-                        logprobs = [t.logprob for t in choice.logprobs.content]
+                        tokens: list[int] = []
+                        logprobs: list[float] = []
+                        for t in choice.logprobs.content:
+                            encoded = self.tokenizer.encode(t.token, add_special_tokens=False)
+                            assert len(encoded) == 1, f"Expected single token but got {encoded} for text: {t.text}"
+                            tokens.append(encoded[0])
+                            logprobs.append(t.logprob)
                         logprobs = np.array(logprobs, dtype=np.float32)
                         if np.all(logprobs == 0):
                             logger.warning(

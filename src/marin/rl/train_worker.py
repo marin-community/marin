@@ -109,7 +109,7 @@ class StreamingRolloutLoader:
             # Convert rollouts to training batch
             batch = create_training_batch_from_rollouts(rollouts, self.max_tokens, self.pad_token_id)
             # shard onto the device mesh
-            with self.config.trainer.device_mesh:
+            with hax.set_mesh(self.config.trainer.device_mesh):
                 sharded_batch = hax.shard(batch, self.config.trainer.compute_axis_mapping)
 
             yield sharded_batch
