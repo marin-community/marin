@@ -234,8 +234,6 @@ class RLJob:
                 trainer=dataclasses.replace(
                     self.config.trainer,
                     tensor_parallel_axes=["mlp", "kv_head"],
-                    # TODO(power) - infer this from the TPU type
-                    model_axis_size=1,
                 ),
                 tokenizer=tokenizer,
                 temperature=self.config.eval_sampling_params.temperature,

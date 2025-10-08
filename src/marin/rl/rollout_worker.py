@@ -19,6 +19,7 @@ This worker loads model checkpoints, generates rollouts from a single environmen
 and writes the rollout data to files for training workers to consume.
 """
 
+import dataclasses
 import logging
 import os
 import socket
@@ -143,6 +144,17 @@ class RolloutWorker:
     def __init__(self, config: RolloutWorkerConfig):
         config.trainer.id = f"{config.run_id}-rollout"
         levanter.initialize(config.trainer)
+
+        # Infer model_axis_size from the actual TPU configuration now that JAX is initialized.
+        # For inference servers, we shard across all local devices on a single host.
+        config.inference_server_config = dataclasses.replace(
+            config.inference_server_config,
+            trainer=dataclasses.replace(
+                config.inference_server_config.trainer,
+                model_axis_size=jax.local_device_count(),
+            ),
+        )
+
         self.tracker = levanter.current_tracker()
         self.config = config
         self._running = True
