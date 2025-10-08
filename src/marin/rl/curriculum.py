@@ -28,13 +28,15 @@ from dataclasses import dataclass, field
 
 import fsspec
 import numpy as np
+import ray
 
 from marin.rl.environments.base import EnvConfig
+from marin.rl.robust_actor import RobustActor
 from marin.rl.types import RolloutStats
 
 logger = logging.getLogger(__name__)
 
-MAX_REWARD_HISTORY = 200
+MAX_REWARD_HISTORY = 1000
 
 
 @dataclass
@@ -75,6 +77,17 @@ class LessonDependency:
 
 
 @dataclass
+class SamplingParams:
+    """Parameters for sampling rollouts from an environment."""
+
+    temperature: float = 1.0
+    n_prompts: int = 8
+    n_generations_per_prompt: int = 4
+    max_tokens: int = 256
+    stop_tokens: list[int] | None = None
+
+
+@dataclass
 class LessonConfig:
     """Configuration for a single lesson in the curriculum."""
 
@@ -99,6 +112,9 @@ class LessonConfig:
     plateau_threshold: float = 0.01
     """Relative slope threshold for detecting plateaus."""
 
+    sampling_params: SamplingParams = field(default_factory=SamplingParams)
+    """Per-lesson sampling configuration (overrides global defaults)."""
+
 
 @dataclass
 class CurriculumConfig:
@@ -107,14 +123,17 @@ class CurriculumConfig:
     lessons: dict[str, LessonConfig]
     """Dictionary mapping lesson names to lesson configurations."""
 
-    eval_frequency: int = 1000
-    """How often to run evaluation (in rollout worker steps)."""
+    eval_frequency: int = 100
+    """How often to run full evaluation across all lessons (in rollout worker steps)."""
 
-    eval_n_examples: int = 32
-    """Number of examples to use for each lesson during evaluation."""
+    eval_n_examples: int = 64
+    """Number of examples to use for each lesson during full evaluation."""
 
-    eval_n_generations: int = 1
-    """Number of generations per example during evaluation."""
+    micro_eval_frequency: int = 10
+    """How often to run micro-evaluation on the current lesson (in rollout worker steps)."""
+
+    micro_eval_n_examples: int = 4
+    """Number of examples for micro-evaluation (keep small for speed)."""
 
     temperature: float = 1.0
     """Temperature for sampling weight distribution."""
@@ -124,6 +143,14 @@ class CurriculumConfig:
 
     minimum_sample_probability: float = 0.1
     """Minimum probability for sampling any active lesson."""
+
+    checkpoint_steps: int = 10
+    """How often to checkpoint curriculum state (in training steps)."""
+
+    @property
+    def max_tokens(self) -> int:
+        """Maximum tokens across all lessons in the curriculum."""
+        return max(lesson.sampling_params.max_tokens for lesson in self.lessons.values())
 
 
 def _validate_dependencies(lesson_configs: dict[str, LessonConfig]):
@@ -210,7 +237,6 @@ def update_performance_stats(
     new_rewards = np.array([rs.episode_reward for rs in rollout_stats])
     reward_history = np.concatenate([stats.reward_history, new_rewards])
 
-    # Trim to max history size
     if len(reward_history) > MAX_REWARD_HISTORY:
         reward_history = reward_history[-MAX_REWARD_HISTORY:]
 
@@ -226,12 +252,8 @@ def compute_success_ratio(stats: LessonStats, current_step: int, max_staleness: 
     return compute_smoothed_success(stats.training_stats.reward_history)
 
 
-def is_plateaued(stats: LessonStats, window: int = 50, threshold: float = 0.01) -> bool:
+def is_plateaued(stats: LessonStats, window: int = 100, threshold: float = 0.01) -> bool:
     """Detect if reward has plateaued using conservative statistical tests.
-
-    Uses multiple criteria to robustly detect when learning has stopped improving.
-    Conservative approach requires ALL conditions to be met to avoid premature
-    graduation or dependency unlocking.
 
     Args:
         stats: Lesson statistics containing reward history.
@@ -256,10 +278,10 @@ def is_plateaued(stats: LessonStats, window: int = 50, threshold: float = 0.01) 
     slope = result.slope
     p_value = result.pvalue
 
-    mean_reward = np.mean(recent)
+    mean_reward = np.mean(np.abs(recent))
     std_reward = np.std(recent)
 
-    # Condition 1: Slope must be small relative to mean (existing threshold logic)
+    # Condition 1: Slope must be small or negative
     if abs(mean_reward) > 1e-6:
         relative_slope = abs(slope) / abs(mean_reward)
         slope_is_flat = relative_slope < threshold
@@ -454,6 +476,13 @@ class Curriculum:
                 if not is_plateaued(dep_stats, window=dep_config.plateau_window, threshold=dep_config.plateau_threshold):
                     return False
 
+        logger.info("All dependencies satisfied for lesson '%s'", lesson_id)
+        for dep in lesson_config.dependencies:
+            success_rate = compute_success_ratio(self.stats[dep.dependency_id], self.current_step)
+            logger.info(
+                f"  Dependency '{dep.dependency_id}' met. Success ratio: {success_rate}, recent rewards: %s",
+                self.stats[dep.dependency_id].training_stats.reward_history[-10:],
+            )
         return True
 
     def check_graduation(self, lesson_id: str) -> bool:
@@ -540,21 +569,16 @@ class Curriculum:
             json.dump(checkpoint_data, f, indent=2)
 
     def restore_checkpoint(self, checkpoint_dir: str, filename: str = "curriculum_state.json"):
-        """Restore curriculum state from checkpoint in-place.
+        """Restore curriculum state from latest checkpoint in directory.
 
         Args:
             checkpoint_dir: Directory containing the checkpoint.
-            filename: Name of the checkpoint file to load.
+            filename: Name of the checkpoint file to load (default pattern).
         """
-        import os
-
-        import fsspec
-
         fs, _ = fsspec.core.url_to_fs(checkpoint_dir)
         checkpoint_path = os.path.join(checkpoint_dir, filename)
 
         if not fs.exists(checkpoint_path):
-            logger.info("No curriculum checkpoint found at %s, starting fresh", checkpoint_path)
             return
 
         with fs.open(checkpoint_path) as f:
@@ -582,7 +606,23 @@ class Curriculum:
         logger.info("Restored curriculum checkpoint from %s at step %d", checkpoint_path, self.current_step)
 
 
-def get_or_create_curriculum_actor(config: CurriculumConfig):
-    import ray
+def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: str | None = None):
+    """Get or create curriculum actor with automatic recovery on failure.
 
-    return ray.remote(Curriculum).options(name=config.actor_name, get_if_exists=True, max_restarts=-1).remote(config)
+    Args:
+        config: Curriculum configuration.
+        checkpoint_path: Optional path to checkpoint directory for auto-restore.
+
+    Returns:
+        Robust actor handle that automatically retries on actor death.
+    """
+    actor = RobustActor.create(Curriculum, actor_name=config.actor_name, actor_args=(config,))
+
+    # Auto-restore from checkpoint if path provided
+    if checkpoint_path:
+        try:
+            ray.get(actor.restore_checkpoint.remote(checkpoint_path))
+        except Exception as e:
+            logger.warning(f"Failed to restore curriculum checkpoint from {checkpoint_path}: {e}, starting fresh")
+
+    return actor
