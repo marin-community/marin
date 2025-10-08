@@ -39,8 +39,10 @@ target_examples = dataset_examples * 10  # 10 epochs
 use_pretokenized_dataset = True
 learning_rate = 3e-4
 per_device_eval_parallelism = 256
-# TODO: Make this cross-platform compatible
-num_gpus = len(jax.devices("gpu"))
+accelerator_type = "H100"
+# TODO: Eliminate the need for this; note that some default must be provided
+#       for unit test dry runs when GPUs are not actually present
+num_gpus = len(jax.devices("gpu")) if jax.default_backend() == "gpu" else 1
 # TODO: Determine why global batch size must scale with gpus to avoid OOM;
 #       gradient accumulation does not appear to be working as expected
 train_batch_size = per_device_eval_parallelism * num_gpus
@@ -91,7 +93,8 @@ if use_pretokenized_dataset:
 # Training configuration
 # -----------------------------------------------------------------------------
 train_config = SimpleTrainConfig(
-    resources=GpuConfig(gpu_count=num_gpus),
+    # TODO: Find what happens when accelerator_type is not specified as in prior runs
+    resources=GpuConfig(gpu_count=num_gpus, accelerator_type=accelerator_type),
     train_batch_size=train_batch_size,
     per_device_eval_parallelism=per_device_eval_parallelism,
     learning_rate=learning_rate,
@@ -130,9 +133,4 @@ if __name__ == "__main__":
     logger.info(f"Steps per eval:     {steps_per_eval:,}")
     logger.info("=" * 64)
 
-    executor_main(
-        steps=[
-            data_tokenized,
-            training_step,
-        ]
-    )
+    executor_main(steps=[training_step])
