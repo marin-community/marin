@@ -53,7 +53,6 @@ def test_rollout_and_train_workers(ray_tpu_cluster, tmp_path):
         curriculum=create_test_curriculum_config(),
         tokenizer=DummyTokenizer(),
         rollout_storage=rollout_storage_config,
-        seed=42,
     )
 
     job = RLJob(job_config)

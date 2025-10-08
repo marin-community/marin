@@ -238,7 +238,6 @@ def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, outpu
         ),
         loss=RLOOLoss(kl_coef=0.0, clip_epsilon=5.0),
         initial_checkpoint=None,
-        seed=42,
     )
 
 
@@ -271,7 +270,6 @@ def create_nano_rollout_worker_config(output_dir: str, rollout_storage: RolloutS
         max_rollouts=1000,
         weight_transfer=create_weight_transfer_config(),
         initial_checkpoint=None,
-        seed=1042,
     )
 
 

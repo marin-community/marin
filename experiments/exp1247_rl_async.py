@@ -179,7 +179,6 @@ def rl_train(name: str) -> ExecutorStep:
 
     # Create RLJobConfig using the new unified interface
     config = RLJobConfig(
-        seed=123,
         model=model_config,
         trainer=trainer_config,
         train_params=TrainParams(

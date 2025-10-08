@@ -107,7 +107,7 @@ class RLJobConfig:
     train_params: TrainParams
     curriculum: CurriculumConfig
     tokenizer: str | PreTrainedTokenizer
-    seed: int
+    seed: int = 42
 
     # Model & initialization (with defaults)
     initial_checkpoint: str | None = None
