@@ -80,6 +80,9 @@ class RolloutWorkerConfig:
 
     log_freq: int = 10
 
+    seed: int = 0
+    """Random seed for reproducibility."""
+
 
 def find_open_port() -> int:
     """Find an open port on localhost."""
@@ -273,7 +276,7 @@ class RolloutWorker:
         else:
             logger.info("Building new policy model from scratch")
 
-        key = jrandom.PRNGKey(42)
+        key = jrandom.PRNGKey(self.config.seed)
         vocab_size = self._tokenizer.vocab_size
         Vocab = hax.Axis("vocab", vocab_size)
 
@@ -407,9 +410,7 @@ class RolloutWorker:
 
         step = 0
 
-        # compute the seed as the all-reduce across all hosts in the jax process
-        # seed = abs(hash(f"{socket.gethostname()}-{os.getpid()}")) % (2**31 - 1)
-        seed = 0
+        seed = self.config.seed
         rng = jax.random.PRNGKey(seed)
         rng = multihost_utils.broadcast_one_to_all(rng)
         logger.info(f"Starting rollout worker with seed {seed}")

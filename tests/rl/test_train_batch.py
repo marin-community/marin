@@ -58,7 +58,7 @@ def test_float_array_padding():
     ary = np.array([1.0, 2.0], dtype=np.float32)
     result = train_batch.trim_and_pad(ary, max_seq_len=4, padding_value=999)
 
-    expected = np.array([1.0, 2.0, 0.0, 0.0], dtype=np.float32)  # Float arrays pad with 0
+    expected = np.array([1.0, 2.0, 999.0, 999.0], dtype=np.float32)
     np.testing.assert_array_equal(result, expected)
 
 

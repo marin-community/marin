@@ -79,6 +79,8 @@ def load_environment_from_spec(config: EnvConfig) -> MarinEnv:
     module_name, class_name = env_class.rsplit(".", 1)
     env_module = __import__(module_name, fromlist=[class_name])
     env_class = getattr(env_module, class_name)
+
+    # TODO(power) - thread random seed from the rollout worker.
     return env_class(**env_args)
 
 

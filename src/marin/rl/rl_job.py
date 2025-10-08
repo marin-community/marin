@@ -106,6 +106,7 @@ class RLJobConfig:
     train_params: TrainParams
     curriculum: CurriculumConfig
     tokenizer: str | PreTrainedTokenizer
+    seed: int
 
     # Model & initialization (with defaults)
     initial_checkpoint: str | None = None
@@ -264,6 +265,7 @@ class RLJob:
             initial_checkpoint=self.config.initial_checkpoint,
             run_id=self.config.run_id,
             curriculum_config=self.config.curriculum,
+            seed=self.config.seed,
         )
 
         # Create rollout worker config
@@ -279,6 +281,7 @@ class RLJob:
             weight_transfer=self.config.weight_transfer,
             rollout_storage=self.config.rollout_storage,
             run_id=self.config.run_id,
+            seed=self.config.seed + 1000,
         )
 
         return train_worker_config, rollout_worker_config

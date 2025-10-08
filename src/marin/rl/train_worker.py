@@ -64,6 +64,9 @@ class TrainWorkerConfig:
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
 
+    seed: int = 0
+    """Random seed for reproducibility."""
+
 
 class StreamingRolloutLoader:
     """Direct loader for streaming rollout data.
@@ -150,8 +153,8 @@ class TrainWorker:
             config=config.replay_buffer,
             local_batch_size=config.trainer.train_batch_size,
             total_processes=jax.process_count(),
-            process_id=jax.process_index(),
             loss_module=self.loss_module,
+            seed=config.seed,
         )
 
         self.replay_loader = ReplayDataLoader(
@@ -183,8 +186,7 @@ class TrainWorker:
     def _build_models(self):
         """Build reference and initial policy models."""
         config = self.config
-        # seed = config.trainer.seed
-        model_key = jrandom.PRNGKey(0)
+        model_key = jrandom.PRNGKey(config.seed)
         Vocab = hax.Axis("vocab", self.tokenizer.vocab_size)
 
         if config.initial_checkpoint is not None:
@@ -207,7 +209,7 @@ class TrainWorker:
         self.reference_model = _load_model()
 
         # Always transfer initial weights to rollout workers
-        self.transfer_server.serve_weights(0, self.reference_model)
+        self.transfer_server.serve_weights(-1, self.reference_model)
 
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
@@ -286,9 +288,6 @@ class TrainWorker:
         }
         trainer.tracker.log(metrics, step=step)
         logger.info(f"Successfully transferred weights with ID {step}")
-        import os
-
-        os._exit(0)
 
     def stop(self):
         """Stop the training worker."""

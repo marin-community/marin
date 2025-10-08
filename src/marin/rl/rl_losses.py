@@ -89,7 +89,6 @@ def rloo_loss_with_importance_sampling(
         key=key,
     )
 
-    # Shift logits and targets to align logprobs correctly
     # logits[i] predicts token at position i+1
     # We want logprob[j] = P(token[j] | tokens[0:j])
     # This comes from logits[j-1] indexed by token[j]
@@ -110,18 +109,21 @@ def rloo_loss_with_importance_sampling(
     reference_logprobs_shifted = reference_log_probs[batch_idx, pos_idx, target_ids_array]  # [batch, seq_len-1]
 
     # Prepend zeros for position 0 (no context to predict from)
-    # Now current_logprobs[j] and policy_logprobs[j] both represent P(token[j] | context before j)
     current_logprobs = jnp.concatenate([jnp.zeros((batch_size, 1)), current_logprobs_shifted], axis=1)
     reference_logprobs_array = jnp.concatenate([jnp.zeros((batch_size, 1)), reference_logprobs_shifted], axis=1)
 
-    jax.debug.print("predicted_logprobs_array {current_logprobs}", current_logprobs=current_logprobs)
-    jax.debug.print(
-        "reference_logprobs_array {reference_logprobs_array}", reference_logprobs_array=reference_logprobs_array
-    )
-    jax.debug.print("policy_logprobs_array {policy_logprobs_array}", policy_logprobs_array=policy_logprobs_array)
+    # jax.debug.print("predicted_logprobs_array {current_logprobs}", current_logprobs=current_logprobs)
+    # jax.debug.print(
+    #     "reference_logprobs_array {reference_logprobs_array}", reference_logprobs_array=reference_logprobs_array
+    # )
+    # jax.debug.print("policy_logprobs_array {policy_logprobs_array}", policy_logprobs_array=policy_logprobs_array)
 
     # importance sampling since we're using off-policy data
     # ratio = π_current(a|s) / π_old(a|s) = log(π_current) - log(π_old)
+    # mask the input tokens to ignore them in the loss
+    current_logprobs = current_logprobs * loss_masks_array
+    reference_logprobs_array = reference_logprobs_array * loss_masks_array
+
     log_ratio = jnp.subtract(current_logprobs, policy_logprobs_array)
     ratio = jnp.exp(log_ratio)
 
@@ -160,9 +162,6 @@ def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     total = rewards.sum()
     leave_one_out_baselines = (total - rewards) / (n - 1)
     advantages = rewards - leave_one_out_baselines
-
-    generator = np.random.default_rng(0)
-    advantages += generator.normal(loc=0.0, scale=1e-6, size=advantages.shape)
     return advantages
 
 

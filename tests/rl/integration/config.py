@@ -163,7 +163,7 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
     return TrainerConfig(
         tracker=JsonLoggerConfig(),
         mp=jmp.get_policy("p=f32"),
-        train_batch_size=1,
+        train_batch_size=16,
         num_train_steps=1000,
         steps_per_eval=1,
         checkpointer=CheckpointerConfig(
@@ -207,7 +207,7 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum"):
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats", "seed": 42},
                 ),
-                sampling_params=SamplingParams(temperature=1.0, n_prompts=1, n_generations_per_prompt=1, max_tokens=32),
+                sampling_params=SamplingParams(temperature=1.0, n_prompts=4, n_generations_per_prompt=4, max_tokens=32),
             )
         },
         eval_frequency=100,
@@ -237,6 +237,7 @@ def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, outpu
         ),
         loss=RLOOLoss(kl_coef=0.0, clip_epsilon=5.0),
         initial_checkpoint=None,
+        seed=42,
     )
 
 
@@ -269,6 +270,7 @@ def create_nano_rollout_worker_config(output_dir: str, rollout_storage: RolloutS
         max_rollouts=1000,
         weight_transfer=create_weight_transfer_config(),
         initial_checkpoint=None,
+        seed=1042,
     )
 
 

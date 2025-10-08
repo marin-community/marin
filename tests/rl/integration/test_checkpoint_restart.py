@@ -60,6 +60,7 @@ def test_train_worker_checkpoint_restart(ray_tpu_cluster, tmp_path):
         tokenizer=DummyTokenizer(),
         rollout_storage=rollout_storage_config,
         run_id="test-0",
+        seed=42,
     )
 
     job = RLJob(job_config)
@@ -113,6 +114,7 @@ def test_train_worker_checkpoint_restart(ray_tpu_cluster, tmp_path):
         tokenizer=DummyTokenizer(),
         rollout_storage=rollout_storage_config,
         run_id="test-0",
+        seed=42,
     )
 
     job2 = RLJob(job_config2)

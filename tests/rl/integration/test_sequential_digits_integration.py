@@ -93,6 +93,7 @@ def test_train_worker_with_sequential_digits(ray_tpu_cluster, tmp_path):
         curriculum=curriculum_config,
         tokenizer=tokenizer,
         rollout_storage=rollout_storage_config,
+        seed=42,
     )
 
     job = RLJob(job_config)
@@ -168,6 +169,7 @@ def test_full_integration_sequential_digits(ray_tpu_cluster, tmp_path):
         curriculum=curriculum_config,
         tokenizer=DummyTokenizer(),
         rollout_storage=rollout_storage_config,
+        seed=42,
     )
 
     job = RLJob(job_config)
