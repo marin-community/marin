@@ -55,7 +55,7 @@ def rloo_loss_with_importance_sampling(
     key: jax.Array | None,
     kl_coef: float,
     clip_epsilon: float,
-) -> jax.Array:
+) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Compute RLOO (Reward Leave-One-Out) loss with importance sampling for off-policy data.
 
     Args:
@@ -99,6 +99,15 @@ def rloo_loss_with_importance_sampling(
 
     current_logprobs = -token_loss
 
+    # Compute importance sampling ratios with shifted policy logprobs
+    # shift +1: compare current[i] with old[i+1]
+    log_ratio_shift_plus1 = current_logprobs[..., :-1] - policy_logprobs_array[..., 1:]
+    ratio_shift_plus1 = jnp.exp(log_ratio_shift_plus1)
+
+    # shift -1: compare current[i] with old[i-1]
+    log_ratio_shift_minus1 = current_logprobs[..., 1:] - policy_logprobs_array[..., :-1]
+    ratio_shift_minus1 = jnp.exp(log_ratio_shift_minus1)
+
     # importance sampling since we're using off-policy data
     # ratio = π_current(a|s) / π_old(a|s) = log(π_current) - log(π_old)
     log_ratio = jnp.subtract(current_logprobs, policy_logprobs_array)
@@ -106,19 +115,29 @@ def rloo_loss_with_importance_sampling(
 
     # N.B. This should be enabled, but we seem to be training far enough
     # off of policy that we're not learning anything when we clip.
-    ratio = jnp.clip(ratio, min=1.0 - clip_epsilon, max=1.0 + clip_epsilon)
+    clipped_ratio = jnp.clip(ratio, min=1.0 - clip_epsilon, max=1.0 + clip_epsilon)
 
     # RLOO loss with importance sampling
     # batch["loss_weights"] contains RLOO advantages: r_i - mean(r_j for j≠i)
-    weighted_loss = -ratio * loss_weights_array * loss_masks_array
+    weighted_loss = -clipped_ratio * loss_weights_array * loss_masks_array
     reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)
 
     # KL regularization
-    kl_penalty = current_logprobs - reference_logprobs_array
+    log_ratio = current_logprobs - reference_logprobs_array
+    # https://github.com/openai/lm-human-preferences/blob/cbfd210bb8b08f6bc5c26878c10984b90f516c66/lm_human_preferences/train_policy.py#L151
+    kl_penalty = log_ratio**2
     kl_loss = kl_coef * jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
 
     loss = reinforce_loss + kl_loss
-    return loss
+    return loss, {
+        "ratio_mean": jnp.mean(ratio),
+        "clipped_ratio_mean": jnp.mean(clipped_ratio),
+        "ratio_shift_plus1_mean": jnp.mean(ratio_shift_plus1),
+        "ratio_shift_minus1_mean": jnp.mean(ratio_shift_minus1),
+        "reinforce_loss": reinforce_loss,
+        "kl_loss": kl_loss,
+        "kl_penalty": jnp.mean(kl_penalty),
+    }
 
 
 def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
