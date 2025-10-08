@@ -903,7 +903,7 @@ class TrainerConfig:
             logger.info(f"At end of run, shutting down TPU VM in {self.shutdown_at_exit} seconds")
             atexit.register(cloud_utils.shutdown_tpu_vm, self.shutdown_at_exit)
 
-    @cached_property
+    @property
     def device_mesh(self) -> Mesh:
         return create_fsdp_mesh(
             self.replica_ici_axis_size,
@@ -939,7 +939,10 @@ class TrainerConfig:
     @property
     def data_ici_axis_size(self):
         """size of the FSDP axis within slices"""
-        assert self.num_devices_per_slice % (self.replica_ici_axis_size * self.model_axis_size) == 0
+        assert self.num_devices_per_slice % (self.replica_ici_axis_size * self.model_axis_size) == 0, (
+            f"num_devices_per_slice ({self.num_devices_per_slice}) must be divisible by "
+            f"replica_ici_axis_size ({self.replica_ici_axis_size}) * model_axis_size ({self.model_axis_size})"
+        )
         return self.num_devices_per_slice // (self.replica_ici_axis_size * self.model_axis_size)
 
     @property
