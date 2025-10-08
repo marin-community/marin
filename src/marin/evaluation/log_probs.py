@@ -34,6 +34,10 @@ from marin.evaluation.utils import download_from_gcs, is_remote_path, discover_l
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 from marin.resources import ResourceConfig
+from marin.download.huggingface.download import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf
+# from marin.post_training.scripts.hf_to_gcs import download_hf_model
+
 
 HUGGINGFACE_CACHE_PATH = "/tmp/huggingface-cache"
 
@@ -122,15 +126,28 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
         # empty shm
         shutil.rmtree("/dev/shm", ignore_errors=True)
         if config.hf_checkpoint:
-            # if config.hf_checkpoint and is_remote_path(config.hf_checkpoint):
-            local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.hf_checkpoint))
-            # if not os.path.exists(local_path):
-            download_from_gcs(
-                gcs_path=config.hf_checkpoint,
-                destination_path=local_path,
-            )
+        # if config.hf_checkpoint and is_remote_path(config.hf_checkpoint):
+            if "@" in config.hf_checkpoint:
+                hf_repo_id, hf_revision = config.hf_checkpoint.split("@")
+            else:
+                hf_repo_id = config.hf_checkpoint
+                hf_revision = "main"
+            local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(hf_repo_id))
+            if not os.path.exists(local_path):
+                os.makedirs(local_path, exist_ok=True)
+                if is_remote_path(config.hf_checkpoint):
+                    download_from_gcs(
+                        gcs_path=config.hf_checkpoint,
+                        destination_path=local_path,
+                    )
+                else:
+                    
+                    download_hf(DownloadConfig(hf_dataset_id=hf_repo_id, revision=hf_revision, hf_repo_type_prefix="", gcs_output_path=local_path))
             config.hf_checkpoint = local_path
             print(f"Downloaded model checkpoint to {local_path}: {os.listdir(local_path)}")
+        # elif config.hf_checkpoint:
+        #     hf_repo_id, hf_revision = config.hf_checkpoint.split("@")
+        #     download_hf(DownloadConfig(hf_dataset_id=hf_repo_id, revision=hf_revision, gcs_output_path=local_path))
         elif config.checkpoint_path and is_remote_path(config.checkpoint_path):
             local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.checkpoint_path))
             download_from_gcs(

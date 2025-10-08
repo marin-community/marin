@@ -115,12 +115,12 @@ llama_3_1_8b_instruct = download_model_step(
     )
 )
 
-llama_3_1_8b = download_model_step(
-    ModelConfig(
-        hf_repo_id="meta-llama/Llama-3.1-8B",
-        hf_revision="d04e592",
-    )
+llama_3_1_8b_config = ModelConfig(
+    hf_repo_id="meta-llama/Llama-3.1-8B",
+    hf_revision="d04e592",
 )
+
+llama_3_1_8b = download_model_step(llama_3_1_8b_config)
 
 tulu_3_1_8b_sft = download_model_step(
     ModelConfig(
@@ -143,19 +143,19 @@ olmo_2_sft_8b = download_model_step(
     )
 )
 
-olmo_2_base_8b = download_model_step(
-    ModelConfig(
-        hf_repo_id="allenai/OLMo-2-1124-7B",
-        hf_revision="7df9a82",
-    )
+olmo_2_base_8b_config = ModelConfig(
+    hf_repo_id="allenai/OLMo-2-1124-7B",
+    hf_revision="7df9a82",
 )
 
-olmo_2_base_32b = download_model_step(
-    ModelConfig(
-        hf_repo_id="allenai/OLMo-2-0325-32B",
-        hf_revision="stage2-ingredient2-step9000-tokens76B",
-    )
+olmo_2_base_8b = download_model_step(olmo_2_base_8b_config)
+
+olmo_2_base_32b_config = ModelConfig(
+    hf_repo_id="allenai/OLMo-2-0325-32B",
+    hf_revision="stage2-ingredient2-step9000-tokens76B",
 )
+
+olmo_2_base_32b = download_model_step(olmo_2_base_32b_config)
 
 amber_base_7b = download_model_step(
     ModelConfig(
@@ -172,79 +172,79 @@ map_neo_7b = download_model_step(
 )
 
 
-marin_8b_base = download_model_step(
-    ModelConfig(
-        hf_repo_id="marin-community/marin-8b-base",
-        hf_revision="0f1f658",
-    )
+marin_8b_base_config = ModelConfig(
+    hf_repo_id="marin-community/marin-8b-base",
+    hf_revision="0f1f658",
 )
 
-llama_3_2_1b = download_model_step(
-    ModelConfig(
-        hf_repo_id="meta-llama/Llama-3.2-1B",
-        hf_revision="4e20de3",
-    )
+marin_8b_base = download_model_step(marin_8b_base_config)
+
+llama_3_2_1b_config = ModelConfig(
+    hf_repo_id="meta-llama/Llama-3.2-1B",
+    hf_revision="4e20de3",
 )
 
-qwen3_0_6b = download_model_step(
-    ModelConfig(
-        hf_repo_id="Qwen/Qwen3-0.6B",
-        hf_revision="c1899de",
-    )
+llama_3_2_1b = download_model_step(llama_3_2_1b_config)
+
+qwen3_0_6b_config = ModelConfig(
+    hf_repo_id="Qwen/Qwen3-0.6B",
+    hf_revision="c1899de",
 )
 
-qwen3_1_7b = download_model_step(
-    ModelConfig(
-        hf_repo_id="Qwen/Qwen3-1.7B",
-        hf_revision="70d244c",
-    )
+qwen3_0_6b = download_model_step(qwen3_0_6b_config)
+
+qwen3_1_7b_config = ModelConfig(
+    hf_repo_id="Qwen/Qwen3-1.7B",
+    hf_revision="70d244c",
 )
 
-qwen3_4b = download_model_step(
-    ModelConfig(
-        hf_repo_id="Qwen/Qwen3-4B",
-        hf_revision="1cfa9a7",
-    )
+qwen3_1_7b = download_model_step(qwen3_1_7b_config)
+
+qwen3_4b_config = ModelConfig(
+    hf_repo_id="Qwen/Qwen3-4B",
+    hf_revision="1cfa9a7",
 )
 
-qwen3_8b = download_model_step(
-    ModelConfig(
-        hf_repo_id="Qwen/Qwen3-8B",
-        hf_revision="b968826",
-    )
+qwen3_4b = download_model_step(qwen3_4b_config)
+
+qwen3_8b_config = ModelConfig(
+    hf_repo_id="Qwen/Qwen3-8B",
+    hf_revision="b968826",
 )
 
-qwen3_32b = download_model_step(
-    ModelConfig(
-        hf_repo_id="Qwen/Qwen3-32B",
-        hf_revision="9216db5",
-    )
+qwen3_8b = download_model_step(qwen3_8b_config)
+
+qwen3_32b_config = ModelConfig(
+    hf_repo_id="Qwen/Qwen3-32B",
+    hf_revision="9216db5",
 )
 
-qwen3_0_6b_base = download_model_step(
-    ModelConfig(
-        hf_repo_id="Qwen/Qwen3-0.6B-Base",
-        hf_revision="da87bfb",
-    )
+qwen3_32b = download_model_step(qwen3_32b_config)
+
+qwen3_0_6b_base_config = ModelConfig(
+    hf_repo_id="Qwen/Qwen3-0.6B-Base",
+    hf_revision="da87bfb",
 )
 
-qwen3_1_7b_base = download_model_step(
-    ModelConfig(
-        hf_repo_id="Qwen/Qwen3-1.7B-Base",
-        hf_revision="ea980cb",
-    )
+qwen3_0_6b_base = download_model_step(qwen3_0_6b_base_config)
+
+qwen3_1_7b_base_config = ModelConfig(
+    hf_repo_id="Qwen/Qwen3-1.7B-Base",
+    hf_revision="ea980cb",
 )
 
-qwen3_4b_base = download_model_step(
-    ModelConfig(
-        hf_repo_id="Qwen/Qwen3-4B-Base",
-        hf_revision="906bfd4",
-    )
+qwen3_1_7b_base = download_model_step(qwen3_1_7b_base_config)
+
+qwen3_4b_base_config = ModelConfig(
+    hf_repo_id="Qwen/Qwen3-4B-Base",
+    hf_revision="906bfd4",
 )
 
-qwen3_8b_base = download_model_step(
-    ModelConfig(
-        hf_repo_id="Qwen/Qwen3-8B-Base",
-        hf_revision="49e3418",
-    )
+qwen3_4b_base = download_model_step(qwen3_4b_base_config)
+
+qwen3_8b_base_config = ModelConfig(
+    hf_repo_id="Qwen/Qwen3-8B-Base",
+    hf_revision="49e3418",
 )
+
+qwen3_8b_base = download_model_step(qwen3_8b_base_config)
