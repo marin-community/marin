@@ -22,8 +22,8 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmHeadModel
-from optax import softmax_cross_entropy_with_integer_labels
 
 from marin.rl.types import Rollout, TrainingBatch
 
@@ -68,45 +68,48 @@ def rloo_loss_with_importance_sampling(
     Returns:
         Tuple of (loss, aux_metrics)
     """
-    target_ids_array = batch.target_ids.array
     policy_logprobs_array = batch.policy_logprobs.array
     loss_weights_array = batch.loss_weights.array
     loss_masks_array = batch.loss_masks.array
 
+    # Derive target_ids from shifted input_ids (next-token prediction)
+    batch_size, seq_len = batch.input_ids.array.shape
+    target_ids_array = jnp.concatenate(
+        [batch.input_ids.array[:, 1:], jnp.zeros((batch_size, 1), dtype=jnp.int32)],  # Padding for last position
+        axis=1,
+    )
+
     # Get logits from current policy
     model_output = model(
         input_ids=batch.input_ids,
-        attn_mask=batch.attention_mask,
+        attn_mask=AttentionMask.causal(),
         pos_ids=batch.position_ids,
         key=key,
     )
 
     reference_output = reference_model(
         input_ids=batch.input_ids,
-        attn_mask=batch.attention_mask,
+        attn_mask=AttentionMask.causal(),
         pos_ids=batch.position_ids,
         key=key,
     )
 
-    reference_logits = reference_output.array
-    reference_logits_array = reference_logits.astype(jnp.float32)
-    reference_logprobs_array = -softmax_cross_entropy_with_integer_labels(reference_logits_array, target_ids_array)
+    # Compute logprobs manually using log_softmax
+    logits_array = model_output.array.astype(jnp.float32)
+    log_probs = jax.nn.log_softmax(logits_array, axis=-1)  # [batch, position, vocab]
+    batch_idx = jnp.arange(batch_size)[:, None]
+    pos_idx = jnp.arange(seq_len)
+    current_logprobs = log_probs[batch_idx, pos_idx, target_ids_array]  # [batch, position]
 
-    logits = model_output
-    logits_array = logits.array
-    logits_array = logits_array.astype(jnp.float32)
-    token_loss = softmax_cross_entropy_with_integer_labels(logits_array, target_ids_array)
+    reference_logits_array = reference_output.array.astype(jnp.float32)
+    reference_log_probs = jax.nn.log_softmax(reference_logits_array, axis=-1)
+    reference_logprobs_array = reference_log_probs[batch_idx, pos_idx, target_ids_array]
 
-    current_logprobs = -token_loss
-
-    # Compute importance sampling ratios with shifted policy logprobs
-    # shift +1: compare current[i] with old[i+1]
-    log_ratio_shift_plus1 = current_logprobs[..., :-1] - policy_logprobs_array[..., 1:]
-    ratio_shift_plus1 = jnp.exp(log_ratio_shift_plus1)
-
-    # shift -1: compare current[i] with old[i-1]
-    log_ratio_shift_minus1 = current_logprobs[..., 1:] - policy_logprobs_array[..., :-1]
-    ratio_shift_minus1 = jnp.exp(log_ratio_shift_minus1)
+    jax.debug.print("predicted_logprobs_array {current_logprobs}", current_logprobs=current_logprobs)
+    jax.debug.print(
+        "reference_logprobs_array {reference_logprobs_array}", reference_logprobs_array=reference_logprobs_array
+    )
+    jax.debug.print("policy_logprobs_array {policy_logprobs_array}", policy_logprobs_array=policy_logprobs_array)
 
     # importance sampling since we're using off-policy data
     # ratio = π_current(a|s) / π_old(a|s) = log(π_current) - log(π_old)
@@ -132,8 +135,6 @@ def rloo_loss_with_importance_sampling(
     return loss, {
         "ratio_mean": jnp.mean(ratio),
         "clipped_ratio_mean": jnp.mean(clipped_ratio),
-        "ratio_shift_plus1_mean": jnp.mean(ratio_shift_plus1),
-        "ratio_shift_minus1_mean": jnp.mean(ratio_shift_minus1),
         "reinforce_loss": reinforce_loss,
         "kl_loss": kl_loss,
         "kl_penalty": jnp.mean(kl_penalty),
@@ -151,7 +152,7 @@ def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     leave_one_out_baselines = (total - rewards) / (n - 1)
     advantages = rewards - leave_one_out_baselines
 
-    generator = np.random.default_rng()
+    generator = np.random.default_rng(0)
     advantages += generator.normal(loc=0.0, scale=1e-6, size=advantages.shape)
     return advantages
 

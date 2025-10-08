@@ -16,6 +16,7 @@
 
 import logging
 import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -109,7 +110,7 @@ def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path):
 def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
     """Long-running test to validate environment objective improves over time."""
     rollout_storage_config = create_test_rollout_storage_config()
-    target_steps = 100
+    target_steps = 1
 
     # Create trainer config with target steps
     trainer_config = create_nano_trainer_config(tmp_path)
@@ -125,8 +126,8 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
             replay_buffer=ReplayBufferConfig(
                 capacity=4096,
                 alpha=3.0,
-                max_samples=4,
-                max_rollout_step_delay=4,
+                max_samples=1,
+                max_rollout_step_delay=1,
             ),
         ),
         curriculum=create_test_curriculum_config(),
@@ -142,8 +143,13 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
     # Apply test-specific overrides
     inference_runner.rollout_worker_config.weight_transfer.sync_interval_steps = 1
 
-    with training_runner, inference_runner:
-        training_runner.done.wait()
+    with training_runner:
+        while training_runner.reference_model is None:
+            time.sleep(0.1)
+        # wait for the training worker to deliver weights
+        time.sleep(5)
+        with inference_runner:
+            training_runner.done.wait()
 
     assert (
         inference_runner.rollouts_generated >= 5

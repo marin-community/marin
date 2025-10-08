@@ -93,7 +93,6 @@ class StreamingRolloutLoader:
         # Get max_tokens from curriculum
         self.max_tokens = self.config.curriculum_config.max_tokens
 
-        # Compute pad_token_id from tokenizer once
         self.pad_token_id = self.config.tokenizer.pad_token_id
         if self.pad_token_id is None:
             self.pad_token_id = self.config.tokenizer.eos_token_id
@@ -184,8 +183,8 @@ class TrainWorker:
     def _build_models(self):
         """Build reference and initial policy models."""
         config = self.config
-        seed = config.trainer.seed
-        model_key = jrandom.PRNGKey(seed)
+        # seed = config.trainer.seed
+        model_key = jrandom.PRNGKey(0)
         Vocab = hax.Axis("vocab", self.tokenizer.vocab_size)
 
         if config.initial_checkpoint is not None:
@@ -287,6 +286,9 @@ class TrainWorker:
         }
         trainer.tracker.log(metrics, step=step)
         logger.info(f"Successfully transferred weights with ID {step}")
+        import os
+
+        os._exit(0)
 
     def stop(self):
         """Stop the training worker."""

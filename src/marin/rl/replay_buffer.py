@@ -93,7 +93,7 @@ class ReplayBuffer:
     rollout_storage: dict[str, list[RolloutWithCount]] = dataclasses.field(default_factory=dict)
 
     def __post_init__(self):
-        self._rng = np.random.default_rng(seed=self.process_id + 42)
+        self._rng = np.random.default_rng(seed=0)
 
     @classmethod
     def from_config(

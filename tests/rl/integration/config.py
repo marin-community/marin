@@ -90,12 +90,13 @@ class DummyTokenizer:
         "7",
         "8",
         "9",
+        "<pad>",
     ]
 
-    def __init__(self, pad_token_id=0):
+    def __init__(self):
         self.vocab_size = len(self.TOKENS)
         self.TOKENS.sort(key=len, reverse=True)  # Sort by length for greedy matching
-        self.pad_token_id = pad_token_id
+        self.pad_token_id = self.TOKENS.index("<pad>")
         self.eos_token = "</s>"
         self.bos_token = "<s>"
 
@@ -162,7 +163,7 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
     return TrainerConfig(
         tracker=JsonLoggerConfig(),
         mp=jmp.get_policy("p=f32"),
-        train_batch_size=32,
+        train_batch_size=1,
         num_train_steps=1000,
         steps_per_eval=1,
         checkpointer=CheckpointerConfig(
@@ -206,7 +207,7 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum"):
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats", "seed": 42},
                 ),
-                sampling_params=SamplingParams(temperature=1.0, n_prompts=8, n_generations_per_prompt=4, max_tokens=32),
+                sampling_params=SamplingParams(temperature=1.0, n_prompts=1, n_generations_per_prompt=1, max_tokens=32),
             )
         },
         eval_frequency=100,

@@ -72,7 +72,10 @@ def load_model_from_checkpoint(
     """
     if checkpoint is None:
         # Build new model from scratch
-        return model_config.build(vocab_axis, key=key)
+        model = model_config.build(vocab_axis, key=jax.random.PRNGKey(0))
+        # log the model weight statistics via pytree
+        jax.tree.map(lambda x: logger.info(f"Model weight stats: {x.shape} {x.dtype} {x.mean()} {x.std()}"), model)
+        return model
 
     mp = trainer_config.mp
 

@@ -32,13 +32,13 @@ logger = logging.getLogger(__name__)
 
 def trim_and_pad(ary: np.ndarray, max_seq_len: int, pad_token_id: int) -> np.ndarray:
     """Trim and pad array to max sequence length."""
-    ary = ary[:max_seq_len]
-    ary = np.pad(
-        ary,
-        (0, max_seq_len - len(ary)),
-        mode="constant",
-        constant_values=pad_token_id if ary.dtype == np.int32 else 0,
-    )
+    # ary = ary[:max_seq_len]
+    # ary = np.pad(
+    #     ary,
+    #     (0, max_seq_len - len(ary)),
+    #     mode="constant",
+    #     constant_values=pad_token_id if ary.dtype == np.int32 else 0,
+    # )
     return ary
 
 
@@ -54,20 +54,14 @@ def convert_rollout_to_training_format(rollout: Rollout, advantage: float, max_t
     Returns:
         Dictionary containing training-ready arrays for the rollout
     """
-    full_tokens = np.concatenate([rollout.prompt_tokens, rollout.response_tokens])
-    full_mask = np.ones(len(full_tokens), dtype=np.int32)
-    full_position_ids = np.maximum(np.cumsum(full_mask) - 1, 0).astype(np.int32)
-
-    # Shifted for next-token prediction
-    input_tokens = full_tokens[:-1]
-    input_attention_mask = full_mask[:-1]
-    target_tokens = full_tokens[1:]
-    position_ids = full_position_ids[:-1]
+    input_tokens = np.concatenate([rollout.prompt_tokens, rollout.response_tokens])
+    input_attention_mask = np.ones(len(input_tokens), dtype=np.int32)
+    position_ids = np.arange(len(input_tokens), dtype=np.int32)
 
     # Loss mask (only on response tokens)
     loss_mask = np.concatenate(
         [
-            np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
+            np.zeros(len(rollout.prompt_tokens), dtype=np.float32),
             np.ones(len(rollout.response_tokens), dtype=np.float32),
         ]
     )
@@ -75,27 +69,41 @@ def convert_rollout_to_training_format(rollout: Rollout, advantage: float, max_t
     # Loss weights (advantage for all response tokens)
     loss_weight = np.concatenate(
         [
-            np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32),
+            np.zeros(len(rollout.prompt_tokens), dtype=np.float32),
             np.full(len(rollout.response_tokens), advantage, dtype=np.float32),
         ]
     )
 
     policy_logprob = np.concatenate(
-        [np.zeros(len(rollout.prompt_tokens) - 1, dtype=np.float32), rollout.response_logprobs.astype(np.float32)]
+        [np.zeros(len(rollout.prompt_tokens), dtype=np.float32), rollout.response_logprobs.astype(np.float32)]
     )
 
     max_seq_len = max_tokens
 
-    return {
-        "input_ids": trim_and_pad(input_tokens, max_seq_len, pad_token_id),
-        "attention_mask": trim_and_pad(input_attention_mask, max_seq_len, pad_token_id),
-        "position_ids": trim_and_pad(position_ids, max_seq_len, pad_token_id),
-        "target_ids": trim_and_pad(target_tokens, max_seq_len, pad_token_id),
-        "loss_weights": trim_and_pad(loss_weight, max_seq_len, pad_token_id),
-        "loss_masks": trim_and_pad(loss_mask, max_seq_len, pad_token_id),
-        "policy_logprobs": trim_and_pad(policy_logprob, max_seq_len, pad_token_id),
-    }
+    input_ids = trim_and_pad(input_tokens, max_seq_len, pad_token_id)
+    input_attention_mask = trim_and_pad(input_attention_mask, max_seq_len, pad_token_id)
+    position_ids = trim_and_pad(position_ids, max_seq_len, pad_token_id)
+    loss_weight = trim_and_pad(loss_weight, max_seq_len, pad_token_id)
+    loss_mask = trim_and_pad(loss_mask, max_seq_len, pad_token_id)
+    policy_logprob = trim_and_pad(policy_logprob, max_seq_len, pad_token_id)
 
+    logger.info("Prompt tokens length: %d", len(rollout.prompt_tokens))
+    logger.info("Response tokens length: %d", len(rollout.response_tokens))
+    logger.info("Total tokens length: %d", len(rollout.prompt_tokens) + len(rollout.response_tokens))
+    logger.info("Position id: %s", position_ids)
+    logger.info("Attention mask: %s", input_attention_mask)
+    logger.info("Input tokens: %s", input_tokens)
+    logger.info("Policy logprobs: %s", policy_logprob)
+    logger.info("Loss mask: %s", loss_mask)
+
+    return {
+        "input_ids": input_ids,
+        "attention_mask": input_attention_mask,
+        "position_ids": position_ids,
+        "loss_weights": loss_weight,
+        "loss_masks": loss_mask,
+        "policy_logprobs": policy_logprob,
+    }
 
 def create_training_batch_from_rollouts(
     individual_rollouts: list[RolloutWithAdvantage], max_tokens: int, pad_token_id: int
@@ -137,7 +145,6 @@ def create_training_batch_from_rollouts(
         input_ids=hax.named(stacked["input_ids"], ["batch", "position"]),
         attention_mask=hax.named(stacked["attention_mask"], ["batch", "position"]),
         position_ids=hax.named(stacked["position_ids"], ["batch", "position"]),
-        target_ids=hax.named(stacked["target_ids"], ["batch", "position"]),
         loss_weights=hax.named(stacked["loss_weights"], ["batch", "position"]),
         loss_masks=hax.named(stacked["loss_masks"], ["batch", "position"]),
         policy_logprobs=hax.named(stacked["policy_logprobs"], ["batch", "position"]),
