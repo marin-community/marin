@@ -167,16 +167,28 @@ class LevanterInferenceContext(InferenceContext):
                         content = choice.message.content
                         tokens: list[int] = []
                         logprobs: list[float] = []
+                        bpe_strings_received = []
                         for t in choice.logprobs.content:
                             # Use convert_tokens_to_ids to correctly round-trip BPE tokens
                             # The server uses convert_ids_to_tokens which preserves BPE format (e.g., Ġ for spaces)
-                            token_id = self.tokenizer.convert_tokens_to_ids(t.token)
+                            bpe_str = t.token
+                            bpe_strings_received.append(bpe_str)
+                            token_id = self.tokenizer.convert_tokens_to_ids(bpe_str)
                             tokens.append(token_id)
                             logprobs.append(t.logprob)
                         logprobs = np.array(logprobs, dtype=np.float32)
                         if np.all(logprobs == 0):
                             logger.warning(
                                 f"All logprobs zero for {prompt}, choice: {choice}. This can result in NaN loss."
+                            )
+                        decoded = self.tokenizer.decode(tokens)
+                        if decoded != content:
+                            logger.error(
+                                f"Token reconstruction mismatch!\n"
+                                f"  Server content: {content}\n"
+                                f"  Client decoded: {decoded}\n"
+                                f"  BPE strings: {bpe_strings_received[:10]}...\n"
+                                f"  Token IDs: {tokens[:10]}..."
                             )
                         choices.append(
                             InferenceChoice(

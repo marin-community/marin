@@ -33,7 +33,7 @@ from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import TrainerConfig
 from ray.runtime_env import RuntimeEnv
-from transformers import AutoTokenizer, PreTrainedTokenizer
+from transformers import PreTrainedTokenizer
 
 from marin.resources import TpuPodConfig
 from marin.rl.curriculum import CurriculumConfig, SamplingParams
@@ -90,12 +90,6 @@ class TrainParams:
             max_rollout_timestamp_delay=3600.0,
         )
     )
-
-
-def make_tokenizer(tokenizer: str | PreTrainedTokenizer) -> PreTrainedTokenizer:
-    if isinstance(tokenizer, str):
-        return AutoTokenizer.from_pretrained(tokenizer)
-    return tokenizer
 
 
 @dataclass
@@ -227,9 +221,6 @@ class RLJob:
         Returns:
             Tuple of (TrainWorkerConfig, RolloutWorkerConfig)
         """
-        # Create tokenizer
-        tokenizer = make_tokenizer(self.config.tokenizer)
-
         # Scan over sampling params for max seqs, must be able to fit a single lesson prompt
         max_seqs = 0
         for lesson in self.config.curriculum.lessons.values():
@@ -238,6 +229,8 @@ class RLJob:
 
         max_tokens = self.config.curriculum.max_tokens
         assert max_tokens > 0, "Max tokens must be positive across curriculum lessons."
+
+        tokenizer = self.config.tokenizer
 
         # Create inference server config if not provided
         if self.config.inference_server_config is None:
@@ -249,10 +242,15 @@ class RLJob:
                 tokenizer=tokenizer,
                 temperature=self.config.eval_sampling_params.temperature,
                 service=InferenceEngineConfig(
-                    max_seqs=max_seqs,
+                    max_seqs=64,
                     page_size=128,
-                    max_pages_per_seq=1 + max_tokens // 128,
+                    max_pages_per_seq=16,
                     enable_logprobs=True,
+                    max_queued_tokens=256,
+                    max_seqs_in_prefill=64,
+                    max_prefill_size=64,
+                    max_tokens_per_round=16,
+                    max_rounds=8,
                 ),
                 port=0,
             )

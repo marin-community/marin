@@ -58,7 +58,7 @@ class TrainWorkerConfig:
     weight_transfer: WeightTransferConfig
     curriculum_config: CurriculumConfig
     loss: RLLossModule
-    tokenizer: PreTrainedTokenizer
+    tokenizer: str | PreTrainedTokenizer
     run_id: str
 
     initial_checkpoint: str | None = None
@@ -144,7 +144,15 @@ class TrainWorker:
         levanter.initialize(config.trainer)
         self.config = config
         self._should_stop = False
-        self.tokenizer = config.tokenizer
+
+        # Load tokenizer if string path provided, otherwise use the object directly
+        if isinstance(config.tokenizer, str):
+            from transformers import AutoTokenizer
+
+            self.tokenizer = AutoTokenizer.from_pretrained(config.tokenizer)
+        else:
+            self.tokenizer = config.tokenizer
+
         self.loss_module = config.loss
 
         self.rollout_reader = config.rollout_storage.create_reader()

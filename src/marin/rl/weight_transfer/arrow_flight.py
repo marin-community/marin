@@ -512,7 +512,10 @@ class ArrowFlightClient(WeightTransferClient):
             start_time = time.time()
 
             # Fetch server info from coordinator
-            server_info = self._coordinator.fetch_server.call()
+            try:
+                server_info = self._coordinator.fetch_server.call()
+            except Exception as e:
+                logger.warning(f"Failed to fetch server info from coordinator {e}")
 
             if not server_info:
                 logger.info("No Arrow Flight server info available from coordinator.")
