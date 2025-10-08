@@ -48,7 +48,7 @@ def create_test_rollout(
 def test_trim_exact_length_no_change():
     """Test that array of exact length is unchanged."""
     ary = np.array([1, 2, 3, 4, 5], dtype=np.int32)
-    result = train_batch.trim_and_pad(ary, max_seq_len=5, pad_token_id=999)
+    result = train_batch.trim_and_pad(ary, max_seq_len=5, padding_value=999)
 
     np.testing.assert_array_equal(result, ary)
 
@@ -56,7 +56,7 @@ def test_trim_exact_length_no_change():
 def test_float_array_padding():
     """Test padding behavior with float arrays."""
     ary = np.array([1.0, 2.0], dtype=np.float32)
-    result = train_batch.trim_and_pad(ary, max_seq_len=4, pad_token_id=999)
+    result = train_batch.trim_and_pad(ary, max_seq_len=4, padding_value=999)
 
     expected = np.array([1.0, 2.0, 0.0, 0.0], dtype=np.float32)  # Float arrays pad with 0
     np.testing.assert_array_equal(result, expected)

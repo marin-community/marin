@@ -30,15 +30,10 @@ from .types import Rollout, RolloutWithAdvantage, TrainingBatch
 logger = logging.getLogger(__name__)
 
 
-def trim_and_pad(ary: np.ndarray, max_seq_len: int, pad_token_id: int) -> np.ndarray:
+def trim_and_pad(ary: np.ndarray, max_seq_len: int, padding_value: int | float) -> np.ndarray:
     """Trim and pad array to max sequence length."""
     ary = ary[:max_seq_len]
-    ary = np.pad(
-        ary,
-        (0, max_seq_len - len(ary)),
-        mode="constant",
-        constant_values=pad_token_id if ary.dtype == np.int32 else 0,
-    )
+    ary = np.pad(ary, (0, max_seq_len - len(ary)), mode="constant", constant_values=padding_value)
     return ary
 
 
@@ -79,19 +74,11 @@ def convert_rollout_to_training_format(rollout: Rollout, advantage: float, max_t
 
     max_seq_len = max_tokens
 
-    input_ids = trim_and_pad(input_tokens, max_seq_len, pad_token_id)
-    position_ids = trim_and_pad(position_ids, max_seq_len, pad_token_id)
-    loss_weight = trim_and_pad(loss_weight, max_seq_len, pad_token_id)
-    loss_mask = trim_and_pad(loss_mask, max_seq_len, pad_token_id)
-    policy_logprob = trim_and_pad(policy_logprob, max_seq_len, pad_token_id)
-
-    logger.info("Prompt tokens length: %d", len(rollout.prompt_tokens))
-    logger.info("Response tokens length: %d", len(rollout.response_tokens))
-    logger.info("Total tokens length: %d", len(rollout.prompt_tokens) + len(rollout.response_tokens))
-    logger.info("Position id: %s", position_ids)
-    logger.info("Input tokens: %s", input_tokens)
-    logger.info("Policy logprobs: %s", policy_logprob)
-    logger.info("Loss mask: %s", loss_mask)
+    input_ids = trim_and_pad(input_tokens, max_seq_len, padding_value=pad_token_id)
+    position_ids = trim_and_pad(position_ids, max_seq_len, padding_value=0)
+    loss_weight = trim_and_pad(loss_weight, max_seq_len, padding_value=0)
+    loss_mask = trim_and_pad(loss_mask, max_seq_len, padding_value=0)
+    policy_logprob = trim_and_pad(policy_logprob, max_seq_len, padding_value=0)
 
     return {
         "input_ids": input_ids,
