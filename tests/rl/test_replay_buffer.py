@@ -112,11 +112,11 @@ def test_replay_buffer():
         local_batch_size=4,
         alpha=3.0,
         total_processes=1,
-        process_id=0,
         max_samples=-1,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
         loss_module=RLOOLoss(),
+        seed=42,
     )
 
     # Add batches to replay buffer
@@ -163,11 +163,11 @@ def test_replay_buffer_recency_bias():
         local_batch_size=50,
         alpha=10.0,
         total_processes=1,
-        process_id=0,
         max_samples=-1,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
         loss_module=RLOOLoss(),
+        seed=42,
     )
     replay_buffer.add_batches(batches)
 
@@ -198,11 +198,11 @@ def test_replay_buffer_capacity_eviction():
         local_batch_size=4,
         alpha=2.0,
         total_processes=1,
-        process_id=0,
         max_samples=-1,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
         loss_module=RLOOLoss(),
+        seed=42,
     )
 
     for i in range(5):
@@ -225,11 +225,11 @@ def test_replay_buffer_max_resamples():
         local_batch_size=2,
         alpha=1.0,
         total_processes=1,
-        process_id=0,
         max_samples=3,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
         loss_module=RLOOLoss(),
+        seed=42,
     )
 
     # Create batch with identifiable examples (already has identifiable tokens)
@@ -263,11 +263,11 @@ def test_replay_buffer_max_resamples_disabled():
         local_batch_size=2,
         alpha=1.0,
         total_processes=1,
-        process_id=0,
         max_samples=-1,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
         loss_module=RLOOLoss(),
+        seed=42,
     )
 
     # Add small batch
@@ -297,11 +297,11 @@ def test_replay_buffer_max_resamples_multiple_envs():
         local_batch_size=3,
         alpha=1.0,
         total_processes=1,
-        process_id=0,
         max_samples=2,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
         loss_module=RLOOLoss(),
+        seed=42,
     )
 
     # Add batches from different environments (identifiable tokens already set)
@@ -337,11 +337,11 @@ def test_replay_buffer_weight_step_filtering():
         local_batch_size=4,
         alpha=2.0,
         total_processes=1,
-        process_id=0,
         max_samples=-1,
         max_rollout_step_delay=30,
         max_rollout_timestamp_delay=3600.0,
         loss_module=RLOOLoss(),
+        seed=42,
     )
 
     # Create batches with weight_steps 50, 100, 150
@@ -380,11 +380,11 @@ def test_replay_buffer_rollout_delay_progressive():
         local_batch_size=2,
         alpha=2.0,
         total_processes=1,
-        process_id=0,
         max_samples=-1,
         max_rollout_step_delay=10,
         max_rollout_timestamp_delay=3600.0,
         loss_module=RLOOLoss(),
+        seed=42,
     )
 
     # Add initial batches at steps 0, 5, 10

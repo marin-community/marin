@@ -79,11 +79,11 @@ class ReplayBuffer:
     local_batch_size: int
     alpha: float
     total_processes: int
-    process_id: int
     max_samples: int
     max_rollout_step_delay: int
     max_rollout_timestamp_delay: float
     loss_module: RLLossModule
+    seed: int
 
     _total_batches_added: int = 0
     _total_batches_sampled: int = 0
@@ -93,7 +93,7 @@ class ReplayBuffer:
     rollout_storage: dict[str, list[RolloutWithCount]] = dataclasses.field(default_factory=dict)
 
     def __post_init__(self):
-        self._rng = np.random.default_rng(seed=self.process_id + 42)
+        self._rng = np.random.default_rng(seed=self.seed)
 
     @classmethod
     def from_config(
@@ -101,8 +101,8 @@ class ReplayBuffer:
         config: ReplayBufferConfig,
         local_batch_size: int,
         total_processes: int,
-        process_id: int,
         loss_module: RLLossModule,
+        seed: int,
     ) -> "ReplayBuffer":
         """Create ReplayBuffer from configuration.
 
@@ -110,8 +110,8 @@ class ReplayBuffer:
             config: Replay buffer configuration.
             local_batch_size: Batch size for sampling.
             total_processes: Total number of processes.
-            process_id: ID of this process.
             loss_module: Loss module for computing advantages.
+            seed: Random seed for sampling.
 
         Returns:
             Configured ReplayBuffer instance.
@@ -121,11 +121,11 @@ class ReplayBuffer:
             local_batch_size=local_batch_size,
             alpha=config.alpha,
             total_processes=total_processes,
-            process_id=process_id,
             max_samples=config.max_samples,
             max_rollout_step_delay=config.max_rollout_step_delay,
             max_rollout_timestamp_delay=config.max_rollout_timestamp_delay,
             loss_module=loss_module,
+            seed=seed,
         )
 
     def set_current_step(self, step: int) -> None:
