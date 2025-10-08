@@ -49,23 +49,8 @@ from experiments.qwen3 import (
 )
 from experiments.isoflop_sweep import generate_isoflop_sweep
 from experiments.tootsie.exp1295_32b import nemotron_mix
-from experiments.uncheatable_eval import uncheatable_eval_tokenized
+from experiments.uncheatable_eval import uncheatable_eval_tokenized, UNCHEATABLE_EVAL_TO_FILE_PATTERN
 
-UNCHEATABLE_EVAL_TO_FILE_PATTERN = {
-    # "wikipedia_arabic": "wikipedia_arabic_*.jsonl.gz",
-    "wikipedia_english": "wikipedia_english_*.jsonl.gz",
-    # "wikipedia_french": "wikipedia_french_*.jsonl.gz",
-    # "wikipedia_german": "wikipedia_german_*.jsonl.gz",
-    # "wikipedia_japanese": "wikipedia_japanese_*.jsonl.gz",
-    # "wikipedia_spanish": "wikipedia_spanish_*.jsonl.gz",
-    "github_python": "github_python_*.jsonl.gz",
-    "github_cpp": "github_cpp_*.jsonl.gz",
-    "bbc_news": "bbc_news_*.jsonl.gz",
-    "arxiv_physics": "arxiv_physics_*.jsonl.gz",
-    "arxiv_computer_science": "arxiv_computer_science_*.jsonl.gz",
-    # "ao3_chinese": "ao3_chinese_*.jsonl.gz",
-    "ao3_english": "ao3_english_*.jsonl.gz",
-}
 
 marin_32b_base = (
     "gs://marin-us-central1/checkpoints/tootsie-32b-cooldown-bison-adamc/hf/tootsie-32b-cooldown-bison-adamc/step-192000"
