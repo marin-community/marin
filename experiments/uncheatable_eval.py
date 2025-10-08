@@ -13,9 +13,8 @@
 # limitations under the License.
 
 """
-The Paloma eval sets, downloaded and tokenized
-
-https://huggingface.co/datasets/allenai/paloma
+The uncheatable eval sets, downloaded and tokenized
+https://github.com/Jellyfish042/uncheatable_eval
 """
 
 import os.path
@@ -31,8 +30,7 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 
 
-# The datasets in the uncheatable eval set and their paths within the uncheatable eval repository
-# https://huggingface.co/datasets/allenai/paloma
+# We only include English and code datasets
 UNCHEATABLE_EVAL_TO_FILE_PATTERN = {
     # "wikipedia_arabic": "wikipedia_arabic_*.jsonl.gz",
     "wikipedia_english": "wikipedia_english_*.jsonl.gz",
@@ -56,7 +54,7 @@ def uncheatable_eval_tokenized(
     *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, uncheatable_eval_raw: ExecutorStep = uncheatable_eval
 ) -> dict[str, TokenizerStep]:
     """
-    Returns a dictionary of steps to tokenize the Paloma eval sets. Keys are the subset names (with `paloma/` prefix)
+    Returns a dictionary of steps to tokenize the uncheatable eval sets. Keys are the subset names (with `uncheatable_eval/` prefix)
     """
     # avoid cyclic dependency
     from experiments.defaults import default_tokenize
