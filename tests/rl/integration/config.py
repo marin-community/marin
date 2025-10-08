@@ -191,6 +191,7 @@ def create_weight_transfer_config():
     return WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
+        max_weight_transfer_wait_time=10.0,
     )
 
 
