@@ -528,7 +528,8 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                     token_logprobs = []
                     if generation.logprobs:
                         for token_id, lp in zip(generated_tokens, generation.logprobs):
-                            token_str = ctx.tokenizer.decode([token_id], skip_special_tokens=False)
+                            # Use convert_ids_to_tokens to preserve BPE format
+                            token_str = ctx.tokenizer.convert_ids_to_tokens(token_id)
                             tokens.append(token_str)
                             token_logprobs.append(float(lp))
 
@@ -644,7 +645,9 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                 content_logprobs = []
                 assert generation.logprobs is not None, "Logprobs requested but missing in generation result"
                 for token_id, lp in zip(generated_tokens, generation.logprobs, strict=True):
-                    token_str = ctx.tokenizer.decode([token_id], skip_special_tokens=False)
+                    # Use convert_ids_to_tokens to preserve BPE format (e.g., Ġ for spaces)
+                    # This allows the client to round-trip: convert_tokens_to_ids(token_str) == token_id
+                    token_str = ctx.tokenizer.convert_ids_to_tokens(token_id)
                     content_logprobs.append(
                         ChatCompletionTokenLogprob(
                             token=token_str,
