@@ -4,6 +4,37 @@ that we use names (either strings or [haliax.Axis][] objects) to specify axes in
 arrays (see [haliax.zeros][] and [haliax.ones][]) as well as things like reductions (see [haliax.sum][] and
 [haliax.mean][]).
 
+## PyTree Helpers
+
+PyTrees are the lingua franca for composing state in JAX ecosystems. Haliax provides drop-in replacements for the
+[`jax.tree`][] helpers that are aware of [`NamedArray`][haliax.NamedArray] semantics. They preserve axis metadata across
+transformations while interoperating with standard JAX containers, so you can use them anywhere you would have reached
+for JAX's versions.
+
+Use these helpers whenever you need to map, flatten, or rebuild PyTrees that might include `NamedArray` instances:
+
+* [`haliax.tree.map`][] mirrors [`jax.tree.map`][] but forwards to Haliax's [`haliax.tree_util.tree_map`][] so axis names remain
+  intact.
+* [`haliax.tree.scan_aware_map`][] descends into [`haliax.nn.Stacked`][haliax.nn.Stacked] modules so that each layer is
+  transformed individually, effectively treating them as if they were unrolled when applying
+  [`haliax.tree_util.scan_aware_tree_map`][].
+* [`haliax.tree.flatten`][] / [`haliax.tree.unflatten`][] match the familiar flattening API while handling `NamedArray`
+  payloads safely.
+* [`haliax.tree.leaves`][] and [`haliax.tree.structure`][] provide direct access to the leaves and PyTree structure.
+
+All of these helpers accept the same `is_leaf` hook you might already use with JAX's utilities. They should be the first
+tools you reach for when you need deterministic tree transforms that understand named axes.
+
+::: haliax.tree.map
+::: haliax.tree.scan_aware_map
+::: haliax.tree.flatten
+::: haliax.tree.unflatten
+::: haliax.tree.leaves
+::: haliax.tree.structure
+
+[`jax.tree`]: https://jax.readthedocs.io/en/latest/_autosummary/jax.tree.html
+[`jax.tree.map`]: https://jax.readthedocs.io/en/latest/_autosummary/jax.tree.map.html
+
 ## Axis Types
 
 If you already speak NumPy or `jax.numpy`, think of Haliax as swapping positional axes (`axis=0`) for named axes

@@ -16,6 +16,7 @@ import haliax.nn as nn
 import haliax.quantization as quantization
 import haliax.random as random
 import haliax.state_dict as state_dict
+import haliax.tree as tree  # noqa: F401
 import haliax.tree_util as tree_util
 import haliax.util as util
 from .field import field
