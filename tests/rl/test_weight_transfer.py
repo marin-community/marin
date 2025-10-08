@@ -225,7 +225,7 @@ def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
     print("Creating mesh for large params transfer...")
     mesh = create_mesh(devices=jax.devices("tpu"))
     # mesh = create_mesh(devices=jax.local_devices())
-    with mesh:
+    with hax.set_mesh(mesh):
         large_params = jax.device_put(large_params)
     print("Mesh created with devices:", mesh.devices)
 

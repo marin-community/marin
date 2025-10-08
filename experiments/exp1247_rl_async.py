@@ -64,7 +64,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
 
     # Default sampling params for all lessons
     default_sampling = SamplingParams(
-        temperature=0.7,
+        temperature=1.0,
         n_prompts=8,
         n_generations_per_prompt=8,
         max_tokens=MAX_TOKENS,
@@ -142,7 +142,7 @@ def rl_train(name: str) -> ExecutorStep:
     trainer_config = TrainerConfig(
         # wandb is persistently crashing
         tracker=WandbConfig(
-            project="marin_rl_testing",
+            project="rl-mockenv-testing",
             name=name,
             tags=["rl", "math", MODEL_NAME.split("/")[-1]],
         ),
@@ -186,7 +186,8 @@ def rl_train(name: str) -> ExecutorStep:
         # sync_interval_steps=4,
         # poll_interval_seconds=1,
         sync_interval_steps=1,
-        # poll_interval_seconds=0.1,
+        # We are running on-policy, so wait for new weights from the trainer after each episode.
+        max_weight_transfer_wait_time=10,
     )
 
     curriculum_config = create_math_curriculum(name)
@@ -214,9 +215,9 @@ def rl_train(name: str) -> ExecutorStep:
         log_freq=10,
         run_config=RunConfig(
             train_tpu_type="v4-8",
-            num_rollout_workers=4,
             inference_tpu_type="v4-8",
             num_train_slices=1,
+            num_rollout_workers=1,
         ),
     )
 
@@ -233,6 +234,8 @@ def main():
     if os.getenv("CI", None) is not None:
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
+
+    # datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     experiments = [
         rl_train(name="chris-llama-1b-number-comparison-rloois-bsz32-lr1e-6-n16-kl0-3-sync-retok-4"),

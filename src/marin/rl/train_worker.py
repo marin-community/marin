@@ -64,6 +64,9 @@ class TrainWorkerConfig:
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
 
+    seed: int = 0
+    """Random seed for replay buffer sampling and model construction."""
+
 
 class StreamingRolloutLoader:
     """Direct loader for streaming rollout data.
@@ -93,7 +96,6 @@ class StreamingRolloutLoader:
         # Get max_tokens from curriculum
         self.max_tokens = self.config.curriculum_config.max_tokens
 
-        # Compute pad_token_id from tokenizer once
         self.pad_token_id = self.config.tokenizer.pad_token_id
         if self.pad_token_id is None:
             self.pad_token_id = self.config.tokenizer.eos_token_id
@@ -109,7 +111,7 @@ class StreamingRolloutLoader:
             # Convert rollouts to training batch
             batch = create_training_batch_from_rollouts(rollouts, self.max_tokens, self.pad_token_id)
             # shard onto the device mesh
-            with self.config.trainer.device_mesh:
+            with hax.set_mesh(self.config.trainer.device_mesh):
                 sharded_batch = hax.shard(batch, self.config.trainer.compute_axis_mapping)
 
             yield sharded_batch
@@ -151,8 +153,8 @@ class TrainWorker:
             config=config.replay_buffer,
             local_batch_size=config.trainer.train_batch_size,
             total_processes=jax.process_count(),
-            process_id=jax.process_index(),
             loss_module=self.loss_module,
+            seed=config.seed,
         )
 
         self.replay_loader = ReplayDataLoader(
@@ -184,8 +186,7 @@ class TrainWorker:
     def _build_models(self):
         """Build reference and initial policy models."""
         config = self.config
-        seed = config.trainer.seed
-        model_key = jrandom.PRNGKey(seed)
+        model_key = jrandom.PRNGKey(config.seed)
         Vocab = hax.Axis("vocab", self.tokenizer.vocab_size)
 
         if config.initial_checkpoint is not None:
@@ -206,6 +207,9 @@ class TrainWorker:
             )
 
         self.reference_model = _load_model()
+
+        # Always transfer initial weights to rollout workers
+        self.transfer_server.serve_weights(-1, self.reference_model)
 
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
