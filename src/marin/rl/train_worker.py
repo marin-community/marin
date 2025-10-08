@@ -265,7 +265,7 @@ class TrainWorker:
         def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
             checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
             try:
-                self._curriculum_actor.save_checkpoint.remote(checkpoint_dir)
+                self._curriculum_actor.save_checkpoint.call(checkpoint_dir)
             except Exception as e:
                 logger.error(f"Failed to save curriculum checkpoint: {e}")
 

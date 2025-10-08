@@ -370,7 +370,7 @@ class JAXTransferServer(WeightTransferServer):
 
         # Start transfer server and register its address with coordinator
         self.transfer_server = start_transfer_server()
-        self.coordinator.register_transfer_server.remote(self.transfer_server.address())
+        self.coordinator.register_transfer_server.call(self.transfer_server.address())
         self._setup_cpu_transfer()
 
         # Single-item queue for polling
@@ -494,7 +494,7 @@ class JAXTransferClient(WeightTransferClient):
 
         # First check if new weights are available without blocking
         try:
-            latest_weight_id, server_address = ray.get(self.coordinator.get_transfer_info.remote())
+            latest_weight_id, server_address = self.coordinator.get_transfer_info.call()
             logger.info(
                 "Current weight id %s, Latest weight ID: %s, Server address: %s",
                 self._last_received_weight_id,
