@@ -158,7 +158,6 @@ class TrainingBatch(eqx.Module):
     """A batch ready for training with Haliax named arrays."""
 
     input_ids: ht.Int[NamedArray, "batch position"]
-    attention_mask: ht.Int[NamedArray, "batch position"]
     position_ids: ht.Int[NamedArray, "batch position"]
     loss_weights: ht.Float[NamedArray, "batch position"]
     loss_masks: ht.Int[NamedArray, "batch position"]

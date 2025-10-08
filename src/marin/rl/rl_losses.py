@@ -72,12 +72,7 @@ def rloo_loss_with_importance_sampling(
     loss_weights_array = batch.loss_weights.array
     loss_masks_array = batch.loss_masks.array
 
-    # Derive target_ids from shifted input_ids (next-token prediction)
     batch_size, seq_len = batch.input_ids.array.shape
-    target_ids_array = jnp.concatenate(
-        [batch.input_ids.array[:, 1:], jnp.zeros((batch_size, 1), dtype=jnp.int32)],  # Padding for last position
-        axis=1,
-    )
 
     # Get logits from current policy
     model_output = model(
@@ -94,16 +89,30 @@ def rloo_loss_with_importance_sampling(
         key=key,
     )
 
-    # Compute logprobs manually using log_softmax
-    logits_array = model_output.array.astype(jnp.float32)
-    log_probs = jax.nn.log_softmax(logits_array, axis=-1)  # [batch, position, vocab]
-    batch_idx = jnp.arange(batch_size)[:, None]
-    pos_idx = jnp.arange(seq_len)
-    current_logprobs = log_probs[batch_idx, pos_idx, target_ids_array]  # [batch, position]
+    # Shift logits and targets to align logprobs correctly
+    # logits[i] predicts token at position i+1
+    # We want logprob[j] = P(token[j] | tokens[0:j])
+    # This comes from logits[j-1] indexed by token[j]
+    logits_array = model_output.array.astype(jnp.float32)[:, :-1, :]  # Drop last position [batch, seq_len-1, vocab]
+    reference_logits_array = reference_output.array.astype(jnp.float32)[:, :-1, :]  # Drop last position
 
-    reference_logits_array = reference_output.array.astype(jnp.float32)
+    target_ids_array = batch.input_ids.array[:, 1:]  # Drop first position [batch, seq_len-1]
+
+    # Compute log probabilities
+    log_probs = jax.nn.log_softmax(logits_array, axis=-1)
     reference_log_probs = jax.nn.log_softmax(reference_logits_array, axis=-1)
-    reference_logprobs_array = reference_log_probs[batch_idx, pos_idx, target_ids_array]
+
+    batch_idx = jnp.arange(batch_size)[:, None]
+    pos_idx = jnp.arange(seq_len - 1)
+
+    # Extract logprobs for the actual tokens
+    current_logprobs_shifted = log_probs[batch_idx, pos_idx, target_ids_array]  # [batch, seq_len-1]
+    reference_logprobs_shifted = reference_log_probs[batch_idx, pos_idx, target_ids_array]  # [batch, seq_len-1]
+
+    # Prepend zeros for position 0 (no context to predict from)
+    # Now current_logprobs[j] and policy_logprobs[j] both represent P(token[j] | context before j)
+    current_logprobs = jnp.concatenate([jnp.zeros((batch_size, 1)), current_logprobs_shifted], axis=1)
+    reference_logprobs_array = jnp.concatenate([jnp.zeros((batch_size, 1)), reference_logprobs_shifted], axis=1)
 
     jax.debug.print("predicted_logprobs_array {current_logprobs}", current_logprobs=current_logprobs)
     jax.debug.print(

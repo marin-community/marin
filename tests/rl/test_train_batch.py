@@ -72,7 +72,6 @@ def test_basic_conversion():
     # Check all expected keys are present
     expected_keys = {
         "input_ids",
-        "attention_mask",
         "position_ids",
         "loss_weights",
         "loss_masks",
@@ -196,7 +195,6 @@ def test_padding_consistency():
 
     # All sequences should have the same length after padding
     assert batch.input_ids.axis_size("position") == 16  # max_tokens
-    assert batch.attention_mask.axis_size("position") == 16
 
     # Check that padding tokens are present where expected
     # For the shortest rollout (prompt_len=3, response_len=1, total=4)
@@ -214,7 +212,6 @@ def test_batch_dtypes():
     # Token IDs and position IDs should be integers
     assert batch.input_ids.array.dtype == np.int32
     assert batch.position_ids.array.dtype == np.int32
-    assert batch.attention_mask.array.dtype == np.int32
 
     # Loss weights, masks, and logprobs should be floats
     assert batch.loss_weights.array.dtype == np.float32
