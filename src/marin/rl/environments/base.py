@@ -82,6 +82,19 @@ def load_environment_from_spec(config: EnvConfig) -> MarinEnv:
     return env_class(**env_args)
 
 
+# TODO: share this with the inference server or find a shared library.
+def tokenize_prompt_with_chat_template(prompt: str, tokenizer: PreTrainedTokenizer) -> list[int]:
+    """Tokenize the prompt using a chat template."""
+    messages = [{"role": "user", "content": prompt}]
+    try:
+        return tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+    except Exception as e:
+        # Fallback: simple concatenation if template fails
+        logger.warning(f"Chat template failed, using fallback: {e}", exc_info=True)
+        prompt_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
+        return tokenizer.encode(prompt_text, add_special_tokens=True)
+
+
 class LevanterInferenceContext(InferenceContext):
     """Context that uses Levanter model and inference server."""
 
@@ -103,8 +116,10 @@ class LevanterInferenceContext(InferenceContext):
         self.max_tokens = max_tokens
 
     def openai_client(self):
-        base_url = f"http://{self._inference_server.address()}/v1"
-        return AsyncOpenAI(base_url=base_url, api_key="marin")
+        return AsyncOpenAI(base_url=self.openai_address(), api_key="marin")
+
+    def openai_address(self) -> str:
+        return f"http://{self._inference_server.address()}/v1"
 
     def generate(
         self,
@@ -148,8 +163,13 @@ class LevanterInferenceContext(InferenceContext):
                 else:
                     for choice in completion.choices:
                         content = choice.message.content
-                        tokens = self.tokenizer.encode(content)
-                        logprobs = [t.logprob for t in choice.logprobs.content]
+                        tokens: list[int] = []
+                        logprobs: list[float] = []
+                        for t in choice.logprobs.content:
+                            encoded = self.tokenizer.encode(t.token, add_special_tokens=False)
+                            assert len(encoded) == 1, f"Expected single token but got {encoded} for text: {t.text}"
+                            tokens.append(encoded[0])
+                            logprobs.append(t.logprob)
                         logprobs = np.array(logprobs, dtype=np.float32)
                         if np.all(logprobs == 0):
                             logger.warning(
@@ -163,8 +183,8 @@ class LevanterInferenceContext(InferenceContext):
                             )
                         )
 
-                # Create InferenceResponse with prompt tokens
-                prompt_tokens = self.tokenizer.encode(prompt, add_special_tokens=True)
+                prompt_tokens = tokenize_prompt_with_chat_template(prompt, self.tokenizer)
+
                 batch_results.append(
                     InferenceResponse(
                         prompt=prompt,

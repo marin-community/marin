@@ -542,7 +542,7 @@ class ArrowFlightClient(WeightTransferClient):
             fetch_time = time.time()
 
             # Convert back to model using state_dict and move to target device
-            with self.mesh, hax.axis_mapping(self.axis_mapping):
+            with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
                 model = update_model(old_model, state_dict)
 
             decode_time = time.time()

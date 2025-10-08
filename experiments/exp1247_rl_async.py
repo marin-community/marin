@@ -65,7 +65,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
 
     # Default sampling params for all lessons
     default_sampling = SamplingParams(
-        temperature=0.7,
+        temperature=1.0,
         n_prompts=8,
         n_generations_per_prompt=8,
         max_tokens=MAX_TOKENS,
@@ -130,7 +130,7 @@ def rl_train(name: str) -> ExecutorStep:
     trainer_config = TrainerConfig(
         # wandb is persistently crashing
         tracker=WandbConfig(
-            project="marin_rl_testing",
+            project="rl-mockenv-testing",
             name=name,
             tags=["rl", "math", MODEL_NAME.split("/")[-1]],
         ),
@@ -173,7 +173,7 @@ def rl_train(name: str) -> ExecutorStep:
         sync_interval_steps=1,
     )
 
-    curriculum_config = create_math_curriculum(RUN_ID)
+    curriculum_config = create_math_curriculum(name)
 
     # Create RLJobConfig using the new unified interface
     config = RLJobConfig(
@@ -194,7 +194,7 @@ def rl_train(name: str) -> ExecutorStep:
         initial_checkpoint=MODEL_NAME,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
-        run_id=RUN_ID,
+        run_id=name,
         log_freq=10,
         run_config=RunConfig(
             train_tpu_type="v5litepod-4",
@@ -218,8 +218,10 @@ def main():
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
+    datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-power-019"),
+        rl_train(name=f"llama-1b-math-rl-test-power-{datestamp}"),
     ]
 
     executor_main(
