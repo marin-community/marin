@@ -23,6 +23,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmHeadModel
 from optax import softmax_cross_entropy_with_integer_labels
 
@@ -77,16 +78,18 @@ def rloo_loss_with_importance_sampling(
     loss_masks_array = batch.loss_masks.array
 
     # Get logits from current policy
+    jax.debug.print("Current batch input ids shape: {batch_shape}", batch_shape=batch.input_ids.shape)
+    jax.debug.print("Current batch input ids: {batch_input_ids}", batch_input_ids=batch.input_ids)
     model_output = model(
         input_ids=batch.input_ids,
-        attn_mask=batch.attention_mask,
+        attn_mask=AttentionMask.causal(),
         pos_ids=batch.position_ids,
         key=key,
     )
 
     reference_output = reference_model(
         input_ids=batch.input_ids,
-        attn_mask=batch.attention_mask,
+        attn_mask=AttentionMask.causal(),
         pos_ids=batch.position_ids,
         key=key,
     )
@@ -105,6 +108,9 @@ def rloo_loss_with_importance_sampling(
     # importance sampling since we're using off-policy data
     # ratio = π_current(a|s) / π_old(a|s) = exp(log π_current - log π_old)
     log_ratio = jnp.subtract(current_logprobs, policy_logprobs_array)
+
+    print(f"Shape of current logprobs: {current_logprobs.shape}")
+    print(f"Shape of policy logprobs: {policy_logprobs_array.shape}")
     ratio = jnp.exp(log_ratio)
 
     # N.B. This should be enabled, but we seem to be training far enough
@@ -157,6 +163,7 @@ def rloo_loss_with_importance_sampling(
         ratio_before_clip_std=jnp.std(ratio_before_clip * loss_masks_array),
     )
 
+    # return loss, {"current_logprobs": current_logprobs}
     return loss
 
 
@@ -192,7 +199,7 @@ def rloo_loss_synchronous(
     # Get logits from current policy
     model_output = model(
         input_ids=batch.input_ids,
-        attn_mask=batch.attention_mask,
+        attn_mask=AttentionMask.causal(),
         pos_ids=batch.position_ids,
         key=key,
     )

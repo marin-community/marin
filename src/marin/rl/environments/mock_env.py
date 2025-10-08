@@ -190,7 +190,7 @@ class NumberComparisonTaskNoSoftReward(NumberComparisonTask):
         # Difficulty not used for this task
         pass
 
-    def compute_reward(self, correct_answer: str, actual_response: str) -> float:
+    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer=None) -> float:
         format_score = 1.0 if actual_response.strip().isdigit() else 0.0
         if format_score == 0.0:
             return 0
@@ -429,11 +429,13 @@ class MockEnv(MarinEnv):
                 # token_rewards = jnp.full(len(choice.response_tokens), episode_reward, dtype=jnp.float32)
 
                 # Compute reward
-                reward = self.task.compute_reward(example["answer"], actual_response, tokenizer=inference_ctx.tokenizer)
+                episode_reward = self.task.compute_reward(
+                    example["answer"], actual_response, tokenizer=inference_ctx.tokenizer
+                )
 
                 # Create rollout
                 prompt_tokens = response.prompt_tokens
-                token_rewards = jnp.full(len(choice.response_tokens), reward, dtype=jnp.float32)
+                token_rewards = jnp.full(len(choice.response_tokens), episode_reward, dtype=jnp.float32)
 
                 rollout = Rollout(
                     env_name=f"mock:{self.task_type}",
@@ -442,12 +444,12 @@ class MockEnv(MarinEnv):
                     response_tokens=jnp.array(choice.response_tokens, dtype=jnp.int32),
                     response_logprobs=jnp.array(choice.logprobs, dtype=jnp.float32),
                     token_rewards=token_rewards,
-                    # episode_reward=float(episode_reward),
+                    episode_reward=float(episode_reward),
                 )
                 rollouts.append(rollout)
 
                 # Track metrics
-                if reward > 0:
+                if episode_reward > 0:
                     correct_count += 1
                 if actual_response:
                     format_correct_count += 1

@@ -50,7 +50,6 @@ WANDB_PROJECT = f"rl_testing_{MODEL_NAME.split('/')[-1].lower()}"
 MODEL_TOKENIZER = MODEL_NAME
 MODEL_CHECKPOINT = MODEL_NAME
 MAX_TOKENS = 256
-RUN_ID = f"test-{MODEL_NAME.split('/')[-1]}-curriculum"
 
 
 def stop_tokens(tokenizer_name: str):
@@ -187,10 +186,10 @@ def rl_train(name: str) -> ExecutorStep:
         # sync_interval_steps=4,
         # poll_interval_seconds=1,
         sync_interval_steps=1,
-        poll_interval_seconds=0.1,
+        # poll_interval_seconds=0.1,
     )
 
-    curriculum_config = create_math_curriculum(RUN_ID)
+    curriculum_config = create_math_curriculum(name)
 
     # Create RLJobConfig using the new unified interface
     config = RLJobConfig(
@@ -211,7 +210,7 @@ def rl_train(name: str) -> ExecutorStep:
         initial_checkpoint=MODEL_NAME,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
-        run_id=RUN_ID,
+        run_id=name,
         log_freq=10,
         run_config=RunConfig(
             train_tpu_type="v4-8",
@@ -236,7 +235,7 @@ def main():
         return
 
     experiments = [
-        rl_train(name="chris-llama-1b-math-number-comparison-rloois-bsz32-lr1e-6-n16-kl0-3-sync"),
+        rl_train(name="chris-llama-1b-number-comparison-rloois-bsz32-lr1e-6-n16-kl0-3-sync-retok-4"),
     ]
 
     executor_main(
