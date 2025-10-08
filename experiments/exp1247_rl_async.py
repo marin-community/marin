@@ -199,10 +199,10 @@ def rl_train(name: str) -> ExecutorStep:
         run_id=name,
         log_freq=10,
         run_config=RunConfig(
-            train_tpu_type="v5litepod-4",
-            num_rollout_workers=4,
-            inference_tpu_type="v5litepod-4",
+            train_tpu_type="v5p-8",
             num_train_slices=1,
+            num_rollout_workers=1,
+            inference_tpu_type="v5p-8",
         ),
     )
 

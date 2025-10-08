@@ -141,6 +141,18 @@ class DummyTokenizer:
             return self.encode(prompt)
         return prompt
 
+    def convert_ids_to_tokens(self, token_id):
+        """Convert token ID to token string (BPE format)."""
+        if isinstance(token_id, list):
+            return [self.TOKENS[tid] for tid in token_id]
+        return self.TOKENS[token_id]
+
+    def convert_tokens_to_ids(self, token):
+        """Convert token string to token ID."""
+        if isinstance(token, list):
+            return [self.TOKENS.index(t) for t in token]
+        return self.TOKENS.index(token)
+
     def __len__(self):
         return self.vocab_size
 
