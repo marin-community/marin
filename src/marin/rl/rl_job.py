@@ -21,6 +21,7 @@ and infrastructure concerns, letting users focus on the RL algorithm and hyperpa
 
 import dataclasses
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 
@@ -184,7 +185,16 @@ class RLJob:
         def inference_worker_task():
             with remove_tpu_lockfile_on_exit():
                 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-                worker = RolloutWorker(config=rollout_worker_config)
+                # inject a different seed for each worker
+
+                process_id = os.getpid()
+                config = dataclasses.replace(
+                    rollout_worker_config,
+                    seed=rollout_worker_config.seed + process_id,
+                    run_id=f"{rollout_worker_config.run_id}-{process_id}",
+                )
+
+                worker = RolloutWorker(config=config)
                 worker.run()
 
         train_tasks = [

@@ -65,7 +65,7 @@ class TrainWorkerConfig:
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
 
     seed: int = 0
-    """Random seed for reproducibility."""
+    """Random seed for replay buffer sampling and model construction."""
 
 
 class StreamingRolloutLoader:

@@ -72,6 +72,9 @@ class RolloutWorkerConfig:
     tokenizer: PreTrainedTokenizer
     run_id: str
 
+    seed: int = 0
+    """Random seed to use for sampling."""
+
     max_rollouts: int | None = None
     """Maximum number of rollouts to generate before stopping. Defaults to running forever."""
 
@@ -79,9 +82,6 @@ class RolloutWorkerConfig:
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
 
     log_freq: int = 10
-
-    seed: int = 0
-    """Random seed for reproducibility."""
 
 
 def find_open_port() -> int:
