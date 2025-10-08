@@ -570,7 +570,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
 
 def _compute_tokens(messages: list[ChatMessage], tokenizer: PreTrainedTokenizer) -> List[int]:
     try:
-        dict_messages = [msg.model_dump() for msg in messages]
+        dict_messages = [msg.model_dump(exclude_none=True) for msg in messages]
         return tokenizer.apply_chat_template(dict_messages, tokenize=True, add_generation_prompt=True)
     except Exception as e:
         # Fallback: simple concatenation if template fails
