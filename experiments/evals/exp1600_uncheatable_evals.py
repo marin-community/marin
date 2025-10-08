@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+#1600: Uncheatable Evals
+
+This experiment evaluates models' perplexity on diverse, high-quality, and fresh datasets
+(arXiv, GitHub, news) to better capture raw intelligence without relying on private datasets.
+"""
+
 from experiments.llama import llama_3_2_1b as llama_3_2_1b_config, llama3_tokenizer, llama_8b
 from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import executor_main
@@ -46,23 +53,7 @@ from experiments.qwen3 import (
     qwen3_32b as qwen3_32b_config,
     marin_32b as marin_32b_config,
 )
-from experiments.uncheatable_eval import uncheatable_eval_tokenized
-
-UNCHEATABLE_EVAL_TO_FILE_PATTERN = {
-    # "wikipedia_arabic": "wikipedia_arabic_*.jsonl.gz",
-    "wikipedia_english": "wikipedia_english_*.jsonl.gz",
-    # "wikipedia_french": "wikipedia_french_*.jsonl.gz",
-    # "wikipedia_german": "wikipedia_german_*.jsonl.gz",
-    # "wikipedia_japanese": "wikipedia_japanese_*.jsonl.gz",
-    # "wikipedia_spanish": "wikipedia_spanish_*.jsonl.gz",
-    "github_python": "github_python_*.jsonl.gz",
-    "github_cpp": "github_cpp_*.jsonl.gz",
-    "bbc_news": "bbc_news_*.jsonl.gz",
-    "arxiv_physics": "arxiv_physics_*.jsonl.gz",
-    "arxiv_computer_science": "arxiv_computer_science_*.jsonl.gz",
-    # "ao3_chinese": "ao3_chinese_*.jsonl.gz",
-    "ao3_english": "ao3_english_*.jsonl.gz",
-}
+from experiments.uncheatable_eval import uncheatable_eval_tokenized, UNCHEATABLE_EVAL_TO_FILE_PATTERN
 
 marin_32b_base = (
     "gs://marin-us-central1/checkpoints/tootsie-32b-cooldown-bison-adamc/hf/tootsie-32b-cooldown-bison-adamc/step-192000"
