@@ -119,8 +119,6 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
     # _separate_process_fn(eval_lm_main, (config,), {})
 
     try:
-        # empty shm
-        shutil.rmtree("/dev/shm", ignore_errors=True)
         if config.hf_checkpoint:
             # if config.hf_checkpoint and is_remote_path(config.hf_checkpoint):
             local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.hf_checkpoint))
