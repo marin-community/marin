@@ -171,7 +171,9 @@ class LevanterInferenceContext(InferenceContext):
                 else:
                     for choice in completion.choices:
                         content = choice.message.content
-                        tokens = self.tokenizer.encode(content)
+                        # Extract token IDs from the logprobs (stored as strings by the server)
+                        # This avoids re-tokenization which can produce different tokens
+                        tokens = [int(t.token) for t in choice.logprobs.content]
                         logprobs = [t.logprob for t in choice.logprobs.content]
                         choices.append(
                             InferenceChoice(
@@ -244,6 +246,47 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
         rollout_stats=rollout_stats_list,
         avg_reward=(reward_sum / total_count) if total_count > 0 else 0.0,
     )
+
+
+def _extract_sample_rollouts(batch: RolloutBatch, tokenizer, num_samples: int = 5) -> list[dict[str, str]]:
+    """Extract sample rollouts for logging.
+
+    Args:
+        batch: RolloutBatch containing rollout groups
+        tokenizer: Tokenizer to decode token IDs
+        num_samples: Number of samples to extract
+
+    Returns:
+        List of dicts with prompt, response, reward, and env_name
+    """
+    samples = []
+    sample_count = 0
+
+    for group in batch.groups:
+        for rollout in group.rollouts:
+            if sample_count >= num_samples:
+                break
+
+            # Decode prompt and response
+            prompt_text = tokenizer.decode(rollout.prompt_tokens, skip_special_tokens=True)
+            response_text = tokenizer.decode(rollout.response_tokens, skip_special_tokens=True)
+
+            samples.append(
+                {
+                    "prompt": prompt_text,
+                    "response": response_text,
+                    "reward": float(rollout.episode_reward),
+                    "env_name": rollout.env_name,
+                    "example_id": rollout.env_example_id,
+                }
+            )
+
+            sample_count += 1
+
+        if sample_count >= num_samples:
+            break
+
+    return samples
 
 
 class RolloutWorker:
@@ -446,6 +489,16 @@ class RolloutWorker:
                 eval_metrics[f"eval/{lesson_id}/avg_reward"] = stats.avg_reward
                 eval_metrics[f"eval/{lesson_id}/total_count"] = stats.total_count
 
+                # Log sample eval rollouts
+                sample_rollouts = _extract_sample_rollouts(batch, self._tokenizer, num_samples=3)
+                logger.info(f"\nEval Samples for {lesson_id}:")
+                for i, sample in enumerate(sample_rollouts, 1):
+                    logger.info(
+                        f"  [{i}] Reward: {sample['reward']:.3f} | "
+                        f"Prompt: {sample['prompt'][:80]}... | "
+                        f"Response: {sample['response'][:80]}..."
+                    )
+
         barrier_sync()
         return eval_metrics
 
@@ -512,6 +565,20 @@ class RolloutWorker:
                     log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
                     logger.info(f"Logging metrics at step {step}... {log_metrics}")
                     self.tracker.log(log_metrics, step=step)
+
+                    # Log sample rollouts
+                    sample_rollouts = _extract_sample_rollouts(rollout_batch, self._tokenizer, num_samples=5)
+                    logger.info(f"\n{'='*80}\nSample Rollouts at Step {step} (Lesson: {lesson_id}):\n{'='*80}")
+                    for i, sample in enumerate(sample_rollouts, 1):
+                        logger.info(
+                            f"\nSample {i}/{len(sample_rollouts)}:\n"
+                            f"  Env: {sample['env_name']}\n"
+                            f"  Example ID: {sample['example_id']}\n"
+                            f"  Reward: {sample['reward']:.3f}\n"
+                            f"  Prompt: {sample['prompt'][:200]}{'...' if len(sample['prompt']) > 200 else ''}\n"
+                            f"  Response: {sample['response'][:200]}{'...' if len(sample['response']) > 200 else ''}"
+                        )
+                    logger.info(f"{'='*80}\n")
 
         logger.info(f"Inference worker completed after generating {step} rollouts")
         barrier_sync()

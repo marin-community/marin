@@ -226,9 +226,15 @@ class TrainWorker:
 
         @jax.jit
         def _loss_function(model, batch, key):
+            # Use synchronous RLOO loss for on-policy RL (no importance sampling)
+            # return rloo_loss_synchronous(
+            #     model, self.reference_model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.2
+            # )
+            # Async version with importance sampling (commented out):
             return rloo_loss_with_importance_sampling(
                 model, self.reference_model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.2
             )
+            # PPO alternative:
             # return ppo_loss(model, batch, key=key, kl_coef=config.kl_coef, clip_epsilon=0.5)
 
         with (
