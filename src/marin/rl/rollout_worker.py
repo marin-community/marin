@@ -171,9 +171,7 @@ class LevanterInferenceContext(InferenceContext):
                 else:
                     for choice in completion.choices:
                         content = choice.message.content
-                        # Extract token IDs from the logprobs (stored as strings by the server)
-                        # This avoids re-tokenization which can produce different tokens
-                        tokens = [int(t.token) for t in choice.logprobs.content]
+                        tokens = self.tokenizer.encode(content)
                         logprobs = [t.logprob for t in choice.logprobs.content]
                         choices.append(
                             InferenceChoice(
