@@ -31,7 +31,6 @@ import ray
 # Add experiments to path so we can import them
 sys.path.insert(0, str(Path(__file__).parent.parent / "experiments"))
 
-from exp1247_rl_async import rl_train
 from marin.rl.rl_job import RLJob
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutWorker
@@ -57,10 +56,9 @@ def main():
         help="Directory to store rollout outputs",
     )
     parser.add_argument(
-        "--storage-type",
-        choices=["file", "memory"],
-        default="file",
-        help="Type of rollout storage to use",
+        "--experiment",
+        default="exp1247_rl_async",
+        help="Experiment module name to load the configuration from",
     )
     args = parser.parse_args()
 
@@ -81,6 +79,11 @@ def main():
             logger.warning(f"Failed to initialize Ray: {e}. Continuing anyway...")
 
     logger.info("Loading experiment configuration from exp1247_rl_async.py...")
+
+    # use dynamic import to load the experiment module
+    experiment_module = __import__(args.experiment)
+    rl_train = experiment_module.rl_train
+
     # Get the experiment step configuration
     step = rl_train(name="rollout-worker-test")
     job_config = step.config
@@ -94,12 +97,8 @@ def main():
     rollout_config.max_rollouts = args.max_rollouts
 
     # Configure rollout storage
-    storage_type = StorageType.FILE if args.storage_type == "file" else StorageType.IN_MEMORY
-    rollout_config.rollout_storage = RolloutStorageConfig(
-        storage_type=storage_type,
-        path=f"{args.output_dir}/rollouts" if storage_type == StorageType.FILE else None,
-        queue_name="standalone_test" if storage_type == StorageType.IN_MEMORY else None,
-    )
+    storage_type = StorageType.FILE
+    rollout_config.rollout_storage = RolloutStorageConfig(storage_type=storage_type, path=f"{args.output_dir}/rollouts")
 
     logger.info("Rollout configuration:")
     logger.info(f"  - Max rollouts: {rollout_config.max_rollouts}")
@@ -108,16 +107,10 @@ def main():
     logger.info(f"  - Model: {rollout_config.model}")
     logger.info(f"  - Curriculum lessons: {list(rollout_config.curriculum_config.lessons.keys())}")
 
-    logger.info("Starting rollout worker...")
-    # logger.info(f"Number of JAX devices: {len(jax.devices())}")
-    # logger.info(f"JAX devices: {jax.devices()}")
-
     worker = RolloutWorker(config=rollout_config)
     worker.run()
 
     logger.info("Rollout worker completed successfully!")
-    if storage_type == StorageType.FILE:
-        logger.info(f"Rollouts saved to: {args.output_dir}/rollouts")
 
 
 if __name__ == "__main__":
