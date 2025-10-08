@@ -260,7 +260,7 @@ TASKS = {
 class MockEnv(MarinEnv):
     """Mock environment that generates synthetic data for testing."""
 
-    def __init__(self, task_type: str, difficulty: str = "medium", seed=0, **kwargs):
+    def __init__(self, task_type: str, seed=None, difficulty: str = "medium", **kwargs):
         self.task_type = task_type
 
         # Get the task class for this task type

@@ -310,11 +310,20 @@ class RolloutWorker:
             self._inference_server.shutdown()
 
     def _sync_weights(self):
+        max_wait_time = self.config.weight_transfer.max_weight_transfer_wait_time
+        start_time = time.time()
+
         while True:
             logger.info("Checking for new weights...")
             update = self._transfer_client.receive_weights(self._policy_model)
             if update:
                 break
+
+            elapsed = time.time() - start_time
+            if elapsed >= max_wait_time:
+                logger.info(f"Waited {elapsed:.1f}s for new weights, proceeding with current weights")
+                return None
+
             time.sleep(1.0)
 
         if update:
