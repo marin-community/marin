@@ -169,7 +169,7 @@ class LevanterInferenceContext(InferenceContext):
                         logprobs: list[float] = []
                         for t in choice.logprobs.content:
                             encoded = self.tokenizer.encode(t.token, add_special_tokens=False)
-                            assert len(encoded) == 1, f"Expected single token but got {encoded} for text: {t.text}"
+                            assert len(encoded) == 1, f"Expected single token but got {encoded} for text: {t.token}"
                             tokens.append(encoded[0])
                             logprobs.append(t.logprob)
                         logprobs = np.array(logprobs, dtype=np.float32)
