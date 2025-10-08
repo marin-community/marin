@@ -72,6 +72,9 @@ class RolloutWorkerConfig:
     tokenizer: PreTrainedTokenizer
     run_id: str
 
+    seed: int = 0
+    """Random seed to use for sampling."""
+
     max_rollouts: int | None = None
     """Maximum number of rollouts to generate before stopping. Defaults to running forever."""
 
@@ -273,7 +276,7 @@ class RolloutWorker:
         else:
             logger.info("Building new policy model from scratch")
 
-        key = jrandom.PRNGKey(42)
+        key = jrandom.PRNGKey(self.config.seed)
         vocab_size = self._tokenizer.vocab_size
         Vocab = hax.Axis("vocab", vocab_size)
 
@@ -289,15 +292,8 @@ class RolloutWorker:
             key=key,
         )
 
-        update = self._transfer_client.receive_weights(initial_model)
-        if update:
-            logger.info("Loaded initial policy model from weight transfer")
-            self._policy_model = update.model
-            self._current_weight_step = update.weight_id
-        else:
-            logger.info("Initializing policy model from initial checkpoint")
-            self._policy_model = initial_model
-        logger.info("Loaded/built policy model")
+        logger.info("Initializing policy model from initial checkpoint")
+        self._policy_model = initial_model
 
     def stop(self):
         """Stop the inference worker loop and server."""
@@ -314,8 +310,21 @@ class RolloutWorker:
             self._inference_server.shutdown()
 
     def _sync_weights(self):
-        logger.info("Checking for new weights...")
-        update = self._transfer_client.receive_weights(self._policy_model)
+        max_wait_time = self.config.weight_transfer.max_weight_transfer_wait_time
+        start_time = time.time()
+
+        while True:
+            logger.info("Checking for new weights...")
+            update = self._transfer_client.receive_weights(self._policy_model)
+            if update:
+                break
+
+            elapsed = time.time() - start_time
+            if elapsed >= max_wait_time:
+                logger.info(f"Waited {elapsed:.1f}s for new weights, proceeding with current weights")
+                return None
+
+            time.sleep(1.0)
 
         if update:
             self._current_weight_step = update.weight_id
@@ -410,14 +419,13 @@ class RolloutWorker:
 
         step = 0
 
-        # compute the seed as the all-reduce across all hosts in the jax process
-        seed = abs(hash(f"{socket.gethostname()}-{os.getpid()}")) % (2**31 - 1)
+        seed = self.config.seed
         rng = jax.random.PRNGKey(seed)
         rng = multihost_utils.broadcast_one_to_all(rng)
         logger.info(f"Starting rollout worker with seed {seed}")
 
         while self._running:
-            barrier_sync()
+            self._sync_weights()
 
             if self.config.max_rollouts is not None and step >= self.config.max_rollouts:
                 logger.info(f"Reached max rollouts ({self.config.max_rollouts}), stopping")
@@ -432,8 +440,6 @@ class RolloutWorker:
                 logger.warning(f"Failed to sample lesson from curriculum: {e}, will try again...")
                 time.sleep(10.0)
                 continue
-
-            self._sync_weights()
 
             # Micro-eval: feedback on current lesson
             if step > 0 and step % self.config.curriculum_config.micro_eval_frequency == 0:

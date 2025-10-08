@@ -79,6 +79,8 @@ def load_environment_from_spec(config: EnvConfig) -> MarinEnv:
     module_name, class_name = env_class.rsplit(".", 1)
     env_module = __import__(module_name, fromlist=[class_name])
     env_class = getattr(env_module, class_name)
+
+    # TODO(power) - thread random seed from the rollout worker.
     return env_class(**env_args)
 
 
@@ -166,9 +168,10 @@ class LevanterInferenceContext(InferenceContext):
                         tokens: list[int] = []
                         logprobs: list[float] = []
                         for t in choice.logprobs.content:
-                            encoded = self.tokenizer.encode(t.token, add_special_tokens=False)
-                            assert len(encoded) == 1, f"Expected single token but got {encoded} for text: {t.text}"
-                            tokens.append(encoded[0])
+                            # Use convert_tokens_to_ids to correctly round-trip BPE tokens
+                            # The server uses convert_ids_to_tokens which preserves BPE format (e.g., Ġ for spaces)
+                            token_id = self.tokenizer.convert_tokens_to_ids(t.token)
+                            tokens.append(token_id)
                             logprobs.append(t.logprob)
                         logprobs = np.array(logprobs, dtype=np.float32)
                         if np.all(logprobs == 0):
