@@ -137,7 +137,7 @@ def rloo_loss_with_importance_sampling(
     reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)
 
     # KL regularization
-    log_ratio = current_logprobs - reference_logprobs_array
+    log_ratio = current_logprobs - reference_logprobs_array * loss_masks_array
     # https://github.com/openai/lm-human-preferences/blob/cbfd210bb8b08f6bc5c26878c10984b90f516c66/lm_human_preferences/train_policy.py#L151
     kl_penalty = log_ratio**2
     kl_loss = kl_coef * jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)

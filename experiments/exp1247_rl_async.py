@@ -171,12 +171,15 @@ def rl_train(name: str) -> ExecutorStep:
     weight_transfer = WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
+        # We are running on-policy, so wait for new weights from the trainer after each episode.
+        max_weight_transfer_wait_time=10,
     )
 
     curriculum_config = create_math_curriculum(name)
 
     # Create RLJobConfig using the new unified interface
     config = RLJobConfig(
+        seed=123,
         model=model_config,
         trainer=trainer_config,
         train_params=TrainParams(
