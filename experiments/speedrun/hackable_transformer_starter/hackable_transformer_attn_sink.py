@@ -521,9 +521,9 @@ if __name__ == "__main__":
 
     sizes = ["130m", "300m", "520m", "1_2b"]
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
-    sink = False
     steps = []
     for s in sizes:
-        name, cfg = build_run(s, sink, use_gpu=use_gpu)
-        steps.extend(default_speedrun(name, cfg))
+        for sink in (True, False):
+            name, cfg = build_run(s, sink, use_gpu=use_gpu)
+            steps.extend(default_speedrun(name, cfg))
     executor_main(steps=steps, description="Hackable transformer attention-sink sweep")
