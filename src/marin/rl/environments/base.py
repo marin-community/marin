@@ -182,6 +182,7 @@ class LevanterInferenceContext(InferenceContext):
                                 f"All logprobs zero for {prompt}, choice: {choice}. This can result in NaN loss."
                             )
                         decoded = self.tokenizer.decode(tokens)
+                        logger.info(f"Original response {content}, reconstructed: {decoded}")
                         if decoded != content:
                             logger.error(
                                 f"Token reconstruction mismatch!\n"

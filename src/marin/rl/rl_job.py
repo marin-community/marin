@@ -243,7 +243,7 @@ class RLJob:
                 temperature=self.config.eval_sampling_params.temperature,
                 service=InferenceEngineConfig(
                     max_seqs=64,
-                    page_size=128,
+                    page_size=8,
                     max_pages_per_seq=16,
                     enable_logprobs=True,
                     max_queued_tokens=256,

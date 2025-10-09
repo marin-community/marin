@@ -531,6 +531,7 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
         """Create runner from RLJob."""
 
         _, rollout_config = job.to_worker_configs()
+        rollout_config.max_rollouts = 1
         return cls(rollout_config)
 
     def _track_rollout_generation(self):

@@ -24,7 +24,7 @@ dependencies = [
     "google-cloud-storage-transfer",
     "jax==0.6.2",
     "haliax>=1.4.dev418",
-    "levanter[serve] @ git+https://github.com/marin-community/levanter.git",
+    "levanter[serve]",
     "lz4",
     "multiprocess==0.70.16",
     "numpy",
@@ -141,6 +141,7 @@ torch = [
     # CUDA12 index only when --extra cuda12
     { index = "pytorch-cu128", extra = "cuda12" },
 ]
+levanter = { workspace = true, editable = true }
 
 
 [[tool.uv.index]]
@@ -152,6 +153,11 @@ explicit = true
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
+
+[tool.uv.workspace]
+members = [
+    "submodules/levanter",
+]
 
 
 [project.optional-dependencies]
