@@ -238,7 +238,7 @@ def main():
     # datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     experiments = [
-        rl_train(name="chris-llama-1b-number-comparison-rloois-bsz32-lr1e-6-n16-kl0-3-sync-retok-4"),
+        rl_train(name="chris-llama-1b-number-comparison-rloois-bsz32-lr1e-6-n16-kl0-3-sync-retok-5"),
     ]
 
     executor_main(
