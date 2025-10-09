@@ -372,10 +372,11 @@ def remove_ssh_host_config(tpu_name: str) -> None:
 
 
 def list_tracked_files(local_path: str) -> list[str]:
-    files = set()
+    """List all files that git would track (excluding gitignored files).
 
-    # Get all files that git would track (excluding gitignored files)
-    # This includes tracked, modified, staged, and untracked files
+    This includes tracked, modified, staged, and untracked files.
+    git ls-files already handles recursive directory traversal.
+    """
     result = run_logged(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=local_path,
@@ -383,26 +384,21 @@ def list_tracked_files(local_path: str) -> list[str]:
         capture_output=True,
         text=True,
     )
+    # Split on null byte and filter empty strings
     all_files = [f for f in result.stdout.split("\0") if f.strip()]
-    # traverse into directories and try to add all files
-    for f in all_files:
-        full_path = Path(local_path) / f
-        full_path = full_path.relative_to(local_path)
-        if full_path.is_dir():
-            for f in list_tracked_files(full_path):
-                files.add(str(full_path / f))
-        else:
-            files.add(str(full_path))
-    return sorted(files)
+    return sorted(all_files)
 
 
 def sync_to_remote(target_host: str, local_path: os.PathLike = ".") -> None:
     local_path = Path(local_path).resolve()
     sync_files = list_tracked_files(local_path)
 
-    run_logged(["ssh", target_host, "mkdir", "-p", "/home/$USER/marin"], check=True)
+    # Here we use the relative path "marin" because the ssh/rsync command use a relative path to
+    # the remote user's home directory.
+    run_logged(["ssh", target_host, "mkdir", "-p", "marin"], check=True)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt") as f:
         f.write("\n".join(sync_files))
+        f.flush()  # Ensure file is written before rsync reads it
         files_from_path = f.name
         rsync_cmd = [
             "rsync",
@@ -412,7 +408,7 @@ def sync_to_remote(target_host: str, local_path: os.PathLike = ".") -> None:
             "--files-from",
             files_from_path,
             f"{local_path}/",
-            f"{target_host}:/home/$USER/marin/",
+            f"{target_host}:marin/",
         ]
 
         logger.info(f"Syncing {len(sync_files)} files (git-tracked, modified, and important untracked)...")
