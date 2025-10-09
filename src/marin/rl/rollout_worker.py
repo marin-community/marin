@@ -67,7 +67,7 @@ class RolloutWorkerConfig:
     curriculum_config: CurriculumConfig
     rollout_storage: RolloutStorageConfig
     weight_transfer: WeightTransferConfig
-    tokenizer: str | PreTrainedTokenizer
+    tokenizer: PreTrainedTokenizer
     run_id: str
 
     seed: int = 0
@@ -163,13 +163,7 @@ class RolloutWorker:
         self._shutdown_condition = threading.Condition()
         self._current_weight_step: int = 0
 
-        # Load tokenizer if string path provided, otherwise use the object directly
-        if isinstance(config.tokenizer, str):
-            from transformers import AutoTokenizer
-
-            self._tokenizer = AutoTokenizer.from_pretrained(config.tokenizer)
-        else:
-            self._tokenizer = config.tokenizer
+        self._tokenizer = config.tokenizer
 
         logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
         self._transfer_client = create_weight_transfer_client(

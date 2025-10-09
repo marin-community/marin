@@ -23,7 +23,7 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-storage-transfer",
     "jax==0.6.2",
-    "haliax>=1.4.dev418",
+    "haliax>=1.4.dev418,<=1.4.dev420",
     "levanter[serve]",
     "lz4",
     "multiprocess==0.70.16",
@@ -260,7 +260,7 @@ rl = [
 post_training = [
     "gcsfs",
     "transformers",
-    "flax==0.10.0",
+    "flax>=0.11.2",
     "jaxtyping",
     "tyro==0.8.11",
     "tqdm",

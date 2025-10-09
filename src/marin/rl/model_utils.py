@@ -72,7 +72,6 @@ def load_model_from_checkpoint(
     """
     if checkpoint is None:
         # Build new model from scratch
-        logger.info("No checkpoint specified, initializing model from scratch")
         return model_config.build(vocab_axis, key=key)
 
     mp = trainer_config.mp
