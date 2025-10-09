@@ -94,6 +94,13 @@ qwen2_5_7b_instruct = download_model_step(
     )
 )
 
+qwen2_5_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-32B",
+        hf_revision="1818d35",
+    )
+)
+
 qwen2_5_72b_instruct = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen2.5-72B-Instruct",

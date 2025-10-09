@@ -44,6 +44,7 @@ from experiments.models import (
     qwen3_4b_base,
     qwen3_8b_base,
     qwen3_32b,
+    qwen2_5_32b as qwen2_5_32b_model,
 )
 from experiments.qwen3 import (
     qwen3_0_6b as qwen3_0_6b_config,
@@ -51,31 +52,15 @@ from experiments.qwen3 import (
     qwen3_4b as qwen3_4b_config,
     qwen3_8b as qwen3_8b_config,
     qwen3_32b as qwen3_32b_config,
+    qwen2_5_32b as qwen2_5_32b_config,
     marin_32b as marin_32b_config,
 )
-from experiments.uncheatable_eval import uncheatable_eval_tokenized, UNCHEATABLE_EVAL_TO_FILE_PATTERN
-
-marin_32b_base = (
-    "gs://marin-us-central1/checkpoints/tootsie-32b-cooldown-bison-adamc/hf/tootsie-32b-cooldown-bison-adamc/step-192000"
+from experiments.olmo2 import (
+    olmo_7b,
+    olmo_32b,
 )
-
-olmo_7b = Olmo2Config(
-    seq_len=4096,
-    hidden_dim=4096,
-    intermediate_dim=11008,
-    num_heads=32,
-    num_kv_heads=32,
-    num_layers=32,
-)
-
-olmo_32b = Olmo2Config(
-    seq_len=4096,
-    hidden_dim=5120,
-    intermediate_dim=27648,
-    num_heads=40,
-    num_kv_heads=40,
-    num_layers=64,
-)
+from experiments.uncheatable_eval import uncheatable_eval_tokenized
+# from experiments.tootsie.exp1529_32b_bison_cooldown import tootsie_32b_cooldown_bison as marin_32b_base
 
 
 @dataclass
@@ -90,83 +75,88 @@ class ModelConfig:
 # Uses 1024 samples by default (adjust max_samples_per_dataset as needed)
 
 model_with_config = [
-    ModelConfig(
-        model_name="marin-community/marin-8b-base",
-        model_config=llama_8b,
-        tokenizer=llama3_tokenizer,
-        model_path=marin_8b_base,
-    ),
-    ModelConfig(
-        model_name="marin-32b",
-        model_config=marin_32b_config,
-        tokenizer=llama3_tokenizer,
-        model_path=marin_32b_base,
-    ),
-    ModelConfig(
-        model_name="allenai/OLMo-2-0325-32B",
-        model_config=olmo_32b,
-        tokenizer="allenai/OLMo-2-0325-32B",
-        model_path=olmo_2_base_32b,
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-32B", model_config=qwen3_32b_config, tokenizer="Qwen/Qwen3-32B", model_path=qwen3_32b
-    ),
-    ModelConfig(
-        model_name="meta-llama/Llama-3.1-8B", model_config=llama_8b, tokenizer=llama3_tokenizer, model_path=llama_3_1_8b
-    ),
-    ModelConfig(
-        model_name="meta-llama/Llama-3.2-1B",
-        model_config=llama_3_2_1b_config,
-        tokenizer=llama3_tokenizer,
-        model_path=llama_3_2_1b_model,
-    ),
-    ModelConfig(
-        model_name="allenai/OLMo-2-1124-7B",
-        model_config=olmo_7b,
-        tokenizer="allenai/OLMo-2-1124-7B",
-        model_path=olmo_2_base_8b,
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-0.6B", model_config=qwen3_0_6b_config, tokenizer="Qwen/Qwen3-0.6B", model_path=qwen3_0_6b
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-1.7B", model_config=qwen3_1_7b_config, tokenizer="Qwen/Qwen3-1.7B", model_path=qwen3_1_7b
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-4B", model_config=qwen3_4b_config, tokenizer="Qwen/Qwen3-4B", model_path=qwen3_4b
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-8B", model_config=qwen3_8b_config, tokenizer="Qwen/Qwen3-8B", model_path=qwen3_8b
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-0.6B-Base",
-        model_config=qwen3_0_6b_config,
-        tokenizer="Qwen/Qwen3-0.6B",
-        model_path=qwen3_0_6b_base,
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-1.7B-Base",
-        model_config=qwen3_1_7b_config,
-        tokenizer="Qwen/Qwen3-1.7B",
-        model_path=qwen3_1_7b_base,
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-4B-Base",
-        model_config=qwen3_4b_config,
-        tokenizer="Qwen/Qwen3-4B",
-        model_path=qwen3_4b_base,
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-8B-Base",
-        model_config=qwen3_8b_config,
-        tokenizer="Qwen/Qwen3-8B",
-        model_path=qwen3_8b_base,
-    ),
+    # ModelConfig(
+    #     model_name="marin-community/marin-8b-base",
+    #     model_config=llama_8b,
+    #     tokenizer=llama3_tokenizer,
+    #     model_path=marin_8b_base,
+    # ),
+    # ModelConfig(
+    #     model_name="marin-32b",
+    #     model_config=marin_32b_config,
+    #     tokenizer=llama3_tokenizer,
+    #     model_path=marin_32b_base,
+    # ),
+    # ModelConfig(
+    #     model_name="allenai/OLMo-2-0325-32B",
+    #     model_config=olmo_32b,
+    #     tokenizer="allenai/OLMo-2-0325-32B",
+    #     model_path=olmo_2_base_32b,
+    # ),
+    # ModelConfig(
+    #     model_name="Qwen/Qwen3-32B", model_config=qwen3_32b_config, tokenizer="Qwen/Qwen3-32B", model_path=qwen3_32b
+    # ),
+    # ModelConfig(
+    #     model_name="meta-llama/Llama-3.1-8B", model_config=llama_8b, tokenizer=llama3_tokenizer, model_path=llama_3_1_8b
+    # ),
+    # ModelConfig(
+    #     model_name="meta-llama/Llama-3.2-1B",
+    #     model_config=llama_3_2_1b_config,
+    #     tokenizer=llama3_tokenizer,
+    #     model_path=llama_3_2_1b_model,
+    # ),
+    # ModelConfig(
+    #     model_name="allenai/OLMo-2-1124-7B",
+    #     model_config=olmo_7b,
+    #     tokenizer="allenai/OLMo-2-1124-7B",
+    #     model_path=olmo_2_base_8b,
+    # ),
+    # ModelConfig(
+    #     model_name="Qwen/Qwen3-0.6B", model_config=qwen3_0_6b_config, tokenizer="Qwen/Qwen3-0.6B", model_path=qwen3_0_6b
+    # ),
+    # ModelConfig(
+    #     model_name="Qwen/Qwen3-1.7B", model_config=qwen3_1_7b_config, tokenizer="Qwen/Qwen3-1.7B", model_path=qwen3_1_7b
+    # ),
+    # ModelConfig(
+    #     model_name="Qwen/Qwen3-4B", model_config=qwen3_4b_config, tokenizer="Qwen/Qwen3-4B", model_path=qwen3_4b
+    # ),
+    # ModelConfig(
+    #     model_name="Qwen/Qwen3-8B", model_config=qwen3_8b_config, tokenizer="Qwen/Qwen3-8B", model_path=qwen3_8b
+    # ),
+    # ModelConfig(
+    #     model_name="Qwen/Qwen3-0.6B-Base",
+    #     model_config=qwen3_0_6b_config,
+    #     tokenizer="Qwen/Qwen3-0.6B",
+    #     model_path=qwen3_0_6b_base,
+    # ),
+    # ModelConfig(
+    #     model_name="Qwen/Qwen3-1.7B-Base",
+    #     model_config=qwen3_1_7b_config,
+    #     tokenizer="Qwen/Qwen3-1.7B",
+    #     model_path=qwen3_1_7b_base,
+    # ),
+    # ModelConfig(
+    #     model_name="Qwen/Qwen3-4B-Base",
+    #     model_config=qwen3_4b_config,
+    #     tokenizer="Qwen/Qwen3-4B",
+    #     model_path=qwen3_4b_base,
+    # ),
+    # ModelConfig(
+    #     model_name="Qwen/Qwen3-8B-Base",
+    #     model_config=qwen3_8b_config,
+    #     tokenizer="Qwen/Qwen3-8B",
+    #     model_path=qwen3_8b_base,
+    # ),
 ]
 
 
 def get_directory_friendly_name(model_name: str) -> str:
     return model_name.replace("/", "--").replace(".", "-")
+
+
+def truncate_model_name(model_name: str, max_length: int = 62) -> str:
+    """Truncate model name to max_length if it exceeds that length."""
+    return model_name[:max_length] if len(model_name) > max_length else model_name
 
 
 steps = []
@@ -185,7 +175,7 @@ for model_config in model_with_config:
             per_device_batch_size=1,
             name=f"{directory_friendly_name}-uncheatable-eval-logprobs",
             wandb_tags=[
-                f"M={model_config.model_name[:62] if len(model_config.model_name) > 62 else model_config.model_name}",
+                f"M={truncate_model_name(model_config.model_name)}",
                 "eval=uncheatable-eval",
             ],
         )
