@@ -187,7 +187,6 @@ class LevanterInferenceContext(InferenceContext):
                         )
 
                 prompt_tokens = tokenize_prompt_with_chat_template(prompt, self.tokenizer)
-                logger.info(f"Prompt tokens: {prompt_tokens}, choices: {choices}")
 
                 batch_results.append(
                     InferenceResponse(
