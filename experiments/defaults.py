@@ -351,6 +351,7 @@ def default_train(
         ),
         initialize_from_hf=hf_checkpoint_path_to_load_from or False,
         z_loss_weight=train_config.z_loss_weight,
+        use_mup=train_config.use_mup,
         model=model_config,
         optimizer=(
             train_config.optimizer_config
@@ -398,7 +399,7 @@ def default_train(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a {compute_num_parameters(model_config, vocab_size) :,} parameter model for "
+            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
             f"{train_config.num_train_steps} (steps) * "
             f"{train_config.train_batch_size} (batch_size) * "
             f"{model_config.seq_len} (seq_len) "
