@@ -46,7 +46,7 @@ def create_eval_step():
     assert len(prefix) > 0, "MARIN_PREFIX is not set"
 
     output_path = os.path.join(prefix, "env_evals/test_evaluation")
-    
+
     eval_step = evaluate_environment(
         model=model_checkpoint,
         env=env,

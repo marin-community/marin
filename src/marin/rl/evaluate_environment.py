@@ -23,7 +23,6 @@ import haliax as hax
 import jax.random as jrandom
 import fsspec
 import json
-from datetime import datetime
 
 from typing import Any
 from dataclasses import dataclass
@@ -54,7 +53,7 @@ class EnvironmentEvalConfig:
 
     env: MarinEnv
     """Environment to evaluate on."""
-    
+
     output_path: str | None = None
     """Path to save evaluation results (local or GCS)."""
 
@@ -96,12 +95,11 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     env = {}
     env = _add_run_env_variables(env)
     env["EQX_ON_ERROR"] = "nan"
-    
+
     runtime_env = RuntimeEnv()
     rollout_pod_config = TpuPodConfig(tpu_type="v5litepod-4", runtime_env=runtime_env)
     rollout_hw_config = rollout_pod_config.with_env_vars(env)
     rollout_kwargs = dict(max_calls=1, **rollout_hw_config.as_remote_kwargs())
-
 
     inference_server_config = InferenceServerConfig(
         # Turn on tensor parallelism for inference
@@ -124,7 +122,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     def inference_worker_task():
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-            
+
             # Initialize Levanter
             trainer_config.id = f"eval-rollout-{config.env.env_id.replace('/', '-')}"
             levanter.initialize(trainer_config)
@@ -133,7 +131,11 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             model_config = LlamaConfig.from_hf_config(hf_config)
 
             # Adjust the max sequence length of the model to reduce memory usage.
-            model_config = dataclasses.replace(model_config, seq_len=config.max_input_length + config.max_output_length, tokenizer=config.model_checkpoint)
+            model_config = dataclasses.replace(
+                model_config,
+                seq_len=config.max_input_length + config.max_output_length,
+                tokenizer=config.model_checkpoint,
+            )
 
             key = jrandom.PRNGKey(42)
             vocab_size = tokenizer.vocab_size
@@ -184,20 +186,19 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
                 logger.warning("No valid rollouts generated in this batch...")
                 return None, None
 
-
             logger.info("Evaluation completed")
             logger.info(f"Rollout groups: {rollout_groups}")
             logger.info(f"Metrics: {metrics}")
 
             # Save rollout groups as JSON
             rollout_file = f"{config.output_path}/rollout_groups.json"
-            with fsspec.open(rollout_file, 'w') as f:
+            with fsspec.open(rollout_file, "w") as f:
                 json.dump([g.model_dump() for g in rollout_groups], f, indent=2)
             logger.info(f"Saved rollout groups to {rollout_file}")
-            
+
             # Save metrics as JSON
             metrics_file = f"{config.output_path}/metrics.json"
-            with fsspec.open(metrics_file, 'w') as f:
+            with fsspec.open(metrics_file, "w") as f:
                 json.dump(metrics, f, indent=2)
             logger.info(f"Saved metrics to {metrics_file}")
 
@@ -207,7 +208,9 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     return inference_task
 
 
-def evaluate_environment(model: str, env: MarinEnv, name: str = None, output_path: str = None) -> ExecutorStep:
+def evaluate_environment(
+    model: str, env: MarinEnv, name: str | None = None, output_path: str | None = None
+) -> ExecutorStep:
     """Create an executor step for evaluating a model on an environment.
 
     Args:
