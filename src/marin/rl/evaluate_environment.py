@@ -126,7 +126,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
             
             # Initialize Levanter
-            trainer_config.id = f"eval-rollout"
+            trainer_config.id = f"eval-rollout-{config.env.env_id.replace('/', '-')}"
             levanter.initialize(trainer_config)
 
             hf_config = AutoConfig.from_pretrained(config.model_checkpoint)
