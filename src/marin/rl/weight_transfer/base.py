@@ -68,11 +68,12 @@ class WeightUpdate:
 class WeightTransferConfig:
     mode: WeightTransferMode = WeightTransferMode.ARROW_FLIGHT
     # Common settings
-    sync_interval_steps: int = 4
-    poll_interval_seconds: float = 1.0
+    sync_interval_steps: int = 1
     coordinator_name: str = "weight_transfer_coordinator"
 
-    transfer_timeout: float = 10.0
+    transfer_timeout: float = 30.0
+    max_weight_transfer_wait_time: float = 0.0
+    """Maximum time (in seconds) to wait for new weights before proceeding. 0 means run ahead without waiting."""
 
     # GCS Checkpoint specific
     checkpoint_dir: str = ""
@@ -129,18 +130,3 @@ class WeightTransferClient(ABC):
     @abstractmethod
     def get_metrics(self) -> dict:
         pass
-
-
-def get_or_create_actor(actor_class, name: str, *args, **kwargs):
-    """Get or create actor. Ray handles restarts automatically with max_restarts=-1.
-
-    Args:
-        actor_class: Ray remote class (e.g., ArrowFlightCoordinator, WeightTransferCoordinator)
-        name: Actor name for registration
-        *args: Arguments to pass to actor constructor
-        **kwargs: Keyword arguments to pass to actor constructor
-
-    Returns:
-        Ray actor handle
-    """
-    return actor_class.options(name=name, get_if_exists=True, max_restarts=-1).remote(*args, **kwargs)

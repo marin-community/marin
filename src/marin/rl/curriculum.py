@@ -28,9 +28,9 @@ from dataclasses import dataclass, field
 
 import fsspec
 import numpy as np
-import ray
 
 from marin.rl.environments.base import EnvConfig
+from marin.rl.robust_actor import RobustActor
 from marin.rl.types import RolloutStats
 
 logger = logging.getLogger(__name__)
@@ -122,14 +122,17 @@ class CurriculumConfig:
     lessons: dict[str, LessonConfig]
     """Dictionary mapping lesson names to lesson configurations."""
 
-    eval_frequency: int = 1000
-    """How often to run evaluation (in rollout worker steps)."""
+    eval_frequency: int = 100
+    """How often to run full evaluation across all lessons (in rollout worker steps)."""
 
-    eval_n_examples: int = 32
-    """Number of examples to use for each lesson during evaluation."""
+    eval_n_examples: int = 64
+    """Number of examples to use for each lesson during full evaluation."""
 
-    eval_n_generations: int = 1
-    """Number of generations per example during evaluation."""
+    micro_eval_frequency: int = 10
+    """How often to run micro-evaluation on the current lesson (in rollout worker steps)."""
+
+    micro_eval_n_examples: int = 4
+    """Number of examples for micro-evaluation (keep small for speed)."""
 
     temperature: float = 1.0
     """Temperature for sampling weight distribution."""
@@ -603,21 +606,21 @@ class Curriculum:
 
 
 def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: str | None = None):
-    """Get or create curriculum actor, auto-restoring from checkpoint if path provided.
+    """Get or create curriculum actor with automatic recovery on failure.
 
     Args:
         config: Curriculum configuration.
         checkpoint_path: Optional path to checkpoint directory for auto-restore.
 
     Returns:
-        Ray actor handle to the curriculum.
+        Robust actor handle that automatically retries on actor death.
     """
-    actor = ray.remote(Curriculum).options(name=config.actor_name, get_if_exists=True, max_restarts=-1).remote(config)
+    actor = RobustActor.create(Curriculum, actor_name=config.actor_name, actor_args=(config,))
 
     # Auto-restore from checkpoint if path provided
     if checkpoint_path:
         try:
-            ray.get(actor.restore_checkpoint.remote(checkpoint_path))
+            actor.restore_checkpoint.call(checkpoint_path)
         except Exception as e:
             logger.warning(f"Failed to restore curriculum checkpoint from {checkpoint_path}: {e}, starting fresh")
 

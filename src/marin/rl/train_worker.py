@@ -64,6 +64,9 @@ class TrainWorkerConfig:
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
 
+    seed: int = 0
+    """Random seed for replay buffer sampling and model construction."""
+
 
 class StreamingRolloutLoader:
     """Direct loader for streaming rollout data.
@@ -93,7 +96,6 @@ class StreamingRolloutLoader:
         # Get max_tokens from curriculum
         self.max_tokens = self.config.curriculum_config.max_tokens
 
-        # Compute pad_token_id from tokenizer once
         self.pad_token_id = self.config.tokenizer.pad_token_id
         if self.pad_token_id is None:
             self.pad_token_id = self.config.tokenizer.eos_token_id
@@ -109,7 +111,7 @@ class StreamingRolloutLoader:
             # Convert rollouts to training batch
             batch = create_training_batch_from_rollouts(rollouts, self.max_tokens, self.pad_token_id)
             # shard onto the device mesh
-            with self.config.trainer.device_mesh:
+            with hax.set_mesh(self.config.trainer.device_mesh):
                 sharded_batch = hax.shard(batch, self.config.trainer.compute_axis_mapping)
 
             yield sharded_batch
@@ -147,18 +149,18 @@ class TrainWorker:
 
         self.rollout_reader = config.rollout_storage.create_reader()
 
-        self.replay_buffer = ReplayBuffer(
+        self.replay_buffer = ReplayBuffer.from_config(
             config=config.replay_buffer,
-            loss_module=self.loss_module,
             local_batch_size=config.trainer.train_batch_size,
-            process_id=jax.process_index(),
             total_processes=jax.process_count(),
+            loss_module=self.loss_module,
+            seed=config.seed,
         )
 
         self.replay_loader = ReplayDataLoader(
             rollout_reader=self.rollout_reader,
             replay_buffer=self.replay_buffer,
-            rollout_fetch_interval=1.0,
+            rollout_fetch_interval=0.1,
         )
 
         self.data_loader = StreamingRolloutLoader(
@@ -184,8 +186,7 @@ class TrainWorker:
     def _build_models(self):
         """Build reference and initial policy models."""
         config = self.config
-        seed = config.trainer.seed
-        model_key = jrandom.PRNGKey(seed)
+        model_key = jrandom.PRNGKey(config.seed)
         Vocab = hax.Axis("vocab", self.tokenizer.vocab_size)
 
         if config.initial_checkpoint is not None:
@@ -207,6 +208,9 @@ class TrainWorker:
 
         self.reference_model = _load_model()
 
+        # Always transfer initial weights to rollout workers
+        self.transfer_server.serve_weights(-1, self.reference_model)
+
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
         logger.info("Starting RLOO training with Levanter...")
@@ -223,7 +227,7 @@ class TrainWorker:
         with (
             config.trainer.device_mesh,
             hax.axis_mapping(config.trainer.compute_axis_mapping),
-            Trainer(config.trainer, optimizer, _loss_function) as trainer,
+            Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer,
             self.replay_loader,
         ):
             seed = config.trainer.seed
@@ -261,7 +265,7 @@ class TrainWorker:
         def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
             checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
             try:
-                self._curriculum_actor.save_checkpoint.remote(checkpoint_dir)
+                self._curriculum_actor.save_checkpoint.call(checkpoint_dir)
             except Exception as e:
                 logger.error(f"Failed to save curriculum checkpoint: {e}")
 

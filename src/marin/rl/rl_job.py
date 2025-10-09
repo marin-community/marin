@@ -21,6 +21,7 @@ and infrastructure concerns, letting users focus on the RL algorithm and hyperpa
 
 import dataclasses
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 
@@ -64,7 +65,7 @@ class RunConfig:
     num_train_slices: int = 1
     """Number of TPU slices for training worker"""
 
-    max_retries_failure: int = 10
+    max_retries_failure: int = 3
     """Maximum retries on worker failure"""
 
     max_retries_preemption: int = 10
@@ -80,12 +81,15 @@ class TrainParams:
 
     optimizer: OptimizerConfig
     rl_loss: "RLLossModule"
-
-    # Replay buffer
-    replay_buffer_capacity: int = 10000
-    replay_buffer_alpha: float = 3.0  # Recency bias
-    max_samples_per_rollout: int = 4  # How many times to use each rollout
-    max_batch_latency: int = 1000  # Max age of rollouts in steps
+    replay_buffer: ReplayBufferConfig = field(
+        default_factory=lambda: ReplayBufferConfig(
+            capacity=4096,
+            alpha=3.0,
+            max_samples=1,
+            max_rollout_step_delay=1,
+            max_rollout_timestamp_delay=3600.0,
+        )
+    )
 
 
 def make_tokenizer(tokenizer: str | PreTrainedTokenizer) -> PreTrainedTokenizer:
@@ -103,6 +107,7 @@ class RLJobConfig:
     train_params: TrainParams
     curriculum: CurriculumConfig
     tokenizer: str | PreTrainedTokenizer
+    seed: int = 42
 
     # Model & initialization (with defaults)
     initial_checkpoint: str | None = None
@@ -121,7 +126,7 @@ class RLJobConfig:
     """Configuration for TPU pod deployment. If None, uses simple Ray actors."""
 
     # Inference server (auto-configured by default)
-    inference_server_config: "InferenceServerConfig | None" = None  # type: ignore
+    inference_server_config: InferenceServerConfig | None = None  # type: ignore
 
     # Sampling configuration
     eval_sampling_params: SamplingParams = field(default_factory=SamplingParams)
@@ -180,7 +185,16 @@ class RLJob:
         def inference_worker_task():
             with remove_tpu_lockfile_on_exit():
                 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-                worker = RolloutWorker(config=rollout_worker_config)
+                # inject a different seed for each worker
+
+                process_id = os.getpid()
+                config = dataclasses.replace(
+                    rollout_worker_config,
+                    seed=rollout_worker_config.seed + process_id,
+                    run_id=f"{rollout_worker_config.run_id}-{process_id}",
+                )
+
+                worker = RolloutWorker(config=config)
                 worker.run()
 
         train_tasks = [
@@ -216,18 +230,10 @@ class RLJob:
         # Create tokenizer
         tokenizer = make_tokenizer(self.config.tokenizer)
 
-        # Create replay buffer config from train params
-        replay_buffer = ReplayBufferConfig(
-            capacity=self.config.train_params.replay_buffer_capacity,
-            alpha=self.config.train_params.replay_buffer_alpha,
-            max_samples=self.config.train_params.max_samples_per_rollout,
-            max_rollout_delay=self.config.train_params.max_batch_latency,
-        )
-
-        # Scan over sampling params for max seqs
+        # Scan over sampling params for max seqs, must be able to fit a single lesson prompt
         max_seqs = 0
         for lesson in self.config.curriculum.lessons.values():
-            total_seqs = lesson.sampling_params.n_generations_per_prompt * lesson.sampling_params.n_prompts
+            total_seqs = lesson.sampling_params.n_generations_per_prompt
             max_seqs = max(max_seqs, total_seqs)
 
         max_tokens = self.config.curriculum.max_tokens
@@ -237,7 +243,8 @@ class RLJob:
         if self.config.inference_server_config is None:
             inference_server_config = InferenceServerConfig(
                 trainer=dataclasses.replace(
-                    self.config.trainer, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=1
+                    self.config.trainer,
+                    tensor_parallel_axes=["mlp", "kv_head"],
                 ),
                 tokenizer=tokenizer,
                 temperature=self.config.eval_sampling_params.temperature,
@@ -264,10 +271,11 @@ class RLJob:
             optimizer=self.config.train_params.optimizer,
             loss=self.config.train_params.rl_loss,
             tokenizer=tokenizer,
-            replay_buffer=replay_buffer,
+            replay_buffer=self.config.train_params.replay_buffer,
             initial_checkpoint=self.config.initial_checkpoint,
             run_id=self.config.run_id,
             curriculum_config=self.config.curriculum,
+            seed=self.config.seed,
         )
 
         # Create rollout worker config
@@ -283,6 +291,7 @@ class RLJob:
             weight_transfer=self.config.weight_transfer,
             rollout_storage=self.config.rollout_storage,
             run_id=self.config.run_id,
+            seed=self.config.seed + 1000,
         )
 
         return train_worker_config, rollout_worker_config

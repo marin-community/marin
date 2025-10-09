@@ -29,6 +29,7 @@ import haliax.haxtyping as ht
 import jax
 import numpy as np
 from haliax import NamedArray
+from openai import AsyncOpenAI
 from transformers import PreTrainedTokenizer
 
 
@@ -72,7 +73,7 @@ class InferenceContext(Protocol):
         """
         ...
 
-    def openai_client(self):
+    def openai_client(self) -> "AsyncOpenAI":
         """Return an OpenAI-compatible client for environments that need it.
 
         Returns:
@@ -88,6 +89,20 @@ class RolloutStats:
     episode_reward: float
     env_example_id: str
     lesson_id: str
+
+
+@dataclass(frozen=True)
+class RolloutMetadata:
+    """Metadata about when/where rollouts were generated."""
+
+    worker_id: str = ""
+    """Worker that generated the rollout."""
+
+    timestamp: float = 0.0
+    """The timestamp at which the rollout was generated."""
+
+    weight_step: int = -1
+    """The step at which the model weights were used to generate this rollout."""
 
 
 class Rollout(eqx.Module):
@@ -114,22 +129,14 @@ class Rollout(eqx.Module):
     episode_reward: float
     """The overall reward for the episode."""
 
+    metadata: RolloutMetadata = RolloutMetadata()
+    """Metadata about when/where this rollout was generated."""
+
 
 class RolloutGroup(eqx.Module):
     """Multiple rollouts for the same prompt (e.g., n_generations samples)."""
 
     rollouts: list[Rollout]
-
-
-@dataclass
-class RolloutMetadata:
-    """Metadata about when/where rollouts were generated."""
-
-    worker_id: str
-    timestamp: float
-
-    """The step at which the model weights were used to generate this rollout."""
-    weight_step: int
 
 
 class RolloutBatch(eqx.Module):
@@ -151,9 +158,7 @@ class TrainingBatch(eqx.Module):
     """A batch ready for training with Haliax named arrays."""
 
     input_ids: ht.Int[NamedArray, "batch position"]
-    attention_mask: ht.Int[NamedArray, "batch position"]
     position_ids: ht.Int[NamedArray, "batch position"]
-    target_ids: ht.Int[NamedArray, "batch position"]
     loss_weights: ht.Float[NamedArray, "batch position"]
     loss_masks: ht.Int[NamedArray, "batch position"]
     policy_logprobs: ht.Float[NamedArray, "batch position"]

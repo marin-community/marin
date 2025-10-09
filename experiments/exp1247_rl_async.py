@@ -22,7 +22,6 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
-from levanter.tracker.tensorboard import TensorboardConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from transformers import AutoConfig, AutoTokenizer
@@ -34,6 +33,7 @@ from marin.execution.executor import (
 )
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, LessonDependency
 from marin.rl.environments import EnvConfig
+from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
@@ -65,9 +65,9 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
 
     # Default sampling params for all lessons
     default_sampling = SamplingParams(
-        temperature=0.7,
-        n_prompts=16,
-        n_generations_per_prompt=16,
+        temperature=1.0,
+        n_prompts=8,
+        n_generations_per_prompt=8,
         max_tokens=MAX_TOKENS,
         stop_tokens=stop_tokens(MODEL_TOKENIZER),
     )
@@ -129,14 +129,14 @@ def rl_train(name: str) -> ExecutorStep:
 
     trainer_config = TrainerConfig(
         # wandb is persistently crashing
-        # tracker=WandbConfig(
-        #     project="marin_rl_testing",
-        #     name=name,
-        #     tags=["rl", "math", MODEL_NAME.split("/")[-1]],
-        # ),
-        tracker=TensorboardConfig(
-            logdir=OutputName("tblogs"),
+        tracker=WandbConfig(
+            project="rl-mockenv-testing",
+            name=name,
+            tags=["rl", "math", MODEL_NAME.split("/")[-1]],
         ),
+        # tracker=TensorboardConfig(
+        #     logdir=OutputName("tblogs"),
+        # ),
         log_xla_hlo=False,
         log_jaxprs=False,
         mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -158,7 +158,7 @@ def rl_train(name: str) -> ExecutorStep:
     )
 
     opt_config = AdamConfig(
-        learning_rate=1e-5,
+        learning_rate=1e-7,
         weight_decay=1e-2,
         warmup=100,
         lr_schedule="constant",
@@ -171,10 +171,11 @@ def rl_train(name: str) -> ExecutorStep:
     weight_transfer = WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
-        poll_interval_seconds=1,
+        # We are running on-policy, so wait for new weights from the trainer after each episode.
+        max_weight_transfer_wait_time=10,
     )
 
-    curriculum_config = create_math_curriculum(RUN_ID)
+    curriculum_config = create_math_curriculum(name)
 
     # Create RLJobConfig using the new unified interface
     config = RLJobConfig(
@@ -182,24 +183,26 @@ def rl_train(name: str) -> ExecutorStep:
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=opt_config,
-            rl_loss=RLOOLoss(kl_coef=0.05, clip_epsilon=0.2),
-            replay_buffer_capacity=4096,
-            replay_buffer_alpha=3,
-            max_samples_per_rollout=1,
-            max_batch_latency=4,
+            rl_loss=RLOOLoss(kl_coef=0.01, clip_epsilon=0.2),
+            replay_buffer=ReplayBufferConfig(
+                capacity=4096,
+                alpha=3,
+                max_samples=1,
+                max_rollout_step_delay=1,
+            ),
         ),
         curriculum=curriculum_config,
         tokenizer=MODEL_TOKENIZER,
         initial_checkpoint=MODEL_NAME,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
-        run_id=RUN_ID,
-        log_freq=5,
+        run_id=name,
+        log_freq=10,
         run_config=RunConfig(
-            train_tpu_type="v5litepod-4",
-            num_rollout_workers=4,
-            inference_tpu_type="v5litepod-4",
+            train_tpu_type="v5p-8",
             num_train_slices=1,
+            num_rollout_workers=1,
+            inference_tpu_type="v5p-8",
         ),
     )
 
@@ -217,8 +220,10 @@ def main():
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
+    datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
     experiments = [
-        rl_train(name="llama-1b-math-rl-test-power-014"),
+        rl_train(name=f"llama-1b-math-rl-test-power-{datestamp}"),
     ]
 
     executor_main(
