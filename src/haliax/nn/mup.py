@@ -168,7 +168,7 @@ class EmbeddingStandardParam(AbstractEmbeddingReparam):
 
     @property
     def unembed_active_scale(self):
-        return 1 / hax.axis_size(self.Embed)
+        return 1
 
 
 class EmbeddingMup(AbstractEmbeddingReparam):
