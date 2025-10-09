@@ -22,9 +22,9 @@ dependencies = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "jax==0.6.2",
+    "jax>=0.6.2",
     "haliax>=1.4.dev381",
-    "levanter[serve]@git+https://github.com/marin-community/levanter.git",
+    "levanter[serve]@git+https://github.com/marin-community/levanter.git@chiheem/test-lm-eval-dependencies",
     "lz4",
     "multiprocess==0.70.16",
     "numpy",
@@ -238,7 +238,7 @@ quality_dedup_consolidate = [
 tokenize_train = [
     "multiprocess==0.70.16",
     "haliax>=1.4.dev348",
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
+    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@18b376504e98aadcb985f9235c3e58ab2bf4c5bc",
     "tblib",
     "sentencepiece",
     "tiktoken",
@@ -267,7 +267,7 @@ post_training = [
 data_browser = ["zstandard==0.23.0"]
 
 eval = [
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
+    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@18b376504e98aadcb985f9235c3e58ab2bf4c5bc",
 ]
 
 pm = [
