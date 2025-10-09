@@ -223,6 +223,7 @@ class TPUAllocationActor:
         import socket
 
         import requests
+
         # Fetch TPU metadata from Google metadata server
         headers = {"Metadata-Flavor": "Google"}
         metadata_base = "http://metadata.google.internal/computeMetadata/v1"
@@ -256,8 +257,10 @@ class TPUAllocationActor:
         # Extract region from zone (e.g., us-central2-b -> us-central2)
         gcloud_region = "-".join(gcloud_zone.split("-")[:-1])
 
-        logger.info(f"TPU info fetched - hostname: {hostname}, IP: {ip_address}, "
-                    f"gcloud TPU name: {gcloud_tpu_name}, zone: {gcloud_zone}, region: {gcloud_region}")
+        logger.info(
+            f"TPU info fetched - hostname: {hostname}, IP: {ip_address}, "
+            f"gcloud TPU name: {gcloud_tpu_name}, zone: {gcloud_zone}, region: {gcloud_region}"
+        )
 
         return {
             "hostname": hostname,
@@ -278,14 +281,20 @@ class TPUAllocationActor:
         # delete the work directories in the background, use the ls to make sure we don't
         # accidentally run this on our local machine
         subprocess.Popen(
-            ["bash", "-c", "ls /dev/accel* && (rm -rf $HOME/marin/; rm -rf $HOME/.cache/; sudo rm -f /tmp/libtpu_lockfile)"],
+            [
+                "bash",
+                "-c",
+                "ls /dev/accel* && (rm -rf $HOME/marin/; rm -rf $HOME/.cache/; sudo rm -f /tmp/libtpu_lockfile)",
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         _hacky_remove_tpu_lockfile()
 
 
-def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name: str, gcloud_tpu_name: str, gcloud_zone: str) -> None:
+def add_ssh_host_config(
+    hostname: str, ip_address: str, username: str, tpu_name: str, gcloud_tpu_name: str, gcloud_zone: str
+) -> None:
     """Add SSH host configuration."""
     config_path = Path.home() / ".ssh" / "config"
     config_path.parent.mkdir(exist_ok=True)
@@ -301,7 +310,8 @@ def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name:
             text=True,
         )
         logger.info("SSH keys set up successfully via gcloud")
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Error when running gcloud compute tpu-vm ssh: {e.stdout}, error: {e.stderr}")
         logger.warning("gcloud compute tpu-vm ssh failed to set up SSH keys")
 
     # Check if Google Compute Engine SSH key exists
@@ -362,10 +372,11 @@ def remove_ssh_host_config(tpu_name: str) -> None:
 
 
 def list_tracked_files(local_path: str) -> list[str]:
-    files = set()
+    """List all files that git would track (excluding gitignored files).
 
-    # Get all files that git would track (excluding gitignored files)
-    # This includes tracked, modified, staged, and untracked files
+    This includes tracked, modified, staged, and untracked files.
+    git ls-files already handles recursive directory traversal.
+    """
     result = run_logged(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=local_path,
@@ -373,26 +384,21 @@ def list_tracked_files(local_path: str) -> list[str]:
         capture_output=True,
         text=True,
     )
+    # Split on null byte and filter empty strings
     all_files = [f for f in result.stdout.split("\0") if f.strip()]
-    # traverse into directories and try to add all files
-    for f in all_files:
-        full_path = Path(local_path) / f
-        full_path = full_path.relative_to(local_path)
-        if full_path.is_dir():
-            for f in list_tracked_files(full_path):
-                files.add(str(full_path / f))
-        else:
-            files.add(str(full_path))
-    return sorted(files)
+    return sorted(all_files)
 
 
 def sync_to_remote(target_host: str, local_path: os.PathLike = ".") -> None:
     local_path = Path(local_path).resolve()
     sync_files = list_tracked_files(local_path)
 
-    run_logged(["ssh", target_host, "mkdir", "-p", "/home/$USER/marin"], check=True)
+    # Here we use the relative path "marin" because the ssh/rsync command use a relative path to
+    # the remote user's home directory.
+    run_logged(["ssh", target_host, "mkdir", "-p", "marin"], check=True)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt") as f:
         f.write("\n".join(sync_files))
+        f.flush()  # Ensure file is written before rsync reads it
         files_from_path = f.name
         rsync_cmd = [
             "rsync",
@@ -402,7 +408,7 @@ def sync_to_remote(target_host: str, local_path: os.PathLike = ".") -> None:
             "--files-from",
             files_from_path,
             f"{local_path}/",
-            f"{target_host}:/home/$USER/marin/",
+            f"{target_host}:marin/",
         ]
 
         logger.info(f"Syncing {len(sync_files)} files (git-tracked, modified, and important untracked)...")
