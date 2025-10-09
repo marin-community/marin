@@ -85,6 +85,7 @@ def create_simple_math_curriculum(run_id: str) -> CurriculumConfig:
         actor_name=f"test-curriculum-{run_id}",
     )
 
+
 @pytest.mark.slow("Integration test with real model")
 def test_llama_math_integration(ray_tpu_cluster, tmp_path):
     """Test full integration with Llama-3.2-1B and math curriculum.

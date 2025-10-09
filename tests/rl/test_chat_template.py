@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 
-import pytest
 from levanter.inference.openai import ChatMessage
 from transformers import AutoTokenizer
 
