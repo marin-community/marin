@@ -11,7 +11,12 @@ import pytest
 
 import haliax as hax
 from haliax.nn import Linear
-from haliax.nn.mup import InputLinearMup, LinearStandardParam, HiddenLinearMup, OutputLinearMup
+from haliax.nn.mup import (
+    InputLinearMup,
+    LinearStandardParam,
+    HiddenLinearMup,
+    OutputLinearMup,
+)
 
 
 @pytest.mark.parametrize("out_first", [True, False])
@@ -37,8 +42,8 @@ def test_mup_linear_call_matches_linear():
     weight = hax.ones(hax.concat_axis_specs(Out, In)) * 0.5
     bias = hax.full(Out, 0.25)
 
-    linear = Linear(weight, bias, In, Out, reparam=LinearStandardParam(In, Out))
-    mup = Linear(weight, bias, In, Out, reparam=InputLinearMup(In, Out))
+    linear = Linear(weight, bias, In, Out, _reparam_cls=LinearStandardParam)
+    mup = Linear(weight, bias, In, Out, _reparam_cls=InputLinearMup)
 
     inputs = hax.full(hax.concat_axis_specs(Batch, In), 2.0)
 
@@ -109,8 +114,8 @@ def test_input_linear_behaves_like_base_linear():
     weight = hax.ones((Out, In)) * 0.1
     bias = hax.zeros(Out)
 
-    linear = Linear(weight, bias, In, Out, reparam=LinearStandardParam(In, Out))
-    input_linear = Linear(weight, bias, In, Out, reparam=InputLinearMup(In, Out))
+    linear = Linear(weight, bias, In, Out, _reparam_cls=LinearStandardParam)
+    input_linear = Linear(weight, bias, In, Out, _reparam_cls=InputLinearMup)
 
     inputs = hax.random.normal(jrandom.PRNGKey(5), (Batch, In))
 

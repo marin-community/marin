@@ -24,7 +24,12 @@ class Embedding(eqx.Module, ReparamEnabled):
     # axes
     Vocab: Axis = eqx.field(static=True)
     Embed: AxisSpec = eqx.field(static=True)
-    reparam: AbstractEmbeddingReparam = eqx.field(static=True)
+
+    _reparam_cls: type[AbstractEmbeddingReparam] = eqx.field(static=True, default=EmbeddingStandardParam)
+
+    @property
+    def reparam(self) -> AbstractEmbeddingReparam:
+        return self._reparam_cls(self.Embed, self.Vocab)
 
     @staticmethod
     def init(
@@ -61,7 +66,7 @@ class Embedding(eqx.Module, ReparamEnabled):
         weight = hax.random.truncated_normal(key, all_axes, -3, 3) * (
             init_scale * reparam_cls.init_scale(Vocab, Embed)
         )
-        return Embedding(weight=weight, Vocab=Vocab, Embed=Embed, reparam=reparam_cls(Embed, Vocab))
+        return Embedding(weight=weight, Vocab=Vocab, Embed=Embed, _reparam_cls=reparam_cls)
 
     def __call__(self, input_ids: NamedArray, *, key: PRNGKeyArray | None = None):
         """Alias for `embed`. key is ignored."""
