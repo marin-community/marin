@@ -164,11 +164,11 @@ gcp = [
     "google-cloud-compute",
 ]
 
-cuda12 = ["jax[cuda12]==0.6.2", "torch"]
+cuda12 = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
 
-tpu = ["jax[tpu]==0.6.2", "torch"]
+tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
 
-cpu = ["jax==0.6.2", "torch"]
+cpu = ["jax==0.6.2", "torch>=2.7.0"]
 
 crawl = [
     "w3lib",

@@ -28,7 +28,6 @@ from dataclasses import dataclass, field
 
 import fsspec
 import numpy as np
-import ray
 
 from marin.rl.environments.base import EnvConfig
 from marin.rl.robust_actor import RobustActor
@@ -621,7 +620,7 @@ def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: st
     # Auto-restore from checkpoint if path provided
     if checkpoint_path:
         try:
-            ray.get(actor.restore_checkpoint.remote(checkpoint_path))
+            actor.restore_checkpoint.call(checkpoint_path)
         except Exception as e:
             logger.warning(f"Failed to restore curriculum checkpoint from {checkpoint_path}: {e}, starting fresh")
 
