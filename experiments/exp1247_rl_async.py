@@ -31,7 +31,7 @@ from marin.execution.executor import (
     OutputName,
     executor_main,
 )
-from marin.rl.curriculum import CurriculumConfig, LessonConfig, LessonDependency
+from marin.rl.curriculum import CurriculumConfig, LessonConfig
 from marin.rl.environments import EnvConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
@@ -50,7 +50,6 @@ WANDB_PROJECT = f"rl_testing_{MODEL_NAME.split('/')[-1].lower()}"
 MODEL_TOKENIZER = MODEL_NAME
 MODEL_CHECKPOINT = MODEL_NAME
 MAX_TOKENS = 256
-RUN_ID = f"test-{MODEL_NAME.split('/')[-1]}-curriculum"
 
 
 def stop_tokens(tokenizer_name: str):
@@ -73,42 +72,55 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
     )
 
     lessons = {
-        "number_comparison": LessonConfig(
-            lesson_id="number_comparison",
+        # "number_comparison": LessonConfig(
+        #     lesson_id="number_comparison",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.mock_env.MockEnv",
+        #         env_args={"task_type": "number_comparison", "seed": 42},
+        #     ),
+        #     dependencies=[],
+        # ),
+        "number_comparison_no_soft_reward": LessonConfig(
+            lesson_id="number_comparison_no_soft_reward",
             env_config=EnvConfig(
                 env_class="marin.rl.environments.mock_env.MockEnv",
-                env_args={"task_type": "number_comparison", "seed": 42},
+                env_args={"task_type": "number_comparison_no_soft_reward", "seed": 42},
             ),
             dependencies=[],
             sampling_params=default_sampling,
         ),
-        "addition_easy": LessonConfig(
-            lesson_id="addition_easy",
-            env_config=EnvConfig(
-                env_class="marin.rl.environments.mock_env.MockEnv",
-                env_args={"task_type": "addition", "difficulty": "easy", "seed": 42},
-            ),
-            dependencies=[LessonDependency(dependency_id="number_comparison", reward_threshold=0.8)],
-            sampling_params=default_sampling,
-        ),
-        "addition_medium": LessonConfig(
-            lesson_id="addition_medium",
-            env_config=EnvConfig(
-                env_class="marin.rl.environments.mock_env.MockEnv",
-                env_args={"task_type": "addition", "difficulty": "medium", "seed": 42},
-            ),
-            dependencies=[LessonDependency(dependency_id="addition_easy", reward_threshold=0.8)],
-            sampling_params=default_sampling,
-        ),
-        "addition_hard": LessonConfig(
-            lesson_id="addition_hard",
-            env_config=EnvConfig(
-                env_class="marin.rl.environments.mock_env.MockEnv",
-                env_args={"task_type": "addition", "difficulty": "hard", "seed": 42},
-            ),
-            dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-            sampling_params=default_sampling,
-        ),
+        # "addition_easy": LessonConfig(
+        #     lesson_id="addition_easy",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.mock_env.MockEnv",
+        #         env_args={"task_type": "addition", "difficulty": "easy", "seed": 42},
+        #     ),
+        #     dependencies=[LessonDependency(dependency_id="number_comparison")],
+        # ),
+        # "addition_medium": LessonConfig(
+        #     lesson_id="addition_medium",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.mock_env.MockEnv",
+        #         env_args={"task_type": "addition", "difficulty": "medium", "seed": 42},
+        #     ),
+        #     dependencies=[LessonDependency(dependency_id="addition_easy")],
+        # ),
+        # "addition_hard": LessonConfig(
+        #     lesson_id="addition_hard",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.mock_env.MockEnv",
+        #         env_args={"task_type": "addition", "difficulty": "hard", "seed": 42},
+        #     ),
+        #     dependencies=[LessonDependency(dependency_id="addition_medium")],
+        # ),
+        # "gsm8k": LessonConfig(
+        #     lesson_id="gsm8k",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.prime_intellect_env.PrimeIntellectEnv",
+        #         env_args={"env_id": "primeintellect/gsm8k", "env_args": {"num_train_examples": 1000}},
+        #     ),
+        #     dependencies=[LessonDependency(dependency_id="gsm8k")],
+        # )
     }
 
     return CurriculumConfig(
@@ -140,12 +152,13 @@ def rl_train(name: str) -> ExecutorStep:
         log_xla_hlo=False,
         log_jaxprs=False,
         mp=jmp.get_policy("p=f32,c=bfloat16"),
+        train_batch_size=64,
+        num_train_steps=1000,
         # Set the train batch size to num_rollout_workers * n_generations * n_prompts
         # to ensure we accept an entire training batch from the rollout workers.
-        train_batch_size=64 * 4,
+        # train_batch_size=64 * 4,
         # microbatch to avoid OOM
         per_device_parallelism=16,
-        num_train_steps=50000,
         steps_per_eval=100,
         checkpointer=CheckpointerConfig(
             base_path=OutputName("checkpoints"),
@@ -160,7 +173,7 @@ def rl_train(name: str) -> ExecutorStep:
     opt_config = AdamConfig(
         learning_rate=1e-7,
         weight_decay=1e-2,
-        warmup=100,
+        warmup=0,
         lr_schedule="constant",
     )
 
@@ -170,6 +183,8 @@ def rl_train(name: str) -> ExecutorStep:
     )
     weight_transfer = WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
+        # sync_interval_steps=4,
+        # poll_interval_seconds=1,
         sync_interval_steps=1,
         # We are running on-policy, so wait for new weights from the trainer after each episode.
         max_weight_transfer_wait_time=10,
@@ -199,10 +214,10 @@ def rl_train(name: str) -> ExecutorStep:
         run_id=name,
         log_freq=10,
         run_config=RunConfig(
-            train_tpu_type="v5p-8",
+            train_tpu_type="v4-8",
+            inference_tpu_type="v4-8",
             num_train_slices=1,
             num_rollout_workers=1,
-            inference_tpu_type="v5p-8",
         ),
     )
 
@@ -220,10 +235,10 @@ def main():
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
-    datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    # datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     experiments = [
-        rl_train(name=f"llama-1b-math-rl-test-power-{datestamp}"),
+        rl_train(name="chris-llama-1b-number-comparison-rloois-bsz32-lr1e-6-n16-kl0-3-sync-nmain"),
     ]
 
     executor_main(

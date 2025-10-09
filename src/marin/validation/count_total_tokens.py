@@ -16,7 +16,9 @@
 Usage:
 
 ray job submit --working-dir . --no-wait -- \
-python -m marin.validation.count_total_tokens --input_path gs://marin-data/filtered/dclm-fasttext-quality/fineweb/fw-v1.0/md/
+python -m marin.validation.count_total_tokens \
+    --input_path gs://marin-data/filtered/dclm-fasttext-quality/fineweb/fw-v1.0/md/ \
+    --text_column text
 """
 
 import argparse
@@ -32,7 +34,7 @@ MAX_TASKS_IN_FLIGHT = 1000
 NUM_DOWNLOAD_RETRIES = 5
 
 
-def count_tokens_in_file(filename: str, tokenizer_name: str) -> int:
+def count_tokens_in_file(filename: str, tokenizer_name: str, text_column: str) -> int:
     from transformers import AutoTokenizer
 
     tokenizer = None
@@ -62,20 +64,20 @@ def count_tokens_in_file(filename: str, tokenizer_name: str) -> int:
         raise ValueError(f"Unsupported file format: {filename}")
 
     # Count tokens in 'text' column if it exists
-    if "text" in df.columns:
-        for text in df["text"].dropna():
+    if text_column in df.columns:
+        for text in df[text_column].dropna():
             total_tokens += len(tokenizer.encode(str(text)))
 
     return total_tokens
 
 
 @ray.remote(memory=1 * 1024 * 1024 * 1024)
-def process_file(input_filename: str, tokenizer_name: str):
-    file_tokens = count_tokens_in_file(input_filename, tokenizer_name)
+def process_file(input_filename: str, tokenizer_name: str, text_column: str):
+    file_tokens = count_tokens_in_file(input_filename, tokenizer_name, text_column)
     return file_tokens
 
 
-def count_total_tokens(input_path: str, tokenizer_name: str, filetype: str) -> int:
+def count_total_tokens(input_path: str, tokenizer_name: str, filetype: str, text_column: str) -> int:
 
     responses = []
     tokens = 0
@@ -86,7 +88,7 @@ def count_total_tokens(input_path: str, tokenizer_name: str, filetype: str) -> i
             for response in ray.get(ready_refs):
                 tokens += response
 
-        result_ref = process_file.remote(input_path, tokenizer_name)
+        result_ref = process_file.remote(input_path, tokenizer_name, text_column)
         responses.append(result_ref)
 
     # Wait for all tasks to complete
@@ -108,10 +110,16 @@ def main():
         default="jsonl.gz",
         help="Filetype of the input files (jsonl.gz, jsonl.zst, parquet, jsonl)",
     )
+    parser.add_argument(
+        "--text_column",
+        type=str,
+        default="text",
+        help="Name of the text column to count tokens in",
+    )
 
     args = parser.parse_args()
 
-    total_tokens = count_total_tokens(args.input_path, args.tokenizer_name, args.filetype)
+    total_tokens = count_total_tokens(args.input_path, args.tokenizer_name, args.filetype, args.text_column)
     print(f"Total tokens in 'text' fields: {total_tokens}")
 
 

@@ -14,6 +14,7 @@
 
 """RL loss functions."""
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -26,6 +27,8 @@ from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmHeadModel
 
 from marin.rl.types import Rollout, TrainingBatch
+
+logger = logging.getLogger(__name__)
 
 # TODO(power) - these should be refactored to accept the precomputed logits instead
 # of computing outputs themselves.
@@ -75,6 +78,8 @@ def rloo_loss_with_importance_sampling(
     batch_size, seq_len = batch.input_ids.array.shape
 
     # Get logits from current policy
+    jax.debug.print("Current batch input ids shape: {batch_shape}", batch_shape=batch.input_ids.shape)
+    jax.debug.print("Current batch input ids: {batch_input_ids}", batch_input_ids=batch.input_ids)
     model_output = model(
         input_ids=batch.input_ids,
         attn_mask=AttentionMask.causal(),
@@ -125,6 +130,7 @@ def rloo_loss_with_importance_sampling(
     reference_logprobs_array = reference_logprobs_array * loss_masks_array
 
     log_ratio = jnp.subtract(current_logprobs, policy_logprobs_array)
+
     ratio = jnp.exp(log_ratio)
 
     # N.B. This should be enabled, but we seem to be training far enough
@@ -134,7 +140,7 @@ def rloo_loss_with_importance_sampling(
     # RLOO loss with importance sampling
     # batch["loss_weights"] contains RLOO advantages: r_i - mean(r_j for j≠i)
     weighted_loss = -clipped_ratio * loss_weights_array * loss_masks_array
-    reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)
+    reinforce_loss = jnp.sum(weighted_loss) / jnp.maximum(jnp.sum(loss_masks_array), 1.0)
 
     # KL regularization
     log_ratio = (current_logprobs - reference_logprobs_array) * loss_masks_array
@@ -143,6 +149,42 @@ def rloo_loss_with_importance_sampling(
     kl_loss = kl_coef * jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
 
     loss = reinforce_loss + kl_loss
+
+    # ratio_clipped_percentage = jnp.sum(
+    #     jnp.where((ratio > 1.0 + clip_epsilon) | (ratio < 1.0 - clip_epsilon), 1.0, 0.0)
+    # ) / jnp.maximum(jnp.sum(loss_masks_array), 1.0)
+
+    # jax.debug.print(
+    #     "RLOO Loss with Importance Sampling Debug:\n"
+    #     "  advantages (mean/std): {adv_mean:.4f} / {adv_std:.4f}\n"
+    #     "  advantages (min/max): {adv_min:.4f} / {adv_max:.4f}\n"
+    #     "  logprobs (mean/std): {lp_mean:.4f} / {lp_std:.4f}\n"
+    #     "  reinforce_loss: {rl:.4f}\n"
+    #     "  kl_loss: {kl:.4f}\n"
+    #     "  total_loss: {total:.4f}\n"
+    #     "  num_valid_tokens: {n_tokens}\n"
+    #     "  ratio_clipped percentage: {ratio_clipped_percentage:.4f}\n"
+    #     "  importance sampling ratio (mean/std): {ratio_mean:.4f} / {ratio_std:.4f}\n"
+    #     "  ratio_before_clip (mean/std): {ratio_before_clip_mean:.4f} / {ratio_before_clip_std:.4f}\n",
+    #     adv_mean=jnp.sum(loss_weights_array * loss_masks_array) / jnp.maximum(jnp.sum(loss_masks_array), 1.0),
+    #     adv_std=jnp.std(loss_weights_array * loss_masks_array),
+    #     adv_min=jnp.min(jnp.where(loss_masks_array > 0, loss_weights_array, jnp.inf)),
+    #     adv_max=jnp.max(jnp.where(loss_masks_array > 0, loss_weights_array, -jnp.inf)),
+    #     lp_mean=jnp.sum(current_logprobs * loss_masks_array) / jnp.maximum(jnp.sum(loss_masks_array), 1.0),
+    #     lp_std=jnp.std(current_logprobs * loss_masks_array),
+    #     rl=reinforce_loss,
+    #     kl=kl_loss,
+    #     total=loss,
+    #     n_tokens=jnp.sum(loss_masks_array),
+    #     ratio_clipped_percentage=ratio_clipped_percentage,
+    #     ratio_mean=jnp.sum(ratio * loss_masks_array) / jnp.maximum(jnp.sum(loss_masks_array), 1.0),
+    #     ratio_std=jnp.std(ratio * loss_masks_array),
+    #     ratio_before_clip_mean=jnp.sum(ratio_before_clip * loss_masks_array)
+    #     / jnp.maximum(jnp.sum(loss_masks_array), 1.0),
+    #     ratio_before_clip_std=jnp.std(ratio_before_clip * loss_masks_array),
+    # )
+
+    # return loss, {"current_logprobs": current_logprobs}
     return loss, {
         "ratio_mean": jnp.mean(ratio),
         "clipped_ratio_mean": jnp.mean(clipped_ratio),
@@ -162,6 +204,19 @@ def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     total = rewards.sum()
     leave_one_out_baselines = (total - rewards) / (n - 1)
     advantages = rewards - leave_one_out_baselines
+
+    # Add small noise to avoid failure cases when all rewards are identical
+    # This noise should be small enough not to bias training but large enough to provide gradient signal
+    generator = np.random.default_rng()
+    advantages += generator.normal(loc=0.0, scale=1e-6, size=advantages.shape)
+
+    # Log statistics for debugging
+    logger.info(
+        f"RLOO Advantages: rewards (min/mean/max): {rewards.min():.4f}/{rewards.mean():.4f}/{rewards.max():.4f}, "
+        f"advantages (min/mean/max/std): \
+        {advantages.min():.4f}/{advantages.mean():.4f}/{advantages.max():.4f}/{advantages.std():.4f}"
+    )
+
     return advantages
 
 

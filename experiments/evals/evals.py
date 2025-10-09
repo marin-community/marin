@@ -242,6 +242,8 @@ def evaluate_levanter_lm_evaluation_harness(
     resource_config: ResourceConfig,
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
+    wandb_tags: list[str] | None = None,
+    generation_params: dict | None = None,
     discover_latest_checkpoint: bool = True,
 ) -> ExecutorStep:
     """
@@ -261,7 +263,10 @@ def evaluate_levanter_lm_evaluation_harness(
             max_eval_instances=versioned(max_eval_instances),
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
+            wandb_tags=versioned(wandb_tags),
+            generation_params=versioned(generation_params),
         ),
+        pip_dependency_groups=["eval"],
     )
 
 

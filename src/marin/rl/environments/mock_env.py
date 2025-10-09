@@ -52,8 +52,13 @@ class Task(Protocol):
         """Generate examples."""
         ...
 
-    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer=None) -> float:
-        """Compute reward for a response."""
+    def compute_reward(self, correct_answer: str, actual_response: str) -> dict[str, float] | float:
+        """Compute reward for a response.
+
+        Can return either:
+        - A float: single episode reward (legacy)
+        - A dict with keys: 'episode_reward', 'format_reward', 'correctness_reward'
+        """
         ...
 
 
@@ -142,8 +147,20 @@ class NumberComparisonTask:
                 examples.append({"prompt": prompt, "answer": answer})
         return examples
 
-    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer=None) -> float:
-        return compute_soft_reward(correct_answer, actual_response)
+    def compute_reward(self, correct_answer: str, actual_response: str) -> dict[str, float] | float:
+        format_score = 1.0 if actual_response.strip().isdigit() else 0.0
+        correctness_score = compute_soft_reward(correct_answer, actual_response)
+        episode_reward = 0.1 * format_score + 0.9 * correctness_score
+
+        # Return dict with separate components
+        return {
+            "format_reward": format_score,
+            "correctness_reward": correctness_score,
+            "episode_reward": episode_reward,
+        }
+
+    # def compute_reward(self, correct_answer: str, actual_response: str, tokenizer=None) -> float:
+    #     return compute_soft_reward(correct_answer, actual_response)
 
 
 def compute_soft_reward(correct_answer: str, actual_response: str) -> float:
@@ -164,6 +181,55 @@ def compute_soft_reward(correct_answer: str, actual_response: str) -> float:
             break
 
     return correct_score / len(tokens)
+
+
+class NumberComparisonTaskNoSoftReward(NumberComparisonTask):
+    """Compare two numbers - 50% success rate target."""
+
+    def __init__(self, difficulty: str = "medium"):
+        # Difficulty not used for this task
+        pass
+
+    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer=None) -> float:
+        format_score = 1.0 if actual_response.strip().isdigit() else 0.0
+        if format_score == 0.0:
+            return 0
+        else:
+            return 1.0 if actual_response.strip() == correct_answer.strip() else 0.0
+        # format_score = 1.0 if actual_response.strip().isdigit() else 0.0
+        # if format_score == 0.0:
+        #     return {
+        #         "format_reward": 0.0,
+        #         "correctness_reward": 0.0,
+        #         "episode_reward": 0.0,
+        #     }
+        # else:  # format passes
+        #     correctness_reward = 1.0 if actual_response.strip() == correct_answer.strip() else 0.0
+        #     return {
+        #         "format_reward": 1.0,
+        #         "correctness_reward": correctness_reward,
+        #         "episode_reward": correctness_reward,
+        #     }
+
+
+class AdditionTaskNoSoftReward(AdditionTask):
+    """Addition task with no soft reward."""
+
+    def compute_reward(self, correct_answer: str, actual_response: str) -> dict[str, float]:
+        format_reward = 1.0 if actual_response.strip().isdigit() else 0.0
+        if format_reward == 0.0:
+            return {
+                "format_reward": 0.0,
+                "correctness_reward": 0.0,
+                "episode_reward": 0.0,
+            }
+        else:
+            correctness_reward = 1.0 if actual_response.strip() == correct_answer.strip() else 0.0
+            return {
+                "format_reward": 1.0,
+                "correctness_reward": correctness_reward,
+                "episode_reward": correctness_reward,
+            }
 
 
 class MoarCatsTask:
@@ -253,6 +319,8 @@ TASKS = {
     "addition": AdditionTask,
     "opposites": OppositesTask,
     "number_comparison": NumberComparisonTask,
+    "number_comparison_no_soft_reward": NumberComparisonTaskNoSoftReward,
+    "addition_no_soft_reward": AdditionTaskNoSoftReward,
     "sequential_digits": SequentialDigitsTask,
 }
 
@@ -329,6 +397,9 @@ class MockEnv(MarinEnv):
         correct_count = 0
         total_count = 0
         format_correct_count = 0
+        # Track separate reward components
+        # format_reward_sum = 0.0
+        # correctness_reward_sum = 0.0
 
         for example, response in zip(sampled_examples, responses, strict=True):
             rollouts = []
@@ -339,12 +410,32 @@ class MockEnv(MarinEnv):
                 else:
                     actual_response = choice.response_text
 
+                # Compute reward - can return float or dict
+                # reward_result = self.task.compute_reward(example["answer"], actual_response)
+
+                # # Handle both dict and float returns
+                # if isinstance(reward_result, dict):
+                #     episode_reward = reward_result["episode_reward"]
+                #     format_reward = reward_result.get("format_reward", 0.0)
+                #     correctness_reward = reward_result.get("correctness_reward", 0.0)
+                # else:
+                #     # Legacy: single float reward
+                #     episode_reward = float(reward_result)
+                #     format_reward = 0.0
+                #     correctness_reward = 0.0
+
+                # # Create rollout
+                # prompt_tokens = response.prompt_tokens[-max_input_length:]
+                # token_rewards = jnp.full(len(choice.response_tokens), episode_reward, dtype=jnp.float32)
+
                 # Compute reward
-                reward = self.task.compute_reward(example["answer"], actual_response, tokenizer=inference_ctx.tokenizer)
+                episode_reward = self.task.compute_reward(
+                    example["answer"], actual_response, tokenizer=inference_ctx.tokenizer
+                )
 
                 # Create rollout
                 prompt_tokens = response.prompt_tokens
-                token_rewards = jnp.full(len(choice.response_tokens), reward, dtype=jnp.float32)
+                token_rewards = jnp.full(len(choice.response_tokens), episode_reward, dtype=jnp.float32)
 
                 rollout = Rollout(
                     env_name=f"mock:{self.task_type}",
@@ -353,16 +444,20 @@ class MockEnv(MarinEnv):
                     response_tokens=jnp.array(choice.response_tokens, dtype=jnp.int32),
                     response_logprobs=jnp.array(choice.logprobs, dtype=jnp.float32),
                     token_rewards=token_rewards,
-                    episode_reward=float(reward),
+                    episode_reward=float(episode_reward),
                 )
                 rollouts.append(rollout)
 
                 # Track metrics
-                if reward > 0:
+                if episode_reward > 0:
                     correct_count += 1
                 if actual_response:
                     format_correct_count += 1
                 total_count += 1
+
+                # Accumulate reward components
+                # format_reward_sum += format_reward
+                # correctness_reward_sum += correctness_reward
 
             if rollouts:
                 rollout_groups.append(RolloutGroup(rollouts=rollouts))
@@ -373,11 +468,15 @@ class MockEnv(MarinEnv):
         mean_reward = (
             sum(r.episode_reward for g in rollout_groups for r in g.rollouts) / total_count if total_count > 0 else 0.0
         )
+        # mean_format_reward = format_reward_sum / total_count if total_count > 0 else 0.0
+        # mean_correctness_reward = correctness_reward_sum / total_count if total_count > 0 else 0.0
 
         metrics = {
             f"{self.task_type}.accuracy": accuracy,
             f"{self.task_type}.format_accuracy": format_accuracy,
             f"{self.task_type}.mean_reward": mean_reward,
+            # f"{self.task_type}.mean_format_reward": mean_format_reward,
+            # f"{self.task_type}.mean_correctness_reward": mean_correctness_reward,
             f"{self.task_type}.total_examples": total_count,
         }
 

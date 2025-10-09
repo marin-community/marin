@@ -44,11 +44,10 @@ from levanter.utils import fsspec_utils
 from experiments.anneal_config import AnnealConfig
 from experiments.evals.task_configs import (
     CORE_TASKS,
-    MMLU_TASKS,
     convert_to_levanter_task_config,
     convert_to_task_metrics,
 )
-from experiments.llama import compute_num_parameters, llama_8b
+from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
@@ -247,6 +246,7 @@ def default_train(
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     override_output_path: str | None = None,
+    only_return_config: bool = False,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -259,6 +259,7 @@ def default_train(
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
+        only_return_config: If True, only return the TrainLmOnPodConfig, not the ExecutorStep.
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
@@ -395,6 +396,9 @@ def default_train(
         output_path=this_output_path(),
     )
 
+    if only_return_config:
+        return config
+
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
@@ -503,23 +507,31 @@ def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
         An ExecutorStep configured for annealing.
 
     """
-    checkpoint_path = anneal_config.initialize_from_checkpoint_path
-    imputed_checkpoint_step = _impute_checkpoint_step(checkpoint_path)
+    # Prioritize the initialize_from_hf path over the initialize_from_checkpoint_path
+    if anneal_config.initialize_from_hf is not None:
+        checkpoint_path = anneal_config.initialize_from_hf
+        num_train_steps = anneal_config.num_anneal_training_tokens / (
+            anneal_config.train_batch_size * AnnealConfig.LLAMA_MAX_SEQ_LEN
+        )
+        learning_rate = anneal_config.learning_rate
+    else:
+        checkpoint_path = anneal_config.initialize_from_checkpoint_path
+        imputed_checkpoint_step = _impute_checkpoint_step(checkpoint_path)
 
-    num_anneal_steps = anneal_config.num_anneal_training_tokens / (
-        anneal_config.train_batch_size * AnnealConfig.LLAMA_MAX_SEQ_LEN
-    )
-    num_train_steps = imputed_checkpoint_step + num_anneal_steps
+        num_anneal_steps = anneal_config.num_anneal_training_tokens / (
+            anneal_config.train_batch_size * AnnealConfig.LLAMA_MAX_SEQ_LEN
+        )
+        num_train_steps = imputed_checkpoint_step + num_anneal_steps
 
-    # We need to simulate having a learning rate that decays from anneal_config.learning rate to 0
-    # over the course of the training. However, we have already taken anneal_config.checkpoint_step steps,
-    # so we need to calculate what the max lr would've been if we had started training with a linear schedule
-    # and then decayed it to 0 over the course of the training.
-    # The formula for the max lr is:
-    # max_lr = num_train_steps * slope
-    # slope = anneal_config.learning_rate / num_anneal_steps
+        # We need to simulate having a learning rate that decays from anneal_config.learning rate to 0
+        # over the course of the training. However, we have already taken anneal_config.checkpoint_step steps,
+        # so we need to calculate what the max lr would've been if we had started training with a linear schedule
+        # and then decayed it to 0 over the course of the training.
+        # The formula for the max lr is:
+        # max_lr = num_train_steps * slope
+        # slope = anneal_config.learning_rate / num_anneal_steps
 
-    learning_rate = num_train_steps * (anneal_config.learning_rate / num_anneal_steps)
+        learning_rate = num_train_steps * (anneal_config.learning_rate / num_anneal_steps)
 
     anneal_stage_train_config = SimpleTrainConfig(
         resources=anneal_config.resources,
@@ -528,18 +540,28 @@ def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
         learning_rate=learning_rate,
         weight_decay=anneal_config.weight_decay,
         min_lr_ratio=anneal_config.min_lr_ratio,
+        warmup=anneal_config.warmup,
         steps_per_export=anneal_config.steps_per_export,
         lr_schedule=anneal_config.lr_schedule,
-        initialize_from_checkpoint_path=checkpoint_path,
     )
+
+    if anneal_config.initialize_from_hf is not None:
+        anneal_stage_train_config = dataclasses.replace(
+            anneal_stage_train_config, initialize_from_hf=anneal_config.initialize_from_hf
+        )
+    else:
+        anneal_stage_train_config = dataclasses.replace(
+            anneal_stage_train_config, initialize_from_checkpoint_path=checkpoint_path
+        )
 
     return default_train(
         name=name,
         tokenized=anneal_config.dataset_config,
-        model_config=llama_8b,
+        model_config=anneal_config.model_config,
         train_config=anneal_stage_train_config,
         use_default_validation=anneal_config.use_default_validation,
-        eval_harness_tasks=MMLU_TASKS,
+        eval_harness_tasks=[],
+        tags=anneal_config.wandb_tags,
     )
 
 

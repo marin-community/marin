@@ -174,6 +174,9 @@ class LevanterInferenceContext(InferenceContext):
                             tokens.append(token_id)
                             logprobs.append(t.logprob)
                         logprobs = np.array(logprobs, dtype=np.float32)
+
+                        # print(f"Token string combined: {token_str_combined}")
+
                         if np.all(logprobs == 0):
                             logger.warning(
                                 f"All logprobs zero for {prompt}, choice: {choice}. This can result in NaN loss."
@@ -181,7 +184,7 @@ class LevanterInferenceContext(InferenceContext):
                         choices.append(
                             InferenceChoice(
                                 response_text=content,
-                                response_tokens=np.array(tokens, dtype=np.int32),
+                                response_tokens=tokens,
                                 logprobs=logprobs,
                             )
                         )
