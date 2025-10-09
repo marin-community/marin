@@ -260,7 +260,7 @@ def evaluate_levanter_lm_evaluation_harness(
     """
     logger.info(f"Running evals on the following tasks: {evals}")
     return ExecutorStep(
-        name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
+        name=f"evaluation/lm_evaluation_harness_levanter/levanter_lmeval_{'-'.join([eval_task.name for eval_task in evals])}_{model_name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",
@@ -272,6 +272,7 @@ def evaluate_levanter_lm_evaluation_harness(
             max_eval_instances=versioned(max_eval_instances),
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
+            wandb_tags=['lm-eval', f'{model_name}', f'{model_path}'] + [eval_task.name for eval_task in evals],
         ),
     )
 
