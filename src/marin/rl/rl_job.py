@@ -21,6 +21,7 @@ and infrastructure concerns, letting users focus on the RL algorithm and hyperpa
 
 import dataclasses
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 
@@ -106,6 +107,7 @@ class RLJobConfig:
     train_params: TrainParams
     curriculum: CurriculumConfig
     tokenizer: str | PreTrainedTokenizer
+    seed: int = 42
 
     # Model & initialization (with defaults)
     initial_checkpoint: str | None = None
@@ -183,7 +185,16 @@ class RLJob:
         def inference_worker_task():
             with remove_tpu_lockfile_on_exit():
                 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-                worker = RolloutWorker(config=rollout_worker_config)
+                # inject a different seed for each worker
+
+                process_id = os.getpid()
+                config = dataclasses.replace(
+                    rollout_worker_config,
+                    seed=rollout_worker_config.seed + process_id,
+                    run_id=f"{rollout_worker_config.run_id}-{process_id}",
+                )
+
+                worker = RolloutWorker(config=config)
                 worker.run()
 
         train_tasks = [
@@ -264,6 +275,7 @@ class RLJob:
             initial_checkpoint=self.config.initial_checkpoint,
             run_id=self.config.run_id,
             curriculum_config=self.config.curriculum,
+            seed=self.config.seed,
         )
 
         # Create rollout worker config
@@ -279,6 +291,7 @@ class RLJob:
             weight_transfer=self.config.weight_transfer,
             rollout_storage=self.config.rollout_storage,
             run_id=self.config.run_id,
+            seed=self.config.seed + 1000,
         )
 
         return train_worker_config, rollout_worker_config

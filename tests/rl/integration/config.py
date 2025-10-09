@@ -90,12 +90,13 @@ class DummyTokenizer:
         "7",
         "8",
         "9",
+        "<pad>",
     ]
 
-    def __init__(self, pad_token_id=0):
+    def __init__(self):
         self.vocab_size = len(self.TOKENS)
         self.TOKENS.sort(key=len, reverse=True)  # Sort by length for greedy matching
-        self.pad_token_id = pad_token_id
+        self.pad_token_id = self.TOKENS.index("<pad>")
         self.eos_token = "</s>"
         self.bos_token = "<s>"
 
@@ -140,6 +141,18 @@ class DummyTokenizer:
             return self.encode(prompt)
         return prompt
 
+    def convert_ids_to_tokens(self, token_id):
+        """Convert token ID to token string (BPE format)."""
+        if isinstance(token_id, list):
+            return [self.TOKENS[tid] for tid in token_id]
+        return self.TOKENS[token_id]
+
+    def convert_tokens_to_ids(self, token):
+        """Convert token string to token ID."""
+        if isinstance(token, list):
+            return [self.TOKENS.index(t) for t in token]
+        return self.TOKENS.index(token)
+
     def __len__(self):
         return self.vocab_size
 
@@ -162,7 +175,7 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
     return TrainerConfig(
         tracker=JsonLoggerConfig(),
         mp=jmp.get_policy("p=f32"),
-        train_batch_size=32,
+        train_batch_size=16,
         num_train_steps=1000,
         steps_per_eval=1,
         checkpointer=CheckpointerConfig(
@@ -190,6 +203,7 @@ def create_weight_transfer_config():
     return WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
+        max_weight_transfer_wait_time=10.0,
     )
 
 
@@ -206,7 +220,7 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum"):
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "cats", "seed": 42},
                 ),
-                sampling_params=SamplingParams(temperature=1.0, n_prompts=8, n_generations_per_prompt=4, max_tokens=32),
+                sampling_params=SamplingParams(temperature=1.0, n_prompts=4, n_generations_per_prompt=4, max_tokens=32),
             )
         },
         eval_frequency=100,
