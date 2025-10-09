@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import shutil
+import contextlib
 
 import fsspec
 import jmp
@@ -58,7 +59,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 "immutabledict",
                 "jax[tpu]",
                 "langdetect",
-                "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@25307586d1e7dc3dd6c788f9a0cd57ca072111be",
+                "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@23244d1db19dc14077c11c4fe42eae355161fd1b",
                 "math-verify", # Required by lm-eval[math]
                 "ray==2.45",
                 "statsmodels==0.14.4",
@@ -76,6 +77,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        show_logs_from_ray: bool = False,
     ) -> None:
         """
         Runs Levanter's lm-eval harness on the specified model and set of tasks.
@@ -86,6 +88,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
             wandb_tags (list[str] | None): The tags to add to the wandb run.
+            show_logs_from_ray (bool): Whether to show the logs from the ray run.
         """
         # Eval Harness code: https://github.com/stanford-crfm/levanter/blob/main/src/levanter/eval_harness.py
         # Run the harness with the model and the specified evals
@@ -96,6 +99,9 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             name = model.name + "_lmeval_" + "-".join([eval_task.name for eval_task in evals])
             logger.info(f"WandB Run Name: {name}")
             logger.info(f"Running eval harness on model: {model_name_or_path}")
+
+            # Set environment variable to allow code evaluation
+            os.environ["HF_ALLOW_CODE_EVAL"] = "1"
 
             # NOTE(chris): Before, the batch size was 16, but this is too large for the 8B model.
             # In the future, we should make this user-configurable.
@@ -131,7 +137,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     task_spec=tasks,
                     max_examples=max_eval_instances,
                     log_samples=False,
-                    max_length=4096,
                 ),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,
@@ -140,7 +145,32 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 model=model_config,
             )
 
-            results = eval_harness.run_eval_harness_main(eval_config)
+            # Ensure unsafe tasks (e.g., humaneval) are allowed in lm-eval by
+            # defaulting confirm_run_unsafe_code=True in its API.
+            try:
+                from lm_eval import evaluator as _lm_eval_evaluator  # type: ignore
+
+                _original_evaluate = _lm_eval_evaluator.evaluate
+
+                def _evaluate_with_unsafe(*args, **kwargs):
+                    kwargs.setdefault("confirm_run_unsafe_code", True)
+                    return _original_evaluate(*args, **kwargs)
+
+                _lm_eval_evaluator.evaluate = _evaluate_with_unsafe  # type: ignore
+            except Exception:
+                pass
+
+            # NOTE(chiheem 2025-10-01): We suppress the stdout/stderr from the harness (per-sample prints)
+            # so that we don't overflow the buffer. The issue occurs at the levanter level.
+            if not show_logs_from_ray:
+                with contextlib.ExitStack() as stack:
+                    devnull_out = stack.enter_context(open(os.devnull, "w"))
+                    devnull_err = stack.enter_context(open(os.devnull, "w"))
+                    stack.enter_context(contextlib.redirect_stdout(devnull_out))
+                    stack.enter_context(contextlib.redirect_stderr(devnull_err))
+                    results = eval_harness.run_eval_harness_main(eval_config)
+            else:
+                results = eval_harness.run_eval_harness_main(eval_config)
 
             try:
                 # add a results.json to output path
