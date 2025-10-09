@@ -254,7 +254,8 @@ def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name:
 
     # try using gcloud compute tpu-vm ssh to forward keys
     logger.info("Setting up SSH keys...")
-    gcloud_ssh_cmd = f"gcloud compute tpu-vm ssh {tpu_name} --zone={zone} -- hostname"
+    gcloud_ssh_cmd = f"gcloud compute tpus tpu-vm ssh {tpu_name} --zone={zone} -- hostname"
+
     try:
         subprocess.run(
             shlex.split(gcloud_ssh_cmd),
@@ -263,7 +264,8 @@ def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name:
             text=True,
         )
         logger.info("SSH keys set up successfully via gcloud")
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Error when running gcloud compute tpu-vm ssh: {e.stdout}, error: {e.stderr}")
         logger.warning("gcloud compute tpu-vm ssh failed to set up SSH keys")
 
     # Check if Google Compute Engine SSH key exists
