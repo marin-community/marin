@@ -3291,7 +3291,7 @@ wheels = [
 
 [[package]]
 name = "haliax"
-version = "1.4.dev438"
+version = "1.4.dev443"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aqtp" },
@@ -3301,9 +3301,9 @@ dependencies = [
     { name = "jmp" },
     { name = "safetensors" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cf/ee/75a766157ba82d6b82effa7b432748b7e6693f6509ae43d71e177729eaee/haliax-1.4.dev438.tar.gz", hash = "sha256:e66873ed92c7c1c7aa432eac439d4b78bbad19fc27bea9300719182d5cc1ed2d", size = 812629, upload-time = "2025-10-07T17:19:35.407Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/66/e5/680fa8a8a9957e9f08c723abf215da8dbb28022ba0a56f9782c304ff5a53/haliax-1.4.dev443.tar.gz", hash = "sha256:9c95daf724d0be9a422b23a6c54679b741d0e1e410f93f8e303738a27495e600", size = 813662, upload-time = "2025-10-09T07:24:19.853Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4f/0c/81bb97c99c1aa33b6c8a0bc8f8e8db5b3b3fdb2b5911ac2454a8aae148e5/haliax-1.4.dev438-py3-none-any.whl", hash = "sha256:baf282cab7c900124c0e5f4f1ce5196fcc9634e1c1bfa4b4313c5a3e12c0685e", size = 138034, upload-time = "2025-10-07T17:19:33.519Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/61/ac171150ff12a32e589459f3a999126a9cd787de9de7abb14377302ce6ad/haliax-1.4.dev443-py3-none-any.whl", hash = "sha256:e523af1024afe2d6ab305ecabb5facdb7c1b256cd002b68fa144bbc8d1a20c79", size = 138799, upload-time = "2025-10-09T07:24:18.05Z" },
 ]
 
 [[package]]
@@ -4637,8 +4637,8 @@ requires-dist = [
     { name = "google-cloud-storage-transfer", marker = "extra == 'crawl'", specifier = "~=1.0" },
     { name = "google-cloud-storage-transfer", marker = "extra == 'download-transform'", specifier = "~=1.0" },
     { name = "google-cloud-storage-transfer", marker = "extra == 'gcp'" },
-    { name = "haliax", specifier = ">=1.4.dev418" },
-    { name = "haliax", marker = "extra == 'tokenize-train'", specifier = ">=1.4.dev348" },
+    { name = "haliax", specifier = ">=1.4.dev443" },
+    { name = "haliax", marker = "extra == 'tokenize-train'", specifier = ">=1.4.dev443" },
     { name = "html2text", marker = "extra == 'download-transform'", specifier = "==2024.2.26" },
     { name = "htmlmin", marker = "extra == 'crawl'" },
     { name = "htmlmin", marker = "extra == 'download-transform'" },
