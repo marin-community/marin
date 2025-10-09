@@ -27,7 +27,6 @@ from experiments.uncheatable_eval import uncheatable_eval_tokenized
 
 # Import shared components from exp1600_uncheatable_evals
 from experiments.evals.exp1600_uncheatable_evals import (
-    ModelConfig,
     model_with_config,
     get_directory_friendly_name,
 )
@@ -41,9 +40,9 @@ This experiment evaluates the correlation between perplexity and other metrics t
 
 EVAL_TASKS = [
     EvalTaskConfig("mmlu_sl_verb", num_fewshot=5, task_alias="mmlu_sl_verb_5_shot"),
-    # EvalTaskConfig("hellaswag", 10, task_alias="hellaswag_10shot"),  # 4-way MCQ commonsense reasoning dataset,
-    # EvalTaskConfig("gsm8k_loss", num_fewshot=8, task_alias="gsm8k_loss_8shot"),
-    # EvalTaskConfig("math_500_loss", num_fewshot=0),
+    EvalTaskConfig("hellaswag", 10, task_alias="hellaswag_10shot"),  # 4-way MCQ commonsense reasoning dataset,
+    EvalTaskConfig("gsm8k_loss", num_fewshot=8, task_alias="gsm8k_loss_8shot"),
+    EvalTaskConfig("math_500_loss", num_fewshot=0),
 ]
 
 steps = []
