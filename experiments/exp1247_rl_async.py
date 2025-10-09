@@ -142,7 +142,7 @@ def rl_train(name: str) -> ExecutorStep:
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         # Set the train batch size to num_rollout_workers * n_generations * n_prompts
         # to ensure we accept an entire training batch from the rollout workers.
-        train_batch_size=64 * 4,
+        train_batch_size=64,
         # microbatch to avoid OOM
         per_device_parallelism=16,
         num_train_steps=50000,
@@ -199,10 +199,10 @@ def rl_train(name: str) -> ExecutorStep:
         run_id=name,
         log_freq=10,
         run_config=RunConfig(
-            train_tpu_type="v5p-8",
+            train_tpu_type="v4-8",
             num_train_slices=1,
             num_rollout_workers=1,
-            inference_tpu_type="v5p-8",
+            inference_tpu_type="v4-8",
         ),
     )
 
@@ -223,7 +223,7 @@ def main():
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     experiments = [
-        rl_train(name=f"llama-1b-math-rl-test-power-{datestamp}"),
+        rl_train(name=f"llama-1b-math-rl-test-chris-{datestamp}"),
     ]
 
     executor_main(
