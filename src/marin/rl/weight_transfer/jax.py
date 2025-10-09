@@ -28,6 +28,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
+import haliax as hax
 import jax
 import jax.experimental.transfer as jax_transfer
 import numpy as np
@@ -39,6 +40,8 @@ from jaxtyping import PyTree
 from ray.actor import ActorHandle
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
+from marin.rl.robust_actor import RobustActor
+
 from .base import (
     WeightTransferClient,
     WeightTransferClientMetrics,
@@ -46,7 +49,6 @@ from .base import (
     WeightTransferServer,
     WeightTransferServerMetrics,
     WeightUpdate,
-    get_or_create_actor,
 )
 
 logger = logging.getLogger(__name__)
@@ -96,7 +98,6 @@ class _EnqueuedWeightTransferRequest:
 # -- Actual Coordinator --
 
 
-@ray.remote
 class WeightTransferCoordinator:
     """
     WeightTransferCoordinator is a Ray actor that coordinates weight transfers between a server and clients.
@@ -365,11 +366,11 @@ class JAXTransferServer(WeightTransferServer):
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
 
-        self.coordinator = get_or_create_actor(WeightTransferCoordinator, config.coordinator_name)
+        self.coordinator = RobustActor.create(WeightTransferCoordinator, actor_name=config.coordinator_name)
 
         # Start transfer server and register its address with coordinator
         self.transfer_server = start_transfer_server()
-        self.coordinator.register_transfer_server.remote(self.transfer_server.address())
+        self.coordinator.register_transfer_server.call(self.transfer_server.address())
         self._setup_cpu_transfer()
 
         # Single-item queue for polling
@@ -393,7 +394,7 @@ class JAXTransferServer(WeightTransferServer):
     def _transfer_to_cpu(self, model) -> PyTree:
         """Transfer params to CPU devices."""
         try:
-            with self.cpu_mesh:
+            with hax.set_mesh(self.cpu_mesh):
                 cpu_devices = jax.devices("cpu")
                 return jax.device_put(model, cpu_devices[0])
         except Exception as e:
@@ -454,7 +455,7 @@ class JAXTransferClient(WeightTransferClient):
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
 
-        self.coordinator = get_or_create_actor(WeightTransferCoordinator, config.coordinator_name)
+        self.coordinator = RobustActor.create(WeightTransferCoordinator, actor_name=config.coordinator_name)
 
         # Start transfer server for client (doesn't register address with coordinator)
         self.transfer_server = start_transfer_server()
@@ -493,7 +494,7 @@ class JAXTransferClient(WeightTransferClient):
 
         # First check if new weights are available without blocking
         try:
-            latest_weight_id, server_address = ray.get(self.coordinator.get_transfer_info.remote())
+            latest_weight_id, server_address = self.coordinator.get_transfer_info.call()
             logger.info(
                 "Current weight id %s, Latest weight ID: %s, Server address: %s",
                 self._last_received_weight_id,

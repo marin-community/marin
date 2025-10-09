@@ -20,7 +20,6 @@ weight transfer implementations.
 """
 
 import logging
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -67,13 +66,14 @@ class WeightUpdate:
 
 @dataclass
 class WeightTransferConfig:
-    mode: WeightTransferMode = WeightTransferMode.GCS_CHECKPOINT
+    mode: WeightTransferMode = WeightTransferMode.ARROW_FLIGHT
     # Common settings
-    sync_interval_steps: int = 100
-    poll_interval_seconds: float = 30.0
+    sync_interval_steps: int = 1
     coordinator_name: str = "weight_transfer_coordinator"
 
-    transfer_timeout: float = 5.0
+    transfer_timeout: float = 30.0
+    max_weight_transfer_wait_time: float = 0.0
+    """Maximum time (in seconds) to wait for new weights before proceeding. 0 means run ahead without waiting."""
 
     # GCS Checkpoint specific
     checkpoint_dir: str = ""
@@ -82,8 +82,6 @@ class WeightTransferConfig:
     # Arrow Flight specific
     flight_host: str = "0.0.0.0"
     flight_port: int = 0  # 0 = auto-assign
-    flight_batch_size: int = 1024 * 1024 * 100  # 100MB chunks
-    flight_use_tls: bool = False
 
 
 class WeightTransferServer(ABC):
@@ -132,36 +130,3 @@ class WeightTransferClient(ABC):
     @abstractmethod
     def get_metrics(self) -> dict:
         pass
-
-
-def get_or_create_actor(actor_class, name: str, *args, **kwargs):
-    """Fetch an existing actor reference or create it if it doesn't exist.
-
-    Args:
-        actor_class: Ray remote class (e.g., RayWeightCoordinator, WeightTransferCoordinator)
-        name: Actor name for registration
-        *args: Arguments to pass to actor constructor
-        max_retries: Number of retry attempts
-        **kwargs: Keyword arguments to pass to actor constructor
-
-    Returns:
-        Ray actor handle
-    """
-    max_retries = 5
-
-    for attempt in range(max_retries):
-        logger.info("Retrieving or creating actor '%s' (attempt %d)", name, attempt + 1)
-        try:
-            return actor_class.options(name=name, get_if_exists=True, max_restarts=-1).remote(*args, **kwargs)
-        except ValueError:
-            # Another process might have created it, wait and retry
-            if attempt < max_retries - 1:
-                retry_timeout = 0.1 * (attempt**2)
-                logger.info(
-                    "Actor '%s' not found, retrying in %.2f seconds (attempt %d)", name, retry_timeout, attempt + 1
-                )
-                time.sleep(retry_timeout)
-                continue
-            raise
-
-    raise RuntimeError(f"Failed to get or create actor '{name}' after {max_retries} attempts")

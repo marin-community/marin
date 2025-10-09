@@ -28,6 +28,7 @@ We can likely extract a bit more performance by:
 
 import dataclasses
 import logging
+import os
 import socket
 import threading
 import time
@@ -43,10 +44,13 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
 import ray
+import ray.actor
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree
 from levanter.utils.jax_utils import barrier_sync
+
+from marin.rl.robust_actor import RobustActor
 
 from .base import (
     WeightTransferClient,
@@ -55,7 +59,6 @@ from .base import (
     WeightTransferServer,
     WeightTransferServerMetrics,
     WeightUpdate,
-    get_or_create_actor,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,11 +79,15 @@ class ServerInfo:
 MAX_ELEMENTS_PER_RECORD = (2000 * 1000 * 1000) // 4
 
 # Thread pool configuration for parallel serving and fetching
-NUM_PARALLEL_SERVERS = 16
+_CPU_COUNT = os.cpu_count() or 1
+NUM_PARALLEL_SERVERS = max(1, _CPU_COUNT // 4)
+NUM_PARALLEL_RECEIVES = max(1, _CPU_COUNT // 4)
 
 
 def _create_binary_array(buffer_data: np.ndarray) -> pa.Array:
     """Construct a single element Arrow LargeBinary array from numpy buffer data without copies"""
+    # buffer_info = buffer_data.__array_interface__
+    # block = pa.foreign_buffer(buffer_info["data"][0], buffer_data.nbytes, base=buffer_data)
     block = pa.py_buffer(buffer_data)
     return pa.Array.from_buffers(
         pa.large_binary(),
@@ -90,7 +97,7 @@ def _create_binary_array(buffer_data: np.ndarray) -> pa.Array:
 
 
 def state_dict_to_batches(
-    state_dict: dict[str, np.ndarray], weight_id: int
+    state_dict: dict[str, np.ndarray], shape_dict: dict[str, tuple[int, ...]], weight_id: int
 ) -> dict[str, tuple[pa.Schema, Sequence[pa.RecordBatch]]]:
     """Convert state_dict to Arrow RecordBatch per parameter using Haliax state_dict for efficient transfer.
 
@@ -119,7 +126,7 @@ def state_dict_to_batches(
     )
 
     for name, value in state_dict.items():
-        shape = value.shape
+        shape = shape_dict[name]
         is_scalar = len(shape) == 0
         dtype = value.dtype
         sz += value.nbytes
@@ -128,7 +135,8 @@ def state_dict_to_batches(
             splits = [value]
             total_parts = 1
         else:
-            splits = np.array_split(value.flatten(), max(1, value.size // MAX_ELEMENTS_PER_RECORD))
+            assert value.ndim == 1, f"Expected flattened array for parameter {value.shape}"
+            splits = np.array_split(value, max(1, value.size // MAX_ELEMENTS_PER_RECORD))
             total_parts = len(splits)
 
         # Create batches for each split
@@ -201,7 +209,6 @@ def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -
         return res
 
 
-@ray.remote(num_cpus=0)
 class ArrowFlightCoordinator:
     """Ray actor for coordinating Arrow Flight weight transfers."""
 
@@ -315,7 +322,6 @@ class ArrowFlightServer(WeightTransferServer):
     _flight_servers: list[MarinFlightServer]
     _server_threads: list[threading.Thread]
     _server_locations: list[str]
-    coordinator: ray.actor.ActorHandle
     metrics: WeightTransferServerMetrics
 
     def __init__(
@@ -356,10 +362,8 @@ class ArrowFlightServer(WeightTransferServer):
 
             logger.info(f"Arrow Flight server {i} started at {server_location}")
 
-        # Get coordinator
-        self.coordinator = get_or_create_actor(ArrowFlightCoordinator, config.coordinator_name)
-
         self.metrics = WeightTransferServerMetrics()
+        self._coordinator = RobustActor.create(ArrowFlightCoordinator, actor_name=self.config.coordinator_name)
 
     def serve_weights(self, weight_id: int, model: PyTree) -> None:
         """Serve weights via Arrow Flight using Haliax state_dict serialization.
@@ -368,7 +372,6 @@ class ArrowFlightServer(WeightTransferServer):
         """
         self.metrics.total_transfers += 1
 
-        logger.info(f"Serving weights for weight_id {weight_id} via {self.num_servers} Arrow Flight servers...")
         start_time = time.time()
         try:
             barrier_sync()
@@ -376,11 +379,13 @@ class ArrowFlightServer(WeightTransferServer):
             if jax.process_index() == 0:
                 # Fetching the entire state dict to CPU allows JAX to parallelize the individual transfers
                 state_dict = hsd.to_state_dict(model)
-                state_dict = jax.device_get(state_dict)
+                shape_dict = jax.tree.map(lambda y: y.shape, state_dict)
+                flat_dict = jax.tree.map(lambda y: y.reshape(-1), state_dict)
+                flat_dict = jax.device_get(flat_dict)
                 copy_time = time.time()
 
                 # Convert to Arrow RecordBatch per parameter
-                params_dict = state_dict_to_batches(state_dict, weight_id)
+                params_dict = state_dict_to_batches(flat_dict, shape_dict, weight_id)
                 serialize_time = time.time()
 
                 for flight_server in self._flight_servers:
@@ -392,7 +397,7 @@ class ArrowFlightServer(WeightTransferServer):
                 param_names = list(params_dict.keys())
                 actual_host = self.config.flight_host if self.config.flight_host != "0.0.0.0" else socket.gethostname()
                 server_locations = [(actual_host, server.port) for server in self._flight_servers]
-                ray.get(self.coordinator.update_server.remote(weight_id, param_names, server_locations))
+                self._coordinator.update_server.call(weight_id, param_names, server_locations)
                 update_time = time.time()
 
                 self.metrics.successful_transfers += 1
@@ -411,13 +416,12 @@ class ArrowFlightServer(WeightTransferServer):
         except Exception as e:
             self.metrics.failed_transfers += 1
             logger.error(f"Failed to serve weights {weight_id} via Arrow Flight: {e}")
-            raise
 
     def cleanup(self) -> None:
         """Cleanup Flight server resources."""
         # shutdown servers in parallel in threads to avoid blocking on shutdown
         for flight_server in self._flight_servers:
-            logger.info(f"Shutting down Arrow Flight server at {flight_server._location}...")
+            logger.debug(f"Shutting down Arrow Flight server at {flight_server._location}...")
             threading.Thread(target=flight_server.shutdown, daemon=True).start()
 
     def get_metrics(self) -> WeightTransferServerMetrics:
@@ -445,15 +449,13 @@ class ArrowFlightClient(WeightTransferClient):
         self.mesh = mesh
         self.axis_mapping = axis_mapping
 
-        # Get coordinator
-        self._coordinator = get_or_create_actor(ArrowFlightCoordinator, config.coordinator_name)
-
         self._last_weight_id = None
         self._flight_clients = []
         self._server_locations = []
 
         self.metrics = WeightTransferClientMetrics()
-        self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_SERVERS)
+        self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_RECEIVES)
+        self._coordinator = RobustActor.create(ArrowFlightCoordinator, actor_name=self.config.coordinator_name)
 
     def _connect_to_servers(self, new_locations) -> bool:
         """Connect to all Arrow Flight servers."""
@@ -510,7 +512,7 @@ class ArrowFlightClient(WeightTransferClient):
             start_time = time.time()
 
             # Fetch server info from coordinator
-            server_info = ray.get(self._coordinator.fetch_server.remote())
+            server_info = self._coordinator.fetch_server.call()
 
             if not server_info:
                 logger.info("No Arrow Flight server info available from coordinator.")
@@ -540,7 +542,7 @@ class ArrowFlightClient(WeightTransferClient):
             fetch_time = time.time()
 
             # Convert back to model using state_dict and move to target device
-            with self.mesh, hax.axis_mapping(self.axis_mapping):
+            with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
                 model = update_model(old_model, state_dict)
 
             decode_time = time.time()
@@ -572,13 +574,6 @@ class ArrowFlightClient(WeightTransferClient):
             logger.info("Thread pool shutdown completed")
         except Exception as e:
             logger.warning(f"Error shutting down thread pool: {e}")
-
-        logger.info("Closing Arrow Flight client connection...")
-        for client in self._flight_clients:
-            try:
-                client.close()
-            except Exception as e:
-                logger.warning(f"Error during Arrow Flight client cleanup: {e}")
 
     def get_metrics(self) -> dict:
         return dataclasses.asdict(self.metrics)

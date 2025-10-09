@@ -66,11 +66,20 @@ class ClusterInfo:
 
 
 @dataclass
+class RayPortMapping:
+    """Local port mappings for SSH tunnel to a Ray cluster."""
+
+    dashboard_port: int  # Ray dashboard (default 8265)
+    gcs_port: int  # Ray GCS (default 6379)
+    api_port: int  # Ray API server (default 10001)
+
+
+@dataclass
 class DashboardConnection:
     """Manages SSH tunnel and proxy for one or more clusters."""
 
     clusters: dict[str, ClusterInfo]  # cluster_name -> info
-    port_mappings: dict[str, tuple[int, int, int]]  # cluster_name -> (dashboard, gcs, api)
+    port_mappings: dict[str, RayPortMapping]  # cluster_name -> port mapping
     ssh_process: subprocess.Popen
     proxy: "DashboardProxy | None" = None
 
@@ -82,7 +91,7 @@ class DashboardConnection:
 
         # Single cluster or specific cluster requested
         name = cluster_name or next(iter(self.clusters.keys()))
-        dashboard_port = self.port_mappings[name][0]
+        dashboard_port = self.port_mappings[name].dashboard_port
         return f"http://localhost:{dashboard_port}"
 
 
@@ -220,7 +229,7 @@ class DashboardInfo:
     ssh_process: subprocess.Popen
 
 
-def allocate_ports(clusters: dict[str, ClusterInfo]) -> dict[str, tuple[int, int, int]]:
+def allocate_ports(clusters: dict[str, ClusterInfo]) -> dict[str, RayPortMapping]:
     """Allocate local ports for each cluster using Ray's traditional ports.
 
     First cluster uses Ray defaults: 8265 (dashboard), 6379 (GCS), 10001 (API).
@@ -238,7 +247,7 @@ def allocate_ports(clusters: dict[str, ClusterInfo]) -> dict[str, tuple[int, int
         dashboard_port = find_free_port(next_dashboard_port)
         gcs_port = find_free_port(next_gcs_port)
         api_port = find_free_port(next_api_port)
-        port_mappings[cluster_name] = (dashboard_port, gcs_port, api_port)
+        port_mappings[cluster_name] = RayPortMapping(dashboard_port=dashboard_port, gcs_port=gcs_port, api_port=api_port)
         next_dashboard_port = dashboard_port + 1
         next_gcs_port = gcs_port + 1
         next_api_port = api_port + 1
@@ -355,7 +364,7 @@ def discover_active_clusters() -> dict[str, ClusterInfo]:
 
 
 def create_ssh_proxy_chain(
-    clusters: dict[str, ClusterInfo], port_mappings: dict[str, tuple[int, int, int]]
+    clusters: dict[str, ClusterInfo], port_mappings: dict[str, RayPortMapping]
 ) -> subprocess.Popen:
     """Create single SSH connection that proxies to all cluster head nodes.
 
@@ -384,12 +393,12 @@ def create_ssh_proxy_chain(
     # Add port forwards for each cluster
     for cluster_name in cluster_names:
         cluster = clusters[cluster_name]
-        dashboard_port, gcs_port, api_port = port_mappings[cluster_name]
+        ports = port_mappings[cluster_name]
         ssh_cmd.extend(
             [
-                f"-L{dashboard_port}:{cluster.head_ip}:8265",
-                f"-L{gcs_port}:{cluster.head_ip}:6379",
-                f"-L{api_port}:{cluster.head_ip}:10001",
+                f"-L{ports.dashboard_port}:{cluster.head_ip}:8265",
+                f"-L{ports.gcs_port}:{cluster.head_ip}:6379",
+                f"-L{ports.api_port}:{cluster.head_ip}:10001",
             ]
         )
 
@@ -428,7 +437,7 @@ def create_ssh_proxy_chain(
 
 
 def wait_for_tunnel(
-    clusters: dict[str, ClusterInfo], port_mappings: dict[str, tuple[int, int, int]], timeout: int = 3
+    clusters: dict[str, ClusterInfo], port_mappings: dict[str, RayPortMapping], timeout: int = 3
 ) -> None:
     """Wait for SSH tunnel to be ready by testing dashboard connections."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -449,7 +458,7 @@ def wait_for_tunnel(
         # Test all dashboards concurrently
         with ThreadPoolExecutor(max_workers=len(clusters)) as executor:
             futures = {
-                executor.submit(check_dashboard, cluster_name, port_mappings[cluster_name][0]): cluster_name
+                executor.submit(check_dashboard, cluster_name, port_mappings[cluster_name].dashboard_port): cluster_name
                 for cluster_name in clusters
             }
 
@@ -521,13 +530,13 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
     # For single cluster, set Ray environment variables
     if len(clusters) == 1:
         cluster_name = next(iter(clusters.keys()))
-        dashboard_port, gcs_port, api_port = port_mappings[cluster_name]
+        ports = port_mappings[cluster_name]
 
         # Set new values
-        os.environ["RAY_ADDRESS"] = f"http://localhost:{dashboard_port}"
-        os.environ["RAY_API_SERVER_ADDRESS"] = f"ray://localhost:{api_port}"
-        os.environ["RAY_DASHBOARD_ADDRESS"] = f"http://localhost:{dashboard_port}"
-        os.environ["RAY_GCS_ADDRESS"] = f"localhost:{gcs_port}"
+        os.environ["RAY_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
+        os.environ["RAY_API_SERVER_ADDRESS"] = f"ray://localhost:{ports.api_port}"
+        os.environ["RAY_DASHBOARD_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
+        os.environ["RAY_GCS_ADDRESS"] = f"localhost:{ports.gcs_port}"
     else:
         # Multiple clusters - start Flask proxy
         proxy = DashboardProxy(clusters, port_mappings, config.proxy_port)
@@ -540,7 +549,7 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
             import ray
 
             cluster_name = next(iter(clusters.keys()))
-            api_port = port_mappings[cluster_name][2]
+            api_port = port_mappings[cluster_name].api_port
             ray.init(address=f"ray://localhost:{api_port}", runtime_env={"working_dir": "."})
 
         yield connection

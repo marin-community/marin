@@ -21,7 +21,8 @@ import pytest
 
 try:
     from marin.rl import train_batch
-    from marin.rl.replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader
+    from marin.rl.replay_buffer import ReplayBuffer, ReplayDataLoader
+    from marin.rl.rl_losses import RLOOLoss
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 from marin.rl.rollout_storage import (
@@ -35,16 +36,28 @@ from marin.rl.types import (
 )
 
 
-def rollouts_to_training_batch(rollouts, max_input_length=16, max_output_length=16, pad_token_id=0):
+def rollouts_to_training_batch(rollouts, max_tokens=32, pad_token_id=0):
     """Helper function to convert rollouts to training batch for testing."""
-    return train_batch.create_training_batch_from_rollouts(rollouts, max_input_length, max_output_length, pad_token_id)
+    return train_batch.create_training_batch_from_rollouts(rollouts, max_tokens, pad_token_id)
 
 
-def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16, env_name: str | None = None) -> RolloutBatch:
+def create_test_batch(
+    idx: int,
+    batch_size: int = 2,
+    max_seq_len: int = 16,
+    env_name: str | None = None,
+    weight_step: int = 0,
+    timestamp: float | None = None,
+) -> RolloutBatch:
     """Helper to create test batches with identifiable tokens for testing."""
     rng = np.random.default_rng(42 + idx)
     if env_name is None:
         env_name = f"test_env_{idx}"
+    if timestamp is None:
+        timestamp = time.time()
+
+    # Create batch metadata
+    batch_metadata = RolloutMetadata(worker_id="test_worker", timestamp=timestamp, weight_step=weight_step)
 
     # Create individual rollouts with identifiable tokens
     rollouts = []
@@ -71,6 +84,7 @@ def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16, env_
             response_logprobs=response_logprobs,
             token_rewards=token_rewards,
             episode_reward=episode_reward,
+            metadata=batch_metadata,
         )
         rollouts.append(rollout)
 
@@ -78,8 +92,7 @@ def create_test_batch(idx: int, batch_size: int = 2, max_seq_len: int = 16, env_
     group = RolloutGroup(rollouts=rollouts)
 
     # Create batch
-    metadata = RolloutMetadata(worker_id="test_worker", timestamp=time.time(), weight_step=0)
-    return RolloutBatch(groups=[group], metadata=metadata)
+    return RolloutBatch(groups=[group], metadata=batch_metadata)
 
 
 def test_replay_buffer():
@@ -95,10 +108,15 @@ def test_replay_buffer():
             writer.write_batch(batch)
 
     replay_buffer = ReplayBuffer(
-        config=ReplayBufferConfig(capacity=100, alpha=3.0, max_samples=-1),
+        capacity=100,
         local_batch_size=4,
-        process_id=0,
+        alpha=3.0,
         total_processes=1,
+        max_samples=-1,
+        max_rollout_step_delay=1000,
+        max_rollout_timestamp_delay=3600.0,
+        loss_module=RLOOLoss(),
+        seed=42,
     )
 
     # Add batches to replay buffer
@@ -141,10 +159,15 @@ def test_replay_buffer_recency_bias():
         batches.append(batch)
 
     replay_buffer = ReplayBuffer(
-        config=ReplayBufferConfig(capacity=100, alpha=10.0, max_samples=-1),  # Very strong recency bias
+        capacity=100,
         local_batch_size=50,
-        process_id=0,
+        alpha=10.0,
         total_processes=1,
+        max_samples=-1,
+        max_rollout_step_delay=1000,
+        max_rollout_timestamp_delay=3600.0,
+        loss_module=RLOOLoss(),
+        seed=42,
     )
     replay_buffer.add_batches(batches)
 
@@ -171,10 +194,15 @@ def test_replay_buffer_recency_bias():
 def test_replay_buffer_capacity_eviction():
     """Test that replay buffer respects capacity limits and evicts old data."""
     replay_buffer = ReplayBuffer(
-        config=ReplayBufferConfig(capacity=3, alpha=2.0, max_samples=-1),
+        capacity=3,
         local_batch_size=4,
-        process_id=0,
+        alpha=2.0,
         total_processes=1,
+        max_samples=-1,
+        max_rollout_step_delay=1000,
+        max_rollout_timestamp_delay=3600.0,
+        loss_module=RLOOLoss(),
+        seed=42,
     )
 
     for i in range(5):
@@ -193,10 +221,15 @@ def test_replay_buffer_capacity_eviction():
 def test_replay_buffer_max_resamples():
     """Test that examples are retired after max_resamples uses."""
     replay_buffer = ReplayBuffer(
-        config=ReplayBufferConfig(capacity=100, alpha=1.0, max_samples=3),  # Uniform sampling for predictable behavior
+        capacity=100,
         local_batch_size=2,
-        process_id=0,
+        alpha=1.0,
         total_processes=1,
+        max_samples=3,
+        max_rollout_step_delay=1000,
+        max_rollout_timestamp_delay=3600.0,
+        loss_module=RLOOLoss(),
+        seed=42,
     )
 
     # Create batch with identifiable examples (already has identifiable tokens)
@@ -226,10 +259,15 @@ def test_replay_buffer_max_resamples():
 def test_replay_buffer_max_resamples_disabled():
     """Test that max_resamples=-1 disables retirement."""
     replay_buffer = ReplayBuffer(
-        config=ReplayBufferConfig(capacity=100, alpha=1.0, max_samples=-1),  # Disabled
+        capacity=100,
         local_batch_size=2,
-        process_id=0,
+        alpha=1.0,
         total_processes=1,
+        max_samples=-1,
+        max_rollout_step_delay=1000,
+        max_rollout_timestamp_delay=3600.0,
+        loss_module=RLOOLoss(),
+        seed=42,
     )
 
     # Add small batch
@@ -255,10 +293,15 @@ def test_replay_buffer_max_resamples_disabled():
 def test_replay_buffer_max_resamples_multiple_envs():
     """Test max_resamples with multiple environments."""
     replay_buffer = ReplayBuffer(
-        config=ReplayBufferConfig(capacity=100, alpha=1.0, max_samples=2),
+        capacity=100,
         local_batch_size=3,
-        process_id=0,
+        alpha=1.0,
         total_processes=1,
+        max_samples=2,
+        max_rollout_step_delay=1000,
+        max_rollout_timestamp_delay=3600.0,
+        loss_module=RLOOLoss(),
+        seed=42,
     )
 
     # Add batches from different environments (identifiable tokens already set)
@@ -290,18 +333,21 @@ def test_replay_buffer_max_resamples_multiple_envs():
 
 def test_replay_buffer_weight_step_filtering():
     replay_buffer = ReplayBuffer(
-        config=ReplayBufferConfig(capacity=100, alpha=2.0, max_samples=-1, max_rollout_delay=30),
+        capacity=100,
         local_batch_size=4,
-        process_id=0,
+        alpha=2.0,
         total_processes=1,
+        max_samples=-1,
+        max_rollout_step_delay=30,
+        max_rollout_timestamp_delay=3600.0,
+        loss_module=RLOOLoss(),
+        seed=42,
     )
 
     # Create batches with weight_steps 50, 100, 150
     for weight_step in [50, 100, 150]:
-        batch = create_test_batch(weight_step, batch_size=4, max_seq_len=16, env_name="test_env")
-        batch = RolloutBatch(
-            groups=batch.groups,
-            metadata=RolloutMetadata(worker_id="test", timestamp=time.time(), weight_step=weight_step),
+        batch = create_test_batch(
+            weight_step, batch_size=4, max_seq_len=16, env_name="test_env", weight_step=weight_step
         )
         replay_buffer.add_batches([batch])
 
@@ -316,10 +362,7 @@ def test_replay_buffer_weight_step_filtering():
     assert replay_buffer.size() == 4
 
     # Add new batch with weight_step=180
-    new_batch = create_test_batch(180, batch_size=3, max_seq_len=16, env_name="test_env")
-    new_batch = RolloutBatch(
-        groups=new_batch.groups, metadata=RolloutMetadata(worker_id="test", timestamp=time.time(), weight_step=180)
-    )
+    new_batch = create_test_batch(180, batch_size=3, max_seq_len=16, env_name="test_env", weight_step=180)
     replay_buffer.add_batches([new_batch])
 
     # Should now have 7 total (4 from weight_step=150 + 3 from weight_step=180)
@@ -328,3 +371,48 @@ def test_replay_buffer_weight_step_filtering():
     # Set current step to 190, min_step=160, should filter out weight_step=150
     replay_buffer.set_current_step(190)
     assert replay_buffer.size() == 3
+
+
+def test_replay_buffer_rollout_delay_progressive():
+    """Test rollout delay with progressive step advancement and stale batch rejection."""
+    replay_buffer = ReplayBuffer(
+        capacity=100,
+        local_batch_size=2,
+        alpha=2.0,
+        total_processes=1,
+        max_samples=-1,
+        max_rollout_step_delay=10,
+        max_rollout_timestamp_delay=3600.0,
+        loss_module=RLOOLoss(),
+        seed=42,
+    )
+
+    # Add initial batches at steps 0, 5, 10
+    for step in [0, 5, 10]:
+        batch = create_test_batch(step, batch_size=2, max_seq_len=16, env_name="test_env", weight_step=step)
+        replay_buffer.add_batches([batch])
+
+    assert replay_buffer.size() == 6
+
+    # Advance to step 15, min_step=5, should filter out step 0
+    replay_buffer.set_current_step(15)
+    assert replay_buffer.size() == 4
+
+    # Try to add a stale batch (step 3 < min_step=5), should be rejected
+    stale_batch = create_test_batch(3, batch_size=2, max_seq_len=16, env_name="test_env", weight_step=3)
+    replay_buffer.add_batches([stale_batch])
+    assert replay_buffer.size() == 4  # Size unchanged
+
+    # Add a fresh batch (step 14 >= min_step=5), should be accepted
+    fresh_batch = create_test_batch(14, batch_size=3, max_seq_len=16, env_name="test_env", weight_step=14)
+    replay_buffer.add_batches([fresh_batch])
+    assert replay_buffer.size() == 7
+
+    # Advance to step 20, min_step=10, should filter out step 5
+    replay_buffer.set_current_step(20)
+    assert replay_buffer.size() == 5  # Only steps 10 and 14 remain
+
+    # Verify we can still sample from remaining data
+    sample = replay_buffer.sample_rollouts()
+    assert sample is not None
+    assert len(sample) == 2

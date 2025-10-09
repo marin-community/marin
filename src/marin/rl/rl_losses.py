@@ -14,11 +14,16 @@
 
 """RL loss functions."""
 
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Protocol
+
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmHeadModel
-from optax import softmax_cross_entropy_with_integer_labels
 
 from marin.rl.types import Rollout, TrainingBatch
 
@@ -26,80 +31,20 @@ from marin.rl.types import Rollout, TrainingBatch
 # of computing outputs themselves.
 
 
-def ppo_loss(
-    model: LmHeadModel,
-    reference_model: LmHeadModel,
-    batch: TrainingBatch,
-    *,
-    key: jax.Array | None,
-    kl_coef: float,
-    clip_epsilon: float,
-) -> jax.Array:
-    """Compute PPO-style loss with RLOO advantages."""
-    reference_output = reference_model(
-        input_ids=batch.input_ids,
-        attn_mask=batch.attention_mask,
-        pos_ids=batch.position_ids,
-        key=key,
-    )
+class RLLossModule(Protocol):
+    """Defines the interface used for computing RL loss & advantages."""
 
-    model_output = model(
-        input_ids=batch.input_ids,
-        attn_mask=batch.attention_mask,
-        pos_ids=batch.position_ids,
-        key=key,
-    )
+    def build(self, reference_model: eqx.Module) -> eqx.Module:
+        """Initialize any learned components (e.g., value heads)."""
+        ...
 
-    logits = model_output.array.astype(jnp.float32)
+    def compute_advantages(self, rollout_group: list[Rollout]) -> np.ndarray:
+        """Compute advantages for a group of rollouts."""
+        ...
 
-    target_ids_array = batch.target_ids.array
-
-    reference_logits = reference_output.array
-    reference_logits_array = reference_logits.astype(jnp.float32)
-    reference_logprobs_array = -softmax_cross_entropy_with_integer_labels(reference_logits_array, target_ids_array)
-
-    token_ce_loss = softmax_cross_entropy_with_integer_labels(logits, target_ids_array)
-    current_logprobs = -token_ce_loss
-
-    # Get the old policy's log probs (from the worker policy that collected the data)
-    old_logprobs = batch.policy_logprobs.array
-
-    # Compute importance sampling ratio exp(log π_current - log π_old)
-    log_ratio = current_logprobs - old_logprobs
-    ratio = jnp.exp(log_ratio)
-
-    # RLOO advantages (returned from the worker, and smeared across tokens)
-    advantages = batch.loss_weights.array
-
-    # Get the mask for valid tokens (e.g., excluding padding)
-    mask = batch.loss_masks.array
-
-    # PPO objective with clipping
-    # We want to maximize advantage-weighted log probs, so we minimize the negative
-
-    # Unclipped surrogate objective: ratio * advantage
-    surrogate_1 = ratio * advantages
-
-    # Clipped surrogate objective
-    clipped_ratio = jnp.clip(ratio, 1 - clip_epsilon, 1 + clip_epsilon)
-    surrogate_2 = clipped_ratio * advantages
-
-    # PPO takes the minimum of the two (pessimistic bound)
-    # We're minimizing negative rewards, so we take minimum of surrogate objectives
-    # then negate to convert maximization to minimization
-    ppo_loss_per_token = -jnp.minimum(surrogate_1, surrogate_2)
-
-    # Apply mask and average
-    ppo_loss = jnp.sum(ppo_loss_per_token * mask) / jnp.maximum(jnp.sum(mask), 1.0)
-
-    # KL penalty from reference policy (optional regularization)
-    # KL(π_current || π_ref) ≈ π_current * (log π_current - log π_ref)
-    kl_div = jnp.exp(current_logprobs) * (current_logprobs - reference_logprobs_array)
-    kl_loss = jnp.sum(kl_div * mask) / jnp.maximum(jnp.sum(mask), 1.0)
-
-    # Total loss
-    total_loss = ppo_loss + kl_coef * kl_loss
-    return total_loss
+    def create_loss_fn(self, reference_model: eqx.Module, train_model: eqx.Module) -> Callable:
+        """Create the loss function for training."""
+        ...
 
 
 def rloo_loss_with_importance_sampling(
@@ -110,7 +55,7 @@ def rloo_loss_with_importance_sampling(
     key: jax.Array | None,
     kl_coef: float,
     clip_epsilon: float,
-) -> jax.Array:
+) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Compute RLOO (Reward Leave-One-Out) loss with importance sampling for off-policy data.
 
     Args:
@@ -123,71 +68,92 @@ def rloo_loss_with_importance_sampling(
     Returns:
         Tuple of (loss, aux_metrics)
     """
-    target_ids_array = batch.target_ids.array
     policy_logprobs_array = batch.policy_logprobs.array
     loss_weights_array = batch.loss_weights.array
     loss_masks_array = batch.loss_masks.array
 
+    batch_size, seq_len = batch.input_ids.array.shape
+
     # Get logits from current policy
     model_output = model(
         input_ids=batch.input_ids,
-        attn_mask=batch.attention_mask,
+        attn_mask=AttentionMask.causal(),
         pos_ids=batch.position_ids,
         key=key,
     )
 
     reference_output = reference_model(
         input_ids=batch.input_ids,
-        attn_mask=batch.attention_mask,
+        attn_mask=AttentionMask.causal(),
         pos_ids=batch.position_ids,
         key=key,
     )
 
-    reference_logits = reference_output.array
-    reference_logits_array = reference_logits.astype(jnp.float32)
-    reference_logprobs_array = -softmax_cross_entropy_with_integer_labels(reference_logits_array, target_ids_array)
+    # logits[i] predicts token at position i+1
+    # We want logprob[j] = P(token[j] | tokens[0:j])
+    # This comes from logits[j-1] indexed by token[j]
+    logits_array = model_output.array.astype(jnp.float32)[:, :-1, :]  # Drop last position [batch, seq_len-1, vocab]
+    reference_logits_array = reference_output.array.astype(jnp.float32)[:, :-1, :]  # Drop last position
 
-    logits = model_output
-    logits_array = logits.array
-    logits_array = logits_array.astype(jnp.float32)
-    token_loss = softmax_cross_entropy_with_integer_labels(logits_array, target_ids_array)
+    target_ids_array = batch.input_ids.array[:, 1:]  # Drop first position [batch, seq_len-1]
 
-    current_logprobs = -token_loss
+    # Compute log probabilities
+    log_probs = jax.nn.log_softmax(logits_array, axis=-1)
+    reference_log_probs = jax.nn.log_softmax(reference_logits_array, axis=-1)
+
+    batch_idx = jnp.arange(batch_size)[:, None]
+    pos_idx = jnp.arange(seq_len - 1)
+
+    # Extract logprobs for the actual tokens
+    current_logprobs_shifted = log_probs[batch_idx, pos_idx, target_ids_array]  # [batch, seq_len-1]
+    reference_logprobs_shifted = reference_log_probs[batch_idx, pos_idx, target_ids_array]  # [batch, seq_len-1]
+
+    # Prepend zeros for position 0 (no context to predict from)
+    current_logprobs = jnp.concatenate([jnp.zeros((batch_size, 1)), current_logprobs_shifted], axis=1)
+    reference_logprobs_array = jnp.concatenate([jnp.zeros((batch_size, 1)), reference_logprobs_shifted], axis=1)
+
+    # jax.debug.print("predicted_logprobs_array {current_logprobs}", current_logprobs=current_logprobs)
+    # jax.debug.print(
+    #     "reference_logprobs_array {reference_logprobs_array}", reference_logprobs_array=reference_logprobs_array
+    # )
+    # jax.debug.print("policy_logprobs_array {policy_logprobs_array}", policy_logprobs_array=policy_logprobs_array)
 
     # importance sampling since we're using off-policy data
     # ratio = π_current(a|s) / π_old(a|s) = log(π_current) - log(π_old)
+    # mask the input tokens to ignore them in the loss
+    current_logprobs = current_logprobs * loss_masks_array
+    reference_logprobs_array = reference_logprobs_array * loss_masks_array
+
     log_ratio = jnp.subtract(current_logprobs, policy_logprobs_array)
     ratio = jnp.exp(log_ratio)
 
     # N.B. This should be enabled, but we seem to be training far enough
     # off of policy that we're not learning anything when we clip.
-    ratio = jnp.clip(ratio, min=1.0 - clip_epsilon, max=1.0 + clip_epsilon)
+    clipped_ratio = jnp.clip(ratio, min=1.0 - clip_epsilon, max=1.0 + clip_epsilon)
 
     # RLOO loss with importance sampling
     # batch["loss_weights"] contains RLOO advantages: r_i - mean(r_j for j≠i)
-    weighted_loss = -ratio * loss_weights_array * loss_masks_array
+    weighted_loss = -clipped_ratio * loss_weights_array * loss_masks_array
     reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)
 
     # KL regularization
-    kl_penalty = jnp.exp(current_logprobs) * (current_logprobs - reference_logprobs_array)
+    log_ratio = (current_logprobs - reference_logprobs_array) * loss_masks_array
+    # https://github.com/openai/lm-human-preferences/blob/cbfd210bb8b08f6bc5c26878c10984b90f516c66/lm_human_preferences/train_policy.py#L151
+    kl_penalty = log_ratio**2
     kl_loss = kl_coef * jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
 
     loss = reinforce_loss + kl_loss
-    return loss
+    return loss, {
+        "ratio_mean": jnp.mean(ratio),
+        "clipped_ratio_mean": jnp.mean(clipped_ratio),
+        "reinforce_loss": reinforce_loss,
+        "kl_loss": kl_loss,
+        "kl_penalty": jnp.mean(kl_penalty),
+    }
 
 
 def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
-    """Compute RLOO (Reward Leave-One-Out) advantages for a group of rollouts.
-
-    This is a standalone version of RolloutGroup.compute_rloo_advantages() that
-    can be used independently.
-
-    Args:
-        rollouts: List of rollouts to compute advantages for
-
-    Returns:
-        Array of advantages, one per rollout
-    """
+    """Compute RLOO (Reward Leave-One-Out) advantages for a group of rollouts."""
     rewards = np.array([r.episode_reward for r in rollouts])
     n = len(rewards)
     if n <= 1:
@@ -196,8 +162,30 @@ def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     total = rewards.sum()
     leave_one_out_baselines = (total - rewards) / (n - 1)
     advantages = rewards - leave_one_out_baselines
-
-    # Add random noise to avoid failure cases when all rewards are identical
-    generator = np.random.default_rng()
-    advantages += generator.normal(loc=0.0, scale=1e-6, size=advantages.shape)
     return advantages
+
+
+@dataclass
+class RLOOLoss:
+    """RLOO loss with importance sampling."""
+
+    kl_coef: float = 0.1
+    clip_epsilon: float = 0.2
+
+    def build(self, reference_model: eqx.Module) -> eqx.Module:
+        """Initialize any learned components (e.g., value heads)."""
+        return self  # No learned parameters
+
+    def compute_advantages(self, rollout_group: list[Rollout]) -> list[float]:
+        """Compute advantages for a group of rollouts."""
+        return compute_rloo_advantages(rollout_group)
+
+    def create_loss_fn(self, reference_model: eqx.Module, train_model: eqx.Module) -> Callable:
+        """Create the loss function for training."""
+
+        def loss_fn(model, batch, key):
+            return rloo_loss_with_importance_sampling(
+                model, reference_model, batch, key=key, kl_coef=self.kl_coef, clip_epsilon=self.clip_epsilon
+            )
+
+        return loss_fn
