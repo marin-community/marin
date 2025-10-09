@@ -17,12 +17,13 @@ Experiment to test environment evaluation using evaluate_environment.py
 """
 
 import logging
+import os
 
 from marin.execution.executor import executor_main
 from marin.post_training.environments.prime_intellect_env import PrimeIntellectEnv
 from marin.rl.evaluate_environment import evaluate_environment
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 def create_eval_step():
@@ -35,15 +36,22 @@ def create_eval_step():
     env = PrimeIntellectEnv(
         env_id="willb/gsm8k",
         env_args={
-            "num_train_examples": -1,
+            "num_train_examples": 0,
             "num_eval_examples": 100,
         },
     )
 
     # Create evaluation step
+    prefix = os.environ["MARIN_PREFIX"]
+    assert len(prefix) > 0, "MARIN_PREFIX is not set"
+
+    output_path = os.path.join(prefix, "env_evals/test_evaluation")
+    
     eval_step = evaluate_environment(
         model=model_checkpoint,
         env=env,
+        name="evaluate-test-environment-4B",
+        output_path=output_path,
     )
 
     return eval_step
