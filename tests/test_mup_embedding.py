@@ -31,7 +31,7 @@ def test_mup_embedding_unembedding_scale():
     Embed = (hax.Axis("E", 3),)
 
     weight = hax.ones(hax.concat_axis_specs(Vocab, Embed))
-    layer = Embedding(weight=weight, Vocab=Vocab, Embed=Embed, reparam=EmbeddingMup(Embed, Vocab))
+    layer = Embedding(weight=weight, Vocab=Vocab, Embed=Embed, _reparam_cls=EmbeddingMup)
 
     scale = layer.reparam.unembed_active_scale
     assert scale == pytest.approx(1.0 / hax.axis_size(Embed))

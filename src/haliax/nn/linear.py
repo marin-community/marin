@@ -45,8 +45,13 @@ class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
 
     In: AxisSpec = eqx.field(static=True)
     Out: AxisSpec = eqx.field(static=True)
-    reparam: AbstractLinearReparam = eqx.field(static=True)
     dot_general: DotGeneralOp = eqx.field(default_factory=DotGeneralOp.default)
+
+    _reparam_cls: type[AbstractLinearReparam] = eqx.field(static=True, default=LinearStandardParam)
+
+    @property
+    def reparam(self) -> AbstractLinearReparam:
+        return self._reparam_cls(self.In, self.Out)
 
     @staticmethod
     def init(
@@ -77,7 +82,7 @@ class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
         if dot_general is None:
             dot_general = DotGeneralOp.default()
 
-        return Linear(weight, bias, In, Out, dot_general=dot_general, reparam=reparam_cls(In, Out))
+        return Linear(weight, bias, In, Out, dot_general=dot_general, _reparam_cls=reparam_cls)
 
     @named_call
     def __call__(self, inputs, *, key: PRNGKeyArray | None = None):
