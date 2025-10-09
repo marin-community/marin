@@ -179,6 +179,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        max_gen_toks: int | None = None,
     ) -> None:
         """
         Runs EleutherAI's lm-eval harness on the specified model and set of  tasks.
@@ -253,7 +254,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                     confirm_run_unsafe_code=True,
                     limit=max_eval_instances if max_eval_instances is not None else None,
                     evaluation_tracker=evaluation_tracker,
-                    log_samples=True,
+                    log_samples=False,
                 )
 
                 if results is not None:

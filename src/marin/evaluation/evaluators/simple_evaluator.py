@@ -137,6 +137,8 @@ class SimpleEvaluator(VllmTpuEvaluator):
         evals: list[str],
         output_path: str,
         max_eval_instances: int | None = None,
+        wandb_tags: list[str] | None = None,
+        max_gen_toks: int | None = None,
     ) -> None:
         try:
             from vllm import LLM, SamplingParams

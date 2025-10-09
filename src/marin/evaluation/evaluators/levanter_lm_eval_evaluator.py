@@ -59,7 +59,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 "immutabledict",
                 "jax[tpu]",
                 "langdetect",
-                "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@23244d1db19dc14077c11c4fe42eae355161fd1b",
+                "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@18b376504e98aadcb985f9235c3e58ab2bf4c5bc",
                 "math-verify", # Required by lm-eval[math]
                 "ray==2.45",
                 "statsmodels==0.14.4",
@@ -77,7 +77,8 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
-        show_logs_from_ray: bool = False,
+        show_logs_from_ray: bool = True,
+        max_gen_toks: int | None = None,
     ) -> None:
         """
         Runs Levanter's lm-eval harness on the specified model and set of tasks.
@@ -89,6 +90,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
             wandb_tags (list[str] | None): The tags to add to the wandb run.
             show_logs_from_ray (bool): Whether to show the logs from the ray run.
+            max_gen_toks (int | None): Maximum number of tokens to generate during evaluation.
         """
         # Eval Harness code: https://github.com/stanford-crfm/levanter/blob/main/src/levanter/eval_harness.py
         # Run the harness with the model and the specified evals
@@ -132,12 +134,20 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             logger.info(f"Model name: {model.name}")
             logger.info(f"model_name_or_path: {model_name_or_path}")
 
+            # Create the eval harness config with max_gen_toks if specified
+            harness_config_kwargs = {
+                "task_spec": tasks,
+                "max_examples": max_eval_instances,
+                "log_samples": False,
+            }
+            
+            # Add max_gen_toks to generation_kwargs if specified
+            if max_gen_toks is not None:
+                harness_config_kwargs["generation_kwargs"] = {"max_gen_toks": max_gen_toks}
+                logger.info(f"Setting max_gen_toks={max_gen_toks} in LmEvalHarnessConfig generation_kwargs")
+
             eval_config = eval_harness.EvalHarnessMainConfig(
-                eval_harness=eval_harness.LmEvalHarnessConfig(
-                    task_spec=tasks,
-                    max_examples=max_eval_instances,
-                    log_samples=False,
-                ),
+                eval_harness=eval_harness.LmEvalHarnessConfig(**harness_config_kwargs),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,
                 checkpoint_is_hf=True,
