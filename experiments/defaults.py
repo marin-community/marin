@@ -247,6 +247,8 @@ def default_train(
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     override_output_path: str | None = None,
+    pz_eval_config: Any | None = None,
+    pz_eval_steps: int = 10000,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -259,6 +261,8 @@ def default_train(
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
+        pz_eval_config: P(z) (memorization) evaluation configuration. If None, P(z) evaluation is disabled.
+        pz_eval_steps: How often to run P(z) evaluation. Defaults to 10000.
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
@@ -319,6 +323,7 @@ def default_train(
     inner_config = TrainLmConfig(
         data=pretraining_data,
         trainer=TrainerConfig(
+            seed=train_config.seed,
             tracker=WandbConfig(
                 project="marin",
                 tags=[*tags],
@@ -383,6 +388,8 @@ def default_train(
         data_seed=train_config.data_seed,
         eval_harness_steps=train_config.steps_per_task_eval or 10000,
         eval_harness=harness_config,
+        pz_eval=pz_eval_config,
+        pz_eval_steps=pz_eval_steps,
     )
 
     # Create the pod config

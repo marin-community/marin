@@ -112,7 +112,7 @@ async def submit_and_track_job(
 
     # add the TPU dependency for cluster jobs.
     runtime_dict = build_runtime_env_for_packages(extra=[*extra.split(","), "tpu"], env_vars=env_vars) | runtime_dict
-
+    print(f"Runtime dict: {json.dumps(runtime_dict, indent=4)}")
     logger.info(
         f"Terminal command: \n"
         f"ray job submit "
