@@ -22,6 +22,7 @@ from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
 
 
+@pytest.mark.gcp
 @pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
 def test_lm_eval_harness(current_date_time, ray_tpu_cluster, model_config):
     gsm8k_config = EvalTaskConfig(name="gsm8k_cot", num_fewshot=8)

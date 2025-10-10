@@ -19,6 +19,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from gcsfs.retry import HttpError
 
 from tests.test_utils import parameterize_with_configs
 
@@ -51,6 +52,11 @@ def test_run_dry_runs(config_file, monkeypatch):
         )
         try:
             runpy.run_path(script, run_name="__main__")
+        except HttpError as e:
+            # Skip if this experiment needs GCS access
+            if "Anonymous caller does not have" in str(e) or "Permission" in str(e):
+                pytest.skip(f"Skipping {script} (requires GCS access)")
+            raise
         except SystemExit as e:
             # Some scripts may call `sys.exit()`, so we catch it to treat `exit(0)` as success
             assert e.code == 0, f"Dry run failed with exit code {e.code} for {script}"
