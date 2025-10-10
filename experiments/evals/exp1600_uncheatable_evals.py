@@ -17,17 +17,22 @@
 
 This experiment evaluates models' perplexity on diverse, high-quality, and fresh datasets
 (arXiv, GitHub, news) to better capture raw intelligence without relying on private datasets.
+
+Reference: https://github.com/Jellyfish042/uncheatable_eval
 """
 
-from experiments.llama import llama_3_2_1b as llama_3_2_1b_config, llama3_tokenizer, llama_8b
-from marin.evaluation.log_probs import default_lm_log_probs
-from marin.execution.executor import executor_main
-from marin.processing.tokenize.data_configs import mixture_for_evaluation
-
+import os.path
 from dataclasses import dataclass
+
+from experiments.llama import llama_3_2_1b as llama_3_2_1b_config, llama3_tokenizer, llama_8b
 from levanter.models.llama import LmConfig
+from marin.evaluation.log_probs import default_lm_log_probs
+from marin.execution.executor import executor_main, ExecutorStep
+from marin.processing.tokenize import TokenizeConfig
+from marin.processing.tokenize.data_configs import mixture_for_evaluation, TokenizerStep
+from src.marin.download.uncheatable_eval.download import make_uncheatable_eval_step
+from experiments.defaults import default_tokenize
 from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
-from marin.execution.executor import ExecutorStep
 from experiments.models import (
     llama_3_1_8b,
     olmo_2_base_8b,
@@ -56,8 +61,42 @@ from experiments.olmo2 import (
     olmo_7b,
     olmo_32b,
 )
-from experiments.uncheatable_eval import uncheatable_eval_tokenized
 from experiments.tootsie.exp1529_32b_bison_cooldown import tootsie_32b_cooldown_bison as marin_32b_base
+
+
+# We only include English and code datasets
+UNCHEATABLE_EVAL_TO_FILE_PATTERN = {
+    # "wikipedia_arabic": "wikipedia_arabic_*.jsonl.gz",
+    "wikipedia_english": "wikipedia_english_*.jsonl.gz",
+    # "wikipedia_french": "wikipedia_french_*.jsonl.gz",
+    # "wikipedia_german": "wikipedia_german_*.jsonl.gz",
+    # "wikipedia_japanese": "wikipedia_japanese_*.jsonl.gz",
+    # "wikipedia_spanish": "wikipedia_spanish_*.jsonl.gz",
+    "github_python": "github_python_*.jsonl.gz",
+    "github_cpp": "github_cpp_*.jsonl.gz",
+    "bbc_news": "bbc_news_*.jsonl.gz",
+    "arxiv_physics": "arxiv_physics_*.jsonl.gz",
+    "arxiv_computer_science": "arxiv_computer_science_*.jsonl.gz",
+    # "ao3_chinese": "ao3_chinese_*.jsonl.gz",
+    "ao3_english": "ao3_english_*.jsonl.gz",
+}
+
+uncheatable_eval = make_uncheatable_eval_step()
+
+
+def uncheatable_eval_tokenized(
+    *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, uncheatable_eval_raw: ExecutorStep = uncheatable_eval
+) -> dict[str, TokenizerStep]:
+    uncheatable_eval_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
+    for dataset, path_part in UNCHEATABLE_EVAL_TO_FILE_PATTERN.items():
+        uncheatable_eval_steps[os.path.join("uncheatable_eval", dataset)] = default_tokenize(
+            name=os.path.join("uncheatable_eval", dataset),
+            dataset=uncheatable_eval_raw.cd(f"{path_part}"),
+            tokenizer=tokenizer,
+            is_validation=True,
+        )
+
+    return uncheatable_eval_steps
 
 
 @dataclass

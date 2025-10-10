@@ -23,12 +23,12 @@ from experiments.evals.task_configs import EvalTaskConfig
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
 from experiments.isoflop_sweep import generate_isoflop_sweep
 from experiments.tootsie.exp1295_32b import nemotron_mix
-from experiments.uncheatable_eval import uncheatable_eval_tokenized
 
 # Import shared components from exp1600_uncheatable_evals
 from experiments.evals.exp1600_uncheatable_evals import (
     model_with_config,
     get_directory_friendly_name,
+    uncheatable_eval_tokenized,
 )
 
 """
