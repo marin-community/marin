@@ -142,6 +142,7 @@ gcloud_tpu_descriptor_to_jax_name: dict[str, str] = {
     "v5": "tpu v5",
     "v5p": "tpu v5",
     "v6lite": "tpu v6 lite",
+    "v6e": "tpu v6 lite",
 }
 
 
