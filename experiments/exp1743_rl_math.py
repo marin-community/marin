@@ -81,33 +81,6 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
             dependencies=[],
             sampling_params=default_sampling,
         ),
-        # "addition_easy": LessonConfig(
-        #     lesson_id="addition_easy",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "addition", "difficulty": "easy", "seed": 42},
-        #     ),
-        #     dependencies=[LessonDependency(dependency_id="number_comparison", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
-        # "addition_medium": LessonConfig(
-        #     lesson_id="addition_medium",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "addition", "difficulty": "medium", "seed": 42},
-        #     ),
-        #     dependencies=[LessonDependency(dependency_id="addition_easy", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
-        # "addition_hard": LessonConfig(
-        #     lesson_id="addition_hard",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "addition", "difficulty": "hard", "seed": 42},
-        #     ),
-        #     dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
     }
 
     return CurriculumConfig(
