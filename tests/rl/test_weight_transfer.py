@@ -211,27 +211,20 @@ def test_concurrent_clients(ray_tpu_cluster, weight_transfer_config, sample_para
         client_2.cleanup()
 
 
-@pytest.mark.slow("Uses real Llama 8B model, requires HuggingFace access.")
+@pytest.mark.slow("Uses real Llama model, requires HuggingFace access.")
 def test_arrow_flight_with_llama_8b(ray_tpu_cluster):
-    """Test Arrow Flight weight transfer with actual Llama 8B model.
-
-    This test replicates issue #1761 where Arrow Flight model updates fail
-    for models other than Llama-3.2-1B-Instruct.
-    """
+    """Test Arrow Flight weight transfer with a LLama 1B model."""
     MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 
     # Load model config from HuggingFace
     hf_config = AutoConfig.from_pretrained(MODEL_NAME)
     model_config = LlamaConfig.from_hf_config(hf_config)
 
-    # Create mesh for TPU with proper sharding
-    print("Creating mesh for Llama 8B model...")
     devices = jax.devices("tpu")
     num_devices = len(devices)
     print(f"Found {num_devices} TPU devices")
 
     # Use tensor parallelism and FSDP like in exp1247_rl_async.py
-    # tensor_parallel_axes=["mlp", "heads"], fsdp_axis="embed"
     mesh = Mesh(np.array(devices).reshape(-1, 4), axis_names=("data", "model"))
     print(f"Mesh created with shape {mesh.shape}: {mesh.devices}")
 
@@ -254,7 +247,6 @@ def test_arrow_flight_with_llama_8b(ray_tpu_cluster):
         coordinator_name=f"test_coordinator_{uuid.uuid4().hex[:8]}",
     )
 
-    # Create server and client with proper axis mapping
     server = create_weight_transfer_server(
         config=weight_transfer_config,
         mesh=mesh,
@@ -267,8 +259,6 @@ def test_arrow_flight_with_llama_8b(ray_tpu_cluster):
         axis_mapping=axis_mapping,
     )
 
-    # Build model with bfloat16 compute
-    print("Building Llama 8B model...")
     Vocab = hax.Axis("vocab", hf_config.vocab_size)
     key = jax.random.PRNGKey(0)
 
