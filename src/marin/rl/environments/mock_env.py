@@ -310,8 +310,9 @@ class MockEnv(MarinEnv):
             example = available_examples[int(idx)]
             sampled_examples[example["prompt"]] = example["answer"]
 
+        prompts = list(sampled_examples.keys())
         completions = inference_ctx.batch_completions(
-            prompts=list(sampled_examples.keys()),
+            prompts=prompts,
             temperature=temperature,
             n=n_generations,
         )
@@ -319,12 +320,11 @@ class MockEnv(MarinEnv):
         # Evaluate and create rollouts
         rollout_groups = []
 
-        for completion in completions:
+        for prompt, completion in zip(prompts, completions, strict=True):
             group = []
             for choice in completion.choices:
-                prompt = completion.prompt
                 true_answer = sampled_examples[prompt]
-                reward = self.task.compute_reward(true_answer, choice.content, tokenizer=inference_ctx.tokenizer)
+                reward = self.task.compute_reward(true_answer, choice.message.content, tokenizer=inference_ctx.tokenizer)
                 rollout = inference_ctx.create_rollout_from_choice(
                     prompt, choice, env_name=f"mock_env:{self.task_type}", env_example_id=hash(prompt), reward=reward
                 )

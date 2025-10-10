@@ -130,7 +130,7 @@ class InferenceContext:
 
         return np.array(tokens, dtype=np.int32)
 
-    def response_tokens_from_chice(self, choice: Choice) -> np.ndarray:
+    def response_tokens_from_choice(self, choice: Choice) -> np.ndarray:
         """Extract token IDs with BPE round-trip."""
         if not choice.logprobs or not choice.logprobs.content:
             raise ValueError("Choice missing logprobs. Use logprobs=True in API call.")
