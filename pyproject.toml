@@ -329,7 +329,8 @@ log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 log_cli_level = "INFO"
 markers = [
-    "slow: mark tests as slow for CI - use -m 'not slow'"
+    "slow: mark tests as slow for CI - use -m 'not slow'",
+    "gcp: mark tests that require GCP authentication or resources",
 ]
 
 # Make sure we timeout before CI kills us
