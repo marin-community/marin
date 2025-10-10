@@ -18,6 +18,10 @@ from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution import versioned
 from marin.execution.executor import ExecutorStep, this_output_path
 from marin.processing.tokenize import lm_mixture_data_config
+from marin.transform.common_pile.filter_by_extension import (
+    FilterByMetadataExtensionConfig,
+    filter_dataset_by_metadata_extension,
+)
 from marin.transform.medical.lavita_to_dolma import LavitaToDolmaConfig, convert_lavita_split_to_dolma
 
 finemath_commit_hash = "8f233cf"
@@ -39,6 +43,44 @@ finemath_3_plus_tokenized = default_tokenize(
     dataset=finemath_3_plus,
     tokenizer=llama3_tokenizer,
 ).with_output_path("tokenized/finemath_3_plus-a26b0f/")
+
+STACKV2_EDU_REVISION = "c354dbe"
+STACKV2_EDU_PYTHON_EXTENSIONS = (".py", ".pyw", ".pyi")
+
+stackv2_edu_filtered_raw = ExecutorStep(
+    name="raw/common_pile/stackv2_edu_filtered",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="common-pile/stackv2_edu_filtered",
+        revision=STACKV2_EDU_REVISION,
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+    override_output_path="raw/common_pile/stackv2_edu_filtered-c354dbe",
+)
+
+stackv2_edu_filtered_tokenized = default_tokenize(
+    name="common_pile_stackv2_edu_filtered",
+    dataset=stackv2_edu_filtered_raw,
+    tokenizer=llama3_tokenizer,
+)
+
+stackv2_edu_filtered_python = ExecutorStep(
+    name="documents/common_pile/stackv2_edu_filtered_python",
+    fn=filter_dataset_by_metadata_extension,
+    config=FilterByMetadataExtensionConfig(
+        input_path=stackv2_edu_filtered_raw,
+        output_path=this_output_path(),
+        allowed_extensions=STACKV2_EDU_PYTHON_EXTENSIONS,
+        input_glob="stack-edu-*.json.gz",
+    ),
+)
+
+stackv2_edu_filtered_python_tokenized = default_tokenize(
+    name="common_pile_stackv2_edu_filtered_python",
+    dataset=stackv2_edu_filtered_python,
+    tokenizer=llama3_tokenizer,
+)
 
 # Define MegaMath dataset source
 megamath_source = default_download(
