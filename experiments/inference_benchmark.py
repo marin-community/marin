@@ -7,9 +7,9 @@ from marin.execution.executor import executor_main, ExecutorStep
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import this_output_path
-from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
+from experiments.evals.resource_configs import ResourceConfig
 
-resource_config = SINGLE_TPU_V5p_8_FULL
+resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v5p-8", strategy="STRICT_PACK")
 
 """
 Note for people trying to do evals:
@@ -23,8 +23,8 @@ if __name__ == "__main__":
     # Quiet ray logs for this experiment
     # logging.getLogger("ray").setLevel(logging.WARNING)
 
-    model_name = "meta-llama/Meta-Llama-3.1-8B-Instruct"
-    model_path = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    model_name = "gs://marin-us-central1/checkpoints/tootsie-32b-cooldown-bison-adamc/hf/tootsie-32b-cooldown-bison-adamc/step-192000"
+    model_path = "gs://marin-us-central1/checkpoints/tootsie-32b-cooldown-bison-adamc/hf/tootsie-32b-cooldown-bison-adamc/step-192000"
     
     # Run all evaluations on all models
     helm_eval = ExecutorStep(
@@ -49,9 +49,9 @@ if __name__ == "__main__":
     # `out of pages` error.
     eval_tasks = [
         EvalTaskConfig(name="gsm8k", num_fewshot=5, task_alias="gsm8k_5shot"),
-        # EvalTaskConfig(name="humaneval", num_fewshot=0, task_alias="humaneval_0shot"),
+        EvalTaskConfig(name="humaneval", num_fewshot=0, task_alias="humaneval_0shot"),
         # # requires pip install lm-eval[math]
-        # EvalTaskConfig(name="minerva_math", num_fewshot=4, task_alias="math_500_4shot"),
+        EvalTaskConfig(name="minerva_math", num_fewshot=4, task_alias="math_500_4shot"),
     ]
     
     all_steps = []
