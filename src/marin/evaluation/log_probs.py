@@ -116,13 +116,10 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
     Args:
         config (EvalLmConfig): The configuration for visualizing log probabilities.
     """
-    # _separate_process_fn(eval_lm_main, (config,), {})
-
     try:
         if config.hf_checkpoint:
-            # if config.hf_checkpoint and is_remote_path(config.hf_checkpoint):
+            # Use GCSFuse directly so that we don't have to download the checkpoint to the local filesystem
             local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.hf_checkpoint))
-            # if not os.path.exists(local_path):
             download_from_gcs(
                 gcs_path=config.hf_checkpoint,
                 destination_path=local_path,
@@ -145,9 +142,6 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
             else:
                 shutil.rmtree(HUGGINGFACE_CACHE_PATH, ignore_errors=True)
                 print(f"Deleted local checkpoint at {HUGGINGFACE_CACHE_PATH}.")
-        # if os.path.exists(local_path):
-        #     shutil.rmtree(local_path, ignore_errors=True)
-        #     print(f"Deleted local checkpoint at {local_path}.")
 
 
 def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
