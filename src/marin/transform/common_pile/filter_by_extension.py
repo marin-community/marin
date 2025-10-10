@@ -50,7 +50,7 @@ def _normalize_extension(value: object, *, casefold: bool) -> str | None:
     if value is None:
         return None
 
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list) or isinstance(value, tuple):
         # Some datasets store extension metadata as a singleton list. Prefer the first entry.
         value = value[0] if value else None
 
