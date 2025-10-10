@@ -30,35 +30,20 @@ logger = logging.getLogger(__name__)
 class LevanterTpuEvaluator(Evaluator, ABC):
     """For `Evaluator`s that runs inference with Levanter (primarily Lm Eval Harness) on TPUs."""
 
-    # pip packages to install for running levanter's eval_harness on TPUs
     # Where to store checkpoints, cache inference results, etc.
-    # Prefer memory-backed tmpfs when available to avoid disk I/O and capacity limits.
-    CACHE_PATH: str = (
-        os.environ.get("MARIN_CACHE_PATH", "/dev/shm/levanter-lm-eval")
-        if os.path.isdir("/dev/shm")
-        else "/tmp/levanter-lm-eval"
-    )
+    CACHE_PATH: str = "/opt/gcsfuse_mount/models"
 
     @staticmethod
     def download_model(model: ModelConfig) -> str:
         """
         Download the model if it's not already downloaded
         """
-        local_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
-        downloaded_path: str | None = model.ensure_downloaded(local_path=local_path)
-
-        # If prefer_in_memory_loading returned None for a GCS path, force a local download.
-        # Levanter cannot load directly from gs://, so we need a concrete filesystem path.
-        if downloaded_path is None and model.path is not None and model.path.startswith("gs://"):
-            original_flag = model.prefer_in_memory_loading
-            try:
-                model.prefer_in_memory_loading = False
-                downloaded_path = model.ensure_downloaded(local_path=local_path)
-            finally:
-                model.prefer_in_memory_loading = original_flag
+        downloaded_path: str | None = model.ensure_downloaded(
+            local_path=os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
+        )
 
         print(f"IN TPU: {downloaded_path}")
-        # Use the local downloaded path if available; otherwise fall back to the model name (HF hub case)
+        # Use the model name if a path is not specified (e.g., for Hugging Face models)
         model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
 
         return model_name_or_path
@@ -80,6 +65,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         return build_runtime_env_for_packages(
             extra=["eval", "tpu"],
             env_vars={
+                "HF_DATASETS_TRUST_REMOTE_CODE": "1",
                 "TOKENIZERS_PARALLELISM": "false",
             },
         )

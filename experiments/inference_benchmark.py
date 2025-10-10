@@ -23,7 +23,7 @@ if __name__ == "__main__":
     # Quiet ray logs for this experiment
     # logging.getLogger("ray").setLevel(logging.WARNING)
 
-    model_name = "gs://marin-us-central1/checkpoints/tootsie-32b-cooldown-bison-adamc/hf/tootsie-32b-cooldown-bison-adamc/step-192000"
+    model_name = "bison"
     model_path = "gs://marin-us-central1/checkpoints/tootsie-32b-cooldown-bison-adamc/hf/tootsie-32b-cooldown-bison-adamc/step-192000"
     
     # Run all evaluations on all models
