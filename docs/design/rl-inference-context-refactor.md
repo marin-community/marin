@@ -1,18 +1,17 @@
-# Design Doc: Refactor InferenceContext for OpenAI API Usage
+# Design Doc: InferenceContext Utilities for Rollout Construction
 
 > **Meta-note**: This design addresses [GitHub Issue #1744](https://github.com/marin-community/marin/issues/1744) by providing utilities to safely convert OpenAI API responses to rollouts with proper prompt token alignment.
 
-## Background & Motivation
-
-### Problem
+## Problem
 
 Constructing a `Rollout` from OpenAI API responses is error-prone because **you need to know the exact prompt template used on the server to correctly align logprobs with training examples**.
 
-**Example scenario**: `PrimeIntellectEnv` at line 140:
+**Broken code** (`prime_intellect_env.py:140` before fix):
 
 ```python
-# ❌ BROKEN: Re-encodes prompt without chat template
+# ❌ Re-encodes prompt without chat template
 prompt_tokens = tokenizer.encode(result.prompt[prompt_idx])
+response_logprobs = jnp.zeros(len(response_tokens))  # ❌ No logprobs!
 ```
 
 This breaks when the server uses a chat template (e.g., `<|user|>{prompt}<|assistant|>`):
@@ -20,464 +19,152 @@ This breaks when the server uses a chat template (e.g., `<|user|>{prompt}<|assis
 2. Logprobs from server correspond to tokens AFTER chat template was applied
 3. Training data misalignment → incorrect gradients → model degradation
 
-**Current state**:
-- `InferenceContext.generate()` (line 189 in `base.py`) manually calls `tokenize_prompt_with_chat_template()` to match the server
-- Environments using raw OpenAI clients (PrimeIntellect) re-encode prompts incorrectly
-- No validation that prompt/response token counts align
+**Why this matters**: The tokenizer's chat template transforms `"What is 2+2?"` into `[1234, 5678, "What is 2+2?", 9012, 3456]` (special tokens + prompt + generation prompt). If environments use `tokenizer.encode()` directly, they get `[5678]` instead, causing misalignment.
 
-### Goals
+## Goals
 
-1. **Centralize prompt tokenization** - Provide methods on `InferenceContext` to get correct prompt tokens
+1. **Centralize prompt tokenization** - One method that always matches server behavior
 2. **Safe rollout construction** - Helper methods to build rollouts from OpenAI responses with validation
-3. **Backwards compatibility** - Existing `generate()` calls continue working unchanged
-4. **Alignment validation** - Assert token counts match expectations to catch template mismatches early
+3. **Backwards compatibility** - No breaking changes to existing code
+4. **Alignment validation** - Catch template mismatches early with assertions
 
-### Non-Goals
+**Non-goals**: Fetching raw token IDs from OpenAI API (not exposed), changing protocol signatures, supporting non-chat endpoints
 
-- Fetching raw token IDs from OpenAI API (not exposed)
-- Changing the `InferenceContext` protocol signature (breaking change)
-- Supporting non-chat completion endpoints
+## Proposed Solution
 
-## Current Implementation
+### Core Approach
 
-### InferenceContext Protocol
+**Consolidate inference utilities into `inference_ctx.py`**: Move `InferenceContext` and add methods for tokenization and rollout construction.
+
+**Key principle**: Provide methods on `InferenceContext` that encapsulate chat template logic, so environments can't accidentally bypass it.
+
+### Data Flow
 
 ```python
-# src/marin/rl/types.py:54-83
-class InferenceContext(Protocol):
-    tokenizer: PreTrainedTokenizer
+# Environment calls InferenceContext methods
+prompt_tokens = inference_ctx.tokenize_prompt(prompt)           # ✅ Uses chat template
+response_tokens = inference_ctx.response_tokens_from_choice(choice)  # ✅ Extracts from API
+response_logprobs = inference_ctx.logprobs_from_choice(choice)      # ✅ Extracts logprobs
 
-    def generate(...) -> list[InferenceResponse]:
-        """Generate responses with prompt_tokens already populated."""
-        ...
-
-    def openai_client() -> AsyncOpenAI:
-        """Return OpenAI-compatible client."""
-        ...
+# Or use all-in-one helper
+rollout = inference_ctx.create_rollout_from_choice(
+    prompt=prompt,
+    choice=completion.choices[0],
+    env_name="gsm8k",
+    env_example_id="ex_123",
+    reward=1.0,
+)
 ```
 
-**Problem**: Environments using `openai_client()` directly bypass `generate()`, losing automatic prompt tokenization.
+### Core Methods
 
-### InferenceContext (Working)
-
-```python
-# src/marin/rl/environments/base.py:189
-prompt_tokens = tokenize_prompt_with_chat_template(prompt, self.tokenizer)
-```
-
-✅ Uses chat template correctly
-
-### PrimeIntellectEnv (Broken)
+Add to `InferenceContext` class in `src/marin/rl/inference_ctx.py`:
 
 ```python
-# src/marin/rl/environments/prime_intellect_env.py:140
-prompt_tokens = tokenizer.encode(result.prompt[prompt_idx])  # ❌ Wrong!
-response_logprobs = jnp.zeros(len(response_tokens))  # ❌ No logprobs!
-```
-
-❌ Re-encodes without chat template, no logprob extraction
-
-## Proposed Design
-
-### Key Principles
-
-1. **Consolidate into inference_ctx.py** - Move all InferenceContext-related code into one module
-2. **Methods + static functions** - Provide both convenience methods on context objects and static utilities
-3. **Single source of truth** - One function for chat template tokenization
-4. **Fail-fast validation** - Catch misalignment at construction time
-
-### New Module Structure
-
-Rename `src/marin/rl/types.py` → `src/marin/rl/inference_ctx.py` and add utilities:
-
-```python
-# src/marin/rl/inference_ctx.py
-"""Inference context protocol and utilities for rollout construction."""
-
-# ... existing InferenceResponse, InferenceChoice dataclasses ...
-
-def tokenize_prompt_with_chat_template(
-    prompt: str,
-    tokenizer: PreTrainedTokenizer
-) -> list[int]:
-    """Tokenize prompt using chat template (matches server-side formatting).
-
-    Returns:
-        Token IDs matching server's chat template application
-    """
+def tokenize_prompt(self, prompt: str) -> np.ndarray:
+    """Tokenize with chat template matching server behavior."""
     messages = [{"role": "user", "content": prompt}]
     try:
-        return tokenizer.apply_chat_template(
+        tokens = self.tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True
         )
     except Exception as e:
-        logger.warning(f"Chat template failed, using fallback: {e}")
+        logger.warning(f"Chat template failed: {e}")
+        # Fallback: manual formatting
         prompt_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
-        result = tokenizer.encode(prompt_text, add_special_tokens=True)
-        if not result:
-            raise ValueError(f"Failed to tokenize prompt: {prompt[:100]}...")
-        return result
+        tokens = self.tokenizer.encode(prompt_text, add_special_tokens=True)
+        if not tokens:
+            raise ValueError(f"Failed to tokenize: {prompt[:100]}...") from None
+    return np.array(tokens, dtype=np.int32)
 
 
-def extract_tokens_and_logprobs_from_choice(
-    choice,  # ChatCompletion.choices[i]
-    tokenizer: PreTrainedTokenizer,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Extract token IDs and logprobs from OpenAI chat completion choice."""
-    if not hasattr(choice, "logprobs") or choice.logprobs is None:
-        raise ValueError(
-            "OpenAI response missing logprobs. "
-            "Ensure client.chat.completions.create(..., logprobs=True)"
-        )
+def response_tokens_from_choice(self, choice: Choice) -> np.ndarray:
+    """Extract token IDs using BPE round-trip."""
+    if not choice.logprobs or not choice.logprobs.content:
+        raise ValueError("Choice missing logprobs. Use logprobs=True in API call.")
 
-    tokens, logprobs = [], []
-    for t in choice.logprobs.content:
-        token_id = tokenizer.convert_tokens_to_ids(t.token)
-        tokens.append(token_id)
-        logprobs.append(t.logprob)
+    # Use convert_tokens_to_ids for correct BPE round-trip
+    tokens = [self.tokenizer.convert_tokens_to_ids(t.token)
+              for t in choice.logprobs.content]
 
-    tokens_arr = np.array(tokens, dtype=np.int32)
-    logprobs_arr = np.array(logprobs, dtype=np.float32)
-
-    if len(tokens_arr) == 0:
-        raise ValueError("OpenAI response has zero tokens")
-    if np.all(logprobs_arr == 0):
-        logger.warning("All logprobs zero - may cause NaN loss")
-
-    return tokens_arr, logprobs_arr
+    if not tokens:
+        raise ValueError("Choice has zero tokens")
+    return np.array(tokens, dtype=np.int32)
 
 
-class InferenceContext(Protocol):
-    """Protocol for inference providers."""
+def create_rollout_from_choice(
+    self, prompt: str, choice: Choice,
+    env_name: str, env_example_id: str, reward: float
+) -> Rollout:
+    """Construct Rollout from OpenAI choice with validation."""
+    prompt_tokens = self.tokenize_prompt(prompt)
+    response_tokens = self.response_tokens_from_choice(choice)
+    response_logprobs = self.logprobs_from_choice(choice)
 
-    tokenizer: PreTrainedTokenizer
+    # Validation
+    if len(response_tokens) < 5:
+        logger.warning(f"Only {len(response_tokens)} tokens for {env_example_id}")
+    if len(prompt_tokens) == 0:
+        logger.error(f"Prompt tokenization failed for {env_example_id}")
 
-    def generate(...) -> list[InferenceResponse]: ...
-    def openai_client() -> AsyncOpenAI: ...
+    token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
 
-    # NEW: Convenience methods for rollout construction
-    def get_prompt_tokens(self, prompt: str) -> np.ndarray:
-        """Get tokenized prompt matching server-side formatting.
-
-        Uses chat template to match server behavior.
-        """
-        tokens = tokenize_prompt_with_chat_template(prompt, self.tokenizer)
-        return np.array(tokens, dtype=np.int32)
-
-    def create_rollout_from_choice(
-        self,
-        env_name: str,
-        env_example_id: str,
-        prompt: str,
-        choice,  # ChatCompletion.choices[i]
-        reward: float,
-    ) -> Rollout:
-        """Construct Rollout from OpenAI ChatCompletion choice.
-
-        Handles chat template tokenization, logprob extraction, and validation.
-
-        Example:
-            completion = ctx.openai_client().chat.completions.create(...)
-            for choice in completion.choices:
-                rollout = ctx.create_rollout_from_choice(
-                    env_name="gsm8k",
-                    env_example_id=f"ex_{i}",
-                    prompt=original_prompt,
-                    choice=choice,
-                    reward=compute_reward(choice.message.content),
-                )
-        """
-        prompt_tokens = self.get_prompt_tokens(prompt)
-        response_tokens, response_logprobs = extract_tokens_and_logprobs_from_choice(
-            choice, self.tokenizer
-        )
-
-        # Validation
-        if len(response_tokens) < 5:
-            logger.warning(f"Only {len(response_tokens)} tokens for {env_example_id}")
-        if len(prompt_tokens) == 0:
-            logger.error(f"Prompt tokenization failed for {env_example_id}")
-
-        token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
-
-        return Rollout(
-            env_name=env_name,
-            env_example_id=env_example_id,
-            prompt_tokens=jnp.array(prompt_tokens, dtype=jnp.int32),
-            response_tokens=jnp.array(response_tokens, dtype=jnp.int32),
-            response_logprobs=jnp.array(response_logprobs, dtype=jnp.float32),
-            token_rewards=token_rewards,
-            episode_reward=float(reward),
-        )
+    return Rollout(
+        env_name=env_name,
+        env_example_id=env_example_id,
+        prompt_tokens=jnp.array(prompt_tokens, dtype=jnp.int32),
+        response_tokens=jnp.array(response_tokens, dtype=jnp.int32),
+        response_logprobs=jnp.array(response_logprobs, dtype=jnp.float32),
+        token_rewards=token_rewards,
+        episode_reward=float(reward),
+    )
 ```
 
 **Rationale**:
-- ✅ All inference-related code in one module
-- ✅ Static functions work standalone, methods provide convenience
-- ✅ Protocol default implementations (Python 3.8+)
-- ✅ Single import: `from marin.rl.inference_ctx import InferenceContext`
+- ✅ All inference utilities in one module
+- ✅ Methods encapsulate chat template logic
+- ✅ Fail-fast validation catches misalignment at construction time
+- ✅ Single source of truth for tokenization
 
-## Implementation Plan
+### Module Consolidation
 
-**Backwards Compatibility**: Fully backwards compatible. Existing `generate()` calls unchanged. New methods are additions to the protocol.
+Rename `src/marin/rl/types.py` → split into:
+- `inference_ctx.py` - `InferenceContext`, `InferenceChoice`, `InferenceResponse`, utility functions
+- `types.py` - `Rollout`, `RolloutGroup`, `RolloutBatch`, `TrainingBatch` (training-focused types)
 
-### Phase 1: Consolidate Module
+**Why separate**: Inference concerns (API interaction, tokenization) are distinct from training types (rollout batching, data structures).
 
-**Goal**: Move InferenceContext definitions and add utilities.
+## Implementation Outline
 
-#### Step 1.1: Rename and consolidate
+1. **Consolidate module** - Move `InferenceContext` from `types.py` to `inference_ctx.py`, update imports across codebase
+2. **Add methods** - Implement `tokenize_prompt()`, `response_tokens_from_choice()`, `logprobs_from_choice()`, `create_rollout_from_choice()` in `InferenceContext`
+3. **Fix PrimeIntellectEnv** - Replace manual `tokenizer.encode()` call with `inference_ctx.tokenize_prompt()` at line 141
+4. **Test** - Verify chat template adds special tokens, logprob extraction works, rollout construction succeeds
 
-**File**: Rename `src/marin/rl/types.py` → `src/marin/rl/inference_ctx.py`
+No breaking changes. All modifications are additions to `InferenceContext` class.
 
-Move these from `types.py`:
-- `InferenceChoice`, `InferenceResponse`, `InferenceContext` protocol
+## Notes
 
-Keep in `types.py`:
-- `Rollout`, `RolloutGroup`, `RolloutBatch`, `TrainingBatch` (training-focused)
+**Chat template fallback**: If `apply_chat_template()` fails (no template configured), falls back to manual `{role}: {content}` formatting. This ensures tokenization always succeeds while still using templates when available.
 
-Add new utilities to `inference_ctx.py`:
-```python
-def tokenize_prompt_with_chat_template(...): ...
-def extract_tokens_and_logprobs_from_choice(...): ...
-```
+**BPE round-trip**: Must use `convert_tokens_to_ids()` instead of `encode()` because OpenAI returns BPE tokens (e.g., `"Ġhello"` for space-prefixed words), not text. Direct encoding would double-encode.
 
-Update protocol with new methods:
-```python
-class InferenceContext(Protocol):
-    # ... existing ...
-    def get_prompt_tokens(self, prompt: str) -> np.ndarray: ...
-    def create_rollout_from_choice(self, ...) -> Rollout: ...
-```
+**Validation strategy**: Log warnings for suspicious cases (short responses, zero logprobs) but don't error - allows partial batches to proceed. Errors only for clearly invalid data (missing logprobs, empty tokens).
 
-**Validate**:
-```bash
-uv run pytest tests/rl/ -v
-# All tests should pass - only module rename
-```
-
-#### Step 1.2: Update imports across codebase
-
-**Files**: All files importing from `marin.rl.types`
-
-Update:
-```python
-# Before
-from marin.rl.types import InferenceContext, InferenceResponse
-
-# After
-from marin.rl.inference_ctx import InferenceContext, InferenceResponse
-from marin.rl.types import Rollout, RolloutBatch  # Still in types
-```
-
-**Validate**:
-```bash
-uv run pytest tests/rl/ -v
-```
-
-#### Step 1.3: Move tokenize function from base.py
-
-**File**: `src/marin/rl/environments/base.py:88-98`
-
-Delete the standalone `tokenize_prompt_with_chat_template` function, import from new module:
-```python
-from marin.rl.inference_ctx import tokenize_prompt_with_chat_template
-```
-
-**Validate**:
-```bash
-uv run pytest tests/rl/integration/test_cats_integration.py -v
-```
-
-### Phase 2: Implement Concrete Methods
-
-**Goal**: Add method implementations to `InferenceContext`.
-
-#### Step 2.1: Add methods to InferenceContext
-
-**File**: `src/marin/rl/environments/base.py:100` (InferenceContext class)
-
-```python
-class InferenceContext(InferenceContext):
-    # ... existing __init__, generate, openai_client ...
-
-    def get_prompt_tokens(self, prompt: str) -> np.ndarray:
-        """Get tokenized prompt matching server-side formatting."""
-        from marin.rl.inference_ctx import tokenize_prompt_with_chat_template
-        tokens = tokenize_prompt_with_chat_template(prompt, self.tokenizer)
-        return np.array(tokens, dtype=np.int32)
-
-    def create_rollout_from_choice(
-        self,
-        env_name: str,
-        env_example_id: str,
-        prompt: str,
-        choice,
-        reward: float,
-    ) -> Rollout:
-        """Construct Rollout from OpenAI choice."""
-        from marin.rl.inference_ctx import extract_tokens_and_logprobs_from_choice
-
-        prompt_tokens = self.get_prompt_tokens(prompt)
-        response_tokens, response_logprobs = extract_tokens_and_logprobs_from_choice(
-            choice, self.tokenizer
-        )
-
-        token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
-
-        return Rollout(
-            env_name=env_name,
-            env_example_id=env_example_id,
-            prompt_tokens=jnp.array(prompt_tokens, dtype=jnp.int32),
-            response_tokens=jnp.array(response_tokens, dtype=jnp.int32),
-            response_logprobs=jnp.array(response_logprobs, dtype=jnp.float32),
-            token_rewards=token_rewards,
-            episode_reward=float(reward),
-        )
-```
-
-**Validate**:
-```bash
-uv run pytest tests/rl/environments/test_levanter_inference.py -v
-```
-
-### Phase 3: Refactor PrimeIntellectEnv
-
-**Goal**: Update PrimeIntellectEnv to use new utilities.
-
-#### Step 3.1: Use get_prompt_tokens
-
-**File**: `src/marin/rl/environments/prime_intellect_env.py:127-158`
-
-**Before**:
-```python
-# ❌ Re-encodes without chat template
-prompt_tokens = tokenizer.encode(result.prompt[prompt_idx])
-response_tokens = tokenizer.encode(completion)
-response_logprobs = jnp.zeros(len(response_tokens))
-```
-
-**After**:
-```python
-# ✅ Use chat template
-from marin.rl.inference_ctx import tokenize_prompt_with_chat_template
-
-prompt_tokens = tokenize_prompt_with_chat_template(
-    result.prompt[prompt_idx],
-    tokenizer
-)
-response_tokens = tokenizer.encode(completion, add_special_tokens=False)
-
-# NOTE: Verifiers don't provide logprobs - use zeros (known limitation)
-response_logprobs = jnp.zeros(len(response_tokens), dtype=jnp.float32)
-```
-
-**Validate**:
-```bash
-uv run pytest tests/rl/environments/test_prime_intellect.py -v
-# Verify prompt tokens now use chat template
-```
-
-### Phase 4: Add Tests
-
-**Goal**: Validate chat template tokenization and logprob extraction.
-
-#### Step 4.1: Test utilities
-
-**File**: `tests/rl/test_inference_ctx.py` (NEW)
-
-```python
-def test_tokenize_prompt_with_chat_template():
-    """Verify chat template adds template tokens."""
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
-
-    prompt = "What is 2+2?"
-    tokens = tokenize_prompt_with_chat_template(prompt, tokenizer)
-
-    assert len(tokens) > 0
-    # Should be longer than raw prompt due to template
-    raw_tokens = tokenizer.encode(prompt, add_special_tokens=False)
-    assert len(tokens) > len(raw_tokens)
-
-
-def test_extract_validates_logprobs_present():
-    """Verify error when logprobs missing."""
-    from unittest.mock import Mock
-
-    choice = Mock()
-    choice.logprobs = None
-
-    with pytest.raises(ValueError, match="missing logprobs"):
-        extract_tokens_and_logprobs_from_choice(choice, tokenizer)
-```
-
-**Validate**:
-```bash
-uv run pytest tests/rl/test_inference_ctx.py -v
-```
-
-## Benefits
-
-1. **Correctness** - Environments can't bypass chat template formatting
-2. **Consolidation** - All inference code in one module (`inference_ctx.py`)
-3. **Convenience** - Methods on context objects for common operations
-4. **Debuggability** - Validation catches misalignment at construction time
-5. **Backwards compatible** - No breaking changes
-
-## Trade-offs
-
-**Pros**:
-- Single module for all inference-related code
-- Both static functions (standalone) and methods (convenience)
-- Fail-fast validation prevents silent training failures
-
-**Cons**:
-- Can't fetch raw token IDs from OpenAI API (API limitation)
-- PrimeIntellect still has no logprobs (verifiers limitation)
-- Validation is best-effort (can't detect all misalignments)
+**PrimeIntellect limitation**: Verifiers library doesn't expose logprobs, so `prime_intellect_env.py` uses `jnp.zeros()` for `response_logprobs`. This is a known limitation - gradients will be incorrect but environment still runs.
 
 ## Future Work
 
-1. **Multi-turn conversation support** - Extend to handle conversation history
-2. **Token-level reward shaping** - Helpers for position-based reward distribution
-3. **Alignment metrics** - Track validation warnings as telemetry
-4. **OpenAI proxy** - Add token IDs to responses for exact alignment
+- Multi-turn conversation support (extend to handle conversation history)
+- Token-level reward shaping (helpers for position-based reward distribution)
+- Alignment metrics (track validation warnings as telemetry)
+- OpenAI proxy (add token IDs to responses for exact alignment)
 
 ---
-
-## Implementation Checklist
-
-- [x] Phase 1: Consolidate module
-  - [x] Rename `types.py` → `inference_ctx.py`, move InferenceContext definitions
-  - [x] Add utility functions to `inference_ctx.py`
-  - [x] Update imports across codebase
-  - [x] Move `tokenize_prompt_with_chat_template` from `base.py`
-- [x] Phase 2: Move InferenceContext and add methods
-  - [x] Move complete `InferenceContext` implementation to `inference_ctx.py`
-  - [x] Add `get_prompt_tokens()` to `InferenceContext`
-  - [x] Add `create_rollout_from_choice()` to `InferenceContext`
-  - [x] Simplify `base.py` to only contain `MarinEnv` and `EnvConfig`
-- [x] Phase 3: Refactor PrimeIntellectEnv
-  - [x] Use `tokenize_prompt_with_chat_template` for prompts
-  - [x] Fix rollout_worker.py imports
-- [ ] Phase 4: Add tests (Optional - basic functionality validated)
-  - [ ] Unit tests for chat template tokenization
-  - [ ] Unit tests for logprob extraction
-
-## Implementation Summary
-
-**Status**: ✅ COMPLETED (Core functionality implemented and tested)
-
-All inference-related code has been successfully consolidated into `src/marin/rl/inference_ctx.py`:
-- Protocol definitions (InferenceContext, InferenceChoice, InferenceResponse)
-- Concrete implementation (InferenceContext)
-- Utility functions (tokenize_prompt_with_chat_template, extract_tokens_and_logprobs_from_choice)
-- Convenience methods (get_prompt_tokens, create_rollout_from_choice)
-
-**Tests**: 69 passed in tests/rl (excluding slow tests)
 
 ## See Also
 
 - GitHub Issue: https://github.com/marin-community/marin/issues/1744
-- `src/marin/rl/inference_ctx.py` - Consolidated inference utilities (new)
+- `src/marin/rl/inference_ctx.py` - Consolidated inference utilities (lines 38-192)
 - `src/marin/rl/types.py` - Training-focused types (Rollout, RolloutBatch)
-- `src/marin/rl/environments/base.py` - InferenceContext implementation
+- `src/marin/rl/environments/prime_intellect_env.py` - Fixed at line 141
