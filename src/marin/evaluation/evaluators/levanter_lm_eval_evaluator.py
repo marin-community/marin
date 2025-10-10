@@ -145,6 +145,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 "task_spec": tasks,
                 "max_examples": max_eval_instances,
                 "log_samples": False,
+                "max_length": 4096,
             }
 
             # Add max_gen_toks to generation_kwargs if specified
