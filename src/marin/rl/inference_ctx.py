@@ -59,6 +59,7 @@ class InferenceContext:
     def openai_address(self) -> str:
         return f"http://{self._inference_server.address()}/v1"
 
+    # TODO: add support for ChatCompletion style [ { role, content} ] messages
     def batch_completions(
         self,
         prompts: list[str],

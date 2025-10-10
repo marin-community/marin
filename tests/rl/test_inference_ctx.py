@@ -83,7 +83,7 @@ def create_choice_with_logprobs(tokenizer, response_text: str, logprobs_values: 
             ChatCompletionTokenLogprob(
                 token=bpe_token,
                 logprob=logprob,
-                bytes=list(response_text.encode("utf-8"))[: len(bpe_token)],
+                bytes=list(bpe_token.encode("utf-8")),
                 top_logprobs=[],
             )
         )
