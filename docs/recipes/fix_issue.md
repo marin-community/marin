@@ -25,6 +25,26 @@ appropriate level of detail.
 * Your comment will follow this with links to the relevant source code related the issue.
 * You may optionally include code snippets, but keep it minimal.
 
+Example research report:
+
+> TPU-to-CPU weight transfers during training achieve only ~1GB/s, well below
+> hardware capabilities (4-7GB/s expected for TPU v4/v5). This blocks efficient
+> weight synchronization between training and rollout workers, causing large
+> models (8B+ parameters) to take 16+ seconds to transfer when they should take
+> 4-8 seconds. The root cause appears to be inefficient memory layout from
+> jax.device_get() and lack of parallelization, requiring investigation into
+> alternative transfer strategies, memory optimization, and hardware-specific
+> tuning.
+>
+> Relevant Code
+> - [arrow_flight.py#L384](https://github.com/marin-community/marin/blob/main/src/marin/rl/weight_transfer/arrow_flight.py#L384) - TPU-to-CPU copy in Arrow Flight implementation
+> - [jax.py#L394-L402](https://github.com/marin-community/marin/blob/main/src/marin/rl/weight_transfer/jax.py#L394-L402) - TPU-to-CPU transfer in JAX implementation
+> - [arrow_flight.py#L380-L384](https://github.com/marin-community/marin/blob/main/src/marin/rl/weight_transfer/arrow_flight.py#L380-L384) - Memory layout context
+> - [jax.py#L228-L283](https://github.com/marin-community/marin/blob/main/src/marin/rl/weight_transfer/jax.py#L228-L283) - JAX transfer server (bypasses CPU)
+> - [base.py#L32-L35](https://github.com/marin-community/marin/blob/main/src/marin/rl/weight_transfer/base.py#L32-L35) - Transfer mode definitions
+> - [test_weight_transfer.py#L211-L255](https://github.com/marin-community/marin/blob/main/tests/rl/test_weight_transfer.py#L211-L255) - Performance benchmark test
+>
+
 Use the information you have collected to attempt to fix the behavior (if it's a bug).
 When needed, you write an appropriate reproduction test which minimally validates your fix.
 
@@ -111,8 +131,12 @@ The tasks for this recipe:
 - [ ] Implement changes until all tests pass
 - [ ] Upload branch to github
 - [ ] Open pull request
-- [ ] Verify CI checks pass and address any failures
+- [ ] Verify CI checks pass and address any failures (by polling gh pr view)
 - [ ] Update comment with final status
 
 If at any point you are unable to proceed, you must add a comment to the Github
 issue with your last status.
+
+# RULES
+
+0. Never credit yourself in commits or comments.
