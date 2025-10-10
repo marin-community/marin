@@ -27,13 +27,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from marin.post_training.environments.math_utils import (
+from marin.rl.math_utils import (
     grade_answer,
     last_boxed_only_string,
     latex_to_text,
     normalize_answer,
+    validate_format,
 )
-from marin.post_training.flax.utils import validate_format
 from marin.rl.types import InferenceContext, Rollout, RolloutGroup
 
 from .base import MarinEnv
@@ -173,11 +173,8 @@ class MathEnv(MarinEnv):
         cleaned_examples: list[MathEnvExample] = []
         total = 0
         for idx, item in enumerate(dataset):
-            # Support both Dataset objects and plain dicts
-            problem = item.get("problem") if isinstance(item, dict) else item["problem"]
-            solution = item.get("solution") if isinstance(item, dict) else item["solution"]
             example_id = f"{split_name}_{idx}"
-            example = self.clean_example(problem, solution, example_id)
+            example = self.clean_example(item["problem"], item["solution"], example_id)
             if example is None:
                 continue
 

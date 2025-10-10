@@ -41,16 +41,43 @@ from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 
 logger = logging.getLogger(__name__)
 
-MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
-# MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-# MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-# MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
-MODEL_TYPE = "llama"
-WANDB_PROJECT = f"rl_testing_{MODEL_NAME.split('/')[-1].lower()}"
-MODEL_TOKENIZER = MODEL_NAME
-MODEL_CHECKPOINT = MODEL_NAME
 MAX_TOKENS = 1024
-RUN_ID = f"test-{MODEL_NAME.split('/')[-1]}-curriculum"
+
+
+@dataclasses.dataclass
+class ModelConfig:
+    model_name: str
+    model_type: str
+    model_tokenizer: str
+    model_checkpoint: str
+
+
+model_configs = [
+    ModelConfig(
+        model_name="meta-llama/Llama-3.2-1B-Instruct",
+        model_type="llama",
+        model_tokenizer="meta-llama/Llama-3.2-1B-Instruct",
+        model_checkpoint="meta-llama/Llama-3.2-1B-Instruct",
+    ),
+    ModelConfig(
+        model_name="meta-llama/Llama-3.1-8B-Instruct",
+        model_type="llama",
+        model_tokenizer="meta-llama/Llama-3.1-8B-Instruct",
+        model_checkpoint="meta-llama/Llama-3.1-8B-Instruct",
+    ),
+    ModelConfig(
+        model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+        model_type="qwen",
+        model_tokenizer="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+        model_checkpoint="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+    ),
+    ModelConfig(
+        model_name="Qwen/Qwen3-4B-Instruct-2507",
+        model_type="qwen",
+        model_tokenizer="Qwen/Qwen3-4B-Instruct-2507",
+        model_checkpoint="Qwen/Qwen3-4B-Instruct-2507",
+    ),
+]
 
 
 def stop_tokens(tokenizer_name: str):
@@ -59,7 +86,7 @@ def stop_tokens(tokenizer_name: str):
     return [tokenizer.eos_token_id]
 
 
-def create_math_curriculum(run_id: str) -> CurriculumConfig:
+def create_math_curriculum(run_id: str, model_name: str) -> CurriculumConfig:
     from marin.rl.curriculum import SamplingParams
 
     # Default sampling params for all lessons
@@ -68,7 +95,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
         n_prompts=8,
         n_generations_per_prompt=8,
         max_tokens=MAX_TOKENS,
-        stop_tokens=stop_tokens(MODEL_TOKENIZER),
+        stop_tokens=stop_tokens(model_name),
     )
 
     lessons = {
@@ -90,12 +117,12 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
     )
 
 
-def rl_train(name: str) -> ExecutorStep:
-    hf_config = AutoConfig.from_pretrained(MODEL_NAME)
+def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
+    hf_config = AutoConfig.from_pretrained(model_config.model_name)
     config = LlamaConfig.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=MODEL_TOKENIZER)
+    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=model_config.model_tokenizer)
 
     _ = WandbConfig
 
@@ -104,7 +131,7 @@ def rl_train(name: str) -> ExecutorStep:
         tracker=WandbConfig(
             project="marin",
             name=name,
-            tags=["rl", "math", MODEL_NAME.split("/")[-1]],
+            tags=["rl", "math", model_config.model_name.split("/")[-1]],
         ),
         # tracker=TensorboardConfig(
         #     logdir=OutputName("tblogs"),
@@ -117,8 +144,8 @@ def rl_train(name: str) -> ExecutorStep:
         train_batch_size=64,
         # microbatch to avoid OOM
         per_device_parallelism=16,
-        num_train_steps=50000,
-        steps_per_eval=100,
+        num_train_steps=200,
+        steps_per_eval=10,
         checkpointer=CheckpointerConfig(
             base_path=OutputName("checkpoints"),
             save_interval=datetime.timedelta(seconds=600),
@@ -147,7 +174,7 @@ def rl_train(name: str) -> ExecutorStep:
         max_weight_transfer_wait_time=10,
     )
 
-    curriculum_config = create_math_curriculum(name)
+    curriculum_config = create_math_curriculum(name, model_config.model_name)
 
     # Create RLJobConfig using the new unified interface
     config = RLJobConfig(
@@ -164,8 +191,8 @@ def rl_train(name: str) -> ExecutorStep:
             ),
         ),
         curriculum=curriculum_config,
-        tokenizer=MODEL_TOKENIZER,
-        initial_checkpoint=MODEL_NAME,
+        tokenizer=model_config.model_tokenizer,
+        initial_checkpoint=model_config.model_checkpoint,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         run_id=name,
@@ -194,9 +221,12 @@ def main():
 
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    experiments = [
-        rl_train(name=f"llama-1b-math-rl-test-chris-{datestamp}"),
-    ]
+    experiments = []
+    for model_config in model_configs:
+        model_base_name = model_config.model_name.split("/")[-1].lower()
+        experiments.append(
+            rl_train(name=f"{model_base_name}-math-rl-test-chris-{datestamp}", model_config=model_config),
+        )
 
     executor_main(
         steps=experiments,
