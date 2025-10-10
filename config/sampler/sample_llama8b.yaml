@@ -13,11 +13,8 @@ trainer:
   model_axis_size: 4
 
 engine:
-  max_pages: 16384
+  max_pages: null
   max_seqs: 256
-  page_size: 8
-  max_pages_per_seq: 512
-  max_queued_tokens: 256
-  max_seqs_in_prefill: 16
-  max_prefill_size: 4096
+  page_size: 128
+  max_seq_len: 4096
   max_rounds: 32

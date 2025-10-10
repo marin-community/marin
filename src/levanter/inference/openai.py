@@ -137,7 +137,7 @@ class InferenceServerConfig:
     tokenizer: str | None = None
 
     # Inference service/memory layout configuration
-    service: InferenceEngineConfig = field(default_factory=InferenceEngineConfig)
+    service: InferenceEngineConfig = field(default_factory=lambda: InferenceEngineConfig(4096))
 
     # Default generation parameters for API
     temperature: float = 0.7
@@ -304,8 +304,8 @@ class InferenceContext:
                 continue
 
             batch = InferenceBatch()
-            max_tokens_per_seq = self.engine.config.max_pages_per_seq * self.engine.config.page_size
-            max_tokens_per_batch = self.engine.config.imputed_max_pages * self.engine.config.page_size
+            max_tokens_per_seq = self.engine.config.max_seq_len
+            max_tokens_per_batch = self.engine.config.page_size * self.engine.config.max_pages  # type: ignore
             logger.info(f"Max tokens per seq: {max_tokens_per_seq}, per batch: {max_tokens_per_batch}")
 
             for r in requests:

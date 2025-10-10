@@ -39,8 +39,8 @@ class DefaultRotaryEmbeddings(RotaryEmbeddings):
 
         freqs = inv_freq.broadcast_axis(position_ids.axes) * position_ids
         emb = hax.concatenate(self.HeadDim, (freqs, freqs))
-        cos = hax.cos(emb)
-        sin = hax.sin(emb)
+        cos = hax.cos(emb).astype(q.dtype)
+        sin = hax.sin(emb).astype(q.dtype)
 
         q_embed = q * cos + _rotate_half(q, self.HeadDim) * sin
         return q_embed
@@ -102,8 +102,8 @@ class Llama3RotaryEmbeddings(RotaryEmbeddings):
         inv_freq_llama = self._compute_inv_freq_llama()
         freqs = position_ids * inv_freq_llama.broadcast_axis(position_ids.axes)
         emb = hax.concatenate(self.HeadDim, (freqs, freqs))
-        cos = hax.cos(emb)
-        sin = hax.sin(emb)
+        cos = hax.cos(emb).astype(q.dtype)
+        sin = hax.sin(emb).astype(q.dtype)
 
         q_embed = q * cos + _rotate_half(q, self.HeadDim) * sin
         return q_embed
@@ -222,8 +222,8 @@ class YarnRotaryEmbeddings(RotaryEmbeddings):
         else:
             temperature = math.sqrt(0.1 * self.config.mscale * math.log(self.config.factor) + 1.0)
 
-        cos = hax.cos(emb) * temperature
-        sin = hax.sin(emb) * temperature
+        cos = hax.cos(emb).astype(q.dtype) * temperature
+        sin = hax.sin(emb).astype(q.dtype) * temperature
 
         q_embed = q * cos + _rotate_half(q, self.HeadDim) * sin
         return q_embed

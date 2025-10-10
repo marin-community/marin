@@ -38,7 +38,10 @@ def trainer_config():
 def baby_llama_config():
     return InferenceServerConfig(
         service=InferenceEngineConfig(
-            max_seqs=2, page_size=4, max_pages_per_seq=4, max_queued_tokens=64, max_seqs_in_prefill=4
+            max_seq_len=16,
+            max_seqs=2,
+            page_size=4,
+            max_queued_tokens=8,
         ),
         temperature=0.7,
         seed=42,

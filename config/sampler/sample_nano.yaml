@@ -18,7 +18,6 @@ engine:
   max_pages: 256
   max_seqs: 8
   page_size: 8
-  max_pages_per_seq: 16
   max_queued_tokens: 16
   max_seqs_in_prefill: 8
   max_prefill_size: 128

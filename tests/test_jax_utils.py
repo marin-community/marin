@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import jax
+import haliax as hax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from levanter.utils.jax_utils import best_effort_sharding, create_fsdp_mesh
+from haliax.partitioning import ResourceAxis
+from levanter.utils.jax_utils import best_effort_sharding, create_fsdp_mesh, sharded_tree_size
 from test_utils import skip_if_not_enough_devices
 
 
@@ -51,6 +54,53 @@ def test_best_effort_sharding():
     array = array.reshape(2, 2, 2)
     sharding = best_effort_sharding(array.shape, devices=devices)
     _assert_can_put_with_sharding(array, sharding)
+
+
+def test_sharded_tree_size_named_array_with_abstract_mesh():
+    mesh = jax.sharding.AbstractMesh((2, 2), ("data", "model"))
+
+    Batch = hax.Axis("batch", 8)
+    Hidden = hax.Axis("hidden", 16)
+    named_array = hax.ones((Batch, Hidden), dtype=jnp.float32)
+
+    mapping = {"batch": ResourceAxis.DATA, "hidden": ResourceAxis.MODEL}
+
+    per_device_bytes = sharded_tree_size(named_array, mesh=mesh, mapping=mapping)
+
+    assert per_device_bytes == named_array.array.nbytes // 4
+
+
+def test_sharded_tree_size_shape_dtype_struct_with_named_sharding():
+    mesh = jax.sharding.AbstractMesh((4,), ("data",))
+    spec = jax.sharding.PartitionSpec("data", None)
+    sharding = jax.sharding.NamedSharding(mesh, spec)
+
+    struct = jax.ShapeDtypeStruct((8, 4), jnp.float32, sharding=sharding)
+
+    per_device_bytes = sharded_tree_size(struct, mesh=mesh)
+
+    assert per_device_bytes == (8 * 4 * jnp.dtype(jnp.float32).itemsize) // 4
+
+
+def test_sharded_tree_size_shape_dtype_struct_without_sharding():
+    mesh = jax.sharding.AbstractMesh((4,), ("data",))
+    struct = jax.ShapeDtypeStruct((8, 4), jnp.float32)
+
+    per_device_bytes = sharded_tree_size(struct, mesh=mesh)
+
+    assert per_device_bytes == (8 * 4 * jnp.dtype(jnp.float32).itemsize)
+
+
+def test_sharded_tree_size_tuple_axis_partition_spec():
+    mesh = jax.sharding.AbstractMesh((2, 2), ("data", "model"))
+    spec = jax.sharding.PartitionSpec(("data", "model"), None)
+    sharding = jax.sharding.NamedSharding(mesh, spec)
+
+    struct = jax.ShapeDtypeStruct((8, 4), jnp.float32, sharding=sharding)
+
+    per_device_bytes = sharded_tree_size(struct, mesh=mesh)
+
+    assert per_device_bytes == (8 * 4 * jnp.dtype(jnp.float32).itemsize) // 4
 
 
 @pytest.mark.parametrize("fsdp_size", [1, 2, 4, 8])

@@ -41,7 +41,7 @@ class SampleLmConfig:
     tokenizer: str | None = None
 
     # Inference service/memory layout configuration
-    engine: InferenceEngineConfig = field(default_factory=InferenceEngineConfig)
+    engine: InferenceEngineConfig = field(default_factory=lambda: InferenceEngineConfig(max_seq_len=1024))
 
     prompts: list[str] | str | tuple[str, ...] = (
         "What is the square root of 17?",
@@ -60,6 +60,8 @@ class SampleLmConfig:
 
     # Optional JAX profiling
     profile: bool = False
+
+    log_kernel_jaxprs_path: Optional[str] = None
 
 
 def _load_model(config: SampleLmConfig, Vocab: Axis, *, key) -> LmHeadModel:
@@ -121,6 +123,9 @@ def main(config: SampleLmConfig):
 
         # Initialize a reusable generation service with capacity from config
         service = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.engine)
+
+        if config.log_kernel_jaxprs_path:
+            service.write_kernel_jaxprs(config.log_kernel_jaxprs_path)
 
         # -------------------------------- Scheduler-based generation --------------------------------
 

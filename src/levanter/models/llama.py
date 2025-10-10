@@ -84,7 +84,7 @@ class LlamaConfig(HFCompatConfig):
     Pos = property(lambda self: Axis(name="position", size=self.seq_len))
     KeyPos = property(lambda self: self.Pos.alias("key_position"))
     Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
-    Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
+    Layers = property(lambda self: Axis(name="layer", size=self.num_layers))
     Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
 
     def __post_init__(self):
@@ -413,13 +413,28 @@ class LlamaTransformer(eqx.Module):
     ) -> tuple[NamedArray, KvPageCache]:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
 
-        x, kv_cache = self.layers.scan_via(LlamaDecoderLayer.decode)(
-            x,
-            kv_cache,
-            batch_info,
-            pos_ids=pos_ids,
-            key=keys,
-        )
+        # Unfortunately, JAX does not seem to want to intelligently reuse memory here, so we manually unroll the loop
+        # x, kv_cache = self.layers.scan_via(LlamaDecoderLayer.decode)(
+        #     x,
+        #     kv_cache,
+        #     batch_info,
+        #     pos_ids=pos_ids,
+        #     key=keys,
+        # )
+        # x = self.norm(x)
+
+        for i in range(self.config.num_layers):
+            layer = hax.tree_util.tree_map(lambda l: l["layer", i], self.layers.stacked)  # type: ignore
+            this_cache = hax.tree_util.tree_map(lambda c: c["layer", i], kv_cache)
+            x, this_cache = layer.decode(
+                x,
+                this_cache,
+                batch_info,
+                pos_ids=pos_ids,
+                key=keys[i] if keys is not None else None,
+            )
+            kv_cache = hax.tree_util.tree_map(lambda c, nc: c.at["layer", i].set(nc), kv_cache, this_cache)
+
         x = self.norm(x)
 
         return x, kv_cache

@@ -18,7 +18,7 @@ WORKDIR /opt/levanter
 ADD pyproject.toml README.md /opt/levanter/
 RUN mkdir -p /opt/levanter/src/levanter
 RUN touch /opt/levanter/src/levanter/__init__.py || true
-RUN uv pip install -e '/opt/levanter/[test]'
+RUN uv pip install -e '/opt/levanter/[test,dev,serve]' prompt_toolkit uvicorn
 RUN uv pip install "lm-eval@git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch"
 RUN uv pip install "draccus@git+https://github.com/dlwh/draccus.git"
 RUN rm /opt/levanter/src/levanter/__init__.py
