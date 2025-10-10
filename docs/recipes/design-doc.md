@@ -10,6 +10,13 @@ Design docs should be **tight, readable 1-pagers** that explain the problem, ref
 
 # Example Design Doc: Step Execution Time Tracking
 
+N.B.
+
+This design doc was machine generated and is primarily used for agent task tracking.
+DO NOT use it as a canonical source of information about the project.
+It is included in this commit for reviewer reference and feedbacka.
+It may be deleted in the future.
+
 ## Problem
 
 The Executor framework (`src/marin/execution/executor.py`) provides no visibility into step execution times. When pipelines run slow (e.g., 6 hours for 50 steps), developers can't identify bottlenecks without manual instrumentation.
