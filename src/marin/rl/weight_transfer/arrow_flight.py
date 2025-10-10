@@ -161,7 +161,7 @@ def state_dict_to_batches(
     return result
 
 
-@partial(jax.jit, donate_argnums=0)
+@jax.jit
 def update_model(old_model, new_state_dict):
     return hsd.from_state_dict(old_model, new_state_dict)
 
