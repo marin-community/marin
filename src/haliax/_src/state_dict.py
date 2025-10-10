@@ -13,7 +13,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import ShapeDtypeStruct
-from jax.experimental.multihost_utils import sync_global_devices
+from haliax.jax_utils import sync_global_devices
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from jax.tree_util import DictKey, FlattenedIndexKey, GetAttrKey, SequenceKey
 from jaxtyping import PyTree
@@ -68,7 +68,11 @@ def flatten_modules_for_export(t: T) -> T:
             )
         return module
 
-    return scan_aware_tree_map(_flatten_module, t, is_leaf=lambda x: isinstance(x, ModuleWithStateDictSerialization))
+    return scan_aware_tree_map(
+        _flatten_module,
+        t,
+        is_leaf=lambda x: isinstance(x, ModuleWithStateDictSerialization),
+    )
 
 
 def unflatten_modules_from_export(t: T, template: T) -> T:
@@ -88,7 +92,10 @@ def unflatten_modules_from_export(t: T, template: T) -> T:
         return module
 
     return scan_aware_tree_map(
-        _unflatten_module, t, template, is_leaf=lambda x: isinstance(x, ModuleWithStateDictSerialization)
+        _unflatten_module,
+        t,
+        template,
+        is_leaf=lambda x: isinstance(x, ModuleWithStateDictSerialization),
     )
 
 
@@ -187,9 +194,13 @@ def from_state_dict(tree: T, state_dict: StateDict, prefix: str | None = None) -
         else:
             return default_eqx_module_from_state_dict(tree, state_dict, prefix)
     elif isinstance(tree, list):
-        return [from_state_dict(item, state_dict, with_prefix(prefix, str(i))) for i, item in enumerate(tree)]  # type: ignore
+        return [
+            from_state_dict(item, state_dict, with_prefix(prefix, str(i))) for i, item in enumerate(tree)
+        ]  # type: ignore
     elif isinstance(tree, dict):
-        return {k: from_state_dict(v, state_dict, prefix=with_prefix(prefix, k)) for k, v in tree.items()}  # type: ignore
+        return {
+            k: from_state_dict(v, state_dict, prefix=with_prefix(prefix, k)) for k, v in tree.items()
+        }  # type: ignore
     elif isinstance(tree, NamedArray):
         if prefix is None:
             raise ValueError("Cannot extract a leaf value from a torch dict without a prefix")
@@ -383,7 +394,8 @@ def to_numpy_state_dict(model, prefix: str | None = None) -> StateDict:
                     # TODO: ensure that this mesh arranges devices correctly
                     # (jax seems to do this internally itself, so we should be fine?)
                     process_mesh = Mesh(
-                        np.array(jax.devices()).reshape((jax.process_count(), -1)), ("process", "device")
+                        np.array(jax.devices()).reshape((jax.process_count(), -1)),
+                        ("process", "device"),
                     )
 
                     # now we need to find an axis along which we can shard the array.
@@ -391,7 +403,8 @@ def to_numpy_state_dict(model, prefix: str | None = None) -> StateDict:
 
                     try:
                         axis_to_shard = index_where(
-                            lambda axis_size: axis_size % process_mesh.devices.size == 0, arr.shape
+                            lambda axis_size: axis_size % process_mesh.devices.size == 0,
+                            arr.shape,
                         )
                     except ValueError:
                         return np.array(arr)
