@@ -150,6 +150,11 @@ class BlockFoldable(Protocol[M]):
         """
         ...
 
+    def get_layer(self, index: int) -> M:
+        """Return the ``index``th layer of the folded module."""
+
+        ...
+
 
 class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
     """
@@ -377,6 +382,11 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
 
         return state_dict
 
+    def get_layer(self, index: int) -> M:
+        """Return the ``index``th block in this sequential container."""
+
+        return self.blocks[index]
+
     @property
     def _output_ckpt_name(self):
         return f"BlockSeq[{self.Block}, {self.blocks[0].__class__.__name__}].outputs"
@@ -441,6 +451,12 @@ class Stacked(ModuleWithStateDictSerialization, Generic[M]):
     stacked: M
     Block: Axis = eqx.field(static=True)
     gradient_checkpointing: ScanCheckpointPolicy = eqx.field(static=True)
+
+    @property
+    def Layers(self) -> Axis:
+        """Alias for :attr:`Block` used by some downstream code."""
+
+        return self.Block
 
     @classmethod
     def init(
@@ -699,6 +715,23 @@ class Stacked(ModuleWithStateDictSerialization, Generic[M]):
         # now we need to transpose the leaves
         unstacked_leaves = tuple(zip(*unstacked_leaves))
         return tuple(map(lambda x: jax.tree_util.tree_unflatten(structure, x), unstacked_leaves))
+
+    def get_layer(self, index: int) -> M:
+        """Return the ``index``th layer of this stacked module."""
+
+        def select_leaf(leaf):
+            if isinstance(leaf, haliax.NamedArray):
+                if haliax.selects_axis(leaf.axes, self.Block):
+                    return leaf[self.Block, index]
+                else:
+                    return leaf
+            if is_jax_or_hax_array_like(leaf):
+                if getattr(leaf, "shape", ()) and leaf.shape[0] == self.Block.size:
+                    return leaf[index]
+                return leaf
+            return leaf
+
+        return haliax.tree_util.tree_map(select_leaf, self.stacked)
 
     def to_state_dict(self, prefix: str | None = None) -> StateDict:
         # this method needs to "devectorize" the blocks, so that we have a list of blocks h.0.FOO, h.1.FOO, etc.

@@ -51,6 +51,65 @@ def test_unstacked():
         assert hax.all(module.array == m.stacked.array[i])
 
 
+def test_get_layer_stacked():
+    class Module(eqx.Module):
+        named: hax.NamedArray
+        array: jax.Array
+        static: int = eqx.static_field()
+
+        def __call__(self, x, *, key):  # pragma: no cover - unused in this test
+            return x + self.array + self.static
+
+        @staticmethod
+        def init(named, array, static):
+            return Module(named=named, array=array, static=static)
+
+    Block = hax.Axis("block", 3)
+    E = hax.Axis("E", 4)
+
+    initial_named = hax.random.uniform(jax.random.PRNGKey(0), (Block, E))
+    arrays = jax.numpy.arange(Block.size)
+
+    stacked = Stacked.init(Block, Module)(named=initial_named, array=arrays, static=2)
+
+    layer = stacked.get_layer(1)
+
+    assert isinstance(layer, Module)
+    assert layer.static == 2
+    assert layer.named.axes == (E,)
+    assert hax.all(layer.named == initial_named["block", 1])
+    assert hax.all(layer.array == arrays[1])
+
+
+def test_get_layer_blockseq():
+    class Module(eqx.Module):
+        named: hax.NamedArray
+        array: jax.Array
+        static: int = eqx.static_field()
+
+        def __call__(self, x, *, key):  # pragma: no cover - unused in this test
+            return x + self.array + self.static
+
+        @staticmethod
+        def init(named, array, static):
+            return Module(named=named, array=array, static=static)
+
+    Block = hax.Axis("block", 3)
+    E = hax.Axis("E", 4)
+
+    initial_named = hax.random.uniform(jax.random.PRNGKey(0), (Block, E))
+    arrays = jax.numpy.arange(Block.size)
+
+    seq = BlockSeq.init(Block, Module)(named=initial_named, array=arrays, static=2)
+
+    layer = seq.get_layer(2)
+
+    assert isinstance(layer, Module)
+    assert layer.static == 2
+    assert hax.all(layer.named == initial_named["block", 2])
+    assert hax.all(layer.array == arrays[2])
+
+
 def test_vmap():
     class Module(eqx.Module):
         weight: hax.NamedArray
