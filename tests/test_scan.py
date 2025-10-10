@@ -6,6 +6,7 @@
 import equinox as eqx
 import jax
 import pytest
+import warnings
 from equinox import filter_grad
 
 import haliax as hax
@@ -164,6 +165,59 @@ def test_scan_with_aux_named_args():
     assert hax.all(hax.isclose(z_scan, z_seq_scan, atol=1e-5))
 
 
+def test_blockseq_unroll_never_warns():
+    class FoldModule(eqx.Module):
+        weight: hax.NamedArray
+
+        def __call__(self, carry: hax.NamedArray) -> hax.NamedArray:
+            return carry + self.weight
+
+        @staticmethod
+        def init(weight):
+            return FoldModule(weight=weight)
+
+    class ScanModule(eqx.Module):
+        weight: hax.NamedArray
+
+        def __call__(self, carry: hax.NamedArray) -> tuple[hax.NamedArray, hax.NamedArray]:
+            updated = carry + self.weight
+            return updated, updated
+
+        @staticmethod
+        def init(weight):
+            return ScanModule(weight=weight)
+
+    Block = hax.Axis("block", 3)
+    Value = hax.Axis("value", 2)
+    weights = hax.random.uniform(jax.random.PRNGKey(0), (Block, Value))
+
+    fold_seq = BlockSeq.init(Block, FoldModule)(weight=weights)
+    scan_seq = BlockSeq.init(Block, ScanModule)(weight=weights)
+
+    init_carry = hax.zeros(Value)
+
+    def fold_step(block: FoldModule, carry: hax.NamedArray) -> hax.NamedArray:
+        return block(carry)
+
+    def scan_step(block: ScanModule, carry: hax.NamedArray) -> tuple[hax.NamedArray, hax.NamedArray]:
+        return block(carry)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _ = fold_seq.fold(init_carry, unroll=2)
+        _ = fold_seq.fold(init_carry, unroll=True)
+        _ = fold_seq.fold(init_carry, unroll=False)
+        _ = fold_seq.fold_via(fold_step, unroll=True)(init_carry)
+        _ = fold_seq.fold_via(fold_step, unroll=False)(init_carry)
+        _ = scan_seq.scan(init_carry, unroll=2)
+        _ = scan_seq.scan(init_carry, unroll=True)
+        _ = scan_seq.scan(init_carry, unroll=False)
+        _ = scan_seq.scan_via(scan_step, unroll=True)(init_carry)
+        _ = scan_seq.scan_via(scan_step, unroll=False)(init_carry)
+
+    assert not caught
+
+
 def test_stacked_to_state_dict():
     class Module(eqx.Module):
         named: hax.NamedArray
@@ -239,8 +293,18 @@ E = hax.Axis("E", 10)
             [(E.size,), (Block.size, E.size), (Block.size, E.size)],
             None,
         ),
-        ("simple", ScanCheckpointPolicy(simple=True), [(E.size,), (Block.size, E.size)], None),
-        ("nested", ScanCheckpointPolicy(simple=True, nested=2), [(E.size,), (2, E.size)], None),
+        (
+            "simple",
+            ScanCheckpointPolicy(simple=True),
+            [(E.size,), (Block.size, E.size)],
+            None,
+        ),
+        (
+            "nested",
+            ScanCheckpointPolicy(simple=True, nested=2),
+            [(E.size,), (2, E.size)],
+            None,
+        ),
         (
             "sin_offload",
             ScanCheckpointPolicy(save_carries=True, offload_block_internals=["sin"]),
@@ -369,6 +433,97 @@ def test_scan_via():
 
     assert hax.all(hax.isclose(carry, expected_carry))
     assert hax.all(hax.isclose(outs, expected_outs))
+
+
+def test_scan_via_with_unroll():
+    class Module(eqx.Module):
+        w: hax.NamedArray
+
+        def with_output(self, x):
+            out = x + self.w
+            return out, 2 * self.w
+
+        def __call__(self, carry):
+            return carry + self.w, 2 * self.w
+
+        @staticmethod
+        def init(named):
+            return Module(w=named)
+
+    Block = hax.Axis("block", 4)
+    E = hax.Axis("E", 6)
+
+    named = hax.random.uniform(jax.random.PRNGKey(0), (Block, E))
+    m = Stacked.init(Block, Module)(named=named)
+
+    x = hax.random.uniform(jax.random.PRNGKey(1), (E,))
+
+    default_carry, default_outs = m.scan_via(Module.with_output)(x)
+    carry, outs = m.scan_via(Module.with_output, unroll=2)(x)
+
+    assert hax.all(hax.isclose(carry, default_carry))
+    assert hax.all(hax.isclose(outs, default_outs))
+
+    default_carry_direct, default_outs_direct = m.scan(x)
+    carry_direct, outs_direct = m.scan(x, unroll=2)
+
+    assert hax.all(hax.isclose(carry_direct, default_carry_direct))
+    assert hax.all(hax.isclose(outs_direct, default_outs_direct))
+
+
+def test_scan_via_with_bool_unroll(monkeypatch):
+    class Module(eqx.Module):
+        w: hax.NamedArray
+
+        def with_output(self, x):
+            out = x + self.w
+            return out, 2 * self.w
+
+        def __call__(self, carry):
+            return carry + self.w, 2 * self.w
+
+        @staticmethod
+        def init(named):
+            return Module(w=named)
+
+    Block = hax.Axis("block", 4)
+    E = hax.Axis("E", 6)
+
+    named = hax.random.uniform(jax.random.PRNGKey(0), (Block, E))
+    m = Stacked.init(Block, Module)(named=named)
+
+    x = hax.random.uniform(jax.random.PRNGKey(1), (E,))
+
+    default_carry_via, default_outs_via = m.scan_via(Module.with_output)(x)
+    default_carry_direct, default_outs_direct = m.scan(x)
+
+    import haliax.nn.scan as hnn_scan
+
+    scan_calls: list[int | None] = []
+    original_scan = hnn_scan.haliax.scan
+
+    def wrapped_scan(*args, **kwargs):
+        scan_calls.append(kwargs.get("unroll"))
+        return original_scan(*args, **kwargs)
+
+    monkeypatch.setattr(hnn_scan.haliax, "scan", wrapped_scan)
+
+    carry_true, outs_true = m.scan_via(Module.with_output, unroll=True)(x)
+    carry_false, outs_false = m.scan_via(Module.with_output, unroll=False)(x)
+    carry_true_direct, outs_true_direct = m.scan(x, unroll=True)
+    carry_false_direct, outs_false_direct = m.scan(x, unroll=False)
+
+    assert scan_calls == [True, False, True, False]
+
+    assert hax.all(hax.isclose(carry_true, default_carry_via))
+    assert hax.all(hax.isclose(outs_true, default_outs_via))
+    assert hax.all(hax.isclose(carry_false, default_carry_via))
+    assert hax.all(hax.isclose(outs_false, default_outs_via))
+
+    assert hax.all(hax.isclose(carry_true_direct, default_carry_direct))
+    assert hax.all(hax.isclose(outs_true_direct, default_outs_direct))
+    assert hax.all(hax.isclose(carry_false_direct, default_carry_direct))
+    assert hax.all(hax.isclose(outs_false_direct, default_outs_direct))
 
 
 def test_scan_via_multi_args():
@@ -511,6 +666,88 @@ def test_fold_via_multi_args():
         expected = expected + 2 * named["block", i] + y + z
 
     assert hax.all(hax.isclose(result, expected))
+
+
+def test_fold_via_with_unroll():
+    class Module(eqx.Module):
+        w: hax.NamedArray
+
+        def intermediate(self, x):
+            return x + 2 * self.w
+
+        def __call__(self, carry):
+            return carry + self.w
+
+        @staticmethod
+        def init(named):
+            return Module(w=named)
+
+    Block = hax.Axis("block", 3)
+    E = hax.Axis("E", 5)
+
+    named = hax.random.uniform(jax.random.PRNGKey(0), (Block, E))
+    m = Stacked.init(Block, Module)(named=named)
+
+    x = hax.random.uniform(jax.random.PRNGKey(1), (E,))
+
+    default_result = m.fold_via(Module.intermediate)(x)
+    result_unroll = m.fold_via(Module.intermediate, unroll=2)(x)
+
+    assert hax.all(hax.isclose(result_unroll, default_result))
+
+    default_fold = m.fold(x)
+    fold_unroll = m.fold(x, unroll=2)
+
+    assert hax.all(hax.isclose(fold_unroll, default_fold))
+
+
+def test_fold_with_bool_unroll(monkeypatch):
+    class Module(eqx.Module):
+        w: hax.NamedArray
+
+        def __call__(self, x):
+            return x + self.w
+
+        def intermediate(self, x):
+            return x + 2 * self.w
+
+        @staticmethod
+        def init(named):
+            return Module(w=named)
+
+    Block = hax.Axis("block", 3)
+    E = hax.Axis("E", 5)
+
+    named = hax.random.uniform(jax.random.PRNGKey(0), (Block, E))
+    m = Stacked.init(Block, Module)(named=named)
+
+    x = hax.random.uniform(jax.random.PRNGKey(1), (E,))
+
+    default_fold = m.fold(x)
+    default_fold_via = m.fold_via(Module.intermediate)(x)
+
+    import haliax.nn.scan as hnn_scan
+
+    fold_calls: list[int | None] = []
+    original_fold = hnn_scan.haliax.fold
+
+    def wrapped_fold(*args, **kwargs):
+        fold_calls.append(kwargs.get("unroll"))
+        return original_fold(*args, **kwargs)
+
+    monkeypatch.setattr(hnn_scan.haliax, "fold", wrapped_fold)
+
+    fold_true = m.fold(x, unroll=True)
+    fold_false = m.fold(x, unroll=False)
+    via_true = m.fold_via(Module.intermediate, unroll=True)(x)
+    via_false = m.fold_via(Module.intermediate, unroll=False)(x)
+
+    assert fold_calls == [True, False, True, False]
+
+    assert hax.all(hax.isclose(fold_true, default_fold))
+    assert hax.all(hax.isclose(fold_false, default_fold))
+    assert hax.all(hax.isclose(via_true, default_fold_via))
+    assert hax.all(hax.isclose(via_false, default_fold_via))
 
 
 def test_fold_via_static_args():

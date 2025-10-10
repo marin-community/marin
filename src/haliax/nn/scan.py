@@ -62,6 +62,22 @@ class ModuleInit(Protocol[M_co]):
     def __call__(self, *args, **kwargs) -> M_co: ...
 
 
+def _normalize_unroll(unroll: int | bool | None, block_size: int) -> int | bool:
+    """Convert user-provided ``unroll`` values into something understood by ``jax.lax.scan``."""
+
+    if unroll is None:
+        return 1
+
+    if isinstance(unroll, bool):
+        return unroll
+
+    resolved = int(unroll)
+    if resolved < 1:
+        raise ValueError(f"unroll must be >= 1; got {resolved}.")
+
+    return resolved
+
+
 class BlockFoldable(Protocol[M]):
     """Common interface for :class:`~haliax.nn.Stacked` and :class:`~haliax.nn.BlockSeq`.
 
@@ -84,29 +100,40 @@ class BlockFoldable(Protocol[M]):
         prevent_cse: bool = False,
     ) -> ModuleInit[S]: ...
 
-    def scan(self, init: T, *extra_args, **extra_kwargs): ...
+    def scan(self, init: T, *extra_args, unroll: int | bool | None = None, **extra_kwargs): ...
 
-    def fold(self, init: T, *args, **kwargs) -> T: ...
-
-    @overload
-    def fold_via(self, fn: FoldFunction[M, P, CarryT]) -> Callable[Concatenate[CarryT, P], CarryT]: ...
+    def fold(self, init: T, *args, unroll: int | bool | None = None, **kwargs) -> T: ...
 
     @overload
-    def fold_via(self, fn: Callable[[M, CarryT], CarryT]) -> Callable[[CarryT], CarryT]: ...
+    def fold_via(
+        self, fn: FoldFunction[M, P, CarryT], *, unroll: int | bool | None = None
+    ) -> Callable[Concatenate[CarryT, P], CarryT]: ...
 
-    def fold_via(self, fn: Callable[..., CarryT]) -> Callable[Concatenate[CarryT, P], CarryT]: ...
+    @overload
+    def fold_via(
+        self, fn: Callable[[M, CarryT], CarryT], *, unroll: int | bool | None = None
+    ) -> Callable[[CarryT], CarryT]: ...
+
+    def fold_via(
+        self, fn: Callable[..., CarryT], *, unroll: int | bool | None = None
+    ) -> Callable[Concatenate[CarryT, P], CarryT]: ...
 
     @overload
     def scan_via(
-        self, fn: ScanFunction[M, CarryT, P, OutputT_co]
+        self, fn: ScanFunction[M, CarryT, P, OutputT_co], *, unroll: int | bool | None = None
     ) -> Callable[Concatenate[CarryT, P], tuple[CarryT, OutputT_co]]: ...
 
     @overload
     def scan_via(
-        self, fn: Callable[[M, CarryT], tuple[CarryT, OutputT_co]]
+        self,
+        fn: Callable[[M, CarryT], tuple[CarryT, OutputT_co]],
+        *,
+        unroll: int | bool | None = None,
     ) -> Callable[[CarryT], tuple[CarryT, OutputT_co]]: ...
 
-    def scan_via(self, fn: Callable[..., tuple[CarryT, OutputT_co]]) -> Callable[P, tuple[CarryT, OutputT_co]]: ...
+    def scan_via(
+        self, fn: Callable[..., tuple[CarryT, OutputT_co]], *, unroll: int | bool | None = None
+    ) -> Callable[P, tuple[CarryT, OutputT_co]]: ...
 
     @overload
     def vmap_via(self, fn: VmapFunction[M, P, OutputT_co]) -> Callable[P, OutputT_co]: ...
@@ -181,15 +208,15 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
 
         return fn
 
-    def scan(self, init: T, *extra_args, **extra_kwargs):
+    def scan(self, init: T, *extra_args, unroll: int | bool | None = None, **extra_kwargs):
         def do_scan(init, *extra_args, **extra_kwargs):
             out = []
             carry = init
 
             for i, block in enumerate(self.blocks):
-
                 (block_args, block_kwargs) = haliax.tree_util.tree_map(
-                    functools.partial(BlockSeq._slice_out, self.Block, i), (extra_args, extra_kwargs)
+                    functools.partial(BlockSeq._slice_out, self.Block, i),
+                    (extra_args, extra_kwargs),
                 )
 
                 block_result = block(carry, *block_args, **block_kwargs)
@@ -210,12 +237,13 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
 
         return do_scan(init, *extra_args, **extra_kwargs)
 
-    def fold(self, init: T, *args, **kwargs) -> T:
+    def fold(self, init: T, *args, unroll: int | bool | None = None, **kwargs) -> T:
         def do_fold(init, *args, **kwargs):
             carry = init
             for i, block in enumerate(self.blocks):
                 (block_args, block_kwargs) = haliax.tree_util.tree_map(
-                    functools.partial(BlockSeq._slice_out, self.Block, i), (args, kwargs)
+                    functools.partial(BlockSeq._slice_out, self.Block, i),
+                    (args, kwargs),
                 )
                 carry = block(carry, *block_args, **block_kwargs)
                 carry = tree_checkpoint_name(carry, self._carry_ckpt_name)
@@ -224,12 +252,16 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
         return do_fold(init, *args, **kwargs)
 
     @overload
-    def fold_via(self, fn: FoldFunction[M, P, CarryT]) -> Callable[Concatenate[CarryT, P], CarryT]: ...
+    def fold_via(
+        self, fn: FoldFunction[M, P, CarryT], *, unroll: int | bool | None = None
+    ) -> Callable[Concatenate[CarryT, P], CarryT]: ...
 
     @overload
-    def fold_via(self, fn: Callable[[M, CarryT], CarryT]) -> Callable[[CarryT], CarryT]: ...
+    def fold_via(
+        self, fn: Callable[[M, CarryT], CarryT], *, unroll: int | bool | None = None
+    ) -> Callable[[CarryT], CarryT]: ...
 
-    def fold_via(self, fn: Callable[..., CarryT]):
+    def fold_via(self, fn: Callable[..., CarryT], *, unroll: int | bool | None = None):
         """Return a function that folds over the sequence using ``fn``.
 
         ``fn`` should take a block and a carry and return a new carry. The
@@ -247,15 +279,18 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
 
     @overload
     def scan_via(
-        self, fn: ScanFunction[M, CarryT, P, OutputT_co]
+        self, fn: ScanFunction[M, CarryT, P, OutputT_co], *, unroll: int | bool | None = None
     ) -> Callable[Concatenate[CarryT, P], tuple[CarryT, OutputT_co]]: ...
 
     @overload
     def scan_via(
-        self, fn: Callable[[M, CarryT], tuple[CarryT, OutputT_co]]
+        self,
+        fn: Callable[[M, CarryT], tuple[CarryT, OutputT_co]],
+        *,
+        unroll: int | bool | None = None,
     ) -> Callable[[CarryT], tuple[CarryT, OutputT_co]]: ...
 
-    def scan_via(self, fn: Callable[..., tuple[CarryT, OutputT_co]]):
+    def scan_via(self, fn: Callable[..., tuple[CarryT, OutputT_co]], *, unroll: int | bool | None = None):
         """Return a function that scans over the sequence using ``fn``.
 
         ``fn`` should take a block and a carry and return ``(carry, output)``.
@@ -447,7 +482,7 @@ class Stacked(ModuleWithStateDictSerialization, Generic[M]):
 
         return fn
 
-    def scan(self, init, *extra_args, **extra_kwargs):
+    def scan(self, init, *extra_args, unroll: int | bool | None = None, **extra_kwargs):
         """
         Scan over the stacked module. This is the same as a for loop that applies each instance of the module in sequence
         to the input, passing the output of one instance to the next instance. It returns a stack of outputs as
@@ -475,19 +510,24 @@ class Stacked(ModuleWithStateDictSerialization, Generic[M]):
 
         """
 
+        resolved_unroll = _normalize_unroll(unroll, self.Block.size)
+
         def do_block(carry, block, *args, **kwargs):
             carry, out = block(carry, *args, **kwargs)
             return carry, out
 
         def do_scan(init, *extra_args, **extra_kwargs):
-            carry, out = haliax.scan(do_block, self.Block, remat=self.gradient_checkpointing)(
-                init, self.stacked, *extra_args, **extra_kwargs
-            )
+            carry, out = haliax.scan(
+                do_block,
+                self.Block,
+                remat=self.gradient_checkpointing,
+                unroll=resolved_unroll,
+            )(init, self.stacked, *extra_args, **extra_kwargs)
             return carry, out
 
         return do_scan(init, *extra_args, **extra_kwargs)
 
-    def fold(self, init, *args, **kwargs):
+    def fold(self, init, *args, unroll: int | bool | None = None, **kwargs):
         """
         Fold over the stacked module. This is the same as a for loop that applies each instance of the module in sequence
         to the input, passing the output of one instance to the next instance.
@@ -510,66 +550,88 @@ class Stacked(ModuleWithStateDictSerialization, Generic[M]):
 
         """
 
+        resolved_unroll = _normalize_unroll(unroll, self.Block.size)
+
         def do_block(carry, block, *args, **kwargs):
             carry = block(carry, *args, **kwargs)
             return carry
 
         def do_fold(init, *extra_args, **extra_kwargs):
-            carry = haliax.fold(do_block, self.Block, remat=self.gradient_checkpointing)(
-                init, self.stacked, *extra_args, **extra_kwargs
-            )
+            carry = haliax.fold(
+                do_block,
+                self.Block,
+                remat=self.gradient_checkpointing,
+                unroll=resolved_unroll,
+            )(init, self.stacked, *extra_args, **extra_kwargs)
             return carry
 
         return do_fold(init, *args, **kwargs)
 
     @overload
-    def fold_via(self, fn: FoldFunction[M, P, CarryT]) -> Callable[Concatenate[CarryT, P], CarryT]: ...
+    def fold_via(
+        self, fn: FoldFunction[M, P, CarryT], *, unroll: int | bool | None = None
+    ) -> Callable[Concatenate[CarryT, P], CarryT]: ...
 
     @overload
-    def fold_via(self, fn: Callable[[M, CarryT], CarryT]) -> Callable[[CarryT], CarryT]: ...
+    def fold_via(
+        self, fn: Callable[[M, CarryT], CarryT], *, unroll: int | bool | None = None
+    ) -> Callable[[CarryT], CarryT]: ...
 
-    def fold_via(self, fn: Callable[..., CarryT]):
+    def fold_via(self, fn: Callable[..., CarryT], *, unroll: int | bool | None = None):
         """Return a function that folds over the stack using ``fn``.
 
         ``fn`` should take a block and a carry and return a new carry.  The
         returned function mirrors :func:`haliax.fold` over the block axis.
         """
 
+        resolved_unroll = _normalize_unroll(unroll, self.Block.size)
+
         def do_block(carry: CarryT, block: M, *args, **kwargs) -> CarryT:
             return fn(block, carry, *args, **kwargs)
 
         def do_fold(init: CarryT, *args, **kwargs) -> CarryT:
-            return haliax.fold(do_block, self.Block, remat=self.gradient_checkpointing)(
-                init, self.stacked, *args, **kwargs
-            )
+            return haliax.fold(
+                do_block,
+                self.Block,
+                remat=self.gradient_checkpointing,
+                unroll=resolved_unroll,
+            )(init, self.stacked, *args, **kwargs)
 
         return do_fold
 
     @overload
     def scan_via(
-        self, fn: ScanFunction[M, CarryT, P, OutputT_co]
+        self, fn: ScanFunction[M, CarryT, P, OutputT_co], *, unroll: int | bool | None = None
     ) -> Callable[Concatenate[CarryT, P], tuple[CarryT, OutputT_co]]: ...
 
     @overload
     def scan_via(
-        self, fn: Callable[[M, CarryT], tuple[CarryT, OutputT_co]]
+        self,
+        fn: Callable[[M, CarryT], tuple[CarryT, OutputT_co]],
+        *,
+        unroll: int | bool | None = None,
     ) -> Callable[[CarryT], tuple[CarryT, OutputT_co]]: ...
 
-    def scan_via(self, fn: Callable[..., tuple[CarryT, OutputT_co]]):
+    def scan_via(self, fn: Callable[..., tuple[CarryT, OutputT_co]], *, unroll: int | bool | None = None):
         """Return a function that scans over the stack using ``fn``.
 
         ``fn`` should take a block and a carry and return ``(carry, output)``.
         Semantics match :func:`haliax.scan` over the block axis.
         """
 
+        resolved_unroll = _normalize_unroll(unroll, self.Block.size)
+
         def do_block(carry: CarryT, block: M, *args, **kwargs) -> tuple[CarryT, OutputT_co]:
             carry, output = fn(block, carry, *args, **kwargs)
             return carry, output
 
         def do_scan(init: CarryT, *args, **kwargs) -> tuple[CarryT, OutputT_co]:
-            return haliax.scan(do_block, self.Block, remat=self.gradient_checkpointing)(
-                init, self.stacked, *args, **kwargs
-            )
+            return haliax.scan(
+                do_block,
+                self.Block,
+                remat=self.gradient_checkpointing,
+                unroll=resolved_unroll,
+            )(init, self.stacked, *args, **kwargs)
 
         return do_scan
 
@@ -707,7 +769,7 @@ def _unstack_state_dict(state_dict: StateDict, prefix: str | None = None) -> Sta
     for k, v in state_dict.items():
         if k.startswith(prefix) and is_jax_or_hax_array_like(v):
             for i, v_i in enumerate(v):
-                new_dict[f"{prefix}{i}.{k[len(prefix):]}"] = v_i
+                new_dict[f"{prefix}{i}.{k[len(prefix) :]}"] = v_i
         else:
             new_dict[k] = v
 
