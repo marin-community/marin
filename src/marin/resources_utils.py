@@ -122,10 +122,11 @@ def get_tpu_type_and_chips(tpu_slice: str) -> tuple[str, int]:
         logger.info(f"TPU type: {tpu_type}, suffix: {suffix}")
 
         # Map size to actual chip count
-        # For v4, v5p, v5e: size/2 gives chip count up to 256 chips
-        if tpu_type in ("v4", "v5p", "v5e"):
+        # For v4/v5p pods the suffix encodes TensorCore count (two per chip), so halve it.
+        if tpu_type in ("v4", "v5p"):
             num_chips = int(suffix) // 2
         else:
+            # v5e/v6e suffixes already report chip counts directly.
             num_chips = int(suffix)
 
         return tpu_type, num_chips

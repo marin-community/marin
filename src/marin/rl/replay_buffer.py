@@ -19,6 +19,7 @@ This module provides a replay buffer that manages rollout data for training,
 with balanced sampling across environments and configurable prioritization.
 """
 
+import dataclasses
 import logging
 import threading
 import time
@@ -27,7 +28,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .rl_losses import compute_rloo_advantages
+from marin.rl.rl_losses import RLLossModule
+
 from .rollout_storage import RolloutReader
 from .types import RolloutBatch, RolloutWithAdvantage
 
@@ -40,17 +42,20 @@ logger = logging.getLogger(__name__)
 class ReplayBufferConfig:
     """Configuration for the replay buffer."""
 
-    capacity: int = 10000
+    capacity: int
     """Maximum number of examples per environment in the buffer."""
 
-    alpha: float = 3.0
+    alpha: float
     """Recency bias for sampling, higher values favor newer examples."""
 
-    max_samples: int = 4
+    max_samples: int
     """Maximum number of times to use an example before retiring."""
 
-    max_rollout_delay: int = 1000
-    """Maximum age of rollouts in training steps."""
+    max_rollout_step_delay: int
+    """Maximum age of rollouts in training steps, rollouts earlier than this will be dropped."""
+
+    max_rollout_timestamp_delay: float = 3600.0
+    """Maximum age of rollouts in seconds."""
 
 
 @dataclass
@@ -61,6 +66,7 @@ class RolloutWithCount(RolloutWithAdvantage):
     weight_step: int = 0
 
 
+@dataclass
 class ReplayBuffer:
     """The replay buffer manages incoming rollout data and produces training batches.
 
@@ -69,56 +75,87 @@ class ReplayBuffer:
     rollout array which is sampled from to produce training batches.
     """
 
-    def __init__(
-        self,
+    capacity: int
+    local_batch_size: int
+    alpha: float
+    total_processes: int
+    max_samples: int
+    max_rollout_step_delay: int
+    max_rollout_timestamp_delay: float
+    loss_module: RLLossModule
+    seed: int
+
+    _total_batches_added: int = 0
+    _total_batches_sampled: int = 0
+    _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
+    _current_step: int = 0
+    _rng: np.random.Generator = dataclasses.field(init=False)
+    rollout_storage: dict[str, list[RolloutWithCount]] = dataclasses.field(default_factory=dict)
+
+    def __post_init__(self):
+        self._rng = np.random.default_rng(seed=self.seed)
+
+    @classmethod
+    def from_config(
+        cls,
         config: ReplayBufferConfig,
         local_batch_size: int,
-        process_id: int,
         total_processes: int,
-    ):
-        """Initialize replay buffer.
+        loss_module: RLLossModule,
+        seed: int,
+    ) -> "ReplayBuffer":
+        """Create ReplayBuffer from configuration.
 
         Args:
-            config: Configuration for buffer capacity, recency bias, and sampling limits.
-            local_batch_size: Target size for training batches.
-            process_id: Identifier for this process. Used to sample across processes.
-            total_processes: Total number of training processes.
+            config: Replay buffer configuration.
+            local_batch_size: Batch size for sampling.
+            total_processes: Total number of processes.
+            loss_module: Loss module for computing advantages.
+            seed: Random seed for sampling.
+
+        Returns:
+            Configured ReplayBuffer instance.
         """
-        self.capacity = config.capacity
-        self.local_batch_size = local_batch_size
-        self.recency_alpha = config.alpha
-        self.total_processes = total_processes
-        self.process_id = process_id
-        self.max_samples = config.max_samples
-        self.max_rollout_delay = config.max_rollout_delay
-
-        self.rollout_storage: dict[str, list[RolloutWithCount]] = {}
-        self._lock = threading.Lock()
-
-        self._total_batches_added = 0
-        self._total_batches_sampled = 0
-        self._current_step: int = 0
-
-        self._rng = np.random.default_rng(seed=process_id + 42)
+        return cls(
+            capacity=config.capacity,
+            local_batch_size=local_batch_size,
+            alpha=config.alpha,
+            total_processes=total_processes,
+            max_samples=config.max_samples,
+            max_rollout_step_delay=config.max_rollout_step_delay,
+            max_rollout_timestamp_delay=config.max_rollout_timestamp_delay,
+            loss_module=loss_module,
+            seed=seed,
+        )
 
     def set_current_step(self, step: int) -> None:
         """Set current training step and filter stale rollouts."""
         self._current_step = step
-        min_step = step - self.max_rollout_delay
+        min_time = time.time() - self.max_rollout_timestamp_delay
+        min_step = step - self.max_rollout_step_delay
+        logger.info(
+            "Discarding rollouts older than step %d or timestamp %.0f (current step %d)", min_step, min_time, step
+        )
 
         with self._lock:
             total_removed = 0
             for env_name in self.rollout_storage:
                 rollouts = self.rollout_storage[env_name]
                 before = len(rollouts)
-                self.rollout_storage[env_name] = [r for r in rollouts if r.weight_step >= min_step]
+                self.rollout_storage[env_name] = [
+                    r
+                    for r in rollouts
+                    if (r.rollout.metadata.weight_step >= min_step and r.rollout.metadata.timestamp > min_time)
+                ]
                 total_removed += before - len(self.rollout_storage[env_name])
 
             total_remaining = sum(len(rollouts) for rollouts in self.rollout_storage.values())
 
             if total_removed > 0:
                 logger.info(
-                    f"Filtered {total_removed} stale rollouts (min_step={min_step}), " f"{total_remaining} remaining"
+                    f"Filtered {total_removed} stale rollouts "
+                    f"(min_step={min_step}, min_time={min_time:.0f}), "
+                    f"{total_remaining} remaining"
                 )
 
     def _retire_overused_rollouts(self):
@@ -139,11 +176,24 @@ class ReplayBuffer:
         """
         env_examples: dict[str, list[RolloutWithCount]] = defaultdict(list)
         for batch in new_batches:
+            if not batch.groups or not batch.groups[0].rollouts:
+                continue
+
+            # Read weight_step from first rollout's metadata
+            first_rollout = batch.groups[0].rollouts[0]
+            weight_step = first_rollout.metadata.weight_step
+
+            if weight_step < self._current_step - self.max_rollout_step_delay:
+                logger.info(
+                    f"Skipping stale rollout batch (weight_step={weight_step}, current_step={self._current_step})"
+                )
+                continue
+
             self._total_batches_added += 1
-            weight_step = batch.metadata.weight_step
+
             for group in batch.groups:
                 # Compute RLOO advantages for the group
-                advantages = compute_rloo_advantages(group.rollouts)
+                advantages = self.loss_module.compute_advantages(group.rollouts)
                 for rollout, advantage in zip(group.rollouts, advantages, strict=True):
                     individual = RolloutWithCount(
                         rollout=rollout, advantage=advantage, usage_count=0, weight_step=weight_step
@@ -157,8 +207,8 @@ class ReplayBuffer:
                 else:
                     self.rollout_storage[env_name] = examples
 
-            if len(self.rollout_storage[env_name]) > self.capacity:
-                self.rollout_storage[env_name] = self.rollout_storage[env_name][-self.capacity :]
+                if len(self.rollout_storage[env_name]) > self.capacity:
+                    self.rollout_storage[env_name] = self.rollout_storage[env_name][-self.capacity :]
 
     def sample_rollouts(self) -> list[RolloutWithCount] | None:
         """Sample individual rollouts with balanced environment sampling.
@@ -174,26 +224,43 @@ class ReplayBuffer:
             if not env_names:
                 return None
 
-            # Sample individual rollouts
-            sampled = []
-            for _ in range(self.local_batch_size):
-                # Select environment (balanced sampling)
-                env_name = self._rng.choice(env_names)
-                rollouts = self.rollout_storage[env_name]
+            # sample environments N times without replacement
+            # we fill the array with the number of rollouts in each env
+            total_count = 0
+            env_choices = []
+            for env_name in env_names:
+                env_choices.extend([env_name] * len(self.rollout_storage[env_name]))
+                total_count += len(self.rollout_storage[env_name])
 
-                # Compute recency weights
+            # not enough samples to fill a batch
+            if total_count < self.local_batch_size:
+                return None
+
+            env_choices = np.array(env_choices)
+            env_indices = self._rng.choice(
+                env_choices,
+                size=self.local_batch_size,
+                replace=False,
+            )
+
+            # count the number of times each env is chosen
+            env_count = defaultdict(int)
+            for env_name in env_indices:
+                env_count[env_name] += 1
+
+            # now sample from each env according to recency weights & number of times chosen
+            sampled: list[RolloutWithCount] = []
+            for env_name, count in env_count.items():
+                rollouts = self.rollout_storage[env_name]
                 weights = np.arange(len(rollouts)) + 1
-                weights = weights**self.recency_alpha
+                weights = weights**self.alpha
                 weights = weights / weights.sum()
 
                 # Sample rollout index
-                idx = self._rng.choice(len(rollouts), p=weights)
-                individual = rollouts[idx]
-
-                sampled.append(individual)
-
-                # Update usage count
-                individual.usage_count += 1
+                idx = self._rng.choice(len(rollouts), p=weights, size=count, replace=False)
+                for i in idx:
+                    sampled.append(rollouts[i])
+                    rollouts[i].usage_count += 1
 
             # Retire overused rollouts
             self._retire_overused_rollouts()

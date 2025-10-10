@@ -170,8 +170,23 @@ def restart_cluster(ctx, preserve_jobs):
     # Backup jobs
     print("Backing up jobs...")
     with tempfile.TemporaryDirectory() as backup_dir:
-        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-            ray.backup_jobs(config_path, backup_dir)
+        try:
+            with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
+                ray.backup_jobs(config_path, backup_dir)
+        except Exception as e:
+            print()
+            print("=" * 60)
+            print(
+                f"Failed to back up jobs from cluster {config_obj.cluster_name} ({e}) "
+                + "(disable with --preserve-jobs=0)"
+            )
+            print("=" * 60)
+            print("Proceed with shutdown? (y/n): ", end="")
+            choice = input().strip().lower()
+            if choice != "y":
+                print("Aborting cluster restart.")
+                return
+            print("Proceeding with cluster restart without job preservation.")
 
         # Restart cluster using proper stop sequence
         print("Stopping cluster...")
@@ -407,16 +422,24 @@ def open_dashboard(ctx, port):
             print("No active clusters found")
             return
 
+        if conn.proxy:
+            print(f"📊 Proxy dashboard: {conn.get_dashboard_url()}")
+            print()
+
         print(f"Connected to {len(conn.clusters)} clusters:")
         for name, info in conn.clusters.items():
-            port_info = conn.port_mappings[name]
-            print(f"  - {name} ({info.zone})")
-            print(f"    Dashboard: http://localhost:{port_info[0]}")
-            print(f"    Internal IP: {info.head_ip}")
-            print(f"    External IP: {info.external_ip}")
+            ports = conn.port_mappings[name]
+            direct_url = f"http://localhost:{ports.dashboard_port}"
+            proxy_url = f"http://localhost:{conn.proxy.proxy_port}/{name}/" if conn.proxy else ""
+            urls = f"{direct_url} | {proxy_url}" if proxy_url else direct_url
+            print(f"  {name} ({info.zone}) - {urls}")
+            print(f"    IP: {info.external_ip} ({info.head_ip})")
+            print(
+                f"    Dashboard: http://localhost:{ports.dashboard_port} | GCS: localhost:{ports.gcs_port} | API: localhost:{ports.api_port}"
+            )
+            print()
 
         if conn.proxy:
-            print(f"\n📊 Proxy dashboard: {conn.get_dashboard_url()}")
             print("\nPress Ctrl+C to stop")
 
             try:

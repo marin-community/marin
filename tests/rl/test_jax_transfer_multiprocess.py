@@ -90,7 +90,6 @@ def run_server(coordinator_name: str, num_processes: int, coordinator_address: s
     config = WeightTransferConfig(
         mode=WeightTransferMode.JAX_TRANSFER_SERVER,
         sync_interval_steps=1,
-        poll_interval_seconds=0.1,
         coordinator_name=coordinator_name,
     )
     logger.info("Creating server with config: %s", config)
@@ -127,7 +126,6 @@ def run_client(coordinator_name: str, process_id: int, num_processes: int, coord
     config = WeightTransferConfig(
         mode=WeightTransferMode.JAX_TRANSFER_SERVER,
         sync_interval_steps=1,
-        poll_interval_seconds=0.1,
         transfer_timeout=10,
         coordinator_name=coordinator_name,
     )
