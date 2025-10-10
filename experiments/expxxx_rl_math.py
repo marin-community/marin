@@ -60,7 +60,6 @@ def stop_tokens(tokenizer_name: str):
 
 
 def create_math_curriculum(run_id: str) -> CurriculumConfig:
-    """Create progressive math curriculum: comparison -> easy -> medium -> hard."""
     from marin.rl.curriculum import SamplingParams
 
     # Default sampling params for all lessons
@@ -74,10 +73,10 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
 
     lessons = {
         "math": LessonConfig(
-            lesson_id="number_comparison",
+            lesson_id="math",
             env_config=EnvConfig(
-                env_class="marin.rl.environments.mock_env.MockEnv",
-                env_args={"task_type": "number_comparison", "seed": 42},
+                env_class="marin.rl.environments.math_env.MathEnv",
+                env_args={"seed": 42},
             ),
             dependencies=[],
             sampling_params=default_sampling,
@@ -130,7 +129,7 @@ def rl_train(name: str) -> ExecutorStep:
     trainer_config = TrainerConfig(
         # wandb is persistently crashing
         tracker=WandbConfig(
-            project="rl-mockenv-testing",
+            project="marin",
             name=name,
             tags=["rl", "math", MODEL_NAME.split("/")[-1]],
         ),
