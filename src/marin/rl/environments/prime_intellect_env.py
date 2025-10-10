@@ -17,11 +17,12 @@ Environment Wrapper for the Environments Hub by Prime-Intellect, which contains 
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
 import logging
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import jax.numpy as jnp
 import numpy as np
 import verifiers as vf
+from verifiers.types import GenerateOutputs
 
 from marin.rl.inference_ctx import InferenceContext
 from marin.rl.types import Rollout, RolloutGroup
@@ -113,17 +114,16 @@ class PrimeIntellectEnv(MarinEnv):
         if n_generations > 1:
             inputs = inputs.repeat(n_generations)
 
-        # Generate using verifiers
-        result = vf_env.generate(
-            dataset=inputs,
-            client=inference_ctx.openai_client(),
-            model="marin-model",
-            sampling_args=sampling_args,
-            max_concurrent=self.max_concurrent,
+        result = cast(
+            GenerateOutputs,
+            vf_env.generate(
+                dataset=inputs,
+                client=inference_ctx.openai_client(),
+                model="marin-model",
+                sampling_args=sampling_args,
+                max_concurrent=self.max_concurrent,
+            ),
         )
-
-        # Access tokenizer from inference context
-        tokenizer = inference_ctx.tokenizer
 
         # Convert to RolloutGroups
         rollout_groups = []
@@ -138,11 +138,13 @@ class PrimeIntellectEnv(MarinEnv):
                 reward = result.reward[overall_idx] if overall_idx < len(result.reward) else 0.0
 
                 # Use chat template for prompt tokenization to match server behavior
-                prompt_tokens = inference_ctx.prompt_tokens(result.prompt[prompt_idx])
-                response_tokens = tokenizer.encode(completion, add_special_tokens=False)
+                prompt_tokens = inference_ctx.tokenize_prompt(result.prompt[prompt_idx])
+                response_tokens = inference_ctx.tokenize_response(completion)
 
                 token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
-                # NOTE: Verifiers don't provide logprobs - use zeros (known limitation)
+                # TODO(herumb): Verifiers don't provide logprobs - stub with zeros for now
+                # nothing can be learned until we get logprobs from verifiers or add a
+                # logprobs endpoint to the server.
                 response_logprobs = jnp.zeros(len(response_tokens), dtype=jnp.float32)
 
                 rollout = Rollout(

@@ -15,8 +15,8 @@
 """
 Inference context for rollout construction.
 
-This module provides:
-- InferenceContext with helpers for querying openai and reconstructing logprobs & tokens from a response.
+This context is provided to environments and provides access to the inference server
+as well as methods for tokenization and logprob extraction from an OpenAI ChatCompletion.
 """
 
 import asyncio
@@ -128,6 +128,17 @@ class InferenceContext:
             if not tokens:
                 raise ValueError(f"Failed to tokenize: {prompt[:100]}...") from None
 
+        return np.array(tokens, dtype=np.int32)
+
+    def tokenize_response(self, text: str) -> np.ndarray:
+        """Extract token IDs from the response text.
+
+        In general this should roundtrip via `encode`, as the chat template should
+        terminate with a special token to indicate the end of the template and start
+        of the assistant response, that is, we should not have a situation [pppprrrr]
+        where `pr` can be interpreted as a valid token.
+        """
+        tokens = self.tokenizer.encode(text, add_special_tokens=False)
         return np.array(tokens, dtype=np.int32)
 
     def response_tokens_from_choice(self, choice: Choice) -> np.ndarray:
