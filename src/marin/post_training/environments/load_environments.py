@@ -19,9 +19,7 @@ from typing import Any
 from transformers import AutoTokenizer
 
 from .aqua_rat_env import AquaRatEnv
-from .marin_env import MarinEnv
 from .math_env import MathEnv
-from .mock_env import MockEnv
 from .numina_math_env import NuminaMathEnv
 from .olym_math_env import OlymMathEnv
 from .olympiad_bench_env import OlympiadBenchEnv
@@ -39,7 +37,6 @@ except ImportError:
 ENVIRONMENT_NAME_TO_CLASS = {
     "aqua_rat": AquaRatEnv,
     "math": MathEnv,
-    "mock": MockEnv,
     "numina_math": NuminaMathEnv,
     "olym_math": OlymMathEnv,
     "olympiad_bench": OlympiadBenchEnv,
@@ -67,7 +64,7 @@ def str_to_val(v: str) -> Any:
         return v
 
 
-def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer) -> MarinEnv:
+def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer):
     """
     Instantiate an environment from a spec string like 'OlymMathEnv:difficulty=easy,language=en'
     """
@@ -86,7 +83,7 @@ def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer) -> MarinEnv:
     return env_cls(tokenizer=tokenizer, **kwargs)
 
 
-def load_environments_from_config(json_path: PathLike, tokenizer: AutoTokenizer) -> list[tuple[str, MarinEnv]]:
+def load_environments_from_config(json_path: PathLike, tokenizer: AutoTokenizer):
     """
     Load environment entries from a JSON config file.
 

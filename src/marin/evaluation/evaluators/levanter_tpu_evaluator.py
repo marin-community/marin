@@ -57,8 +57,10 @@ class LevanterTpuEvaluator(Evaluator, ABC):
             finally:
                 model.prefer_in_memory_loading = original_flag
 
+        print(f"IN TPU: {downloaded_path}")
         # Use the local downloaded path if available; otherwise fall back to the model name (HF hub case)
         model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
+
         return model_name_or_path
 
     @staticmethod
@@ -97,7 +99,10 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         """
 
         @ray.remote(
-            resources={"TPU": resource_config.num_tpu, f"{resource_config.tpu_type}-head": 1},
+            resources={
+                "TPU": resource_config.num_tpu,
+                f"{resource_config.tpu_type}-head": 1,
+            },
             runtime_env=self.get_runtime_env(),
             max_calls=1,
         )

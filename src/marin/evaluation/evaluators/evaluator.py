@@ -78,13 +78,12 @@ class ModelConfig:
 
     def destroy(self) -> None:
         """Deletes the model checkpoint."""
-        if self.path and os.path.exists(self.path):
+        if self.path and os.path.exists(self.path) and "gcsfuse" not in self.path:
             shutil.rmtree(self.path, ignore_errors=True)
             print(f"Deleted local checkpoint at {self.path}.")
 
 
 class Evaluator(ABC):
-
     def _get_scheduling_strategy(self, resource_config: ResourceConfig | None):
         if resource_config is None:
             fn = None

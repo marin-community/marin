@@ -1,0 +1,119 @@
+{
+  "runs": [
+    {
+      "run_info": {
+        "author": {
+          "affiliation": "Independent",
+          "name": "Harry Shin",
+          "url": "https://www.linkedin.com/in/harry-shin-34743216a/"
+        },
+        "description": "Parallel Llama ~150M with parallel attention/MLP computation on TPU.",
+        "eval/paloma/c4_en/bpb": 1.2320165634155273,
+        "model_config": {
+          "activation_function": "silu",
+          "attn_backend": null,
+          "cross_entropy_block_size": 32000,
+          "flash_attention_block_size": null,
+          "gradient_checkpointing": true,
+          "head_dim": null,
+          "hidden_dim": 512,
+          "initializer_range": 0.02,
+          "intermediate_dim": 1792,
+          "layer_norm_epsilon": 1e-05,
+          "num_heads": 8,
+          "num_kv_heads": 8,
+          "num_layers": 6,
+          "reference_checkpoint": "NousResearch/Llama-2-7b-hf",
+          "rope": {
+            "factor": 1.0,
+            "theta": 10000
+          },
+          "scan_layers": true,
+          "seq_len": 1024,
+          "tie_word_embeddings": false,
+          "tokenizer": null,
+          "upcast_attn": false,
+          "use_bias": false,
+          "use_layer_norm_weight": true,
+          "use_parallel_blocks": true
+        },
+        "model_flops": 1.707084418797011e+18,
+        "model_size": 154147328,
+        "resources": {
+          "device_flops_override": null,
+          "slice_count": 1,
+          "tpu_type": "v5p-32"
+        },
+        "run_completion_timestamp": "2025-09-30 10:25:53 UTC",
+        "tokenized_dataset": "gs://marin-us-east5/tokenized/subcache/fineweb-edu-10B-6fbcbb",
+        "total_tokens": 2999975936,
+        "train_config": {
+          "allow_partial_checkpoint": false,
+          "beta1": null,
+          "beta2": null,
+          "cycle_length": null,
+          "data_seed": null,
+          "decay": null,
+          "ema_beta": null,
+          "epsilon": null,
+          "initialize_from_checkpoint_path": null,
+          "initialize_from_hf": null,
+          "int8": false,
+          "learning_rate": 0.008,
+          "lr_schedule": null,
+          "max_eval_batches": null,
+          "max_grad_norm": null,
+          "min_lr_ratio": null,
+          "num_train_steps": 22888,
+          "optimizer_config": {
+            "adamc_weight_decay": false,
+            "beta1": 0.95,
+            "beta2": 0.98,
+            "cooldown": null,
+            "cycle_length": null,
+            "cycles": null,
+            "decay": null,
+            "default_weight_decay_mask": null,
+            "epsilon": 1e-15,
+            "gamma": 0.025,
+            "haps": null,
+            "learning_rate": 0.008,
+            "lr_schedule": "cosine",
+            "max_grad_norm": 1,
+            "min_lr_ratio": 0.0,
+            "rewarmup": 0.0,
+            "warmup": 2000,
+            "weight_decay": 0.1,
+            "weight_decay_modules": null
+          },
+          "per_device_eval_parallelism": null,
+          "reset_data_loader_on_init": true,
+          "rewarmup": null,
+          "skip_bad_steps": false,
+          "steps_per_eval": null,
+          "steps_per_export": 10000,
+          "steps_per_hf_export": null,
+          "steps_per_task_eval": null,
+          "train_batch_size": 128,
+          "warmup": null,
+          "watch": {
+            "include_histograms": false,
+            "include_norms": true,
+            "include_per_parameter_norms": true,
+            "interval": 10,
+            "split_scan_layers": true,
+            "watch_targets": [
+              "grads",
+              "params"
+            ]
+          },
+          "weight_decay": null,
+          "z_loss_weight": null
+        },
+        "training_hardware_flops": 2.8950289894939865e+19,
+        "training_time": 1971.0164688820714,
+        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/parallel_llama_150m_tpu_20250930_001036-22db7b"
+      }
+    }
+  ]
+}

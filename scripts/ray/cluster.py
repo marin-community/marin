@@ -28,6 +28,7 @@ import logging
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import click
@@ -50,9 +51,8 @@ def check_cluster_head_running(config_path: str) -> bool:
     """
     try:
         # Try to connect to the dashboard to see if cluster is running
-        with ray.ray_dashboard(config_path):
-            # If we can get cluster resources, the head is running
-            ray.get_ray_cluster_resources()
+        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
+            ray.print_cluster_status()
             return True
     except Exception:
         # Any exception means we couldn't connect to a running cluster
@@ -170,8 +170,23 @@ def restart_cluster(ctx, preserve_jobs):
     # Backup jobs
     print("Backing up jobs...")
     with tempfile.TemporaryDirectory() as backup_dir:
-        with ray.ray_dashboard(config_path):
-            ray.backup_jobs(config_path, backup_dir)
+        try:
+            with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
+                ray.backup_jobs(config_path, backup_dir)
+        except Exception as e:
+            print()
+            print("=" * 60)
+            print(
+                f"Failed to back up jobs from cluster {config_obj.cluster_name} ({e}) "
+                + "(disable with --preserve-jobs=0)"
+            )
+            print("=" * 60)
+            print("Proceed with shutdown? (y/n): ", end="")
+            choice = input().strip().lower()
+            if choice != "y":
+                print("Aborting cluster restart.")
+                return
+            print("Proceeding with cluster restart without job preservation.")
 
         # Restart cluster using proper stop sequence
         print("Stopping cluster...")
@@ -182,7 +197,7 @@ def restart_cluster(ctx, preserve_jobs):
 
         # Restore jobs
         print("Restoring jobs...")
-        with ray.ray_dashboard(config_path):
+        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
             ray.restore_jobs(config_path, backup_dir)
 
     print("Cluster restarted successfully!")
@@ -193,7 +208,7 @@ def restart_cluster(ctx, preserve_jobs):
 @click.pass_context
 def cluster_backup_jobs(ctx, backup_dir):
     """Backup Ray jobs to specified directory."""
-    with ray.ray_dashboard(ctx.obj.config_file):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         Path(backup_dir).mkdir(parents=True, exist_ok=True)
         ray.backup_jobs(ctx.obj.config_file, backup_dir)
         print(f"Jobs backed up successfully to {backup_dir}")
@@ -204,7 +219,7 @@ def cluster_backup_jobs(ctx, backup_dir):
 @click.pass_context
 def cluster_restore_jobs(ctx, backup_dir):
     """Restore Ray jobs from specified directory."""
-    with ray.ray_dashboard(ctx.obj.config_file):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         ray.restore_jobs(ctx.obj.config_file, backup_dir)
         print(f"Jobs restored successfully from {backup_dir}")
 
@@ -213,9 +228,35 @@ def cluster_restore_jobs(ctx, backup_dir):
 @click.pass_context
 def get_status(ctx):
     """Get cluster status."""
-    with ray.ray_dashboard(ctx.obj.config_file):
-        status_result = ray.get_ray_cluster_resources()
-        print(json.dumps(status_result, indent=2))
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+        ray.print_cluster_status()
+
+
+@cli.command("cluster-info")
+@click.pass_context
+def cluster_info(ctx):
+    """Display cluster information. Shows all clusters if no config specified."""
+    config_path = ctx.obj.config_file
+
+    if config_path:
+        # Show info for specific cluster
+        info = ray.load_cluster_info(config_path)
+        clusters = {info.cluster_name: info}
+    else:
+        # Discover and show all active clusters
+        clusters = ray.discover_active_clusters()
+        if not clusters:
+            print("No active clusters found")
+            return
+
+    print(f"Active Clusters ({len(clusters)}):")
+    for name, info in sorted(clusters.items()):
+        print(f"\n{name}:")
+        print(f"  Config: {info.config_path}")
+        print(f"  Zone: {info.zone}")
+        print(f"  Project: {info.project}")
+        print(f"  Internal IP: {info.head_ip}")
+        print(f"  External IP: {info.external_ip}")
 
 
 @cli.command("list-configs")
@@ -283,7 +324,7 @@ def ssh_head(ctx, extra_args):
 @click.pass_context
 def list_workers(ctx):
     """List Ray workers."""
-    with ray.ray_dashboard(ctx.obj.config_file):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         print(json.dumps(ray.list_workers(), indent=2))
 
 
@@ -292,7 +333,7 @@ def list_workers(ctx):
 @click.pass_context
 def list_jobs(ctx):
     """List Ray jobs."""
-    with ray.ray_dashboard(ctx.obj.config_file):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         print(json.dumps(ray.list_jobs(), indent=2))
 
 
@@ -305,7 +346,7 @@ def submit_job(ctx, entrypoint, working_dir, runtime_env):
     """Submit a Ray job."""
     runtime_env_dict = json.loads(runtime_env) if runtime_env else None
 
-    with ray.ray_dashboard(ctx.obj.config_file):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         job_id = ray.submit_job(entrypoint, working_dir, runtime_env_dict)
         print(f"Job submitted with ID: {job_id}")
 
@@ -361,19 +402,50 @@ def init_worker(ctx, name):
     print("Worker initialized successfully!")
 
 
-@cli.command("open-dashboard")
+@cli.command("dashboard")
+@click.option("--port", default=9999, help="Proxy dashboard port")
 @click.pass_context
-def open_dashboard(ctx):
-    """Open Ray dashboard in browser."""
-    with ray.ray_dashboard(ctx.obj.config_file) as dashboard_url:
-        print(f"Ray dashboard is running at: {dashboard_url}")
-        print("Press Ctrl+C to stop the dashboard.")
-        # Keep the context manager alive until interrupted
-        try:
-            while True:
-                pass
-        except KeyboardInterrupt:
-            print("Stopping Ray dashboard...")
+def open_dashboard(ctx, port):
+    """Open dashboard for all active Ray clusters."""
+    config_obj = ctx.obj.config_obj
+    if config_obj:
+        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)) as dashboard:
+            print(f"Connected to {config_obj.cluster_name} dashboard at {dashboard.get_dashboard_url()}")
+            try:
+                time.sleep(86400)
+            except KeyboardInterrupt:
+                print("\nShutting down...")
+        return
+
+    with ray.ray_dashboard(ray.DashboardConfig(proxy_port=port)) as conn:
+        if not conn.clusters:
+            print("No active clusters found")
+            return
+
+        if conn.proxy:
+            print(f"📊 Proxy dashboard: {conn.get_dashboard_url()}")
+            print()
+
+        print(f"Connected to {len(conn.clusters)} clusters:")
+        for name, info in conn.clusters.items():
+            ports = conn.port_mappings[name]
+            direct_url = f"http://localhost:{ports.dashboard_port}"
+            proxy_url = f"http://localhost:{conn.proxy.proxy_port}/{name}/" if conn.proxy else ""
+            urls = f"{direct_url} | {proxy_url}" if proxy_url else direct_url
+            print(f"  {name} ({info.zone}) - {urls}")
+            print(f"    IP: {info.external_ip} ({info.head_ip})")
+            print(
+                f"    Dashboard: http://localhost:{ports.dashboard_port} | GCS: localhost:{ports.gcs_port} | API: localhost:{ports.api_port}"
+            )
+            print()
+
+        if conn.proxy:
+            print("\nPress Ctrl+C to stop")
+
+            try:
+                time.sleep(86400)
+            except KeyboardInterrupt:
+                print("\nShutting down...")
 
 
 @cli.command("monitor-cluster")
@@ -387,12 +459,13 @@ def monitor_cluster(ctx, wandb):
         sys.exit(1)
 
     config_zones = {config_obj.region: [config_obj.zone]}
-    health_data = monitoring.monitor_cluster_health(
-        config_zones=config_zones, project=config_obj.project_id, log_to_wandb=wandb
-    )
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+        health_data = monitoring.monitor_cluster_health(
+            config_zones=config_zones, project=config_obj.project_id, log_to_wandb=wandb
+        )
 
-    summary = monitoring.get_cluster_health_summary(health_data)
-    print(summary)
+        summary = monitoring.get_cluster_health_summary(health_data)
+        print(summary)
 
     if wandb:
         print("Metrics logged to wandb")
