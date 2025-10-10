@@ -161,7 +161,7 @@ def state_dict_to_batches(
     return result
 
 
-@jax.jit
+@partial(jax.jit, donate_argnums=0)
 def update_model(old_model, new_state_dict):
     return hsd.from_state_dict(old_model, new_state_dict)
 
@@ -306,7 +306,7 @@ class MarinFlightServer(flight.FlightServerBase):
             return self._latest_weight_id
 
 
-@partial(jax.jit, donate_argnums=0)
+@jax.jit
 def copy_and_flatten(model: PyTree) -> tuple[dict[str, jax.Array], dict[str, tuple[int, ...]]]:
     """Convert `model` into a state with flattened arrays and shapes."""
     state_dict = hsd.to_state_dict(model)
