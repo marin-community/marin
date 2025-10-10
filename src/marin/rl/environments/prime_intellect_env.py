@@ -23,7 +23,8 @@ import jax.numpy as jnp
 import numpy as np
 import verifiers as vf
 
-from marin.rl.types import InferenceContext, Rollout, RolloutGroup
+from marin.rl.inference_ctx import InferenceContext
+from marin.rl.types import Rollout, RolloutGroup
 
 from .base import MarinEnv
 
@@ -136,11 +137,12 @@ class PrimeIntellectEnv(MarinEnv):
                 completion = result.completion[overall_idx]
                 reward = result.reward[overall_idx] if overall_idx < len(result.reward) else 0.0
 
-                # Use tokenizer from inference context
-                prompt_tokens = tokenizer.encode(result.prompt[prompt_idx])
-                response_tokens = tokenizer.encode(completion)
+                # Use chat template for prompt tokenization to match server behavior
+                prompt_tokens = inference_ctx.prompt_tokens(result.prompt[prompt_idx])
+                response_tokens = tokenizer.encode(completion, add_special_tokens=False)
 
                 token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
+                # NOTE: Verifiers don't provide logprobs - use zeros (known limitation)
                 response_logprobs = jnp.zeros(len(response_tokens), dtype=jnp.float32)
 
                 rollout = Rollout(

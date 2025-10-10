@@ -20,11 +20,11 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Protocol
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 from transformers import PreTrainedTokenizer
 
-from marin.rl.types import InferenceContext, Rollout, RolloutGroup
+from marin.rl.inference_ctx import InferenceContext
+from marin.rl.types import RolloutGroup
 
 from .base import MarinEnv
 
@@ -305,83 +305,33 @@ class MockEnv(MarinEnv):
         rng = np.random.default_rng(seed)
         indices = rng.choice(len(available_examples), size=n_to_sample, replace=True)
 
-        sampled_examples = []
+        sampled_examples = {}
         for idx in indices:
             example = available_examples[int(idx)]
-            sampled_examples.append(
-                {
-                    "prompt": example["prompt"],
-                    "answer": example["answer"],
-                    "example_id": f"{self.task_type}_example_{idx}",
-                }
-            )
+            sampled_examples[example["prompt"]] = example["answer"]
 
-        # Generate responses
-        prompts = [ex["prompt"] for ex in sampled_examples]
-        responses = inference_ctx.generate(
-            prompts=prompts,
+        completions = inference_ctx.batch_completions(
+            prompts=list(sampled_examples.keys()),
             temperature=temperature,
-            n_generations=n_generations,
+            n=n_generations,
         )
 
         # Evaluate and create rollouts
         rollout_groups = []
-        correct_count = 0
-        total_count = 0
-        format_correct_count = 0
 
-        for example, response in zip(sampled_examples, responses, strict=True):
-            rollouts = []
-
-            for choice in response.choices:
-                if choice.response_text.startswith(example["prompt"]):
-                    actual_response = choice.response_text[len(example["prompt"]) :]
-                else:
-                    actual_response = choice.response_text
-
-                # Compute reward
-                reward = self.task.compute_reward(example["answer"], actual_response, tokenizer=inference_ctx.tokenizer)
-
-                # Create rollout
-                prompt_tokens = response.prompt_tokens
-                token_rewards = jnp.full(len(choice.response_tokens), reward, dtype=jnp.float32)
-
-                rollout = Rollout(
-                    env_name=f"mock:{self.task_type}",
-                    env_example_id=example["example_id"],
-                    prompt_tokens=jnp.array(prompt_tokens, dtype=jnp.int32),
-                    response_tokens=jnp.array(choice.response_tokens, dtype=jnp.int32),
-                    response_logprobs=jnp.array(choice.logprobs, dtype=jnp.float32),
-                    token_rewards=token_rewards,
-                    episode_reward=float(reward),
+        for completion in completions:
+            group = []
+            for choice in completion.choices:
+                prompt = completion.prompt
+                true_answer = sampled_examples[prompt]
+                reward = self.task.compute_reward(true_answer, choice.content, tokenizer=inference_ctx.tokenizer)
+                rollout = inference_ctx.create_rollout_from_choice(
+                    prompt, choice, env_name=f"mock_env:{self.task_type}", env_example_id=hash(prompt), reward=reward
                 )
-                rollouts.append(rollout)
+                group.append(rollout)
+            rollout_groups.append(RolloutGroup(rollouts=group))
 
-                # Track metrics
-                if reward > 0:
-                    correct_count += 1
-                if actual_response:
-                    format_correct_count += 1
-                total_count += 1
-
-            if rollouts:
-                rollout_groups.append(RolloutGroup(rollouts=rollouts))
-
-        # Compute metrics
-        accuracy = correct_count / total_count if total_count > 0 else 0.0
-        format_accuracy = format_correct_count / total_count if total_count > 0 else 0.0
-        mean_reward = (
-            sum(r.episode_reward for g in rollout_groups for r in g.rollouts) / total_count if total_count > 0 else 0.0
-        )
-
-        metrics = {
-            f"{self.task_type}.accuracy": accuracy,
-            f"{self.task_type}.format_accuracy": format_accuracy,
-            f"{self.task_type}.mean_reward": mean_reward,
-            f"{self.task_type}.total_examples": total_count,
-        }
-
-        return rollout_groups, metrics
+        return rollout_groups, {}
 
     def training_data(self) -> Iterator[MockEnvExample]:
         """Stream training data."""
