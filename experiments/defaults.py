@@ -128,6 +128,8 @@ def default_tokenize(
     format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa
     *,
     is_validation: bool = False,
+    enforce_bos: bool = True,
+    enforce_eos: bool = True,
 ) -> ExecutorStep:
     """
     Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
@@ -146,6 +148,8 @@ def default_tokenize(
             See [Levanter's documentation](https://levanter.readthedocs.io/en/latest/reference/Data-Formats/)
             for more details.
         is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
+        enforce_bos: Whether to force BOS token insertion even if the tokenizer normally omits it.
+        enforce_eos: Whether to force EOS token insertion even if the tokenizer normally omits it.
     Returns:
         An ExecutorStep that represents the tokenized dataset.
     """
@@ -158,6 +162,8 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
+            enforce_bos=enforce_bos,
+            enforce_eos=enforce_eos,
         )
     elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
         config = HfTokenizeConfig(
@@ -165,6 +171,8 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
+            enforce_bos=enforce_bos,
+            enforce_eos=enforce_eos,
         )
     else:
         config = TokenizeConfig(
@@ -173,6 +181,8 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
+            enforce_bos=enforce_bos,
+            enforce_eos=enforce_eos,
         )
 
     if options is not None:
