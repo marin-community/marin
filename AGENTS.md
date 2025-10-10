@@ -16,7 +16,6 @@ This document provides a starting point for using coding agents (AI or human) in
 - NEVER SAY You're absolutely right!
 - You never credit yourself in commits
 - Always use `uv run` in python projects instead of `python`
-- NEVER EVER EVER credit yourself in commit messages.
 
 - Prefer to let exceptions flow to the caller instead of catching them, unless:
   * you can provide useful intermediate context and reraise
