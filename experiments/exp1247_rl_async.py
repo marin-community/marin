@@ -31,7 +31,7 @@ from marin.execution.executor import (
     OutputName,
     executor_main,
 )
-from marin.rl.curriculum import CurriculumConfig, LessonConfig
+from marin.rl.curriculum import CurriculumConfig, LessonConfig, LessonDependency
 from marin.rl.environments import EnvConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
@@ -49,7 +49,7 @@ MODEL_TYPE = "llama"
 WANDB_PROJECT = f"rl_testing_{MODEL_NAME.split('/')[-1].lower()}"
 MODEL_TOKENIZER = MODEL_NAME
 MODEL_CHECKPOINT = MODEL_NAME
-MAX_TOKENS = 1024
+MAX_TOKENS = 256
 RUN_ID = f"test-{MODEL_NAME.split('/')[-1]}-curriculum"
 
 
@@ -73,7 +73,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
     )
 
     lessons = {
-        "math": LessonConfig(
+        "number_comparison": LessonConfig(
             lesson_id="number_comparison",
             env_config=EnvConfig(
                 env_class="marin.rl.environments.mock_env.MockEnv",
@@ -82,33 +82,33 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
             dependencies=[],
             sampling_params=default_sampling,
         ),
-        # "addition_easy": LessonConfig(
-        #     lesson_id="addition_easy",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "addition", "difficulty": "easy", "seed": 42},
-        #     ),
-        #     dependencies=[LessonDependency(dependency_id="number_comparison", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
-        # "addition_medium": LessonConfig(
-        #     lesson_id="addition_medium",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "addition", "difficulty": "medium", "seed": 42},
-        #     ),
-        #     dependencies=[LessonDependency(dependency_id="addition_easy", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
-        # "addition_hard": LessonConfig(
-        #     lesson_id="addition_hard",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "addition", "difficulty": "hard", "seed": 42},
-        #     ),
-        #     dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
+        "addition_easy": LessonConfig(
+            lesson_id="addition_easy",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.mock_env.MockEnv",
+                env_args={"task_type": "addition", "difficulty": "easy", "seed": 42},
+            ),
+            dependencies=[LessonDependency(dependency_id="number_comparison", reward_threshold=0.8)],
+            sampling_params=default_sampling,
+        ),
+        "addition_medium": LessonConfig(
+            lesson_id="addition_medium",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.mock_env.MockEnv",
+                env_args={"task_type": "addition", "difficulty": "medium", "seed": 42},
+            ),
+            dependencies=[LessonDependency(dependency_id="addition_easy", reward_threshold=0.8)],
+            sampling_params=default_sampling,
+        ),
+        "addition_hard": LessonConfig(
+            lesson_id="addition_hard",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.mock_env.MockEnv",
+                env_args={"task_type": "addition", "difficulty": "hard", "seed": 42},
+            ),
+            dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+            sampling_params=default_sampling,
+        ),
     }
 
     return CurriculumConfig(
@@ -142,7 +142,7 @@ def rl_train(name: str) -> ExecutorStep:
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         # Set the train batch size to num_rollout_workers * n_generations * n_prompts
         # to ensure we accept an entire training batch from the rollout workers.
-        train_batch_size=64,
+        train_batch_size=64 * 4,
         # microbatch to avoid OOM
         per_device_parallelism=16,
         num_train_steps=50000,
@@ -199,10 +199,10 @@ def rl_train(name: str) -> ExecutorStep:
         run_id=name,
         log_freq=10,
         run_config=RunConfig(
-            train_tpu_type="v4-8",
+            train_tpu_type="v5p-8",
             num_train_slices=1,
             num_rollout_workers=1,
-            inference_tpu_type="v4-8",
+            inference_tpu_type="v5p-8",
         ),
     )
 
@@ -223,7 +223,7 @@ def main():
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     experiments = [
-        rl_train(name=f"llama-1b-math-rl-test-chris-{datestamp}"),
+        rl_train(name=f"llama-1b-math-rl-test-power-{datestamp}"),
     ]
 
     executor_main(
