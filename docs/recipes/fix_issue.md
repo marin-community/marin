@@ -82,6 +82,21 @@ When all tests pass, you may proceed to upload your branch.
 You will then open a pull request for the branch.
 You will attach it to the Github issue with a comment summarizing the fix.
 
+## Verify CI Status
+
+After opening the pull request, you must verify that CI checks pass:
+
+* Monitor the PR using `gh pr view <number> --json statusCheckRollup`
+* Wait for the unit tests to complete
+* If tests fail, investigate and fix any issues
+* Push additional commits to address CI failures
+* Do not consider the PR complete until all relevant checks pass
+
+Key checks to monitor:
+- **unit tests**: Must pass - validates your changes don't break existing functionality
+- **lint-and-format**: Must pass - ensures code style compliance
+- **build-docs**: Should pass if you modified documentation
+
 # Tasks
 
 The tasks for this recipe:
@@ -96,6 +111,7 @@ The tasks for this recipe:
 - [ ] Implement changes until all tests pass
 - [ ] Upload branch to github
 - [ ] Open pull request
+- [ ] Verify CI checks pass and address any failures
 - [ ] Update comment with final status
 
 If at any point you are unable to proceed, you must add a comment to the Github
