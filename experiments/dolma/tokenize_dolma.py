@@ -20,6 +20,7 @@ import os.path
 from dataclasses import dataclass
 
 from experiments.llama import llama3_tokenizer
+from experiments.midtraining_datasets import stackv2_edu_filtered_python_tokenized
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
