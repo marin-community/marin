@@ -25,18 +25,19 @@ from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from levanter.callbacks.watch import WatchConfig
 from levanter.models.llama import LlamaConfig
+from levanter.optim import AdamConfig
 from marin.execution.executor import ExecutorStep, executor_main
 from marin.resources import TpuPodConfig
 from marin.training.training import TrainLmOnPodConfig
 
 logger = logging.getLogger("ray")
 
-LR_CHOICES: tuple[float, ...] = np.logspace(-5, -2, num=8)
+LR_CHOICES = np.logspace(-13, -5, num=15, base=2)
 """Learning rates to sweep for each configuration."""
 
 
 BASE_BATCH_SIZE = 128
-BASE_NUM_TOKS = 600_000_000
+BASE_NUM_TOKS = 100_000_000_000
 BASE_WEIGHT_DECAY = 0.1
 
 
@@ -56,7 +57,7 @@ def _scale_llama_config(base: LlamaConfig, hidden_dim: int) -> LlamaConfig:
 
 
 def _format_lr(lr: float) -> str:
-    return f"{lr:.0e}".replace("e-0", "e-").replace("e+0", "e+").replace("+", "")
+    return f"{lr:.2e}".replace("e-0", "e-").replace("e+0", "e+").replace("+", "")
 
 
 def _lr_sweep(
@@ -69,10 +70,21 @@ def _lr_sweep(
 
     scaled_config = _scale_llama_config(llama_30m, hidden_dim)
     sweep_kind = "mup" if use_mup else "baseline"
-    base_name = f"exp1570_hidden{hidden_dim}-{sweep_kind}"
+    base_name = f"exp1570_hidden{hidden_dim}-{sweep_kind}-wsd-long"
+    stable_sweep_kind = "mup-stable"
+    stable_base_name = f"exp1570_hidden{hidden_dim}-{stable_sweep_kind}-wsd-long"
 
     steps = []
     for lr in learning_rates:
+        optimizer_config = AdamConfig(
+            learning_rate=lr,
+            weight_decay=BASE_WEIGHT_DECAY,
+            use_mup=use_mup,
+            warmup=0.1,
+            decay=0.1,
+            lr_schedule="linear",
+        )
+
         train_config = SimpleTrainConfig(
             resources=TpuPodConfig(tpu_type="v4-16"),
             train_batch_size=BASE_BATCH_SIZE,
@@ -81,6 +93,7 @@ def _lr_sweep(
             weight_decay=BASE_WEIGHT_DECAY,
             watch=WatchConfig(watch_targets=["grads", "params", "updates", "opt_state"], interval=1),
             use_mup=use_mup,
+            optimizer_config=optimizer_config,
         )
 
         step = default_train(
@@ -90,10 +103,36 @@ def _lr_sweep(
             train_config=train_config,
             tags=("exp1570", f"hidden_dim_{hidden_dim}", sweep_kind, "lr_sweep"),
             eval_harness_tasks=(),
-            use_default_validation=False,
         )
 
         steps.append(step)
+
+        if use_mup:
+            independent_weight_decay = BASE_WEIGHT_DECAY * (2 ** (-7.2))
+            oc = dataclasses.replace(
+                optimizer_config, decoupled_weight_decay=True, weight_decay=independent_weight_decay
+            )
+            mc = dataclasses.replace(scaled_config, use_layer_norm_weight=False)
+            train_config = SimpleTrainConfig(
+                resources=TpuPodConfig(tpu_type="v4-16"),
+                train_batch_size=BASE_BATCH_SIZE,
+                num_train_steps=BASE_NUM_TOKS / (BASE_BATCH_SIZE * scaled_config.seq_len),
+                learning_rate=lr,
+                weight_decay=independent_weight_decay,
+                watch=WatchConfig(watch_targets=["grads", "params", "updates", "opt_state"], interval=1),
+                use_mup=use_mup,
+                optimizer_config=oc,
+            )
+
+            step = default_train(
+                name=f"{stable_base_name}-lr{_format_lr(lr)}",
+                tokenized=nemotron_mix,
+                model_config=mc,
+                train_config=train_config,
+                tags=("exp1570", f"hidden_dim_{hidden_dim}", sweep_kind, "lr_sweep"),
+                eval_harness_tasks=(),
+            )
+            steps.append(step)
 
     return steps
 
