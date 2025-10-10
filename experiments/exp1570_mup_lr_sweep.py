@@ -137,13 +137,15 @@ def _lr_sweep(
     return steps
 
 
-def build_steps():
+def build_steps(high=False):
     hidden_dims = [llama_30m.hidden_dim]
     hidden_dims.append(hidden_dims[-1] * 2)
-    hidden_dims.append(hidden_dims[-1] * 2)
+    # hidden_dims.append(hidden_dims[-1] * 2)
+    # if high:
+    #    hidden_dims.append(hidden_dims[-1] * 2)
 
     all_steps = []
-    for use_mup in (True, False):
+    for use_mup in [True, False]:
         for hidden_dim in hidden_dims:
             all_steps.extend(_lr_sweep(hidden_dim=hidden_dim, use_mup=use_mup, learning_rates=LR_CHOICES))
 
@@ -151,4 +153,5 @@ def build_steps():
 
 
 if __name__ == "__main__":
-    executor_main(steps=build_steps())
+    executor_main(steps=build_steps(high=False))
+#    executor_main(steps=build_steps(high=True))
