@@ -135,6 +135,53 @@ class RLJobConfig:
     run_id: str = field(default_factory=lambda: f"rl-{uuid.uuid4().hex[:8]}")
     log_freq: int = 10
 
+    def with_sync_mode(self, max_wait_time: float = 600.0) -> "RLJobConfig":
+        """Configure for synchronous (on-policy) training mode.
+
+        This helper configures all necessary settings to run in near-synchronous mode,
+        where rollout workers wait for updated weights after each training step and the
+        trainer only accepts fresh rollouts from the current policy.
+
+        Settings applied:
+        - replay_buffer.max_rollout_step_delay = 1 (only accept rollouts from current/previous step)
+        - weight_transfer.sync_interval_steps = 1 (transfer weights after every training step)
+        - weight_transfer.max_weight_transfer_wait_time = max_wait_time (wait for new weights)
+
+        Args:
+            max_wait_time: Maximum time (in seconds) to wait for new weights before timing out.
+                          Default is 600 seconds (10 minutes). Set high to avoid duplicate work
+                          on rollout workers while waiting for training steps.
+
+        Returns:
+            New RLJobConfig configured for synchronous training mode.
+
+        Example:
+            >>> config = RLJobConfig(...)
+            >>> sync_config = config.with_sync_mode()
+        """
+        # Update replay buffer to only accept fresh rollouts
+        updated_replay_buffer = dataclasses.replace(
+            self.train_params.replay_buffer,
+            max_rollout_step_delay=1,
+        )
+        updated_train_params = dataclasses.replace(
+            self.train_params,
+            replay_buffer=updated_replay_buffer,
+        )
+
+        # Update weight transfer to sync every step and wait for new weights
+        updated_weight_transfer = dataclasses.replace(
+            self.weight_transfer,
+            sync_interval_steps=1,
+            max_weight_transfer_wait_time=max_wait_time,
+        )
+
+        return dataclasses.replace(
+            self,
+            train_params=updated_train_params,
+            weight_transfer=updated_weight_transfer,
+        )
+
 
 class RLJob:
     """High-level interface for RL training jobs.

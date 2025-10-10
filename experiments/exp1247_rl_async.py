@@ -39,7 +39,6 @@ from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
-from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 
 logger = logging.getLogger(__name__)
 
@@ -203,13 +202,12 @@ def rl_train(name: str) -> ExecutorStep:
     )
     weight_transfer = WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
-        sync_interval_steps=2,
-        max_weight_transfer_wait_time=5,
+        sync_interval_steps=1,
+        max_weight_transfer_wait_time=10,
     )
 
     curriculum_config = create_math_curriculum(name)
 
-    # Create RLJobConfig using the new unified interface
     config = RLJobConfig(
         model=model_config,
         trainer=trainer_config,
@@ -220,14 +218,13 @@ def rl_train(name: str) -> ExecutorStep:
                 capacity=4096,
                 alpha=3,
                 max_samples=1,
-                max_rollout_step_delay=8,
+                max_rollout_step_delay=1,
             ),
         ),
         curriculum=curriculum_config,
         tokenizer=MODEL.tokenizer,
         initial_checkpoint=MODEL.checkpoint,
         rollout_storage=rollout_storage,
-        weight_transfer=weight_transfer,
         run_id=name,
         log_freq=10,
         run_config=RunConfig(
@@ -237,6 +234,13 @@ def rl_train(name: str) -> ExecutorStep:
             inference_tpu_type="v5p-8",
         ),
     )
+
+    # Enable synchronous (on-policy) training mode
+    # This configures:
+    # - replay_buffer.max_rollout_step_delay = 1
+    # - weight_transfer.sync_interval_steps = 1
+    # - weight_transfer.max_weight_transfer_wait_time = 600 (default)
+    config = config.with_sync_mode()
 
     return ExecutorStep(
         name=f"rl_testing/{name}",
