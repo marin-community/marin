@@ -117,7 +117,7 @@ class PrimeIntellectEnv(MarinEnv):
         result = cast(
             GenerateOutputs,
             vf_env.generate(
-                dataset=inputs,
+                inputs=inputs,
                 client=inference_ctx.openai_client(),
                 model="marin-model",
                 sampling_args=sampling_args,
@@ -137,9 +137,18 @@ class PrimeIntellectEnv(MarinEnv):
                 completion = result.completion[overall_idx]
                 reward = result.reward[overall_idx] if overall_idx < len(result.reward) else 0.0
 
+                # Extract completion text (handle both string and message list formats)
+                if isinstance(completion, list) and len(completion) > 0:
+                    # completion is a list of message dicts [{'role': 'assistant', 'content': '...'}]
+                    completion_text = (
+                        completion[-1].get("content", "") if isinstance(completion[-1], dict) else str(completion[-1])
+                    )
+                else:
+                    completion_text = str(completion) if completion else ""
+
                 # Use chat template for prompt tokenization to match server behavior
                 prompt_tokens = inference_ctx.tokenize_prompt(result.prompt[prompt_idx])
-                response_tokens = inference_ctx.tokenize_response(completion)
+                response_tokens = inference_ctx.tokenize_response(completion_text)
 
                 token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
                 # TODO(herumb): Verifiers don't provide logprobs - stub with zeros for now
