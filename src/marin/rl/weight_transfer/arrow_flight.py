@@ -306,7 +306,7 @@ class MarinFlightServer(flight.FlightServerBase):
             return self._latest_weight_id
 
 
-# @partial(jax.jit, donate_argnums=0)
+@partial(jax.jit, donate_argnums=0)
 def copy_and_flatten(model: PyTree) -> tuple[dict[str, jax.Array], dict[str, tuple[int, ...]]]:
     """Convert `model` into a state with flattened arrays and shapes."""
     state_dict = hsd.to_state_dict(model)
@@ -411,7 +411,8 @@ class ArrowFlightServer(WeightTransferServer):
                 self.metrics.successful_transfers += 1
 
                 logger.info(
-                    "Served weights for weight_id %s, timings: state_dict=%.2fs, copy=%.2fs, serialize=%.2fs, store=%.2fs, update=%.2fs",
+                    "Served weights for weight_id %s. "
+                    "timings: state_dict=%.2fs, copy=%.2fs, serialize=%.2fs, store=%.2fs, update=%.2fs",
                     weight_id,
                     state_dict_time - start_time,
                     copy_time - state_dict_time,
