@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import pytest
 from haliax import Axis
 
-from levanter.inference.engine import InferenceEngine, Request
+from levanter.inference.engine import InferenceEngine, Request, InferenceEngineConfig
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.page_table import PageTable
 from levanter.layers.attention import KvPageCache
@@ -48,16 +48,18 @@ class DummyModel(eqx.Module):
 
 def _build_service(vocab_size=10):
     model = DummyModel(vocab_size=vocab_size, eos_id=3)
-    service = InferenceEngine.from_model(
-        model=model,
+    service = InferenceEngine.from_model_with_config(
+        model=model,  # type: ignore
         tokenizer=None,
-        max_pages=64,
-        max_seqs=8,
-        page_size=8,
-        max_pages_per_seq=4,
-        compute_dtype=jnp.float32,
-        max_queued_tokens=64,
-        max_seqs_in_prefill=4,
+        config=InferenceEngineConfig(
+            max_seq_len=32,
+            max_pages=64,
+            max_seqs=8,
+            page_size=8,
+            compute_dtype=jnp.float32,
+            max_queued_tokens=64,
+            max_seqs_in_prefill=4,
+        ),
     )
     return service
 

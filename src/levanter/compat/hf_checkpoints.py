@@ -1271,6 +1271,8 @@ def _should_use_cpu_for_checkpoint_loading():
     if sum(accel_memory) < cpu_memory:
         return True
 
+    return False
+
 
 def _is_hf_hub_model(ref: RepoRef):
     api = HfApi()

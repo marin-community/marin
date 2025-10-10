@@ -26,6 +26,7 @@ from typing import Callable, Dict, Optional
 import equinox as eqx
 import haliax as hax
 import jax.random as jrandom
+import jmp
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from prompt_toolkit import prompt
@@ -138,6 +139,7 @@ class InferenceReplConfig:
             tensor_parallel_axes=["mlp", "kv_head"],
             fsdp_axis="embed",
             batch_axis="batch",
+            mp=jmp.get_policy("p=f32,c=f32"),
         )
     )
     # bad
@@ -153,15 +155,16 @@ class InferenceReplConfig:
     server: InferenceServerConfig = field(
         default_factory=lambda: InferenceServerConfig(
             service=InferenceEngineConfig(
-                max_pages=None,
+                max_pages=128,
                 max_seqs=64,
                 page_size=8,
-                max_pages_per_seq=8,
+                max_seq_len=1024,
                 max_queued_tokens=64,
                 max_seqs_in_prefill=4,
                 max_prefill_size=64,
                 max_tokens_per_round=16,
                 max_rounds=8,
+                hbm_utilization=0.7,
             ),
         )
     )

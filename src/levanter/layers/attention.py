@@ -1500,10 +1500,6 @@ class AttentionConfig:
             return default_attention_type() != AttentionBackend.VANILLA
         return self.attn_backend != AttentionBackend.VANILLA
 
-    # ---------------------------------------------------------------------------------
-    # KV-cache helper (paged only)
-    # ---------------------------------------------------------------------------------
-
 
 class Attention(eqx.Module):
     """A multi-head attention layer that uses dot product attention.
@@ -1700,8 +1696,8 @@ class Attention(eqx.Module):
         if self.rot_embs is not None:
             if pos_ids is None:
                 pos_ids = hax.arange(x.resolve_axis("position"))
-            q = self.rot_embs(q, pos_ids)
-            k = self.rot_embs(k, pos_ids)
+            q = self.rot_embs(q, pos_ids).astype(q.dtype)
+            k = self.rot_embs(k, pos_ids).astype(k.dtype)
 
         return q, k, v
 
