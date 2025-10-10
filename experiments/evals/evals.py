@@ -248,12 +248,14 @@ def evaluate_levanter_lm_evaluation_harness(
     Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
     """
     logger.info(f"Running evals on the following tasks: {evals}")
+    # Sanitize model_name for use in step name (replace / with -)
+    sanitized_name = model_name.replace("/", "-")
     return ExecutorStep(
-        name=f"evaluation/lm_evaluation_harness_levanter/levanter_lmeval_{'-'.join([eval_task.name for eval_task in evals])}_{model_name}",
+        name=f"evaluation/lm_evaluation_harness_levanter/levanter_lmeval_{'-'.join([eval_task.name for eval_task in evals])}_{sanitized_name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",
-            model_name=None,  # imputed automatically
+            model_name=model_name,  # Pass the original model_name with /
             model_path=model_path,  # type: ignore
             evaluation_path=this_output_path(),
             evals=versioned(evals),
