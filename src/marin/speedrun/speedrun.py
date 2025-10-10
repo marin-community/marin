@@ -200,6 +200,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
         * config.speedrun_config.model_config.seq_len
         * config.speedrun_config.train_config.num_train_steps
     )
+    flops_per_token = config.speedrun_config.model_config.flops_per_token(config.speedrun_config.vocab_size)
 
     training_time = sum(step_times)
     training_hardware_flops = training_time * config.speedrun_config.num_devices * config.speedrun_config.device_flops
@@ -214,6 +215,11 @@ def speedrun_results(config: SpeedrunResultsConfig):
     wandb_metrics = {
         "eval/paloma/c4_en/bpb": run.summary.get("eval/paloma/c4_en/bpb", None),
     }
+
+    try:
+        run.summary.update({"model/flops_per_token": float(flops_per_token)})
+    except Exception as exc:
+        logger.warning(f"Failed to write flops_per_token to Weights & Biases: {exc}")
 
     wandb_num_devices = run.summary.get("num_devices", None)
     if wandb_num_devices is not None:
@@ -249,6 +255,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
         "model_size": model_size,
         "total_tokens": total_tokens,
         "model_flops": model_flops,
+        "model_flops_per_token": flops_per_token,
         # Training metrics
         "training_time": training_time,
         "training_hardware_flops": training_hardware_flops,
