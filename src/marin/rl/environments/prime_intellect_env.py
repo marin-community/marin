@@ -17,13 +17,15 @@ Environment Wrapper for the Environments Hub by Prime-Intellect, which contains 
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
 import logging
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import jax.numpy as jnp
 import numpy as np
 import verifiers as vf
+from verifiers.types import GenerateOutputs
 
-from marin.rl.types import InferenceContext, Rollout, RolloutGroup
+from marin.rl.inference_ctx import InferenceContext
+from marin.rl.types import Rollout, RolloutGroup
 
 from .base import MarinEnv
 
@@ -112,17 +114,16 @@ class PrimeIntellectEnv(MarinEnv):
         if n_generations > 1:
             inputs = inputs.repeat(n_generations)
 
-        # Generate using verifiers
-        result = vf_env.generate(
-            dataset=inputs,
-            client=inference_ctx.openai_client(),
-            model="marin-model",
-            sampling_args=sampling_args,
-            max_concurrent=self.max_concurrent,
+        result = cast(
+            GenerateOutputs,
+            vf_env.generate(
+                inputs=inputs,
+                client=inference_ctx.openai_client(),
+                model="marin-model",
+                sampling_args=sampling_args,
+                max_concurrent=self.max_concurrent,
+            ),
         )
-
-        # Access tokenizer from inference context
-        tokenizer = inference_ctx.tokenizer
 
         # Convert to RolloutGroups
         rollout_groups = []
@@ -136,11 +137,23 @@ class PrimeIntellectEnv(MarinEnv):
                 completion = result.completion[overall_idx]
                 reward = result.reward[overall_idx] if overall_idx < len(result.reward) else 0.0
 
-                # Use tokenizer from inference context
-                prompt_tokens = tokenizer.encode(result.prompt[prompt_idx])
-                response_tokens = tokenizer.encode(completion)
+                # Extract completion text (handle both string and message list formats)
+                if isinstance(completion, list) and len(completion) > 0:
+                    # completion is a list of message dicts [{'role': 'assistant', 'content': '...'}]
+                    completion_text = (
+                        completion[-1].get("content", "") if isinstance(completion[-1], dict) else str(completion[-1])
+                    )
+                else:
+                    completion_text = str(completion) if completion else ""
+
+                # Use chat template for prompt tokenization to match server behavior
+                prompt_tokens = inference_ctx.tokenize_prompt(result.prompt[prompt_idx])
+                response_tokens = inference_ctx.tokenize_response(completion_text)
 
                 token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
+                # TODO(herumb): Verifiers don't provide logprobs - stub with zeros for now
+                # nothing can be learned until we get logprobs from verifiers or add a
+                # logprobs endpoint to the server.
                 response_logprobs = jnp.zeros(len(response_tokens), dtype=jnp.float32)
 
                 rollout = Rollout(
