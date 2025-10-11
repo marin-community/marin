@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from experiments.common_pile.tokenize_commonpile import stackv2_edu_filtered
+from experiments.common_pile.tokenize_common_pile import stackv2_edu_filtered
 from experiments.defaults import default_download, default_tokenize
 from experiments.llama import llama3_tokenizer
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
