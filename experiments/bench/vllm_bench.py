@@ -48,8 +48,8 @@ class BenchmarkConfig:
     """Configuration for the benchmark."""
 
     # Model configuration
-    model_path: str = field(default="meta-llama/Llama-3.2-1B")
-    model_config: LmConfig | None = LlamaConfig.from_hf_config(AutoConfig.from_pretrained("meta-llama/Llama-3.2-1B"))
+    model_path: str
+    model_config: LmConfig | None = None
     tokenizer_path: str | None = None
 
     # Server configuration
@@ -79,6 +79,12 @@ class BenchmarkConfig:
 
     # Additional flags
     force_run_failed: bool = False
+
+    def __post_init__(self):
+        if self.model_config is None:
+            self.model_config = LlamaConfig.from_hf_config(
+                AutoConfig.from_pretrained(self.model_path)
+            )
 
 
 def load_model(config: BenchmarkConfig):
