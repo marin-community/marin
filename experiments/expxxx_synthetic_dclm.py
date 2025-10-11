@@ -831,6 +831,35 @@ active_reading_steps_1_5M_rewrite = ExecutorStep(
     ),
 )
 
+active_reading_1_5M_qa = ExecutorStep(
+    name="documents/wikipedia-subset-1p5m-qa",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=wikipedia_subset_1_5M_chunked,
+        output_path=this_output_path(),
+        model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-2-1B-Instruct--c4219cc",
+        model_type="vllm",
+        attribute_name="wrap_qa_rephrase",
+        filetype="jsonl.gz",
+        batch_size=512,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+        classifier_kwargs={
+            "template": WRAP_QA_REPHRASE_PROMPT,
+            "post_process_fn": None,
+            "engine_kwargs": engine_kwargs,
+            "generation_kwargs": generation_kwargs,
+            "save_original_generation": True,
+        },
+        dataset_schema=DatasetSchemaConfig(
+            input_columns=["text", "id", "metadata"],
+            output_columns=["id", "generated_text", "text", "metadata"],
+        ),
+        classifier_actor_options={"resources": {"TPU": 1}},
+        use_autoscaling_actor_pool=True,
+    ),
+)
+
 if __name__ == "__main__":
     # executor_main([synthetic_dclm_10B_subset_wrapqa])
     executor_main(
@@ -843,8 +872,9 @@ if __name__ == "__main__":
             # synthetic_dclm_10B_subset_wrapqa_8b,
             # *persona_steps,
             # active_reading_steps_1b_rewrite_autoscale,
-            wikipedia_subset_1_5M,
-            active_reading_1_5M_with_attributes,
-            active_reading_steps_1_5M_rewrite,
+            # wikipedia_subset_1_5M,
+            # active_reading_1_5M_with_attributes,
+            # active_reading_steps_1_5M_rewrite,
+            active_reading_1_5M_qa,
         ]
     )

@@ -28,7 +28,7 @@ class AutoscalingActorPool:
         task_queue: Queue,
         result_queue: Queue,
         min_actors: int = 1,
-        max_actors: int = 16,
+        max_actors: int = 32,
         target_queue_size: int = 5,
         scale_up_threshold: float = 0.8,
         scale_down_threshold: float = 0.2,
