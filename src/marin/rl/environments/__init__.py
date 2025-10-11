@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from marin.rl.types import InferenceContext, InferenceResponse
-
 from .base import EnvConfig, MarinEnv, load_environment_from_spec
 
-__all__ = ["EnvConfig", "InferenceContext", "InferenceResponse", "MarinEnv", "load_environment_from_spec"]
+__all__ = ["EnvConfig", "MarinEnv", "load_environment_from_spec"]

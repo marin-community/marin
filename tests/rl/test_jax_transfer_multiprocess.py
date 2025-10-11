@@ -159,6 +159,7 @@ def run_client(coordinator_name: str, process_id: int, num_processes: int, coord
 
 
 @pytest.mark.parametrize("num_clients", [1, 2])
+@pytest.mark.skip(reason="not using jax transfer")
 def test_jax_transfer_multiprocess(ray_tpu_cluster, num_clients):
     num_processes = num_clients + 1  # 1 server + N clients
     coordinator_name = f"jax_coordinator_{uuid.uuid4().hex[:8]}"

@@ -24,7 +24,6 @@ from collections.abc import Callable, Iterable
 
 import datasets
 import jax
-import jax.numpy as jnp
 import numpy as np
 
 from marin.rl.math_utils import (
@@ -34,7 +33,8 @@ from marin.rl.math_utils import (
     normalize_answer,
     validate_format,
 )
-from marin.rl.types import InferenceContext, Rollout, RolloutGroup
+from marin.rl.inference_ctx import InferenceContext
+from marin.rl.types import Rollout, RolloutGroup
 
 from .base import MarinEnv
 
@@ -214,7 +214,7 @@ class MathEnv(MarinEnv):
         sampled_examples = [available_examples[int(idx)] for idx in indices]
 
         prompts = [example.processed_prompt for example in sampled_examples]
-        responses = inference_ctx.generate(prompts=prompts, temperature=temperature, n_generations=n_generations)
+        completions = inference_ctx.batch_completions(prompts=prompts, temperature=temperature, n=n_generations)
 
         rollout_groups: list[RolloutGroup] = []
         total_choices = 0
@@ -223,30 +223,25 @@ class MathEnv(MarinEnv):
         correct_sum = 0.0
         response_token_count = 0
 
-        for example, response in zip(sampled_examples, responses, strict=True):
+        for example, completion in zip(sampled_examples, completions, strict=True):
             group_rollouts: list[Rollout] = []
 
-            for choice in response.choices:
+            for choice in completion.choices:
+                response_text = choice.message.content or ""
+
                 (
                     reward,
                     fmt_score,
                     correct_score,
                     token_reward,
-                ) = self._score_choice(example=example, choice=choice, tokenizer=inference_ctx.tokenizer)
+                ) = self._score_choice(example=example, response_text=response_text, tokenizer=inference_ctx.tokenizer)
 
-                prompt_tokens = jnp.array(response.prompt_tokens, dtype=jnp.int32)
-                response_tokens = jnp.array(choice.response_tokens, dtype=jnp.int32)
-                response_logprobs = jnp.array(choice.logprobs, dtype=jnp.float32)
-                token_rewards = jnp.full(response_tokens.shape, token_reward, dtype=jnp.float32)
-
-                rollout = Rollout(
+                rollout = inference_ctx.create_rollout_from_choice(
+                    prompt=example.processed_prompt,
+                    choice=choice,
                     env_name="math",
                     env_example_id=example.example_id,
-                    prompt_tokens=prompt_tokens,
-                    response_tokens=response_tokens,
-                    response_logprobs=response_logprobs,
-                    token_rewards=token_rewards,
-                    episode_reward=float(reward),
+                    reward=token_reward,
                 )
                 group_rollouts.append(rollout)
 
@@ -254,7 +249,7 @@ class MathEnv(MarinEnv):
                 reward_sum += reward
                 format_sum += fmt_score
                 correct_sum += correct_score
-                response_token_count += response_tokens.size
+                response_token_count += rollout.response_tokens.size
 
             if group_rollouts:
                 rollout_groups.append(RolloutGroup(rollouts=group_rollouts))
@@ -274,15 +269,13 @@ class MathEnv(MarinEnv):
 
         return rollout_groups, metrics
 
-    def _score_choice(self, example: MathEnvExample, choice, tokenizer) -> tuple[float, float, float, float]:
-        """Score a single generated choice.
+    def _score_choice(self, example: MathEnvExample, response_text: str, tokenizer) -> tuple[float, float, float, float]:
+        """Score a single generated response text.
 
         Returns (reward, format_score, correct_score, token_reward_value).
         """
 
-        decoded_response = (choice.response_text or "").strip()
-        if not decoded_response:
-            decoded_response = tokenizer.decode(choice.response_tokens, skip_special_tokens=True)
+        decoded_response = response_text.strip()
         validation = validate_format(decoded_response + ">")
 
         true_answer = example.processed_answer.strip()
