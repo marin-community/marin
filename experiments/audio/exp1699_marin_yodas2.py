@@ -27,9 +27,9 @@ from levanter.optim import CautiousConfig
 
 SEQ_LEN = 4096
 BASE_BATCH_SIZE = 256
-BATCH_SIZE = 2048  # leverage v5p-64 capacity
+BATCH_SIZE = 512
 BASE_LEARNING_RATE = 3e-3
-LEARNING_RATE = 0.003
+LEARNING_RATE = 0.003 * (BATCH_SIZE / BASE_BATCH_SIZE) ** 0.5
 
 yodas_qwen = dataclasses.replace(
     qwen3_0_6b, tie_word_embeddings=False, gradient_checkpointing=hax.ScanCheckpointPolicy(save_carries="offload")
