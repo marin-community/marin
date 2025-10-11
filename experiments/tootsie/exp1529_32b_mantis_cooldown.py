@@ -38,7 +38,11 @@ from experiments.nemotron_cc.tokenize_nemotron import (
 )
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
-from experiments.midtraining_datasets import megamath_token_counts, megamath_tokenized
+from experiments.midtraining_datasets import (
+    megamath_token_counts,
+    megamath_tokenized,
+    stackv2_edu_filtered_python_tokenized,
+)
 from experiments.tootsie.exp600_tootsie import phase_3_tokenized, starling_components
 from marin.execution import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
@@ -91,6 +95,26 @@ mantis_cooldown_weights = {
     **{k: v * (0.3 / mantis_total_hq_weight) for k, v in mantis_hq_cooldown_weights.items()},
 }
 
+STACKV2_EDU_PYTHON_KEY = "common_pile_stackv2_edu_filtered_python"
+STACKV2_EDU_PYTHON_INTRO_STEP = 174_000
+# Approximate dataset weight by converting 14.63 GiB
+STACKV2_EDU_PYTHON_WEIGHT = 0.01463
+
+mantis_hq_cooldown_weights_with_stackv2_python = {
+    **mantis_hq_cooldown_weights,
+    STACKV2_EDU_PYTHON_KEY: STACKV2_EDU_PYTHON_WEIGHT,
+}
+
+mantis_total_hq_weight_with_stackv2_python = sum(mantis_hq_cooldown_weights_with_stackv2_python.values())
+
+mantis_cooldown_weights_with_stackv2_python = {
+    **{k: v * 0.7 / nemotron_total for k, v in NEMOTRON_PT_MIX_WEIGHTS.items()},
+    **{
+        k: v * (0.3 / mantis_total_hq_weight_with_stackv2_python)
+        for k, v in mantis_hq_cooldown_weights_with_stackv2_python.items()
+    },
+}
+
 mantis_cooldown_mixture = lm_varying_mixture_data_config(
     components={
         **nemotron_steps,
@@ -100,10 +124,12 @@ mantis_cooldown_mixture = lm_varying_mixture_data_config(
         **{k: v for k, v in pt_vs_hq_components.items() if k != "all_math"},
         **megamath_tokenized,
         **starling_components,
+        STACKV2_EDU_PYTHON_KEY: stackv2_edu_filtered_python_tokenized,
     },
     weights_list=[
         (0, NEMOTRON_PT_MIX_WEIGHTS),  # Phase 1 and 2 used the same data mixture and just changed the model arch
         (PHASE_3_START, mantis_cooldown_weights),
+        (STACKV2_EDU_PYTHON_INTRO_STEP, mantis_cooldown_weights_with_stackv2_python),
     ],
     permutation_type="feistel",  # the first phase was actually linear, but this is better for mixing things up
 )
@@ -149,13 +175,13 @@ mantis_train_config = dataclasses.replace(
 )
 
 tootsie_32b_cooldown_mantis = default_train(
-    name="tootsie-32b-cooldown-mantis-adamc",
+    name="tootsie-32b-cooldown-mantis-adamc-v2",
     tokenized=mantis_cooldown_mixture,
     model_config=qwen3_32b_remat,
     train_config=mantis_train_config,
     tags=["qwen", "32b", "ema", "exp1529", "tootsie", "cooldown", "mantis"],
     eval_harness_tasks=[],
-).with_output_path("checkpoints/tootsie-32b-cooldown-mantis-adamc")
+).with_output_path("checkpoints/tootsie-32b-cooldown-mantis-adamc-v2")
 
 
 baselines = [
