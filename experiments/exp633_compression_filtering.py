@@ -120,7 +120,11 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         tokenized[input_data_source] = tokenize_step
         weights[input_data_source] = 1.0
 
-    data_config = lm_mixture_data_config(components=tokenized, weights=weights)
+    data_config = lm_mixture_data_config(
+        components=tokenized,
+        weights=weights,
+        permutation_type="linear",
+    )
 
     train_step = default_train(
         name=f"compression_filtering/{config.experiment_name}",
