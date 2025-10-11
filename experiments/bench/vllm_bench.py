@@ -231,7 +231,7 @@ async def run_benchmark_client(config: BenchmarkConfig):
 
     await benchmark(
         task_type=TaskType.GENERATION,
-        endpoint_type="openai",
+        endpoint_type="openai-nonstreaming",  # Use non-streaming handler for Levanter
         api_url=api_url,
         base_url=base_url,
         model_id=config.model_path,
@@ -243,7 +243,7 @@ async def run_benchmark_client(config: BenchmarkConfig):
         burstiness=1.0,
         disable_tqdm=False,
         profile=False,
-        selected_percentile_metrics=["ttft", "tpot", "itl", "e2el"],
+        selected_percentile_metrics=["e2el"],  # Only e2el makes sense for non-streaming
         selected_percentiles=[25, 50, 75, 90, 95, 99],
         ignore_eos=False,
         goodput_config_dict={},
