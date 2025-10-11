@@ -142,6 +142,9 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
             else:
                 shutil.rmtree(HUGGINGFACE_CACHE_PATH, ignore_errors=True)
                 print(f"Deleted local checkpoint at {HUGGINGFACE_CACHE_PATH}.")
+        if "gcsfuse" not in local_path:
+            shutil.rmtree(local_path, ignore_errors=True)
+            print(f"Deleted local checkpoint at {local_path}.")
 
 
 def evaluate_lm_log_probs(config: EvalLmConfig) -> None:

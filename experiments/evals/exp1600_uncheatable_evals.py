@@ -64,22 +64,33 @@ from experiments.olmo2 import (
 from experiments.tootsie.exp1529_32b_bison_cooldown import tootsie_32b_cooldown_bison as marin_32b_base
 
 
-# We only include English and code datasets
-UNCHEATABLE_EVAL_TO_FILE_PATTERN = {
-    # "wikipedia_arabic": "wikipedia_arabic_*.jsonl.gz",
+# Complete mapping of all available datasets
+ALL_UNCHEATABLE_EVAL_DATASETS = {
+    "wikipedia_arabic": "wikipedia_arabic_*.jsonl.gz",
     "wikipedia_english": "wikipedia_english_*.jsonl.gz",
-    # "wikipedia_french": "wikipedia_french_*.jsonl.gz",
-    # "wikipedia_german": "wikipedia_german_*.jsonl.gz",
-    # "wikipedia_japanese": "wikipedia_japanese_*.jsonl.gz",
-    # "wikipedia_spanish": "wikipedia_spanish_*.jsonl.gz",
+    "wikipedia_french": "wikipedia_french_*.jsonl.gz",
+    "wikipedia_german": "wikipedia_german_*.jsonl.gz",
+    "wikipedia_japanese": "wikipedia_japanese_*.jsonl.gz",
+    "wikipedia_spanish": "wikipedia_spanish_*.jsonl.gz",
     "github_python": "github_python_*.jsonl.gz",
     "github_cpp": "github_cpp_*.jsonl.gz",
     "bbc_news": "bbc_news_*.jsonl.gz",
     "arxiv_physics": "arxiv_physics_*.jsonl.gz",
     "arxiv_computer_science": "arxiv_computer_science_*.jsonl.gz",
-    # "ao3_chinese": "ao3_chinese_*.jsonl.gz",
+    "ao3_chinese": "ao3_chinese_*.jsonl.gz",
     "ao3_english": "ao3_english_*.jsonl.gz",
 }
+
+# We only include English and code datasets for this experiment
+ACTIVE_DATASETS = [
+    "wikipedia_english",
+    "github_python",
+    "github_cpp",
+    "bbc_news",
+    "arxiv_physics",
+    "arxiv_computer_science",
+    "ao3_english",
+]
 
 uncheatable_eval = make_uncheatable_eval_step()
 
@@ -88,7 +99,8 @@ def uncheatable_eval_tokenized(
     *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, uncheatable_eval_raw: ExecutorStep = uncheatable_eval
 ) -> dict[str, TokenizerStep]:
     uncheatable_eval_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
-    for dataset, path_part in UNCHEATABLE_EVAL_TO_FILE_PATTERN.items():
+    for dataset in ACTIVE_DATASETS:
+        path_part = ALL_UNCHEATABLE_EVAL_DATASETS[dataset]
         uncheatable_eval_steps[os.path.join("uncheatable_eval", dataset)] = default_tokenize(
             name=os.path.join("uncheatable_eval", dataset),
             dataset=uncheatable_eval_raw.cd(f"{path_part}"),
