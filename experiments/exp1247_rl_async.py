@@ -26,8 +26,6 @@ from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from transformers import AutoConfig, AutoTokenizer
-
 from marin.execution.executor import (
     ExecutorStep,
     OutputName,
@@ -39,6 +37,7 @@ from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
+from transformers import AutoConfig, AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -200,11 +199,6 @@ def rl_train(name: str) -> ExecutorStep:
         storage_type=StorageType.FILE,
         path=OutputName("rollouts"),
     )
-    weight_transfer = WeightTransferConfig(
-        mode=WeightTransferMode.ARROW_FLIGHT,
-        sync_interval_steps=1,
-        max_weight_transfer_wait_time=10,
-    )
 
     curriculum_config = create_math_curriculum(name)
 
@@ -235,12 +229,8 @@ def rl_train(name: str) -> ExecutorStep:
         ),
     )
 
-    # Enable synchronous (on-policy) training mode
-    # This configures:
-    # - replay_buffer.max_rollout_step_delay = 1
-    # - weight_transfer.sync_interval_steps = 1
-    # - weight_transfer.max_weight_transfer_wait_time = 600 (default)
-    config = config.with_sync_mode()
+    # Enable synchronous (on-policy) training mode for testing
+    config = config.with_on_policy_training()
 
     return ExecutorStep(
         name=f"rl_testing/{name}",

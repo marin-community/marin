@@ -71,7 +71,7 @@ class WeightTransferConfig:
     sync_interval_steps: int = 1
     coordinator_name: str = "weight_transfer_coordinator"
 
-    transfer_timeout: float = 30.0
+    transfer_timeout: float = 600.0
     max_weight_transfer_wait_time: float = 0.0
     """Maximum time (in seconds) to wait for new weights before proceeding. 0 means run ahead without waiting."""
 
