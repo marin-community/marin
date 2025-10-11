@@ -138,6 +138,84 @@ def _update_headers_common(
         headers["x-request-id"] = request_func_input.request_id
 
 
+async def async_request_openai_completions_nonstreaming(
+    request_func_input: RequestFuncInput,
+    session: aiohttp.ClientSession,
+    pbar: Optional[tqdm] = None,
+) -> RequestFuncOutput:
+    """The async request function for the OpenAI Completions API (non-streaming).
+
+    Args:
+        request_func_input: The input for the request function.
+        pbar: The progress bar to display the progress.
+
+    Returns:
+        The output of the request function.
+    """
+    api_url = request_func_input.api_url
+    _validate_api_url(api_url, "OpenAI Completions API", "completions")
+
+    payload = {
+        "model": request_func_input.model_name
+        if request_func_input.model_name
+        else request_func_input.model,
+        "prompt": request_func_input.prompt,
+        "temperature": 0.0,
+        "repetition_penalty": 1.0,
+        "max_tokens": request_func_input.output_len,
+        "logprobs": request_func_input.logprobs,
+        "stream": False,
+    }
+    _update_payload_common(payload, request_func_input)
+
+    headers = {
+        "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}",
+    }
+    _update_headers_common(headers, request_func_input)
+
+    output = RequestFuncOutput()
+    output.prompt_len = request_func_input.prompt_len
+
+    st = time.perf_counter()
+    output.start_time = st
+    try:
+        async with session.post(url=api_url, json=payload, headers=headers) as response:
+            if response.status == 200:
+                data = await response.json()
+                end_time = time.perf_counter()
+
+                # Extract completion data
+                if choices := data.get("choices"):
+                    generated_text = choices[0].get("text", "")
+                    output.generated_text = generated_text
+
+                    # Get token counts from usage
+                    if usage := data.get("usage"):
+                        output.output_tokens = usage.get("completion_tokens", 0)
+
+                    # For non-streaming, we treat the entire response as one "token"
+                    # Set TTFT to the full latency (since we get everything at once)
+                    output.latency = end_time - st
+                    output.ttft = output.latency
+                    # No inter-token latencies for non-streaming
+                    output.itl = []
+                    output.success = True
+                else:
+                    output.success = False
+                    output.error = "No choices in response"
+            else:
+                output.error = response.reason or ""
+                output.success = False
+    except Exception:
+        output.success = False
+        exc_info = sys.exc_info()
+        output.error = "".join(traceback.format_exception(*exc_info))
+
+    if pbar:
+        pbar.update(1)
+    return output
+
+
 async def async_request_openai_completions(
     request_func_input: RequestFuncInput,
     session: aiohttp.ClientSession,
@@ -205,7 +283,12 @@ async def async_request_openai_completions(
                         chunk = message.removeprefix("data: ")
 
                         if chunk != "[DONE]":
-                            data = json.loads(chunk)
+                            try:
+                                data = json.loads(chunk)
+                            except json.JSONDecodeError as e:
+                                # Log malformed JSON for debugging
+                                print(f"Warning: Failed to parse chunk as JSON: {chunk[:100]}")
+                                continue
 
                             # NOTE: Some completion API might have a last
                             # usage summary response without a token so we
@@ -229,6 +312,10 @@ async def async_request_openai_completions(
                                 generated_text += text or ""
                             elif usage := data.get("usage"):
                                 output.output_tokens = usage.get("completion_tokens")
+                            else:
+                                # Debug: log unexpected chunk format
+                                if not first_chunk_received:
+                                    print(f"Debug: Received chunk without choices or usage: {list(data.keys())}")
                 if first_chunk_received:
                     output.success = True
                 else:
@@ -712,6 +799,7 @@ async def async_request_infinity_embeddings_clip(
 ASYNC_REQUEST_FUNCS: dict[str, RequestFunc] = {
     "vllm": async_request_openai_completions,
     "openai": async_request_openai_completions,
+    "openai-nonstreaming": async_request_openai_completions_nonstreaming,
     "openai-chat": async_request_openai_chat_completions,
     "openai-audio": async_request_openai_audio,
     "openai-embeddings": async_request_openai_embeddings,
