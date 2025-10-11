@@ -36,6 +36,7 @@ NUM_ANNEAL_TOKENS = 50_000_000_000
 control_dataset_config = lm_mixture_data_config(
     components={"dclm": dclm},
     weights={"dclm": 1.0},
+    permutation_type="linear",
 )
 control_anneal_config = AnnealConfig(
     dataset_config=control_dataset_config,
