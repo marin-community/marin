@@ -35,7 +35,6 @@ from experiments.defaults import default_tokenize
 from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
 from experiments.models import ModelConfig as HFModelConfig, download_model_step
 
-
 # Complete mapping of all available datasets
 ALL_UNCHEATABLE_EVAL_DATASETS = {
     "wikipedia_arabic": "wikipedia_arabic_*.jsonl.gz",

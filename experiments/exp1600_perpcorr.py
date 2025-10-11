@@ -85,7 +85,7 @@ for isoflop_step, isoflop_metadata in zip(isoflop_steps, isoflop_metadatas, stri
         )
     )
 
-for model_config in model_with_config:
+for model_config in models:
     paloma_tokenized_dict = paloma_tokenized(tokenizer=model_config.tokenizer)
     uncheatable_eval_tokenized_dict = uncheatable_eval_tokenized(tokenizer=model_config.tokenizer)
     eval_data = mixture_for_evaluation(paloma_tokenized_dict | uncheatable_eval_tokenized_dict)
