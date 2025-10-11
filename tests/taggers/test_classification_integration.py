@@ -22,12 +22,14 @@ import json
 import os
 import tempfile
 
-from marin.processing.classification.classifier import DummyClassifier
+from marin.processing.classification.config.inference_config import DatasetSchemaConfig
 from marin.processing.classification.inference import (
     count_existing_rows,
     process_file_with_quality_classifier_streaming,
     read_dataset_streaming,
 )
+
+DEFAULT_DATASET_SCHEMA = DatasetSchemaConfig(input_columns=["id", "text"], output_columns=["id", "attributes"])
 
 
 def test_single_file_processing():
@@ -50,11 +52,10 @@ def test_single_file_processing():
         # Create output file path
         output_file = os.path.join(temp_dir, "output.jsonl.gz")
 
-        # Create classifier
-        classifier = DummyClassifier("dummy", "quality")
-
         # Process file
-        process_file_with_quality_classifier_streaming(input_file, output_file, classifier, batch_size=2, resume=False)
+        process_file_with_quality_classifier_streaming(
+            input_file, output_file, "dummy", "quality", "dummy", {}, DEFAULT_DATASET_SCHEMA, batch_size=2, resume=False
+        )
 
         # Verify output
         assert os.path.exists(output_file)
@@ -103,13 +104,18 @@ def test_multiple_files_processing():
             input_files.append(input_file)
             output_files.append(output_file)
 
-        # Create classifier
-        classifier = DummyClassifier("dummy", "quality")
-
         # Process each file
         for input_file, output_file in zip(input_files, output_files, strict=False):
             process_file_with_quality_classifier_streaming(
-                input_file, output_file, classifier, batch_size=1, resume=False
+                input_file,
+                output_file,
+                "dummy",
+                "quality",
+                "dummy",
+                {},
+                DEFAULT_DATASET_SCHEMA,
+                batch_size=1,
+                resume=False,
             )
 
         # Verify all outputs
@@ -170,11 +176,10 @@ def test_resumption_functionality():
         existing_count = count_existing_rows(output_file)
         assert existing_count == 2
 
-        # Create classifier
-        classifier = DummyClassifier("dummy", "quality")
-
         # Process with resumption
-        process_file_with_quality_classifier_streaming(input_file, output_file, classifier, batch_size=2, resume=True)
+        process_file_with_quality_classifier_streaming(
+            input_file, output_file, "dummy", "quality", "dummy", {}, DEFAULT_DATASET_SCHEMA, batch_size=2, resume=True
+        )
 
         # Verify final output has all rows
         results = []

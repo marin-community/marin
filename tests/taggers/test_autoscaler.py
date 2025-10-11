@@ -91,7 +91,7 @@ def test_autoscaler_requeues_failed_tasks(ray_runtime):
         # assert processed_task["processed"] is True
         # assert processed_task["actor_id"] != initial_actor_id
 
-        with pytest.raises(TimeoutError):
+        with pytest.raises(ray.exceptions.RayTaskError):
             result_queue.get(timeout=30)  # next one should not succeed since only one task
     finally:
         pool.shutdown()

@@ -21,7 +21,7 @@ import pytest
 import ray
 
 from marin.core.runtime import TaskConfig
-from marin.processing.classification.classifier import DummyClassifier
+from marin.processing.classification.config.inference_config import DatasetSchemaConfig
 from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig
 from marin.processing.classification.inference import (
     count_existing_rows,
@@ -31,10 +31,17 @@ from marin.processing.classification.inference import (
 )
 from marin.utils import fsspec_exists, fsspec_mkdirs
 
+DEFAULT_DATASET_SCHEMA = DatasetSchemaConfig(input_columns=["id", "text"], output_columns=["id", "attributes"])
+
 
 @pytest.fixture
-def gs_bucket_prefix():
-    return "gs://marin-us-east1/tests"
+def ray_cluster():
+    ray.shutdown()
+    ray.init(num_cpus=2, resources={"head_node": 1}, ignore_reinit_error=True)
+    try:
+        yield
+    finally:
+        ray.shutdown()
 
 
 @pytest.fixture
@@ -179,10 +186,12 @@ class TestSingleFileProcessing:
         create_jsonl_gz_file(sample_data, input_file)
 
         # Create dummy classifier
-        classifier = DummyClassifier("dummy", "quality")
+        # classifier = DummyClassifier("dummy", "quality")
 
         # Process file
-        process_file_with_quality_classifier_streaming(input_file, output_file, classifier, batch_size=2, resume=False)
+        process_file_with_quality_classifier_streaming(
+            input_file, output_file, "dummy", "quality", "dummy", {}, DEFAULT_DATASET_SCHEMA, batch_size=2, resume=False
+        )
 
         # Verify output
         results = read_jsonl_gz_file(output_file)
@@ -210,10 +219,12 @@ class TestSingleFileProcessing:
         create_jsonl_gz_file(partial_output, output_file)
 
         # Create dummy classifier
-        classifier = DummyClassifier("dummy", "quality")
+        # classifier = DummyClassifier("dummy", "quality")
 
         # Process file with resumption
-        process_file_with_quality_classifier_streaming(input_file, output_file, classifier, batch_size=2, resume=True)
+        process_file_with_quality_classifier_streaming(
+            input_file, output_file, "dummy", "quality", "dummy", {}, DEFAULT_DATASET_SCHEMA, batch_size=2, resume=True
+        )
 
         # Verify output contains all rows
         results = read_jsonl_gz_file(output_file)
@@ -232,14 +243,22 @@ class TestSingleFileProcessing:
         create_jsonl_gz_file(sample_data, input_file)
 
         # Create dummy classifier
-        classifier = DummyClassifier("dummy", "quality")
+        # classifier = DummyClassifier("dummy", "quality")
 
         # Test different batch sizes
         for batch_size in [1, 2, 3, 10]:
             output_file = os.path.join(temp_dir, f"test_output_batch_{batch_size}.jsonl.gz")
 
             process_file_with_quality_classifier_streaming(
-                input_file, output_file, classifier, batch_size=batch_size, resume=False
+                input_file,
+                output_file,
+                "dummy",
+                "quality",
+                "dummy",
+                {},
+                DEFAULT_DATASET_SCHEMA,
+                batch_size=batch_size,
+                resume=False,
             )
 
             results = read_jsonl_gz_file(output_file)
@@ -254,10 +273,12 @@ class TestSingleFileProcessing:
         create_parquet_file(sample_data, input_file)
 
         # Create dummy classifier
-        classifier = DummyClassifier("dummy", "quality")
+        # classifier = DummyClassifier("dummy", "quality")
 
         # Process file
-        process_file_with_quality_classifier_streaming(input_file, output_file, classifier, batch_size=2, resume=False)
+        process_file_with_quality_classifier_streaming(
+            input_file, output_file, "dummy", "quality", "dummy", {}, DEFAULT_DATASET_SCHEMA, batch_size=2, resume=False
+        )
 
         # Verify output
         results = read_parquet_file(output_file)
@@ -285,10 +306,12 @@ class TestSingleFileProcessing:
         create_parquet_file(partial_output, output_file)
 
         # Create dummy classifier
-        classifier = DummyClassifier("dummy", "quality")
+        # classifier = DummyClassifier("dummy", "quality")
 
         # Process file with resumption
-        process_file_with_quality_classifier_streaming(input_file, output_file, classifier, batch_size=2, resume=True)
+        process_file_with_quality_classifier_streaming(
+            input_file, output_file, "dummy", "quality", "dummy", {}, DEFAULT_DATASET_SCHEMA, batch_size=2, resume=True
+        )
 
         # Verify output contains all rows
         results = read_parquet_file(output_file)
@@ -303,12 +326,12 @@ class TestSingleFileProcessing:
 class TestMultipleFileProcessing:
     """Test processing of multiple files"""
 
-    def test_process_multiple_files(self, gs_bucket_prefix, sample_data, temp_dir):
+    def test_process_multiple_files(self, ray_cluster, sample_data, temp_dir):
         """Test processing multiple files with Ray"""
         # Create input directory structure
 
-        input_dir = os.path.join(gs_bucket_prefix, "tagger-input")
-        output_dir = os.path.join(gs_bucket_prefix, "tagger-output")
+        input_dir = os.path.join(temp_dir, "tagger-input")
+        output_dir = os.path.join(temp_dir, "tagger-output")
         fsspec_mkdirs(input_dir)
         fsspec_mkdirs(output_dir)
 
@@ -338,6 +361,7 @@ class TestMultipleFileProcessing:
             runtime=RuntimeConfig(memory_limit_gb=1),
             task=TaskConfig(max_in_flight=2),
             classifier_kwargs={},
+            dataset_schema=DEFAULT_DATASET_SCHEMA,
         )
 
         # Run inference
@@ -356,11 +380,11 @@ class TestMultipleFileProcessing:
                 assert "id" in result
                 assert "attributes" in result
 
-    def test_process_multiple_parquet_files(self, gs_bucket_prefix, sample_data, temp_dir):
+    def test_process_multiple_parquet_files(self, ray_cluster, sample_data, temp_dir):
         """Test processing multiple Parquet files with Ray"""
         # Create input directory structure
-        input_dir = os.path.join(gs_bucket_prefix, "tagger-parquet-input")
-        output_dir = os.path.join(gs_bucket_prefix, "tagger-parquet-output")
+        input_dir = os.path.join(temp_dir, "tagger-parquet-input")
+        output_dir = os.path.join(temp_dir, "tagger-parquet-output")
         fsspec_mkdirs(input_dir)
         fsspec_mkdirs(output_dir)
 
@@ -390,6 +414,7 @@ class TestMultipleFileProcessing:
             runtime=RuntimeConfig(memory_limit_gb=1),
             task=TaskConfig(max_in_flight=2),
             classifier_kwargs={},
+            dataset_schema=DEFAULT_DATASET_SCHEMA,
         )
 
         # Run inference
@@ -464,10 +489,12 @@ class TestErrorHandling:
         create_jsonl_gz_file([], input_file)
 
         # Create dummy classifier
-        classifier = DummyClassifier("dummy", "quality")
+        # classifier = DummyClassifier("dummy", "quality")
 
         # Process empty file
-        process_file_with_quality_classifier_streaming(input_file, output_file, classifier, batch_size=2, resume=False)
+        process_file_with_quality_classifier_streaming(
+            input_file, output_file, "dummy", "quality", "dummy", {}, DEFAULT_DATASET_SCHEMA, batch_size=2, resume=False
+        )
 
         # Should create empty output file
         assert not os.path.exists(output_file)

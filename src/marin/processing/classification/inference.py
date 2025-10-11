@@ -26,7 +26,6 @@ import os
 import draccus
 import pandas as pd
 import ray
-from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from ray.util.queue import Queue
 import datetime
 import threading
@@ -34,10 +33,8 @@ import queue
 from marin.core.runtime import cached_or_construct_output
 from marin.processing.classification.classifier import (
     AutoClassifier,
-    BaseClassifier,
     AutoClassifierRayActor,
 )
-from marin.processing.classification.cleanup import Reaper
 from marin.processing.classification.config.inference_config import DatasetSchemaConfig, InferenceConfig
 from marin.utils import (
     fsspec_glob,
@@ -47,60 +44,6 @@ from marin.utils import (
 from marin.processing.classification.autoscaler import AutoscalingActorPool
 
 logger = logging.getLogger("ray")
-
-
-def _kill_processes_by_regex_if_no_vllm(pattern: str) -> None:
-    """Hacky cleanup: kill processes whose name/cmdline matches pattern
-    only if there is no process that mentions "VLLM".
-
-    This is intended to mitigate cases where accelerator lock files are held
-    by crashed or orphaned Ray workers.
-    """
-    try:
-        import os as _os
-        import re as _re
-        import signal as _signal
-        import psutil as _psutil  # type: ignore
-    except Exception:
-        # If psutil or other deps aren't available, silently skip
-        return
-
-    try:
-        # Check if any VLLM process is present; if so, do nothing
-        has_vllm = False
-        for proc in _psutil.process_iter(attrs=["pid", "name", "cmdline"]):
-            try:
-                info = proc.info
-                name = info.get("name") or ""
-                cmdline = " ".join(info.get("cmdline") or [])
-                haystack = f"{name} {cmdline}"
-                if _re.search(r"VLLM", haystack):
-                    has_vllm = True
-                    break
-            except (_psutil.NoSuchProcess, _psutil.AccessDenied, _psutil.ZombieProcess) as e:
-                print(f"Error getting process info for {proc.pid}: {e}")
-                continue
-
-        if has_vllm:
-            return
-
-        # No VLLM processes found; kill processes matching the provided pattern
-        for proc in _psutil.process_iter(attrs=["pid", "name", "cmdline"]):
-            try:
-                info = proc.info
-                name = info.get("name") or ""
-                cmdline = " ".join(info.get("cmdline") or [])
-                haystack = f"{name} {cmdline}"
-                if _re.search(pattern, haystack, flags=_re.IGNORECASE):
-                    if proc.pid == _os.getpid():
-                        continue
-                    _os.kill(proc.pid, _signal.SIGKILL)
-            except (_psutil.NoSuchProcess, _psutil.AccessDenied, _psutil.ZombieProcess) as e:
-                print(f"Error killing process {proc.pid}: {e}")
-                continue
-    except Exception:
-        # Best-effort cleanup; ignore any unexpected errors
-        pass
 
 
 def read_dataset_streaming(input_filename: str, columns: list[str] | None = None):
@@ -135,59 +78,6 @@ def read_dataset_streaming(input_filename: str, columns: list[str] | None = None
 
     # Yield rows from the streaming dataset
     yield from dataset
-
-
-def count_existing_rows(output_filename: str) -> int:
-    """Count the number of rows already processed in the output file
-
-    Uses fsspec to support remote filesystems (e.g., gs://) instead of os.path.exists.
-    """
-    import datasets
-    import fsspec
-
-    try:
-        # Check if file exists on local or remote filesystem
-        fs, _ = fsspec.core.url_to_fs(output_filename)
-        if not fs.exists(output_filename):
-            return 0
-
-        # Use datasets library to count rows efficiently
-        datasets.disable_caching()
-        datasets.logging.set_verbosity_warning()
-
-        if output_filename.endswith((".jsonl.gz", ".jsonl.zst", ".jsonl")):
-            # Load as JSON lines with streaming to count
-            # dataset = datasets.load_dataset("json", data_files=output_filename, streaming=True, split="train")
-            with fsspec.open(output_filename, "rt", compression="infer") as f:
-                count = 0
-                for _ in f:
-                    count += 1
-
-            return count
-        elif output_filename.endswith(".parquet"):
-            # Load parquet with streaming to count
-            import pyarrow.dataset as ds
-
-            def count_rows_dataset(path: str) -> int:
-                dataset = ds.dataset(path, format="parquet")  # local, s3://..., gs://..., etc.
-                # Arrow ≥12 has count_rows(); for older Arrow, fall back to sum of file metadata
-                try:
-                    return dataset.count_rows()  # uses metadata; very fast
-                except AttributeError:
-                    return sum(ds.parquet_dataset_factory(path).finish().count_rows())
-
-            return count_rows_dataset(output_filename)
-        else:
-            return 0
-
-        # Count rows by iterating through the streaming dataset
-        # count = 0
-        # for _ in dataset:
-        #     count += 1
-
-        # return count
-    except (FileNotFoundError, Exception):
-        return 0
 
 
 def get_id_from_row(row: dict, id_column: str | dict[str, str]) -> str:
@@ -490,41 +380,6 @@ class AsyncJSONLWriter:
                 pass
 
 
-def read_dataset(input_filename: str, columns: list[str] | None = None):
-    """Read in a dataset and return as a Huggingface Dataset"""
-    import datasets
-
-    datasets.disable_caching()
-    datasets.logging.set_verbosity_warning()
-
-    if input_filename.endswith(".jsonl.gz"):
-        df = pd.read_json(input_filename, compression="gzip", lines=True)
-    elif input_filename.endswith(".jsonl.zst"):
-        df = pd.read_json(input_filename, compression="zstd", lines=True)
-    elif input_filename.endswith(".parquet"):
-        df = pd.read_parquet(input_filename)
-    else:
-        raise ValueError(f"Unsupported filetype: {input_filename}")
-
-    if columns:
-        df = df[columns]
-
-    return datasets.Dataset.from_pandas(df)
-
-
-def write_dataset(dataset, output_filename: str):
-    """Writes a Huggingface Dataset to a file (remote or local) - kept for backward compatibility"""
-    if output_filename.endswith(".jsonl.gz"):
-        dataset.to_json(output_filename, compression="gzip")
-    elif output_filename.endswith(".jsonl.zst"):
-        df_pandas = dataset.to_pandas()
-        df_pandas.to_json(output_filename, orient="records", compression="zstd", lines=True)
-    elif output_filename.endswith(".parquet"):
-        dataset.to_parquet(output_filename)
-    else:
-        raise ValueError(f"Unsupported filetype: {output_filename}")
-
-
 def get_input_dataset_column_names(dataset_schema: DatasetSchemaConfig | None = None) -> list[str]:
     schema = dataset_schema or DatasetSchemaConfig()
     return schema.input_columns
@@ -544,11 +399,11 @@ def process_file_with_quality_classifier_streaming(
     attribute_name: str,
     model_type: str,
     classifier_kwargs: dict,
+    dataset_schema: DatasetSchemaConfig,
     batch_size: int = 512,
     resume: bool = True,
     use_autoscaling_actor_pool: bool = False,
     classifier_actor_options: dict | None = None,
-    dataset_schema: DatasetSchemaConfig | None = None,
 ):
     """Process a file with streaming I/O and resumption capability"""
     print(f"[*] Processing {input_filename} to {output_filename}")
@@ -666,96 +521,12 @@ def process_file_with_quality_classifier_streaming(
 
         pool.shutdown()
 
-        # Write batch
-    #         if output_filename.endswith(".parquet"):
-    #             parquet_batches.extend(output_rows)
-    #             # Write parquet in larger chunks to be efficient
-    #             if len(parquet_batches) >= batch_size * 10:
-    #                 _write_parquet_batch(parquet_batches, output_filename, append=append_mode or total_processed > 0)
-    #                 parquet_batches = []
-    #         else:
-    #             # Enqueue JSONL write to overlap with next compute batch
-    #             # async_writer.submit_rows(output_rows)
-    #             write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
-
-    #         total_processed += len(batch)
-    #         print(f"[*] Processed {total_processed} rows from {input_filename}")
-    #         batch = []
-
-    # # Process remaining rows in final batch
-    # if batch:
-    #     batch_dict = {}
-    #     for key in input_column_names:
-    #         batch_dict[key] = [row.get(key, "") for row in batch]
-
-    #     processed_batch = quality_classifier(batch_dict)
-
-    #     output_rows = []
-    #     for i in range(len(batch)):
-    #         output_row = {}
-    #         for col in output_column_names:
-    #             if col in processed_batch:
-    #                 output_row[col] = processed_batch[col][i]
-    #             elif col in batch_dict:
-    #                 output_row[col] = batch_dict[col][i]
-    #         output_rows.append(output_row)
-
-    #     # Write final batch
-    #     if output_filename.endswith(".parquet"):
-    #         parquet_batches.extend(output_rows)
-    #     else:
-    #         # Enqueue final JSONL rows
-    #         # async_writer.submit_rows(output_rows)
-    #         write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
-
-    #     total_processed += len(batch)
-
-    # Flush remaining writes
-    # if output_filename.endswith(".parquet"):
-    #     if parquet_batches:
-    #         _write_parquet_batch(parquet_batches, output_filename, append_mode or total_processed > rows_to_skip)
-    # else:
-    # Finalize JSONL: join background writer and upload to destination
-    # if async_writer is not None:
-    #     async_writer.close()
-
     print(
         f"[*] Completed processing {input_filename} - \
         Total rows: {total_processed} (skipped {total_skipped} already finished)"
     )
 
 
-def _write_parquet_batch(rows: list, output_filename: str, append: bool):
-    """Helper function to write a batch of rows to parquet"""
-    import fsspec
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    if not rows:
-        return
-
-    df = pd.DataFrame(rows)
-    table = pa.Table.from_pandas(df)
-
-    fs, _ = fsspec.core.url_to_fs(output_filename)
-    if append and fs.exists(output_filename):
-        # Read existing parquet and append
-        with fsspec.open(output_filename, "rb") as f:
-            existing_table = pq.read_table(f)
-        table = pa.concat_tables([existing_table, table])
-
-    with fsspec.open(output_filename, "wb") as f:
-        pq.write_table(table, f)
-
-
-@cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseClassifier):
-    """Legacy function - kept for backward compatibility"""
-    process_file_with_quality_classifier_streaming(input_filename, output_filename, quality_classifier)
-
-
-# @ray.remote(max_calls=1)
-# @remove_tpu_lockfile_on_exit
 @ray.remote(max_calls=1)
 @cached_or_construct_output(success_suffix="SUCCESS")
 def process_file_ray(
@@ -778,10 +549,6 @@ def process_file_ray(
         if classifier_actor_options is None:
             classifier_actor_options = {}
 
-        # quality_classifier = AutoClassifier.from_model_path(
-        #     model_name_or_path, attribute_name, model_type, **classifier_kwargs
-        # )
-
         process_file_with_quality_classifier_streaming(
             input_filename,
             output_filename,
@@ -789,103 +556,21 @@ def process_file_ray(
             attribute_name,
             model_type,
             classifier_kwargs,
+            dataset_schema,
             batch_size,
             resume,
             use_autoscaling_actor_pool,
             classifier_actor_options,
-            dataset_schema=dataset_schema,
         )
 
-    except Exception:
-        # On failure, try to clear out stray Ray worker processes if safe
-        # _kill_processes_by_regex_if_no_vllm(r"process_file_ray")
-        raise
-    finally:
-        if queue is not None:
-            queue.put(
-                {
-                    "pid": os.getpid(),
-                    "node_id": ray.get_runtime_context().get_node_id(),
-                }
-            )
-
-
-# @ray.remote(max_calls=1)
-# @remove_tpu_lockfile_on_exit
-# @ray.remote(max_calls=1)
-# @cached_or_construct_output(success_suffix="SUCCESS")
-# def _process_dir(
-#     input_path: str,
-#     output_path: str,
-#     model_name_or_path: str,
-#     attribute_name: str,
-#     model_type: str | None,
-#     filetype: str,
-#     classifier_kwargs: dict,
-#     batch_size: int = 512,
-#     resume: bool = True,
-#     queue: Queue | None = None,
-#     use_autoscaling_actor_pool: bool = False,
-# ):
-#     """Perform quality classification on a directory of files
-
-#     We assume that the input_path is a directory of files. Using _process_dir is more
-#     efficient than process_file_ray because it avoids the overhead of spawning a new
-#     Ray task for each file and instead processes all files in a single task.
-#     """
-
-#     files = fsspec_glob(os.path.join(input_path, f"*.{filetype}"))
-
-#     if len(files) == 0:
-#         logger.error(f"No files found in {input_path} with pattern {filetype}!!! This is likely an error.")
-#         return
-
-#     quality_classifier = AutoClassifier.from_model_path(
-#         model_name_or_path, attribute_name, model_type, **classifier_kwargs
-#     )
-
-#     for input_filename in files:
-#         output_filename = rebase_file_path(input_path, input_filename, output_path)
-#         process_file_with_quality_classifier_streaming(
-#             input_filename, output_filename, quality_classifier, batch_size, resume, use_autoscaling_actor_pool
-#         )
-
-
-def get_process_filepath_func(subdirectories: list[str]):
-    # if len(subdirectories) > 0:
-    #     return _process_dir
-    # else:
-    return process_file_ray
-
-
-def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
-    # NOTE(chris): Maximize parallelism by doing one task per file. If this is too high
-    # then we can use _process_dir to process multiple files in a single task.
-    process_filepath_func = process_file_ray
-    filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
-
-    return filepaths, process_filepath_func
-
-
-@ray.remote(num_cpus=0, resources={"head_node": 0.001})
-def cleanup_tpu_processes(queue: Queue):
-    killed_pids = []
-    while True:
-        info = queue.get()
-
-        if info is None:
-            break
-        reaper = Reaper.options(scheduling_strategy=NodeAffinitySchedulingStrategy(info["node_id"], soft=False)).remote()
-        results = ray.get(reaper.kill_if_holding_accel.remote(info["pid"]))
-        killed_pids.extend(results["killed"])
-
-    return killed_pids
+    except Exception as e:
+        raise e
 
 
 @ray.remote(num_cpus=0, resources={"head_node": 0.001})
 def run_inference(inference_config: InferenceConfig):
     logger.info(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
-    filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
+    filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
 
     if len(filepaths) == 0:
         pattern = f"**/*.{inference_config.filetype}"
@@ -908,12 +593,10 @@ def run_inference(inference_config: InferenceConfig):
     pending_refs: dict = {}
     attempt_count: dict[str, int] = {}
 
-    queue = Queue(actor_options={"num_cpus": 0, "resources": {"head_node": 0.001}})
-
     def submit(input_fp: str):
         output_fp = rebase_file_path(input_path, input_fp, output_path)
         fsspec_mkdirs(os.path.dirname(output_fp))
-        ref = process_filepath_func.options(**options_kwargs).remote(
+        ref = process_file_ray.options(**options_kwargs).remote(
             input_fp,
             output_fp,
             inference_config.model_name,
@@ -930,8 +613,6 @@ def run_inference(inference_config: InferenceConfig):
         )
         pending_refs[ref] = input_fp
 
-    cleanup_task = cleanup_tpu_processes.remote(queue)
-
     for input_filepath in filepaths:
         # Throttle submissions
         while len(pending_refs) >= max_in_flight:
@@ -946,8 +627,6 @@ def run_inference(inference_config: InferenceConfig):
                 count = attempt_count.get(file_for_ref, 0) + 1
                 attempt_count[file_for_ref] = count
                 logger.warning(f"Task failed for {file_for_ref} (attempt {count}): {e}")
-                # Hacky cleanup on failure to clear accelerator locks held by stray workers
-                _kill_processes_by_regex_if_no_vllm(r"process_file_ray")
                 if count < max_retries_per_file:
                     submit(file_for_ref)
                 else:
@@ -967,17 +646,10 @@ def run_inference(inference_config: InferenceConfig):
             count = attempt_count.get(file_for_ref, 0) + 1
             attempt_count[file_for_ref] = count
             logger.warning(f"Task failed for {file_for_ref} (attempt {count}): {e}")
-            # Hacky cleanup on failure to clear accelerator locks held by stray workers
-            _kill_processes_by_regex_if_no_vllm(r"process_file_ray")
             if count < max_retries_per_file:
                 submit(file_for_ref)
             else:
                 logger.error(f"Giving up after {count} attempts for {file_for_ref}")
-
-    # Stop sentinel for cleanup since all done
-    queue.put(None)
-    killed_pids = ray.get(cleanup_task)
-    print(f"Killed PIDs: {killed_pids}")
 
 
 @draccus.wrap()

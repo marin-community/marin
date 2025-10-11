@@ -38,8 +38,6 @@ try:
 except ImportError:
     xm = None
 
-from marin.classifiers.fasttext.utils import get_preprocess_fn
-
 
 class BaseClassifier:
     def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
@@ -96,14 +94,11 @@ class FasttextClassifier(BaseClassifier):
         "julien-c/fasttext-language-id": "lid.176.bin",
     }
 
-    def __init__(
-        self, model_name: str, attribute_name: str, k: int = 2, preprocess_fn_type: str | None = None, *args, **kwargs
-    ):
+    def __init__(self, model_name: str, attribute_name: str, k: int = 2, *args, **kwargs):
         self.model_name = model_name
         self.attribute_name = attribute_name
         self.model = self.load_model()
         self.k = k
-        self.preprocess_fn = get_preprocess_fn(preprocess_fn_type)
 
     def load_model(self):
         from fasttext.FastText import _FastText
@@ -193,9 +188,7 @@ class FasttextClassifier(BaseClassifier):
                 # has multiple newlines then it will appear as if it were
                 # multiple examples. So, we replace `\n` with a space to avoid this.
                 # https://arc.net/l/quote/mfbqvtry
-                text = self.preprocess_fn(text)
-            else:
-                text = ""
+                text = text.replace("\n", " ")
             texts.append(text)
 
         label_arr, score_arr = self.predict(texts)
