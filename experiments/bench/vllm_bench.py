@@ -58,14 +58,13 @@ class BenchmarkConfig:
     max_seq_len: int = 2048
     max_seqs: int = 256
     page_size: int = 128
+    max_pages: int = 4096
 
     # Trainer configuration
     trainer: TrainerConfig = field(
         default_factory=lambda: TrainerConfig(
-            model_axis_size=1,
-            tensor_parallel_axes=["mlp", "kv_head"],
-            fsdp_axis="embed",
-            batch_axis="batch",
+            model_axis_size=4,
+            tensor_parallel_axes=["mlp", "heads", "kv_head", "vocab"],
             mp=jmp.get_policy("p=f32,c=bfloat16"),
         )
     )
@@ -134,7 +133,7 @@ def start_server_process(config: BenchmarkConfig):
     """Start the Levanter inference server in a separate process."""
     logger.info("Starting Levanter inference server...")
 
-    # Load model and create server
+    # Load model and create server within the device mesh and axis mapping context
     model, tokenizer = load_model(config)
 
     server_config = InferenceServerConfig(
@@ -142,6 +141,7 @@ def start_server_process(config: BenchmarkConfig):
             max_seq_len=config.max_seq_len,
             max_seqs=config.max_seqs,
             page_size=config.page_size,
+            max_pages=config.max_pages,
         ),
         host=config.host,
         port=config.port,
@@ -150,7 +150,9 @@ def start_server_process(config: BenchmarkConfig):
         trainer=config.trainer,
     )
 
-    server = InferenceServer.create(server_config, model, tokenizer)
+    # Create server within the device mesh and axis mapping context
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(server_config, model, tokenizer)
 
     logger.info(f"Server initialized, listening on {config.host}:{config.port}")
 
@@ -292,6 +294,7 @@ def main():
     parser.add_argument("--max_seq_len", type=int, default=2048, help="Maximum sequence length")
     parser.add_argument("--max_seqs", type=int, default=256, help="Maximum concurrent sequences")
     parser.add_argument("--page_size", type=int, default=16, help="Page size for KV cache")
+    parser.add_argument("--max_pages", type=int, default=1024, help="Maximum number of pages")
 
     # Benchmark arguments
     parser.add_argument("--num_prompts", type=int, default=100, help="Number of prompts to benchmark")
@@ -315,6 +318,7 @@ def main():
         max_seq_len=args.max_seq_len,
         max_seqs=args.max_seqs,
         page_size=args.page_size,
+        max_pages=args.max_pages,
         num_prompts=args.num_prompts,
         request_rate=args.request_rate,
         dataset_name=args.dataset_name,
