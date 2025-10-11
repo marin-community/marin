@@ -589,7 +589,11 @@ def _prepare_data_config(
         validation_sets = {}
 
     if isinstance(tokenized, InputName | ExecutorStep):
-        pretraining_data = lm_data_config(training_set=tokenized, validation_sets=validation_sets)
+        pretraining_data = lm_data_config(
+            training_set=tokenized,
+            validation_sets=validation_sets,
+            permutation_type="linear",
+        )
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures
         pretraining_data = tokenized

@@ -42,7 +42,8 @@ from transformers import PreTrainedTokenizer
 
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
-from marin.rl.environments.base import LevanterInferenceContext, load_environment_from_spec
+from marin.rl.environments.base import load_environment_from_spec
+from marin.rl.inference_ctx import InferenceContext
 from marin.rl.model_utils import load_model_from_checkpoint
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
@@ -212,7 +213,7 @@ class RolloutWorker:
         stop_tokens = lesson_config.sampling_params.stop_tokens
         max_tokens = lesson_config.sampling_params.max_tokens
 
-        policy_ctx = LevanterInferenceContext(
+        policy_ctx = InferenceContext(
             tokenizer=self._tokenizer,
             inference_server=self._inference_server,
             max_tokens=max_tokens,

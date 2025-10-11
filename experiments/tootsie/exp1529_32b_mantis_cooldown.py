@@ -15,7 +15,7 @@
 """
 https://github.com/marin-community/marin/issues/1529
 
-Cooldown run for 32B Tootsie Model using the same data mixture as in Starling for 8B
+Cooldown run for the 32B Tootsie model using MegaMath in place of the Dolmino math mixture.
 """
 
 import dataclasses
@@ -38,6 +38,7 @@ from experiments.nemotron_cc.tokenize_nemotron import (
 )
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
+from experiments.midtraining_datasets import megamath_token_counts, megamath_tokenized
 from experiments.tootsie.exp600_tootsie import phase_3_tokenized, starling_components
 from marin.execution import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
@@ -57,12 +58,13 @@ NEMOTRON_PT_MIX_WEIGHTS = {
     "proofpile_2": 0.055,
 }
 
+# In Trillions, as usual, upweighting a few things
 HQ_COOLDOWN_WEIGHTS = {
     "dolmino/flan": 0.017 * 2,  # Double Weight in Starling
     "dolmino/pes2o": 0.0581,
     "dolmino/stackexchange": 0.0171,
     "dolmino/wiki": 0.00365,
-    "all_math": 0.00422 * 2,  # Double Weight in Starling
+    "all_math": 0.371,
     "arxiv_markdownified": 0.0581,
     "stackexchange_custom": 0.0171,
     "wikipedia_markdown": 0.00365,
@@ -71,34 +73,46 @@ HQ_COOLDOWN_WEIGHTS = {
 }
 
 nemotron_total = sum(NEMOTRON_PT_MIX_WEIGHTS.values())
-total_hq_weight = sum(HQ_COOLDOWN_WEIGHTS.values())
+all_math_weight = HQ_COOLDOWN_WEIGHTS["all_math"]
+megamath_total = sum(megamath_token_counts.values())
 
-bison_cooldown_weights = {
-    **{k: v * 0.7 / nemotron_total for k, v in NEMOTRON_PT_MIX_WEIGHTS.items()},
-    **{k: v * 0.3 / total_hq_weight for k, v in HQ_COOLDOWN_WEIGHTS.items()},
+mantis_hq_cooldown_weights = {
+    **{k: v for k, v in HQ_COOLDOWN_WEIGHTS.items() if k != "all_math"},
+    **{
+        split: (all_math_weight if split != "megamath/web" else all_math_weight / 4) * weight / megamath_total
+        for split, weight in megamath_token_counts.items()
+    },
 }
 
-bison_cooldown_mixture = lm_varying_mixture_data_config(
+mantis_total_hq_weight = sum(mantis_hq_cooldown_weights.values())
+
+mantis_cooldown_weights = {
+    **{k: v * 0.7 / nemotron_total for k, v in NEMOTRON_PT_MIX_WEIGHTS.items()},
+    **{k: v * (0.3 / mantis_total_hq_weight) for k, v in mantis_hq_cooldown_weights.items()},
+}
+
+mantis_cooldown_mixture = lm_varying_mixture_data_config(
     components={
         **nemotron_steps,
         "starcoderdata": starcoderdata,
         "proofpile_2": proofpile_2,
         **phase_3_tokenized,
-        **pt_vs_hq_components,
+        **{k: v for k, v in pt_vs_hq_components.items() if k != "all_math"},
+        **megamath_tokenized,
         **starling_components,
     },
     weights_list=[
         (0, NEMOTRON_PT_MIX_WEIGHTS),  # Phase 1 and 2 used the same data mixture and just changed the model arch
-        (PHASE_3_START, bison_cooldown_weights),
+        (PHASE_3_START, mantis_cooldown_weights),
     ],
-    permutation_type="linear",
+    permutation_type="feistel",  # the first phase was actually linear, but this is better for mixing things up
 )
 
 DECAY_FRACTION = (PHASE_3_END - PHASE_3_START) / PHASE_3_END
 
 qwen_phase2_checkpoint_for_phase3 = marin_32b_qwen.cd(f"checkpoints/step-{PHASE_3_START}").nonblocking()
 
-bison_train_config = dataclasses.replace(
+mantis_train_config = dataclasses.replace(
     qwen_32b_warmstart_train,
     initialize_from_checkpoint_path=qwen_phase2_checkpoint_for_phase3,
     decay=DECAY_FRACTION,
@@ -134,55 +148,15 @@ bison_train_config = dataclasses.replace(
     ),
 )
 
-tootsie_32b_cooldown_bison = default_train(
-    name="tootsie-32b-cooldown-bison-adamc",
-    tokenized=bison_cooldown_mixture,
+tootsie_32b_cooldown_mantis = default_train(
+    name="tootsie-32b-cooldown-mantis-adamc",
+    tokenized=mantis_cooldown_mixture,
     model_config=qwen3_32b_remat,
-    train_config=bison_train_config,
-    tags=["qwen", "32b", "ema", "exp1529", "tootsie", "cooldown"],
+    train_config=mantis_train_config,
+    tags=["qwen", "32b", "ema", "exp1529", "tootsie", "cooldown", "mantis"],
     eval_harness_tasks=[],
-).with_output_path("checkpoints/tootsie-32b-cooldown-bison-adamc")
+).with_output_path("checkpoints/tootsie-32b-cooldown-mantis-adamc")
 
-
-# Loss Spiked, see if flat LR works. (Will: It doesn't but preserving for posterity)
-
-qwen_phase3_checkpoint_for_phase4 = tootsie_32b_cooldown_bison.cd("checkpoints/step-190000").nonblocking()
-
-bison_train_config_flat = dataclasses.replace(
-    bison_train_config,
-    decay=0,
-    num_train_steps=PHASE_3_END,
-    initialize_from_checkpoint_path=qwen_phase3_checkpoint_for_phase4,
-    optimizer_config=AdamConfig(
-        # Modulate Decay And Warmup to Just Cool This Model Down
-        decay=0,
-        warmup=0.0,
-        adamc_weight_decay=True,
-        learning_rate=(7e-4 * (1 - (30 / 32))) + (7e-5 * (30 / 32)),
-        # From here out, this is a copy of the Optimizer hparams from bison_train_config
-        beta1=0.9,
-        beta2=0.95,
-        epsilon=1e-8,
-        max_grad_norm=0.2,  # we're almost always < .2 except during spikes
-        # width is a little smaller than the 24B and we're using a much larger batch size
-        # 4.2e-4 * sqrt(8192/3072) ≈ 7e-4
-        weight_decay=0.05,
-        skip_bad_steps=True,
-        # update_rms_clipping=1.0,  # added at 67522, removed at 72233
-        lr_schedule="linear",
-        # this was inadvertently off from about 74k to 80k
-        clip_update_norm=ClipUpdateNormConfig(rolling_interval_length=128, sigma_factor=2.0),
-    ),
-)
-
-tootsie_32b_cooldown_bison_flat = default_train(
-    name="tootsie-32b-cooldown-bison-adamc-flat",
-    tokenized=bison_cooldown_mixture,
-    model_config=qwen3_32b_remat,
-    train_config=bison_train_config_flat,
-    tags=["qwen", "32b", "ema", "exp1529", "tootsie", "cooldown"],
-    eval_harness_tasks=[],
-).with_output_path("checkpoints/tootsie-32b-cooldown-bison-adamc-flat")
 
 baselines = [
     ("Qwen/Qwen3-32B", "9216db5781bf21249d130ec9da846c4624c16137"),
@@ -205,9 +179,13 @@ for model, revision in baselines:
 if __name__ == "__main__":
     executor_main(
         [
-            tootsie_32b_cooldown_bison,
-            *default_base_eval(tootsie_32b_cooldown_bison, resource_config=SINGLE_TPU_V5p_8, run_generation_evals=False),
+            tootsie_32b_cooldown_mantis,
+            *default_base_eval(
+                tootsie_32b_cooldown_mantis,
+                resource_config=SINGLE_TPU_V5p_8,
+                run_generation_evals=False,
+            ),
             *baseline_evals,
         ],
-        description="Cooldown the 32B Qwen model on bison mixture",
+        description="Cooldown the 32B Qwen model on mantis mixture",
     )
