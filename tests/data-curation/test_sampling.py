@@ -13,9 +13,12 @@
 # limitations under the License.
 
 import fsspec
+import pytest
 
 from marin.classifiers.utils import create_dataset_shard, reservoir_sample
 from marin.utils import fsspec_rm
+
+pytestmark = pytest.mark.gcp
 
 TEST_OUTPUT_PATH = "gs://marin-us-east5/documents/test-sampling.jsonl.gz"
 

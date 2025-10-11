@@ -70,6 +70,26 @@ from src.marin.utils import _hacky_remove_tpu_lockfile
 
 logger = logging.getLogger(__name__)
 
+
+def run_logged(cmd: list[str] | str, **kwargs) -> subprocess.CompletedProcess:
+    """Run a subprocess command with logging.
+
+    Args:
+        cmd: Command to run (list or string)
+        **kwargs: Arguments passed to subprocess.run
+
+    Returns:
+        CompletedProcess result from subprocess.run
+    """
+    if isinstance(cmd, list):
+        cmd_str = shlex.join(cmd)
+    else:
+        cmd_str = cmd
+
+    logger.info(f"Running command: {cmd_str}")
+    return subprocess.run(cmd, **kwargs)
+
+
 # Default environment variables to forward to remote
 DEFAULT_ENV_VARS = [
     "HF_TOKEN",
@@ -193,44 +213,65 @@ class TPUAllocationActor:
     """Actor that holds TPU allocation and manages TPU info."""
 
     def __init__(self, username: str, tpu_name: str, tpu_type: str = "v4-8"):
-        """Initialize the actor and fetch TPU info."""
+        """Initialize the actor."""
+        self.username = username
+        self.tpu_name = tpu_name
+        self.tpu_type = tpu_type
+
+    def host_info(self) -> dict:
+        """Fetch and return TPU metadata from Google metadata server."""
         import socket
 
         import requests
 
-        self.username = username
-        self.tpu_name = tpu_name
-        self.tpu_type = tpu_type
-        self.ready = False
-        self.hostname = None
-        self.ip_address = None
-        self.error = None
+        # Fetch TPU metadata from Google metadata server
+        headers = {"Metadata-Flavor": "Google"}
+        metadata_base = "http://metadata.google.internal/computeMetadata/v1"
 
-        try:
-            # Fetch TPU metadata from Google metadata server
-            response = requests.get(
-                "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip",
-                headers={"Metadata-Flavor": "Google"},
-            )
-            self.ip_address = response.text.strip()
-            self.hostname = socket.gethostname()
-            self.ready = True
-            logger.info(f"TPU info fetched - hostname: {self.hostname}, IP: {self.ip_address}")
-        except Exception as e:
-            logger.error("Failed to fetch TPU metadata", exc_info=True)
-            self.ready = True
-            self.hostname = "unknown"
-            self.ip_address = "unknown"
-            self.error = e
+        # Get external IP
+        response = requests.get(
+            f"{metadata_base}/instance/network-interfaces/0/access-configs/0/external-ip",
+            headers=headers,
+        )
+        ip_address = response.text.strip()
 
-    def host_info(self) -> dict:
+        # Get hostname
+        hostname = socket.gethostname()
+
+        # Get actual TPU instance ID from metadata (this is the gcloud TPU name)
+        response = requests.get(
+            f"{metadata_base}/instance/attributes/instance-id",
+            headers=headers,
+        )
+        gcloud_tpu_name = response.text.strip()
+
+        # Get zone (e.g., us-central2-b)
+        response = requests.get(
+            f"{metadata_base}/instance/zone",
+            headers=headers,
+        )
+        # Zone comes back as projects/PROJECT_ID/zones/ZONE, extract just the zone
+        zone_path = response.text.strip()
+        gcloud_zone = zone_path.split("/")[-1]
+
+        # Extract region from zone (e.g., us-central2-b -> us-central2)
+        gcloud_region = "-".join(gcloud_zone.split("-")[:-1])
+
+        logger.info(
+            f"TPU info fetched - hostname: {hostname}, IP: {ip_address}, "
+            f"gcloud TPU name: {gcloud_tpu_name}, zone: {gcloud_zone}, region: {gcloud_region}"
+        )
+
         return {
-            "hostname": self.hostname,
-            "ip_address": self.ip_address,
+            "hostname": hostname,
+            "ip_address": ip_address,
             "username": self.username,
             "tpu_name": self.tpu_name,
+            "gcloud_tpu_name": gcloud_tpu_name,
+            "gcloud_zone": gcloud_zone,
+            "gcloud_region": gcloud_region,
             "tpu_type": self.tpu_type,
-            "error": str(self.error) if self.error else "",
+            "error": "",
         }
 
     def heartbeat(self) -> str:
@@ -240,30 +281,37 @@ class TPUAllocationActor:
         # delete the work directories in the background, use the ls to make sure we don't
         # accidentally run this on our local machine
         subprocess.Popen(
-            ["bash", "-c", "ls /dev/accel* && rm -rf $HOME/marin/ $HOME/.cache/"],
+            [
+                "bash",
+                "-c",
+                "ls /dev/accel* && (rm -rf $HOME/marin/; rm -rf $HOME/.cache/; sudo rm -f /tmp/libtpu_lockfile)",
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         _hacky_remove_tpu_lockfile()
 
 
-def add_ssh_host_config(hostname: str, ip_address: str, username: str, tpu_name: str, zone: str) -> None:
+def add_ssh_host_config(
+    hostname: str, ip_address: str, username: str, tpu_name: str, gcloud_tpu_name: str, gcloud_zone: str
+) -> None:
     """Add SSH host configuration."""
     config_path = Path.home() / ".ssh" / "config"
     config_path.parent.mkdir(exist_ok=True)
 
     # try using gcloud compute tpu-vm ssh to forward keys
-    logger.info("Setting up SSH keys...")
-    gcloud_ssh_cmd = f"gcloud compute tpu-vm ssh {tpu_name} --zone={zone} -- hostname"
+    logger.info("Tryng to setup SSH keys via gcloud. You may register your key manually if this fails.")
+    gcloud_ssh_cmd = f"gcloud compute tpus tpu-vm ssh {gcloud_tpu_name} --zone={gcloud_zone} -- hostname"
     try:
-        subprocess.run(
+        run_logged(
             shlex.split(gcloud_ssh_cmd),
             check=True,
             capture_output=True,
             text=True,
         )
         logger.info("SSH keys set up successfully via gcloud")
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Error when running gcloud compute tpu-vm ssh: {e.stdout}, error: {e.stderr}")
         logger.warning("gcloud compute tpu-vm ssh failed to set up SSH keys")
 
     # Check if Google Compute Engine SSH key exists
@@ -324,37 +372,33 @@ def remove_ssh_host_config(tpu_name: str) -> None:
 
 
 def list_tracked_files(local_path: str) -> list[str]:
-    files = set()
+    """List all files that git would track (excluding gitignored files).
 
-    # Get all files that git would track (excluding gitignored files)
-    # This includes tracked, modified, staged, and untracked files
-    result = subprocess.run(
+    This includes tracked, modified, staged, and untracked files.
+    git ls-files already handles recursive directory traversal.
+    """
+    result = run_logged(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=local_path,
         check=True,
         capture_output=True,
         text=True,
     )
+    # Split on null byte and filter empty strings
     all_files = [f for f in result.stdout.split("\0") if f.strip()]
-    # traverse into directories and try to add all files
-    for f in all_files:
-        full_path = Path(local_path) / f
-        full_path = full_path.relative_to(local_path)
-        if full_path.is_dir():
-            for f in list_tracked_files(full_path):
-                files.add(str(full_path / f))
-        else:
-            files.add(str(full_path))
-    return sorted(files)
+    return sorted(all_files)
 
 
 def sync_to_remote(target_host: str, local_path: os.PathLike = ".") -> None:
     local_path = Path(local_path).resolve()
     sync_files = list_tracked_files(local_path)
 
-    subprocess.run(["ssh", target_host, "mkdir", "-p", "/home/$USER/marin"], check=True)
+    # Here we use the relative path "marin" because the ssh/rsync command use a relative path to
+    # the remote user's home directory.
+    run_logged(["ssh", target_host, "mkdir", "-p", "marin"], check=True)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt") as f:
         f.write("\n".join(sync_files))
+        f.flush()  # Ensure file is written before rsync reads it
         files_from_path = f.name
         rsync_cmd = [
             "rsync",
@@ -364,11 +408,11 @@ def sync_to_remote(target_host: str, local_path: os.PathLike = ".") -> None:
             "--files-from",
             files_from_path,
             f"{local_path}/",
-            f"{target_host}:/home/$USER/marin/",
+            f"{target_host}:marin/",
         ]
 
         logger.info(f"Syncing {len(sync_files)} files (git-tracked, modified, and important untracked)...")
-        subprocess.run(rsync_cmd, check=True)
+        run_logged(rsync_cmd, check=True)
         logger.info("File sync completed successfully")
 
 
@@ -388,7 +432,7 @@ cd /home/$USER/marin
 uv sync --extra=tpu --python=3.11 || true
 """
     logger.info("Setting up remote environment...")
-    subprocess.run(["ssh", target_host, "bash", "-c", setup_script], check=True)
+    run_logged(["ssh", target_host, "bash", "-c", setup_script], check=True)
     logger.info("Environment setup completed")
 
 
@@ -425,10 +469,20 @@ def hold_tpu_allocation(
             logger.info("TPU allocated successfully!")
             print(f"Hostname: {host_info['hostname']}")
             print(f"IP Address: {host_info['ip_address']}")
-            print(f"TPU name: {tpu_name}")
+            print(f"User TPU name: {tpu_name}")
+            print(f"GCloud TPU name: {host_info['gcloud_tpu_name']}")
+            print(f"GCloud Zone: {host_info['gcloud_zone']}")
+            print(f"GCloud Region: {host_info['gcloud_region']}")
 
             logger.info("Setting up SSH configuration")
-            add_ssh_host_config(host_info["hostname"], host_info["ip_address"], username, tpu_name, zone=zone)
+            add_ssh_host_config(
+                host_info["hostname"],
+                host_info["ip_address"],
+                username,
+                tpu_name,
+                host_info["gcloud_tpu_name"],
+                host_info["gcloud_zone"],
+            )
 
             logger.info("Syncing environment")
             try:
@@ -554,7 +608,7 @@ def connect(ctx, username):
 
     print(f"Connecting to {host_alias}...")
     cmd = shlex.quote(f"source $HOME/.local/bin/env && cd marin && {env_string} exec bash")
-    subprocess.run(["ssh", host_alias, "-t", "bash", "-c", cmd])
+    run_logged(["ssh", host_alias, "-t", "bash", "-c", cmd])
 
 
 @cli.command("setup_env")
