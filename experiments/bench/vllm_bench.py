@@ -57,8 +57,7 @@ class BenchmarkConfig:
     port: int = 8000
     max_seq_len: int = 2048
     max_seqs: int = 256
-    page_size: int = 16
-    max_queued_tokens: int = 512
+    page_size: int = 128
 
     # Trainer configuration
     trainer: TrainerConfig = field(
@@ -143,7 +142,6 @@ def start_server_process(config: BenchmarkConfig):
             max_seq_len=config.max_seq_len,
             max_seqs=config.max_seqs,
             page_size=config.page_size,
-            max_queued_tokens=config.max_queued_tokens,
         ),
         host=config.host,
         port=config.port,
@@ -294,7 +292,6 @@ def main():
     parser.add_argument("--max_seq_len", type=int, default=2048, help="Maximum sequence length")
     parser.add_argument("--max_seqs", type=int, default=256, help="Maximum concurrent sequences")
     parser.add_argument("--page_size", type=int, default=16, help="Page size for KV cache")
-    parser.add_argument("--max_queued_tokens", type=int, default=512, help="Maximum queued tokens")
 
     # Benchmark arguments
     parser.add_argument("--num_prompts", type=int, default=100, help="Number of prompts to benchmark")
@@ -318,7 +315,6 @@ def main():
         max_seq_len=args.max_seq_len,
         max_seqs=args.max_seqs,
         page_size=args.page_size,
-        max_queued_tokens=args.max_queued_tokens,
         num_prompts=args.num_prompts,
         request_rate=args.request_rate,
         dataset_name=args.dataset_name,
