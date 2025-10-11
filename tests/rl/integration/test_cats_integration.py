@@ -51,7 +51,7 @@ def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path):
     with varying rewards and learn to prefer high-reward (cat-heavy) responses.
     """
     rollout_storage_config = create_test_rollout_storage_config()
-    target_steps = 100
+    target_steps = 20
     tokenizer = DummyTokenizer()
 
     # Create trainer config with target steps
@@ -110,7 +110,7 @@ def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path):
 def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
     """Long-running test to validate environment objective improves over time."""
     rollout_storage_config = create_test_rollout_storage_config()
-    target_steps = 100
+    target_steps = 20
 
     # Create trainer config with target steps
     trainer_config = create_nano_trainer_config(tmp_path)

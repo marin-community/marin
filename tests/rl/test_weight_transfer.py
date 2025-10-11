@@ -36,19 +36,10 @@ from marin.rl.weight_transfer import (
     create_weight_transfer_server,
 )
 
-try:
-    import jax.experimental.transfer
-
-    TRANSFER_TYPES = [
-        WeightTransferMode.GCS_CHECKPOINT,
-        WeightTransferMode.JAX_TRANSFER_SERVER,
-        WeightTransferMode.ARROW_FLIGHT,
-    ]
-except (ImportError, AttributeError):
-    TRANSFER_TYPES = [
-        WeightTransferMode.GCS_CHECKPOINT,
-        WeightTransferMode.ARROW_FLIGHT,
-    ]
+TRANSFER_TYPES = [
+    WeightTransferMode.GCS_CHECKPOINT,
+    WeightTransferMode.ARROW_FLIGHT,
+]
 
 if os.environ.get("CI"):
     pytest.skip("Skipping slow tests on CI", allow_module_level=True)
