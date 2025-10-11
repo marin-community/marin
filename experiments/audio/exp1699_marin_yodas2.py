@@ -15,6 +15,7 @@
 """Training config for the Marin Yodas2 audio run targeting 500B tokens."""
 
 import dataclasses
+import haliax as hax
 from math import ceil
 
 from experiments.qwen3 import qwen3_0_6b
@@ -30,7 +31,9 @@ BATCH_SIZE = 2048  # leverage v5p-64 capacity
 BASE_LEARNING_RATE = 3e-3
 LEARNING_RATE = 0.003
 
-yodas_qwen = dataclasses.replace(qwen3_0_6b, tie_word_embeddings=False)
+yodas_qwen = dataclasses.replace(
+    qwen3_0_6b, tie_word_embeddings=False, gradient_checkpointing=hax.ScanCheckpointPolicy(save_carries="offload")
+)
 
 NUM_TRAIN_TOKENS = int(500e9)
 NUM_TRAIN_STEPS = ceil(NUM_TRAIN_TOKENS / (BATCH_SIZE * SEQ_LEN))
@@ -63,7 +66,8 @@ yodas_1b_model = default_train(
     tokenized=yodas2_mixture_config(),
     model_config=yodas_qwen,
     train_config=training_config,
-    tags=["AUDIO", "MARIN_YODAS2"],
+    eval_harness_tasks=[],
+    tags=["audio"],
 )
 
 if __name__ == "__main__":

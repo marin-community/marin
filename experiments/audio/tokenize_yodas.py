@@ -98,7 +98,11 @@ def yodas2_mixture_config() -> LMMixtureDatasetConfig:
     """Create an lm_mixture_dataset config for the tokenized YODAS2 splits."""
     tokenized = yodas2_tokenized_steps()
     weights = {f"yodas2/{lang}": weight for lang, weight in _YODAS2_LANGUAGE_WEIGHTS.items()}
-    return lm_mixture_data_config(components=tokenized, weights=weights)
+    return lm_mixture_data_config(
+        components=tokenized,
+        weights=weights,
+        permutation_type="feistel",
+    )
 
 
 if __name__ == "__main__":
