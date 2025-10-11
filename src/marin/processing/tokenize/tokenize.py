@@ -71,6 +71,12 @@ class HfDatasetSpec:
 class TokenizeConfigBase(abc.ABC):
     """Base class for tokenize configs."""
 
+    enforce_bos: bool | None = None
+    """Override whether BOS should be appended. None falls back to default heuristics."""
+
+    enforce_eos: bool | None = None
+    """Override whether EOS should be appended. None falls back to default heuristics."""
+
     @abc.abstractmethod
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -95,6 +101,8 @@ class TokenizeConfig(TokenizeConfigBase):
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     cache_options: CacheOptions | None = None
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa
+    enforce_bos: bool | None = None
+    enforce_eos: bool | None = None
     """
     The format of the dataset. This is used to determine how to tokenize the data.
     See Levanter's documentation for more details.
@@ -185,6 +193,8 @@ class HfTokenizeConfig(TokenizeConfigBase):
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     cache_options: CacheOptions | None = None
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa: RUF009
+    enforce_bos: bool | None = None
+    enforce_eos: bool | None = None
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -231,7 +241,15 @@ def tokenize(config: TokenizeConfigBase):
         )
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
-    batch_tokenizer = preprocessor_for_format(config.format, tokenizer)
+    enforce_bos = True if config.enforce_bos is None else config.enforce_bos
+    enforce_eos = True if config.enforce_eos is None else config.enforce_eos
+
+    batch_tokenizer = preprocessor_for_format(
+        config.format,
+        tokenizer,
+        enforce_bos=enforce_bos,
+        enforce_eos=enforce_eos,
+    )
 
     if train_source is not None:
         options = config.cache_options
