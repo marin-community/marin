@@ -26,7 +26,7 @@ from experiments.tootsie.exp1295_32b import nemotron_mix
 
 # Import shared components from exp1600_uncheatable_evals
 from experiments.evals.exp1600_uncheatable_evals import (
-    model_with_config,
+    models,
     get_directory_friendly_name,
     uncheatable_eval_tokenized,
 )

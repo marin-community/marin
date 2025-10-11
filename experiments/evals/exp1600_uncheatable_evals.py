@@ -24,44 +24,16 @@ Reference: https://github.com/Jellyfish042/uncheatable_eval
 import os.path
 from dataclasses import dataclass
 
-from experiments.llama import llama_3_2_1b as llama_3_2_1b_config, llama3_tokenizer, llama_8b
-from levanter.models.llama import LmConfig
+from experiments.llama import llama3_tokenizer
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from marin.evaluation.log_probs import default_lm_log_probs
-from marin.execution.executor import executor_main, ExecutorStep
+from marin.execution.executor import executor_main, ExecutorStep, output_path_of
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import mixture_for_evaluation, TokenizerStep
 from src.marin.download.uncheatable_eval.download import make_uncheatable_eval_step
 from experiments.defaults import default_tokenize
 from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
-from experiments.models import (
-    llama_3_1_8b,
-    olmo_2_base_8b,
-    olmo_2_base_32b,
-    marin_8b_base,
-    llama_3_2_1b as llama_3_2_1b_model,
-    qwen3_0_6b,
-    qwen3_1_7b,
-    qwen3_4b,
-    qwen3_8b,
-    qwen3_0_6b_base,
-    qwen3_1_7b_base,
-    qwen3_4b_base,
-    qwen3_8b_base,
-    qwen3_32b,
-)
-from experiments.qwen3 import (
-    qwen3_0_6b as qwen3_0_6b_config,
-    qwen3_1_7b as qwen3_1_7b_config,
-    qwen3_4b as qwen3_4b_config,
-    qwen3_8b as qwen3_8b_config,
-    qwen3_32b as qwen3_32b_config,
-    marin_32b as marin_32b_config,
-)
-from experiments.olmo2 import (
-    olmo_7b,
-    olmo_32b,
-)
-from experiments.tootsie.exp1529_32b_bison_cooldown import tootsie_32b_cooldown_bison as marin_32b_base
+from experiments.models import ModelConfig as HFModelConfig, download_model_step
 
 
 # Complete mapping of all available datasets
@@ -114,87 +86,29 @@ def uncheatable_eval_tokenized(
 @dataclass
 class ModelConfig:
     model_name: str
-    model_config: LmConfig
-    tokenizer: str
-    model_path: ExecutorStep
+    revision: str
+    tokenizer: str | None = None  # Optional: if None, uses model_name as tokenizer
 
 
-# Evaluate log probabilities of meta-llama/Llama-3.2-1B on a subset of DCLM baseline
-# Uses 1024 samples by default (adjust max_samples_per_dataset as needed)
+# Evaluate log probabilities on uncheatable eval datasets
+# Format: (model_name, revision, tokenizer)
+# If tokenizer is None, uses model_name as tokenizer
 
-model_with_config = [
-    ModelConfig(
-        model_name="marin-community/marin-8b-base",
-        model_config=llama_8b,
-        tokenizer=llama3_tokenizer,
-        model_path=marin_8b_base,
-    ),
-    ModelConfig(
-        model_name="marin-32b",
-        model_config=marin_32b_config,
-        tokenizer=llama3_tokenizer,
-        model_path=marin_32b_base,
-    ),
-    ModelConfig(
-        model_name="allenai/OLMo-2-0325-32B",
-        model_config=olmo_32b,
-        tokenizer="allenai/OLMo-2-0325-32B",
-        model_path=olmo_2_base_32b,
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-32B", model_config=qwen3_32b_config, tokenizer="Qwen/Qwen3-32B", model_path=qwen3_32b
-    ),
-    ModelConfig(
-        model_name="meta-llama/Llama-3.1-8B", model_config=llama_8b, tokenizer=llama3_tokenizer, model_path=llama_3_1_8b
-    ),
-    ModelConfig(
-        model_name="meta-llama/Llama-3.2-1B",
-        model_config=llama_3_2_1b_config,
-        tokenizer=llama3_tokenizer,
-        model_path=llama_3_2_1b_model,
-    ),
-    ModelConfig(
-        model_name="allenai/OLMo-2-1124-7B",
-        model_config=olmo_7b,
-        tokenizer="allenai/OLMo-2-1124-7B",
-        model_path=olmo_2_base_8b,
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-0.6B", model_config=qwen3_0_6b_config, tokenizer="Qwen/Qwen3-0.6B", model_path=qwen3_0_6b
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-1.7B", model_config=qwen3_1_7b_config, tokenizer="Qwen/Qwen3-1.7B", model_path=qwen3_1_7b
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-4B", model_config=qwen3_4b_config, tokenizer="Qwen/Qwen3-4B", model_path=qwen3_4b
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-8B", model_config=qwen3_8b_config, tokenizer="Qwen/Qwen3-8B", model_path=qwen3_8b
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-0.6B-Base",
-        model_config=qwen3_0_6b_config,
-        tokenizer="Qwen/Qwen3-0.6B",
-        model_path=qwen3_0_6b_base,
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-1.7B-Base",
-        model_config=qwen3_1_7b_config,
-        tokenizer="Qwen/Qwen3-1.7B",
-        model_path=qwen3_1_7b_base,
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-4B-Base",
-        model_config=qwen3_4b_config,
-        tokenizer="Qwen/Qwen3-4B",
-        model_path=qwen3_4b_base,
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-8B-Base",
-        model_config=qwen3_8b_config,
-        tokenizer="Qwen/Qwen3-8B",
-        model_path=qwen3_8b_base,
-    ),
+models = [
+    ModelConfig(model_name="marin-community/marin-8b-base", revision="main", tokenizer=llama3_tokenizer),
+    ModelConfig(model_name="allenai/OLMo-2-0325-32B", revision="main"),
+    ModelConfig(model_name="Qwen/Qwen3-32B", revision="main"),
+    ModelConfig(model_name="meta-llama/Llama-3.1-8B", revision="main", tokenizer=llama3_tokenizer),
+    ModelConfig(model_name="meta-llama/Llama-3.2-1B", revision="main", tokenizer=llama3_tokenizer),
+    ModelConfig(model_name="allenai/OLMo-2-1124-7B", revision="main"),
+    ModelConfig(model_name="Qwen/Qwen3-0.6B", revision="main"),
+    ModelConfig(model_name="Qwen/Qwen3-1.7B", revision="main"),
+    ModelConfig(model_name="Qwen/Qwen3-4B", revision="main"),
+    ModelConfig(model_name="Qwen/Qwen3-8B", revision="main"),
+    ModelConfig(model_name="Qwen/Qwen3-0.6B-Base", revision="main", tokenizer="Qwen/Qwen3-0.6B"),
+    ModelConfig(model_name="Qwen/Qwen3-1.7B-Base", revision="main", tokenizer="Qwen/Qwen3-1.7B"),
+    ModelConfig(model_name="Qwen/Qwen3-4B-Base", revision="main", tokenizer="Qwen/Qwen3-4B"),
+    ModelConfig(model_name="Qwen/Qwen3-8B-Base", revision="main", tokenizer="Qwen/Qwen3-8B"),
 ]
 
 
@@ -208,15 +122,25 @@ def truncate_model_name(model_name: str, max_length: int = 62) -> str:
 
 
 steps = []
-for model_config in model_with_config:
-    uncheatable_eval_tokenized_dict = uncheatable_eval_tokenized(tokenizer=model_config.tokenizer)
+for model_config in models:
+    # Use model_name as tokenizer if not specified
+    tokenizer = model_config.tokenizer if model_config.tokenizer is not None else model_config.model_name
+
+    uncheatable_eval_tokenized_dict = uncheatable_eval_tokenized(tokenizer=tokenizer)
     eval_data = mixture_for_evaluation(uncheatable_eval_tokenized_dict)
+
+    # Download model and load config dynamically from HuggingFace
+    model_identifier = f"{model_config.model_name}@{model_config.revision}"
+    model_instance = download_model_step(
+        HFModelConfig(hf_repo_id=model_config.model_name, hf_revision=model_config.revision)
+    )
+    hf_model_config = HFCheckpointConverter.from_hf(model_identifier).config_from_hf_checkpoint(model_identifier)
 
     directory_friendly_name = get_directory_friendly_name(model_config.model_name)
     steps.append(
         default_lm_log_probs(
-            checkpoint=model_config.model_path,
-            model=model_config.model_config,
+            checkpoint=output_path_of(model_instance),
+            model=hf_model_config,
             data=eval_data,
             resource_config=SINGLE_TPU_V5p_8_FULL,
             checkpoint_is_hf=True,
