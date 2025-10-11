@@ -138,19 +138,13 @@ class RLJobConfig:
     def with_sync_mode(self, max_wait_time: float = 600.0) -> "RLJobConfig":
         """Configure for synchronous (on-policy) training mode.
 
-        This helper configures all necessary settings to run in near-synchronous mode,
+        Configures all necessary settings to run in near-synchronous mode,
         where rollout workers wait for updated weights after each training step and the
         trainer only accepts fresh rollouts from the current policy.
 
-        Settings applied:
-        - replay_buffer.max_rollout_step_delay = 1 (only accept rollouts from current/previous step)
-        - weight_transfer.sync_interval_steps = 1 (transfer weights after every training step)
-        - weight_transfer.max_weight_transfer_wait_time = max_wait_time (wait for new weights)
-
         Args:
             max_wait_time: Maximum time (in seconds) to wait for new weights before timing out.
-                          Default is 600 seconds (10 minutes). Set high to avoid duplicate work
-                          on rollout workers while waiting for training steps.
+                          Default is 600 seconds (10 minutes).
 
         Returns:
             New RLJobConfig configured for synchronous training mode.
@@ -163,6 +157,7 @@ class RLJobConfig:
         updated_replay_buffer = dataclasses.replace(
             self.train_params.replay_buffer,
             max_rollout_step_delay=1,
+            max_samples=1,
         )
         updated_train_params = dataclasses.replace(
             self.train_params,

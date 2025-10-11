@@ -197,11 +197,7 @@ def rl_train(name: str) -> ExecutorStep:
         ),
     )
 
-    # Enable synchronous (on-policy) training mode
-    # This configures:
-    # - replay_buffer.max_rollout_step_delay = 1
-    # - weight_transfer.sync_interval_steps = 1
-    # - weight_transfer.max_weight_transfer_wait_time = 600 (default)
+    # Enable synchronous (on-policy) training mode for testing
     config = config.with_sync_mode()
 
     return ExecutorStep(
