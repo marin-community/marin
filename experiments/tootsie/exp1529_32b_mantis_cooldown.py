@@ -98,11 +98,11 @@ mantis_cooldown_weights = {
 STACKV2_EDU_PYTHON_KEY = "common_pile_stackv2_edu_filtered_python"
 STACKV2_EDU_PYTHON_INTRO_STEP = 174_000
 # Approximate dataset weight by converting 14.63 GiB
-STACKV2_EDU_PYTHON_TRILLION_WEIGHT = 0.01463
+STACKV2_EDU_PYTHON_WEIGHT = 0.01463
 
 mantis_hq_cooldown_weights_with_stackv2_python = {
     **mantis_hq_cooldown_weights,
-    STACKV2_EDU_PYTHON_KEY: STACKV2_EDU_PYTHON_TRILLION_TOKENS,
+    STACKV2_EDU_PYTHON_KEY: STACKV2_EDU_PYTHON_WEIGHT,
 }
 
 mantis_total_hq_weight_with_stackv2_python = sum(mantis_hq_cooldown_weights_with_stackv2_python.values())
