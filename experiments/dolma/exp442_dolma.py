@@ -32,6 +32,7 @@ EXPERIMENT_TAG = ["442_dolma"]
 dolma_llama3_tokenized = lm_mixture_data_config(
     components=tokenize_dolma_steps(),
     weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
+    permutation_type="linear",
 )
 
 dolma_1_4b = default_train(
@@ -48,6 +49,7 @@ dolma_1_4b = default_train(
 dolma_neox_tokenized = lm_mixture_data_config(
     components=tokenize_dolma_steps(tokenizer="EleutherAI/gpt-neox-20b"),
     weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
+    permutation_type="linear",
 )
 
 # https://arxiv.org/pdf/2402.00838 page 3 (Table 1

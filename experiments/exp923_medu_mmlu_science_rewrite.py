@@ -80,6 +80,7 @@ mmlu_science_qa_model = default_quality_ablation(
         candidate_weight=0.0,
         num_anneal_tokens=50_000_000_000,
         model_name_prefix="8b-dclm-70-qa-30-50b",
+        permutation_type="linear",
     ),
 ).with_output_path("checkpoints/8b-dclm-70-qa-30-50b-tokenized-medu-candidate-mmlu-science-ll-qa-7d2930")
 

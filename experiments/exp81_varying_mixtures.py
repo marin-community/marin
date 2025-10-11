@@ -47,6 +47,7 @@ data_config = lm_varying_mixture_data_config(
         (0, {"slimpajama": 0.9, "starcoderdata": 0.1}),  # At step 0, start with mostly SlimPajama
         (num_sequences // 2, {"slimpajama": 0.1, "starcoderdata": 0.9}),  # Halfway, transition to mostly Starcoderdata
     ],
+    permutation_type="linear",
 )
 
 # Train the model using the varying mixture
