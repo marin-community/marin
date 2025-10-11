@@ -70,7 +70,7 @@ class BenchmarkConfig:
     )
 
     # Benchmark configuration
-    num_prompts: int = 100
+    num_prompts: int = 1000
     request_rate: float = float("inf")
     dataset_name: str = "random"
     dataset_path: str | None = None
@@ -223,7 +223,7 @@ async def run_benchmark_client(config: BenchmarkConfig):
             # Random dataset specific args
             self.random_prefix_len = 0
             self.random_input_len = 1024
-            self.random_output_len = 128
+            self.random_output_len = 1024
             self.random_range_ratio = 0.0
             self.random_batch_size = 1
 
@@ -291,7 +291,7 @@ def main():
     parser = argparse.ArgumentParser(description="Benchmark Levanter inference server with vLLM client")
 
     # Model arguments
-    parser.add_argument("--model_path", type=str, default="meta-llama/Llama-3.2-1B", help="Model path or HF repo")
+    parser.add_argument("--model_path", type=str, default="meta-llama/Llama-3.1-8B", help="Model path or HF repo")
     parser.add_argument("--tokenizer_path", type=str, default=None, help="Tokenizer path (defaults to model_path)")
 
     # Server arguments
