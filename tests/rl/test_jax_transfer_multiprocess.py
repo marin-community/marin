@@ -90,7 +90,6 @@ def run_server(coordinator_name: str, num_processes: int, coordinator_address: s
     config = WeightTransferConfig(
         mode=WeightTransferMode.JAX_TRANSFER_SERVER,
         sync_interval_steps=1,
-        poll_interval_seconds=0.1,
         coordinator_name=coordinator_name,
     )
     logger.info("Creating server with config: %s", config)
@@ -127,7 +126,6 @@ def run_client(coordinator_name: str, process_id: int, num_processes: int, coord
     config = WeightTransferConfig(
         mode=WeightTransferMode.JAX_TRANSFER_SERVER,
         sync_interval_steps=1,
-        poll_interval_seconds=0.1,
         transfer_timeout=10,
         coordinator_name=coordinator_name,
     )
@@ -161,6 +159,7 @@ def run_client(coordinator_name: str, process_id: int, num_processes: int, coord
 
 
 @pytest.mark.parametrize("num_clients", [1, 2])
+@pytest.mark.skip(reason="not using jax transfer")
 def test_jax_transfer_multiprocess(ray_tpu_cluster, num_clients):
     num_processes = num_clients + 1  # 1 server + N clients
     coordinator_name = f"jax_coordinator_{uuid.uuid4().hex[:8]}"

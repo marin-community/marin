@@ -23,7 +23,7 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-storage-transfer",
     "jax==0.6.2",
-    "haliax>=1.4.dev418",
+    "haliax>=1.4.dev443",
     "levanter[serve] @ git+https://github.com/marin-community/levanter.git",
     "lz4",
     "multiprocess==0.70.16",
@@ -164,11 +164,11 @@ gcp = [
     "google-cloud-compute",
 ]
 
-cuda12 = ["jax[cuda12]==0.6.2", "torch"]
+cuda12 = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
 
-tpu = ["jax[tpu]==0.6.2", "torch"]
+tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
 
-cpu = ["jax==0.6.2", "torch"]
+cpu = ["jax==0.6.2", "torch>=2.7.0"]
 
 crawl = [
     "w3lib",
@@ -238,7 +238,7 @@ quality_dedup_consolidate = [
 
 tokenize_train = [
     "multiprocess==0.70.16",
-    "haliax>=1.4.dev348",
+    "haliax>=1.4.dev443",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
     "tblib",
     "sentencepiece",
@@ -329,7 +329,8 @@ log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 log_cli_level = "INFO"
 markers = [
-    "slow: mark tests as slow for CI - use -m 'not slow'"
+    "slow: mark tests as slow for CI - use -m 'not slow'",
+    "gcp: mark tests that require GCP authentication or resources",
 ]
 
 # Make sure we timeout before CI kills us

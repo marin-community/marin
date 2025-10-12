@@ -17,14 +17,16 @@ Environment Wrapper for the Environments Hub by Prime-Intellect, which contains 
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
 import logging
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import jax.numpy as jnp
 import numpy as np
 import verifiers as vf
+from verifiers.types import GenerateOutputs
 
 from marin.rl.environments import MarinEnv
-from marin.rl.types import InferenceContext, Rollout, RolloutGroup
+from marin.rl.inference_ctx import InferenceContext
+from marin.rl.types import Rollout, RolloutGroup
 
 logger = logging.getLogger("ray")
 
@@ -111,13 +113,15 @@ class PrimeIntellectEnv(MarinEnv):
         if n_generations > 1:
             inputs = inputs.repeat(n_generations)
 
-        # Generate using verifiers
-        result = vf_env.generate(
-            dataset=inputs,
-            client=inference_ctx.openai_client(),
-            model="marin-model",
-            sampling_args=sampling_args,
-            max_concurrent=self.max_concurrent,
+        result = cast(
+            GenerateOutputs,
+            vf_env.generate(
+                inputs=inputs,
+                client=inference_ctx.openai_client(),
+                model="marin-model",
+                sampling_args=sampling_args,
+                max_concurrent=self.max_concurrent,
+            ),
         )
 
         processed_outputs = vf_env.process_env_results_vllm(

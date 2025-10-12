@@ -34,6 +34,7 @@ dolmino_dclm = get_dolmino_step_llama3("dclm")
 pure_dolmino_mixture = lm_mixture_data_config(
     components={"dolmino/dclm": dolmino_dclm},
     weights={"dolmino/dclm": 1.0},
+    permutation_type="linear",
 )
 
 checkpoint = phoenix_phase4_checkpoint_for_phase5

@@ -30,6 +30,7 @@ import fsspec
 import numpy as np
 
 from marin.rl.environments.base import EnvConfig
+from marin.rl.robust_actor import RobustActor
 from marin.rl.types import RolloutStats
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,17 @@ class LessonDependency:
 
 
 @dataclass
+class SamplingParams:
+    """Parameters for sampling rollouts from an environment."""
+
+    temperature: float = 1.0
+    n_prompts: int = 8
+    n_generations_per_prompt: int = 4
+    max_tokens: int = 256
+    stop_tokens: list[int] | None = None
+
+
+@dataclass
 class LessonConfig:
     """Configuration for a single lesson in the curriculum."""
 
@@ -99,6 +111,9 @@ class LessonConfig:
     plateau_threshold: float = 0.01
     """Relative slope threshold for detecting plateaus."""
 
+    sampling_params: SamplingParams = field(default_factory=SamplingParams)
+    """Per-lesson sampling configuration (overrides global defaults)."""
+
 
 @dataclass
 class CurriculumConfig:
@@ -107,14 +122,17 @@ class CurriculumConfig:
     lessons: dict[str, LessonConfig]
     """Dictionary mapping lesson names to lesson configurations."""
 
-    eval_frequency: int = 1000
-    """How often to run evaluation (in rollout worker steps)."""
+    eval_frequency: int = 100
+    """How often to run full evaluation across all lessons (in rollout worker steps)."""
 
-    eval_n_examples: int = 32
-    """Number of examples to use for each lesson during evaluation."""
+    eval_n_examples: int = 64
+    """Number of examples to use for each lesson during full evaluation."""
 
-    eval_n_generations: int = 1
-    """Number of generations per example during evaluation."""
+    micro_eval_frequency: int = 10
+    """How often to run micro-evaluation on the current lesson (in rollout worker steps)."""
+
+    micro_eval_n_examples: int = 4
+    """Number of examples for micro-evaluation (keep small for speed)."""
 
     temperature: float = 1.0
     """Temperature for sampling weight distribution."""
@@ -124,6 +142,14 @@ class CurriculumConfig:
 
     minimum_sample_probability: float = 0.1
     """Minimum probability for sampling any active lesson."""
+
+    checkpoint_steps: int = 10
+    """How often to checkpoint curriculum state (in training steps)."""
+
+    @property
+    def max_tokens(self) -> int:
+        """Maximum tokens across all lessons in the curriculum."""
+        return max(lesson.sampling_params.max_tokens for lesson in self.lessons.values())
 
 
 def _validate_dependencies(lesson_configs: dict[str, LessonConfig]):
@@ -542,21 +568,16 @@ class Curriculum:
             json.dump(checkpoint_data, f, indent=2)
 
     def restore_checkpoint(self, checkpoint_dir: str, filename: str = "curriculum_state.json"):
-        """Restore curriculum state from checkpoint in-place.
+        """Restore curriculum state from latest checkpoint in directory.
 
         Args:
             checkpoint_dir: Directory containing the checkpoint.
-            filename: Name of the checkpoint file to load.
+            filename: Name of the checkpoint file to load (default pattern).
         """
-        import os
-
-        import fsspec
-
         fs, _ = fsspec.core.url_to_fs(checkpoint_dir)
         checkpoint_path = os.path.join(checkpoint_dir, filename)
 
         if not fs.exists(checkpoint_path):
-            logger.info("No curriculum checkpoint found at %s, starting fresh", checkpoint_path)
             return
 
         with fs.open(checkpoint_path) as f:
@@ -584,7 +605,23 @@ class Curriculum:
         logger.info("Restored curriculum checkpoint from %s at step %d", checkpoint_path, self.current_step)
 
 
-def get_or_create_curriculum_actor(config: CurriculumConfig):
-    import ray
+def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: str | None = None):
+    """Get or create curriculum actor with automatic recovery on failure.
 
-    return ray.remote(Curriculum).options(name=config.actor_name, get_if_exists=True, max_restarts=-1).remote(config)
+    Args:
+        config: Curriculum configuration.
+        checkpoint_path: Optional path to checkpoint directory for auto-restore.
+
+    Returns:
+        Robust actor handle that automatically retries on actor death.
+    """
+    actor = RobustActor.create(Curriculum, actor_name=config.actor_name, actor_args=(config,))
+
+    # Auto-restore from checkpoint if path provided
+    if checkpoint_path:
+        try:
+            actor.restore_checkpoint.call(checkpoint_path)
+        except Exception as e:
+            logger.warning(f"Failed to restore curriculum checkpoint from {checkpoint_path}: {e}, starting fresh")
+
+    return actor
