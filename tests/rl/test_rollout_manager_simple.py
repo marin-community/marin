@@ -15,7 +15,7 @@
 """
 Simple test demonstrating RolloutManager usage without infrastructure overhead.
 
-This shows how to test rollout generation in <20 lines instead of 100+ lines.
+The core rollout generation logic can be implemented in under 20 lines, compared to 100+ lines with full infrastructure. (Supporting mocks and setup add additional lines for clarity.)
 """
 
 import numpy as np
