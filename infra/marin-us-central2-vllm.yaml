@@ -60,7 +60,6 @@ setup_commands:
   - echo 'export MARIN_PREFIX="gs://marin-us-central2"' >> $HOME/.bashrc
   - echo 'export BUCKET="marin-us-central2"' >> $HOME/.bashrc
   - gcsfuse --implicit-dirs --cache-dir /dev/shm --file-cache-max-size-mb 160000 --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
-  # - if mountpoint -q /opt/gcsfuse_mount; then echo "gcsfuse already mounted"; else nohup gcsfuse --implicit-dirs --cache-dir /opt/gcsfuse_cache --file-cache-max-size-mb 160000--client-protocol grpc --only-dir gcsfuse_mount "$BUCKET" /opt/gcsfuse_mount > /var/log/gcsfuse.log 2>&1 < /dev/null & disown; fi
   - mkdir -p ~/.ssh && /root/gcloud/google-cloud-sdk/bin/gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
   # Using /home/ray/.ssh/ since auth.ssh_user is set to 'ray' and we need to ensure the key is in the correct user's home directory else we get an error
   - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
