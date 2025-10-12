@@ -49,17 +49,26 @@ class BenchmarkConfig:
 
     # Model configuration
     model_path: str
-    model_config: LmConfig | None = None
-    tokenizer_path: str | None = None
 
     # Server configuration
-    host: str = "127.0.0.1"
-    port: int = 8000
-    max_seq_len: int = 2048
-    max_seqs: int = 256
-    page_size: int = 128
-    max_pages: int = 4096
+    host: str
+    port: int
+    max_seq_len: int
+    max_seqs: int
+    page_size: int
+    max_pages: int
 
+    # Benchmark configuration
+    num_prompts: int
+    request_rate: float
+    dataset_name: str
+    seed: int
+    num_fewshot: int
+
+    tokenizer_path: str | None = None
+    model_config: LmConfig = None
+    dataset_path: str | None = None
+    
     # Trainer configuration
     trainer: TrainerConfig = field(
         default_factory=lambda: TrainerConfig(
@@ -68,14 +77,6 @@ class BenchmarkConfig:
             mp=jmp.get_policy("p=f32,c=bfloat16"),
         )
     )
-
-    # Benchmark configuration
-    num_prompts: int = 1000
-    request_rate: float = float("inf")
-    dataset_name: str = "random"
-    dataset_path: str | None = None
-    seed: int = 42
-    num_fewshot: int = 0
 
     # Additional flags
     force_run_failed: bool = False
@@ -299,11 +300,11 @@ def main():
     parser.add_argument("--port", type=int, default=8000, help="Server port")
     parser.add_argument("--max_seq_len", type=int, default=2048, help="Maximum sequence length")
     parser.add_argument("--max_seqs", type=int, default=256, help="Maximum concurrent sequences")
-    parser.add_argument("--page_size", type=int, default=16, help="Page size for KV cache")
-    parser.add_argument("--max_pages", type=int, default=1024, help="Maximum number of pages")
+    parser.add_argument("--page_size", type=int, default=128, help="Page size for KV cache")
+    parser.add_argument("--max_pages", type=int, default=None, help="Maximum number of pages")
 
     # Benchmark arguments
-    parser.add_argument("--num_prompts", type=int, default=100, help="Number of prompts to benchmark")
+    parser.add_argument("--num_prompts", type=int, default=256, help="Number of prompts to benchmark")
     parser.add_argument("--request_rate", type=float, default=float("inf"), help="Request rate (requests/sec)")
     parser.add_argument("--dataset_name", type=str, default="random", help="Dataset name")
     parser.add_argument("--dataset_path", type=str, default=None, help="Dataset path")
