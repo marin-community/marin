@@ -16,6 +16,7 @@ import haliax.nn as nn
 import haliax.quantization as quantization
 import haliax.random as random
 import haliax.state_dict as state_dict
+import haliax.ref as ref  # noqa: F401
 import haliax.tree as tree  # noqa: F401
 import haliax.tree_util as tree_util
 import haliax.util as util
@@ -68,6 +69,7 @@ from .core import (
     unflatten_axis,
     updated_slice,
 )
+from .ref import NamedRef, freeze, get, new_ref, swap
 from .haxtyping import Named
 from .hof import fold, map, scan, vmap
 from .jax_utils import tree_checkpoint_name
@@ -1350,5 +1352,10 @@ __all__ = [
     "NamedArrayAxes",
     "NamedArrayAxesSpec",
     "Named",
+    "NamedRef",
+    "new_ref",
+    "freeze",
+    "swap",
+    "get",
     "set_mesh",
 ]

@@ -17,6 +17,7 @@ from jax import numpy as jnp
 from jax import random as jrandom
 from jax.experimental.multihost_utils import host_local_array_to_global_array
 from jax.sharding import PartitionSpec
+from jax._src.state.indexing import Slice
 from jax.ad_checkpoint import checkpoint_name
 from jax.typing import DTypeLike
 from jaxtyping import PRNGKeyArray
@@ -218,13 +219,7 @@ def is_in_jit():
 
 
 def is_pallas_dslice(x: object) -> bool:
-    try:
-        from jax.experimental.pallas import dslice as pdslice
-    except ImportError:
-        return False
-
-    _PALLAS_DSLICE_TYPE = type(pdslice(0, 1))
-    return isinstance(x, _PALLAS_DSLICE_TYPE)
+    return isinstance(x, Slice)
 
 
 def is_scalarish(x):

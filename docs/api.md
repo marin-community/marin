@@ -179,6 +179,42 @@ See also the section on [Indexing and Slicing](indexing.md).
 ::: haliax.take
 ::: haliax.updated_slice
 
+## Mutable References
+
+See also the section on [Mutable References](mutable-refs.md).
+
+JAX provides [`jax.Ref`][], a mutable array reference that can be read or written in place while remaining compatible
+with transformations such as `jax.jit` or `jax.grad`. Haliax mirrors that API with [`haliax.NamedRef`][haliax.NamedRef],
+which carries axis metadata so you can keep using named indexing when plumbing state through your programs.
+
+You introduce a new reference with [`haliax.new_ref`][haliax.new_ref]. The returned object behaves much like a
+[`NamedArray`][haliax.NamedArray] for indexing purposes: `ref[{"batch": 0}]` reads a slice, and assignments like
+`ref[{"token": slice(1, 3)}] = update` perform in-place updates on the underlying buffer. If you need to stage part of a
+reference for repeated use, call [`NamedRef.slice`][haliax.NamedRef.slice] to create a *slice ref*. Slice refs remember a
+partial indexing expression so you only supply the remaining axes during reads or writes:
+
+```python
+Cache = hax.Axis("layers", 24)
+Head = hax.Axis("head", 8)
+cache = hax.zeros((Cache, Head))
+cache_ref = hax.new_ref(cache)
+
+# Pin the layer axis once so subsequent lookups only specify the head coordinate.
+layer_ref = cache_ref.slice({"layers": slice(4, 8)})
+layer_ref[{"layers": 0, "head": 3}] = 1.0  # updates layer 4, head 3 in the original cache
+```
+
+When you are done mutating a reference, call [`haliax.freeze`][haliax.freeze] to invalidate it and recover a final
+`NamedArray` snapshot. You can also perform atomic-style updates with [`haliax.swap`][haliax.swap] (or the functional
+helpers under `haliax.ref`).
+
+::: haliax.NamedRef
+::: haliax.new_ref
+::: haliax.freeze
+::: haliax.swap
+
+[`jax.Ref`]: https://docs.jax.dev/en/latest/array_refs.html
+
 #### Dynamic Slicing
 
 ::: haliax.dslice

@@ -88,6 +88,7 @@ nav:
   - Named Arrays:
     - Broadcasting: 'broadcasting.md'
     - Indexing and Slicing: 'indexing.md'
+    - Mutable References: 'mutable-refs.md'
     - Rearrange: 'rearrange.md'
     - Matrix Multiplication: 'matmul.md'
     - Type Annotations: 'typing.md'
