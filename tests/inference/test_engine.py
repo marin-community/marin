@@ -13,7 +13,7 @@ from haliax import Axis
 from levanter.inference.engine import InferenceEngine, Request, InferenceEngineConfig
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.page_table import PageTable
-from levanter.layers.attention import KvPageCache
+from levanter.layers.kv_cache import KvPageCache
 
 
 class DummyModel(eqx.Module):

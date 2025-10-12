@@ -1,7 +1,6 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 import functools
 import logging
 import math
@@ -41,6 +40,7 @@ from jax.sharding import PartitionSpec
 from jaxtyping import PRNGKeyArray
 
 from ..inference.page_table import PageBatchInfo, PageTable
+from .kv_cache import KvPageCache
 from .normalization import LayerNormConfigBase
 from .rotary import RotaryEmbeddings, RotaryEmbeddingsConfig
 
@@ -1700,80 +1700,6 @@ class Attention(eqx.Module):
             k = self.rot_embs(k, pos_ids).astype(k.dtype)
 
         return q, k, v
-
-
-class KvPageCache(eqx.Module):
-    """
-    KvPageCache for paged attention. It contains keys and values for all pages, including
-    potentially sequences that are not currently active.
-
-    Contains a global view of all pages and their sequences. This can't be usefully used
-    with an accompanying PageTable.
-    """
-
-    kv_pages: NamedArray  # [Page, Slot, 2 * KVHeads, Embed]
-
-    @staticmethod
-    def init(page_table: PageTable, kv_heads: Axis, head_size: Axis, dtype=jnp.float32) -> "KvPageCache":
-        """
-        Initialize a KvPageCache with the given page table and dimensions.
-
-        Args:
-            page_table: The PageTable instance that defines the pages.
-            kv_heads: Axis for key/value heads.
-            head_size: Axis for head size.
-            dtype: Data type for the cache.
-        """
-        kv_pages = hax.zeros(
-            {
-                "page": page_table.num_pages,
-                "slot": page_table.page_size,
-                "kv_head": 2 * kv_heads.size,
-                head_size.name: head_size.size,
-            },
-            dtype=dtype,
-        )
-        return KvPageCache(kv_pages)
-
-    @named_call
-    def update(
-        self,
-        batch_info: PageBatchInfo,
-        new_k: NamedArray,  # [Tok, KvHeads, HeadDim]
-        new_v: NamedArray,  # [Tok, KvHeads, HeadDim]
-    ) -> "KvPageCache":
-        """Append keys and values to the paged cache using *batch_info* to locate pages."""
-
-        page_size = self.kv_pages.array.shape[1]
-
-        assert page_size == batch_info.page_size, (
-            f"Page size mismatch: {page_size} != {batch_info.page_size}. "
-            "Ensure that the page size in batch_info matches the kv_pages."
-        )
-
-        t_pages, t_slots = batch_info.pages_and_slots()
-
-        # jax.debug.print("Updating kv_pages at pages {t_pages} and slots {t_slots}",
-        #                 t_pages=t_pages, t_slots=t_slots)
-
-        new_k = new_k.astype(self.kv_pages.dtype)
-        new_v = new_v.astype(self.kv_pages.dtype)
-        # kv_pages = eqx.error_if(self.kv_pages, hax.any(hax.isnan(self.kv_pages)).scalar(), "NaN in kv_pages pre")
-        kv_pages = self.kv_pages
-        kv_pages = kv_pages.at["page", t_pages, "slot", t_slots, "kv_head", 0::2].set(new_k, mode="drop")
-        kv_pages = kv_pages.at["page", t_pages, "slot", t_slots, "kv_head", 1::2].set(new_v, mode="drop")
-
-        # kv_pages = eqx.error_if(kv_pages, hax.any(hax.isnan(kv_pages)).scalar(), "NaN in kv_pages")
-
-        return dataclasses.replace(self, kv_pages=kv_pages)
-
-    def copy_page(self, src_page: int, dst_page: int) -> "KvPageCache":
-        """Copy the entire contents of page ``src_page`` into ``dst_page``.
-
-        This is used when creating clones that should have an identical last partial page, but mapped to a fresh page.
-        """
-        new_k = self.kv_pages.at["page", dst_page].set(self.kv_pages["page", src_page])
-        return dataclasses.replace(self, kv_pages=new_k)
 
 
 @named_call

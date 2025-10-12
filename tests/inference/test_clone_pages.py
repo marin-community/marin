@@ -9,7 +9,7 @@ import numpy as np
 import haliax as hax
 
 from levanter.inference.page_table import PageTable
-from levanter.layers.attention import KvPageCache
+from levanter.layers.kv_cache import KvPageCache
 
 
 def _make_table(max_pages=8, max_seqs=2, page_size=4, pages_per_seq=3):
