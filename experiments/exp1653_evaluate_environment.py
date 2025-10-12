@@ -17,9 +17,8 @@ Experiment to test environment evaluation using evaluate_environment.py
 """
 
 import logging
-import os
 
-from marin.execution.executor import executor_main
+from marin.execution.executor import InputName, executor_main
 from marin.rl.environments.prime_intellect_env import PrimeIntellectEnv
 from marin.rl.evaluate_environment import evaluate_environment
 
@@ -42,15 +41,13 @@ def create_eval_step():
     )
 
     # Create evaluation step
-    prefix = os.environ["MARIN_PREFIX"]
-    assert len(prefix) > 0, "MARIN_PREFIX is not set"
-
-    output_path = os.path.join(prefix, "env_evals/test_evaluation")
+    # Use InputName.hardcoded to create a path relative to the prefix
+    output_path = InputName.hardcoded("env_evals/test_evaluation")
 
     eval_step = evaluate_environment(
         model=model_checkpoint,
         env=env,
-        name="evaluate-test-environment-4B-v17",
+        name="evaluate-test-environment-4B-v18",
         output_path=output_path,
         tpu_type="v5litepod-4",  # Use smaller TPU for testing
     )
