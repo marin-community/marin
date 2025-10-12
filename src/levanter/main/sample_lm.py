@@ -46,9 +46,9 @@ class SampleLmConfig:
     prompts: list[str] | str | tuple[str, ...] = (
         "What is the square root of 17?",
         "Four score and seven years ago, our",
-        # "On the first day of Christmas, my true love gave to me",
+        "On the first day of Christmas, my true love gave to me",
         "In a hole in the ground there lived a hobbit, not a nasty, dirty, wet hole",
-    ) * 5
+    ) * 4
     stop_sequence: str | None = "."
     "Stop sequences. Currently only does whole token sequences."
     max_new_tokens: int = 192

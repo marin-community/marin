@@ -68,7 +68,7 @@ The inference server is built around a `GenerationService` that encapsulates:
 ## File/Code References
 - `src/levanter/main/sample_lm.py`: `SampleLmConfig`, `_load_model`, `GenState`, `run_generation_loop`, `_one_round`, `extract_outputs`.
 - `src/levanter/inference/jit_scheduler.py`: `JitScheduler`, `DecodeState`, `SeqDecodingParams`.
-- `levanter.inference.page_table.PageTable`, `levanter.layers.attention.KvPageCache`.
+- `levanter.inference.page_table.PageTable`, `levanter.layers.kv_cache.KvPageCache`.
 - `levanter.layers.sampler.Sampler`.
 - `levanter.models.llama.LlamaLMHeadModel` and `levanter.models.lm_model.LmHeadModel`.
 - `levanter.compat.hf_checkpoints.HFCheckpointConverter`, `load_tokenizer`.

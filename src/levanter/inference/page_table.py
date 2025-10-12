@@ -524,6 +524,10 @@ class PageBatchInfo(eqx.Module):
     new_token_dests: ht.i32[NamedArray, "position"]  # type: ignore[name-defined]
     page_size: int = eqx.field(static=True)
 
+    @property
+    def num_new_tokens(self) -> jnp.ndarray:
+        return self.cu_q_lens["seq", self.num_seqs].scalar()
+
     def __post_init__(self):
         assert isinstance(self.num_seqs, jnp.ndarray), "num_seqs must be a JAX ndarray"
 
