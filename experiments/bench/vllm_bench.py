@@ -251,7 +251,7 @@ async def run_benchmark_client(config: BenchmarkConfig):
         profile=False,
         selected_percentile_metrics=["e2el"],  # Only e2el makes sense for non-streaming
         selected_percentiles=[25, 50, 75, 90, 95, 99],
-        ignore_eos=False,
+        ignore_eos=True,
         goodput_config_dict={},
         max_concurrency=None,
         extra_headers=None,
