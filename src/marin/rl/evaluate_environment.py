@@ -36,7 +36,7 @@ from levanter.inference.engine import InferenceEngineConfig
 from marin.resources import TpuPodConfig
 from marin.training.training import _add_run_env_variables
 from marin.execution import ExecutorStep
-from marin.rl.environments.base import MarinEnv, load_environment_from_spec
+from marin.rl.environments.base import MarinEnv, EnvConfig, load_environment_from_spec
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.rollout_worker import LevanterInferenceContext
 from marin.utils import remove_tpu_lockfile_on_exit
@@ -51,8 +51,8 @@ class EnvironmentEvalConfig:
     model_checkpoint: str
     """Path to model checkpoint to evaluate."""
 
-    env: MarinEnv
-    """Environment to evaluate on."""
+    env_config: EnvConfig
+    """Environment configuration."""
 
     output_path: str | None = None
     """Path to save evaluation results (local or GCS)."""
@@ -78,11 +78,20 @@ class EnvironmentEvalConfig:
     seed: int = 42
     """Random seed for evaluation."""
 
+    tpu_type: str = "v5litepod-128"
+    """TPU type to use for evaluation."""
+
 
 @ray.remote(max_retries=3)
 def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     """Run environment evaluation."""
 
+    # Get the actual device count from the TPU configuration first
+    runtime_env_temp = RuntimeEnv()
+    rollout_pod_config_temp = TpuPodConfig(tpu_type=config.tpu_type, runtime_env=runtime_env_temp)
+    num_devices_for_config = rollout_pod_config_temp.total_device_count()
+    model_axis_size_config = min(4, num_devices_for_config)
+    
     # Initialize Levanter with minimal trainer config
     trainer_config = TrainerConfig(
         mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -90,6 +99,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
         fsdp_axis="embed",
         batch_axis="batch",
         ray=levanter.distributed.RayConfig(auto_start_cluster=False),
+        model_axis_size=model_axis_size_config,
     )
 
     env = {}
@@ -97,13 +107,25 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     env["EQX_ON_ERROR"] = "nan"
 
     runtime_env = RuntimeEnv()
-    rollout_pod_config = TpuPodConfig(tpu_type="v5litepod-4", runtime_env=runtime_env)
+    rollout_pod_config = TpuPodConfig(tpu_type=config.tpu_type, runtime_env=runtime_env)
     rollout_hw_config = rollout_pod_config.with_env_vars(env)
-    rollout_kwargs = dict(max_calls=1, **rollout_hw_config.as_remote_kwargs())
+    
+    # Get the actual device count from the TPU configuration
+    num_devices = rollout_pod_config.total_device_count()
+    model_axis_size = min(4, num_devices)  # Conservative choice for model parallelism
+    logger.info(f"Using TPU type {config.tpu_type} with {num_devices} devices, model_axis_size={model_axis_size}")
+    
+    # Properly request TPU resources for Ray remote
+    rollout_kwargs = dict(
+        max_calls=1,
+        runtime_env=rollout_hw_config.runtime_env,
+        num_cpus=8,
+        resources={"TPU": num_devices, f"{config.tpu_type}-head": 1},
+    )
 
     inference_server_config = InferenceServerConfig(
         # Turn on tensor parallelism for inference
-        trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=4),
+        trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=model_axis_size),
         tokenizer=config.model_checkpoint,
         temperature=1.0,
         service=InferenceEngineConfig(
@@ -124,12 +146,14 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
 
             # Initialize Levanter
-            trainer_config.id = f"eval-rollout-{config.env.env_id.replace('/', '-')}"
+            env_name = config.env_config.env_class.split('.')[-1]
+            trainer_config.id = f"eval-rollout-{env_name}"
             levanter.initialize(trainer_config)
 
             hf_config = AutoConfig.from_pretrained(config.model_checkpoint)
             model_config = LlamaConfig.from_hf_config(hf_config)
-
+            logger.info(f"Model config: {model_config}")
+            
             # Adjust the max sequence length of the model to reduce memory usage.
             model_config = dataclasses.replace(
                 model_config,
@@ -140,6 +164,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             key = jrandom.PRNGKey(42)
             vocab_size = tokenizer.vocab_size
             Vocab = hax.Axis("vocab", vocab_size)
+            logger.info(f"Vocab size: {vocab_size}")
 
             policy_model = load_model_from_checkpoint(
                 checkpoint=config.model_checkpoint,
@@ -152,14 +177,16 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
                 tokenizer=tokenizer,
                 key=key,
             )
-
+            logger.info(f"Policy model: {policy_model}")
+            
             inference_server = InferenceServer.create(
                 inference_server_config,
                 model=policy_model,
                 tokenizer=tokenizer,
             )
 
-            env = load_environment_from_spec(config.env)
+            env = load_environment_from_spec(config.env_config)
+            logger.info(f"Loaded environment: {env}")
 
             policy_ctx = LevanterInferenceContext(
                 tokenizer=tokenizer,
@@ -205,33 +232,63 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             return metrics
 
     inference_task = inference_worker_task.remote()
-    return inference_task
+    # Wait for the task to complete and return the actual results
+    return ray.get(inference_task)
 
 
 def evaluate_environment(
-    model: str, env: MarinEnv, name: str | None = None, output_path: str | None = None
+    model: str, 
+    env_config: EnvConfig | None = None,
+    env: MarinEnv | None = None,
+    name: str | None = None, 
+    output_path: str | None = None, 
+    tpu_type: str = "v5litepod-128"
 ) -> ExecutorStep:
     """Create an executor step for evaluating a model on an environment.
 
     Args:
         model: Path to model checkpoint or ExecutorStep producing a model
-        env: Environment to evaluate on
+        env_config: Environment configuration (use this or env, not both)
+        env: MarinEnv instance for backward compatibility (will be converted to config)
         name: Name of the evaluation
         output_path: Path to save evaluation results (local or GCS)
+        tpu_type: TPU type to use for evaluation
 
     Returns:
         ExecutorStep that runs the evaluation
     """
+    if env_config is None and env is None:
+        raise ValueError("Either env_config or env must be provided")
+    
+    if env_config is None:
+        # Convert the MarinEnv instance to an EnvConfig for serialization
+        env_class_path = f"{env.__class__.__module__}.{env.__class__.__name__}"
+        env_config = EnvConfig(
+            env_class=env_class_path,
+            env_args={
+                'env_id': getattr(env, 'env_id', ''),
+                'env_args': getattr(env, 'env_args', {}),
+                'max_tokens': getattr(env, 'max_tokens', 1024),
+                'max_concurrent': getattr(env, 'max_concurrent', 32),
+            }
+        )
+        env_name = env.__class__.__name__
+        env_id = getattr(env, 'env_id', 'unknown')
+    else:
+        env_name = env_config.env_class.split('.')[-1]
+        env_id = env_config.env_args.get('env_id', 'unknown')
+    
     config = EnvironmentEvalConfig(
         model_checkpoint=model,
-        env=env,
+        env_config=env_config,
         output_path=output_path,
+        tpu_type=tpu_type,
     )
 
     return ExecutorStep(
-        name=name or f"evaluate-{env.__class__.__name__}-{model}-{getattr(env, 'env_id', 'unknown')}",
+        name=name or f"evaluate-{env_name}-{model}-{env_id}",
         fn=_run_evaluation,
         config=config,
-        description=f"Evaluate model on {env.__class__.__name__}",
+        description=f"Evaluate model on {env_name}",
         pip_dependency_groups=["post_training", "rl"],
     )

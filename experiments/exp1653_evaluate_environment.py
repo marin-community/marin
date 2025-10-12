@@ -50,8 +50,9 @@ def create_eval_step():
     eval_step = evaluate_environment(
         model=model_checkpoint,
         env=env,
-        name="evaluate-test-environment-4B",
+        name="evaluate-test-environment-4B-v17",
         output_path=output_path,
+        tpu_type="v5litepod-4",  # Use smaller TPU for testing
     )
 
     return eval_step
