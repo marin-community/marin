@@ -69,23 +69,6 @@ class DummyClassifier(BaseClassifier):
         return batch
 
 
-class SlowClassifier(BaseClassifier):
-    def __init__(self, model_name: str, attribute_name: str, model_type: str, *args, **kwargs):
-        super().__init__(model_name, attribute_name)
-
-    def __call__(self, batch: dict[str, Any]):
-
-        print("Sleeping for 0.5 seconds")
-        time.sleep(0.5)
-        print("Done sleeping")
-        # context = ray.get_runtime_context()
-        result = dict(batch)
-        # result["processed"] = True
-        # result["actor_id"] = context.get_actor_id().hex()
-        print("Returning result")
-        return result
-
-
 class FasttextClassifier(BaseClassifier):
     _MODEL_NAME_TO_MODEL_FILENAME_DICT: ClassVar[dict[str, str]] = {
         "mlfoundations/fasttext-oh-eli5": "openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train.bin",
