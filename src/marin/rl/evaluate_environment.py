@@ -91,7 +91,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     rollout_pod_config_temp = TpuPodConfig(tpu_type=config.tpu_type, runtime_env=runtime_env_temp)
     num_devices_for_config = rollout_pod_config_temp.total_device_count()
     model_axis_size_config = min(4, num_devices_for_config)
-    
+
     # Initialize Levanter with minimal trainer config
     trainer_config = TrainerConfig(
         mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -109,12 +109,12 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     runtime_env = RuntimeEnv()
     rollout_pod_config = TpuPodConfig(tpu_type=config.tpu_type, runtime_env=runtime_env)
     rollout_hw_config = rollout_pod_config.with_env_vars(env)
-    
+
     # Get the actual device count from the TPU configuration
     num_devices = rollout_pod_config.total_device_count()
     model_axis_size = min(4, num_devices)  # Conservative choice for model parallelism
     logger.info(f"Using TPU type {config.tpu_type} with {num_devices} devices, model_axis_size={model_axis_size}")
-    
+
     # Properly request TPU resources for Ray remote
     rollout_kwargs = dict(
         max_calls=1,
@@ -125,7 +125,9 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
 
     inference_server_config = InferenceServerConfig(
         # Turn on tensor parallelism for inference
-        trainer=dataclasses.replace(trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=model_axis_size),
+        trainer=dataclasses.replace(
+            trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=model_axis_size
+        ),
         tokenizer=config.model_checkpoint,
         temperature=1.0,
         service=InferenceEngineConfig(
@@ -146,14 +148,14 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
 
             # Initialize Levanter
-            env_name = config.env_config.env_class.split('.')[-1]
+            env_name = config.env_config.env_class.split(".")[-1]
             trainer_config.id = f"eval-rollout-{env_name}"
             levanter.initialize(trainer_config)
 
             hf_config = AutoConfig.from_pretrained(config.model_checkpoint)
             model_config = LlamaConfig.from_hf_config(hf_config)
             logger.info(f"Model config: {model_config}")
-            
+
             # Adjust the max sequence length of the model to reduce memory usage.
             model_config = dataclasses.replace(
                 model_config,
@@ -178,7 +180,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
                 key=key,
             )
             logger.info(f"Policy model: {policy_model}")
-            
+
             inference_server = InferenceServer.create(
                 inference_server_config,
                 model=policy_model,
@@ -237,12 +239,12 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
 
 
 def evaluate_environment(
-    model: str, 
+    model: str,
     env_config: EnvConfig | None = None,
     env: MarinEnv | None = None,
-    name: str | None = None, 
-    output_path: str | None = None, 
-    tpu_type: str = "v5litepod-128"
+    name: str | None = None,
+    output_path: str | None = None,
+    tpu_type: str = "v5litepod-128",
 ) -> ExecutorStep:
     """Create an executor step for evaluating a model on an environment.
 
@@ -259,25 +261,25 @@ def evaluate_environment(
     """
     if env_config is None and env is None:
         raise ValueError("Either env_config or env must be provided")
-    
+
     if env_config is None:
         # Convert the MarinEnv instance to an EnvConfig for serialization
         env_class_path = f"{env.__class__.__module__}.{env.__class__.__name__}"
         env_config = EnvConfig(
             env_class=env_class_path,
             env_args={
-                'env_id': getattr(env, 'env_id', ''),
-                'env_args': getattr(env, 'env_args', {}),
-                'max_tokens': getattr(env, 'max_tokens', 1024),
-                'max_concurrent': getattr(env, 'max_concurrent', 32),
-            }
+                "env_id": getattr(env, "env_id", ""),
+                "env_args": getattr(env, "env_args", {}),
+                "max_tokens": getattr(env, "max_tokens", 1024),
+                "max_concurrent": getattr(env, "max_concurrent", 32),
+            },
         )
         env_name = env.__class__.__name__
-        env_id = getattr(env, 'env_id', 'unknown')
+        env_id = getattr(env, "env_id", "unknown")
     else:
-        env_name = env_config.env_class.split('.')[-1]
-        env_id = env_config.env_args.get('env_id', 'unknown')
-    
+        env_name = env_config.env_class.split(".")[-1]
+        env_id = env_config.env_args.get("env_id", "unknown")
+
     config = EnvironmentEvalConfig(
         model_checkpoint=model,
         env_config=env_config,
