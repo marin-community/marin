@@ -17,16 +17,18 @@ Environment Wrapper for the Environments Hub by Prime-Intellect, which contains 
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
 import logging
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import jax.numpy as jnp
 import numpy as np
-import verifiers as vf
-from verifiers.types import GenerateOutputs
 
 from marin.rl.environments import MarinEnv
 from marin.rl.inference_ctx import InferenceContext
 from marin.rl.types import Rollout, RolloutGroup
+
+# Lazy import for optional dependencies
+if TYPE_CHECKING:
+    pass
 
 logger = logging.getLogger("ray")
 
@@ -36,7 +38,7 @@ class PrimeIntellectEnv(MarinEnv):
     Environment Wrapper for the Environments Hub by Prime-Intellect, which contains a collection of environments.
     """
 
-    ENVS: ClassVar[dict[str, vf.Environment]] = {}
+    ENVS: ClassVar[dict[str, Any]] = {}
 
     def __init__(
         self,
@@ -58,10 +60,23 @@ class PrimeIntellectEnv(MarinEnv):
         self.max_tokens = max_tokens
         self.max_concurrent = max_concurrent
 
-    def load_prime_intellect_env(self, env_id: str, env_args: dict) -> vf.Environment:
+    def _ensure_verifiers_installed(self):
+        """Ensure verifiers package is installed."""
+        try:
+            import verifiers  # noqa: F401
+        except ImportError as e:
+            raise ImportError(
+                "The 'verifiers' package is required to use PrimeIntellectEnv. "
+                "Please install it with: uv pip install 'marin[rl]' or uv pip install verifiers"
+            ) from e
+
+    def load_prime_intellect_env(self, env_id: str, env_args: dict) -> Any:
         """
         Get the Verifiers environment for the environment ID.
         """
+        self._ensure_verifiers_installed()
+        import verifiers as vf
+
         logger.debug(f"Loading Verifiers environment for {env_id} with arguments: {env_args}")
 
         if env_id not in self.ENVS:
@@ -79,6 +94,8 @@ class PrimeIntellectEnv(MarinEnv):
         mode: str = "train",
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample problems and generate responses using the model."""
+        self._ensure_verifiers_installed()
+        from verifiers.types import GenerateOutputs
         import subprocess
 
         # Download/install the environment
