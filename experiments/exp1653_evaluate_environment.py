@@ -20,7 +20,7 @@ import logging
 import os
 
 from marin.execution.executor import executor_main
-from marin.post_training.environments.prime_intellect_env import PrimeIntellectEnv
+from marin.rl.environments.prime_intellect_env import PrimeIntellectEnv
 from marin.rl.evaluate_environment import evaluate_environment
 
 logger = logging.getLogger("ray")
