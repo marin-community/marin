@@ -1,10 +1,20 @@
 # vllm/vllm-tpu:9dbf7a2dc1448d6657adfb2daba36be270dcebcd - 0.7.4 has some issues
 # FROM vllm/vllm-tpu:e92694b6fe264a85371317295bca6643508034ef
-FROM vllm/vllm-tpu:nightly
 
+# 3c545 has some bad interactions with ray data that make it not work
+# FROM vllm/vllm-tpu:3c545c0c3b98ee642373a308197d750d0e449403 # newest one that is 0.9.2 thought it should work but some ray data issues
+# ABSOLUTE NEWEST vLLM vllm/vllm-tpu:b395b3b0a3166d17c75e74f4eaf0ff4b15f2554f
+
+# 3c529fc9945964819dc17b9910ad6ccdbf231413 used in central2
+FROM vllm/vllm-tpu:3c529fc9945964819dc17b9910ad6ccdbf231413
 # Setup gcsfuse
-RUN apt-get update && apt-get install lsb-release rsync docker.io -y
+# cmake, build-essential, libssl-dev, protobuf-compiler for dolma
+RUN apt-get update && apt-get install lsb-release rsync docker.io cmake build-essential libssl-dev protobuf-compiler -y
 RUN usermod -aG docker $(whoami)
+
+# Install rust for dolma
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH=$HOME/.cargo/bin:$PATH
 
 RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | tee /etc/apt/sources.list.d/gcsfuse.list
 RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
@@ -18,21 +28,12 @@ RUN curl -sSL https://sdk.cloud.google.com > /tmp/gcl && \
     && chown -R $(whoami) /root/gcloud
 
 # Install core dependencies
-RUN pip install --no-cache-dir draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1190 haliax==1.4.dev327
+RUN pip install --no-cache-dir draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1500 haliax==1.4.dev381 lm-eval https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
 
-# NOTE(chris): We fix the lm-evaluation-harness commit hash for now since the newest main is broken because of
-# the new eval_logger change they made
-ARG LM_EVAL_EVAL_COMMIT_HASH=a40fe42aae2a5232448495c7bb5bf76aef100309
-# Install lm-evaluation-harness
-RUN mkdir -p /opt/lm_eval && chown -R $(whoami) /opt/lm_eval && \
-cd /opt/lm_eval && \
-git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness && \
-cd lm-evaluation-harness && \
-git fetch origin $LM_EVAL_EVAL_COMMIT_HASH && \
-git checkout $LM_EVAL_EVAL_COMMIT_HASH && pip install --no-cache-dir -e ".[ifeval, math]"
-
+COPY docker/marin/vllm-vmem-oom.patch .
+RUN patch -p0 -d /workspace/vllm < vllm-vmem-oom.patch
 # Need the latest accelerate due to some deprecations in the newest pytorch
-RUN pip install --no-cache-dir https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
+# RUN pip install --no-cache-dir https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
 
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
@@ -43,5 +44,6 @@ ENV PATH=$PATH:/root/gcloud/google-cloud-sdk/bin
 ENV VLLM_USE_V1=1
 ENV TF_CPP_MIN_LOG_LEVEL=1
 ENV HF_HOME=/opt/gcsfuse_mount/huggingface-cache
+ENV TPU_MIN_LOG_LEVEL=3
 
 WORKDIR /opt/marin
