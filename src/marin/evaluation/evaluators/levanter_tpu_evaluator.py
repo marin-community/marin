@@ -21,6 +21,7 @@ import ray
 from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.utils import is_remote_path
 from marin.run.ray_deps import build_runtime_env_for_packages
 from marin.utils import remove_tpu_lockfile_on_exit
 
@@ -38,9 +39,12 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         """
         Download the model if it's not already downloaded
         """
-        downloaded_path: str | None = model.ensure_downloaded(
-            local_path=os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
-        )
+        if is_remote_path(model.path):
+            downloaded_path = model.path
+        else:
+            downloaded_path: str | None = model.ensure_downloaded(
+                local_path=os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
+            )
 
         print(f"IN TPU: {downloaded_path}")
         # Use the model name if a path is not specified (e.g., for Hugging Face models)
