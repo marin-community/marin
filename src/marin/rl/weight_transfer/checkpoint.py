@@ -169,7 +169,7 @@ class GCSCheckpointClient(WeightTransferClient):
         # Checkpoint format is {checkpoint_dir}/step_{xyz}
         # Make sure we expire before our poll-interval.
         # We disable caching above, but it's unclear if fsspec adheres to this.
-        dirs = fs.ls(path_in_fs, listings_expiry_time=self.config.poll_interval_seconds)
+        dirs = fs.ls(path_in_fs, listings_expiry_time=1.0)
         checkpoint_dirs = []
         for d in dirs:
             # Handle trailing slashes in directory names
