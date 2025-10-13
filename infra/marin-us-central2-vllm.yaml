@@ -21,7 +21,7 @@ provider:
   project_id: hai-gcp-models
 
 docker:
-    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:6e804a10"
+    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:86c70693"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -59,7 +59,7 @@ setup_commands:
   - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
   - echo 'export MARIN_PREFIX="gs://marin-us-central2"' >> $HOME/.bashrc
   - echo 'export BUCKET="marin-us-central2"' >> $HOME/.bashrc
-  - gcsfuse --implicit-dirs --cache-dir /dev/shm --file-cache-max-size-mb 160000 --client-protocol grpc --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
+  - gcsfuse --implicit-dirs --cache-dir /dev/shm --file-cache-max-size-mb 160000 --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
   - mkdir -p ~/.ssh && /root/gcloud/google-cloud-sdk/bin/gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
   # Using /home/ray/.ssh/ since auth.ssh_user is set to 'ray' and we need to ensure the key is in the correct user's home directory else we get an error
   - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
@@ -74,7 +74,7 @@ available_node_types:
   head_default:
     min_workers: 0
     max_workers: 0
-    resources: {"CPU": 1}
+    resources: {"CPU": 0, "head_node": 1}
 
     # GCP-Specific Configuration; by default, Ray will configure unspecified fields (e.g., subnets, ssh-keys)
     #   => Ref: https://cloud.google.com/compute/docs/reference/rest/v1/instances/insert
@@ -93,9 +93,69 @@ available_node_types:
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
     max_workers: 1024
-    min_workers: 1
+    min_workers: 4
+    node_config:
+      acceleratorType: v4-8
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_16:
+    max_workers: 1024
+    min_workers: 0
     node_config:
       acceleratorType: v4-16
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_32:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-32
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_64:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-64
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_128:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-128
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_256:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-256
       runtimeVersion: tpu-ubuntu2204-base
       schedulingConfig:
         preemptible: true
