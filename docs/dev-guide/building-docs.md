@@ -6,7 +6,7 @@ This guide explains how to build, test, and maintain the Marin documentation.
 
 Before you begin, ensure you have the following installed:
 
-- Python 3.11 or higher
+- Python 3.13 or higher
 - uv (Python package manager)
 - Git
 
