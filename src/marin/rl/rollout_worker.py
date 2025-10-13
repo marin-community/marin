@@ -56,6 +56,8 @@ from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_
 
 logger = logging.getLogger(__name__)
 
+MAX_INFERENCE_RETRIES = 10
+
 
 @dataclass
 class RolloutWorkerConfig:
@@ -459,13 +461,25 @@ class RolloutWorker:
 
             rng, input_rng = jax.random.split(rng)
             lesson_config = self.config.curriculum_config.lessons[lesson_id]
-            rollout_batch, env_metrics = self._sample_batch(
-                lesson_id=lesson_id,
-                n_examples=lesson_config.sampling_params.n_prompts,
-                n_generations=lesson_config.sampling_params.n_generations_per_prompt,
-                mode="train",
-                rng=input_rng,
-            )
+
+            for attempt in range(MAX_INFERENCE_RETRIES):
+                try:
+                    rollout_batch, env_metrics = self._sample_batch(
+                        lesson_id=lesson_id,
+                        n_examples=lesson_config.sampling_params.n_prompts,
+                        n_generations=lesson_config.sampling_params.n_generations_per_prompt,
+                        mode="train",
+                        rng=input_rng,
+                    )
+                    break
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to sample batch from lesson {lesson_id}: {e}, will try again... \
+                            (attempt {attempt + 1}/{MAX_INFERENCE_RETRIES})"
+                    )
+                    time.sleep(5.0)
+                    continue
+
             if rollout_batch is None:
                 continue
 

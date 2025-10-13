@@ -199,7 +199,7 @@ class LevanterInferenceContext(InferenceContext):
 
         # Process prompts in batches to limit concurrent requests
         # Each prompt with n_generations counts as n_generations requests
-        max_concurrent_requests = 8
+        max_concurrent_requests = 4
         batch_size = max(1, max_concurrent_requests // n_generations)
         all_results = []
 
