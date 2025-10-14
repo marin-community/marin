@@ -17,7 +17,6 @@
 import json
 import logging
 import os
-import shlex
 import shutil
 import socket
 import subprocess
@@ -156,7 +155,7 @@ class RayCommandError(RuntimeError):
 
 def run_ray_command(
     command: list[str],
-    timeout: float | None = 30,
+    timeout: int = 30,
     check: bool = True,
     capture_output: bool = True,
     text: bool = True,
@@ -166,7 +165,7 @@ def run_ray_command(
 
     Args:
         command: Command to run as a list of strings
-        timeout: Timeout in seconds (set to None to disable)
+        timeout: Timeout in seconds
         check: Whether to raise an exception on non-zero exit code
         capture_output: Whether to capture stdout/stderr
         text: Whether to return output as text
@@ -181,8 +180,6 @@ def run_ray_command(
     if env is None:
         env = os.environ.copy() | {"TERM": "dumb"}
 
-    logger.info(f"Running Ray command: {' '.join(command)}")
-
     try:
         result = subprocess.run(
             command,
@@ -190,38 +187,18 @@ def run_ray_command(
             stderr=subprocess.PIPE if capture_output else None,
             text=text,
             env=env,
-            check=False,  # Don't raise immediately, we'll handle it
+            check=check,
             timeout=timeout,
             start_new_session=True,  # Creates new process group to avoid terminal issues
         )
-
-        if result.returncode != 0:
-            logger.error(f"Ray command failed with exit code {result.returncode}")
-            if capture_output and result.stdout:
-                logger.error(f"STDOUT: {result.stdout}")
-            if capture_output and result.stderr:
-                logger.error(f"STDERR: {result.stderr}")
-
-            if check:
-                raise RayCommandError(
-                    command=command,
-                    returncode=result.returncode,
-                    stdout=result.stdout or "",
-                    stderr=result.stderr or "",
-                )
-        else:
-            logger.info("Ray command completed successfully")
-            if capture_output and result.stdout:
-                logger.debug(f"STDOUT: {result.stdout}")
-
         return result
-
-    except subprocess.TimeoutExpired:
-        if timeout is None:
-            logger.error("Ray command timed out with no timeout configured")
-        else:
-            logger.error(f"Ray command timed out after {timeout} seconds")
-        raise
+    except subprocess.CalledProcessError as e:
+        raise RayCommandError(
+            command=command,
+            returncode=e.returncode,
+            stdout=e.stdout or "",
+            stderr=e.stderr or "",
+        ) from e
 
 
 def get_head_ip_from_config(cluster_config: str) -> str:
@@ -618,42 +595,24 @@ def submit_job(
     if working_dir:
         cmd.extend(["--working-dir", working_dir])
 
-    runtime_env_file = None
     if runtime_env:
-        # Create a temporary file for the runtime environment
-        import tempfile
-        import os
-
-        fd, runtime_env_file = tempfile.mkstemp(suffix=".json")
-        try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(runtime_env, f)
-        except:
-            os.close(fd)
-            raise
-        cmd.extend(["--runtime-env", runtime_env_file])
+        cmd.extend(["--runtime-env-json", json.dumps(runtime_env)])
 
     if resources:
         for resource, amount in resources.items():
             cmd.extend([f"--{resource}", str(amount)])
 
-    # Use argument unpacking instead of list concatenation for clarity and style (RUF005)
-    cmd.extend(["--", *shlex.split(entrypoint)])
+    cmd.extend(["--", entrypoint])
 
-    try:
-        result = run_ray_command(cmd, timeout=None)
-        # Extract job ID from output (usually in format "Job submitted with ID: <id>")
-        output_lines = result.stdout.strip().split("\n")
-        for line in output_lines:
-            if "submitted with ID:" in line:
-                return line.split(":")[-1].strip()
+    result = run_ray_command(cmd, timeout=500, capture_output=False)
+    # Extract job ID from output (usually in format "Job submitted with ID: <id>")
+    output_lines = result.stdout.strip().split("\n")
+    for line in output_lines:
+        if "submitted with ID:" in line:
+            return line.split(":")[-1].strip()
 
-        # Fallback: return full output if we can't parse job ID
-        return result.stdout.strip()
-    finally:
-        # Clean up temporary file
-        if runtime_env_file and os.path.exists(runtime_env_file):
-            os.unlink(runtime_env_file)
+    # Fallback: return full output if we can't parse job ID
+    return result.stdout.strip()
 
 
 def download_working_directory(
@@ -1000,8 +959,7 @@ export BUCKET="{bucket}"
 
 echo 'Checking for head node IP...'
 gcloud compute instances list \\
-  --filter="labels.ray-cluster-name:{cluster_name} AND labels.ray-node-type=head AND \\
-name~'ray-{cluster_name}-head-.*'" \\
+  --filter="labels.ray-node-name:ray-{cluster_name}-head AND labels.ray-node-type=head" \\
   --format="value(networkInterfaces[0].networkIP)" > /tmp/head_ip
 
 HEAD_IP=$(cat /tmp/head_ip | head -1 | awk '{{print $1}}' || true)
