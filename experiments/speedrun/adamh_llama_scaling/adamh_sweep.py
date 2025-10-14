@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Speedruns using the AdamH optimizer for various Llama model sizes (Chinchilla optimal steps)."""
+"""Speedruns using the AdamH optimizer for various Llama model sizes (Chinchilla optimal steps).
+"""
 
 import dataclasses
 import logging
@@ -119,7 +120,10 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     }
 
     # Descriptions
-    format_str = "{size} parameter model (basically fully scale invariant) trained with the AdamH optimizer to maintain constant norm."
+    format_str = (
+        "{size} parameter model (basically fully scale invariant) "
+        "trained with the AdamH optimizer to maintain constant norm."
+    )
     descriptions = {
         "130m": format_str.format(size="130M"),
         "300m": format_str.format(size="300M"),
