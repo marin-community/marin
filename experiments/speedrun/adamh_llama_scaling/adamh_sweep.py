@@ -69,7 +69,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
         "1_2b": TpuPodConfig(tpu_type="v5litepod-64"),
     }
 
-    # AdamC optimizer configs for each size
+    # AdamH optimizer configs for each size
     adam_configs = {
         "130m": AdamHConfig(
             learning_rate=0.02,
