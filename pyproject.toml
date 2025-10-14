@@ -41,6 +41,7 @@ dependencies = [
     "tqdm",
     "tqdm-loggable",
     "wandb",
+    "fray",
 ]
 
 [dependency-groups]
@@ -146,6 +147,7 @@ torch = [
     # CUDA12 index only when --extra cuda12
     { index = "pytorch-cu128", extra = "cuda12" },
 ]
+fray = { path = "lib/fray", editable = true }
 
 
 [[tool.uv.index]]

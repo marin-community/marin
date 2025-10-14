@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fray"
+version = "0.1.0"
+description = "Ray-like distributed execution abstraction layer"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+ray = ["ray==2.45"]
+
+[dependency-groups]
+test = ["pytest>=8.3.2", "pytest-asyncio", "pytest-timeout"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fray"]
+
+[tool.hatch.build.targets.sdist]
+packages = ["src/fray"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 300
