@@ -122,10 +122,10 @@ if __name__ == "__main__":
             model_name,
             model_path,
             evals = [eval_task],
-            max_eval_instances=5,
+            max_eval_instances=None,
             resource_config=resource_config,
             apply_chat_template=True,
-            max_gen_toks=4096,  # Override max_gen_toks to 4096 tokens
+            max_gen_toks=8192,  # Override max_gen_toks to 4096 tokens
         )
         all_steps.append(lm_eval_task_step)
 

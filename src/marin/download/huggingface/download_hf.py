@@ -20,6 +20,8 @@ using HfFileSystem for direct streaming of data transfer.
 
 import logging
 import os
+import time
+import random
 
 import fsspec
 import ray
@@ -29,6 +31,8 @@ from tqdm_loggable.tqdm_logging import tqdm_logging
 from marin.core.runtime import simple_backpressure
 from marin.download.huggingface.download import DownloadConfig
 from marin.utilities.validation_utils import write_provenance_json
+from marin.utils import get_directory_friendly_name
+from marin.evaluation.utils import upload_to_gcs
 
 # Set up logging
 logger = logging.getLogger("ray")
@@ -50,23 +54,25 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
 def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: str, fsspec_file_path: str):
     """Ray task to stream a file from HfFileSystem to another fsspec path."""
     target_fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
+    # Use larger chunk size for large files, such as 32B models
+    chunk_size = 16 * 1024 * 1024
+    max_retries = 10
 
-    # Increase timeout for large files
-    timeout = 600  # Increase from default 10 seconds to 60 seconds
-
-    try:
-        # Use the timeout parameter when opening the file
-        with hf_fs.open(file_path, "rb", timeout=timeout) as src_file:
-            target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
-            with target_fs.open(fsspec_file_path, "wb") as dest_file:
-                # Increase chunk size for faster downloads
-                chunk_size = 8 * 1024 * 1024  # 8MB chunks instead of 1MB
-                while chunk := src_file.read(chunk_size):
-                    dest_file.write(chunk)
-        logging.info(f"Streamed {file_path} to fsspec path: {fsspec_file_path}")
-    except Exception as e:
-        logging.exception(f"Error processing {file_path}: {e}")
-        raise
+    # Retry when there is an error, such as hf rate limit
+    for attempt in range(max_retries):
+        try:
+            with hf_fs.open(file_path, "rb") as src_file:
+                target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
+                with target_fs.open(fsspec_file_path, "wb") as dest_file:
+                    while chunk := src_file.read(chunk_size):
+                        dest_file.write(chunk)
+            logger.info(f"Streamed {file_path} successfully to {fsspec_file_path}")
+            return
+        except Exception as e:
+            wait_time = (2**attempt) + random.uniform(0, 5)
+            logger.warning(f"Attempt {attempt+1} failed for {file_path}: {e}, retrying in {wait_time:.1f}s")
+            time.sleep(wait_time)
+    raise RuntimeError(f"Failed to download {file_path} after {max_retries} attempts")
 
 
 def download_hf(cfg: DownloadConfig) -> None:
@@ -74,6 +80,17 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     # Parse the output path and get the file system
     fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
+
+    # Look for the model in local path
+    if '32' in cfg.hf_dataset_id:
+        directory_friendly_name = get_directory_friendly_name(cfg.hf_dataset_id + "/" + cfg.revision)
+        model_path = os.path.join("/opt/gcsfuse_mount/models", directory_friendly_name)
+        if os.path.exists(model_path):
+            logger.info(f"Model already exists in {model_path}")
+            upload_to_gcs(model_path, cfg.gcs_output_path)
+            (model_path, cfg.gcs_output_path)
+            logger.info(f"Copied model to {cfg.gcs_output_path}")
+            return
 
     # TODO: Our earlier version of download_hf used this piece of code for calculating the versioned_output_path
     # versioned_output_path = os.path.join(cfg.gcs_output_path, cfg.revision)

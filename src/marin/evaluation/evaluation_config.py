@@ -103,7 +103,7 @@ class EvaluationConfig:
     Tags to add to the wandb run.
     """
 
-    max_gen_toks: int | None = None
+    max_length: int | None = None
     """
-    Maximum number of tokens to generate during evaluation.
+    Maximum total length (prompt + generation) during evaluation.
     """

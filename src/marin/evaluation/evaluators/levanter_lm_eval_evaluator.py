@@ -59,10 +59,10 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 "immutabledict",
                 "jax[tpu]",
                 "langdetect",
-                "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@18b376504e98aadcb985f9235c3e58ab2bf4c5bc",
-                "math-verify", # Required by lm-eval[math]
                 "ray==2.45",
                 "statsmodels==0.14.4",
+                "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@18b376504e98aadcb985f9235c3e58ab2bf4c5bc",
+                "math-verify", # Required by lm-eval[math]
                 "sympy>=1.12", # Required by lm-eval[math]
             ],
             env_vars={
@@ -78,7 +78,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
         show_logs_from_ray: bool = True,
-        max_gen_toks: int | None = None,
+        max_length: int | None = None,
     ) -> None:
         """
         Runs Levanter's lm-eval harness on the specified model and set of tasks.
@@ -90,7 +90,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
             wandb_tags (list[str] | None): The tags to add to the wandb run.
             show_logs_from_ray (bool): Whether to show the logs from the ray run.
-            max_gen_toks (int | None): Maximum number of tokens to generate during evaluation.
+            max_length (int | None): Maximum total length (prompt + generation) during evaluation.
         """
         # Eval Harness code: https://github.com/stanford-crfm/levanter/blob/main/src/levanter/eval_harness.py
         # Run the harness with the model and the specified evals
@@ -124,7 +124,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 model_axis_size=4,
                 tensor_parallel_axes=["mlp", "heads", "kv_head", "vocab"],
             )
-            print("after trainer?")
+            logger.info("after trainer?")
 
             model_config = HFCheckpointConverter.from_hf(model_name_or_path).LevConfigClass()
 
@@ -140,18 +140,17 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             logger.info(f"Model name: {model.name}")
             logger.info(f"model_name_or_path: {model_name_or_path}")
 
-            # Create the eval harness config with max_gen_toks if specified
+            # Create the eval harness config with max_length if specified
             harness_config_kwargs = {
                 "task_spec": tasks,
                 "max_examples": max_eval_instances,
-                "log_samples": False,
-                "max_length": 4096,
+                "log_samples": True,
+                "max_length": max_length if max_length is not None else 4096,
+                "sample_logging": eval_harness.SampleLoggingConfig(log_all=True),  # Enable sample collection
             }
 
-            # Add max_gen_toks to generation_kwargs if specified
-            if max_gen_toks is not None:
-                harness_config_kwargs["generation_kwargs"] = {"max_gen_toks": max_gen_toks}
-                logger.info(f"Setting max_gen_toks={max_gen_toks} in LmEvalHarnessConfig generation_kwargs")
+            if max_length is not None:
+                logger.info(f"Setting max_length={max_length} in LmEvalHarnessConfig")
 
             print("starting harness")
             eval_config = eval_harness.EvalHarnessMainConfig(
@@ -192,15 +191,38 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             print("finished harness")
 
             try:
+                # Extract samples if they exist in results (levanter format)
+                samples = {}
+                if results is not None and "results" in results:
+                    # Levanter stores samples in results[task_name]["outputs"]
+                    for task_name, task_results in results["results"].items():
+                        if "outputs" in task_results:
+                            samples[task_name] = task_results["outputs"]
+                            logger.info(f"Extracted {len(task_results['outputs'])} samples for task {task_name}")
+                            # Remove outputs from results to keep results.json clean
+                            del task_results["outputs"]
+                
+                if not samples:
+                    logger.info("No samples found in results")
+                
                 # add a results.json to output path
-                output_path = os.path.join(output_path, "results.json")
+                results_output_path = os.path.join(output_path, "results.json")
 
-                logger.info(f"Uploading results to GCS: {output_path}")
+                logger.info(f"Uploading results to GCS: {results_output_path}")
 
-                # write output JSON directly to output_path on GCS
+                # write results JSON directly to output_path on GCS
                 fs = fsspec.filesystem("gcs")
-                with fs.open(output_path, "w") as f:
+                with fs.open(results_output_path, "w") as f:
                     json.dump(results, f, indent=2)
+
+                # Save samples if they exist
+                if samples:
+                    for task_name, task_samples in samples.items():
+                        samples_output_path = os.path.join(output_path, f"{task_name}_samples.json")
+                        with fs.open(samples_output_path, "w") as f:
+                            json.dump(task_samples, f, indent=2)
+                        logger.info(f"Uploaded samples for {task_name} to GCS: {samples_output_path}")
+
 
                 levanter.tracker.current_tracker().finish()
                 logger.info("Upload completed successfully.")

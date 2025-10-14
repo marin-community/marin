@@ -49,7 +49,7 @@ def evaluate(config: EvaluationConfig) -> None:
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
             resource_config=config.resource_config,
-            max_gen_toks=config.max_gen_toks,
+            max_length=config.max_length,
         )
     else:
         evaluator.evaluate(
@@ -57,7 +57,7 @@ def evaluate(config: EvaluationConfig) -> None:
             evals=config.evals,
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
-            max_gen_toks=config.max_gen_toks,
+            max_length=config.max_length,
         )
 
     logger.info(f"Done (total time: {time.time() - start_time} seconds)")
