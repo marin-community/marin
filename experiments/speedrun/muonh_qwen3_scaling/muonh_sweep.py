@@ -161,7 +161,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
         "1_2b": "Qwen3 ~1.2B (LLaMA-geometry-matched) with MuonH.",
     }
 
-    run_names = {  
+    run_names = {
         "130m": "qwen3_130m_muonh_4096_lr_0.02_adam_lr_0.008",
         "300m": "qwen3_300m_muonh_4096_lr_0.01",
         "520m": "qwen3_520m_muonh_4096_lr_0.01",

@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Speedruns using the AdamH optimizer for various Llama model sizes (Chinchilla optimal steps).
-"""
+"""Speedruns using the AdamH optimizer for various Llama model sizes (Chinchilla optimal steps)."""
 
 import dataclasses
 import logging
 
-from levanter.optim import AdamConfig, AdamHConfig
-from experiments.llama import llama_1_4b, llama_150m, llama_300m, llama_600m, llama_150m_hybrid_norm, llama_150m_all_norm, llama_300m_all_norm, llama_600m_all_norm, llama_1_4b_all_norm
+from levanter.optim import AdamHConfig
+from experiments.llama import llama_150m_all_norm, llama_300m_all_norm, llama_600m_all_norm, llama_1_4b_all_norm
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
@@ -121,10 +120,18 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     # Descriptions
     descriptions = {
-        "130m": "130M parameter model (basically fully scale invariant) trained with the AdamH optimizer to maintain constant norm.",
-        "300m": "300M parameter model (basically fully scale invariant) trained with the AdamH optimizer to maintain constant norm.",
-        "520m": "520M parameter model (basically fully scale invariant) trained with the AdamH optimizer to maintain constant norm.",
-        "1_2b": "1.2B parameter model (basically fully scale invariant) trained with the AdamH optimizer to maintain constant norm.",
+        "130m": (
+            "130M parameter model (basically fully scale invariant) trained with the AdamH optimizer to maintain constant norm."
+        ),
+        "300m": (
+            "300M parameter model (basically fully scale invariant) trained with the AdamH optimizer to maintain constant norm."
+        ),
+        "520m": (
+            "520M parameter model (basically fully scale invariant) trained with the AdamH optimizer to maintain constant norm."
+        ),
+        "1_2b": (
+            "1.2B parameter model (basically fully scale invariant) trained with the AdamH optimizer to maintain constant norm."
+        ),
     }
 
     # Names for the runs
@@ -132,7 +139,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
         "130m": "llama_130m_adamh_lr0.02_adam_lr0.008_warmup1000_qk",
         "300m": "llama_300m_adamh_lr0.02_adam_lr0.008_warmup1000_qk",
         "520m": "llama_520m_adamh_lr0.02_adam_lr0.004_warmup1000_qk",
-        "1_2b": "llama_1_2b_adamh_lr0.015_adam_lr0.0015_warmup1000_qk", 
+        "1_2b": "llama_1_2b_adamh_lr0.015_adam_lr0.0015_warmup1000_qk",
     }
 
     # Gather config for the requested size
