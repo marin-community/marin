@@ -1,6 +1,20 @@
-from experiments.evals.evals import evaluate_helm, evaluate_lm_evaluation_harness, evaluate_levanter_lm_evaluation_harness
-import logging
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
 from marin.evaluation.evaluation_config import EvalTaskConfig
+
 # from experiments.models import llama_3_1_8b_instruct, tulu_3_1_8b_instruct
 # from experiments.tootsie.exp1237_starling_sft import mixture_sft_deeper_starling
 from marin.execution.executor import executor_main, ExecutorStep
@@ -25,7 +39,7 @@ if __name__ == "__main__":
 
     model_name = "bison"
     model_path = "gs://marin-us-central1/checkpoints/tootsie-32b-cooldown-bison-adamc/hf/tootsie-32b-cooldown-bison-adamc/step-192000"
-    
+
     # Run all evaluations on all models
     helm_eval = ExecutorStep(
         name="evaluation/helm/exp905c",
@@ -35,12 +49,9 @@ if __name__ == "__main__":
             model_name=model_name,
             model_path=model_path,
             evaluation_path=this_output_path(),
-            evals=[
-                EvalTaskConfig(name="mmlu", num_fewshot=0),
-                EvalTaskConfig(name="lite", num_fewshot=0)
-            ],
+            evals=[EvalTaskConfig(name="mmlu", num_fewshot=0), EvalTaskConfig(name="lite", num_fewshot=0)],
             apply_chat_template=True,
-            resource_config=resource_config
+            resource_config=resource_config,
         ),
         pip_dependency_groups=["eval", "transformers", "tiktoken", "sentencepiece"],
     )
@@ -53,13 +64,13 @@ if __name__ == "__main__":
         # # requires pip install lm-eval[math]
         EvalTaskConfig(name="minerva_math", num_fewshot=4, task_alias="math_500_4shot"),
     ]
-    
+
     all_steps = []
     for eval_task in eval_tasks:
         lm_eval_task_step = evaluate_levanter_lm_evaluation_harness(
             model_name,
             model_path,
-            evals = [eval_task],
+            evals=[eval_task],
             max_eval_instances=None,
             resource_config=resource_config,
             apply_chat_template=True,

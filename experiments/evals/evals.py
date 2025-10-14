@@ -266,7 +266,7 @@ def evaluate_levanter_lm_evaluation_harness(
             apply_chat_template=apply_chat_template,
             max_length=max_length,
             print_every_n=print_every_n,
-            wandb_tags=['lm-eval', f'{model_name}', f'{model_path}'] + [eval_task.name for eval_task in evals],
+            wandb_tags=["lm-eval", f"{model_name}", f"{model_path}"] + [eval_task.name for eval_task in evals],
         ),
     )
 
