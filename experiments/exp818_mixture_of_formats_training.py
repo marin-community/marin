@@ -47,6 +47,7 @@ tokenized_dolma_steps = tokenize_dolma_steps()
 no_mixture_llama3_tokenized = lm_mixture_data_config(
     components=tokenized_dolma_steps,
     weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
+    permutation_type="linear",
 )
 
 no_mixture_dolma_model = default_train(
@@ -96,6 +97,7 @@ wiki_and_arxiv_weights = {
 wiki_and_arxiv_subbed_llama3_tokenized = lm_mixture_data_config(
     components=wiki_and_arxiv_tokenization_steps,
     weights=wiki_and_arxiv_weights,
+    permutation_type="linear",
 )
 
 wiki_and_arxiv_subbed_dolma_model = default_train(

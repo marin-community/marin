@@ -34,6 +34,7 @@ finemath_anneal_config = AnnealConfig(
             "dolmino/dclm": dolmino_dclm,
         },
         weights={"finemath": 0.3, "dolmino/dclm": 0.7},
+        permutation_type="linear",
     ),
 )
 ```
@@ -48,6 +49,7 @@ control_dataset_config=lm_mixture_data_config(
         "dolmino/dclm": dolmino_dclm,
     },
     weights={"dolmino/dclm": 1.0},
+    permutation_type="linear",
 )
 
 control_dclm_anneal_config = AnnealConfig(
