@@ -18,7 +18,7 @@ import time
 import ray
 from threading import Thread, Lock
 from multiprocessing import Event
-from ray.exceptions import GetTimeoutError, RayActorError
+from ray.exceptions import RayActorError
 from ray.util.queue import Queue
 
 from marin.processing.classification.classifier import BaseClassifier
@@ -49,12 +49,31 @@ class AutoscalingActorPool:
         scale_check_interval: float = 2,
         actor_kwargs: dict | None = None,
         actor_options: dict | None = None,
-        actor_health_check_interval: float = 5.0,
         actor_health_check_timeout: float = 2.0,
         max_tasks_per_actor: int | None = 4,
     ):
         """
-        Initialize the autoscaling actor pool.
+        The autoscaling actor pool is repsonsible for creating, managing and scaling actors to handle tasks.
+        We can think of the autoscaling actor pool as essentially the coordinator in the "MapReduce" pattern.
+        It is responsible for:
+        1. Accepting tasks from the client (e.g. inference.py) and dispatching these tasks
+        to the available actors.
+        2. Scaling up and down the number of actors based on the load.
+        3. Collecting results from the actors and returning them to the client.
+        4. Handling actor failures and requeuing tasks to available actors.
+
+        To communicate between the client and the autoscaling actor pool, we use a task queue and a result queue.
+        To detect actor failures, we periodically ping the actors and remove the actors if we do not receive a response.
+        Furthermore, if the coordinator is ray.wait'ing on a future that had an actor failure, the subsequent ray.get on
+        that task will fail with ray.exceptions.ActorDiedError,
+        which prompts this autoscaler to requeue the task to a new actor.
+
+        There are three different threads that are responsible for these tasks:
+        1. Autoscaling monitor thread: This thread is responsible for monitoring the load
+        and scaling the number of actors.
+        2. Dispatcher thread: This thread is responsible for dispatching tasks to the available actors.
+        3. Result collector thread: This thread is responsible for collecting results from the actors
+        and returning them to the client.
 
         Args:
             actor_class: The Ray actor class to use
@@ -90,7 +109,6 @@ class AutoscalingActorPool:
         self.future_to_actor = {}
         self.future_to_task = {}
         self.actor_options = actor_options or {}
-        self.actor_health_check_interval = actor_health_check_interval
         self.actor_health_check_timeout = actor_health_check_timeout
         self.max_tasks_per_actor = max_tasks_per_actor
         self.lock = Lock()
@@ -107,7 +125,6 @@ class AutoscalingActorPool:
         self._start_autoscaling_monitor()
         self._start_dispatcher()
         self._start_result_collector()
-        # self._start_actor_health_monitor()
 
     def _initialize_actors(self):
         """Initialize the minimum number of actors."""
@@ -254,82 +271,6 @@ class AutoscalingActorPool:
                     except ValueError:
                         logger.error("Failed to remove future from actor futures!")
 
-    def _start_actor_health_monitor(self):
-        """Start a background thread to verify actor liveness."""
-        self._health_stop_event: Event = Event()
-
-        def _loop():
-            while not self._health_stop_event.is_set():
-                with self.lock:
-                    actors_snapshot = list(self.actors)
-                for actor in actors_snapshot:
-                    if self._health_stop_event.is_set():
-                        break
-                    try:
-                        ping_ref = actor.ping.remote()
-                        ray.get(ping_ref, timeout=self.actor_health_check_timeout)
-                    except (RayActorError, GetTimeoutError):
-                        self._handle_actor_failure(actor)
-                    except Exception:
-                        self._handle_actor_failure(actor)
-                time.sleep(self.actor_health_check_interval)
-
-        self._health_thread: Thread = Thread(target=_loop, daemon=True)
-        self._health_thread.start()
-
-    def _handle_actor_failure(self, actor):
-        """Remove a failed actor and requeue its tasks."""
-        tasks_to_requeue: list[Any] = []
-        need_replacement = False
-
-        with self.lock:
-            if actor not in self.actors:
-                return
-
-            futures = self.actor_futures.pop(actor, [])
-            try:
-                self.actors.remove(actor)
-            except ValueError:
-                pass
-
-            for future in futures:
-                self.future_to_actor.pop(future, None)
-                task = self.future_to_task.pop(future, None)
-                if task is not None:
-                    tasks_to_requeue.append(task)
-
-            need_replacement = len(self.actors) < self.min_actors
-
-        if tasks_to_requeue:
-            logger.warning("Actor failure detected; requeueing %d pending tasks", len(tasks_to_requeue))
-        else:
-            logger.warning("Actor failure detected; no pending tasks to requeue")
-
-        if self.task_queue is not None:
-            for task in tasks_to_requeue:
-                try:
-                    logger.debug(
-                        "Requeueing task after actor failure",
-                        extra={
-                            "task": task,
-                            "requeue_count": len(tasks_to_requeue),
-                        },
-                    )
-                    self.task_queue.put(task)
-                except Exception:
-                    logger.error("Failed to requeue task after actor failure")
-
-        try:
-            ray.kill(actor)
-        except Exception:
-            pass
-
-        if need_replacement:
-            try:
-                self._create_and_register_actor()
-            except Exception:
-                logger.warning("Failed to replace actor after failure", exc_info=True)
-
     def _check_and_scale(self):
         """Check current load and scale actors accordingly."""
         with self.lock:
@@ -408,12 +349,12 @@ class AutoscalingActorPool:
         if not self.actors:
             return None
 
-        logger.info("Trying to dispatch the task")
+        logger.debug("Trying to dispatch the task")
         with self.lock:
             alive_actors = []
             for actor in self.actors:
                 ping_received = actor.ping.remote()
-                logger.info(f"Pinging actor: {actor}")
+                logger.debug(f"Pinging actor: {actor}")
                 ping_received_ready, _ = ray.wait([ping_received], num_returns=1, timeout=1.0)
 
                 # ping_received = ray.get(ping_received, timeout=self.actor_health_check_timeout)
@@ -422,7 +363,7 @@ class AutoscalingActorPool:
                     try:
                         result = ray.get(ping_received_ready, timeout=5.0)
                         if result:
-                            logger.info(f"Ping received from actor: {actor}")
+                            logger.debug(f"Ping received from actor: {actor}")
                             alive_actors.append(actor)
                     except Exception as e:
                         logger.error(f"Error received trying to ping actor: {e}")
@@ -460,7 +401,7 @@ class AutoscalingActorPool:
             self.actor_futures[actor] = [*self.actor_futures.get(actor, []), future]
             self.future_to_actor[future] = actor
             self.future_to_task[future] = task
-            logger.info(f"Assigning to actor: {actor}")
+            logger.debug(f"Assigning to actor: {actor} for task: {task}")
             return future
 
     def _cleanup_completed_futures(self):
@@ -512,11 +453,6 @@ class AutoscalingActorPool:
             self._dispatch_stop_event.set()
             if hasattr(self, "_dispatch_thread"):
                 self._dispatch_thread.join(timeout=5)
-
-        if hasattr(self, "_health_stop_event"):
-            self._health_stop_event.set()
-            if hasattr(self, "_health_thread"):
-                self._health_thread.join(timeout=5)
 
         # Kill all actors
         with self.lock:

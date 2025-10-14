@@ -68,6 +68,8 @@ class TextGenerationInferenceConfig:
     generated_text_column_name: str = "text"
 
     # Checkpoint specific
+    # This checkpoint id column is the "key" in the file that will be used to uniquely identify an input example.
+    # This is used for deduplicating work in the case when we are resuming from a checkpoint.
     checkpoint_id_column: str | None = None
 
 
@@ -146,72 +148,6 @@ def get_ray_data_write_kwargs(config: TextGenerationInferenceConfig):
         )
 
     return ray_data_write_kwargs
-
-
-def fix_warc_truncated_schema(batch: dict[str, Any]) -> dict[str, Any]:
-    """Fix WARC-Truncated field in metadata to maintain schema consistency.
-
-    NOTE(chris):
-    Fix WARC-Truncated schema issue. In DCLM, some input rows will have the column "WARC-Truncated" with a string
-    value there while others will not. When the vLLMTextGeneration concatenates blocks together after its outputs,
-    this will lead to an error where it tries to concatenate blocks with inconsistent schemas. That's why we call
-    this function before the vLLM text generation function to ensure a consistent schema.
-    For example, the input schema is:
-    Column                                                           Type
-    ------                                                           ----
-    bff_contained_ngram_count_before_dedupe                          int64
-    language_id_whole_page_fasttext                                  struct<en: double>
-    metadata                                                         struct<Content-Length: string, Content-Type:
-                                                                     string, WARC-Block-Digest: string,
-                                                                     WARC-Concurrent-To: string, WARC-Date:
-                                                                     timestamp[s], WARC-IP-Address: string,
-                                                                     WARC-Identified-Payload-Type: string,
-                                                                     WARC-Payload-Digest: string, WARC-Record-ID:
-                                                                     string, WARC-Target-URI: string, WARC-Type:
-                                                                     string, WARC-Warcinfo-ID: string,
-                                                                     WARC-Truncated: string>
-    previous_word_count                                              int64
-    text                                                             string
-    url                                                              string
-    warcinfo                                                         string
-    fasttext_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train_prob  double
-
-    However, since only some columns have the WARC-Truncated nested column in metadata, it leads the output schema
-    to set it to null. Here is an example of the broken output schema:
-    Column                                                           Type
-    ------                                                           ----
-    bff_contained_ngram_count_before_dedupe                          int64
-    language_id_whole_page_fasttext                                  struct<en: double>
-    metadata                                                         struct<Content-Length: string, Content-Type:
-                                                                     string, WARC-Block-Digest: string,
-                                                                     WARC-Concurrent-To: string, WARC-Date:
-                                                                     timestamp[us], WARC-IP-Address: string,
-                                                                     WARC-Identified-Payload-Type: string,
-                                                                     WARC-Payload-Digest: string, WARC-Record-ID:
-                                                                     string, WARC-Target-URI: string,
-                                                                     WARC-Truncated: null, WARC-Type: string,
-                                                                     WARC-Warcinfo-ID: string>
-    previous_word_count                                              int64
-    text                                                             string
-    url                                                              string
-    warcinfo                                                         string
-    fasttext_openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train_prob  double
-    generated_text                                                   string
-
-    We fix this by checking if the row contains the "WARC-Truncated" key and if it doesn't then, we set the default
-    value to an empty string to have a consistent schema.
-    """
-    if "metadata" in batch:
-        metadata_list = batch["metadata"]
-        for metadata in metadata_list:
-            if metadata is not None:
-                if "WARC-Truncated" in metadata:
-                    if metadata["WARC-Truncated"] is None:
-                        metadata["WARC-Truncated"] = ""
-                else:
-                    metadata["WARC-Truncated"] = ""
-
-    return batch
 
 
 @ray.remote
