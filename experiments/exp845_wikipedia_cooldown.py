@@ -40,6 +40,7 @@ markdownified_wiki_tokenized = default_tokenize(
 # TPU is used which is not available in us-central2
 cooldown_config = QualityAblationConfig(
     resources=TpuPodConfig(tpu_type="v4-128"),
+    permutation_type="linear",
 )
 
 # Conduct the cooldown experiment

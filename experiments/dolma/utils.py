@@ -78,6 +78,7 @@ def dolma_pipeline_with_modified_dataset(
     llama3_tokenized_mixture = lm_mixture_data_config(
         components=dolma_tokenization_steps,
         weights=dolma_weights,
+        permutation_type="linear",
     )
 
     trained_1_4b_model = default_train(

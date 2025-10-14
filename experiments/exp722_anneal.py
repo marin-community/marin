@@ -35,6 +35,7 @@ finemath_anneal_config = AnnealConfig(
             "dolmino": dolmino_dclm,
         },
         weights={"finemath": 0.3, "dolmino": 0.7},
+        permutation_type="linear",
     ),
 )
 
@@ -44,6 +45,7 @@ control_dclm_anneal_config = AnnealConfig(
             "dolmino": dolmino_dclm,
         },
         weights={"dolmino": 1.0},
+        permutation_type="linear",
     ),
 )
 control_model = default_anneal(name="llama-8b-anneal-dclm", anneal_config=control_dclm_anneal_config)

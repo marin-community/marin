@@ -91,6 +91,7 @@ spoonbill_mixture = lm_varying_mixture_data_config(
         (PHASE_3_START, cooldown_mixture_weights_v1),
         (PHASE_3_END, spoonbill_weights),
     ],
+    permutation_type="linear",
 )
 
 

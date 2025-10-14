@@ -35,6 +35,7 @@ dataset_config = lm_mixture_data_config(
         "dclm": dolmino_dclm,
     },
     weights={"starcoder": 0.30, "dclm": 0.70},
+    permutation_type="linear",
 )
 # Starcoder dataset has 250B tokens.
 starcoder_anneal_config = AnnealConfig(

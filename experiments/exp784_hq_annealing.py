@@ -70,6 +70,7 @@ TOTAL_HIGH_QUALITY_TOKENS = sum(HIGH_QUALITY_TOKEN_COUNTS.values())
 control_dataset_config = lm_mixture_data_config(
     components={"dclm_baseline": DCLM_BASELINE},
     weights={"dclm_baseline": 1.0},
+    permutation_type="linear",
 )
 
 control_anneal_config = AnnealConfig(
@@ -95,6 +96,7 @@ for hq_dataset in high_quality_datasets:
     dataset_config = lm_mixture_data_config(
         components={"dclm": DCLM_BASELINE, "high_quality": hq_dataset},
         weights={"dclm": DCLM_WEIGHT, "high_quality": HIGH_QUALITY_WEIGHT},
+        permutation_type="linear",
     )
 
     anneal_config = AnnealConfig(
@@ -113,6 +115,7 @@ for hq_dataset in high_quality_datasets:
     dataset_config_with_flan = lm_mixture_data_config(
         components={"dclm": DCLM_BASELINE, "high_quality": hq_dataset, "flan": dolma_tokenized["dolma/flan"]},
         weights={"dclm": DCLM_WEIGHT, "high_quality": FLAN_WEIGHT_15, "flan": FLAN_WEIGHT_15},
+        permutation_type="linear",
     )
 
     anneal_config_with_flan = AnnealConfig(
@@ -141,6 +144,7 @@ all_hq_datasets = {dataset: dolma_tokenized[dataset] for dataset in HIGH_QUALITY
 all_hq_dataset_config = lm_mixture_data_config(
     components={"dclm": DCLM_BASELINE, "flan": dolma_tokenized["dolma/flan"], **all_hq_datasets},
     weights=mixture_weights_15pct_flan,
+    permutation_type="linear",
 )
 
 all_hq_anneal_config = AnnealConfig(
@@ -168,6 +172,7 @@ mixture_weights_5pct_flan = {
 all_hq_dataset_config_5pct = lm_mixture_data_config(
     components={"dclm": DCLM_BASELINE, "flan": dolma_tokenized["dolma/flan"], **all_hq_datasets},
     weights=mixture_weights_5pct_flan,
+    permutation_type="linear",
 )
 
 all_hq_anneal_config_5pct = AnnealConfig(
