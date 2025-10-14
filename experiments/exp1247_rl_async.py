@@ -37,7 +37,6 @@ from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
-from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 
 logger = logging.getLogger(__name__)
 
@@ -168,12 +167,6 @@ def rl_train(name: str) -> ExecutorStep:
         storage_type=StorageType.FILE,
         path=OutputName("rollouts"),
     )
-    weight_transfer = WeightTransferConfig(
-        mode=WeightTransferMode.ARROW_FLIGHT,
-        sync_interval_steps=1,
-        # We are running on-policy, so wait for new weights from the trainer after each episode.
-        max_weight_transfer_wait_time=10,
-    )
 
     curriculum_config = create_math_curriculum(name)
 
@@ -188,14 +181,12 @@ def rl_train(name: str) -> ExecutorStep:
                 capacity=4096,
                 alpha=3,
                 max_samples=1,
-                max_rollout_step_delay=1,
             ),
         ),
         curriculum=curriculum_config,
         tokenizer=MODEL_TOKENIZER,
         initial_checkpoint=MODEL_NAME,
         rollout_storage=rollout_storage,
-        weight_transfer=weight_transfer,
         run_id=name,
         log_freq=10,
         run_config=RunConfig(
@@ -205,6 +196,9 @@ def rl_train(name: str) -> ExecutorStep:
             inference_tpu_type="v5p-8",
         ),
     )
+
+    # Enable synchronous (on-policy) training mode for testing
+    config = config.with_sync_mode()
 
     return ExecutorStep(
         name=f"rl_testing/{name}",
