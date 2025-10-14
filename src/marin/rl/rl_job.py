@@ -251,7 +251,8 @@ class RLJob:
                 service=InferenceEngineConfig(
                     max_seqs=max_seqs,
                     page_size=128,
-                    max_pages_per_seq=1 + max_tokens // 128,
+                    # max_pages_per_seq=1 + max_tokens // 128,
+                    max_seq_len=max_tokens,
                     enable_logprobs=True,
                 ),
                 port=0,

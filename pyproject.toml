@@ -253,7 +253,6 @@ rl = [
 
 post_training = [
     "gcsfs",
-    "transformers",
     "flax==0.10.0",
     "jaxtyping",
     "tyro==0.8.11",
