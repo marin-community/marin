@@ -31,7 +31,7 @@ import ray
 
 def run_levanter_eval_sliding(config: EvalSlidingTotalConfig) -> None:
     """Run Levanter's eval_sliding_total with proper TPU infrastructure like training."""
-    hw_config = TpuPodConfig(tpu_type="v4-128", slice_count=1, runtime_env={"env_vars": {}})
+    hw_config = TpuPodConfig(tpu_type="v4-64", slice_count=1, runtime_env={"env_vars": {}})
 
     @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1)
     def eval_lm_task():
@@ -122,7 +122,7 @@ eval_sliding_step = ExecutorStep(
         cursor_inc_chars=10,
         token_mode=True,
         cursor_inc_tokens=5,
-        eval_batch_size=512,  # max batch size is 512 for TPU v4-128
+        eval_batch_size=256,  # max batch size is 256 for TPU v4-64
         output_base_path=this_output_path(),
         gcp_log=True,  # Save plots and data to GCP instead of WandB artifacts
         # Use canonical books location (matches other working scripts)

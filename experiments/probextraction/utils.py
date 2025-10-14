@@ -52,7 +52,7 @@ def list_books(gcp_path: str) -> list[tuple[str, str]]:
 
 def run_eval_sliding_on_tpu(
     config: EvalSlidingTotalConfig,
-    tpu_type: str = "v4-128",
+    tpu_type: str = "v4-64",
     slice_count: int = 1,
 ) -> None:
     """Run Levanter's marin_eval_sliding_total on a TPU slice via Ray.
@@ -71,7 +71,7 @@ def run_eval_sliding_on_tpu(
     return run_on_pod_resumable(eval_lm_task, hw_config.accelerator_descriptor(), max_retries_failure=10)
 
 
-def make_run_eval_sliding_fn(tpu_type: str = "v4-128", slice_count: int = 1):
+def make_run_eval_sliding_fn(tpu_type: str = "v4-64", slice_count: int = 1):
     """Return a callable(config) that runs eval_sliding on the specified TPU configuration."""
 
     def _runner(cfg: EvalSlidingTotalConfig):
@@ -82,7 +82,7 @@ def make_run_eval_sliding_fn(tpu_type: str = "v4-128", slice_count: int = 1):
 
 def run_eval_pz_on_tpu(
     config: PzEvalConfig,
-    tpu_type: str = "v4-128",
+    tpu_type: str = "v4-64",
     slice_count: int = 1,
 ) -> None:
     """Run Levanter's eval_pz on a TPU slice via Ray."""
@@ -96,7 +96,7 @@ def run_eval_pz_on_tpu(
     return run_on_pod_resumable(eval_task, hw_config.accelerator_descriptor(), max_retries_failure=10)
 
 
-def make_run_eval_pz_fn(tpu_type: str = "v4-128", slice_count: int = 1):
+def make_run_eval_pz_fn(tpu_type: str = "v4-64", slice_count: int = 1):
     """Return a callable(config) that runs eval_pz on the specified TPU configuration."""
 
     def _runner(cfg: PzEvalConfig):
@@ -114,9 +114,9 @@ def make_run_eval_pz_fn(tpu_type: str = "v4-128", slice_count: int = 1):
 HW_PRESETS: list[tuple[float, str, int]] = [
     # (max_params_b, tpu_type, eval_batch_size)
     (8.0, "v4-64", 256),
-    (15.0, "v4-128", 512),
-    (35.0, "v4-128", 512),
-    (80.0, "v4-256", 256),
+    (15.0, "v4-64", 256),
+    (35.0, "v4-64", 256),
+    (80.0, "v4-64", 256),
 ]
 
 
@@ -133,7 +133,7 @@ def choose_hw_and_batch(params_b: float, *, override_env: str = "TPU_TYPE_OVERRI
         if tp == "v4-64":
             return tp, 256
         elif tp == "v4-128":
-            return tp, 512
+            return tp, 256
         # Default conservative fallback
         return tp, 256
 

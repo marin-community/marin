@@ -57,7 +57,7 @@ base_config = EvalSlidingTotalConfig(
     cursor_inc_chars=10,
     token_mode=True,
     cursor_inc_tokens=5,
-    eval_batch_size=128,  # max batch size is 128 for TPU v4-128 / v6e-64
+    eval_batch_size=128,  # max batch size is 128 for TPU v4-64 (large model)
     output_base_path=this_output_path(),
     gcp_log=True,  # Save plots and data to GCP instead of WandB artifacts
 )

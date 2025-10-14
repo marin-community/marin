@@ -73,7 +73,7 @@ base_config = EvalSlidingTotalConfig(
     cursor_inc_chars=10,
     token_mode=True,
     cursor_inc_tokens=5,
-    eval_batch_size=128,  # Smaller batch size for larger model
+    eval_batch_size=128,  # Smaller batch size for large model on v4-64
     output_base_path=this_output_path(),
     gcp_log=True,  # Save plots and data to GCP instead of WandB artifacts
 )
