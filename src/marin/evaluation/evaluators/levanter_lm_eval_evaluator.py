@@ -77,8 +77,9 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
-        show_logs_from_ray: bool = True,
+        show_logs_from_ray: bool = False,
         max_length: int | None = None,
+        print_every_n: int | None = None,
     ) -> None:
         """
         Runs Levanter's lm-eval harness on the specified model and set of tasks.
@@ -91,6 +92,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             wandb_tags (list[str] | None): The tags to add to the wandb run.
             show_logs_from_ray (bool): Whether to show the logs from the ray run.
             max_length (int | None): Maximum total length (prompt + generation) during evaluation.
+            print_every_n (int | None): Print decoded tokens every N tokens during Levanter generation. If 0 or None, disable printing.
         """
         # Eval Harness code: https://github.com/stanford-crfm/levanter/blob/main/src/levanter/eval_harness.py
         # Run the harness with the model and the specified evals
@@ -153,6 +155,13 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 logger.info(f"Setting max_length={max_length} in LmEvalHarnessConfig")
 
             print("starting harness")
+            # Thread print_every_n into the harness config if provided
+            if print_every_n is not None:
+                try:
+                    harness_config_kwargs["print_every_n"] = int(print_every_n)
+                except Exception:
+                    logger.warning(f"Invalid print_every_n: {print_every_n}. Ignoring.")
+
             eval_config = eval_harness.EvalHarnessMainConfig(
                 eval_harness=eval_harness.LmEvalHarnessConfig(**harness_config_kwargs),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path

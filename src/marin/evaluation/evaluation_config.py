@@ -107,3 +107,8 @@ class EvaluationConfig:
     """
     Maximum total length (prompt + generation) during evaluation.
     """
+
+    print_every_n: int | None = None
+    """
+    Print decoded tokens every N tokens during Levanter generation. If 0 or None, disable printing.
+    """

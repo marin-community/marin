@@ -242,6 +242,7 @@ def evaluate_levanter_lm_evaluation_harness(
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
     max_length: int | None = None,
+    print_every_n: int | None = None,
     discover_latest_checkpoint: bool = True,
 ) -> ExecutorStep:
     """
@@ -264,6 +265,7 @@ def evaluate_levanter_lm_evaluation_harness(
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
             max_length=max_length,
+            print_every_n=print_every_n,
             wandb_tags=['lm-eval', f'{model_name}', f'{model_path}'] + [eval_task.name for eval_task in evals],
         ),
     )
