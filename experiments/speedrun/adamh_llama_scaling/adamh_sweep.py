@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Speedruns using the AdamH optimizer for various Llama model sizes (Chinchilla optimal steps).
-"""
+"""Speedruns using the AdamH optimizer for various Llama model sizes (Chinchilla optimal steps)."""
 
 import dataclasses
 import logging
