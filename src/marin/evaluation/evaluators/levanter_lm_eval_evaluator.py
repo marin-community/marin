@@ -40,9 +40,10 @@ logger = logging.getLogger(__name__)
 Note: to use this class, you will need to pass an additional flag `--extra eval` to ray_run.
 This will ensure that the correct dependencies are installed at launch time.
 
-e.g.,  
+e.g.,
 `python src/marin/run/ray_run.py --no_wait --extra eval -- python script.py`
 """
+
 
 class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
     """For `Evaluator`s that runs inference with Levanter's Lm Eval Harness on TPUs."""
@@ -54,7 +55,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         return build_runtime_env_for_packages(
             extra=["eval", "tpu"],
             pip_packages=[
-                "antlr4-python3-runtime==4.11", # Required by lm-eval[math]
+                "antlr4-python3-runtime==4.11",  # Required by lm-eval[math]
                 "haliax>=1.4.dev348",
                 "immutabledict",
                 "jax[tpu]",
@@ -62,8 +63,8 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 "ray==2.45",
                 "statsmodels==0.14.4",
                 "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@18b376504e98aadcb985f9235c3e58ab2bf4c5bc",
-                "math-verify", # Required by lm-eval[math]
-                "sympy>=1.12", # Required by lm-eval[math]
+                "math-verify",  # Required by lm-eval[math]
+                "sympy>=1.12",  # Required by lm-eval[math]
             ],
             env_vars={
                 "TOKENIZERS_PARALLELISM": "false",
@@ -114,10 +115,10 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             # NOTE(chris): Before, the batch size was 16, but this is too large for the 8B model.
             # In the future, we should make this user-configurable.
             #
-            # NOTE (chiheem 2025-09-30): We should make the users pass TrainerConfig so that they 
+            # NOTE (chiheem 2025-09-30): We should make the users pass TrainerConfig so that they
             # are forced to customize the TrainerConfig according to their device, device, and model.
             # Current config is customized for our 8B model on v6e-8.
-            # 
+            #
             trainer_config = TrainerConfig(
                 tracker=WandbConfig(project="marin", tags=wandb_tags, name=name),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -148,6 +149,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 "max_examples": max_eval_instances,
                 "log_samples": True,
                 "max_length": max_length if max_length is not None else 4096,
+                "apply_chat_template": model.apply_chat_template,
                 "sample_logging": eval_harness.SampleLoggingConfig(log_all=True),  # Enable sample collection
             }
 
@@ -167,6 +169,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,
                 checkpoint_is_hf=True,
+                apply_chat_template=model.apply_chat_template,
                 trainer=trainer_config,
                 model=model_config,
             )
@@ -210,10 +213,10 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                             logger.info(f"Extracted {len(task_results['outputs'])} samples for task {task_name}")
                             # Remove outputs from results to keep results.json clean
                             del task_results["outputs"]
-                
+
                 if not samples:
                     logger.info("No samples found in results")
-                
+
                 # add a results.json to output path
                 results_output_path = os.path.join(output_path, "results.json")
 
@@ -231,7 +234,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                         with fs.open(samples_output_path, "w") as f:
                             json.dump(task_samples, f, indent=2)
                         logger.info(f"Uploaded samples for {task_name} to GCS: {samples_output_path}")
-
 
                 levanter.tracker.current_tracker().finish()
                 logger.info("Upload completed successfully.")
