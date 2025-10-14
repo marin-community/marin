@@ -17,17 +17,18 @@ Environment Wrapper for the Environments Hub by Prime-Intellect, which contains 
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
 import logging
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import jax.numpy as jnp
 import numpy as np
-import verifiers as vf
-from verifiers.types import GenerateOutputs
 
+from marin.rl.environments import MarinEnv
 from marin.rl.inference_ctx import InferenceContext
 from marin.rl.types import Rollout, RolloutGroup
 
-from .base import MarinEnv
+# Lazy import for optional dependencies
+if TYPE_CHECKING:
+    pass
 
 logger = logging.getLogger("ray")
 
@@ -37,7 +38,7 @@ class PrimeIntellectEnv(MarinEnv):
     Environment Wrapper for the Environments Hub by Prime-Intellect, which contains a collection of environments.
     """
 
-    ENVS: ClassVar[dict[str, vf.Environment]] = {}
+    ENVS: ClassVar[dict[str, Any]] = {}
 
     def __init__(
         self,
@@ -59,10 +60,23 @@ class PrimeIntellectEnv(MarinEnv):
         self.max_tokens = max_tokens
         self.max_concurrent = max_concurrent
 
-    def load_prime_intellect_env(self, env_id: str, env_args: dict) -> vf.Environment:
+    def _ensure_verifiers_installed(self):
+        """Ensure verifiers package is installed."""
+        try:
+            import verifiers  # noqa: F401
+        except ImportError as e:
+            raise ImportError(
+                "The 'verifiers' package is required to use PrimeIntellectEnv. "
+                "Please install it with: uv pip install 'marin[rl]' or uv pip install verifiers"
+            ) from e
+
+    def load_prime_intellect_env(self, env_id: str, env_args: dict) -> Any:
         """
         Get the Verifiers environment for the environment ID.
         """
+        self._ensure_verifiers_installed()
+        import verifiers as vf
+
         logger.debug(f"Loading Verifiers environment for {env_id} with arguments: {env_args}")
 
         if env_id not in self.ENVS:
@@ -80,6 +94,8 @@ class PrimeIntellectEnv(MarinEnv):
         mode: str = "train",
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample problems and generate responses using the model."""
+        self._ensure_verifiers_installed()
+        from verifiers.types import GenerateOutputs
         import subprocess
 
         # Download/install the environment
@@ -125,36 +141,27 @@ class PrimeIntellectEnv(MarinEnv):
             ),
         )
 
+        processed_outputs = vf_env.process_env_results_vllm(
+            result.prompt, result.completion, result.state, inference_ctx.tokenizer
+        )
+
         # Convert to RolloutGroups
         rollout_groups = []
-        for prompt_idx in range(len(result.prompt)):
+        for prompt_idx in range(len(processed_outputs.prompt_ids)):
             rollouts = []
             for gen_idx in range(n_generations):
                 overall_idx = prompt_idx * n_generations + gen_idx
-                if overall_idx >= len(result.completion):
+                if overall_idx >= len(processed_outputs.completion_ids):
                     break
 
-                completion = result.completion[overall_idx]
-                reward = result.reward[overall_idx] if overall_idx < len(result.reward) else 0.0
+                reward = processed_outputs.rewards[overall_idx] if overall_idx < len(processed_outputs.rewards) else 0.0
 
-                # Extract completion text (handle both string and message list formats)
-                if isinstance(completion, list) and len(completion) > 0:
-                    # completion is a list of message dicts [{'role': 'assistant', 'content': '...'}]
-                    completion_text = (
-                        completion[-1].get("content", "") if isinstance(completion[-1], dict) else str(completion[-1])
-                    )
-                else:
-                    completion_text = str(completion) if completion else ""
-
-                # Use chat template for prompt tokenization to match server behavior
-                prompt_tokens = inference_ctx.tokenize_prompt(result.prompt[prompt_idx])
-                response_tokens = inference_ctx.tokenize_response(completion_text)
+                # Use tokenizer from inference context
+                prompt_tokens = processed_outputs.prompt_ids[prompt_idx]
+                response_tokens = processed_outputs.completion_ids[overall_idx]
 
                 token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
-                # TODO(herumb): Verifiers don't provide logprobs - stub with zeros for now
-                # nothing can be learned until we get logprobs from verifiers or add a
-                # logprobs endpoint to the server.
-                response_logprobs = jnp.zeros(len(response_tokens), dtype=jnp.float32)
+                response_logprobs = processed_outputs.completion_logprobs[overall_idx]
 
                 rollout = Rollout(
                     env_name=f"prime_intellect:{self.env_id}",
