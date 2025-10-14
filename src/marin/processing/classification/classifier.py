@@ -508,8 +508,6 @@ class vLLMClassifierWithDocsAndAttributes(vLLMClassifier):
 
     def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
         """Process a batch of documents."""
-        # Use the text generation pipeline to generate responses
-        # batch_with_generations = self.text_generator(batch)
 
         # Process the generated text to extract classification scores
         attributes = []
@@ -518,9 +516,6 @@ class vLLMClassifierWithDocsAndAttributes(vLLMClassifier):
         # We assume that we want to change the prompt template based on what each attribute is.
         # Number of strategies * number of text documents = number of flattened batches
         templates = []
-        # print(f"attribute list: {attribute_dict_list}")
-        print(f"len of attributes: {len(attribute_dict_list)}")
-        print(f"len of batch: {len(batch)}")
 
         # requires attributes as an input key
         flattened_batch_keys_to_values = {key: [] for key in batch.keys()}
@@ -539,12 +534,10 @@ class vLLMClassifierWithDocsAndAttributes(vLLMClassifier):
                 templates.append(self._change_template_based_on_attributes(attribute))
                 current_index += 1
 
-        # print(f"len of flattened batches: {len(flattened_batches)}")
-
+        # We then mutate the template using the templates list that we created above where each template
+        # in the template list is a unique template using the passed in base template + some dynamic attribute
+        # of each example.
         self.text_generator.template = templates
-
-        print(f"flattened_batch_keys_to_values: {len(flattened_batch_keys_to_values)}")
-        print(f"len of templates: {len(templates)}")
 
         # Generate text for each flattened batch
         batch_with_generations = self.text_generator(flattened_batch_keys_to_values)
