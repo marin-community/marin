@@ -48,6 +48,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             env_vars={
                 "TOKENIZERS_PARALLELISM": "false",
                 "HF_DATASETS_TRUST_REMOTE_CODE": "1",
+                "HF_ALLOW_CODE_EVAL": "1",
             },
         )
 
@@ -114,6 +115,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     log_samples=False,
                     max_length=4096,
                     apply_chat_template=model.apply_chat_template,
+                    confirm_run_unsafe_code=True,
                     sample_logging=eval_harness.SampleLoggingConfig(max_samples_per_benchmark=20)
                 ),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
