@@ -206,6 +206,7 @@ CODE_TASKS = (
     EvalTaskConfig("jsonschema_bench_easy", 2, task_alias="jsonschema_bench_easy_2shot"),
     EvalTaskConfig("jsonschema_bench_medium", 2, task_alias="jsonschema_bench_medium_2shot"),
     EvalTaskConfig("jsonschema_bench_hard", 2, task_alias="jsonschema_bench_hard_2shot"),
+    EvalTaskConfig("humaneval", 0, task_alias="humaneval_0shot"),
 )
 
 # Medical and Healthcare Tasks
