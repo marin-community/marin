@@ -19,10 +19,20 @@ Reference: https://github.com/EleutherAI/lm-evaluation-harness
 
 from experiments.evals.evals import default_eval
 from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
-from experiments.evals.task_configs import REASONING_TASKS, EMOTIONAL_ETHICS_TASKS, LANGUAGE_TASKS, CODE_TASKS, MEDICAL_TASKS, KNOWLEDGE_TASKS, BIAS_SAFETY_TASKS, LONG_CONTEXT_TASKS, ACTION_TASKS, TRUTHFULNESS_TASKS, SPECIALIZED_TASKS
+from experiments.evals.task_configs import (
+    REASONING_TASKS,
+    EMOTIONAL_ETHICS_TASKS,
+    LANGUAGE_TASKS,
+    CODE_TASKS,
+    MEDICAL_TASKS,
+    KNOWLEDGE_TASKS,
+    BIAS_SAFETY_TASKS,
+    ACTION_TASKS,
+    TRUTHFULNESS_TASKS,
+    SPECIALIZED_TASKS,
+)
 from experiments.models import qwen3_32b
 from marin.execution.executor import executor_main
-from experiments.models import download_model_step, ModelConfig
 
 from experiments.tootsie.exp1529_32b_mantis_cooldown import tootsie_32b_cooldown_mantis as marin_32b
 
@@ -33,7 +43,18 @@ MODELS_TO_EVALUATE = [
 ]
 
 # Task configurations to run
-TASK_CONFIGS = REASONING_TASKS + EMOTIONAL_ETHICS_TASKS + LANGUAGE_TASKS + CODE_TASKS + MEDICAL_TASKS + KNOWLEDGE_TASKS + BIAS_SAFETY_TASKS + ACTION_TASKS + TRUTHFULNESS_TASKS + SPECIALIZED_TASKS
+TASK_CONFIGS = (
+    REASONING_TASKS
+    + EMOTIONAL_ETHICS_TASKS
+    + LANGUAGE_TASKS
+    + CODE_TASKS
+    + MEDICAL_TASKS
+    + KNOWLEDGE_TASKS
+    + BIAS_SAFETY_TASKS
+    + ACTION_TASKS
+    + TRUTHFULNESS_TASKS
+    + SPECIALIZED_TASKS
+)
 
 if __name__ == "__main__":
     # Comprehensive evaluation suite for multiple models
