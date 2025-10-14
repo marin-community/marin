@@ -903,6 +903,7 @@ class LmEvalHarnessConfig:
     bootstrap_iters: int = 0
     apply_chat_template: bool = False
     fewshot_as_multiturn: bool = False
+    confirm_run_unsafe_code: bool = True
     sample_logging: SampleLoggingConfig = dataclasses.field(default_factory=SampleLoggingConfig)
     generation_kwargs: dict = dataclasses.field(
         default_factory=lambda: {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
@@ -1162,6 +1163,7 @@ def _actually_run_eval_harness(
                 bootstrap_iters=config.bootstrap_iters,
                 apply_chat_template=config.apply_chat_template,
                 fewshot_as_multiturn=config.fewshot_as_multiturn,
+                confirm_run_unsafe_code=config.confirm_run_unsafe_code,
             )
 
         worker.stop()
@@ -1308,12 +1310,12 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
             # log the results as json
             logger.info("uploading artifacts...")
             with open("lm_eval_harness_results.json", "w") as f:
-                json.dump(outputs, f, indent=2)
+                json.dump(outputs, f, indent=2, default=_json_default)
                 f.flush()
                 f_path = f.name
                 levanter.tracker.current_tracker().log_artifact(f_path, name="lm_eval_harness_results")
 
-            print(json.dumps(outputs, indent=2), flush=True)
+            print(json.dumps(outputs, indent=2, default=_json_default), flush=True)
 
         return outputs
 
@@ -1340,7 +1342,30 @@ def log_report_to_tracker(prefix: str, report: dict, tracker: Optional[levanter.
 
                 to_log[f"{prefix}/averages/{metric_name}"] = metric_value
 
-    tracker.log(to_log, step=None)
+    if to_log:
+        tracker.log(to_log, step=None)
+
+
+def _json_default(value):
+    """
+    Provide a best-effort JSON serialization for objects returned by the eval harness.
+    """
+    if dataclasses.is_dataclass(value):
+        return dataclasses.asdict(value)
+
+    if isinstance(value, set):
+        return list(value)
+
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        try:
+            return value.to_dict()
+        except Exception:
+            pass
+
+    if hasattr(value, "__dict__"):
+        return vars(value)
+
+    return repr(value)
 
 
 def lm_eval_harness(config: LmEvalHarnessConfig, tokenizer, EvalBatch, axis_resources, mp: jmp.Policy | None):
@@ -1375,7 +1400,7 @@ def lm_eval_harness(config: LmEvalHarnessConfig, tokenizer, EvalBatch, axis_reso
             with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as f:
                 import json
 
-                json.dump(outputs, f)
+                json.dump(outputs, f, default=_json_default)
                 f.flush()
                 levanter.tracker.current_tracker().log_artifact(
                     f.name, name=f"lm_eval_harness_results.{step.step}.json", type="lm_eval_output"
