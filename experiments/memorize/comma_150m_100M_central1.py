@@ -14,7 +14,13 @@
 
 # Copyright 2025 The Marin Authors
 
-"""100M seed set runs for us-central1 using shared utils."""
+"""100M seed set runs for us-central1 using shared utils.
+
+Supports resuming specific runs by passing a fixed timestamp to the runner
+for each step.
+"""
+
+import os
 
 from marin.execution.executor import executor_main
 
@@ -23,14 +29,18 @@ from experiments.memorize.utils import make_runner_100m
 REGION = "central1"
 runner = make_runner_100m(REGION)
 
-train_1epoch = runner(1)
-train_2epoch = runner(2)
-train_5epoch = runner(5)
-train_10epoch = runner(10)
 
 
 if __name__ == "__main__":
+    # Build the desired steps here so we can pass the timestamp argument.
+    steps = [
+        #runner(200, timestamp="20251013_141440"),
+        runner(300, timestamp="20251013_141440"),
+        # runner(500, timestamp=RUNNER_TIMESTAMP),
+        # runner(750, timestamp="20251013_141440"),
+    ]
+
     executor_main(
-        steps=[train_1epoch, train_2epoch, train_5epoch, train_10epoch],
+        steps=steps,
         description="150M on ~100M COMMA seed set (us-central1).",
     )

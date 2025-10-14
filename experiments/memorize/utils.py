@@ -57,16 +57,16 @@ def build_llama150m_memorize_config():
     return dataclasses.replace(llama_150m, seq_len=4096)
 
 
-def make_pz_eval_config() -> PzInnerLoopConfig:
+def make_pz_eval_config(initial_batch_size: int) -> PzInnerLoopConfig:
     """P(z) configuration aligned with levanter YAML defaults (fast + informative).
 
     Key choices:
-    - Focus on Wikimedia (common subset) and evaluate ~1% of training steps.
+    - Evaluate across all datasets in the mixture (datasets=None) and ~1% of training steps.
     - doc length limited to 1024 for speed; chunk_size/prompt tokens as in YAML.
     - eval_batch_size 64 and num_documents 1000 (as in referenced config).
     """
     return PzInnerLoopConfig(
-        datasets=["common_pile/wikimedia"],
+        datasets=None,  # include all datasets in the mixture
         mode="first",
         num_documents=1000,
         eval_batch_size=64,
@@ -78,6 +78,12 @@ def make_pz_eval_config() -> PzInnerLoopConfig:
         pz_npz=False,
         decode_preview=1,
         verify_treecache=False,
+        # Enforce subset + deterministic shuffle strictly within training head
+        restrict_to_training_subset=True,
+        initial_batch_size=initial_batch_size,
+        doc_shuffle=True,
+        doc_perm_type="feistel",
+        doc_perm_seed=0,
     )
 
 
@@ -98,6 +104,8 @@ def make_comma_mixture_1m_wikimedia() -> tuple[object, int]:
         max_train_batches=max_train_batches,
         shuffle=False,
     )
+    # Enable Feistel PRP and per-epoch reshuffling on wrap
+    mixture = dataclasses.replace(mixture, permutation_type="feistel", shuffle_per_epoch=True)
     return mixture, 2
 
 
@@ -111,6 +119,8 @@ def make_comma_mixture_10m() -> tuple[object, int]:
         max_train_batches=max_train_batches,
         shuffle=False,
     )
+    # Enable Feistel PRP and per-epoch reshuffling on wrap
+    mixture = dataclasses.replace(mixture, permutation_type="feistel", shuffle_per_epoch=True)
     # 15 datasets x 1 batch each → 15 steps/epoch
     return mixture, 15
 
@@ -140,6 +150,8 @@ def make_comma_mixture_100m() -> tuple[object, int]:
         max_train_batches=max_train_batches,
         shuffle=False,
     )
+    # Enable Feistel PRP and per-epoch reshuffling on wrap
+    mixture = dataclasses.replace(mixture, permutation_type="feistel", shuffle_per_epoch=True)
 
     seed_set_batches = 13 * len(components)
     return mixture, seed_set_batches
@@ -151,21 +163,21 @@ def mk_run(
     name_prefix: str,
     epochs: int,
     seed_set_batches: int,
+    train_batch_size: int = 128,
     model_config,
     mixture,
-    z_loss_zero_if_upto_10: bool = True,
+    timestamp: str | None = None,
 ) -> ExecutorStep:
     """Create a training ExecutorStep with auto P(z) cadence and sensible defaults.
 
     - P(z) cadence: ~1% of total steps, rounded, min 1
-    - z_loss rule: 0 for epochs ≤ 10 if `z_loss_zero_if_upto_10`, else 1e-4
     - TPU type: chosen via REGION_TPU_DEFAULTS
     - Batch size: 128, steps_per_eval: 1000, max_eval_batches: 10
     - Tags incorporate seed size, region, and model size
     """
     tpu_type = REGION_TPU_DEFAULTS.get(region, "v5p-8")
     pz_steps = max(1, int((seed_set_batches * epochs) / 100 + 0.5))
-    z_loss = 0 if (z_loss_zero_if_upto_10 and epochs <= 10) else 1e-4
+    z_loss = 0
 
     # Derive seed size tag (e.g., 1M, 10M, 100M) from the name prefix
     _prefix_tail = name_prefix.split("/")[-1]
@@ -186,13 +198,49 @@ def mk_run(
         tags.append(dataset_tag)
     tags.extend([region, tpu_type])
 
+    # Add timestamp to run name for unique identification
+    # Allow caller to override to support resuming pre-empted runs by name.
+    ts = timestamp or now_timestamp()
+
+    # Build P(z) config first to allow consistency checks
+    pz_cfg = make_pz_eval_config(train_batch_size)
+
+    # Consistency checks: enforce shuffle=False for training, and ensure max_train_batches covers P(z) datasets
+    # mixture is a LMMixtureDatasetConfig
+    if getattr(mixture, "shuffle", False) not in (False, 0):
+        raise ValueError("Memorize runs require data.shuffle=False to align P(z) subset with training subset.")
+
+    if pz_cfg.datasets is not None and getattr(mixture, "max_train_batches", None) is not None:
+        mtb = mixture.max_train_batches
+        for ds in pz_cfg.datasets:
+            if ds in mixture.configs:
+                if ds not in mtb or int(mtb[ds]) < 1:
+                    raise ValueError(
+                        f"P(z) dataset {ds} must have max_train_batches >= 1 in the training config to guarantee subset alignment."
+                    )
+
+    # HARD GUARDRAILS: These options desynchronize P(z) selection from the training subset head.
+    # We do not support them in memorize experiments because P(z) must sample strictly from the
+    # same head that training uses (as defined by max_train_batches × initial_batch_size).
+    if getattr(mixture, "experiment_budget", None) is not None or getattr(mixture, "target_budget", None) is not None:
+        raise ValueError(
+            "Memorize runs must NOT set experiment_budget/target_budget. These change the effective training subset "
+            "used by mixtures and will cause P(z) to sample from a different head than training."
+        )
+
+    if getattr(mixture, "num_validation_sequences", None) is not None:
+        raise ValueError(
+            "Memorize runs must NOT set num_validation_sequences. Holding out a tail for validation changes the "
+            "training subset definition and breaks P(z) alignment with training."
+        )
+
     return default_train(
-        name=f"{name_prefix}_{epochs}epoch_{region}",
+        name=f"{name_prefix}_{epochs}epoch_{region}_{ts}",
         tokenized=mixture,
         model_config=model_config,
         train_config=SimpleTrainConfig(
             resources=TpuPodConfig(tpu_type=tpu_type, slice_count=1),
-            train_batch_size=128,
+            train_batch_size=train_batch_size,
             num_train_steps=seed_set_batches * epochs,
             learning_rate=0.003,
             weight_decay=0.0,
@@ -209,7 +257,7 @@ def mk_run(
         ),
         tags=tags,
         eval_harness_tasks=(),
-        pz_eval_config=make_pz_eval_config(),
+        pz_eval_config=pz_cfg,
         pz_eval_steps=pz_steps,
     )
 
@@ -225,7 +273,7 @@ def make_runner_1m_wikimedia(region: str):
     mixture, seed_batches = make_comma_mixture_1m_wikimedia()
     name_prefix = "memorize/comma_150m_1M_wikimedia"
 
-    def _runner(epochs: int) -> ExecutorStep:
+    def _runner(epochs: int, *, timestamp: str | None = None) -> ExecutorStep:
         return mk_run(
             region=region,
             name_prefix=name_prefix,
@@ -233,6 +281,7 @@ def make_runner_1m_wikimedia(region: str):
             seed_set_batches=seed_batches,
             model_config=model_config,
             mixture=mixture,
+            timestamp=timestamp,
         )
 
     return _runner
@@ -244,7 +293,7 @@ def make_runner_10m(region: str):
     mixture, seed_batches = make_comma_mixture_10m()
     name_prefix = "memorize/comma_150m_10M"
 
-    def _runner(epochs: int) -> ExecutorStep:
+    def _runner(epochs: int, *, timestamp: str | None = None) -> ExecutorStep:
         return mk_run(
             region=region,
             name_prefix=name_prefix,
@@ -252,6 +301,7 @@ def make_runner_10m(region: str):
             seed_set_batches=seed_batches,
             model_config=model_config,
             mixture=mixture,
+            timestamp=timestamp,
         )
 
     return _runner
@@ -266,7 +316,7 @@ def make_runner_100m(region: str):
     mixture, seed_batches = make_comma_mixture_100m()
     name_prefix = "memorize/comma_150m_100M"
 
-    def _runner(epochs: int) -> ExecutorStep:
+    def _runner(epochs: int, *, timestamp: str | None = None) -> ExecutorStep:
         return mk_run(
             region=region,
             name_prefix=name_prefix,
@@ -274,7 +324,7 @@ def make_runner_100m(region: str):
             seed_set_batches=seed_batches,
             model_config=model_config,
             mixture=mixture,
-            z_loss_zero_if_upto_10=False,
+            timestamp=timestamp,
         )
 
     return _runner

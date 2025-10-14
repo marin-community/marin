@@ -388,6 +388,11 @@ def _add_run_env_variables(env: dict):
     if "TPU_STDERR_LOG_LEVEL" not in env:
         env["TPU_STDERR_LOG_LEVEL"] = "2"
 
+    # Set WandB init timeout to maximum to prevent timeout errors during initialization
+    # This is particularly important for TPU clusters where WandB may take longer to initialize
+    if "WANDB_INIT_TIMEOUT" not in env:
+        env["WANDB_INIT_TIMEOUT"] = "600"  # 10 minutes (maximum reasonable timeout)
+
     return env
 
 

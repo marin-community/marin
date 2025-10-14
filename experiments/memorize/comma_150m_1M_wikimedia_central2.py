@@ -46,7 +46,7 @@ train_6000epoch = runner(6000)
 if __name__ == "__main__":
     executor_main(
         steps=[
-            #train_2_epoch
+            train_2_epoch
             # train_10epoch,
             # train_20epoch,
             # train_50epoch,

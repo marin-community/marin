@@ -60,6 +60,14 @@ from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size
 logger = logging.getLogger(__name__)
 
 
+def _dbg(msg: str):
+    """Emit a flush-print debug line for tokenization tracing."""
+    try:
+        print(f"[TOKENIZE-DBG] {msg}", flush=True)
+    except Exception:
+        pass
+
+
 @dataclasses.dataclass(frozen=True)
 class HfDatasetSpec:
     """Specification for a HuggingFace dataset and optional subset name."""
@@ -203,25 +211,82 @@ def _expand_directories(config: UrlDatasetSourceConfig, allow_test_in_train) -> 
     Expand directories in the config to globs.
     """
 
+    _dbg(
+        "_expand_directories: pre-expansion counts "
+        f"train={len(config.train_urls)} validation={len(config.validation_urls)}"
+    )
+    _dbg(f"  train_urls head={config.train_urls[:3]}")
+    _dbg(f"  validation_urls head={config.validation_urls[:3]}")
+
     train_paths = _get_filepaths_to_tokenize(config.train_urls)
     _validate_train_urls(train_paths, allow_test_in_train)
     validation_paths = _get_filepaths_to_tokenize(config.validation_urls)
-
+    _dbg(
+        "_expand_directories: post-expansion counts "
+        f"train={len(train_paths)} validation={len(validation_paths)}"
+    )
+    _dbg(f"  train_paths head={train_paths[:3]}")
+    _dbg(f"  validation_paths head={validation_paths[:3]}")
     return dataclasses.replace(config, train_urls=train_paths, validation_urls=validation_paths)
 
 
 # most of the work is done in other ray remote functions, so we set 0.1
 @ray.remote(num_cpus=0.1)
 def tokenize(config: TokenizeConfigBase):
+    _dbg(f"tokenize: config type={type(config).__name__} cache_path={getattr(config, 'cache_path', None)}")
+    _dbg(f"tokenize: tokenizer={getattr(config, 'tokenizer', None)} format={getattr(config, 'format', None)}")
+
     source_config = config.as_lm_dataset_source_config(config.cache_path)
+    _dbg(f"tokenize: source_config type={type(source_config).__name__}")
+    try:
+        _dbg(
+            f"tokenize: source_config.train_urls count={len(getattr(source_config, 'train_urls', []) )} "
+            f"head={getattr(source_config, 'train_urls', [])[:3]}"
+        )
+        _dbg(
+            f"tokenize: source_config.validation_urls count={len(getattr(source_config, 'validation_urls', []) )} "
+            f"head={getattr(source_config, 'validation_urls', [])[:3]}"
+        )
+    except Exception as e:
+        _dbg(f"tokenize: error inspecting source_config urls: {e}")
 
     if isinstance(config, TokenizeConfig):
+        _dbg("tokenize: TokenizeConfig detected; running _expand_directories")
         # TODO: Levanter doesn't automatically expand directories to globs, but by convention we do in Marin
         # we should backport this to Levanter
         source_config = _expand_directories(source_config, config.allow_test_in_train)
+        try:
+            _dbg(
+                f"tokenize: after expansion train_urls count="
+                f"{len(getattr(source_config, 'train_urls', []) )} head={getattr(source_config, 'train_urls', [])[:3]}"
+            )
+            _dbg(
+                f"tokenize: after expansion validation_urls count="
+                f"{len(getattr(source_config, 'validation_urls', []) )} head={getattr(source_config, 'validation_urls', [])[:3]}"
+            )
+        except Exception as e:
+            _dbg(f"tokenize: error inspecting post-expansion urls: {e}")
 
     train_source = source_config.get_shard_source("train")
     validation_source = source_config.get_shard_source("validation")
+    _dbg(
+        "tokenize: shard sources "
+        f"train={type(train_source).__name__ if train_source else None} "
+        f"validation={type(validation_source).__name__ if validation_source else None}"
+    )
+    try:
+        if train_source:
+            _dbg(
+                f"tokenize: train_source.num_shards={train_source.num_shards} "
+                f"shard_names head={train_source.shard_names[:3]}"
+            )
+        if validation_source:
+            _dbg(
+                f"tokenize: validation_source.num_shards={validation_source.num_shards} "
+                f"shard_names head={validation_source.shard_names[:3]}"
+            )
+    except Exception as e:
+        _dbg(f"tokenize: error reading shard metadata: {e}")
 
     if train_source is None and validation_source is None:
         raise ValueError(
@@ -236,10 +301,15 @@ def tokenize(config: TokenizeConfigBase):
     if train_source is not None:
         options = config.cache_options
         if options is None and isinstance(config, TokenizeConfig):
+            _dbg("tokenize: deriving CacheOptions for TRAIN via _heuristic_cache_options")
             options = _heuristic_cache_options(config.train_paths)
         else:
             options = CacheOptions()
 
+        _dbg(
+            f"tokenize: dispatch TRAIN build_or_load_cache to {os.path.join(config.cache_path, 'train')} "
+            f"options={options}"
+        )
         train_ledger = (
             ray.remote(_levanter_build_cache)
             .options(
@@ -260,10 +330,15 @@ def tokenize(config: TokenizeConfigBase):
     if validation_source is not None:
         options = config.cache_options
         if options is None and isinstance(config, TokenizeConfig):
+            _dbg("tokenize: deriving CacheOptions for VALIDATION via _heuristic_cache_options")
             options = _heuristic_cache_options(config.validation_paths)
         else:
             options = CacheOptions()
 
+        _dbg(
+            f"tokenize: dispatch VALIDATION build_or_load_cache to {os.path.join(config.cache_path, 'validation')} "
+            f"options={options}"
+        )
         validation_ledger = (
             ray.remote(_levanter_build_cache)
             .options(
@@ -282,8 +357,10 @@ def tokenize(config: TokenizeConfigBase):
         validation_ledger = None
 
     if train_ledger is not None:
+        _dbg("tokenize: awaiting TRAIN ledger")
         ray.get(train_ledger)
     if validation_ledger is not None:
+        _dbg("tokenize: awaiting VALIDATION ledger")
         ray.get(validation_ledger)
 
 
@@ -292,6 +369,7 @@ def _heuristic_cache_options(paths: list[str]):
     # data files. Rule of thumb: 1 processor per 10GB (capping at 1024, per normal)
     # This reduces contention when writing to gcs and should hopefully mitigate some cost spikes
 
+    _dbg(f"_heuristic_cache_options: input paths head={paths[:3] if paths else []}")
     paths = _get_filepaths_to_tokenize(paths)
     if paths:
         total_size = sum(fsspec_size(path) for path in paths)
@@ -299,6 +377,9 @@ def _heuristic_cache_options(paths: list[str]):
         num_processors = min(1024, max(1, total_size // 10_000_000_000, num_files))
         human_size = humanfriendly.format_size(total_size)
         logger.info(f"Using {num_processors} processors for caching {num_files} files of total size {human_size}")
+        _dbg(
+            f"_heuristic_cache_options: total_size={human_size} files={num_files} num_shard_groups={num_processors}"
+        )
         options = CacheOptions(num_shard_groups=num_processors)
     else:
         options = CacheOptions()
@@ -321,6 +402,7 @@ def _levanter_build_cache(source, batch_tokenizer, output_path, options: CacheOp
 
 
 def _create_source(input_paths: str | list[str]) -> ShardedDataSource:
+    _dbg(f"_create_source: input_paths type={type(input_paths).__name__}")
     if isinstance(input_paths, str) and not _is_probably_path(input_paths):
         source = levanter.data.datasource_from_hf(input_paths, split="train")
     else:
@@ -328,7 +410,10 @@ def _create_source(input_paths: str | list[str]) -> ShardedDataSource:
             input_paths = [input_paths]
 
         filepaths_to_tokenize = _get_filepaths_to_tokenize(input_paths)
-
+        _dbg(
+            f"_create_source: resolved {len(filepaths_to_tokenize)} filepaths "
+            f"head={filepaths_to_tokenize[:3]}"
+        )
         if len(filepaths_to_tokenize) == 0:
             raise ValueError(f"No valid json/jsonl/parquet files found to tokenize in {input_paths}")
 
@@ -342,15 +427,23 @@ def _get_files_by_extensions(input_paths: list[str], extensions: list[str]) -> l
     """
     Get a list of all filepaths with the specified extension from the input paths.
     """
+    _dbg(f"_get_files_by_extensions: {len(input_paths)} inputs")
     output_paths = []
     for path in input_paths:
         assert path != "/"
-        if path.endswith("/") or fsspec_isdir(path):
+        as_dir = path.endswith("/") or fsspec_isdir(path)
+        _dbg(f"  inspect path={path} is_dir={as_dir}")
+        if as_dir:
             logger.info(f"Getting all {extensions} files in {path}")
             for ex in extensions:
-                output_paths.extend(fsspec_glob(os.path.join(path, f"**/*.{ex}")))
+                patt = os.path.join(path, f"**/*.{ex}")
+                hits = fsspec_glob(patt)
+                _dbg(f"    glob {patt} -> {len(hits)} hits head={hits[:2]}")
+                output_paths.extend(hits)
         else:
-            output_paths.extend(fsspec_glob(path))
+            hits = fsspec_glob(path)
+            _dbg(f"    glob {path} -> {len(hits)} hits head={hits[:2]}")
+            output_paths.extend(hits)
 
     return output_paths
 
@@ -360,16 +453,22 @@ def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
     Get all file paths to tokenize from the input paths.
     Handles json/jsonl.{gz,zst,zstd}, and parquet.
     """
+    _dbg(
+        f"_get_filepaths_to_tokenize: type={type(input_paths).__name__} "
+        f"len={(len(input_paths) if isinstance(input_paths, list) else 'NA')}"
+    )
     if isinstance(input_paths, VersionedValue):
         input_paths = input_paths.value
 
     if len(input_paths) == 0:
         return []
     elif any(isinstance(x, InputName | ExecutorStep) for x in input_paths):
+        _dbg("_get_filepaths_to_tokenize: found InputName/ExecutorStep; returning as-is for Executor to concretize")
         return input_paths
 
     # we're only going to have one or the other, but might as well return both
     out = _get_files_by_extensions(input_paths, ["json.{gz,zst,zstd}", "jsonl.{gz,zst,zstd}", "parquet", "json"])
+    _dbg(f"_get_filepaths_to_tokenize: expanded to {len(out)} paths head={out[:3]}")
 
     # NOTE(chris): When downloading the datasets from HF using default_download, we create a
     # provenance.json file but we seek to exclude this since we shouldn't train on this.
@@ -388,11 +487,14 @@ def _is_probably_path(path: str) -> bool:
     """see if it looks like a real path or not, in which case it might be an hf dataset"""
 
     protocol, _ = fsspec.core.split_protocol(path)
+    _dbg(f"_is_probably_path: path={path} protocol={protocol}")
 
     if protocol is not None:
         return True
 
-    if fsspec_isdir(path):
+    as_dir = fsspec_isdir(path)
+    _dbg(f"_is_probably_path: fsspec_isdir({path}) -> {as_dir}")
+    if as_dir:
         return True
 
     return False

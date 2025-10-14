@@ -24,21 +24,26 @@ REGION = "east5"
 runner = make_runner_10m(REGION)
 
 # Active longer runs for this region
+
 train_500epoch = runner(500)
 train_750epoch = runner(750)
 train_1000epoch = runner(1000)
 train_1500epoch = runner(1500)
 train_3000epoch = runner(3000)
 
+train_60epoch = runner(60)
+train_65epoch = runner(65)
 
 if __name__ == "__main__":
     executor_main(
         steps=[
-            train_500epoch,
-            train_750epoch,
-            train_1000epoch,
-            train_1500epoch,
-            train_3000epoch,
+            # train_500epoch,
+            # train_750epoch,
+            # train_1000epoch,
+            # train_1500epoch,
+            # train_3000epoch,
+            train_60epoch,
+            train_65epoch,
         ],
         description="150M on ~10M COMMA seed set (us-east5).",
     )
