@@ -610,6 +610,14 @@ class AutoClassifier(BaseClassifier):
 
 @ray.remote(concurrency_groups={"ping": 2})
 class AutoClassifierRayActor(AutoClassifier):
+    """Ray Actor Wrapper around the AutoClassifier class.
+
+    The mapping operation f(x) is preserved, we just add a ping method to this actor. This ping method
+    is used to check if the actor is alive from the autoscaler in .autoscaler. We set the concurrecy group
+    to 2 which will allow multiple threads to access the ping method concurrently, so when a batch is running
+    on the actor, the ping method can still be accessed by the autoscaler.
+    """
+
     def __init__(self, model_name: str, attribute_name: str, model_type: str | None, *args, **kwargs):
         super().__init__(model_name, attribute_name, model_type, *args, **kwargs)
 

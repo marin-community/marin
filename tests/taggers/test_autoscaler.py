@@ -22,17 +22,7 @@ from marin.processing.classification.autoscaler import AutoscalingActorPool
 from marin.processing.classification.classifier import AutoClassifierRayActor
 
 
-@pytest.fixture
-def ray_runtime():
-    ray.shutdown()
-    ray.init(num_cpus=2, ignore_reinit_error=True)
-    try:
-        yield
-    finally:
-        ray.shutdown()
-
-
-def test_autoscaler_requeues_failed_tasks(ray_runtime):
+def test_autoscaler_requeues_failed_tasks(ray_tpu_cluster):
     task_queue = Queue()
     result_queue = Queue()
 
@@ -46,22 +36,20 @@ def test_autoscaler_requeues_failed_tasks(ray_runtime):
         min_actors=1,
         max_actors=2,
         target_queue_size=1,
-        actor_health_check_interval=2.0,
-        actor_health_check_timeout=1.0,
     )
 
     try:
         original_task = {"id": "task-1", "text": "test"}
         task_queue.put(original_task)
 
-        with pool.lock:
+        with pool.actor_task_metadata_lock:
             initial_actor = pool.actors[0]
             initial_actor_id = initial_actor._actor_id.hex()
 
-        deadline = time.time() + 5
+        deadline = time.time() + 15
         task_assigned = False
         while time.time() < deadline:
-            with pool.lock:
+            with pool.actor_task_metadata_lock:
                 pending = pool.actor_futures.get(initial_actor, [])
             if pending:
                 task_assigned = True
@@ -75,7 +63,7 @@ def test_autoscaler_requeues_failed_tasks(ray_runtime):
 
         time.sleep(3.0)  # Greater than the actor health check interval so that we see that the initial actor is dead
 
-        with pool.lock:
+        with pool.actor_task_metadata_lock:
             print(f"Actor futures: {pool.actor_futures}")
 
         start = time.time()

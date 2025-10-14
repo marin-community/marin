@@ -49,7 +49,6 @@ class AutoscalingActorPool:
         scale_check_interval: float = 2,
         actor_kwargs: dict | None = None,
         actor_options: dict | None = None,
-        actor_health_check_timeout: float = 2.0,
         max_tasks_per_actor: int | None = 4,
     ):
         """
@@ -76,7 +75,8 @@ class AutoscalingActorPool:
         and returning them to the client.
 
         Args:
-            actor_class: The Ray actor class to use
+            actor_class: The Ray actor class to use. This needs to be a subclass of AutoClassifierRayActor
+            or a class that implements a ping method so that the autoscaler can check if the actor is alive.
             min_actors: Minimum number of actors to maintain
             max_actors: Maximum number of actors allowed
             target_queue_size: Target queue size per actor for scaling decisions
@@ -85,7 +85,6 @@ class AutoscalingActorPool:
             scale_check_interval: Interval in seconds between scaling checks
             actor_kwargs: Additional keyword arguments to pass to actor initialization
             actor_health_check_interval: Interval between actor health probes
-            actor_health_check_timeout: Seconds to wait for a ping response before marking actor unhealthy
             max_tasks_per_actor: Maximum number of in-flight tasks allowed per actor. When reached, dispatch
                 waits for capacity or new actors before assigning more work. If None, no hard cap is enforced.
         """
@@ -109,9 +108,11 @@ class AutoscalingActorPool:
         self.future_to_actor = {}
         self.future_to_task = {}
         self.actor_options = actor_options or {}
-        self.actor_health_check_timeout = actor_health_check_timeout
         self.max_tasks_per_actor = max_tasks_per_actor
-        self.lock = Lock()
+
+        self.actor_task_metadata_lock = Lock()
+        """Lock to protect the actor and task metadata mappings
+        (e.g. actors, actor_futures, future_to_actor, future_to_task)"""
 
         # Statistics
         self.total_processed = 0
@@ -178,10 +179,6 @@ class AutoscalingActorPool:
 
         def _loop():
             while not self._dispatch_stop_event.is_set():
-                if self.task_queue is None:
-                    time.sleep(0.1)
-                    continue
-
                 if len(self.actors) == 0:
                     logger.debug("Dispatcher waiting for actors to come online")
                     time.sleep(0.5)
@@ -221,7 +218,7 @@ class AutoscalingActorPool:
         def _loop():
             while not self._result_stop_event.is_set():
                 futures_snapshot = []
-                with self.lock:
+                with self.actor_task_metadata_lock:
                     futures_snapshot = list(self.future_to_actor.keys())
 
                 if not futures_snapshot:
@@ -252,7 +249,7 @@ class AutoscalingActorPool:
                 except Exception as e:
                     logger.error(f"Failed to put result in results queue! {e}")
         except (RayActorError, ray.exceptions.ActorDiedError):
-            with self.lock:
+            with self.actor_task_metadata_lock:
                 task_to_retry = self.future_to_task.get(future)
             if task_to_retry is not None and self.task_queue is not None:
                 try:
@@ -262,7 +259,7 @@ class AutoscalingActorPool:
         except Exception:
             logger.exception("Error retrieving future result")
         finally:
-            with self.lock:
+            with self.actor_task_metadata_lock:
                 actor = self.future_to_actor.pop(future, None)
                 self.future_to_task.pop(future, None)
                 if actor is not None and actor in self.actor_futures:
@@ -273,7 +270,7 @@ class AutoscalingActorPool:
 
     def _check_and_scale(self):
         """Check current load and scale actors accordingly."""
-        with self.lock:
+        with self.actor_task_metadata_lock:
             current_actors = len(self.actors)
             try:
                 pending_count = int(self.task_queue.qsize()) if self.task_queue is not None else 0
@@ -325,7 +322,7 @@ class AutoscalingActorPool:
 
     def _scale_down(self, count: int):
         """Remove idle actors from the pool."""
-        with self.lock:
+        with self.actor_task_metadata_lock:
             removed = 0
             actors_to_remove = []
 
@@ -350,14 +347,13 @@ class AutoscalingActorPool:
             return None
 
         logger.debug("Trying to dispatch the task")
-        with self.lock:
+        with self.actor_task_metadata_lock:
             alive_actors = []
             for actor in self.actors:
                 ping_received = actor.ping.remote()
                 logger.debug(f"Pinging actor: {actor}")
                 ping_received_ready, _ = ray.wait([ping_received], num_returns=1, timeout=1.0)
 
-                # ping_received = ray.get(ping_received, timeout=self.actor_health_check_timeout)
                 logger.debug("Ping wait result", extra={"actor": str(actor), "ready": bool(ping_received_ready)})
                 if ping_received_ready:
                     try:
@@ -392,7 +388,7 @@ class AutoscalingActorPool:
         if actor is None:
             raise RuntimeError("No actors available")
 
-        with self.lock:
+        with self.actor_task_metadata_lock:
             current_load = len(self.actor_futures.get(actor, []))
             if self.max_tasks_per_actor is not None and current_load >= self.max_tasks_per_actor:
                 raise RuntimeError("Actor saturated")
@@ -406,7 +402,7 @@ class AutoscalingActorPool:
 
     def _cleanup_completed_futures(self):
         """Remove completed futures from tracking."""
-        with self.lock:
+        with self.actor_task_metadata_lock:
             for actor in self.actors:
                 if actor in self.actor_futures:
                     # Filter out completed futures
@@ -422,7 +418,7 @@ class AutoscalingActorPool:
 
     def get_pool_stats(self) -> dict[str, Any]:
         """Get current pool statistics."""
-        with self.lock:
+        with self.actor_task_metadata_lock:
             active_tasks = sum(len(futures) for futures in self.actor_futures.values())
 
             stats = {
@@ -443,19 +439,15 @@ class AutoscalingActorPool:
         logger.info("Shutting down actor pool...")
 
         # Stop the autoscaling monitor thread
-        if hasattr(self, "_monitor_stop_event"):
-            self._monitor_stop_event.set()
-            if hasattr(self, "_monitor_thread"):
-                self._monitor_thread.join(timeout=5)
+        self._monitor_stop_event.set()
+        self._monitor_thread.join(timeout=5)
 
         # Stop dispatcher thread
-        if hasattr(self, "_dispatch_stop_event"):
-            self._dispatch_stop_event.set()
-            if hasattr(self, "_dispatch_thread"):
-                self._dispatch_thread.join(timeout=5)
+        self._dispatch_stop_event.set()
+        self._dispatch_thread.join(timeout=5)
 
         # Kill all actors
-        with self.lock:
+        with self.actor_task_metadata_lock:
             for actor in self.actors:
                 ray.kill(actor)
             self.actors.clear()
