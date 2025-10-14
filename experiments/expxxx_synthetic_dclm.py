@@ -41,7 +41,7 @@ dclm_data_chunked = ExecutorStep(
     config=ChunkingConfig(
         input_path=synthetic_dclm_annotation_subset,
         output_path=this_output_path(),
-        filetype="jsonl.zst",
+        glob_pattern="**/*.jsonl.zst",
         chunk_strategy=ChunkStrategy.CHAR,
         chunk_size=1024,
     ),
@@ -300,7 +300,7 @@ synthetic_dclm_10B_subset_chunked = ExecutorStep(
     config=ChunkingConfig(
         input_path=synthetic_dclm_10B_subset,
         output_path=this_output_path(),
-        filetype="jsonl.zst",
+        glob_pattern="**/*.jsonl.zst",
         chunk_strategy=ChunkStrategy.PASSAGE,
         chunk_size=350,  # 350 tokens per passage
     ),
@@ -780,7 +780,7 @@ wikipedia_subset_1_5M_chunked = ExecutorStep(
     config=ChunkingConfig(
         input_path=wikipedia_subset_1_5M,
         output_path=this_output_path(),
-        filetype="jsonl.gz",
+        glob_pattern="**/*.jsonl.gz",
         chunk_strategy=ChunkStrategy.PASSAGE,
         chunk_size=350,  # 350 tokens per passage
     ),

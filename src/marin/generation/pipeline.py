@@ -37,6 +37,19 @@ class TextGeneration:
         save_templated_prompt: bool = False,
         generated_text_column_name: str = "generated_text",
     ):
+        """Initializes a text generation pipeline that takes an input batch and generates text for each example.
+
+        Inputs:
+            llm: The LLM provider to use for the pipeline.
+            template: The template to use for the pipeline. This can be a string or a list of strings.
+                If it is a string, it will be used for all examples.
+                If it is a list of strings, we will zip the template with each example
+                (i.e. iterate through template, example in zip(templates, examples))
+            num_generations: The number of generations to generate for each example.
+            prompt_column: The column name of the prompt in the input batch.
+            save_templated_prompt: Whether to save the templated prompt.
+            generated_text_column_name: The column name of the generated text in the output batch.
+        """
         self.llm = llm
 
         # Template is a string that contains a placeholder for "example"
@@ -123,9 +136,9 @@ class vLLMTextGeneration(TextGeneration):
                     try:
                         chat_example = [{"role": "user", "content": template.format(example=example)}]
                     except Exception as e:
-                        print(f"Error formatting template: {e}")
-                        print(f"Template: {template}")
-                        print(f"Example: {example}")
+                        logger.error(f"Error formatting template: {e}")
+                        logger.error(f"Template: {template}")
+                        logger.error(f"Example: {example}")
                         raise e
                     prompts.append(
                         self.tokenizer.apply_chat_template(chat_example, tokenize=False, add_generation_prompt=True)

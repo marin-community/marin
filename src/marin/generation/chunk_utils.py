@@ -31,6 +31,9 @@ class ChunkStrategy(str, Enum):
     #     determined by ``chunk_size``.
     #   - ``ChunkStrategy.PARAGRAPH``: split on newlines (``"\n"``) and treat
     #     each line-separated paragraph as a separate example.
+    #   - ``ChunkStrategy.PASSAGE``: split on sentence-ending chars followed by whitespace
+    #     and merge consecutive passages up to ``chunk_size``.
+    #     Based on work from: https://arxiv.org/abs/2410.20796
     # If ``chunk_strategy`` is ``None`` no chunking is applied.
     CHAR = "char"
     PARAGRAPH = "paragraph"
@@ -41,71 +44,51 @@ class ChunkStrategy(str, Enum):
 class ChunkingConfig:
     input_path: str
     output_path: str
-    filetype: str
+    glob_pattern: str
     chunk_strategy: ChunkStrategy
     chunk_size: int | None = None
 
 
-def chunk_text(
-    example: dict[str, Any],
+def chunk_iterator(
+    text: str,
     strategy: ChunkStrategy,
     chunk_size: int | None = None,
-) -> list[dict[str, Any]]:
-    """Split an example into multiple smaller examples.
+) -> list[tuple[int, str]]:
+    """Split text into chunks according to the specified strategy.
 
     Parameters
     ----------
-    example:
-        A dictionary representing a single row in the dataset. Must contain a
-        ``"text"`` field and may optionally contain an ``"id"`` field.
+    text:
+        The text to chunk.
     strategy:
         The chunking strategy to apply. ``ChunkStrategy.CHAR`` splits the
         document into fixed-size windows based on ``chunk_size`` characters.
         ``ChunkStrategy.PARAGRAPH`` splits on newlines (``"\n"``) and treats
         each resulting segment as a separate chunk.
+        ``ChunkStrategy.PASSAGE`` splits on sentence-ending chars followed by whitespace
+        and merges consecutive passages up to ``chunk_size``.
     chunk_size:
-        Size of each chunk when ``strategy`` is ``ChunkStrategy.CHAR``. Ignored for other
-        strategies.
+        Size of each chunk when ``strategy`` is ``ChunkStrategy.CHAR`` or ``ChunkStrategy.PASSAGE``.
 
     Returns
     -------
-    list[dict[str, Any]]
-        A list of new examples with updated ``text`` (and ``id`` if provided).
+    list[tuple[int, str]]
+        A list of (chunk_idx, chunk_text) tuples.
     """
-
-    text = example.get("text", "")
-
-    if "id" in example:
-        example_id = example.get("id")
-    elif "metadata" in example:  # Extract from DCLM
-        example_id = example.get("metadata").get("WARC-Record-ID")
-
-    results: list[dict[str, Any]] = []
+    chunks: list[tuple[int, str]] = []
 
     if strategy is ChunkStrategy.CHAR:
         if not chunk_size or chunk_size <= 0:
             raise ValueError("chunk_size must be a positive integer for 'char' strategy")
         for idx in range(0, len(text), chunk_size):
             chunk = text[idx : idx + chunk_size]
-            new_example = example.copy()
-            new_example_metadata = new_example.get("metadata", {})
-            new_example["text"] = chunk
-            if example_id is not None:
-                new_example["id"] = f"{example_id}_{idx // chunk_size}"
-                new_example_metadata["source_document_id"] = example_id
-                new_example["metadata"] = new_example_metadata
-            results.append(new_example)
+            chunks.append((idx // chunk_size, chunk))
+
     elif strategy is ChunkStrategy.PARAGRAPH:
         for idx, para in enumerate(filter(None, text.split("\n"))):
-            new_example = example.copy()
-            new_example_metadata = new_example.get("metadata", {})
-            new_example["text"] = para
-            if example_id is not None:
-                new_example["id"] = f"{example_id}_{idx}"
-                new_example_metadata["source_document_id"] = example_id
-                new_example["metadata"] = new_example_metadata
-            results.append(new_example)
-    elif strategy is ChunkStrategy.PASSAGE:  # Based on https://arxiv.org/pdf/2410.20796
+            chunks.append((idx, para))
+
+    elif strategy is ChunkStrategy.PASSAGE:
         # Default maximum tokens per merged passage
         max_tokens = chunk_size if (chunk_size and chunk_size > 0) else 350
 
@@ -154,21 +137,64 @@ def chunk_text(
             merged_texts.append(" ".join(current_tokens))
 
         for idx, m in enumerate(merged_texts):
-            new_example = example.copy()
-            new_example_metadata = new_example.get("metadata", {})
-
             if len(m) < 100:  # NOTE(chris): Drop if less than 100 characters, expose this as a parameter?
                 continue
+            chunks.append((idx, m))
 
-            new_example["text"] = m
-            if example_id is not None:
-                new_example["id"] = f"{example_id}_{idx}"
-                new_example_metadata["source_document_id"] = example_id
-                new_example_metadata["chunk_idx"] = idx
-                new_example["metadata"] = new_example_metadata
-            results.append(new_example)
     else:
         raise ValueError(f"Unknown chunking strategy: {strategy}")
+
+    return chunks
+
+
+def chunk_text(
+    example: dict[str, Any],
+    strategy: ChunkStrategy,
+    chunk_size: int | None = None,
+) -> list[dict[str, Any]]:
+    """Split an example into multiple smaller examples.
+
+    Parameters
+    ----------
+    example:
+        A dictionary representing a single row in the dataset. Must contain a
+        ``"text"`` field and may optionally contain an ``"id"`` field.
+    strategy:
+        The chunking strategy to apply. ``ChunkStrategy.CHAR`` splits the
+        document into fixed-size windows based on ``chunk_size`` characters.
+        ``ChunkStrategy.PARAGRAPH`` splits on newlines (``"\n"``) and treats
+        each resulting segment as a separate chunk.
+    chunk_size:
+        Size of each chunk when ``strategy`` is ``ChunkStrategy.CHAR``. Ignored for other
+        strategies.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        A list of new examples with updated ``text`` (and ``id`` if provided).
+    """
+    text = example.get("text", "")
+
+    if "id" in example:
+        example_id = example.get("id")
+    elif "metadata" in example:  # Extract from DCLM
+        example_id = example.get("metadata").get("WARC-Record-ID")
+
+    results: list[dict[str, Any]] = []
+
+    for chunk_idx, chunk in chunk_iterator(text, strategy, chunk_size):
+        new_example = example.copy()
+        new_example_metadata = new_example.get("metadata", {})
+        new_example["text"] = chunk
+
+        if example_id is not None:
+            new_example["id"] = f"{example_id}_{chunk_idx}"
+            new_example_metadata["source_document_id"] = example_id
+            if strategy is ChunkStrategy.PASSAGE:
+                new_example_metadata["chunk_idx"] = chunk_idx
+            new_example["metadata"] = new_example_metadata
+
+        results.append(new_example)
 
     return results
 
@@ -195,7 +221,7 @@ def chunk_with_config(config: ChunkingConfig) -> list[str]:
     refs = map_files_in_directory(
         _chunk_single_file.remote,
         config.input_path,
-        f"**/*.{config.filetype}",
+        config.glob_pattern,
         config.output_path,
         TaskConfig(),
         False,
