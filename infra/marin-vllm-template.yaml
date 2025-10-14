@@ -41,6 +41,12 @@ initialization_commands:
   # we want to launch docker containers from inside docker, which means we need to loosen the permissions on the docker
   # socket. This isn't the best security practice, but it's the easiest way to get this working.
   - sudo chmod 666 /var/run/docker.sock
+  # Install Google Cloud Ops Agent
+  - curl -sS https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh -o add-google-cloud-ops-agent-repo.sh
+  - sudo bash add-google-cloud-ops-agent-repo.sh --also-install
+  - gcloud secrets versions access latest --secret=RAY_CLUSTER_GOOGLE_CLOUD_OPS_AGENT_CONFIG --out-file=google-cloud-ops-agent-config.yaml
+  - sudo mv google-cloud-ops-agent-config.yaml /etc/google-cloud-ops-agent/config.yaml
+  - sudo systemctl restart google-cloud-ops-agent
 
 setup_commands:
   # set the GCP project because it's not injected by default
