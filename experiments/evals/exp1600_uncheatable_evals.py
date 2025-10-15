@@ -25,6 +25,7 @@ import os
 import os.path
 import logging
 from dataclasses import dataclass
+from functools import lru_cache
 
 
 from experiments.llama import llama3_tokenizer
@@ -125,37 +126,40 @@ def truncate_model_name(model_name: str, max_length: int = 62) -> str:
     return model_name[:max_length] if len(model_name) > max_length else model_name
 
 
-steps = []
-for model_config in models:
-    # Use model_name as tokenizer if not specified
-    tokenizer = model_config.tokenizer if model_config.tokenizer is not None else model_config.model_name
+@lru_cache(maxsize=1)
+def build_steps() -> list[ExecutorStep]:
+    steps: list[ExecutorStep] = []
+    for model_config in models:
+        # Use model_name as tokenizer if not specified
+        tokenizer = model_config.tokenizer if model_config.tokenizer is not None else model_config.model_name
 
-    uncheatable_eval_tokenized_dict = uncheatable_eval_tokenized(tokenizer=tokenizer)
-    eval_data = mixture_for_evaluation(uncheatable_eval_tokenized_dict)
+        uncheatable_eval_tokenized_dict = uncheatable_eval_tokenized(tokenizer=tokenizer)
+        eval_data = mixture_for_evaluation(uncheatable_eval_tokenized_dict)
 
-    # Download model and load config dynamically from HuggingFace
-    model_identifier = f"{model_config.model_name}@{model_config.revision}"
-    model_instance = download_model_step(
-        HFModelConfig(hf_repo_id=model_config.model_name, hf_revision=model_config.revision)
-    )
-    hf_model_config = HFCheckpointConverter.from_hf(model_identifier).config_from_hf_checkpoint(model_identifier)
-
-    directory_friendly_name = get_directory_friendly_name(model_config.model_name)
-    steps.append(
-        default_lm_log_probs(
-            checkpoint=output_path_of(model_instance),
-            model=hf_model_config,
-            data=eval_data,
-            resource_config=SINGLE_TPU_V5p_8_FULL,
-            checkpoint_is_hf=True,
-            per_device_batch_size=1,
-            name=f"{directory_friendly_name}-uncheatable-eval-logprobs",
-            wandb_tags=[
-                f"M={truncate_model_name(model_config.model_name)}",
-                "eval=uncheatable-eval",
-            ],
+        # Download model and load config dynamically from HuggingFace
+        model_identifier = f"{model_config.model_name}@{model_config.revision}"
+        model_instance = download_model_step(
+            HFModelConfig(hf_repo_id=model_config.model_name, hf_revision=model_config.revision)
         )
-    )
+        hf_model_config = HFCheckpointConverter.from_hf(model_identifier).config_from_hf_checkpoint(model_identifier)
+
+        directory_friendly_name = get_directory_friendly_name(model_config.model_name)
+        steps.append(
+            default_lm_log_probs(
+                checkpoint=output_path_of(model_instance),
+                model=hf_model_config,
+                data=eval_data,
+                resource_config=SINGLE_TPU_V5p_8_FULL,
+                checkpoint_is_hf=True,
+                per_device_batch_size=1,
+                name=f"{directory_friendly_name}-uncheatable-eval-logprobs",
+                wandb_tags=[
+                    f"M={truncate_model_name(model_config.model_name)}",
+                    "eval=uncheatable-eval",
+                ],
+            )
+        )
+    return steps
 
 
 def main():
@@ -163,7 +167,7 @@ def main():
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
-    for step in steps:
+    for step in build_steps():
         executor_main(steps=[step])
 
 
