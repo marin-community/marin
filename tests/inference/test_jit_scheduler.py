@@ -5,9 +5,8 @@ import jax.numpy as jnp
 import haliax as hax
 import pytest
 
-from levanter.inference.jit_scheduler import SequenceTable, TokenQueue
+from levanter.inference.jit_scheduler import TokenQueue
 from levanter.inference.page_table import PageTable
-from levanter.inference.utils import INVALID
 
 
 def test_pack_next_sequence_single_seq_boundary_at_last_token():
@@ -30,9 +29,9 @@ def test_pack_next_sequence_single_seq_boundary_at_last_token():
     # Determine boundaries based on PageTable seq_lens after allocation
     assert int(packed.num_tokens) == capacity
     pt = PageTable.init(max_pages=16, max_seqs=4, page_size=8, max_pages_per_seq=4)
-    sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
-    sequences, _ = sequences.reserve_slot(0)
-    sequences, pt, binfo = sequences.allocate_for_seq(pt, packed.slot_ids, packed.pos_ids)
+    # activate seq 0
+    pt, _ = pt.assign_seq_id_to_seq()
+    pt, binfo = pt.allocate_for_seq(packed.slot_ids, packed.pos_ids)
     seq_lens_after = binfo.seq_lens["seq", packed.slot_ids]
     boundary_mask = packed.pos_ids == (seq_lens_after - 1)
     # Expect exactly one boundary at the last token
@@ -60,12 +59,12 @@ def test_pack_next_sequence_boundaries_between_sequences(seq_ids):
 
     assert int(packed.num_tokens) == capacity
     pt = PageTable.init(max_pages=16, max_seqs=4, page_size=8, max_pages_per_seq=4)
-    sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
-    sequences, assigned1 = sequences.reserve_slot(seq1)
-    assert int(assigned1) == seq1
-    sequences, assigned2 = sequences.reserve_slot(seq2)
-    assert int(assigned2) == seq2
-    sequences, pt, binfo = sequences.allocate_for_seq(pt, packed.slot_ids, packed.pos_ids)
+    # activate seq 0 and 1
+    pt, _seq1 = pt.assign_seq_id_to_seq(seq1)
+    assert _seq1 == seq1
+    pt, _seq2 = pt.assign_seq_id_to_seq(seq2)
+    assert _seq2 == seq2
+    pt, binfo = pt.allocate_for_seq(packed.slot_ids, packed.pos_ids)
     seq_lens_after = binfo.seq_lens["seq", packed.slot_ids]
 
     boundary_mask = packed.pos_ids == (seq_lens_after - 1)
@@ -80,45 +79,3 @@ def test_pack_next_sequence_boundaries_between_sequences(seq_ids):
         assert bool(bm[6]) is True
 
     assert int(bm.sum()) == 2
-
-
-def test_allocate_for_seq_ignores_out_of_range_slots():
-    pt = PageTable.init(max_pages=8, max_seqs=2, page_size=4, max_pages_per_seq=2)
-    sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
-
-    # Slot ids that are >= max_seqs should be ignored without allocating pages.
-    slot_ids = hax.named(jnp.array([5, 5], dtype=jnp.int32), axis=("position",))
-    pos_ids = hax.named(jnp.array([0, 1], dtype=jnp.int32), axis=("position",))
-
-    new_sequences, new_pt, batch = sequences.allocate_for_seq(pt, slot_ids, pos_ids)
-
-    assert jnp.array_equal(new_sequences.seq_lens.array, jnp.zeros((pt.max_seqs,), dtype=jnp.int32))
-    assert jnp.all(new_sequences.page_indices.array == INVALID)
-    assert jnp.all(new_sequences.kv_pages.array == INVALID)
-    assert jnp.all(new_pt.page_ref_counts.array == 0)
-    assert int(batch.num_seqs) == 0
-    assert jnp.all(batch.new_token_dests.array == INVALID)
-
-
-def test_allocate_for_seq_ignores_invalid_padding_tokens():
-    pt = PageTable.init(max_pages=8, max_seqs=2, page_size=4, max_pages_per_seq=2)
-    sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
-    sequences, seq0 = sequences.reserve_slot(0)
-    assert int(seq0) == 0
-
-    slot_ids = hax.named(jnp.array([0, INVALID], dtype=jnp.int32), axis=("position",))
-    pos_ids = hax.named(jnp.array([0, INVALID], dtype=jnp.int32), axis=("position",))
-
-    new_sequences, new_pt, batch = sequences.allocate_for_seq(pt, slot_ids, pos_ids)
-
-    seq_lens_arr = new_sequences.seq_lens.array
-    assert int(seq_lens_arr[0]) == 1
-    assert jnp.all(seq_lens_arr[1:] == 0)
-    assert jnp.all(new_sequences.page_indices.array[1:] == INVALID)
-    # Only one sequence should be considered in the batch info
-    assert int(batch.num_seqs) == 1
-    # The real token should map to a concrete KV destination
-    assert int(batch.new_token_dests.array[0]) == 0
-    # Padding token should not produce a KV destination
-    assert int(batch.new_token_dests.array[1]) == INVALID
-    assert int(new_pt.page_ref_counts.array.sum()) == 1
