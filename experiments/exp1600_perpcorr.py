@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+#1600: Perplexity Correlation
+
+This experiment evaluates the correlation between perplexity and other metrics to check the quality of uncheatable evals.
+"""
+
+import os
+import logging
+
 from experiments.llama import llama3_tokenizer
 from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import executor_main
@@ -31,12 +40,7 @@ from experiments.evals.exp1600_uncheatable_evals import (
     uncheatable_eval_tokenized,
 )
 
-"""
-#1600: Perplexity Correlation
-
-This experiment evaluates the correlation between perplexity and other metrics to check the quality of uncheatable evals.
-"""
-
+logger = logging.getLogger(__name__)
 
 EVAL_TASKS = [
     EvalTaskConfig("mmlu_sl_verb", num_fewshot=5, task_alias="mmlu_sl_verb_5_shot"),
@@ -115,6 +119,14 @@ for model_config in models:
     )
 
 
-if __name__ == "__main__":
+def main():
+    if os.getenv("CI", None) is not None:
+        logger.info("Skipping experiment execution on CI environment, needs HF access.")
+        return
+
     for step in steps:
         executor_main(steps=[step])
+
+
+if __name__ == "__main__":
+    main()

@@ -21,8 +21,11 @@ This experiment evaluates models' perplexity on diverse, high-quality, and fresh
 Reference: https://github.com/Jellyfish042/uncheatable_eval
 """
 
+import os
 import os.path
+import logging
 from dataclasses import dataclass
+
 
 from experiments.llama import llama3_tokenizer
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
@@ -34,6 +37,8 @@ from src.marin.download.uncheatable_eval.download import make_uncheatable_eval_s
 from experiments.defaults import default_tokenize
 from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
 from experiments.models import ModelConfig as HFModelConfig, download_model_step
+
+logger = logging.getLogger(__name__)
 
 # Complete mapping of all available datasets
 ALL_UNCHEATABLE_EVAL_DATASETS = {
@@ -153,6 +158,14 @@ for model_config in models:
     )
 
 
-if __name__ == "__main__":
+def main():
+    if os.getenv("CI", None) is not None:
+        logger.info("Skipping experiment execution on CI environment, needs HF access.")
+        return
+
     for step in steps:
         executor_main(steps=[step])
+
+
+if __name__ == "__main__":
+    main()
