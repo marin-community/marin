@@ -12,14 +12,15 @@ from haliax import Axis
 
 from levanter.inference.engine import InferenceEngine, Request, InferenceEngineConfig
 from levanter.inference.jit_scheduler import SeqDecodingParams
-from levanter.inference.page_table import PageTable
+from levanter.inference.page_table import PageTableSpec
+from levanter.inference.utils import INVALID
 from levanter.layers.kv_cache import KvPageCache
 
 
 class DummyModel(eqx.Module):
     """Minimal model stub to drive GenerationService for tests.
 
-    - `initial_cache` returns an empty KvPageCache sized to the PageTable.
+    - `initial_cache` returns an empty KvPageCache sized to the page-table spec.
     - `decode` returns constant logits that strongly prefer token `EOS`.
     """
 
@@ -30,11 +31,11 @@ class DummyModel(eqx.Module):
         self.Vocab = Axis("vocab", vocab_size)
         self.eos = eos_id
 
-    def initial_cache(self, page_table: PageTable, *, dtype):
+    def initial_cache(self, spec: PageTableSpec, *, dtype):
         # Use trivial cache dimensions; the cache is unused by this dummy model
         kv_heads = Axis("kv_head", 1)
         head_size = Axis("embed", 1)
-        return KvPageCache.init(page_table, kv_heads, head_size, dtype=dtype)
+        return KvPageCache.init(spec, kv_heads, head_size, dtype=dtype)
 
     def decode(self, input_ids, kv_cache, batch_info, pos_ids):
         # Produce logits that prefer `eos` for every sampled position
@@ -93,13 +94,14 @@ def test_release_on_finish_and_reuse_slots(caplog: pytest.LogCaptureFixture):
     assert result.tokens[1] == [3]
     assert result.total_generated == 2  # one new token per prompt
 
-    # Finished sequences are auto-released; PageTable should have no active seqs
+    # Finished sequences are auto-released; no active seqs remain
+    sequences = svc.gen_state.decode_state.sequences
     pt = svc.gen_state.decode_state.page_table
     # All slots should be marked unused and lengths zeroed
-    seq_lens = jax.device_get(pt.seq_lens.array)
-    used_mask = jax.device_get(pt.used_mask.array)
+    seq_lens = jax.device_get(sequences.seq_lens.array)
+    used_mask = jax.device_get(sequences.used_mask.array)
     assert (used_mask == 0).all()
-    assert (seq_lens == 0).all()
+    assert ((seq_lens == 0) | (seq_lens == INVALID)).all()
     # No pages should be held
     ref_counts = jax.device_get(pt.page_ref_counts.array)
     assert int(ref_counts.sum()) == 0
