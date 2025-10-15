@@ -255,3 +255,10 @@ qwen3_8b_base = download_model_step(
         hf_revision="49e3418",
     )
 )
+
+qwen3_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-32B",
+        hf_revision="9216db5781bf21249d130ec9da846c4624c16137",
+    )
+)

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
 import json
 import logging
 import os
@@ -48,6 +49,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             env_vars={
                 "TOKENIZERS_PARALLELISM": "false",
                 "HF_DATASETS_TRUST_REMOTE_CODE": "1",
+                "HF_ALLOW_CODE_EVAL": "1",
             },
         )
 
@@ -114,6 +116,8 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     log_samples=False,
                     max_length=4096,
                     apply_chat_template=model.apply_chat_template,
+                    confirm_run_unsafe_code=True,
+                    sample_logging=eval_harness.SampleLoggingConfig(max_samples_per_benchmark=20),
                 ),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,
@@ -134,7 +138,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 # write output JSON directly to output_path on GCS
                 fs = fsspec.filesystem("gcs")
                 with fs.open(output_path, "w") as f:
-                    json.dump(results, f, indent=2)
+                    json.dump(results, f, indent=2, default=_json_default)
 
                 levanter.tracker.current_tracker().finish()
                 logger.info("Upload completed successfully.")
@@ -152,3 +156,22 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
             if os.path.exists(LevanterTpuEvaluator.CACHE_PATH) and "gcsfuse" not in LevanterTpuEvaluator.CACHE_PATH:
                 shutil.rmtree(LevanterTpuEvaluator.CACHE_PATH)
+
+
+def _json_default(value):
+    """
+    Provide a best-effort JSON serialization for objects returned by the eval harness.
+    """
+    if dataclasses.is_dataclass(value):
+        return dataclasses.asdict(value)
+
+    if isinstance(value, set):
+        return list(value)
+
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        try:
+            return value.to_dict()
+        except Exception:
+            pass
+
+    return repr(value)
