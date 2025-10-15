@@ -87,8 +87,6 @@ class SimpleTrainConfig:
     watch: WatchConfig = dataclasses.field(default_factory=WatchConfig)
     """Config for watching gradients, parameters, etc. Default is to log norms of gradients and parameters."""
 
-    use_mup: bool = False
-
     @property
     def tpu_type(self) -> str | None:
         """For backward compatibility."""
