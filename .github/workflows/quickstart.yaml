@@ -7,11 +7,17 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      timeout-minutes:
+        description: 'Timeout in minutes'
+        type: number
+        required: false
 
 jobs:
   quickstart:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: ${{ github.event.inputs.timeout-minutes || 20 }}
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
