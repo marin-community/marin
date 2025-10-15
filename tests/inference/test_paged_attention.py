@@ -16,6 +16,7 @@ import haliax as hax
 from haliax import NamedArray, Axis
 
 from levanter.inference.page_table import PageBatchInfo, PageTable
+from levanter.inference.jit_scheduler import SequenceTable
 from levanter.inference.utils import INVALID
 from levanter.layers import AttentionConfig, AttentionBackend, Attention
 from levanter.layers.attention import AttentionMask, ragged_paged_attention, simple_attention_with_dropout
@@ -230,17 +231,19 @@ def test_attention_paged_decode_matches_full_ar():
     full_out = attn(x, AttentionMask.causal(), key=jrandom.PRNGKey(1))
 
     pt = PageTable.init(max_pages=4, max_seqs=2, page_size=4, max_pages_per_seq=4)
-    pt, seq_id = pt.assign_seq_id_to_seq()
-    kv_cache = attn.empty_page_cache(pt, dtype=jnp.float32)
+    sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
+    sequences, seq_id_arr = sequences.reserve_slot()
+    seq_id = int(seq_id_arr)
+    kv_cache = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
     out_chunks = []
     for i in range(Pos.size):
         # Compute pos_ids for this allocation using current seq_lens before allocation
         seg_ids = hax.named([seq_id], "position")
         # relative position inside this seg is 0 for this single token; absolute pos is current len
-        abs_pos = pt.seq_lens["seq", seg_ids].array
+        abs_pos = sequences.seq_lens["seq", seg_ids].array
         pos_ids = hax.named(abs_pos, "position")
 
-        pt, binfo = pt.allocate_for_seq(seg_ids, pos_ids)
+        sequences, pt, binfo = sequences.allocate_for_seq(pt, seg_ids, pos_ids)
 
         x_tok = x[Pos, hax.dslice(i, 1)]
         out_tok, kv_cache = _jit_paged_decode(attn, x_tok, pos_ids, kv_cache, binfo)
@@ -260,18 +263,19 @@ def test_attention_paged_decode_matches_full_prefill():
     attn = Attention.init(cfg, key=attn_key)
 
     pt = PageTable.init(max_pages=4, max_seqs=2, page_size=4, max_pages_per_seq=4)
-    pt, seq1 = pt.assign_seq_id_to_seq()
-    pt, seq2 = pt.assign_seq_id_to_seq()
+    sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
+    sequences, seq1_arr = sequences.reserve_slot(0)
+    sequences, seq2_arr = sequences.reserve_slot(1)
 
     x = hax.random.normal(x_key, (Pos, Embed)) * 0.2
     seg_ids = hax.named([0] * 4 + [1] * 3 + [INVALID] * 9, "position")
     pos_ids = hax.named(jnp.array([0, 1, 2, 3, 0, 1, 2] + [INVALID] * 9, dtype=jnp.int32), "position")
-    pt, binfo = pt.allocate_for_seq(seg_ids, pos_ids)
+    sequences, pt, binfo = sequences.allocate_for_seq(pt, seg_ids, pos_ids)
 
     causal = AttentionMask.causal().with_segment_ids(seg_ids)
     full_out = attn(x, causal, key=jrandom.PRNGKey(1))
 
-    kv_cache = attn.empty_page_cache(pt, dtype=jnp.float32)
+    kv_cache = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
 
     # Compute absolute pos ids for this batch from current seq_lens
     def _relative_positions(seg_ids):
@@ -282,7 +286,7 @@ def test_attention_paged_decode_matches_full_prefill():
         return idx - seg_start
 
     rel_pos = _relative_positions(seg_ids.array)
-    starts = pt.seq_lens["seq", seg_ids].array
+    starts = sequences.seq_lens["seq", seg_ids].array
     pos_ids = hax.named(starts + rel_pos, "position")
 
     decode_out, _ = _jit_paged_decode(attn, x, pos_ids, kv_cache, binfo)
@@ -310,13 +314,14 @@ def test_attention_paged_decode_prefill_in_chunks(prefix_size, chunk_size, seq_i
     max_pages_per_seq = math.ceil((prefix_size + 4 * chunk_size) / NUM_SLOTS)
 
     pt = PageTable.init(max_pages=max_pages_per_seq * 3, max_seqs=3, page_size=4, max_pages_per_seq=max_pages_per_seq)
+    sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
     seq1 = seq_ids[0]
     seq2 = seq_ids[1]
-    pt, _seq1 = pt.assign_seq_id_to_seq(seq1)
-    pt, _seq2 = pt.assign_seq_id_to_seq(seq2)
-    assert _seq1 == seq1
-    assert _seq2 == seq2
-    kv_cache = attn.empty_page_cache(pt, dtype=jnp.float32)
+    sequences, assigned1 = sequences.reserve_slot(seq1)
+    sequences, assigned2 = sequences.reserve_slot(seq2)
+    assert int(assigned1) == seq1
+    assert int(assigned2) == seq2
+    kv_cache = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
 
     x = hax.random.normal(x_key, (Pos, Embed)) * 0.2
     x0 = x["position", hax.dslice(0, Pos.size)]
@@ -335,7 +340,7 @@ def test_attention_paged_decode_prefill_in_chunks(prefix_size, chunk_size, seq_i
             hax.arange({"position": prefix_size}, dtype=jnp.int32),
         ],
     )
-    pt, binfo = pt.allocate_for_seq(tokens, pos_ids)
+    sequences, pt, binfo = sequences.allocate_for_seq(pt, tokens, pos_ids)
 
     with jax.sharding.set_mesh(jax.make_mesh((len(jax.devices()),), ("model",))):
         out, kv_cache = _jit_paged_decode(attn, x_prefill, pos_ids, kv_cache, binfo)
@@ -360,7 +365,7 @@ def test_attention_paged_decode_prefill_in_chunks(prefix_size, chunk_size, seq_i
             start0 += chunk_size
             start1 += chunk_size
 
-            pt, binfo = pt.allocate_for_seq(tokens, pos_ids)
+            sequences, pt, binfo = sequences.allocate_for_seq(pt, tokens, pos_ids)
 
             x_chunk = hax.concatenate(
                 "position",
@@ -390,9 +395,12 @@ def test_attention_paged_decode_ragged_fill_in_chunks():
     full_out = attn(x, AttentionMask.causal(), key=jrandom.PRNGKey(1))
 
     pt = PageTable.init(max_pages=8, max_seqs=2, page_size=4, max_pages_per_seq=4)
-    pt, seq1 = pt.assign_seq_id_to_seq()
-    pt, seq2 = pt.assign_seq_id_to_seq()
-    kv_cache = attn.empty_page_cache(pt, dtype=jnp.float32)
+    sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
+    sequences, seq1_arr = sequences.reserve_slot(0)
+    sequences, seq2_arr = sequences.reserve_slot(1)
+    seq1 = int(seq1_arr)
+    seq2 = int(seq2_arr)
+    kv_cache = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
 
     x0 = x[B, 0]
     x1 = x[B, 1]
@@ -413,7 +421,7 @@ def test_attention_paged_decode_ragged_fill_in_chunks():
             ],
         )
 
-        pt, binfo = pt.allocate_for_seq(seg_ids, pos_ids)
+        sequences, pt, binfo = sequences.allocate_for_seq(pt, seg_ids, pos_ids)
 
         x_chunk = hax.concatenate(
             "position",
