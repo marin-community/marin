@@ -27,6 +27,7 @@ from experiments.midtraining_datasets import finemath_3_plus_tokenized, megamath
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
+from experiments.exp808_sft_mixture import mixture_config as sft_mixture_llama3
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 from marin.resources import TpuPodConfig
@@ -55,9 +56,6 @@ PEAK_LEARNING_RATE = 3e-3
 WEIGHT_DECAY = 0.1
 
 # Stage 3 SFT configuration.
-INSTRUCTION_DATASET_NAME = "HuggingFaceTB/smoltalk"
-SFT_DATASET_GLOB = "**/*.jsonl.gz"
-SFT_BATCH_SIZE = 256
 SFT_NUM_STEPS = 1_000
 SFT_LEARNING_RATE = 5e-5
 SFT_WARMUP_FRACTION = 0.05
@@ -124,18 +122,10 @@ nanochat_pre_mid_step = default_train(
     tags=["nanochat-style", "pretrain-midtrain"],
 ).with_output_path("checkpoints/nanochat-style-pre-mid")
 
-instruction_dataset = get_instruction_dataset(INSTRUCTION_DATASET_NAME)
-
-sft_tokenize_step = default_tokenize(
-    name="nanochat-style-smoltalk",
-    dataset=instruction_dataset / SFT_DATASET_GLOB,
-    tokenizer=TOKENIZER_NAME,
-    format=ChatLmDatasetFormat(),
-)
 
 sft_config = SimpleSFTConfig(
     resources=TpuPodConfig(tpu_type="v5p-8"),
-    train_batch_size=SFT_BATCH_SIZE,
+    train_batch_size=BATCH_SIZE,
     num_train_steps=SFT_NUM_STEPS,
     learning_rate=SFT_LEARNING_RATE,
     tokenizer=TOKENIZER_NAME,
@@ -149,7 +139,7 @@ sft_config = SimpleSFTConfig(
 
 nanochat_sft_step = default_sft(
     name="nanochat-style-sft",
-    tokenized=sft_tokenize_step,
+    tokenized=sft_mixture_llama3,
     model_config=MODEL_CONFIG,
     sft_config=sft_config,
     tags=["nanochat-style", "sft"],
