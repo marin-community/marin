@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
+# /// script
+# dependencies = ["PyGithub>=2.3.0"]
+# ///
 # Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,10 +23,9 @@ By default, it updates the issues. If --dry-run is passed, it prints the substit
 instead of editing the issues.
 
 Usage:
-    python scripts/replace_crfm_links.py [--dry-run]
+    ./scripts/pm/replace_crfm_links.py [--dry-run]
 
 Requires:
-    pip install PyGithub
     export GITHUB_TOKEN=your_token
 """
 
