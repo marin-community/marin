@@ -19,12 +19,10 @@ DCLM mixture, transitions into the reasoning-focused midtraining mix with a 0.2/
 schedule, and finally runs a SmolTalk chat SFT stage on top of the resulting checkpoint.
 """
 
-from levanter.data.text import ChatLmDatasetFormat
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
-from experiments.defaults import default_sft, default_tokenize, default_train
+from experiments.defaults import default_sft, default_train
 from experiments.llama import llama3_tokenizer, llama_300m
 from experiments.midtraining_datasets import finemath_3_plus_tokenized, megamath_tokenized
-from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.exp808_sft_mixture import mixture_config as sft_mixture_llama3
