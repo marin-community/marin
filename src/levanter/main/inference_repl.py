@@ -451,8 +451,7 @@ class ReplContext:
             else:  # Text completion
                 content = choice.text
 
-            panel = Panel(content, title=f"Response {i + 1}/{len(response.choices)}", border_style="green")
-            console.print(panel)
+            console.print(f"Response {i + 1}/{len(response.choices)}: {content}")
 
         # Show usage stats
         if response.usage:

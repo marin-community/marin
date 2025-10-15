@@ -12,8 +12,16 @@ from haliax import haxtyping as ht
 from haliax.jax_utils import ensure_scalar
 from jax import numpy as jnp
 
-from levanter.inference.page_table import PageTable
-from levanter.inference.utils import INVALID, is_stop_signal, is_valid, masked_set, purge
+from levanter.inference.page_table import PageTable, PageBatchInfo
+from levanter.inference.utils import (
+    INVALID,
+    get_unique_in_order,
+    is_stop_signal,
+    is_valid,
+    masked_set,
+    purge,
+    is_invalid,
+)
 
 
 class PackedSequence(eqx.Module):
@@ -63,6 +71,476 @@ class SeqDecodingParams(eqx.Module):
         )
 
 
+class SequenceTable(eqx.Module):
+    """Compact view over per-sequence metadata tracked by :class:`DecodeState`."""
+
+    seq_lens: ht.i32[NamedArray, "seq"]
+    clone_sources: ht.i32[NamedArray, "seq"]
+    kv_pages: ht.i32[NamedArray, "seq page"]
+    page_indices: ht.i32[NamedArray, "seq page"]
+    used_mask: ht.bool_[NamedArray, "seq"]
+    page_size: int = eqx.field(static=True)
+
+    @staticmethod
+    def init(max_seqs: int, pages_per_seq: int, page_size: int) -> "SequenceTable":
+        """Create an empty sequence table."""
+        return SequenceTable(
+            seq_lens=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
+            clone_sources=hax.full({"seq": max_seqs}, INVALID, dtype=jnp.int32),
+            kv_pages=hax.full({"seq": max_seqs, "page": pages_per_seq}, INVALID, dtype=jnp.int32),
+            page_indices=hax.full({"seq": max_seqs, "page": pages_per_seq}, INVALID, dtype=jnp.int32),
+            used_mask=hax.full({"seq": max_seqs}, False, dtype=bool),
+            page_size=page_size,
+        )
+
+    @property
+    def max_seqs(self) -> int:
+        return self.seq_lens.axis_size("seq")
+
+    @property
+    def pages_per_seq(self) -> int:
+        return self.page_indices.axis_size("page")
+
+    def reserve_slot(self, slot_id: int | jnp.ndarray | None = None) -> tuple["SequenceTable", int]:
+        """Reserve a free sequence slot and return its ID.
+
+        DONATES self
+
+        If ``seq_id`` is provided and valid (0 <= seq_id < max_seqs), it is used directly and no search is done.
+        If ``seq_id`` is None or invalid (<0 or >= max_seqs), a free slot is searched for and assigned.
+
+        If no free slots are available, returns INVALID (-1) as the seq_id and does not modify the table.
+
+        Args:
+            seq_id: Optional specific sequence ID to assign. If None or invalid, a free slot is searched for.
+
+        Returns:
+            A tuple of (new PageTable with updated metadata, assigned sequence ID or INVALID if none available).
+        """
+        if isinstance(slot_id, int):
+            slot_id = jnp.array(slot_id, dtype=jnp.int32)
+        return self._reserve_slot(slot_id)
+
+    @eqx.filter_jit(donate="all")
+    def _reserve_slot(self, slot_id: jnp.ndarray | None = None) -> tuple["SequenceTable", int]:
+        if slot_id is None:
+            slot_id = INVALID
+
+        def validate(candidate):
+            return hax.where(self.used_mask["seq", candidate], INVALID, candidate)
+
+        def find_free(_: jnp.ndarray):
+            free_flags = ~self.used_mask
+            maybe = hax.argmax(free_flags, "seq").scalar()
+            available = (~self.used_mask["seq", maybe]).scalar()
+            return hax.where(available, maybe, INVALID)
+
+        slot = jax.lax.cond(is_valid(slot_id), validate, find_free, slot_id)
+
+        def do_assign(table):
+            seq_lens = table.seq_lens.at["seq", slot].set(0)
+            clone_sources = table.clone_sources.at["seq", slot].set(INVALID)
+            kv_pages = table.kv_pages.at["seq", slot].set(hax.full_like(table.kv_pages["seq", slot], INVALID))
+            page_indices = table.page_indices.at["seq", slot].set(
+                hax.full_like(table.page_indices["seq", slot], INVALID)
+            )
+            used_mask = table.used_mask.at["seq", slot].set(True)
+            return dataclasses.replace(
+                table,
+                seq_lens=seq_lens,
+                clone_sources=clone_sources,
+                kv_pages=kv_pages,
+                page_indices=page_indices,
+                used_mask=used_mask,
+            )
+
+        table = jax.lax.cond(is_valid(slot), do_assign, lambda t: t, self)
+        return table, slot
+
+    def assign_slot(
+        self,
+        slot_id: int,
+        *,
+        seq_len: jnp.ndarray,
+        kv_pages: ht.i32[NamedArray, "page"],  # type: ignore[name-defined]
+        page_indices: ht.i32[NamedArray, "page"] | None = None,  # type: ignore[name-defined]
+        clone_source: jnp.ndarray | int = INVALID,
+    ) -> "SequenceTable":
+        seq_lens = self.seq_lens.at["seq", slot_id].set(seq_len)
+        clone_sources = self.clone_sources.at["seq", slot_id].set(clone_source)
+        kv_pages_arr = self.kv_pages.at["seq", slot_id].set(kv_pages)
+        indices_row = (
+            page_indices if page_indices is not None else hax.full_like(self.page_indices["seq", slot_id], INVALID)
+        )
+        page_indices_arr = self.page_indices.at["seq", slot_id].set(indices_row)
+        used_mask = self.used_mask.at["seq", slot_id].set(True)
+        return dataclasses.replace(
+            self,
+            seq_lens=seq_lens,
+            clone_sources=clone_sources,
+            kv_pages=kv_pages_arr,
+            page_indices=page_indices_arr,
+            used_mask=used_mask,
+        )
+
+    def set_clone_source(self, slot_id: int, clone_source: jnp.ndarray | int) -> "SequenceTable":
+        clone_sources = self.clone_sources.at["seq", slot_id].set(clone_source)
+        return dataclasses.replace(self, clone_sources=clone_sources)
+
+    def clear_slots(self, mask: ht.bool_[NamedArray, "seq"]) -> "SequenceTable":  # type: ignore[name-defined]
+        new_seq_lens = hax.where(mask, INVALID, self.seq_lens)
+        new_clone_sources = hax.where(mask, INVALID, self.clone_sources)
+        new_kv_pages = hax.where(mask, INVALID, self.kv_pages)
+        new_page_indices = hax.where(mask, INVALID, self.page_indices)
+        new_used_mask = hax.where(mask, False, self.used_mask)
+        return SequenceTable(
+            new_seq_lens,
+            new_clone_sources,
+            new_kv_pages,
+            new_page_indices,
+            new_used_mask,
+            self.page_size,
+        )
+
+    def release_slot(self, slot_id: int) -> "SequenceTable":
+        mask = hax.zeros_like(self.used_mask)
+        mask = mask.at["seq", slot_id].set(True)
+        return self.clear_slots(mask)
+
+    @eqx.filter_jit
+    def allocate_for_seq(
+        self,
+        page_table: "PageTable",
+        token_slot_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
+        token_pos_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
+    ) -> tuple["SequenceTable", "PageTable", "PageBatchInfo"]:
+        """
+        Allocate pages from PageTable for new sequences and update ``seq_lens``.
+
+        **ASSUMES** that the ``token_slot_ids`` are already grouped by sequence ID, i.e. all tokens for a given sequence
+        are contiguous in the input. The order of sequences in the input does not matter.
+        """
+        token_slot_ids = hax.where(token_slot_ids < 0, self.max_seqs, token_slot_ids)
+        # CAREFUL: we don't assume slot_ids are sorted, just contiguous. segment_sum is our friend
+        # NB: segment_sum assumes that segment ids are in the range [0, num_segments)
+        # and returns an array of that length
+        # essentially this means segment_sum et al require dense segment ids so we have to denseify the slot ids first
+        unique_ids, dense_ids = get_unique_in_order(
+            token_slot_ids.array,
+            size=self.max_seqs + 1,  # +1 for INVALID
+            fill_value=INVALID,
+        )
+        segment_lengths = jax.ops.segment_sum(
+            data=jnp.ones_like(token_slot_ids.array, dtype=jnp.int32),
+            segment_ids=dense_ids,
+            num_segments=self.max_seqs,
+        )
+        # now we need to know the segment_ids
+        segment_ids = jax.ops.segment_max(
+            data=token_slot_ids.array,
+            segment_ids=dense_ids,
+            num_segments=self.max_seqs,
+        )
+        # and then the maximum position within each segment
+        max_pos_per_seq = jax.ops.segment_max(
+            data=token_pos_ids.array,
+            segment_ids=dense_ids,
+            num_segments=self.max_seqs,
+        )
+
+        updated_seqs = hax.named(segment_ids, axis="seq")
+        new_counts = hax.named(segment_lengths, axis="seq")
+        new_max_pos = hax.named(max_pos_per_seq, axis="seq")
+        # jax.debug.print("segment_lengths={sl} segment_ids={sid}, tsi={tsi}", sl=new_counts, sid=updated_seqs, tsi=token_slot_ids)
+
+        valid_updated = is_valid(updated_seqs) & (updated_seqs < self.max_seqs)
+        safe_updated = hax.where(valid_updated, updated_seqs, 0)
+
+        masked_max_pos = hax.where(valid_updated, new_max_pos, -1)
+
+        cu_new_counts = hax.concatenate(
+            "seq",
+            [
+                hax.zeros({"seq": 1}, dtype=jnp.int32),
+                hax.cumsum(new_counts, "seq", dtype=jnp.int32),
+            ],
+        )
+
+        new_counts = hax.where(valid_updated, new_counts, 0)
+
+        current_lens = self.seq_lens
+        active_mask_for_updated = hax.where(valid_updated, self.used_mask["seq", safe_updated], False)
+
+        num_updated_seqs = hax.sum(valid_updated).scalar().astype(jnp.int32)
+
+        masked_seq_len = (masked_max_pos + 1) * active_mask_for_updated.astype(new_counts.dtype)
+        new_lens = current_lens.at["seq", safe_updated].max(masked_seq_len, mode="drop")
+        # jax.debug.print("masked_seq_len={msl} new_lens={nl} safe_updated={su}", msl=masked_seq_len, nl=new_lens, su=safe_updated)
+
+        new_num_pages_needed = (new_lens + self.page_size - 1) // self.page_size
+        # Count how many pages are actually allocated (valid page_indices), not based on seq_lens
+        # This handles the case where seq_len is set but pages haven't been allocated yet
+        num_allocated_pages = hax.sum(is_valid(self.page_indices), axis="page")
+        old_num_pages_needed = num_allocated_pages
+        old_num_pages_needed = hax.where(valid_updated, old_num_pages_needed["seq", safe_updated], 0)
+        new_num_pages_needed = hax.where(valid_updated, new_num_pages_needed["seq", safe_updated], 0)
+        # jax.debug.print("new_num_pages_needed={nnp} old_num_pages_needed={onp}", nnp=new_num_pages_needed, onp=old_num_pages_needed)
+        # jax.debug.print(
+        #     "nnp per seq: seq0={s0} seq1={s1} seq2={s2}",
+        #     s0=new_num_pages_needed["seq", 0],
+        #     s1=new_num_pages_needed["seq", 1],
+        #     s2=new_num_pages_needed["seq", 2],
+        # )
+
+        page_indices = self.page_indices
+        page_ref_counts = page_table.page_ref_counts
+
+        # NB seq_offset refers to the offset into updated_seqs, not the actual seq_id
+        def _alloc_pages_for_seq(seq_offset, carry):
+            indices, ref_counts = carry
+            num_needed = new_num_pages_needed["seq", seq_offset].scalar()
+            old_needed = old_num_pages_needed["seq", seq_offset].scalar()
+            seq_id = safe_updated["seq", seq_offset].scalar()
+            # jax.debug.print(
+            #     "alloc seq {seq_id} lookup nnp={nnp}", seq_id=seq_id, nnp=new_num_pages_needed["seq", seq_id]
+            # )
+            # jax.debug.print("alloc seq {seq_id} old_needed={old} num_needed={new}", seq_id=seq_id, old=old_needed, new=num_needed)
+
+            def body(page_idx, state):
+                indices, ref_counts = state
+                has_free = hax.any(ref_counts == 0).scalar()
+
+                ref_counts = eqx.error_if(ref_counts, ~has_free, "Out of free pages during allocation")
+
+                def do_alloc(state):
+                    indices, ref_counts = state
+                    # choose a page with the smallest ref count; when has_free, argmin will pick a zero-ref page
+                    free_page_idx = hax.argmin(ref_counts, "page")
+                    ref_counts = ref_counts.at["page", free_page_idx].add(1)
+                    indices = indices.at["seq", seq_id, "page", page_idx].set(free_page_idx)
+                    return indices, ref_counts
+
+                def no_alloc(state):
+                    # No-op; leave index INVALID so downstream gets INVALID destinations
+                    state = eqx.error_if(state, jnp.zeros(()) < 4, "INVALID!")
+                    return state
+
+                return jax.lax.cond(has_free, do_alloc, no_alloc, (indices, ref_counts))
+
+            return jax.lax.fori_loop(old_needed, num_needed, body, (indices, ref_counts))
+
+        def outer(i, carry):
+            page_indices, page_ref_counts = carry
+
+            def do_alloc(carry):
+                return _alloc_pages_for_seq(i, carry)
+
+            seq_id = updated_seqs["seq", i].scalar()
+            cond = is_valid(seq_id)
+            # jax.debug.print("outer iter {i}: seq_id={seq} is_valid={iv}", i=i, seq=seq_id, iv=is_valid(seq_id))
+
+            page_indices, page_ref_counts = jax.lax.cond(cond, do_alloc, lambda c: c, (page_indices, page_ref_counts))
+            return page_indices, page_ref_counts
+
+        page_indices, page_ref_counts = jax.lax.fori_loop(0, num_updated_seqs, outer, (page_indices, page_ref_counts))
+
+        batch_info = self._create_batch_info(
+            updated_seqs,
+            page_indices,
+            cu_new_counts,
+            new_lens,
+            token_slot_ids,
+            token_pos_ids,
+        )
+
+        kv_pages = self.kv_pages.at["seq", safe_updated].set(page_indices["seq", safe_updated])
+        new_sequences = dataclasses.replace(self, seq_lens=new_lens, page_indices=page_indices, kv_pages=kv_pages)
+        new_page_table = dataclasses.replace(page_table, page_ref_counts=page_ref_counts)
+
+        return new_sequences, new_page_table, batch_info
+
+    def _create_batch_info(self, updated_seqs, page_indices, cu_new_counts, new_lens, token_slot_ids, token_pos_ids):
+        mask = is_valid(updated_seqs) & (updated_seqs < self.max_seqs)
+        safe_updated = hax.where(mask, updated_seqs, 0)
+
+        gathered_page_indices = page_indices["seq", safe_updated]
+        batch_page_indices = hax.where(mask, gathered_page_indices, INVALID)
+
+        seq_lens = new_lens["seq", safe_updated]
+        seq_lens = hax.where(mask, seq_lens, INVALID)
+
+        token_dests = hax.full(token_slot_ids.shape, INVALID, dtype=jnp.int32)
+
+        def token_body(i, token_dests):
+            seq_id = token_slot_ids["position", i].scalar()
+            pos_id = token_pos_ids["position", i].scalar()
+
+            def assign(dest):
+                page_idx = pos_id // self.page_size
+                page_offset = pos_id % self.page_size
+                page = page_indices["seq", seq_id, "page", page_idx]
+                dest_value = hax.where(is_invalid(page), INVALID, page * self.page_size + page_offset)
+                return dest.at["position", i].set(dest_value)
+
+            seq_valid = (seq_id >= 0) & (seq_id < self.max_seqs) & is_valid(seq_id)
+            pos_valid = is_valid(pos_id)
+            return jax.lax.cond(seq_valid & pos_valid, assign, lambda d: d, token_dests)
+
+        token_dests = jax.lax.fori_loop(0, token_slot_ids.axis_size("position"), token_body, token_dests)
+
+        batch_info = PageBatchInfo(
+            slot_ids=updated_seqs,
+            page_indices=batch_page_indices,
+            seq_lens=seq_lens,
+            cu_q_lens=cu_new_counts,
+            num_seqs=hax.sum(mask).scalar().astype(jnp.int32),
+            new_token_dests=token_dests,
+            page_size=self.page_size,
+        )
+
+        return batch_info
+
+    @eqx.filter_jit(donate="all")
+    def free_pages(self, page_table: "PageTable", seq_id: int) -> tuple["SequenceTable", "PageTable"]:
+        seq_pages = self.page_indices["seq", seq_id]
+        is_valid_page = is_valid(seq_pages)
+
+        def body(i, ref_counts):
+            def dec(rc):
+                page = seq_pages["page", i].scalar()
+                return rc.at["page", page].add(-1)
+
+            return jax.lax.cond(is_valid_page["page", i].scalar(), dec, lambda x: x, ref_counts)
+
+        new_ref_counts = jax.lax.fori_loop(0, seq_pages.axis_size("page"), body, page_table.page_ref_counts)
+        new_ref_counts = hax.maximum(new_ref_counts, hax.zeros_like(new_ref_counts))
+
+        new_seq_lens = self.seq_lens.at["seq", seq_id].set(0)
+        new_clone_sources = self.clone_sources.at["seq", seq_id].set(INVALID)
+        new_kv_pages = self.kv_pages.at["seq", seq_id].set(hax.full_like(self.kv_pages["seq", seq_id], INVALID))
+        new_page_indices = self.page_indices.at["seq", seq_id].set(
+            hax.full_like(self.page_indices["seq", seq_id], INVALID)
+        )
+        new_used_mask = self.used_mask.at["seq", seq_id].set(False)
+
+        new_sequences = SequenceTable(
+            new_seq_lens,
+            new_clone_sources,
+            new_kv_pages,
+            new_page_indices,
+            new_used_mask,
+            self.page_size,
+        )
+        new_page_table = dataclasses.replace(page_table, page_ref_counts=new_ref_counts)
+        return new_sequences, new_page_table
+
+    @eqx.filter_jit(donate="all")
+    def free_pages_for_finished(
+        self,
+        page_table: "PageTable",
+        finished_mask: jnp.ndarray,
+    ) -> tuple["SequenceTable", "PageTable"]:
+        assert finished_mask.ndim == 1
+
+        def dec_refcounts_for_seq(pages_row, ref_counts):
+            valid = is_valid(pages_row)
+
+            def body(i, rc):
+                def dec(rc):
+                    page = pages_row["page", i].scalar()
+                    return rc.at["page", page].add(-1)
+
+                return jax.lax.cond(valid["page", i].scalar(), dec, lambda x: x, rc)
+
+            updated = jax.lax.fori_loop(0, pages_row.axis_size("page"), body, ref_counts)
+            return hax.maximum(updated, hax.zeros_like(updated))
+
+        def body(i, state):
+            ref_counts, sequences = state
+
+            def do(state):
+                ref_counts, sequences = state
+                pages_row = sequences.page_indices["seq", i]
+                ref_counts = dec_refcounts_for_seq(pages_row, ref_counts)
+                sequences = sequences.release_slot(i)
+                return ref_counts, sequences
+
+            return jax.lax.cond(finished_mask[i], do, lambda s: s, (ref_counts, sequences))
+
+        ref_counts, sequences = jax.lax.fori_loop(0, self.max_seqs, body, (page_table.page_ref_counts, self))
+        new_page_table = dataclasses.replace(page_table, page_ref_counts=ref_counts)
+        return sequences, new_page_table
+
+    @eqx.filter_jit(donate="all")
+    def clone_pages_from(
+        self,
+        page_table: "PageTable",
+        src_seq_id: int,
+        dst_seq_id: int,
+    ) -> tuple["SequenceTable", "PageTable"]:
+        # jax.debug.print("clone {} -> {}", src_seq_id, dst_seq_id)
+        src_pages = self.page_indices["seq", src_seq_id]
+        src_len = self.seq_lens["seq", src_seq_id].scalar()
+        size = self.page_size
+
+        used_pages = (src_len + size - 1) // size
+        last_idx = hax.maximum(used_pages - 1, 0)
+        is_boundary = (src_len % size) == 0
+
+        page_indices = self.page_indices.at["seq", dst_seq_id].set(src_pages)
+
+        def inc_shared(ref_counts):
+            def body(i, rc):
+                page = src_pages["page", i]
+
+                def inc(rc):
+                    return rc.at["page", page].add(1)
+
+                return jax.lax.cond(is_valid(page).scalar(), inc, lambda x: x, rc)
+
+            limit = used_pages - jnp.where(is_boundary, 0, 1)
+            return jax.lax.fori_loop(0, limit, body, ref_counts)
+
+        ref_counts = inc_shared(page_table.page_ref_counts)
+
+        def handle_partial(state):
+            ref_counts, indices = state
+            has_free = hax.any(ref_counts == 0).scalar()
+            ref_counts = eqx.error_if(ref_counts, ~has_free, "Out of free pages during clone_pages_from")
+            free_idx = hax.argmax(ref_counts == 0, "page")
+            indices = indices.at["seq", dst_seq_id, "page", last_idx].set(free_idx)
+            ref_counts = ref_counts.at["page", free_idx].add(1)
+            return ref_counts, indices
+
+        ref_counts, page_indices = jax.lax.cond(
+            is_boundary,
+            lambda s: s,
+            handle_partial,
+            (ref_counts, page_indices),
+        )
+
+        seq_lens = self.seq_lens.at["seq", dst_seq_id].set(src_len)
+        used_mask = self.used_mask.at["seq", dst_seq_id].set(True)
+
+        kv_pages = self.kv_pages.at["seq", dst_seq_id].set(page_indices["seq", dst_seq_id])
+        sequences = dataclasses.replace(
+            self,
+            seq_lens=seq_lens,
+            page_indices=page_indices,
+            used_mask=used_mask,
+            kv_pages=kv_pages,
+        )
+        page_table = dataclasses.replace(page_table, page_ref_counts=ref_counts)
+        return sequences, page_table
+
+    def bump_seq_len_to_next_page(self, seq_id: int) -> "SequenceTable":
+        cur = self.seq_lens["seq", seq_id]
+        size = jnp.array(self.page_size, dtype=jnp.int32)
+        next_page = ((cur + size - 1) // size) * size
+        new_seq_lens = self.seq_lens.at["seq", seq_id].set(next_page)
+        return dataclasses.replace(self, seq_lens=new_seq_lens)
+
+
 class DecodeState(eqx.Module):
     """
     State of sequences during decoding. This manages a "hot set" of sequences that are currently being decoded.
@@ -79,19 +557,8 @@ class DecodeState(eqx.Module):
     tokens: ht.i32[NamedArray, "seq position"]
     """ most recent tokens generated for each sequence. Should always start at a page boundary. """
     logprobs: ht.Float[NamedArray, "seq position"] | None  # log probabilities of the tokens
-    seq_lens: ht.i32[NamedArray, "seq"]
-    """Sequence length for each sequence. This is the number of tokens currently in the sequence"""
-    clone_sources: ht.i32[NamedArray, "seq"]
-    """
-    For each local sequence slot, the local source id it should be cloned from, or INVALID if it's either already
-    been cloned or is an original sequence. This is used to implement efficient cloning of sequences for multi-sample
-    decoding or potentially beam search / particle filtering.
-    """
-
-    # TODO: these aren't actually used anywhere. (We currently only use them from PageTable)
-    # This is a better place for them, so we should move them here and update the code to use them.
-    kv_pages: ht.i32[NamedArray, "seq page"]
-    """Key-value pages for each sequence. This is used to store the key-value pairs for the sequences."""
+    sequences: SequenceTable
+    """Aggregated per-sequence state such as lengths, clone metadata, and KV page assignments."""
     page_size: int = eqx.field(static=True)
 
     # Page table for KV page allocation and per-sequence lengths/usage
@@ -110,11 +577,71 @@ class DecodeState(eqx.Module):
     prng_keys: jaxtyping.PRNGKeyArray
     """one per sequence, used for sampling. This is a JAX PRNG key, so it can be split to get new keys."""
 
-    # Token queue for pending decode work
     tqueue: "TokenQueue"
+    """token queue for pending decode work"""
 
     # Cached finished flags per sequence (updated when tokens are enqueued)
     finished: ht.bool_[NamedArray, "seq"]
+
+    @staticmethod
+    def init(
+        page_table: PageTable,
+        pad_token_id: int = INVALID,
+        max_stop_seqs: int = 0,
+        max_stop_tokens: int = 16,
+        max_queued_tokens: int = 0,
+        enable_logprobs: bool = False,
+    ) -> "DecodeState":
+        """
+        Initialize a DecodeState with empty buffers.
+        """
+        max_seqs = page_table.max_seqs
+        pages_per_seq = page_table.pages_per_seq
+        page_size = page_table.page_size
+        max_seq_len = page_table.max_len_per_seq
+
+        sequence_table = SequenceTable.init(max_seqs, pages_per_seq, page_size)
+
+        return DecodeState(
+            sequences=sequence_table,
+            page_size=page_size,
+            page_table=page_table,
+            tokens=hax.full({"seq": max_seqs, "position": max_seq_len}, pad_token_id, dtype=jnp.int32),
+            logprobs=(
+                None
+                if not enable_logprobs
+                else hax.full({"seq": max_seqs, "position": max_seq_len}, jnp.nan, dtype=jnp.float32)
+            ),
+            max_num_tokens=hax.full({"seq": max_seqs}, 0, dtype=jnp.int32),
+            stop_tokens=(
+                hax.full(
+                    {"seq": max_seqs, "stop_seq": max_stop_seqs, "position": max_stop_tokens},
+                    INVALID,
+                    dtype=jnp.int32,
+                )
+                if max_stop_tokens > 0
+                else None
+            ),
+            temperature=hax.ones({"seq": max_seqs}, dtype=jnp.float32),
+            prng_keys=jax.vmap(jax.random.PRNGKey, axis_size=max_seqs, in_axes=None)(0),
+            tqueue=TokenQueue.init(max_queued_tokens),
+            finished=hax.zeros({"seq": max_seqs}, dtype=bool),
+        )
+
+    @property
+    def seq_lens(self) -> ht.i32[NamedArray, "seq"]:  # type: ignore[name-defined]
+        """Current logical length for each active sequence."""
+        return self.sequences.seq_lens
+
+    @property
+    def clone_sources(self) -> ht.i32[NamedArray, "seq"]:  # type: ignore[name-defined]
+        """Mapping from clone targets to their parent sequences."""
+        return self.sequences.clone_sources
+
+    @property
+    def kv_pages(self) -> ht.i32[NamedArray, "seq page"]:  # type: ignore[name-defined]
+        """KV page assignments per sequence."""
+        return self.sequences.kv_pages
 
     @eqx.filter_jit(donate="all")
     def invalidate_finished(self) -> "DecodeState":
@@ -125,18 +652,9 @@ class DecodeState(eqx.Module):
         - Clears ``kv_pages`` rows for finished slots to INVALID
         """
         mask = self.finished
-        new_seq_lens = hax.where(mask, INVALID, self.seq_lens)
-        new_clone_sources = hax.where(mask, INVALID, self.clone_sources)
-        new_kv_pages = hax.where(mask, INVALID, self.kv_pages)
-        finished = hax.zeros_like(self.finished)  # reset finished flags
-
-        return dataclasses.replace(
-            self,
-            seq_lens=new_seq_lens,
-            clone_sources=new_clone_sources,
-            kv_pages=new_kv_pages,
-            finished=finished,
-        )
+        finished = hax.zeros_like(self.finished)
+        new_sequences = self.sequences.clear_slots(mask)
+        return dataclasses.replace(self, sequences=new_sequences, finished=finished)
 
     def prng_key_for(self, slot_id: int, pos_id: int) -> jaxtyping.PRNGKeyArray:
         """
@@ -145,6 +663,36 @@ class DecodeState(eqx.Module):
         """
         per_pos_key = self.prng_keys[ensure_scalar(slot_id)]
         return jax.random.fold_in(per_pos_key, ensure_scalar(pos_id))
+
+    def reserve_slot(self, slot_id: int | jnp.ndarray | None = None) -> tuple["DecodeState", int]:
+        sequences, slot = self.sequences.reserve_slot(slot_id)
+        return dataclasses.replace(self, sequences=sequences), slot
+
+    def release_slot(self, slot_id: int) -> "DecodeState":
+        sequences = self.sequences.release_slot(slot_id)
+        return dataclasses.replace(self, sequences=sequences)
+
+    def allocate_for_seq(
+        self,
+        token_slot_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
+        token_pos_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
+    ) -> tuple["DecodeState", PageBatchInfo]:
+        sequences, page_table, batch_info = self.sequences.allocate_for_seq(
+            self.page_table, token_slot_ids, token_pos_ids
+        )
+        return dataclasses.replace(self, sequences=sequences, page_table=page_table), batch_info
+
+    def free_pages(self, seq_id: int) -> "DecodeState":
+        sequences, page_table = self.sequences.free_pages(self.page_table, seq_id)
+        return dataclasses.replace(self, sequences=sequences, page_table=page_table)
+
+    def free_pages_for_finished(self, finished_mask: jnp.ndarray) -> "DecodeState":
+        sequences, page_table = self.sequences.free_pages_for_finished(self.page_table, finished_mask)
+        return dataclasses.replace(self, sequences=sequences, page_table=page_table)
+
+    def bump_seq_len_to_next_page(self, seq_id: int) -> "DecodeState":
+        sequences = self.sequences.bump_seq_len_to_next_page(seq_id)
+        return dataclasses.replace(self, sequences=sequences)
 
     def prng_keys_for(self, slot_ids: ht.i32[NamedArray, "position"], pos_ids: ht.i32[NamedArray, "position"]) -> jaxtyping.PRNGKeyArray:  # type: ignore[name-defined]
         """
@@ -188,7 +736,7 @@ class DecodeState(eqx.Module):
 
         JIT-safe: uses a bounded fori_loop over ``num_targets``.
         """
-        clone_map = self.clone_sources
+        clone_map = self.sequences.clone_sources
 
         def body(i, cmap):
             tid = target_slot_ids["position", i].scalar()
@@ -199,7 +747,16 @@ class DecodeState(eqx.Module):
             return jax.lax.cond(is_valid(tid), do, lambda c: c, cmap)
 
         new_map = jax.lax.fori_loop(0, num_targets, body, clone_map)
-        return dataclasses.replace(self, clone_sources=new_map)
+        table = self.sequences
+        new_sequences = dataclasses.replace(table, clone_sources=new_map)
+        return dataclasses.replace(self, sequences=new_sequences)
+
+    def clone_pages_from(self, src, dest) -> "DecodeState":
+        """
+        Clone kv_pages from src slot to dest slot.
+        """
+        sequences, page_table = self.sequences.clone_pages_from(self.page_table, src, dest)
+        return dataclasses.replace(self, sequences=sequences, page_table=page_table)
 
     @property
     def empty_queue_space(self) -> jnp.ndarray:
@@ -238,20 +795,29 @@ class DecodeState(eqx.Module):
         self,
         local_slot_id: int,
         tokens: ht.i32[NamedArray, "position"],  # type: ignore[name-defined]
-        seq_len: jnp.ndarray,
+        seq_len: jnp.ndarray | int = 0,
         kv_pages: ht.i32[NamedArray, "page"] | None = None,  # type: ignore[name-defined]
+        page_indices: ht.i32[NamedArray, "page"] | None = None,  # type: ignore[name-defined]
         seq_params: SeqDecodingParams | None = None,
     ) -> "DecodeState":
         """Assign a new sequence to the given local slot."""
 
         new_tokens = self.tokens.at["seq", local_slot_id, "position", 0 : tokens.axis_size("position")].set(tokens)
 
+        sequences = self.sequences
         if kv_pages is None:
-            kv_pages = hax.full_like(self.kv_pages["seq", local_slot_id], INVALID)
+            kv_pages = hax.full_like(sequences.kv_pages["seq", local_slot_id], INVALID)
+
+        new_sequences = sequences.assign_slot(
+            local_slot_id,
+            seq_len=seq_len,
+            kv_pages=kv_pages,
+            page_indices=page_indices,
+        )
 
         new_state = dataclasses.replace(
             self,
-            kv_pages=self.kv_pages.at["seq", local_slot_id].set(kv_pages),
+            sequences=new_sequences,
             tokens=new_tokens,
             # set log probs to nan for the prefix tokens
             logprobs=(
@@ -259,7 +825,6 @@ class DecodeState(eqx.Module):
                 if self.logprobs is not None
                 else None
             ),
-            seq_lens=self.seq_lens.at["seq", local_slot_id].set(seq_len),
             finished=self.finished.at["seq", local_slot_id].set(False),
         )
 
@@ -309,7 +874,8 @@ class DecodeState(eqx.Module):
         """
         tokens = self.tokens
         logprobs = self.logprobs
-        counts = self.seq_lens
+        sequences = self.sequences
+        counts = sequences.seq_lens
         fins = self.finished
 
         # We'll also compute per-token absolute position ids to feed into the TokenQueue.
@@ -362,8 +928,10 @@ class DecodeState(eqx.Module):
         # Enqueue tokens and their corresponding position ids into the queue
         new_tqueue = self.tqueue.enqueue_tokens(new_tokens, local_slot_ids, pos_ids, num_new_tokens_to_queue)
 
+        new_sequences = dataclasses.replace(sequences, seq_lens=counts)
+
         return dataclasses.replace(
-            self, tokens=tokens, logprobs=logprobs, seq_lens=counts, tqueue=new_tqueue, finished=fins
+            self, tokens=tokens, logprobs=logprobs, sequences=new_sequences, tqueue=new_tqueue, finished=fins
         )
 
     def is_finished(self, slot_id: jnp.ndarray) -> jnp.ndarray:
@@ -392,58 +960,13 @@ kv_pages: {kv_pages}
 logprobs: {logprobs}
 max_num_tokens: {max_num_tokens}
 """,
-            num_tokens=self.seq_lens,
+            num_tokens=self.sequences.seq_lens,
             finished=self.finished,
             tokens=self.tokens,
             stop_tokens=self.stop_tokens,
-            kv_pages=self.kv_pages,
+            kv_pages=self.sequences.kv_pages,
             logprobs=self.logprobs if self.logprobs is not None else "None",
             max_num_tokens=self.max_num_tokens,
-        )
-
-    @staticmethod
-    def init(
-        page_table: PageTable,
-        pad_token_id: int = INVALID,
-        max_stop_seqs: int = 0,
-        max_stop_tokens: int = 16,
-        max_queued_tokens: int = 0,
-        enable_logprobs: bool = False,
-    ) -> "DecodeState":
-        """
-        Initialize a DecodeState with empty buffers.
-        """
-        max_seqs = page_table.max_seqs
-        pages_per_seq = page_table.pages_per_seq
-        page_size = page_table.page_size
-        max_seq_len = page_table.max_len_per_seq
-
-        return DecodeState(
-            kv_pages=hax.full({"seq": max_seqs, "page": pages_per_seq}, INVALID, dtype=jnp.int32),
-            page_size=page_size,
-            page_table=page_table,
-            tokens=hax.full({"seq": max_seqs, "position": max_seq_len}, pad_token_id, dtype=jnp.int32),
-            logprobs=(
-                None
-                if not enable_logprobs
-                else hax.full({"seq": max_seqs, "position": max_seq_len}, jnp.nan, dtype=jnp.float32)
-            ),
-            seq_lens=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
-            clone_sources=hax.full({"seq": max_seqs}, INVALID, dtype=jnp.int32),
-            max_num_tokens=hax.full({"seq": max_seqs}, 0, dtype=jnp.int32),
-            stop_tokens=(
-                hax.full(
-                    {"seq": max_seqs, "stop_seq": max_stop_seqs, "position": max_stop_tokens},
-                    INVALID,
-                    dtype=jnp.int32,
-                )
-                if max_stop_tokens > 0
-                else None
-            ),
-            temperature=hax.ones({"seq": max_seqs}, dtype=jnp.float32),
-            prng_keys=jax.vmap(jax.random.PRNGKey, axis_size=max_seqs, in_axes=None)(0),
-            tqueue=TokenQueue.init(max_queued_tokens),
-            finished=hax.zeros({"seq": max_seqs}, dtype=bool),
         )
 
 
