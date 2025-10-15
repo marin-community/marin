@@ -26,7 +26,7 @@ from experiments.midtraining_datasets import finemath_3_plus_tokenized, megamath
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.exp808_sft_mixture import mixture_config as sft_mixture_llama3
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 from marin.resources import TpuPodConfig
 
@@ -127,7 +127,7 @@ sft_config = SimpleSFTConfig(
     num_train_steps=SFT_NUM_STEPS,
     learning_rate=SFT_LEARNING_RATE,
     tokenizer=TOKENIZER_NAME,
-    model_name_or_path=nanochat_pre_mid_step,
+    model_name_or_path=output_path_of(nanochat_pre_mid_step, "hf/step-2599/"),
     steps_per_eval=100,
     steps_per_checkpoint=200,
     steps_per_hf_export=200,
