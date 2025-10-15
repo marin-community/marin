@@ -3,8 +3,6 @@
 
 """Cache implementations for paged attention."""
 
-from __future__ import annotations
-
 import dataclasses
 import functools
 from typing import Generic, Iterable, Iterator, TypeVar, Self
@@ -18,7 +16,7 @@ import haliax as hax
 from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call
 
-from levanter.inference.page_table import PageBatchInfo, PageTable
+from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 
 
 class PageCache(eqx.Module):
@@ -35,12 +33,20 @@ class KvPageCache(PageCache):
     kv_pages: NamedArray  # [Page, Slot, 2 * KVHeads, Embed]
 
     @staticmethod
-    def init(page_table: PageTable, kv_heads: Axis, head_size: Axis, dtype=jnp.float32) -> "KvPageCache":
-        """Allocate an empty KV cache matching *page_table* and head axes."""
+    def init(spec: PageTableSpec, kv_heads: Axis, head_size: Axis, dtype=jnp.float32) -> "KvPageCache":
+        """
+        Initialize a KvPageCache with the given page table specification and dimensions.
+
+        Args:
+            spec: The layout specification for KV pages.
+            kv_heads: Axis for key/value heads.
+            head_size: Axis for head size.
+            dtype: Data type for the cache.
+        """
         kv_pages = hax.zeros(
             {
-                "page": page_table.num_pages,
-                "slot": page_table.page_size,
+                "page": spec.num_pages,
+                "slot": spec.page_size,
                 "kv_head": 2 * kv_heads.size,
                 head_size.name: head_size.size,
             },
@@ -58,7 +64,10 @@ class KvPageCache(PageCache):
         """Append keys and values to the cache based on *batch_info*."""
         page_size = self.kv_pages.array.shape[1]
 
-        _ = page_size  # keeps JIT-shapes available; retained for future assertions.
+        assert page_size == batch_info.page_size, (
+            f"Page size mismatch: {page_size} != {batch_info.page_size}. "
+            "Ensure that the page size in batch_info matches the kv_pages."
+        )
 
         K = jnp.asarray(batch_info.num_new_tokens, jnp.int32)
         t_pages, t_slots = batch_info.pages_and_slots()  # [T] int32 (first K valid)
@@ -75,7 +84,10 @@ class KvPageCache(PageCache):
         return dataclasses.replace(self, kv_pages=updated)
 
     def copy_page(self, src_page: int, dst_page: int) -> "KvPageCache":
-        """Copy an entire page of cached keys/values."""
+        """Copy the entire contents of page ``src_page`` into ``dst_page``.
+
+        This is used when creating clones that should have an identical last partial page, but mapped to a fresh page.
+        """
         new_k = self.kv_pages.at["page", dst_page].set(self.kv_pages["page", src_page])
         return dataclasses.replace(self, kv_pages=new_k)
 

@@ -39,7 +39,7 @@ from jax.experimental.shard_map import shard_map
 from jax.sharding import PartitionSpec
 from jaxtyping import PRNGKeyArray
 
-from ..inference.page_table import PageBatchInfo, PageTable
+from ..inference.page_table import PageBatchInfo, PageTableSpec
 from .kv_cache import KvPageCache
 from .normalization import LayerNormConfigBase
 from .rotary import RotaryEmbeddings, RotaryEmbeddingsConfig
@@ -1564,13 +1564,8 @@ class Attention(eqx.Module):
 
         return Attention(config, q_proj, k_proj, v_proj, o_proj, q_norm, k_norm, rot_embs)
 
-    def empty_page_cache(self, page_table: PageTable, *, dtype) -> "KvPageCache":
-        return KvPageCache.init(
-            page_table,
-            self.config.KVHeads,
-            self.config.HeadSize,
-            dtype=dtype,
-        )
+    def empty_page_cache(self, spec: PageTableSpec, *, dtype) -> "KvPageCache":
+        return KvPageCache.init(spec, self.config.KVHeads, self.config.HeadSize, dtype=dtype)
 
     @named_call
     def __call__(
