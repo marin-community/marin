@@ -520,8 +520,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                 logprobs = None
                 if request.logprobs:
                     # Convert logprobs to API format
-                    prompt_len = generation.prompt_tokens
-                    generated_tokens = generation.tokens[prompt_len:]
+                    generated_tokens = generation.tokens
 
                     # Create token logprobs in OpenAI format
                     tokens = []
