@@ -20,7 +20,8 @@ from levanter.metrics import (
 from levanter.tracker import NoopConfig
 from levanter.trainer import Trainer, TrainerConfig, WrappedLossFunction
 
-Batch = hax.Axis("batch", size=4)
+# Use a batch size that remains divisible by the data-parallel axis on multi-device setups.
+Batch = hax.Axis("batch", size=4 * max(1, jax.device_count()))
 Embed = hax.Axis("embed", size=8)
 
 
