@@ -35,7 +35,6 @@ def test_autoscaler_requeues_failed_tasks(ray_tpu_cluster):
         result_queue=result_queue,
         min_actors=1,
         max_actors=2,
-        target_queue_size=1,
     )
 
     try:
