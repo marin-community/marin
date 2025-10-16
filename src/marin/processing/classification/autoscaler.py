@@ -59,7 +59,7 @@ class AutoscalingActorPool:
         to the available actors.
         2. Scaling up and down the number of actors based on the load.
         3. Collecting results from the actors and returning them to the client.
-        4. Handling actor failures and requeuing tasks to available actors.
+        4. Requeuing tasks to available actors when an actor fails.
 
         To communicate between the client and the autoscaling actor pool, we use a task queue and a result queue.
         To detect actor failures, we periodically ping the actors and remove the actors if we do not receive a response.
@@ -122,10 +122,17 @@ class AutoscalingActorPool:
         self._initialize_actors()
 
         # Start autoscaling monitor, dispatcher, and result collector
-        self.scaling_task = None
-        self._start_autoscaling_monitor()
-        self._start_dispatcher()
-        self._start_result_collector()
+        self._monitor_stop_event: Event = Event()
+        self._monitor_thread: Thread = Thread(target=self._autoscaling_monitor_loop, daemon=True)
+        self._monitor_thread.start()
+
+        self._dispatch_stop_event: Event = Event()
+        self._dispatch_thread: Thread = Thread(target=self._dispatcher_loop, daemon=True)
+        self._dispatch_thread.start()
+
+        self._result_stop_event: Event = Event()
+        self._result_thread: Thread = Thread(target=self._result_collector_loop, daemon=True)
+        self._result_thread.start()
 
     def _initialize_actors(self):
         """Initialize the minimum number of actors."""
@@ -154,88 +161,68 @@ class AutoscalingActorPool:
         self.actors.append(actor)
         self.actor_futures[actor] = []
 
-    def _start_autoscaling_monitor(self):
-        """Start a local background thread for monitoring and autoscaling.
+    def _autoscaling_monitor_loop(self):
+        """Start a background thread that monitors the load and scales the number of actors accordingly."""
+        while not self._monitor_stop_event.is_set():
+            try:
+                time.sleep(self.scale_check_interval)
+                self._check_and_scale()
+            except Exception:
+                # Best-effort; do not crash the monitor
+                pass
 
-        Avoids passing the non-serializable pool object to a Ray actor.
-        """
-        self._monitor_stop_event: Event = Event()
-
-        def _loop():
-            while not self._monitor_stop_event.is_set():
-                try:
-                    time.sleep(self.scale_check_interval)
-                    self._check_and_scale()
-                except Exception:
-                    # Best-effort; do not crash the monitor
-                    pass
-
-        self._monitor_thread: Thread = Thread(target=_loop, daemon=True)
-        self._monitor_thread.start()
-
-    def _start_dispatcher(self):
+    def _dispatcher_loop(self):
         """Start a background dispatcher that pulls tasks and dispatches work."""
-        self._dispatch_stop_event: Event = Event()
+        while not self._dispatch_stop_event.is_set():
+            if len(self.actors) == 0:
+                logger.debug("Dispatcher waiting for actors to come online")
+                time.sleep(0.5)
+                continue
 
-        def _loop():
-            while not self._dispatch_stop_event.is_set():
-                if len(self.actors) == 0:
-                    logger.debug("Dispatcher waiting for actors to come online")
-                    time.sleep(0.5)
-                    continue
+            dispatched_any = False
+            for _ in range(4):  # cap per-iteration dispatch volume
+                try:
+                    task = self.task_queue.get(timeout=1)
+                except Exception:
+                    break
 
-                dispatched_any = False
-                for _ in range(4):  # cap per-iteration dispatch volume
+                self.total_submitted += 1
+                try:
+                    self._dispatch_task(task)
+                    dispatched_any = True
+                except RuntimeError:
+                    # No actor available; put task back and wait before retrying
                     try:
-                        task = self.task_queue.get(timeout=1)
+                        self.task_queue.put(task)
                     except Exception:
-                        break
+                        logger.error("Dispatcher failed to requeue task after no actor available")
+                    time.sleep(0.1)
+                    break
 
-                    self.total_submitted += 1
-                    try:
-                        self._dispatch_task(task)
-                        dispatched_any = True
-                    except RuntimeError:
-                        # No actor available; put task back and wait before retrying
-                        try:
-                            self.task_queue.put(task)
-                        except Exception:
-                            logger.error("Dispatcher failed to requeue task after no actor available")
-                        time.sleep(0.1)
-                        break
+            if not dispatched_any:
+                logger.info("No tasks dispatched - going to sleep for 10 seconds.")
+                time.sleep(10)
 
-                if not dispatched_any:
-                    logger.info("No tasks dispatched - going to sleep for 10 seconds.")
-                    time.sleep(10)
-
-        self._dispatch_thread: Thread = Thread(target=_loop, daemon=True)
-        self._dispatch_thread.start()
-
-    def _start_result_collector(self):
+    def _result_collector_loop(self):
         """Start a background thread that collects completed futures."""
-        self._result_stop_event: Event = Event()
 
-        def _loop():
-            while not self._result_stop_event.is_set():
-                futures_snapshot = []
-                with self.actor_task_metadata_lock:
-                    futures_snapshot = list(self.future_to_actor.keys())
+        while not self._result_stop_event.is_set():
+            futures_snapshot = []
+            with self.actor_task_metadata_lock:
+                futures_snapshot = list(self.future_to_actor.keys())
 
-                if not futures_snapshot:
-                    time.sleep(0.05)
-                    continue
+            if not futures_snapshot:
+                time.sleep(0.05)
+                continue
 
-                ready_refs, _ = ray.wait(futures_snapshot, num_returns=len(futures_snapshot), timeout=0)
+            ready_refs, _ = ray.wait(futures_snapshot, num_returns=len(futures_snapshot), timeout=0)
 
-                if not ready_refs:
-                    time.sleep(0.05)
-                    continue
+            if not ready_refs:
+                time.sleep(0.05)
+                continue
 
-                for ref in ready_refs:
-                    self._handle_completed_future(ref)
-
-        self._result_thread: Thread = Thread(target=_loop, daemon=True)
-        self._result_thread.start()
+            for ref in ready_refs:
+                self._handle_completed_future(ref)
 
     def _handle_completed_future(self, future: ray.ObjectRef) -> None:
         task_to_retry = None
@@ -273,7 +260,7 @@ class AutoscalingActorPool:
         with self.actor_task_metadata_lock:
             current_actors = len(self.actors)
             try:
-                pending_count = int(self.task_queue.qsize()) if self.task_queue is not None else 0
+                pending_count = int(self.task_queue.qsize())
             except Exception:
                 pending_count = 0
 
@@ -281,10 +268,7 @@ class AutoscalingActorPool:
             active_tasks = sum(len(futures) for futures in self.actor_futures.values())
         total_load = pending_count + active_tasks
 
-        # Calculate utilization
-        per_actor_capacity = self.max_tasks_per_actor or self.target_queue_size
-        capacity = current_actors * per_actor_capacity
-        utilization = total_load / capacity if capacity > 0 else 0
+        utilization = total_load / current_actors if current_actors > 0 else total_load
 
         logger.info(
             f"Load check - Actors: {current_actors}, Pending: {pending_count}, "
@@ -370,11 +354,7 @@ class AutoscalingActorPool:
                 alive_actor_futures[actor] = futures
 
             self.actor_futures = alive_actor_futures
-            available_actors = [
-                actor
-                for actor in self.actors
-                if self.max_tasks_per_actor is None or len(self.actor_futures.get(actor, [])) < self.max_tasks_per_actor
-            ]
+            available_actors = [actor for actor, futures in self.actor_futures.items() if len(futures) == 0]
 
         if not available_actors:
             return None
@@ -390,7 +370,7 @@ class AutoscalingActorPool:
 
         with self.actor_task_metadata_lock:
             current_load = len(self.actor_futures.get(actor, []))
-            if self.max_tasks_per_actor is not None and current_load >= self.max_tasks_per_actor:
+            if current_load >= 1:  # Don't assign to actor since it already has a task
                 raise RuntimeError("Actor saturated")
 
             future = actor.__call__.remote(task)
@@ -416,24 +396,6 @@ class AutoscalingActorPool:
                             self.future_to_task.pop(future, None)
                     self.actor_futures[actor] = pending
 
-    def get_pool_stats(self) -> dict[str, Any]:
-        """Get current pool statistics."""
-        with self.actor_task_metadata_lock:
-            active_tasks = sum(len(futures) for futures in self.actor_futures.values())
-
-            stats = {
-                "num_actors": len(self.actors),
-                "min_actors": self.min_actors,
-                "max_actors": self.max_actors,
-                "max_tasks_per_actor": self.max_tasks_per_actor,
-                "active_tasks": active_tasks,
-                "pending_tasks": self.task_queue.qsize() if self.task_queue is not None else 0,
-                "total_submitted": self.total_submitted,
-                "total_processed": self.total_processed,
-                "actor_loads": {f"actor_{i}": len(futures) for i, futures in enumerate(self.actor_futures.values())},
-            }
-            return stats
-
     def shutdown(self):
         """Shutdown the actor pool and clean up resources."""
         logger.info("Shutting down actor pool...")
@@ -445,6 +407,9 @@ class AutoscalingActorPool:
         # Stop dispatcher thread
         self._dispatch_stop_event.set()
         self._dispatch_thread.join(timeout=5)
+
+        self._result_stop_event.set()
+        self._result_thread.join(timeout=5)
 
         # Kill all actors
         with self.actor_task_metadata_lock:

@@ -47,9 +47,6 @@ class BaseClassifier:
     def predict(self, documents: list[str]):
         raise NotImplementedError
 
-    def ping(self):
-        return True
-
     def __call__(self, batch: dict[str, Any]):
         raise NotImplementedError
 
@@ -279,8 +276,8 @@ class GTEClassifier(FinewebEduClassifier):
 
         device = xm.xla_device()
 
-        is_remote_or_local_path: bool = urllib.parse.urlparse(model_name).scheme or os.path.exists(model_name)
-        if is_remote_or_local_path:
+        is_file_path: bool = urllib.parse.urlparse(model_name).scheme or os.path.exists(model_name)
+        if is_file_path:
             print(f"Downloading model from {model_name}")
             with tempfile.TemporaryDirectory() as tmp_dir:
                 fs, fs_path = fsspec.core.url_to_fs(model_name)
@@ -462,6 +459,24 @@ class vLLMClassifier(BaseClassifier):
 
 
 class vLLMClassifierWithDocsAndAttributes(vLLMClassifier):
+    """LLM generation based on a template, attribute, and document
+
+    The idea is that there is a function that we will have to apply
+    that applies a transformation on the template based on the
+    attributes of the given doc.
+
+    In symbolic form:
+    vLLM classifier: text -> M(text, template) where template is the
+    given template, text is the document text, and M is the model
+
+    vLLM classifier with docs and attributes:
+    template + attributes -> f(template, attributes) -> template'
+    then template' + text -> M(text, template') -> generated_text
+    We apply some tranformation f on the template + attribute of the
+    given document to get a new template then
+    apply that new template to the text.
+    """
+
     def __init__(
         self,
         model_name: str,
@@ -518,9 +533,6 @@ class vLLMClassifierWithDocsAndAttributes(vLLMClassifier):
         # We assume that we want to change the prompt template based on what each attribute is.
         # Number of strategies * number of text documents = number of flattened batches
         templates = []
-        # print(f"attribute list: {attribute_dict_list}")
-        print(f"len of attributes: {len(attribute_dict_list)}")
-        print(f"len of batch: {len(batch)}")
 
         # requires attributes as an input key
         flattened_batch_keys_to_values = {key: [] for key in batch.keys()}
@@ -539,12 +551,7 @@ class vLLMClassifierWithDocsAndAttributes(vLLMClassifier):
                 templates.append(self._change_template_based_on_attributes(attribute))
                 current_index += 1
 
-        # print(f"len of flattened batches: {len(flattened_batches)}")
-
         self.text_generator.template = templates
-
-        print(f"flattened_batch_keys_to_values: {len(flattened_batch_keys_to_values)}")
-        print(f"len of templates: {len(templates)}")
 
         # Generate text for each flattened batch
         batch_with_generations = self.text_generator(flattened_batch_keys_to_values)

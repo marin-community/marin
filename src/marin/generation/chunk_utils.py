@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Utilities for chunking text on character, paragraph or passage boundaries.
+"""
+
 from enum import Enum
 from dataclasses import dataclass
 from typing import Any

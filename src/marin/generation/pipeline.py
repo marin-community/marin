@@ -52,9 +52,10 @@ class TextGeneration:
         """
         self.llm = llm
 
-        # Template is a string that contains a placeholder for "example"
-        # which will be replaced with the actual example
-        self.template = template or STEP_BY_STEP_TEMPLATE
+        # Normalize template to a list for consistent handling at call time
+        # Accept either a single string template or a list of per-example templates.
+        base_template = template or STEP_BY_STEP_TEMPLATE
+        self.templates: list[str] = base_template if isinstance(base_template, list) else [base_template]
         self.num_generations = num_generations
         self.prompt_column = prompt_column
         self.save_templated_prompt = save_templated_prompt
@@ -71,16 +72,16 @@ class TextGeneration:
     def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
         """Generate a batch of text using an LLM where the example text is in dolma format in the "text" column."""
 
-        if isinstance(self.template, list):
-            assert len(self.template) == len(
-                batch[self.prompt_column]
-            ), "The number of templates must match the number of examples."
-            prompts = [
-                template.format(example=example)
-                for template, example in zip(self.template, batch[self.prompt_column], strict=False)
-            ]
+        examples = batch[self.prompt_column]
+
+        if len(self.templates) == 1:
+            # Broadcast single template to all examples
+            prompts = [self.templates[0].format(example=example) for example in examples]
         else:
-            prompts = [self.template.format(example=example) for example in batch[self.prompt_column]]
+            assert len(self.templates) == len(examples), "The number of templates must match the number of examples."
+            prompts = [
+                template.format(example=example) for template, example in zip(self.templates, examples, strict=False)
+            ]
 
         generated_text = self.llm.generate(prompts)
 
@@ -124,20 +125,18 @@ class vLLMTextGeneration(TextGeneration):
     def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
         prompts = []
 
-        if isinstance(self.template, list):
-            assert len(self.template) == len(
-                batch[self.prompt_column]
-            ), "The number of templates must match the number of examples."
+        examples = batch[self.prompt_column]
 
-            for template, example in zip(self.template, batch[self.prompt_column], strict=False):
+        if len(self.templates) == 1:
+            single_template = self.templates[0]
+            for example in examples:
                 example = self._truncate_example(example)
-
                 if self.apply_chat_template:
                     try:
-                        chat_example = [{"role": "user", "content": template.format(example=example)}]
+                        chat_example = [{"role": "user", "content": single_template.format(example=example)}]
                     except Exception as e:
                         logger.error(f"Error formatting template: {e}")
-                        logger.error(f"Template: {template}")
+                        logger.error(f"Template: {single_template}")
                         logger.error(f"Example: {example}")
                         raise e
                     prompts.append(
@@ -146,10 +145,17 @@ class vLLMTextGeneration(TextGeneration):
                 else:
                     prompts.append(example)
         else:
-            for example in batch[self.prompt_column]:
+            assert len(self.templates) == len(examples), "The number of templates must match the number of examples."
+            for template, example in zip(self.templates, examples, strict=False):
                 example = self._truncate_example(example)
                 if self.apply_chat_template:
-                    chat_example = [{"role": "user", "content": self.template.format(example=example)}]
+                    try:
+                        chat_example = [{"role": "user", "content": template.format(example=example)}]
+                    except Exception as e:
+                        logger.error(f"Error formatting template: {e}")
+                        logger.error(f"Template: {template}")
+                        logger.error(f"Example: {example}")
+                        raise e
                     prompts.append(
                         self.tokenizer.apply_chat_template(chat_example, tokenize=False, add_generation_prompt=True)
                     )
