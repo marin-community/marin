@@ -555,9 +555,8 @@ def _handle_clones(
         decode_state, cache = state
         src_slot_id = src_ids["position", i].scalar()
         dst_slot_id = tgt_ids["position", i].scalar()
-        decode_state = decode_state.clone_pages_from(src_slot_id, dst_slot_id)
 
-        src_len = decode_state.seq_lens["seq", src_slot_id].scalar()
+        src_len = decode_state.seq_lens["seq", dst_slot_id].scalar()
         used_pages = (src_len + size - 1) // size
         last_idx = jnp.maximum(used_pages - 1, 0)
 
