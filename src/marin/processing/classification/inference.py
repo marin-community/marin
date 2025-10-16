@@ -26,108 +26,303 @@ import os
 import draccus
 import pandas as pd
 import ray
-
+from ray.util.queue import Queue
+import datetime
+import queue
 from marin.core.runtime import cached_or_construct_output
 from marin.processing.classification.classifier import (
     AutoClassifier,
-    BaseClassifier,
+    AutoClassifierRayActor,
 )
-from marin.processing.classification.config.inference_config import InferenceConfig
+from marin.processing.classification.config.inference_config import DatasetSchemaConfig, InferenceConfig
 from marin.utils import (
     fsspec_glob,
     fsspec_mkdirs,
     rebase_file_path,
-    remove_tpu_lockfile_on_exit,
 )
+from marin.processing.classification.checkpoint_utils import get_finished_ids, get_id_from_row
+from marin.processing.classification.autoscaler import AutoscalingActorPool
 
 logger = logging.getLogger("ray")
 
 
-def read_dataset(input_filename: str, columns: list[str] | None = None):
-    """Read in a dataset and return as a Huggingface Dataset
+def read_dataset_streaming(input_filename: str, columns: list[str] | None = None):
+    """Read in a dataset as a streaming iterator using datasets library
 
     Args:
         input_filename: str
-            The path to the input file. Currently supports .jsonl.gz and .parquet
+            The path to the input file. Currently supports .jsonl.gz, .jsonl.zst, and .parquet
 
     Returns:
-        datasets.Dataset: A Huggingface Dataset in-memory without using the disk
+        Iterator: An iterator over the dataset rows
     """
     import datasets
 
+    # Disable caching for streaming
     datasets.disable_caching()
     datasets.logging.set_verbosity_warning()
-    # We use pandas to read in the file so that we don't have to materialize
-    # the entire dataset in disk since we have limited disk space.
-    # Huggingface datasets loads the dataset into disk first and mmaps.
-    if input_filename.endswith(".jsonl.gz"):
-        df = pd.read_json(input_filename, compression="gzip", lines=True)
-        dataset = datasets.Dataset.from_pandas(df)
-        return dataset
-    elif input_filename.endswith(".jsonl.zst"):
-        df = pd.read_json(input_filename, compression="zstd", lines=True)
-        dataset = datasets.Dataset.from_pandas(df)
-        return dataset
+
+    # Determine file type and load with streaming
+    if input_filename.endswith((".jsonl.gz", ".jsonl.zst", ".jsonl")):
+        # Load as JSON lines with streaming
+        dataset = datasets.load_dataset("json", data_files=input_filename, streaming=True, split="train")
     elif input_filename.endswith(".parquet"):
-        df = pd.read_parquet(input_filename, columns=columns)
-        dataset = datasets.Dataset.from_pandas(df)
-        return dataset
+        # Load parquet with streaming
+        dataset = datasets.load_dataset("parquet", data_files=input_filename, streaming=True, split="train")
     else:
         raise ValueError(f"Unsupported filetype: {input_filename}")
 
+    # Filter columns if specified
+    if columns:
+        dataset = dataset.select_columns(columns)
 
-def write_dataset(dataset, output_filename: str):
-    """Writes a Huggingface Dataset to a file (remote or local)"""
-    if output_filename.endswith(".jsonl.gz"):
-        dataset.to_json(output_filename, compression="gzip")
-    elif output_filename.endswith(".jsonl.zst"):
-        df_pandas = dataset.to_pandas()
-        df_pandas.to_json(output_filename, orient="records", compression="zstd", lines=True)
-        # dataset.to_json(output_filename, to_json_kwargs={"compression": "zstd", "lines": True})
+    # Yield rows from the streaming dataset
+    yield from dataset
+
+
+def make_json_serializable(row: dict) -> dict:
+    """Make a row JSON serializable"""
+    for key, value in row.items():
+        if isinstance(value, dict):
+            row[key] = make_json_serializable(value)
+        if isinstance(value, datetime.datetime):
+            row[key] = value.isoformat()
+    return row
+
+
+def convert_batch_dict_to_output_rows(batch_dict: dict, output_column_names: list[str], batch_size: int) -> list[dict]:
+    output_rows = []
+    for i in range(batch_size):
+        output_row = {}
+        for col in output_column_names:
+            if col in batch_dict:
+                output_row[col] = batch_dict[col][i]
+            elif col in batch_dict:
+                output_row[col] = batch_dict[col][i]
+        output_rows.append(output_row)
+
+    return output_rows
+
+
+def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = False):
+    """Writes rows to a file in streaming fashion
+
+    JSONL behavior:
+      - For JSONL(.gz/.zst), write to a deterministic temp file under /tmp in append-mode,
+        then upload the full file to the destination (e.g., gs://...). This provides safe
+        append semantics for object stores.
+      - Checkpoint restoration should continue to read from the remote path.
+    """
+    import json
+    import hashlib
+    import os
+    import shutil
+
+    import fsspec
+
+    mode = "ab" if append else "wb"
+
+    if ".jsonl" in output_filename:
+        # Build deterministic temp path for this output file
+        file_hash = hashlib.sha256(output_filename.encode("utf-8")).hexdigest()
+        if output_filename.endswith(".jsonl.gz"):
+            tmp_path = f"/tmp/marin_{file_hash}.jsonl.gz"
+        elif output_filename.endswith(".jsonl.zst"):
+            tmp_path = f"/tmp/marin_{file_hash}.jsonl.zst"
+        else:
+            tmp_path = f"/tmp/marin_{file_hash}.jsonl"
+
+        # If appending and local temp doesn't exist, hydrate it from remote (if present)
+        if append and not os.path.exists(tmp_path):
+            fs, _ = fsspec.core.url_to_fs(output_filename)
+            if fs.exists(output_filename):
+                with fsspec.open(output_filename, "rb") as src, open(tmp_path, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+            else:
+                # Ensure file exists for append
+                open(tmp_path, "wb").close()
+
+        # Write rows to temp with append semantics using fsspec with compression inference
+        with fsspec.open(tmp_path, mode, compression="infer") as f:
+            for row in rows_iterator:
+                row = make_json_serializable(row)
+                f.write((json.dumps(row) + "\n").encode("utf-8"))
+
+        # Upload temp file to destination (overwrite remote with full content)
+        with fsspec.open(output_filename, "wb") as dst, open(tmp_path, "rb") as src:
+            shutil.copyfileobj(src, dst)
     elif output_filename.endswith(".parquet"):
-        dataset.to_parquet(output_filename)
+        # For parquet, we need to collect rows and write in batches
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        rows = list(rows_iterator)
+        if rows:
+            df = pd.DataFrame(rows)
+            table = pa.Table.from_pandas(df)
+
+            fs, _ = fsspec.core.url_to_fs(output_filename)
+            if append and fs.exists(output_filename):
+                # Read existing parquet and append
+                with fsspec.open(output_filename, "rb") as f:
+                    existing_table = pq.read_table(f)
+                table = pa.concat_tables([existing_table, table])
+
+            with fsspec.open(output_filename, "wb") as f:
+                pq.write_table(table, f)
     else:
         raise ValueError(f"Unsupported filetype: {output_filename}")
 
 
-def get_input_dataset_column_names(input_filename: str) -> list[str]:
-    if "fineweb" in input_filename.lower():
-        return ["text", "id"]
-    elif "dclm" in input_filename.lower():
-        return ["text", "metadata"]
-    else:
-        logger.warning("We are assuming the input dataset has the following columns: text, id")
-        return ["text", "id"]
+def get_input_dataset_column_names(dataset_schema: DatasetSchemaConfig | None = None) -> list[str]:
+    schema = dataset_schema or DatasetSchemaConfig()
+    return schema.input_columns
 
 
-def get_output_dataset_column_names(input_filename: str) -> list[str]:
-    if "fineweb" in input_filename.lower():
-        return ["id", "attributes"]
-    elif "dclm" in input_filename.lower():
-        return ["metadata", "attributes"]
-    else:
-        logger.warning("We are assuming the output dataset has the following columns: id, attributes")
-        return ["id", "attributes"]
+def get_output_dataset_column_names(dataset_schema: DatasetSchemaConfig | None = None) -> list[str]:
+    schema = dataset_schema or DatasetSchemaConfig()
+    return schema.output_columns
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseClassifier):
+def process_file_with_quality_classifier_streaming(
+    input_filename: str,
+    output_filename: str,
+    # quality_classifier: BaseClassifier,
+    model_name_or_path: str,
+    attribute_name: str,
+    model_type: str,
+    classifier_kwargs: dict,
+    dataset_schema: DatasetSchemaConfig,
+    batch_size: int = 512,
+    resume: bool = True,
+    use_autoscaling_actor_pool: bool = False,
+    classifier_actor_options: dict | None = None,
+):
+    """Process a file with streaming I/O and resumption capability"""
     print(f"[*] Processing {input_filename} to {output_filename}")
 
-    dataset = read_dataset(input_filename)
+    # Initialize mutable defaults
+    if classifier_actor_options is None:
+        classifier_actor_options = {}
 
-    # TODO(chris): Add support for more types of columns.
-    input_column_names = get_input_dataset_column_names(input_filename)
-    output_column_names = get_output_dataset_column_names(input_filename)
-    dataset = dataset.select_columns(input_column_names)
-    dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=512)
-    dataset = dataset.select_columns(output_column_names)
+    # Get column names
+    input_column_names = get_input_dataset_column_names(dataset_schema)
+    output_column_names = get_output_dataset_column_names(dataset_schema)
 
-    write_dataset(dataset, output_filename)
+    # Check if we should resume from existing progress by loading finished IDs
+    finished_ids = set()
+    if resume:
+        finished_ids = get_finished_ids(output_filename, dataset_schema.id_column)
+        if finished_ids:
+            print(f"[*] Resuming: found {len(finished_ids)} already processed IDs")
+        else:
+            print(f"[*] No existing IDs found in {output_filename}")
+
+    # Create streaming iterator
+    row_iterator = read_dataset_streaming(input_filename, input_column_names)
+
+    # Initialize for batch processing
+    append_mode = len(finished_ids) > 0
+
+    # For parquet, collect batches; for JSONL, stream asynchronously
+    # if output_filename.endswith(".parquet"):
+    #     parquet_batches = []
+    # async_writer = None
+    # else:
+    # async_writer = AsyncJSONLWriter(output_filename, append=append_mode)
+
+    batch = []
+    total_processed = len(finished_ids)
+    total_skipped = 0
+
+    task_queue = Queue()
+    result_queue = Queue()
+
+    if use_autoscaling_actor_pool:
+        pool = AutoscalingActorPool(
+            AutoClassifierRayActor,
+            model_name_or_path,
+            attribute_name,
+            model_type,
+            task_queue,
+            result_queue,
+            actor_kwargs=classifier_kwargs,
+            actor_options=classifier_actor_options,
+        )
+    else:
+        quality_classifier = AutoClassifier.from_model_path(
+            model_name_or_path, attribute_name, model_type, **classifier_kwargs
+        )
+
+    num_batches = 0
+    for row in row_iterator:
+        # Skip rows that have already been processed
+        row_id = get_id_from_row(row, dataset_schema.id_column)
+        if row_id in finished_ids:
+            total_skipped += 1
+            continue
+
+        batch.append(row)
+
+        if len(batch) >= batch_size:
+            # Process batch
+            batch_dict = {}
+            for key in input_column_names:
+                batch_dict[key] = [row.get(key, "") for row in batch]
+
+            num_batches += 1
+            # Apply classifier
+            if use_autoscaling_actor_pool:
+                task_queue.put(batch_dict)
+            else:
+                processed_batch = quality_classifier(batch_dict)
+                output_rows = convert_batch_dict_to_output_rows(processed_batch, output_column_names, len(batch))
+                write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
+                total_processed += len(batch)
+                logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
+
+            batch = []
+
+    # Final batch that might not be of size batch_size
+    if batch:
+        batch_dict = {}
+        for key in input_column_names:
+            batch_dict[key] = [row.get(key, "") for row in batch]
+        num_batches += 1
+
+        if use_autoscaling_actor_pool:
+            task_queue.put(batch_dict)
+        else:
+            processed_batch = quality_classifier(batch_dict)
+            output_rows = convert_batch_dict_to_output_rows(processed_batch, output_column_names, len(batch))
+            write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
+            total_processed += len(batch)
+            logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
+
+    if use_autoscaling_actor_pool:
+        num_collected_batches = 0
+        while num_collected_batches < num_batches:
+            processed_batch = result_queue.get()
+
+            num_collected_batches += 1
+
+            batch_size = len(processed_batch["text"])
+            output_rows = convert_batch_dict_to_output_rows(processed_batch, output_column_names, batch_size)
+            write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
+            total_processed += batch_size
+            logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
+
+        pool.shutdown()
+
+    print(
+        f"[*] Completed processing {input_filename} - \
+        Total rows: {total_processed} (skipped {total_skipped} already finished)"
+    )
 
 
 @ray.remote(max_calls=1)
-@remove_tpu_lockfile_on_exit
+@cached_or_construct_output(success_suffix="SUCCESS")
 def process_file_ray(
     input_filename: str,
     output_filename: str,
@@ -136,69 +331,40 @@ def process_file_ray(
     model_type: str | None,
     filetype: str,
     classifier_kwargs: dict,
+    batch_size: int = 512,
+    resume: bool = True,
+    queue: Queue | None = None,
+    use_autoscaling_actor_pool: bool = False,
+    classifier_actor_options: dict | None = None,
+    dataset_schema: DatasetSchemaConfig | None = None,
 ):
-    quality_classifier = AutoClassifier.from_model_path(
-        model_name_or_path, attribute_name, model_type, **classifier_kwargs
-    )
+    try:
+        # Initialize mutable defaults
+        if classifier_actor_options is None:
+            classifier_actor_options = {}
 
-    process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
+        process_file_with_quality_classifier_streaming(
+            input_filename,
+            output_filename,
+            model_name_or_path,
+            attribute_name,
+            model_type,
+            classifier_kwargs,
+            dataset_schema,
+            batch_size,
+            resume,
+            use_autoscaling_actor_pool,
+            classifier_actor_options,
+        )
 
-
-@ray.remote(max_calls=1)
-@remove_tpu_lockfile_on_exit
-@cached_or_construct_output(success_suffix="SUCCESS")
-def _process_dir(
-    input_path: str,
-    output_path: str,
-    model_name_or_path: str,
-    attribute_name: str,
-    model_type: str | None,
-    filetype: str,
-    classifier_kwargs: dict,
-):
-    """Perform quality classification on a directory of files
-
-    We assume that the input_path is a directory of files. Using _process_dir is more
-    efficient than process_file_ray because it avoids the overhead of spawning a new
-    Ray task for each file and instead processes all files in a single task.
-    """
-
-    files = fsspec_glob(os.path.join(input_path, f"*.{filetype}"))
-
-    if len(files) == 0:
-        logger.error(f"No files found in {input_path} with pattern {filetype}!!! This is likely an error.")
-        return
-
-    quality_classifier = AutoClassifier.from_model_path(
-        model_name_or_path, attribute_name, model_type, **classifier_kwargs
-    )
-
-    for input_filename in files:
-        output_filename = rebase_file_path(input_path, input_filename, output_path)
-        process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
+    except Exception as e:
+        raise e
 
 
-def get_process_filepath_func(subdirectories: list[str]):
-    if len(subdirectories) > 0:
-        return _process_dir
-    else:
-        return process_file_ray
-
-
-def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
-    # NOTE(chris): Maximize parallelism by doing one task per file. If this is too high
-    # then we can use _process_dir to process multiple files in a single task.
-    process_filepath_func = process_file_ray
-    filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
-
-    return filepaths, process_filepath_func
-
-
-@ray.remote(num_cpus=3)
-@remove_tpu_lockfile_on_exit
+@ray.remote(num_cpus=0, resources={"head_node": 0.001})
 def run_inference(inference_config: InferenceConfig):
     logger.info(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
-    filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
+    filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
 
     if len(filepaths) == 0:
         pattern = f"**/*.{inference_config.filetype}"
@@ -206,35 +372,78 @@ def run_inference(inference_config: InferenceConfig):
 
     input_path = inference_config.input_path
     output_path = inference_config.output_path
-    responses = []
-    for input_filepath in filepaths:
-        if len(responses) > inference_config.task.max_in_flight:
-            ready_refs, responses = ray.wait(responses, num_returns=1)
-            ray.get(ready_refs)
 
-        output_filepath = rebase_file_path(input_path, input_filepath, output_path)
-        fsspec_mkdirs(os.path.dirname(output_filepath))
+    # Resilient wait/get with per-task retries to tolerate preemptions.
+    max_in_flight = inference_config.task.max_in_flight
+    max_retries_per_file = 100
 
-        result_ref = process_filepath_func.options(
-            memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
-            resources=inference_config.runtime.resources,
-        ).remote(
-            input_filepath,
-            output_filepath,
+    options_kwargs = {
+        "memory": inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
+    }
+
+    if not inference_config.classifier_actor_options:
+        options_kwargs["resources"] = inference_config.runtime.resources
+
+    pending_refs: dict = {}
+    attempt_count: dict[str, int] = {}
+
+    def submit(input_fp: str):
+        output_fp = rebase_file_path(input_path, input_fp, output_path)
+        fsspec_mkdirs(os.path.dirname(output_fp))
+        ref = process_file_ray.options(**options_kwargs).remote(
+            input_fp,
+            output_fp,
             inference_config.model_name,
             inference_config.attribute_name,
             inference_config.model_type,
             inference_config.filetype,
             inference_config.classifier_kwargs,
+            inference_config.batch_size,
+            inference_config.resume,
+            queue,
+            inference_config.use_autoscaling_actor_pool,
+            inference_config.classifier_actor_options,
+            inference_config.dataset_schema,
         )
+        pending_refs[ref] = input_fp
 
-        responses.append(result_ref)
+    for input_filepath in filepaths:
+        # Throttle submissions
+        while len(pending_refs) >= max_in_flight:
+            ready_refs, _ = ray.wait(list(pending_refs.keys()), num_returns=1)
+            ready_ref = ready_refs[0]
+            file_for_ref = pending_refs.pop(ready_ref)
+            try:
+                ray.get(ready_ref)
+                logger.info(f"Completed: {file_for_ref}")
+            except Exception as e:
+                # Log and resubmit up to max retries (tolerate spot preemptions)
+                count = attempt_count.get(file_for_ref, 0) + 1
+                attempt_count[file_for_ref] = count
+                logger.warning(f"Task failed for {file_for_ref} (attempt {count}): {e}")
+                if count < max_retries_per_file:
+                    submit(file_for_ref)
+                else:
+                    logger.error(f"Giving up after {count} attempts for {file_for_ref}")
 
-    try:
-        ray.get(responses)
-    except Exception as e:
-        print(f"Error processing: {e}")
-        raise e
+        submit(input_filepath)
+
+    # Drain remaining tasks
+    while len(pending_refs) > 0:
+        ready_refs, _ = ray.wait(list(pending_refs.keys()), num_returns=1)
+        ready_ref = ready_refs[0]
+        file_for_ref = pending_refs.pop(ready_ref)
+        try:
+            ray.get(ready_ref)
+            logger.info(f"Completed: {file_for_ref}")
+        except Exception as e:
+            count = attempt_count.get(file_for_ref, 0) + 1
+            attempt_count[file_for_ref] = count
+            logger.warning(f"Task failed for {file_for_ref} (attempt {count}): {e}")
+            if count < max_retries_per_file:
+                submit(file_for_ref)
+            else:
+                logger.error(f"Giving up after {count} attempts for {file_for_ref}")
 
 
 @draccus.wrap()

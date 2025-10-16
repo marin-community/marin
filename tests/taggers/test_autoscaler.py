@@ -60,8 +60,6 @@ def test_autoscaler_requeues_failed_tasks(ray_tpu_cluster):
         ray.kill(initial_actor)
         print(f"Killed initial actor: {initial_actor_id}")
 
-        time.sleep(3.0)  # Greater than the actor health check interval so that we see that the initial actor is dead
-
         with pool.actor_task_metadata_lock:
             print(f"Actor futures: {pool.actor_futures}")
 

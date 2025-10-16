@@ -13,8 +13,16 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-
 from marin.core.runtime import TaskConfig
+
+
+@dataclass
+class DatasetSchemaConfig:
+    input_columns: list[str] = field(default_factory=lambda: ["text", "id"])
+    output_columns: list[str] = field(default_factory=lambda: ["id", "attributes", "generated_text", "text"])
+
+    id_column: str | dict[str, str] = field(default_factory=lambda: "id")
+    """Unique identifier for what is considered an id for a row of the dataset"""
 
 
 @dataclass
@@ -32,7 +40,7 @@ class InferenceConfig:
     model_name: str
     attribute_name: str
 
-    # The type of the model. Currently: fasttext, fineweb, or None.
+    # The type of the model. Currently: fasttext, fineweb, vllm, or None.
     model_type: str | None = None
     output_path: str | None = None
 
@@ -49,4 +57,18 @@ class InferenceConfig:
     # The filetype of the input data.
     filetype: str = "jsonl.gz"
 
+    # Batch size for processing documents
+    batch_size: int = 512
+
+    # Whether to resume from existing progress
+    resume: bool = True
+
     classifier_kwargs: dict = field(default_factory=dict)
+
+    # Whether to use the autoscaling actor pool
+    use_autoscaling_actor_pool: bool = False
+
+    classifier_actor_options: dict = field(default_factory=dict)
+
+    # Dataset schema configuration (input/output columns)
+    dataset_schema: DatasetSchemaConfig = field(default_factory=DatasetSchemaConfig)

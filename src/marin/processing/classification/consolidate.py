@@ -30,9 +30,10 @@ from typing import Any
 import draccus
 import numpy as np
 import ray
+import pandas as pd
+import datasets
 
 from marin.core.runtime import cached_or_construct_output
-from marin.processing.classification.inference import read_dataset, write_dataset
 from marin.utils import (
     fsspec_exists,
     fsspec_glob,
@@ -70,6 +71,9 @@ class FilterConfig:
     upper_threshold: float | None = None
     """Keep documents where the value is below this."""
 
+    reverse: bool = False
+    """Reverse the filter."""
+
 
 @dataclass(frozen=True)
 class ConsolidateConfig:
@@ -98,6 +102,51 @@ CORPUS_TYPE_TO_ID_GUIDE = {
     "dolma": {"key": "id"},  # Direct key access
     "dclm": {"key": "metadata", "nested": {"key": "WARC-Record-ID"}},  # Nested dictionary access
 }
+
+
+def read_dataset(input_filename: str, columns: list[str] | None = None):
+    """Read in a dataset and return as a Huggingface Dataset
+
+    Args:
+        input_filename: str
+            The path to the input file. Currently supports .jsonl.gz and .parquet
+
+    Returns:
+        datasets.Dataset: A Huggingface Dataset in-memory without using the disk
+    """
+    datasets.disable_caching()
+    datasets.logging.set_verbosity_warning()
+    # We use pandas to read in the file so that we don't have to materialize
+    # the entire dataset in disk since we have limited disk space.
+    # Huggingface datasets loads the dataset into disk first and mmaps.
+    if input_filename.endswith(".jsonl.gz"):
+        df = pd.read_json(input_filename, compression="gzip", lines=True)
+        dataset = datasets.Dataset.from_pandas(df)
+        return dataset
+    elif input_filename.endswith(".jsonl.zst"):
+        df = pd.read_json(input_filename, compression="zstd", lines=True)
+        dataset = datasets.Dataset.from_pandas(df)
+        return dataset
+    elif input_filename.endswith(".parquet"):
+        df = pd.read_parquet(input_filename, columns=columns)
+        dataset = datasets.Dataset.from_pandas(df)
+        return dataset
+    else:
+        raise ValueError(f"Unsupported filetype: {input_filename}")
+
+
+def write_dataset(dataset, output_filename: str):
+    """Writes a Huggingface Dataset to a file (remote or local)"""
+    if output_filename.endswith(".jsonl.gz"):
+        dataset.to_json(output_filename, compression="gzip")
+    elif output_filename.endswith(".jsonl.zst"):
+        df_pandas = dataset.to_pandas()
+        df_pandas.to_json(output_filename, orient="records", compression="zstd", lines=True)
+        # dataset.to_json(output_filename, to_json_kwargs={"compression": "zstd", "lines": True})
+    elif output_filename.endswith(".parquet"):
+        dataset.to_parquet(output_filename)
+    else:
+        raise ValueError(f"Unsupported filetype: {output_filename}")
 
 
 def remove_spans(text: str, spans: list[list[int]]) -> str:
@@ -151,11 +200,17 @@ def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attr
         value = attribute_value
 
     # Check both lower and upper bounds if specified
-    if doc_filter.threshold is not None and value < doc_filter.threshold:
-        return False
+    if doc_filter.reverse:
+        if doc_filter.threshold is not None and value > doc_filter.threshold:
+            return False
+        if doc_filter.upper_threshold is not None and value < doc_filter.upper_threshold:
+            return False
+    else:
+        if doc_filter.threshold is not None and value < doc_filter.threshold:
+            return False
 
-    if doc_filter.upper_threshold is not None and value > doc_filter.upper_threshold:
-        return False
+        if doc_filter.upper_threshold is not None and value > doc_filter.upper_threshold:
+            return False
 
     return True
 
