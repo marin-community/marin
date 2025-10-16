@@ -14,8 +14,7 @@ from draccus import field
 
 from levanter.tracker import Tracker
 from levanter.tracker.histogram import Histogram
-from levanter.tracker.tracker import TrackerConfig, NoopTracker
-
+from levanter.tracker.tracker import NoopTracker, TrackerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -45,18 +44,7 @@ class TrackioTracker(Tracker):
         del commit
         to_log = {}
         for k, v in metrics.items():
-            if isinstance(v, Histogram):
-                counts, limits = v.to_numpy_histogram()
-                to_log[f"{k}/histogram"] = {
-                    "counts": counts.tolist(),
-                    "limits": limits.tolist(),
-                    "min": v.min,
-                    "max": v.max,
-                    "mean": v.mean,
-                    "variance": v.variance,
-                }
-            else:
-                to_log[k] = _convert_value_to_loggable_rec(v)
+            to_log[k] = _convert_value_to_loggable_rec(v)
 
         import trackio
 
@@ -80,20 +68,34 @@ class TrackioTracker(Tracker):
 
 
 def _convert_value_to_loggable_rec(value: Any):
+    if isinstance(value, jax.Array):
+        if value.ndim == 0:
+            value = value.item()
+        else:
+            value = np.array(value)
+
     if isinstance(value, (list, tuple)):
         return [_convert_value_to_loggable_rec(v) for v in value]
     elif isinstance(value, typing.Mapping):
         return {k: _convert_value_to_loggable_rec(v) for k, v in value.items()}
-    elif isinstance(value, jax.Array):
-        if value.ndim == 0:
-            return value.item()
-        else:
-            return np.array(value)
     elif isinstance(value, Histogram):
         counts, limits = value.to_numpy_histogram()
-        return {"counts": counts.tolist(), "limits": limits.tolist()}
-    else:
+        return {
+            "counts": counts.tolist(),
+            "limits": limits.tolist(),
+            "min": value.min.item(),
+            "max": value.max.item(),
+            "mean": value.mean.item(),
+            "variance": value.variance.item(),
+        }
+    elif isinstance(value, np.ndarray):
+        return value.tolist()
+    elif isinstance(value, np.generic):
+        return value.item()
+    elif isinstance(value, (int, float)):
         return value
+    else:
+        return repr(value)
 
 
 @TrackerConfig.register_subclass("trackio")
