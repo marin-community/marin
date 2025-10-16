@@ -22,7 +22,7 @@ import jinja2
 import yaml
 
 # Cluster configuration constants and templates
-LATEST = "20251016"  # The latest docker tag used for the clusters
+LATEST = "20250923"  # The latest docker tag used for the clusters
 
 
 @dataclass
@@ -245,7 +245,7 @@ CONFIGS = {
         "REGION": "us-central2",
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": "6e804a10",
+        "DOCKER_TAG": "d84bcac24",
         "tpu_generation": "v4-serve",
         "min_workers": 1,
         "VLLM": True,
