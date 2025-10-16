@@ -295,7 +295,7 @@ class InferenceContext:
         return request_id
 
     def _inference_loop(self) -> None:
-        """Main inference loop running in background thread - collects requests into batches"""
+        """Collect requests from the serving and batch them into batches of appropriate size for inference."""
         logger.info("Inference thread started")
 
         while not self.shutdown_event.is_set():
@@ -327,14 +327,18 @@ class InferenceContext:
                     )
                     logger.error(error_msg)
                     r.future.get_loop().call_soon_threadsafe(r.future.set_exception, ValueError(error_msg))
-                elif (
+                    continue
+
+                if (
                     batch.num_seqs() + r.n_generations <= self.engine.config.max_seqs
                     and batch.total_tokens() + (len(r.prompt_tokens) + r.max_tokens) <= max_tokens_per_batch
                 ):
                     batch.append(r)
                 else:
-                    self.batch_queue.put(batch)
+                    if batch:
+                        self.batch_queue.put(batch)
                     batch = InferenceBatch([r])
+
             if batch:
                 self.batch_queue.put(batch)
 
