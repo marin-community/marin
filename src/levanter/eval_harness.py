@@ -295,20 +295,32 @@ class _Message:
     LOGLIKELIHOOD = 1
 
 
-def _get_segments_this_batch(batch, max_segments_per_ex):
-    unique_segs = np.unique(batch.attn_mask.segment_ids[0].array).tolist()
-    # + 1 because we use -1 as a padding value for segments and allow that
+def get_segment_ids_from_batch(batch: LmExample, max_segments_per_ex: int) -> list[int]:
+    """
+    Extract unique segment IDs from a batch (on host).
+    """
+    if batch.attn_mask.segment_ids is None:
+        segment_ids = []
+    else:
+        segment_ids = jax.device_get(batch.attn_mask.segment_ids[0].array)
+
+    unique_segs = np.unique(segment_ids).tolist()
+
     if len(unique_segs) > max_segments_per_ex + 1:
         raise ValueError(f"Too many segments in batch: {len(unique_segs)}")
+
     if -1 in unique_segs:
         unique_segs.remove(-1)
 
     return unique_segs
 
 
-def _get_padding_count(batch, pad_token_id):
-    # returns the total amount of padding in the batch
-    padding_count = np.sum(batch.tokens.array == pad_token_id)
+def get_padding_count_from_batch(batch: LmExample, pad_token_id: int) -> tuple[int, int]:
+    """
+    Extract padding statistics from a batch (on host).
+    """
+    tokens = jax.device_get(batch.tokens.array)
+    padding_count = int(np.sum(tokens == pad_token_id))
     total_tokens = batch.tokens.size
     return padding_count, total_tokens
 
@@ -502,20 +514,20 @@ class LevanterHarnessLM(TemplateLM):
             # Handle profiler start/stop based on step
             self._handle_profiler_step()
 
-            segments_this_batch = _get_segments_this_batch(
+            segments_this_batch = get_segment_ids_from_batch(
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
             )
 
-            padding_count, batch_tokens = _get_padding_count(batch, self.tokenizer.pad_token_id)
+            padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
 
             out_ids, out_lls, out_correct = self.leader.dispatch_loglikelihood(batch)
 
             # Increment step after processing batch
             self._current_step += 1
 
-            out_ids = np.array(out_ids.array)
-            out_lls = np.array(out_lls.array)
-            out_correct = np.array(out_correct.array)
+            out_ids = jax.device_get(out_ids.array)
+            out_lls = jax.device_get(out_lls.array)
+            out_correct = jax.device_get(out_correct.array)
             # -1's are going to be where we had too few sequences to fill a batch
             valid_indices = out_ids != -1
 
