@@ -43,13 +43,11 @@ class AutoscalingActorPool:
         result_queue: Queue,
         min_actors: int = 1,
         max_actors: int = 32,
-        target_queue_size: int = 5,
         scale_up_threshold: float = 0.8,
         scale_down_threshold: float = 0.2,
         scale_check_interval: float = 2,
         actor_kwargs: dict | None = None,
         actor_options: dict | None = None,
-        max_tasks_per_actor: int | None = 4,
     ):
         """
         The autoscaling actor pool is repsonsible for creating, managing and scaling actors to handle tasks.
@@ -79,14 +77,11 @@ class AutoscalingActorPool:
             or a class that implements a ping method so that the autoscaler can check if the actor is alive.
             min_actors: Minimum number of actors to maintain
             max_actors: Maximum number of actors allowed
-            target_queue_size: Target queue size per actor for scaling decisions
             scale_up_threshold: Queue utilization threshold to trigger scale up
             scale_down_threshold: Queue utilization threshold to trigger scale down
             scale_check_interval: Interval in seconds between scaling checks
             actor_kwargs: Additional keyword arguments to pass to actor initialization
             actor_health_check_interval: Interval between actor health probes
-            max_tasks_per_actor: Maximum number of in-flight tasks allowed per actor. When reached, dispatch
-                waits for capacity or new actors before assigning more work. If None, no hard cap is enforced.
         """
         self.actor_class = actor_class
         self.model_name_or_path = model_name_or_path
@@ -94,7 +89,6 @@ class AutoscalingActorPool:
         self.model_type = model_type
         self.min_actors = min_actors
         self.max_actors = max_actors
-        self.target_queue_size = target_queue_size
         self.scale_up_threshold = scale_up_threshold
         self.scale_down_threshold = scale_down_threshold
         self.scale_check_interval = scale_check_interval
@@ -108,7 +102,6 @@ class AutoscalingActorPool:
         self.future_to_actor = {}
         self.future_to_task = {}
         self.actor_options = actor_options or {}
-        self.max_tasks_per_actor = max_tasks_per_actor
 
         self.actor_task_metadata_lock = Lock()
         """Lock to protect the actor and task metadata mappings
@@ -279,14 +272,6 @@ class AutoscalingActorPool:
         if (
             utilization > self.scale_up_threshold and current_actors < self.max_actors
         ) or current_actors < self.min_actors:
-
-            # If a system quickly overwhelms the scale up threshold,
-            # we end up having to scale up too many actors at once.
-            # Let's just scale up one at a time
-            # new_actors_count = min(
-            #     self.max_actors - current_actors,
-            #     max(1, (total_load // self.target_queue_size) - current_actors)
-            # )
             self._scale_up(self.NUM_ACTORS_TO_SCALE_UP)
 
         # Scale down if needed
