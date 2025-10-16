@@ -79,14 +79,23 @@ def microbatched(
     if microbatch_size <= 0:
         raise ValueError(f"Bad value for {microbatch_size=}")
 
+    if microbatch_size >= batch_size:
+        return fn
+
     num_micro_steps = batch_size // microbatch_size
 
-    if num_micro_steps == 1:
-        return fn
+    if num_micro_steps <= 0:
+        raise ValueError(
+            f"microbatch_size ({microbatch_size}) must be less than batch size ({batch_size}) or divisible into it"
+        )
 
     Microbatch = Batch.resize(microbatch_size)
     AccumStep = Axis("accum_step", num_micro_steps)
-    assert num_micro_steps * microbatch_size == batch_size
+    if num_micro_steps * microbatch_size != batch_size:
+        raise ValueError(
+            "Batch size must be an integer multiple of microbatch_size. "
+            f"Got batch size {batch_size} and microbatch_size {microbatch_size}."
+        )
 
     if reduce not in ReductionType:
         raise ValueError(f"accum_type must be one of {ReductionType}")
