@@ -1,0 +1,8 @@
+input_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/"
+output_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_deduped_only/"
+max_tasks_in_flight: 1000
+
+filters:
+  - type: "dedupe"
+    attribute_path: "gs://marin-us-central2/documents/mmlu/v2024-08-30/v1-basic/"
+    name: "duplicate_text"

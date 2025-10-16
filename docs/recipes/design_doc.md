@@ -19,7 +19,7 @@ It may be deleted in the future.
 
 ## Problem
 
-The Executor framework (`src/marin/execution/executor.py`) provides no visibility into step execution times. When pipelines run slow (e.g., 6 hours for 50 steps), developers can't identify bottlenecks without manual instrumentation.
+The Executor framework (`lib/marin/src/marin/execution/executor.py`) provides no visibility into step execution times. When pipelines run slow (e.g., 6 hours for 50 steps), developers can't identify bottlenecks without manual instrumentation.
 
 **Current behavior**: `_launch_step()` at line 664 launches Ray tasks but never records timing. `ExecutorStepInfo` (line 324) has no timing fields.
 

@@ -1,0 +1,5 @@
+--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html
+
+jax[tpu]
+flax
+transformers
