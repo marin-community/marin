@@ -405,8 +405,11 @@ def sync_to_remote(target_host: str, local_path: os.PathLike = ".") -> None:
             "-az",
             "--delete",
             "--progress",
+            "--exclude=.git",
+            "--exclude=.venv",
             "--files-from",
             files_from_path,
+            "-r",  # Explicitly activate recursion -- disabled by --files-from
             f"{local_path}/",
             f"{target_host}:marin/",
         ]
