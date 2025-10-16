@@ -17,6 +17,7 @@ CLI Usage:
 import asyncio
 import json
 import logging
+import os
 import shlex
 import time
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ from typing import Callable, Dict, Optional
 
 import equinox as eqx
 import haliax as hax
+import jax
 import jax.random as jrandom
 import jmp
 from haliax import Axis
@@ -54,6 +56,11 @@ from levanter.utils.jax_utils import use_cpu_device
 
 logger = logging.getLogger(__name__)
 console = Console()
+
+jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
+jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
 
 
 def weight_loader(server, server_config, current_model: LmHeadModel) -> LmHeadModel:
@@ -155,16 +162,14 @@ class InferenceReplConfig:
     server: InferenceServerConfig = field(
         default_factory=lambda: InferenceServerConfig(
             service=InferenceEngineConfig(
-                max_pages=128,
-                max_seqs=64,
                 page_size=8,
-                max_seq_len=1024,
+                max_seq_len=64,
+                max_seqs=2,
                 max_queued_tokens=64,
-                max_seqs_in_prefill=4,
+                max_seqs_in_prefill=1,
                 max_prefill_size=64,
-                max_tokens_per_round=16,
-                max_rounds=8,
-                hbm_utilization=0.7,
+                max_rounds=4,
+                hbm_utilization=0.2,
             ),
         )
     )
@@ -252,7 +257,8 @@ class ReplContext:
 
             self.server.reload(_reload)
         else:
-            self.server = InferenceServer.create(self.config.server, model=model, tokenizer=tokenizer)
+            with self.config.trainer.use_device_mesh(), hax.axis_mapping(self.config.trainer.compute_axis_mapping):
+                self.server = InferenceServer.create(self.config.server, model=model, tokenizer=tokenizer)
 
         console.print(f"[green]✓ Loaded {path}[/green]")
 
@@ -565,6 +571,7 @@ def cli_mode(config: InferenceReplConfig, commands: ReplContext):
 def main(config: InferenceReplConfig):
     """Main entry point."""
     commands = ReplContext(config)
+    os.environ["EQX_ON_ERROR"] = "nan"
 
     # Determine mode
     if config.command:

@@ -24,8 +24,8 @@ from haliax.jax_utils import is_jax_array_like
 import levanter.tracker
 from levanter.inference.jit_scheduler import (
     DecodeState,
-    SequenceTable,
     SeqDecodingParams,
+    SequenceTable,
     TokenQueue,
     _DecodeOutputs,
 )
@@ -1128,7 +1128,20 @@ class InferenceEngine:
         logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
         # Autoregressive generation loop with periodic extraction
+        num_outer_rounds = 0
+
         def _all_done() -> bool:
+            nonlocal num_outer_rounds
+            if num_outer_rounds * self.config.max_rounds >= self.config.max_seq_len:
+                logger.warning(
+                    f"Breaking decode loop after {num_outer_rounds} rounds."
+                    f" max_rounds={self.config.max_rounds} "
+                    f" outer_rounds={num_outer_rounds}"
+                    f" max_needed_tokens={max_needed}"
+                    f" max_seq_len={self.config.max_seq_len}"
+                )
+                return True
+            num_outer_rounds += 1
             for rid, n_kids in expected_children.items():
                 kid_map = self.results.get(rid, {})
                 for cid in range(n_kids):
