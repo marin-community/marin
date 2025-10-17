@@ -252,7 +252,7 @@ class RLJob:
                     max_seqs=max_seqs,
                     max_seq_len=max_tokens,
                     page_size=128,
-                    max_pages=max_seqs * max_tokens // 128,
+                    max_pages=2 * max(1, max_tokens // 128) * max_seqs,
                     enable_logprobs=True,
                 ),
                 port=0,
