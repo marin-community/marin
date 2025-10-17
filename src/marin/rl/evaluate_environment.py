@@ -182,11 +182,12 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             )
             logger.info(f"Policy model: {policy_model}")
 
-            inference_server = InferenceServer.create(
-                inference_server_config,
-                model=policy_model,
-                tokenizer=tokenizer,
-            )
+            with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
+                inference_server = InferenceServer.create(
+                    inference_server_config,
+                    model=policy_model,
+                    tokenizer=tokenizer,
+                )
 
             env = load_environment_from_spec(config.env_config)
             logger.info(f"Loaded environment: {env}")
