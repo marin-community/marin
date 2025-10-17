@@ -8,6 +8,7 @@
           "url": "https://WilliamHeld.com"
         },
         "description": "300M parameter model trained with the AdamW optimizer.",
+        "device_flops": 459000000000000.0,
         "eval/paloma/c4_en/bpb": 1.069084644317627,
         "model_config": {
           "activation_function": "silu",
@@ -40,6 +41,8 @@
         },
         "model_flops": 9.99035877535934e+18,
         "model_size": 299649792,
+        "num_chips": 16,
+        "num_devices": 32,
         "resources": {
           "device_flops_override": null,
           "slice_count": 1,
@@ -113,7 +116,7 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 7.711788528451579e+19,
+        "training_hardware_flops": 3.8558942642257895e+19,
         "training_time": 5250.400686581957,
         "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/llama_300m_adamw_4096-c4da63"
       }

@@ -8,6 +8,7 @@
           "url": "https://pinlinxu.com"
         },
         "description": "Hackable Transformer (130m); Attention with parallel MLP (Muon)",
+        "device_flops": 459000000000000.0,
         "eval/paloma/c4_en/bpb": 1.1829973459243774,
         "model_config": {
           "activation_function": "silu",
@@ -41,6 +42,8 @@
         },
         "model_flops": 2.107429813789655e+18,
         "model_size": 154147328,
+        "num_chips": 16,
+        "num_devices": 32,
         "resources": {
           "device_flops_override": null,
           "slice_count": 1,
@@ -118,7 +121,7 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 2.236763301176485e+19,
+        "training_hardware_flops": 1.1183816505882425e+19,
         "training_time": 1522.8508314110056,
         "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_130m_stdattn_parallel_4096-12314d"
       }

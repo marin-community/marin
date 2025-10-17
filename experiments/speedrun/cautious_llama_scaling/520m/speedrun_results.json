@@ -8,6 +8,7 @@
           "url": "https://WilliamHeld.com"
         },
         "description": "520M parameter model trained with the Cautious optimizer.",
+        "device_flops": 459000000000000.0,
         "eval/paloma/c4_en/bpb": 0.9973351955413818,
         "model_config": {
           "activation_function": "silu",
@@ -40,6 +41,8 @@
         },
         "model_flops": 4.210403636805422e+19,
         "model_size": 602457088,
+        "num_chips": 16,
+        "num_devices": 32,
         "resources": {
           "device_flops_override": null,
           "slice_count": 1,
@@ -111,7 +114,7 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 2.7571167238883996e+20,
+        "training_hardware_flops": 1.3785583619441998e+20,
         "training_time": 18771.219525383985,
         "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/llama_520m_cautious_4096-7650d9"
       }

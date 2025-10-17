@@ -8,6 +8,7 @@
           "url": "https://pinlinxu.com"
         },
         "description": "Hackable Transformer (1_2b); Attention (Muon)",
+        "device_flops": 459000000000000.0,
         "eval/paloma/c4_en/bpb": 0.9318751692771912,
         "model_config": {
           "activation_function": "silu",
@@ -40,6 +41,8 @@
         },
         "model_flops": 2.4710625753168033e+20,
         "model_size": 1431373824,
+        "num_chips": 16,
+        "num_devices": 32,
         "resources": {
           "device_flops_override": null,
           "slice_count": 1,
@@ -116,7 +119,7 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 1.084319112930505e+21,
+        "training_hardware_flops": 5.421595564652525e+20,
         "training_time": 73823.46901759974,
         "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_1_2b_stdattn_4096-46708c"
       }
