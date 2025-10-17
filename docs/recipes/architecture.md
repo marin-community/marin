@@ -4,7 +4,7 @@ Marin is a framework for building reproducible language model training pipelines
 
 ## Core Architecture
 
-**Executor Pattern**: Experiments are DAGs of `ExecutorStep` objects (`src/marin/execution/executor.py`). Output path = `<base>/<name>-<hash>` where hash covers versioned fields and dependencies. Only changed steps re-run.
+**Executor Pattern**: Experiments are DAGs of `ExecutorStep` objects (`lib/marin/src/marin/execution/executor.py`). Output path = `<base>/<name>-<hash>` where hash covers versioned fields and dependencies. Only changed steps re-run.
 
 **Ray Distribution**: Steps can be normal or `@ray.remote` functions. Ray ships code to workers with step-specific dependency groups from `pyproject.toml`.
 
@@ -17,7 +17,7 @@ marin/
 ├── pyproject.toml              # Dependencies, extras (crawl, tokenize_train, post_training, etc.)
 ├── README.md, CLAUDE.md, AGENTS.md
 │
-├── src/marin/                  # Core library organized by function
+├── lib/marin/src/marin/                  # Core library organized by function
 │   ├── execution/              # DAG executor (executor.py, status_actor.py)
 │   ├── run/                    # Job launchers (ray_run.py, slurm_run.py)
 │   ├── download/               # Dataset downloaders (huggingface/, ar5iv/, wikipedia/, nemotron_cc/, filesystem/)
@@ -60,15 +60,15 @@ marin/
 
 ## Key Concepts
 
-**Steps and Versioning** (`src/marin/execution/executor.py`): Output path = `<base>/<name>-<hash>` where hash covers versioned fields + dependencies. Re-running with same config = no-op.
+**Steps and Versioning** (`lib/marin/src/marin/execution/executor.py`): Output path = `<base>/<name>-<hash>` where hash covers versioned fields + dependencies. Re-running with same config = no-op.
 
 **Pipeline Stages**:
-1. **Download** (`src/marin/download/`): Fetch datasets from HF Hub, S3, Wikipedia, arXiv
-2. **Transform** (`src/marin/transform/`): Raw formats → text/markdown
-3. **Quality Filtering** (`src/marin/classifiers/`, `src/marin/datashop/`): Train classifiers or LLM filtering
-4. **Tokenize** (`src/marin/processing/tokenize/`): Text → tokens (sentencepiece/tiktoken)
-5. **Train** (`src/marin/training/`): Levanter (JAX) on TPU/GPU
-6. **Evaluate** (`src/marin/evaluation/`): lm-eval-harness or vLLM
+1. **Download** (`lib/marin/src/marin/download/`): Fetch datasets from HF Hub, S3, Wikipedia, arXiv
+2. **Transform** (`lib/marin/src/marin/transform/`): Raw formats → text/markdown
+3. **Quality Filtering** (`lib/marin/src/marin/classifiers/`, `lib/marin/src/marin/datashop/`): Train classifiers or LLM filtering
+4. **Tokenize** (`lib/marin/src/marin/processing/tokenize/`): Text → tokens (sentencepiece/tiktoken)
+5. **Train** (`lib/marin/src/marin/training/`): Levanter (JAX) on TPU/GPU
+6. **Evaluate** (`lib/marin/src/marin/evaluation/`): lm-eval-harness or vLLM
 
 **Cluster Infrastructure** (`infra/README.md`): Ray on GCP, on-demand head + preemptible TPU workers (v4/v5e/v6e), autoscaling 4-1024 workers, managed via `scripts/ray/cluster.py`
 
@@ -80,6 +80,6 @@ marin/
 
 **For Agents**: [Add Dataset](add_dataset.md) • [Fix Issue](fix_issue.md) • See `AGENTS.md` in repository root
 
-**Core APIs**: See `src/marin/execution/executor.py` for executor API, `experiments/defaults.py` for default steps
+**Core APIs**: See `lib/marin/src/marin/execution/executor.py` for executor API, `experiments/defaults.py` for default steps
 
 **Infrastructure**: See `infra/README.md` for cluster setup and infrastructure overview
