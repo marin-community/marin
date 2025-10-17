@@ -193,8 +193,8 @@ class AutoscalingActorPool:
                     break
 
             if not dispatched_any:
-                logger.info("No tasks dispatched - going to sleep for 10 seconds.")
-                time.sleep(10)
+                logger.info("No tasks dispatched - going to sleep for 1 second.")
+                time.sleep(1)
 
     def _result_collector_loop(self):
         """Start a background thread that collects completed futures."""
