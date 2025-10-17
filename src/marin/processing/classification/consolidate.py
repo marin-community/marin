@@ -32,12 +32,12 @@ import numpy as np
 import ray
 
 from marin.core.runtime import cached_or_construct_output
+from marin.processing.classification.inference import read_dataset, write_dataset
 from marin.utils import (
     fsspec_exists,
     fsspec_glob,
     rebase_file_path,
 )
-from marin.processing.classification.dataset_utils import read_dataset, write_dataset
 
 FILTER_TYPE_CLASSIFY = "classify"
 FILTER_TYPE_REMOVE_SPANS = "remove_spans"
@@ -69,9 +69,6 @@ class FilterConfig:
 
     upper_threshold: float | None = None
     """Keep documents where the value is below this."""
-
-    reverse: bool = False
-    """Reverse the filter."""
 
 
 @dataclass(frozen=True)
@@ -140,7 +137,6 @@ def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attr
     attribute_value = attributes[doc_filter.name]
 
     # Handle nested attributes structure if a label is specified
-    accepted = True
     if doc_filter.label is not None:
         if isinstance(attribute_value, dict) and doc_filter.label in attribute_value:
             value = attribute_value[doc_filter.label]
@@ -148,7 +144,7 @@ def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attr
             logger.warning(
                 f"Label {doc_filter.label} not found in attribute {doc_filter.name} for document {input_data['id']}"
             )
-            accepted = False
+            return False
     else:
         # If no label specified, use the attribute value directly
         # This handles cases like compression_ratio where the value is a scalar
@@ -156,14 +152,12 @@ def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attr
 
     # Check both lower and upper bounds if specified
     if doc_filter.threshold is not None and value < doc_filter.threshold:
-        accepted = False
+        return False
+
     if doc_filter.upper_threshold is not None and value > doc_filter.upper_threshold:
-        accepted = False
+        return False
 
-    if doc_filter.reverse:
-        accepted = not accepted
-
-    return accepted
+    return True
 
 
 def get_corpus_type(filename: str) -> str:
