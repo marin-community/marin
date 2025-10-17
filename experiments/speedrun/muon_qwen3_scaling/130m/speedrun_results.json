@@ -8,6 +8,7 @@
           "url": "https://pinlinxu.com"
         },
         "description": "Qwen3 ~130M (LLaMA-geometry-matched) with Muon.",
+        "device_flops": 459000000000000.0,
         "eval/paloma/c4_en/bpb": 1.1662893295288086,
         "model_config": {
           "activation_function": "silu",
@@ -42,6 +43,8 @@
         },
         "model_flops": 1.777337490915459e+18,
         "model_size": 154147328,
+        "num_chips": 16,
+        "num_devices": 32,
         "resources": {
           "device_flops_override": null,
           "slice_count": 1,
@@ -118,7 +121,7 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 2.053736788813536e+19,
+        "training_hardware_flops": 1.026868394406768e+19,
         "training_time": 1398.2412777869936,
         "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/qwen3_130m_muon_4096-04770b"
       }
