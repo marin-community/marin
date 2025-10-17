@@ -72,8 +72,9 @@ class ReplayConfig:
     service: InferenceEngineConfig = field(
         default_factory=lambda: InferenceEngineConfig(
             max_seqs=16,
+            max_seq_len=2048,
             page_size=128,
-            max_pages_per_seq=8,
+            max_pages=16 * 8,
             max_seqs_in_prefill=16,
         )
     )
