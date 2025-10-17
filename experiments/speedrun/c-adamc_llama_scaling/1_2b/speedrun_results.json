@@ -8,6 +8,7 @@
           "url": "https://WilliamHeld.com"
         },
         "description": "1.2B parameter model trained with the C-AdamC optimizer.",
+        "device_flops": 459000000000000.0,
         "eval/paloma/c4_en/bpb": 0.9381008148193359,
         "model_config": {
           "activation_function": "silu",
@@ -40,6 +41,8 @@
         },
         "model_flops": 2.071634014279733e+20,
         "model_size": 1431373824,
+        "num_chips": 16,
+        "num_devices": 32,
         "resources": {
           "device_flops_override": null,
           "slice_count": 1,
@@ -111,7 +114,7 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 7.937334384059815e+20,
+        "training_hardware_flops": 3.9686671920299075e+20,
         "training_time": 54039.58594811965,
         "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/llama_1_2b_c_adamc_4096-d56b4a"
       }
