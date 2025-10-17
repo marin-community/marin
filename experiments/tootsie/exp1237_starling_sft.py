@@ -42,7 +42,7 @@ deeper_sft_config = dataclasses.replace(
 
 
 mixture_sft_deeper_starling = default_sft(
-    name="sft/mixture_sft_deeper_starling",
+    name="sft/debug_mixture_sft_deeper_starling",
     tokenized=sft_mixture_llama3,
     model_config=llama_8b,
     sft_config=deeper_sft_config,
