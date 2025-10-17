@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 CLEANUP_JOB_PREFIX = "marin-cleanup-cron"
 
 
-def cleanup_iteration(project: str, zone: str) -> list[str]:
+def cleanup_iteration(project: str, zone: str, dry_run: bool) -> list[str]:
     """Run one iteration of cleanup checks.
 
     Removes terminated/preempted TPU nodes.
@@ -46,7 +46,7 @@ def cleanup_iteration(project: str, zone: str) -> list[str]:
     Returns:
         List of deleted TPU names
     """
-    deleted = cleanup_preempted_tpus(project, zone, dry_run=False)
+    deleted = cleanup_preempted_tpus(project, zone, dry_run=dry_run)
 
     if deleted:
         logger.info(f"Cleaned up {len(deleted)} preempted/terminated TPUs: {deleted}")

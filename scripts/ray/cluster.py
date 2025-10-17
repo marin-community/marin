@@ -375,6 +375,7 @@ def start_cleanup(ctx, interval):
 
 
 @cli.command("run-cleanup")
+@click.option("--dry-run", is_flag=True, help="Show what would be cleaned")
 @click.pass_context
 def run_cleanup(ctx):
     """Run a single cleanup iteration."""
@@ -385,7 +386,7 @@ def run_cleanup(ctx):
 
     with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         print("Running cleanup iteration...")
-        deleted = cleanup_iteration(config_obj.project_id, config_obj.zone)
+        deleted = cleanup_iteration(config_obj.project_id, config_obj.zone, dry_run=True)
         if deleted:
             print(f"Deleted {len(deleted)} preempted TPUs: {deleted}")
         else:
