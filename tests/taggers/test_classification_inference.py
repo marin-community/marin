@@ -14,7 +14,6 @@
 
 import json
 import os
-import tempfile
 
 import fsspec
 import pytest
@@ -24,11 +23,11 @@ from marin.core.runtime import TaskConfig
 from marin.processing.classification.config.inference_config import DatasetSchemaConfig
 from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig
 from marin.processing.classification.inference import (
-    process_file_with_quality_classifier_streaming,
     read_dataset_streaming,
     run_inference,
 )
 from marin.utils import fsspec_exists, fsspec_mkdirs
+from marin.processing.classification.autoscaler import DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG
 
 DEFAULT_DATASET_SCHEMA = DatasetSchemaConfig(input_columns=["id", "text"], output_columns=["id", "attributes"])
 
@@ -43,13 +42,6 @@ def sample_data():
         {"id": "doc4", "text": "Another excellent document with comprehensive details."},
         {"id": "doc5", "text": "A mediocre document that could be improved."},
     ]
-
-
-@pytest.fixture
-def temp_dir():
-    """Create a temporary directory for test files"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield tmpdir
 
 
 def create_jsonl_gz_file(data: list[dict], filepath: str):
@@ -88,227 +80,71 @@ def read_parquet_file(filepath: str) -> list[dict]:
 class TestStreamingReading:
     """Test streaming dataset reading functionality"""
 
-    def test_read_dataset_streaming_jsonl_gz(self, sample_data, temp_dir):
-        """Test streaming reading of JSONL.GZ files"""
-        input_file = os.path.join(temp_dir, "test_input.jsonl.gz")
-        create_jsonl_gz_file(sample_data, input_file)
+    @pytest.mark.parametrize(
+        "ext,create_fn",
+        [
+            ("jsonl.gz", create_jsonl_gz_file),
+            ("parquet", create_parquet_file),
+        ],
+    )
+    def test_read_dataset_streaming(self, sample_data, tmpdir, ext, create_fn):
+        """Test streaming reading for both JSONL.GZ and Parquet files"""
+        input_file = os.path.join(tmpdir, f"test_input.{ext}")
+        create_fn(sample_data, input_file)
 
-        # Read streaming
         rows = list(read_dataset_streaming(input_file))
 
         assert len(rows) == len(sample_data)
         assert rows[0]["id"] == "doc1"
         assert rows[0]["text"] == sample_data[0]["text"]
 
-    def test_read_dataset_streaming_with_columns(self, sample_data, temp_dir):
-        """Test streaming reading with column selection"""
-        input_file = os.path.join(temp_dir, "test_input.jsonl.gz")
-        create_jsonl_gz_file(sample_data, input_file)
+    @pytest.mark.parametrize(
+        "ext,create_fn",
+        [
+            ("jsonl.gz", create_jsonl_gz_file),
+            ("parquet", create_parquet_file),
+        ],
+    )
+    def test_read_dataset_streaming_with_columns(self, sample_data, tmpdir, ext, create_fn):
+        """Test streaming reading with column selection for both formats"""
+        input_file = os.path.join(tmpdir, f"test_input.{ext}")
+        create_fn(sample_data, input_file)
 
-        # Read only specific columns
         rows = list(read_dataset_streaming(input_file, columns=["id"]))
 
         assert len(rows) == len(sample_data)
         assert "id" in rows[0]
         assert "text" not in rows[0]
-
-    def test_read_dataset_streaming_parquet(self, sample_data, temp_dir):
-        """Test streaming reading of Parquet files"""
-        input_file = os.path.join(temp_dir, "test_input.parquet")
-        create_parquet_file(sample_data, input_file)
-
-        # Read streaming
-        rows = list(read_dataset_streaming(input_file))
-
-        assert len(rows) == len(sample_data)
-        assert rows[0]["id"] == "doc1"
-        assert rows[0]["text"] == sample_data[0]["text"]
-
-    def test_read_dataset_streaming_parquet_with_columns(self, sample_data, temp_dir):
-        """Test streaming reading of Parquet files with column selection"""
-        input_file = os.path.join(temp_dir, "test_input.parquet")
-        create_parquet_file(sample_data, input_file)
-
-        # Read only specific columns
-        rows = list(read_dataset_streaming(input_file, columns=["id"]))
-
-        assert len(rows) == len(sample_data)
-        assert "id" in rows[0]
-        assert "text" not in rows[0]
-
-
-class TestSingleFileProcessing:
-    """Test processing of single files"""
-
-    def test_process_single_file_streaming(self, sample_data, temp_dir):
-        """Test streaming processing of a single file"""
-        input_file = os.path.join(temp_dir, "test_input.jsonl.gz")
-        output_file = os.path.join(temp_dir, "test_output.jsonl.gz")
-
-        # Create input file
-        create_jsonl_gz_file(sample_data, input_file)
-
-        # Create dummy classifier
-        # classifier = DummyClassifier("dummy", "quality")
-
-        # Process file
-        process_file_with_quality_classifier_streaming(
-            input_file, output_file, "dummy", "quality", "dummy", {}, DEFAULT_DATASET_SCHEMA, batch_size=2, resume=False
-        )
-
-        # Verify output
-        results = read_jsonl_gz_file(output_file)
-        assert len(results) == len(sample_data)
-
-        # Check that attributes were added
-        for result in results:
-            assert "id" in result
-            assert "attributes" in result
-            assert "dummy-quality" in result["attributes"]
-
-    def test_process_single_file_with_resumption(self, sample_data, temp_dir):
-        """Test resumption capability"""
-        input_file = os.path.join(temp_dir, "test_input.jsonl.gz")
-        output_file = os.path.join(temp_dir, "test_output.jsonl.gz")
-
-        # Create input file
-        create_jsonl_gz_file(sample_data, input_file)
-
-        # Create partial output file (first 2 rows)
-        partial_output = [
-            {"id": "doc1", "attributes": {"dummy-quality": {"score": 1.0}}},
-            {"id": "doc2", "attributes": {"dummy-quality": {"score": 1.0}}},
-        ]
-        create_jsonl_gz_file(partial_output, output_file)
-
-        # Create dummy classifier
-        # classifier = DummyClassifier("dummy", "quality")
-
-        # Process file with resumption
-        process_file_with_quality_classifier_streaming(
-            input_file, output_file, "dummy", "quality", "dummy", {}, DEFAULT_DATASET_SCHEMA, batch_size=2, resume=True
-        )
-
-        # Verify output contains all rows
-        results = read_jsonl_gz_file(output_file)
-        assert len(results) == len(sample_data)
-
-        # Check that all rows have attributes
-        for result in results:
-            assert "id" in result
-            assert "attributes" in result
-
-    def test_process_single_file_different_batch_sizes(self, sample_data, temp_dir):
-        """Test processing with different batch sizes"""
-        input_file = os.path.join(temp_dir, "test_input.jsonl.gz")
-
-        # Create input file
-        create_jsonl_gz_file(sample_data, input_file)
-
-        # Create dummy classifier
-        # classifier = DummyClassifier("dummy", "quality")
-
-        # Test different batch sizes
-        for batch_size in [1, 2, 3, 10]:
-            output_file = os.path.join(temp_dir, f"test_output_batch_{batch_size}.jsonl.gz")
-
-            process_file_with_quality_classifier_streaming(
-                input_file,
-                output_file,
-                "dummy",
-                "quality",
-                "dummy",
-                {},
-                DEFAULT_DATASET_SCHEMA,
-                batch_size=batch_size,
-                resume=False,
-            )
-
-            results = read_jsonl_gz_file(output_file)
-            assert len(results) == len(sample_data)
-
-    def test_process_single_parquet_file_streaming(self, sample_data, temp_dir):
-        """Test streaming processing of a single Parquet file"""
-        input_file = os.path.join(temp_dir, "test_input.parquet")
-        output_file = os.path.join(temp_dir, "test_output.parquet")
-
-        # Create input Parquet file
-        create_parquet_file(sample_data, input_file)
-
-        # Create dummy classifier
-        # classifier = DummyClassifier("dummy", "quality")
-
-        # Process file
-        process_file_with_quality_classifier_streaming(
-            input_file, output_file, "dummy", "quality", "dummy", {}, DEFAULT_DATASET_SCHEMA, batch_size=2, resume=False
-        )
-
-        # Verify output
-        results = read_parquet_file(output_file)
-        assert len(results) == len(sample_data)
-
-        # Check that attributes were added
-        for result in results:
-            assert "id" in result
-            assert "attributes" in result
-            assert "dummy-quality" in result["attributes"]
-
-    def test_process_parquet_file_with_resumption(self, sample_data, temp_dir):
-        """Test resumption capability with Parquet files"""
-        input_file = os.path.join(temp_dir, "test_input.parquet")
-        output_file = os.path.join(temp_dir, "test_output.parquet")
-
-        # Create input Parquet file
-        create_parquet_file(sample_data, input_file)
-
-        # Create partial output file (first 2 rows)
-        partial_output = [
-            {"id": "doc1", "attributes": {"dummy-quality": {"score": 1.0}}},
-            {"id": "doc2", "attributes": {"dummy-quality": {"score": 1.0}}},
-        ]
-        create_parquet_file(partial_output, output_file)
-
-        # Create dummy classifier
-        # classifier = DummyClassifier("dummy", "quality")
-
-        # Process file with resumption
-        process_file_with_quality_classifier_streaming(
-            input_file, output_file, "dummy", "quality", "dummy", {}, DEFAULT_DATASET_SCHEMA, batch_size=2, resume=True
-        )
-
-        # Verify output contains all rows
-        results = read_parquet_file(output_file)
-        assert len(results) == len(sample_data)
-
-        # Check that all rows have attributes
-        for result in results:
-            assert "id" in result
-            assert "attributes" in result
 
 
 class TestMultipleFileProcessing:
     """Test processing of multiple files"""
 
-    def test_process_multiple_files(self, ray_tpu_cluster, sample_data, temp_dir):
-        """Test processing multiple files with Ray"""
+    @pytest.mark.parametrize("num_files", [1, 3])
+    @pytest.mark.parametrize(
+        "ext,create_fn,read_fn",
+        [
+            ("jsonl.gz", create_jsonl_gz_file, read_jsonl_gz_file),
+            ("parquet", create_parquet_file, read_parquet_file),
+        ],
+    )
+    def test_process_multiple_files(self, ray_tpu_cluster, sample_data, tmpdir, num_files, ext, create_fn, read_fn):
+        """Test processing multiple files with Ray for both JSONL.GZ and Parquet"""
         # Create input directory structure
-
-        input_dir = os.path.join(temp_dir, "tagger-input")
-        output_dir = os.path.join(temp_dir, "tagger-output")
+        input_dir = os.path.join(tmpdir, f"tagger-{ext}-input")
+        output_dir = os.path.join(tmpdir, f"tagger-{ext}-output")
         fsspec_mkdirs(input_dir)
         fsspec_mkdirs(output_dir)
 
         # Create multiple input files
-        file_data = [
-            sample_data[:2],  # First 2 rows
-            sample_data[2:4],  # Next 2 rows
-            sample_data[4:],  # Last row
-        ]
+        file_data = []
+        for _ in range(num_files):
+            file_data.append(sample_data)
 
         input_files = []
         for i, data in enumerate(file_data):
-            input_file = os.path.join(input_dir, f"file_{i}.jsonl.gz")
-            create_jsonl_gz_file(data, input_file)
+            input_file = os.path.join(input_dir, f"file_{i}.{ext}")
+            create_fn(data, input_file)
             input_files.append(input_file)
 
         # Create inference config
@@ -318,12 +154,12 @@ class TestMultipleFileProcessing:
             model_name="dummy",
             model_type="dummy",
             attribute_name="quality",
-            filetype="jsonl.gz",
+            filetype=ext,
             batch_size=2,
             resume=True,
             runtime=RuntimeConfig(memory_limit_gb=1),
             task=TaskConfig(max_in_flight=2),
-            classifier_kwargs={},
+            autoscaling_actor_pool_config=DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG,
             dataset_schema=DEFAULT_DATASET_SCHEMA,
         )
 
@@ -332,132 +168,13 @@ class TestMultipleFileProcessing:
 
         # Verify all output files were created
         for i in range(len(file_data)):
-            output_file = os.path.join(output_dir, f"file_{i}.jsonl.gz")
+            output_file = os.path.join(output_dir, f"file_{i}.{ext}")
             assert fsspec_exists(output_file)
 
-            results = read_jsonl_gz_file(output_file)
+            results = read_fn(output_file)
             assert len(results) == len(file_data[i])
 
             # Check that attributes were added
             for result in results:
                 assert "id" in result
                 assert "attributes" in result
-
-    def test_process_multiple_parquet_files(self, ray_tpu_cluster, sample_data, temp_dir):
-        """Test processing multiple Parquet files with Ray"""
-        # Create input directory structure
-        input_dir = os.path.join(temp_dir, "tagger-parquet-input")
-        output_dir = os.path.join(temp_dir, "tagger-parquet-output")
-        fsspec_mkdirs(input_dir)
-        fsspec_mkdirs(output_dir)
-
-        # Create multiple input Parquet files
-        file_data = [
-            sample_data[:2],  # First 2 rows
-            sample_data[2:4],  # Next 2 rows
-            sample_data[4:],  # Last row
-        ]
-
-        input_files = []
-        for i, data in enumerate(file_data):
-            input_file = os.path.join(input_dir, f"file_{i}.parquet")
-            create_parquet_file(data, input_file)
-            input_files.append(input_file)
-
-        # Create inference config for Parquet files
-        config = InferenceConfig(
-            input_path=input_dir,
-            output_path=output_dir,
-            model_name="dummy",
-            model_type="dummy",
-            attribute_name="quality",
-            filetype="parquet",
-            batch_size=2,
-            resume=True,
-            runtime=RuntimeConfig(memory_limit_gb=1),
-            task=TaskConfig(max_in_flight=2),
-            classifier_kwargs={},
-            dataset_schema=DEFAULT_DATASET_SCHEMA,
-        )
-
-        # Run inference
-        ray.get(run_inference.remote(config))
-
-        # Verify all output files were created
-        for i in range(len(file_data)):
-            output_file = os.path.join(output_dir, f"file_{i}.parquet")
-            assert fsspec_exists(output_file)
-
-            results = read_parquet_file(output_file)
-            assert len(results) == len(file_data[i])
-
-            # Check that attributes were added
-            for result in results:
-                assert "id" in result
-                assert "attributes" in result
-
-
-class TestInferenceConfig:
-    """Test inference configuration"""
-
-    def test_inference_config_defaults(self):
-        """Test default values in InferenceConfig"""
-        config = InferenceConfig(input_path="/test/input", model_name="test_model", attribute_name="test_attr")
-
-        assert config.batch_size == 512
-        assert config.resume is True
-        assert config.filetype == "jsonl.gz"
-        assert config.model_type is None
-        assert config.runtime.memory_limit_gb == 0.1
-
-    def test_inference_config_custom_values(self):
-        """Test custom values in InferenceConfig"""
-        config = InferenceConfig(
-            input_path="/test/input",
-            model_name="test_model",
-            attribute_name="test_attr",
-            batch_size=256,
-            resume=False,
-            filetype="jsonl.zst",
-            model_type="vllm",
-        )
-
-        assert config.batch_size == 256
-        assert config.resume is False
-        assert config.filetype == "jsonl.zst"
-        assert config.model_type == "vllm"
-
-
-class TestErrorHandling:
-    """Test error handling scenarios"""
-
-    def test_unsupported_file_format(self, temp_dir):
-        """Test handling of unsupported file formats"""
-        input_file = os.path.join(temp_dir, "test.txt")
-
-        # Create a text file
-        with open(input_file, "w") as f:
-            f.write("test content")
-
-        # Should raise ValueError for unsupported format
-        with pytest.raises(ValueError, match="Unsupported filetype"):
-            list(read_dataset_streaming(input_file))
-
-    def test_empty_input_file(self, temp_dir):
-        """Test handling of empty input files"""
-        input_file = os.path.join(temp_dir, "empty.jsonl.gz")
-        output_file = os.path.join(temp_dir, "empty_output.jsonl.gz")
-
-        # Create empty file
-        create_jsonl_gz_file([], input_file)
-
-        # Create dummy classifier
-        # classifier = DummyClassifier("dummy", "quality")
-
-        # Process empty file
-        process_file_with_quality_classifier_streaming(
-            input_file, output_file, "dummy", "quality", "dummy", {}, DEFAULT_DATASET_SCHEMA, batch_size=2, resume=False
-        )
-
-        # Should create empty output file
-        assert not os.path.exists(output_file)

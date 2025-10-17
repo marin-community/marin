@@ -13,50 +13,31 @@
 # limitations under the License.
 
 
-def get_id_from_row(row: dict, id_column: str | dict[str, str]) -> str:
-    """Get the ID from a row
-
-    Args:
-        row: The data row
-        id_column: Either a string column name, or a dict with nested column access
-                   e.g., {"metadata": "id"} means row["metadata"]["id"]
-
-    Returns:
-        The ID value from the row
-    """
-    if isinstance(id_column, dict):
-        # Handle nested column access
-        parent_key = next(iter(id_column.keys()))
-        child_key = next(iter(id_column.values()))
-        return row[parent_key][child_key]
-    else:
-        return row[id_column]
+def get_id_from_row(row: dict, id_path: tuple[str, ...]) -> str | None:
+    """Traverse a tuple path in a row to extract the ID, or return None if missing."""
+    obj = row
+    for key in id_path:
+        obj = obj.get(key)
+        if obj is None:
+            raise ValueError(f"ID path {id_path} not found in row: {row}")
+    return obj
 
 
-def has_id_column(row: dict, id_column: str | dict[str, str]) -> bool:
-    """Check if a row has the required id column
-
-    Args:
-        row: The data row
-        id_column: Either a string column name, or a dict with nested column access
-
-    Returns:
-        True if the id column exists in the row
-    """
-    if isinstance(id_column, dict):
-        parent_key = next(iter(id_column.keys()))
-        child_key = next(iter(id_column.values()))
-        return parent_key in row and isinstance(row[parent_key], dict) and child_key in row[parent_key]
-    else:
-        return id_column in row
+def has_id_column(row: dict, id_path: tuple[str, ...]) -> bool:
+    """Check whether the tuple path exists in the row."""
+    try:
+        get_id_from_row(row, id_path)
+        return True
+    except ValueError:
+        return False
 
 
-def get_finished_ids(output_filename: str, id_column: str | dict[str, str]) -> set:
+def get_finished_ids(output_filename: str, id_path: tuple[str, ...]) -> set:
     """Get the set of IDs that have already been processed in the output file
 
     Args:
         output_filename: Path to the output file
-        id_column: Name of the column containing the ID
+        id_path: Tuple path of keys leading to the ID (e.g., ("metadata", "id"))
 
     Returns:
         Set of IDs that have already been processed
@@ -78,8 +59,9 @@ def get_finished_ids(output_filename: str, id_column: str | dict[str, str]) -> s
                 for line in f:
                     try:
                         row = json.loads(line)
-                        if has_id_column(row, id_column):
-                            finished_ids.add(get_id_from_row(row, id_column))
+                        id_value = get_id_from_row(row, id_path)
+                        if id_value is not None:
+                            finished_ids.add(id_value)
                     except json.JSONDecodeError:
                         continue
         elif output_filename.endswith(".parquet"):
@@ -87,19 +69,11 @@ def get_finished_ids(output_filename: str, id_column: str | dict[str, str]) -> s
             import pyarrow.parquet as pq
 
             with fsspec.open(output_filename, "rb") as f:
-                if isinstance(id_column, dict):
-                    # Handle nested column access
-                    parent_key = next(iter(id_column.keys()))
-                    child_key = next(iter(id_column.values()))
-                    table = pq.read_table(f, columns=[parent_key])
-                    # Extract child values from nested dicts
-                    for row in table.to_pylist():
-                        if parent_key in row and isinstance(row[parent_key], dict) and child_key in row[parent_key]:
-                            finished_ids.add(row[parent_key][child_key])
-                else:
-                    # Simple column access
-                    table = pq.read_table(f, columns=[id_column])
-                    finished_ids = set(table[id_column].to_pylist())
+                table = pq.read_table(f, columns=[id_path[0]])
+                for row in table.to_pylist():
+                    id_value = get_id_from_row(row, id_path)
+                    if id_value is not None:
+                        finished_ids.add(id_value)
 
         return finished_ids
     except (FileNotFoundError, Exception) as e:

@@ -17,13 +17,13 @@ from marin.core.runtime import TaskConfig
 from marin.processing.classification.autoscaler import DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG, AutoscalingActorPoolConfig
 
 
-@dataclass
+@dataclass(frozen=True)
 class DatasetSchemaConfig:
     input_columns: list[str] = field(default_factory=lambda: ["text", "id"])
     output_columns: list[str] = field(default_factory=lambda: ["id", "attributes", "generated_text", "text"])
 
-    id_column: str | dict[str, str] = field(default_factory=lambda: "id")
-    """Unique identifier for what is considered an id for a row of the dataset"""
+    id_column: tuple[str, ...] = field(default_factory=lambda: ("id",))
+    """Path (tuple of keys) to the unique identifier in a row, e.g. ("metadata", "id")."""
 
 
 @dataclass

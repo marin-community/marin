@@ -105,7 +105,7 @@ CORPUS_TYPE_TO_ID_GUIDE = {
 
 
 def read_dataset(input_filename: str, columns: list[str] | None = None):
-    """Read in a dataset and return as a Huggingface Dataset
+    """Read in a data source and return as a Huggingface Dataset
 
     Args:
         input_filename: str
@@ -114,25 +114,21 @@ def read_dataset(input_filename: str, columns: list[str] | None = None):
     Returns:
         datasets.Dataset: A Huggingface Dataset in-memory without using the disk
     """
-    datasets.disable_caching()
+    datasets.disable_caching()  # Disabling caching or else it spills to disk to cache
     datasets.logging.set_verbosity_warning()
     # We use pandas to read in the file so that we don't have to materialize
     # the entire dataset in disk since we have limited disk space.
     # Huggingface datasets loads the dataset into disk first and mmaps.
     if input_filename.endswith(".jsonl.gz"):
         df = pd.read_json(input_filename, compression="gzip", lines=True)
-        dataset = datasets.Dataset.from_pandas(df)
-        return dataset
     elif input_filename.endswith(".jsonl.zst"):
         df = pd.read_json(input_filename, compression="zstd", lines=True)
-        dataset = datasets.Dataset.from_pandas(df)
-        return dataset
     elif input_filename.endswith(".parquet"):
         df = pd.read_parquet(input_filename, columns=columns)
-        dataset = datasets.Dataset.from_pandas(df)
-        return dataset
     else:
         raise ValueError(f"Unsupported filetype: {input_filename}")
+
+    return datasets.Dataset.from_pandas(df)
 
 
 def write_dataset(dataset, output_filename: str):
@@ -186,6 +182,7 @@ def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attr
     attribute_value = attributes[doc_filter.name]
 
     # Handle nested attributes structure if a label is specified
+    accepted = True
     if doc_filter.label is not None:
         if isinstance(attribute_value, dict) and doc_filter.label in attribute_value:
             value = attribute_value[doc_filter.label]
@@ -193,26 +190,22 @@ def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attr
             logger.warning(
                 f"Label {doc_filter.label} not found in attribute {doc_filter.name} for document {input_data['id']}"
             )
-            return False
+            accepted = False
     else:
         # If no label specified, use the attribute value directly
         # This handles cases like compression_ratio where the value is a scalar
         value = attribute_value
 
     # Check both lower and upper bounds if specified
+    if doc_filter.threshold is not None and value < doc_filter.threshold:
+        accepted = False
+    if doc_filter.upper_threshold is not None and value > doc_filter.upper_threshold:
+        accepted = False
+
     if doc_filter.reverse:
-        if doc_filter.threshold is not None and value > doc_filter.threshold:
-            return False
-        if doc_filter.upper_threshold is not None and value < doc_filter.upper_threshold:
-            return False
-    else:
-        if doc_filter.threshold is not None and value < doc_filter.threshold:
-            return False
+        accepted = not accepted
 
-        if doc_filter.upper_threshold is not None and value > doc_filter.upper_threshold:
-            return False
-
-    return True
+    return accepted
 
 
 def get_corpus_type(filename: str) -> str:

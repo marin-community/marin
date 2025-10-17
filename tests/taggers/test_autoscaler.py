@@ -18,7 +18,7 @@ import pytest
 import ray
 from ray.util.queue import Queue
 
-from marin.processing.classification.autoscaler import AutoscalingActorPool
+from marin.processing.classification.autoscaler import AutoscalingActorPool, DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG
 from marin.processing.classification.classifier import AutoClassifierRayActor
 
 
@@ -33,8 +33,7 @@ def test_autoscaler_requeues_failed_tasks(ray_tpu_cluster):
         model_type="dummy",
         task_queue=task_queue,
         result_queue=result_queue,
-        min_actors=1,
-        max_actors=2,
+        autoscaler_config=DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG,
     )
 
     try:

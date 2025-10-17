@@ -28,7 +28,6 @@ import pandas as pd
 import ray
 from ray.util.queue import Queue
 import datetime
-import queue
 from marin.core.runtime import cached_or_construct_output
 from marin.processing.classification.classifier import (
     AutoClassifierRayActor,
@@ -79,6 +78,7 @@ def read_dataset_streaming(input_filename: str, columns: list[str] | None = None
     yield from dataset
 
 
+# TODO(chris): Consolidate this with other make json serializable functions
 def make_json_serializable(row: dict) -> dict:
     """Make a row JSON serializable"""
     for key, value in row.items():
@@ -95,8 +95,6 @@ def convert_batch_dict_to_output_rows(batch_dict: dict, output_column_names: lis
         output_row = {}
         for col in output_column_names:
             if col in batch_dict:
-                output_row[col] = batch_dict[col][i]
-            elif col in batch_dict:
                 output_row[col] = batch_dict[col][i]
         output_rows.append(output_row)
 
@@ -137,11 +135,8 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
             if fs.exists(output_filename):
                 with fsspec.open(output_filename, "rb") as src, open(tmp_path, "wb") as dst:
                     shutil.copyfileobj(src, dst)
-            else:
-                # Ensure file exists for append
-                open(tmp_path, "wb").close()
 
-        # Write rows to temp with append semantics using fsspec with compression inference
+        # Turn on compression inference to have fsspec auto-compress files according to the suffix
         with fsspec.open(tmp_path, mode, compression="infer") as f:
             for row in rows_iterator:
                 row = make_json_serializable(row)
@@ -173,16 +168,6 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
         raise ValueError(f"Unsupported filetype: {output_filename}")
 
 
-def get_input_dataset_column_names(dataset_schema: DatasetSchemaConfig | None = None) -> list[str]:
-    schema = dataset_schema or DatasetSchemaConfig()
-    return schema.input_columns
-
-
-def get_output_dataset_column_names(dataset_schema: DatasetSchemaConfig | None = None) -> list[str]:
-    schema = dataset_schema or DatasetSchemaConfig()
-    return schema.output_columns
-
-
 @cached_or_construct_output(success_suffix="SUCCESS")
 def process_file_with_quality_classifier_streaming(
     input_filename: str,
@@ -198,10 +183,6 @@ def process_file_with_quality_classifier_streaming(
     """Process a file with streaming I/O and resumption capability"""
     print(f"[*] Processing {input_filename} to {output_filename}")
 
-    # Get column names
-    input_column_names = get_input_dataset_column_names(dataset_schema)
-    output_column_names = get_output_dataset_column_names(dataset_schema)
-
     # Check if we should resume from existing progress by loading finished IDs
     finished_ids = set()
     if resume:
@@ -212,7 +193,7 @@ def process_file_with_quality_classifier_streaming(
             print(f"[*] No existing IDs found in {output_filename}")
 
     # Create streaming iterator
-    row_iterator = read_dataset_streaming(input_filename, input_column_names)
+    row_iterator = read_dataset_streaming(input_filename, dataset_schema.input_columns)
 
     # Initialize for batch processing
     append_mode = len(finished_ids) > 0
@@ -239,6 +220,9 @@ def process_file_with_quality_classifier_streaming(
     for row in row_iterator:
         # Skip rows that have already been processed
         row_id = get_id_from_row(row, dataset_schema.id_column)
+        if row_id is None:
+            logger.warning(f"No ID found in row: {row} for ID path: {dataset_schema.id_column} - skipping")
+            continue
         if row_id in finished_ids:
             total_skipped += 1
             continue
@@ -248,7 +232,7 @@ def process_file_with_quality_classifier_streaming(
         if len(batch) >= batch_size:
             # Process batch
             batch_dict = {}
-            for key in input_column_names:
+            for key in dataset_schema.input_columns:
                 batch_dict[key] = [row.get(key, "") for row in batch]
 
             num_batches += 1
@@ -259,7 +243,7 @@ def process_file_with_quality_classifier_streaming(
     # Final batch that might not be of size batch_size
     if batch:
         batch_dict = {}
-        for key in input_column_names:
+        for key in dataset_schema.input_columns:
             batch_dict[key] = [row.get(key, "") for row in batch]
         num_batches += 1
 
@@ -269,12 +253,14 @@ def process_file_with_quality_classifier_streaming(
     while num_collected_batches < num_batches:
         processed_batch = result_queue.get()
         num_collected_batches += 1
-        output_rows = convert_batch_dict_to_output_rows(processed_batch, output_column_names, len(batch))
+        output_rows = convert_batch_dict_to_output_rows(
+            processed_batch, dataset_schema.output_columns, len(processed_batch[dataset_schema.output_columns[0]])
+        )
         write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
-        total_processed += len(batch)
+        total_processed += len(processed_batch)
         logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
 
-        pool.shutdown()
+    pool.shutdown()
 
     print(
         f"[*] Completed processing {input_filename} - \
@@ -292,27 +278,21 @@ def process_file_ray(
     model_type: str | None,
     filetype: str,
     autoscaling_actor_pool_config: AutoscalingActorPoolConfig,
+    dataset_schema: DatasetSchemaConfig,
     batch_size: int = 512,
     resume: bool = True,
-    queue: Queue | None = None,
-    dataset_schema: DatasetSchemaConfig | None = None,
 ):
-    try:
-        # Initialize mutable defaults
-        process_file_with_quality_classifier_streaming(
-            input_filename,
-            output_filename,
-            model_name_or_path,
-            attribute_name,
-            model_type,
-            dataset_schema,
-            autoscaling_actor_pool_config,
-            batch_size,
-            resume,
-        )
-
-    except Exception as e:
-        raise e
+    process_file_with_quality_classifier_streaming(
+        input_filename,
+        output_filename,
+        model_name_or_path,
+        attribute_name,
+        model_type,
+        dataset_schema,
+        autoscaling_actor_pool_config,
+        batch_size,
+        resume,
+    )
 
 
 @ray.remote(num_cpus=0, resources={"head_node": 0.001})
@@ -348,11 +328,10 @@ def run_inference(inference_config: InferenceConfig):
             inference_config.attribute_name,
             inference_config.model_type,
             inference_config.filetype,
-            inference_config.batch_size,
-            inference_config.resume,
-            queue,
             inference_config.autoscaling_actor_pool_config,
             inference_config.dataset_schema,
+            inference_config.batch_size,
+            inference_config.resume,
         )
         pending_refs[ref] = input_fp
 
