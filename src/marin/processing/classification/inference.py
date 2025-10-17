@@ -25,6 +25,7 @@ import os
 
 import draccus
 import pandas as pd
+import numpy as np
 import ray
 from ray.util.queue import Queue
 import datetime
@@ -86,6 +87,10 @@ def make_json_serializable(row: dict) -> dict:
             row[key] = make_json_serializable(value)
         if isinstance(value, datetime.datetime):
             row[key] = value.isoformat()
+        if isinstance(value, np.ndarray):
+            row[key] = value.tolist()
+        if isinstance(value, np.float32 | np.float64):
+            row[key] = float(value)
     return row
 
 
