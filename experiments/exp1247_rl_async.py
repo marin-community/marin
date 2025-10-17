@@ -21,6 +21,7 @@ import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import HFCompatConfig
 from levanter.distributed import RayConfig
+from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
@@ -56,16 +57,23 @@ class ModelConfig:
         return self.name.replace("/", "-").lower()
 
 
-MODEL = ModelConfig(
+qwen4b = ModelConfig(
     name="Qwen/Qwen3-4B-Instruct-2507",
     type="qwen",
     tokenizer="Qwen/Qwen3-4B-Instruct-2507",
     checkpoint="Qwen/Qwen3-4B-Instruct-2507",
     config_class=Qwen3Config,
 )
-
+llama1b = ModelConfig(
+    name="meta-llama/Llama-3.2-1B-Instruct",
+    type="llama",
+    tokenizer="meta-llama/Llama-3.2-1B-Instruct",
+    checkpoint="meta-llama/Llama-3.2-1B-Instruct",
+    config_class=LlamaConfig,
+)
+MODEL = llama1b
 WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
-MAX_TOKENS = 256
+MAX_TOKENS = 512
 RUN_ID = f"test-{MODEL.name.split('/')[-1]}-curriculum"
 
 
