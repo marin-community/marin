@@ -128,7 +128,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
         "math_full": LessonConfig(
             lesson_id="math_full",
             env_config=EnvConfig(
-                env_class="marin.rl.environments.math.MathEnv",
+                env_class="marin.rl.environments.math_env.MathEnv",
                 env_args={},
             ),
             dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
