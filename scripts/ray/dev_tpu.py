@@ -64,9 +64,9 @@ import yaml
 
 # N.B. We have to import from "src" as we are using the `ray.remote` directly from our `uv run`
 # script instead of launching a driver job. This confuses cloudpickle for some reason.
-from marin.cluster import ray as ray_utils
-from marin.cluster.config import RayClusterConfig, find_config_by_region
-from marin.utils import _hacky_remove_tpu_lockfile
+from src.marin.cluster import ray as ray_utils
+from src.marin.cluster.config import RayClusterConfig, find_config_by_region
+from src.marin.utils import _hacky_remove_tpu_lockfile
 
 logger = logging.getLogger(__name__)
 
