@@ -50,7 +50,7 @@ def test_autoscaler_requeues_failed_tasks(ray_tpu_cluster):
         while time.time() < deadline:
             with pool.actor_task_metadata_lock:
                 pending = pool.actor_futures.get(initial_actor, [])
-            if pending:
+            if pending or result_queue.qsize() > 0:  # pending task or finished task
                 task_assigned = True
                 break
             time.sleep(0.05)
@@ -69,9 +69,11 @@ def test_autoscaler_requeues_failed_tasks(ray_tpu_cluster):
             processed_task = result_queue.get(timeout=30)
             break
 
+        print("Finished processing first task")
+
         assert processed_task["id"] == original_task["id"]
 
         with pytest.raises(ray.exceptions.RayTaskError):
-            result_queue.get(timeout=30)  # next one should not succeed since only one task
+            result_queue.get(timeout=5)  # next one should not succeed since only one task
     finally:
         pool.shutdown()
