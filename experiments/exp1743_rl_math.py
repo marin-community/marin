@@ -21,6 +21,7 @@ import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
+from levanter.models.qwen import QwenConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -45,37 +46,19 @@ MAX_TOKENS = 1024
 
 
 @dataclasses.dataclass
-class ModelConfig:
+class ExperimentConfig:
     model_name: str
     model_type: str
     model_tokenizer: str
     model_checkpoint: str
 
 
-model_configs = [
-    ModelConfig(
-        model_name="meta-llama/Llama-3.2-1B-Instruct",
-        model_type="llama",
-        model_tokenizer="meta-llama/Llama-3.2-1B-Instruct",
-        model_checkpoint="meta-llama/Llama-3.2-1B-Instruct",
-    ),
-    ModelConfig(
-        model_name="meta-llama/Llama-3.1-8B-Instruct",
-        model_type="llama",
-        model_tokenizer="meta-llama/Llama-3.1-8B-Instruct",
-        model_checkpoint="meta-llama/Llama-3.1-8B-Instruct",
-    ),
-    ModelConfig(
-        model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+experiment_configs = [
+    ExperimentConfig(
+        model_name="Qwen/Qwen2.5-1.5B",
         model_type="qwen",
-        model_tokenizer="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-        model_checkpoint="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-    ),
-    ModelConfig(
-        model_name="Qwen/Qwen3-4B-Instruct-2507",
-        model_type="qwen",
-        model_tokenizer="Qwen/Qwen3-4B-Instruct-2507",
-        model_checkpoint="Qwen/Qwen3-4B-Instruct-2507",
+        model_tokenizer="Qwen/Qwen2.5-1.5B",
+        model_checkpoint="Qwen/Qwen2.5-1.5B",
     ),
 ]
 
@@ -117,21 +100,27 @@ def create_math_curriculum(run_id: str, model_name: str) -> CurriculumConfig:
     )
 
 
-def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
-    hf_config = AutoConfig.from_pretrained(model_config.model_name)
-    config = LlamaConfig.from_hf_config(hf_config)
+def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
+    hf_config = AutoConfig.from_pretrained(experiment_config.model_name)
+
+    if experiment_config.model_type == "llama":
+        config = LlamaConfig.from_hf_config(hf_config)
+    elif experiment_config.model_type == "qwen":
+        config = QwenConfig.from_hf_config(hf_config)
+    else:
+        raise ValueError(f"Invalid model type: {experiment_config.model_type}")
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=model_config.model_tokenizer)
+    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=experiment_config.model_tokenizer)
 
     _ = WandbConfig
 
     trainer_config = TrainerConfig(
         # wandb is persistently crashing
         tracker=WandbConfig(
-            project="marin",
+            project="marin_rl_testing",
             name=name,
-            tags=["rl", "math", model_config.model_name.split("/")[-1]],
+            tags=["rl", "math", experiment_config.model_name.split("/")[-1]],
         ),
         # tracker=TensorboardConfig(
         #     logdir=OutputName("tblogs"),
@@ -144,7 +133,7 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
         train_batch_size=64,
         # microbatch to avoid OOM
         per_device_parallelism=16,
-        num_train_steps=200,
+        num_train_steps=500,  # 12000 training samples in MATH so 12000 / 8 = 1500 prompts = 1 epoch
         steps_per_eval=10,
         checkpointer=CheckpointerConfig(
             base_path=OutputName("checkpoints"),
@@ -172,9 +161,10 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
         sync_interval_steps=1,
         # We are running on-policy, so wait for new weights from the trainer after each episode.
         max_weight_transfer_wait_time=10,
+        coordinator_name=f"weight_transfer_coordinator_{experiment_config.model_name.split('/')[-1]}",
     )
 
-    curriculum_config = create_math_curriculum(name, model_config.model_name)
+    curriculum_config = create_math_curriculum(name, experiment_config.model_name)
 
     # Create RLJobConfig using the new unified interface
     config = RLJobConfig(
@@ -191,22 +181,22 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
             ),
         ),
         curriculum=curriculum_config,
-        tokenizer=model_config.model_tokenizer,
-        initial_checkpoint=model_config.model_checkpoint,
+        tokenizer=experiment_config.model_tokenizer,
+        initial_checkpoint=experiment_config.model_checkpoint,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         run_id=name,
         log_freq=10,
         run_config=RunConfig(
-            train_tpu_type="v4-8",
+            train_tpu_type="v5p-8",
             num_train_slices=1,
             num_rollout_workers=1,
-            inference_tpu_type="v4-8",
+            inference_tpu_type="v5p-8",
         ),
     )
 
     return ExecutorStep(
-        name=f"rl_testing/{name}",
+        name=f"rl_testing_qwen1.5b/{name}",
         description=f"Async RL training: {name}",
         fn=RLJob.make_step_fn(),
         config=config,
@@ -219,13 +209,11 @@ def main():
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
-    datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-
     experiments = []
-    for model_config in model_configs:
-        model_base_name = model_config.model_name.split("/")[-1].lower()
+    for experiment_config in experiment_configs:
+        model_base_name = experiment_config.model_name.split("/")[-1].lower()
         experiments.append(
-            rl_train(name=f"{model_base_name}-math-rl-test-chris-{datestamp}", model_config=model_config),
+            rl_train(name=f"{model_base_name}-rl-math-sync", experiment_config=experiment_config),
         )
 
     executor_main(

@@ -24,8 +24,10 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import ray
+import yaml
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.infra.ray_tpu import run_on_pod_ray
@@ -47,6 +49,31 @@ from marin.training.training import _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
+
+
+def load_levanter_env_vars() -> dict[str, str]:
+    """Load environment variables from .levanter.yaml if it exists."""
+    levanter_yaml_path = Path.cwd() / ".levanter.yaml"
+
+    if not levanter_yaml_path.exists():
+        logger.warning(f".levanter.yaml not found at {levanter_yaml_path}")
+        return {}
+
+    try:
+        with open(levanter_yaml_path, "r") as f:
+            config = yaml.safe_load(f)
+
+        if config and "env" in config:
+            env_vars = config["env"]
+            logger.info(f"Loaded {len(env_vars)} environment variables from .levanter.yaml")
+            # Convert all values to strings
+            return {k: str(v) for k, v in env_vars.items()}
+        else:
+            logger.warning(".levanter.yaml exists but has no 'env' section")
+            return {}
+    except Exception as e:
+        logger.error(f"Error reading .levanter.yaml: {e}")
+        return {}
 
 
 @dataclass
@@ -155,8 +182,8 @@ class RLJob:
         run_config = self.config.run_config
         train_worker_config, rollout_worker_config = self.to_worker_configs()
 
-        # Setup environment
-        env = {}
+        # Setup environment - load from .levanter.yaml first
+        env = load_levanter_env_vars()
         env = _add_run_env_variables(env)
         env["EQX_ON_ERROR"] = "nan"
 
@@ -241,21 +268,34 @@ class RLJob:
 
         # Create inference server config if not provided
         if self.config.inference_server_config is None:
+            # Calculate max_pages based on max_tokens and page_size
+            page_size = 128
+            max_pages = (1 + max_tokens // page_size) * max_seqs
+
             inference_server_config = InferenceServerConfig(
                 trainer=dataclasses.replace(
                     self.config.trainer,
-                    tensor_parallel_axes=["mlp", "kv_head"],
+                    tensor_parallel_axes=["mlp"],
                 ),
                 tokenizer=tokenizer,
                 temperature=self.config.eval_sampling_params.temperature,
                 service=InferenceEngineConfig(
+                    max_seq_len=max_tokens,  # New required parameter
                     max_seqs=max_seqs,
-                    page_size=128,
-                    max_pages_per_seq=1 + max_tokens // 128,
+                    page_size=page_size,
+                    max_pages=max_pages,  # Replaces max_pages_per_seq
                     enable_logprobs=True,
                 ),
                 port=0,
             )
+            print(f"=" * 80)
+            print(f"RLJob.to_worker_configs: INFERENCE SERVER CONFIG")
+            print(f"  tensor_parallel_axes: {inference_server_config.trainer.tensor_parallel_axes}")
+            print(f"  max_seqs: {max_seqs}")
+            print(f"  max_tokens: {max_tokens}")
+            print(f"  max_pages: {max_pages}")
+            print(f"  page_size: {page_size}")
+            print(f"=" * 80)
             logger.info(
                 "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_tokens=%d", max_seqs, max_tokens
             )
