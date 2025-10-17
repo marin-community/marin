@@ -164,26 +164,10 @@ def restart_cluster(ctx, preserve_jobs):
         sys.exit(1)
 
     print(f"Restarting cluster {config_obj.cluster_name}...")
+    backup_dir = tempfile.TemporaryDirectory()
 
-    if not preserve_jobs:
-        print("Stopping cluster...")
-        _stop_cluster_internal(config_obj, config_path)
-
-        print("Starting cluster...")
-        subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
-
-        # Auto-start cleanup cron
-        print("Starting automated cleanup cron...")
-        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-            job_id = submit_cleanup_cron_job(config_obj.project_id, config_obj.zone, interval=600)
-            print(f"Cleanup cron job started: {job_id}")
-
-        print("Cluster restarted successfully!")
-        return
-
-    # Backup jobs
-    print("Backing up jobs...")
-    with tempfile.TemporaryDirectory() as backup_dir:
+    if preserve_jobs:
+        print("Backing up jobs...")
         try:
             with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
                 ray.backup_jobs(config_path, backup_dir)
@@ -202,14 +186,13 @@ def restart_cluster(ctx, preserve_jobs):
                 return
             print("Proceeding with cluster restart without job preservation.")
 
-        # Restart cluster using proper stop sequence
-        print("Stopping cluster...")
-        _stop_cluster_internal(config_obj, config_path)
+    print("Stopping cluster...")
+    _stop_cluster_internal(config_obj, config_path)
 
-        print("Starting cluster...")
-        subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
+    print("Starting cluster...")
+    subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
 
-        # Restore jobs
+    if preserve_jobs:
         print("Restoring jobs...")
         with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
             ray.restore_jobs(config_path, backup_dir)
@@ -402,8 +385,7 @@ def run_cleanup(ctx):
 
     with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         print("Running cleanup iteration...")
-        result = cleanup_iteration(config_obj.project_id, config_obj.zone)
-        deleted = result["preempted_tpus_deleted"]
+        deleted = cleanup_iteration(config_obj.project_id, config_obj.zone)
         if deleted:
             print(f"Deleted {len(deleted)} preempted TPUs: {deleted}")
         else:

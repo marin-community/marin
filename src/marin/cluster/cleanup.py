@@ -20,6 +20,7 @@ and removes terminated/preempted TPU nodes.
 
 import argparse
 import datetime
+import itertools
 import json
 import logging
 import subprocess
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 CLEANUP_JOB_PREFIX = "marin-cleanup-cron"
 
 
-def cleanup_iteration(project: str, zone: str) -> dict[str, Any]:
+def cleanup_iteration(project: str, zone: str) -> list[str]:
     """Run one iteration of cleanup checks.
 
     Removes terminated/preempted TPU nodes.
@@ -43,17 +44,14 @@ def cleanup_iteration(project: str, zone: str) -> dict[str, Any]:
         zone: GCP zone
 
     Returns:
-        Dict with cleanup results
+        List of deleted TPU names
     """
     deleted = cleanup_preempted_tpus(project, zone, dry_run=False)
 
     if deleted:
         logger.info(f"Cleaned up {len(deleted)} preempted/terminated TPUs: {deleted}")
 
-    return {
-        "timestamp": time.time(),
-        "preempted_tpus_deleted": deleted,
-    }
+    return deleted
 
 
 def run_cleanup_loop(project: str, zone: str, interval: int = 600) -> None:
@@ -70,18 +68,19 @@ def run_cleanup_loop(project: str, zone: str, interval: int = 600) -> None:
     logger.info(f"Starting cleanup cron loop (interval={interval}s)")
     logger.info(f"Monitoring project={project}, zone={zone}")
 
-    iteration = 0
-    while True:
-        iteration += 1
+    for iteration in itertools.count(1):
         logger.info(f"=== Cleanup iteration {iteration} ===")
 
-        result = cleanup_iteration(project, zone)
+        try:
+            deleted = cleanup_iteration(project, zone)
 
-        total_deleted = len(result["preempted_tpus_deleted"])
-        if total_deleted > 0:
-            logger.info(f"Iteration {iteration} complete: {total_deleted} TPUs terminated")
-        else:
-            logger.info(f"Iteration {iteration} complete: No cleanup needed")
+            if deleted:
+                logger.info(f"Iteration {iteration} complete: {len(deleted)} TPUs terminated")
+            else:
+                logger.info(f"Iteration {iteration} complete: No cleanup needed")
+        except Exception as e:
+            logger.error(f"Cleanup iteration {iteration} failed: {e}", exc_info=True)
+            logger.info(f"Will retry in {interval}s...")
 
         logger.info(f"Sleeping {interval}s until next check...")
         time.sleep(interval)
