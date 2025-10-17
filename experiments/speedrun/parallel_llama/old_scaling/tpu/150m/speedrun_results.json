@@ -8,6 +8,7 @@
           "url": "https://www.linkedin.com/in/harry-shin-34743216a/"
         },
         "description": "Parallel Llama ~150M with parallel attention/MLP computation on TPU.",
+        "device_flops": 459000000000000.0,
         "eval/paloma/c4_en/bpb": 1.2320165634155273,
         "model_config": {
           "activation_function": "silu",
@@ -39,6 +40,8 @@
         },
         "model_flops": 1.707084418797011e+18,
         "model_size": 154147328,
+        "num_chips": 16,
+        "num_devices": 32,
         "resources": {
           "device_flops_override": null,
           "slice_count": 1,
@@ -110,7 +113,7 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 2.8950289894939865e+19,
+        "training_hardware_flops": 1.4475144947469933e+19,
         "training_time": 1971.0164688820714,
         "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/parallel_llama_150m_tpu_20250930_001036-22db7b"
       }

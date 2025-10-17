@@ -8,6 +8,7 @@
           "url": "https://pinlinxu.com"
         },
         "description": "Hackable Transformer (520m); Attention (Muon)",
+        "device_flops": 459000000000000.0,
         "eval/paloma/c4_en/bpb": 0.9861995577812195,
         "model_config": {
           "activation_function": "silu",
@@ -40,6 +41,8 @@
         },
         "model_flops": 4.8779636003945054e+19,
         "model_size": 602457088,
+        "num_chips": 16,
+        "num_devices": 32,
         "resources": {
           "device_flops_override": null,
           "slice_count": 1,
@@ -116,7 +119,7 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 4.2063620651052053e+20,
+        "training_hardware_flops": 2.1031810325526027e+20,
         "training_time": 28638.085955236966,
         "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_520m_stdattn_4096-b3aa29"
       }
