@@ -145,7 +145,8 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
         # Upload temp file to destination (overwrite remote with full content)
         with fsspec.open(output_filename, "wb") as dst, open(tmp_path, "rb") as src:
             shutil.copyfileobj(src, dst)
-    elif output_filename.endswith(".parquet"):
+        return
+    if output_filename.endswith(".parquet"):
         # For parquet, we need to collect rows and write in batches
         import pyarrow as pa
         import pyarrow.parquet as pq
@@ -164,8 +165,9 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
 
             with fsspec.open(output_filename, "wb") as f:
                 pq.write_table(table, f)
-    else:
-        raise ValueError(f"Unsupported filetype: {output_filename}")
+        return
+
+    raise ValueError(f"Unsupported filetype: {output_filename}")
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")

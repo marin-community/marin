@@ -19,6 +19,18 @@ the attributes.  Handles two cases:
 - Quality filtering produces attributes (e.g., fasttext-quality) with labels
   (e.g., __label__hq), filter on threshold.
 - Deduplication produces attributes (e.g., duplicate_text).  Remove duplicates.
+
+NOTE(chris): Remove the usage of read_dataset and write_dataset.
+Right now, this code utilizes read_dataset and write_dataset but this is
+probably not needed because we could theoretically stream the data in as well.
+The reason why we need it currently is for two reasons:
+1. We have attributes in one file and documents in another file. However, we are not
+guaranteed that they are read in the same order. So, our solution is to just
+read in all of the attributes and then map the id of the document to the id of the attribute.
+We can then filter based on the value. However, this means we cannot simply stream the data in
+since we have to store the mapping of id -> attributes.
+2. We use some of the builtin Huggingface Dataset .map and .filter functions which may not work with
+the streaming data paradigm (it might but not sure).
 """
 
 import logging
