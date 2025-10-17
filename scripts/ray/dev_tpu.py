@@ -64,9 +64,9 @@ import yaml
 
 # N.B. We have to import from "src" as we are using the `ray.remote` directly from our `uv run`
 # script instead of launching a driver job. This confuses cloudpickle for some reason.
-from src.marin.cluster import ray as ray_utils
-from src.marin.cluster.config import RayClusterConfig, find_config_by_region
-from src.marin.utils import _hacky_remove_tpu_lockfile
+from marin.cluster import ray as ray_utils
+from marin.cluster.config import RayClusterConfig, find_config_by_region
+from marin.utils import _hacky_remove_tpu_lockfile
 
 logger = logging.getLogger(__name__)
 
@@ -458,7 +458,7 @@ def hold_tpu_allocation(
     config_obj = yaml.safe_load(open(config_file).read())
     zone = config_obj["provider"]["availability_zone"]
 
-    from src.marin.cluster.ray import DashboardConfig
+    from marin.cluster.ray import DashboardConfig
 
     with ray_utils.ray_dashboard(DashboardConfig.from_cluster(config_file, ray_init=True)):
         try:
