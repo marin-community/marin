@@ -60,6 +60,12 @@ experiment_configs = [
         model_tokenizer="Qwen/Qwen2.5-1.5B",
         model_checkpoint="Qwen/Qwen2.5-1.5B",
     ),
+    # ExperimentConfig(
+    #     model_name="meta-llama/Llama-3.2-1B",
+    #     model_type="llama",
+    #     model_tokenizer="meta-llama/Llama-3.2-1B",
+    #     model_checkpoint="meta-llama/Llama-3.2-1B",
+    # ),
 ]
 
 
