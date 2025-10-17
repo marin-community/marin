@@ -31,7 +31,6 @@ import datetime
 import queue
 from marin.core.runtime import cached_or_construct_output
 from marin.processing.classification.classifier import (
-    AutoClassifier,
     AutoClassifierRayActor,
 )
 from marin.processing.classification.config.inference_config import DatasetSchemaConfig, InferenceConfig
@@ -41,7 +40,7 @@ from marin.utils import (
     rebase_file_path,
 )
 from marin.processing.classification.checkpoint_utils import get_finished_ids, get_id_from_row
-from marin.processing.classification.autoscaler import AutoscalingActorPool
+from marin.processing.classification.autoscaler import AutoscalingActorPool, AutoscalingActorPoolConfig
 
 logger = logging.getLogger("ray")
 
@@ -188,23 +187,16 @@ def get_output_dataset_column_names(dataset_schema: DatasetSchemaConfig | None =
 def process_file_with_quality_classifier_streaming(
     input_filename: str,
     output_filename: str,
-    # quality_classifier: BaseClassifier,
     model_name_or_path: str,
     attribute_name: str,
     model_type: str,
-    classifier_kwargs: dict,
     dataset_schema: DatasetSchemaConfig,
+    autoscaling_actor_pool_config: AutoscalingActorPoolConfig,
     batch_size: int = 512,
     resume: bool = True,
-    use_autoscaling_actor_pool: bool = False,
-    classifier_actor_options: dict | None = None,
 ):
     """Process a file with streaming I/O and resumption capability"""
     print(f"[*] Processing {input_filename} to {output_filename}")
-
-    # Initialize mutable defaults
-    if classifier_actor_options is None:
-        classifier_actor_options = {}
 
     # Get column names
     input_column_names = get_input_dataset_column_names(dataset_schema)
@@ -225,13 +217,7 @@ def process_file_with_quality_classifier_streaming(
     # Initialize for batch processing
     append_mode = len(finished_ids) > 0
 
-    # For parquet, collect batches; for JSONL, stream asynchronously
-    # if output_filename.endswith(".parquet"):
-    #     parquet_batches = []
-    # async_writer = None
-    # else:
-    # async_writer = AsyncJSONLWriter(output_filename, append=append_mode)
-
+    # Initialize batch
     batch = []
     total_processed = len(finished_ids)
     total_skipped = 0
@@ -239,21 +225,15 @@ def process_file_with_quality_classifier_streaming(
     task_queue = Queue()
     result_queue = Queue()
 
-    if use_autoscaling_actor_pool:
-        pool = AutoscalingActorPool(
-            AutoClassifierRayActor,
-            model_name_or_path,
-            attribute_name,
-            model_type,
-            task_queue,
-            result_queue,
-            actor_kwargs=classifier_kwargs,
-            actor_options=classifier_actor_options,
-        )
-    else:
-        quality_classifier = AutoClassifier.from_model_path(
-            model_name_or_path, attribute_name, model_type, **classifier_kwargs
-        )
+    pool = AutoscalingActorPool(
+        AutoClassifierRayActor,
+        model_name_or_path,
+        attribute_name,
+        model_type,
+        task_queue,
+        result_queue,
+        autoscaler_config=autoscaling_actor_pool_config,
+    )
 
     num_batches = 0
     for row in row_iterator:
@@ -273,15 +253,7 @@ def process_file_with_quality_classifier_streaming(
 
             num_batches += 1
             # Apply classifier
-            if use_autoscaling_actor_pool:
-                task_queue.put(batch_dict)
-            else:
-                processed_batch = quality_classifier(batch_dict)
-                output_rows = convert_batch_dict_to_output_rows(processed_batch, output_column_names, len(batch))
-                write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
-                total_processed += len(batch)
-                logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
-
+            task_queue.put(batch_dict)
             batch = []
 
     # Final batch that might not be of size batch_size
@@ -291,27 +263,16 @@ def process_file_with_quality_classifier_streaming(
             batch_dict[key] = [row.get(key, "") for row in batch]
         num_batches += 1
 
-        if use_autoscaling_actor_pool:
-            task_queue.put(batch_dict)
-        else:
-            processed_batch = quality_classifier(batch_dict)
-            output_rows = convert_batch_dict_to_output_rows(processed_batch, output_column_names, len(batch))
-            write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
-            total_processed += len(batch)
-            logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
+        task_queue.put(batch_dict)
 
-    if use_autoscaling_actor_pool:
-        num_collected_batches = 0
-        while num_collected_batches < num_batches:
-            processed_batch = result_queue.get()
-
-            num_collected_batches += 1
-
-            batch_size = len(processed_batch["text"])
-            output_rows = convert_batch_dict_to_output_rows(processed_batch, output_column_names, batch_size)
-            write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
-            total_processed += batch_size
-            logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
+    num_collected_batches = 0
+    while num_collected_batches < num_batches:
+        processed_batch = result_queue.get()
+        num_collected_batches += 1
+        output_rows = convert_batch_dict_to_output_rows(processed_batch, output_column_names, len(batch))
+        write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
+        total_processed += len(batch)
+        logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
 
         pool.shutdown()
 
@@ -330,31 +291,24 @@ def process_file_ray(
     attribute_name: str,
     model_type: str | None,
     filetype: str,
-    classifier_kwargs: dict,
+    autoscaling_actor_pool_config: AutoscalingActorPoolConfig,
     batch_size: int = 512,
     resume: bool = True,
     queue: Queue | None = None,
-    use_autoscaling_actor_pool: bool = False,
-    classifier_actor_options: dict | None = None,
     dataset_schema: DatasetSchemaConfig | None = None,
 ):
     try:
         # Initialize mutable defaults
-        if classifier_actor_options is None:
-            classifier_actor_options = {}
-
         process_file_with_quality_classifier_streaming(
             input_filename,
             output_filename,
             model_name_or_path,
             attribute_name,
             model_type,
-            classifier_kwargs,
             dataset_schema,
+            autoscaling_actor_pool_config,
             batch_size,
             resume,
-            use_autoscaling_actor_pool,
-            classifier_actor_options,
         )
 
     except Exception as e:
@@ -381,9 +335,6 @@ def run_inference(inference_config: InferenceConfig):
         "memory": inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
     }
 
-    if not inference_config.classifier_actor_options:
-        options_kwargs["resources"] = inference_config.runtime.resources
-
     pending_refs: dict = {}
     attempt_count: dict[str, int] = {}
 
@@ -397,12 +348,10 @@ def run_inference(inference_config: InferenceConfig):
             inference_config.attribute_name,
             inference_config.model_type,
             inference_config.filetype,
-            inference_config.classifier_kwargs,
             inference_config.batch_size,
             inference_config.resume,
             queue,
-            inference_config.use_autoscaling_actor_pool,
-            inference_config.classifier_actor_options,
+            inference_config.autoscaling_actor_pool_config,
             inference_config.dataset_schema,
         )
         pending_refs[ref] = input_fp

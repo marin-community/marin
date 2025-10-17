@@ -18,6 +18,7 @@ from marin.download.filesystem.transfer import TransferConfig, transfer_files
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, output_path_of
 from marin.generation.chunk_utils import ChunkingConfig, chunk_with_config, ChunkStrategy
 from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig, DatasetSchemaConfig
+from marin.processing.classification.autoscaler import AutoscalingActorPoolConfig
 from marin.processing.classification.consolidate import consolidate, ConsolidateConfig, FilterConfig
 from marin.processing.classification.inference import run_inference
 
@@ -743,7 +744,7 @@ active_reading_steps_1b_rewrite_autoscale = ExecutorStep(
         filetype="jsonl.gz",
         batch_size=512,
         resume=True,
-        runtime=RuntimeConfig(memory_limit_gb=16, resources={"TPU": 1}),
+        runtime=RuntimeConfig(memory_limit_gb=16),
         classifier_kwargs={
             "template": ACTIVE_READING_REWRITE_PROMPT,
             "post_process_fn": None,
@@ -756,8 +757,14 @@ active_reading_steps_1b_rewrite_autoscale = ExecutorStep(
             input_columns=["text", "id", "attributes"],
             output_columns=["id", "attributes", "generated_text", "text"],
         ),
-        classifier_actor_options={"resources": {"TPU": 1}},
-        use_autoscaling_actor_pool=True,
+        autoscaling_actor_pool_config=AutoscalingActorPoolConfig(
+            min_actors=1,
+            max_actors=32,
+            scale_up_threshold=0.8,
+            scale_down_threshold=0.2,
+            scale_check_interval=1.0,
+            actor_options={"resources": {"TPU": 1}},
+        ),
     ),
 )
 
@@ -810,8 +817,14 @@ active_reading_1_5M_with_attributes = ExecutorStep(
             input_columns=["text", "id", "metadata"],
             output_columns=["id", "attributes", "generated_text", "text", "metadata"],
         ),
-        classifier_actor_options={"resources": {"TPU": 1}},
-        use_autoscaling_actor_pool=True,
+        autoscaling_actor_pool_config=AutoscalingActorPoolConfig(
+            min_actors=1,
+            max_actors=32,
+            scale_up_threshold=0.8,
+            scale_down_threshold=0.2,
+            scale_check_interval=1.0,
+            actor_options={"resources": {"TPU": 1}},
+        ),
     ),
 )
 
@@ -840,8 +853,14 @@ active_reading_steps_1_5M_rewrite = ExecutorStep(
             input_columns=["text", "id", "attributes", "metadata"],
             output_columns=["id", "attributes", "generated_text", "text", "metadata"],
         ),
-        classifier_actor_options={"resources": {"TPU": 1}},
-        use_autoscaling_actor_pool=True,
+        autoscaling_actor_pool_config=AutoscalingActorPoolConfig(
+            min_actors=1,
+            max_actors=32,
+            scale_up_threshold=0.8,
+            scale_down_threshold=0.2,
+            scale_check_interval=1.0,
+            actor_options={"resources": {"TPU": 1}},
+        ),
     ),
 )
 
@@ -869,8 +888,14 @@ active_reading_1_5M_qa = ExecutorStep(
             input_columns=["text", "id", "metadata"],
             output_columns=["id", "generated_text", "text", "metadata"],
         ),
-        classifier_actor_options={"resources": {"TPU": 1}},
-        use_autoscaling_actor_pool=True,
+        autoscaling_actor_pool_config=AutoscalingActorPoolConfig(
+            min_actors=1,
+            max_actors=32,
+            scale_up_threshold=0.8,
+            scale_down_threshold=0.2,
+            scale_check_interval=1.0,
+            actor_options={"resources": {"TPU": 1}},
+        ),
     ),
 )
 

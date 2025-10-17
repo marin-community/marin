@@ -14,6 +14,7 @@
 
 from dataclasses import dataclass, field
 from marin.core.runtime import TaskConfig
+from marin.processing.classification.autoscaler import DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG, AutoscalingActorPoolConfig
 
 
 @dataclass
@@ -40,7 +41,7 @@ class InferenceConfig:
     model_name: str
     attribute_name: str
 
-    # The type of the model. Currently: fasttext, fineweb, vllm, or None.
+    # The type of the model. Check AutoClasssifier for the available models.
     model_type: str | None = None
     output_path: str | None = None
 
@@ -66,9 +67,9 @@ class InferenceConfig:
     classifier_kwargs: dict = field(default_factory=dict)
 
     # Whether to use the autoscaling actor pool
-    use_autoscaling_actor_pool: bool = False
-
-    classifier_actor_options: dict = field(default_factory=dict)
+    autoscaling_actor_pool_config: AutoscalingActorPoolConfig = field(
+        default_factory=lambda: DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG
+    )
 
     # Dataset schema configuration (input/output columns)
     dataset_schema: DatasetSchemaConfig = field(default_factory=DatasetSchemaConfig)
