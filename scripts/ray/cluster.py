@@ -351,6 +351,16 @@ def submit_job(ctx, entrypoint, working_dir, runtime_env):
         print(f"Job submitted with ID: {job_id}")
 
 
+@cli.command("stop-job")
+@click.argument("job_id")
+@click.pass_context
+def stop_job(ctx, job_id):
+    """Stop a running Ray job."""
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+        ray.stop_job(job_id)
+        print(f"Job {job_id} stop requested")
+
+
 # Clean commands
 @cli.command("clean-tpu-processes")
 @click.option("--tpu-type", default="v4-8", help="TPU type (default: v4-8)")
