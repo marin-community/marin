@@ -19,18 +19,6 @@ the attributes.  Handles two cases:
 - Quality filtering produces attributes (e.g., fasttext-quality) with labels
   (e.g., __label__hq), filter on threshold.
 - Deduplication produces attributes (e.g., duplicate_text).  Remove duplicates.
-
-NOTE(chris): Remove the usage of read_dataset and write_dataset.
-Right now, this code utilizes read_dataset and write_dataset but this is
-probably not needed because we could theoretically stream the data in as well.
-The reason why we need it currently is for two reasons:
-1. We have attributes in one file and documents in another file. However, we are not
-guaranteed that they are read in the same order. So, our solution is to just
-read in all of the attributes and then map the id of the document to the id of the attribute.
-We can then filter based on the value. However, this means we cannot simply stream the data in
-since we have to store the mapping of id -> attributes.
-2. We use some of the builtin Huggingface Dataset .map and .filter functions which may not work with
-the streaming data paradigm (it might but not sure).
 """
 
 import logging
@@ -42,8 +30,6 @@ from typing import Any
 import draccus
 import numpy as np
 import ray
-import pandas as pd
-import datasets
 
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import (
@@ -51,6 +37,7 @@ from marin.utils import (
     fsspec_glob,
     rebase_file_path,
 )
+from marin.processing.classification.dataset_utils import read_dataset, write_dataset
 
 FILTER_TYPE_CLASSIFY = "classify"
 FILTER_TYPE_REMOVE_SPANS = "remove_spans"
@@ -114,47 +101,6 @@ CORPUS_TYPE_TO_ID_GUIDE = {
     "dolma": {"key": "id"},  # Direct key access
     "dclm": {"key": "metadata", "nested": {"key": "WARC-Record-ID"}},  # Nested dictionary access
 }
-
-
-def read_dataset(input_filename: str, columns: list[str] | None = None):
-    """Read in a data source and return as a Huggingface Dataset
-
-    Args:
-        input_filename: str
-            The path to the input file. Currently supports .jsonl.gz and .parquet
-
-    Returns:
-        datasets.Dataset: A Huggingface Dataset in-memory without using the disk
-    """
-    datasets.disable_caching()  # Disabling caching or else it spills to disk to cache
-    datasets.logging.set_verbosity_warning()
-    # We use pandas to read in the file so that we don't have to materialize
-    # the entire dataset in disk since we have limited disk space.
-    # Huggingface datasets loads the dataset into disk first and mmaps.
-    if input_filename.endswith(".jsonl.gz"):
-        df = pd.read_json(input_filename, compression="gzip", lines=True)
-    elif input_filename.endswith(".jsonl.zst"):
-        df = pd.read_json(input_filename, compression="zstd", lines=True)
-    elif input_filename.endswith(".parquet"):
-        df = pd.read_parquet(input_filename, columns=columns)
-    else:
-        raise ValueError(f"Unsupported filetype: {input_filename}")
-
-    return datasets.Dataset.from_pandas(df)
-
-
-def write_dataset(dataset, output_filename: str):
-    """Writes a Huggingface Dataset to a file (remote or local)"""
-    if output_filename.endswith(".jsonl.gz"):
-        dataset.to_json(output_filename, compression="gzip")
-    elif output_filename.endswith(".jsonl.zst"):
-        df_pandas = dataset.to_pandas()
-        df_pandas.to_json(output_filename, orient="records", compression="zstd", lines=True)
-        # dataset.to_json(output_filename, to_json_kwargs={"compression": "zstd", "lines": True})
-    elif output_filename.endswith(".parquet"):
-        dataset.to_parquet(output_filename)
-    else:
-        raise ValueError(f"Unsupported filetype: {output_filename}")
 
 
 def remove_spans(text: str, spans: list[list[int]]) -> str:
