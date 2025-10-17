@@ -405,8 +405,11 @@ def sync_to_remote(target_host: str, local_path: os.PathLike = ".") -> None:
             "-az",
             "--delete",
             "--progress",
+            "--exclude=.git",
+            "--exclude=.venv",
             "--files-from",
             files_from_path,
+            "-r",  # Explicitly activate recursion -- disabled by --files-from
             f"{local_path}/",
             f"{target_host}:marin/",
         ]
@@ -455,7 +458,7 @@ def hold_tpu_allocation(
     config_obj = yaml.safe_load(open(config_file).read())
     zone = config_obj["provider"]["availability_zone"]
 
-    from src.marin.cluster.ray import DashboardConfig
+    from marin.cluster.ray import DashboardConfig
 
     with ray_utils.ray_dashboard(DashboardConfig.from_cluster(config_file, ray_init=True)):
         try:
