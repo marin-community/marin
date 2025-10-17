@@ -36,6 +36,7 @@ import click
 import yaml
 
 from marin.cluster import cleanup, gcp, monitoring, ray
+from marin.cluster.cleanup import cleanup_iteration, submit_cleanup_cron_job
 from marin.cluster.config import (
     RayClusterConfig,
     find_config_by_region,
@@ -137,6 +138,12 @@ def start_cluster(ctx):
     print(f"Starting cluster {config_obj.cluster_name}...")
     subprocess.run(["ray", "up", "-y", config_path], check=True)
 
+    # Auto-start cleanup cron
+    print("Starting automated cleanup cron...")
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
+        job_id = submit_cleanup_cron_job(config_obj.project_id, config_obj.zone, interval=600)
+        print(f"Cleanup cron job started: {job_id}")
+
 
 @cli.command("stop-cluster")
 @click.pass_context
@@ -185,19 +192,10 @@ def restart_cluster(ctx, preserve_jobs):
         sys.exit(1)
 
     print(f"Restarting cluster {config_obj.cluster_name}...")
+    backup_dir = tempfile.TemporaryDirectory()
 
-    if not preserve_jobs:
-        print("Stopping cluster...")
-        _stop_cluster_internal(config_obj, config_path)
-
-        print("Starting cluster...")
-        subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
-        print("Cluster restarted successfully!")
-        return
-
-    # Backup jobs
-    print("Backing up jobs...")
-    with tempfile.TemporaryDirectory() as backup_dir:
+    if preserve_jobs:
+        print("Backing up jobs...")
         try:
             with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
                 ray.backup_jobs(config_path, backup_dir)
@@ -216,17 +214,22 @@ def restart_cluster(ctx, preserve_jobs):
                 return
             print("Proceeding with cluster restart without job preservation.")
 
-        # Restart cluster using proper stop sequence
-        print("Stopping cluster...")
-        _stop_cluster_internal(config_obj, config_path)
+    print("Stopping cluster...")
+    _stop_cluster_internal(config_obj, config_path)
 
-        print("Starting cluster...")
-        subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
+    print("Starting cluster...")
+    subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
 
-        # Restore jobs
+    if preserve_jobs:
         print("Restoring jobs...")
         with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
             ray.restore_jobs(config_path, backup_dir)
+
+    # Auto-start cleanup cron
+    print("Starting automated cleanup cron...")
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
+        job_id = submit_cleanup_cron_job(config_obj.project_id, config_obj.zone, interval=600)
+        print(f"Cleanup cron job started: {job_id}")
 
     print("Cluster restarted successfully!")
 
@@ -390,13 +393,42 @@ def stop_job(ctx, job_id):
 
 
 # Clean commands
-@cli.command("clean-tpu-processes")
-@click.option("--tpu-type", default="v4-8", help="TPU type (default: v4-8)")
+@cli.command("start-cleanup")
+@click.option("--interval", default=600, help="Cleanup check interval in seconds (default: 600)")
 @click.pass_context
-def clean_tpu_processes(ctx, tpu_type):
-    """Kill straggling TPU processes."""
-    cleanup.kill_tpu_processes(tpu_type)
-    print(f"Submitted cleanup job for TPU type {tpu_type}")
+def start_cleanup(ctx, interval):
+    """Start automated cleanup cron job."""
+    config_obj = ctx.obj.config_obj
+    if not config_obj:
+        print("Error: --config required for cleanup commands", file=sys.stderr)
+        sys.exit(1)
+
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+        job_id = submit_cleanup_cron_job(
+            config_obj.project_id,
+            config_obj.zone,
+            interval=interval,
+        )
+        print(f"Cleanup cron job started: {job_id}")
+
+
+@cli.command("run-cleanup")
+@click.option("--dry-run", is_flag=True, help="Show what would be cleaned")
+@click.pass_context
+def run_cleanup(ctx):
+    """Run a single cleanup iteration."""
+    config_obj = ctx.obj.config_obj
+    if not config_obj:
+        print("Error: --config required for cleanup commands", file=sys.stderr)
+        sys.exit(1)
+
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+        print("Running cleanup iteration...")
+        deleted = cleanup_iteration(config_obj.project_id, config_obj.zone, dry_run=True)
+        if deleted:
+            print(f"Deleted {len(deleted)} preempted TPUs: {deleted}")
+        else:
+            print("No preempted TPUs found")
 
 
 @cli.command("clean-preempted-tpus")
