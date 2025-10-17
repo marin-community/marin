@@ -175,11 +175,12 @@ class RolloutWorker:
 
         self._rollout_writer = config.rollout_storage.create_writer()
         self._build_models()
-        self._inference_server = InferenceServer.create(
-            config.inference_server_config,
-            model=self._policy_model,
-            tokenizer=self._tokenizer,
-        )
+        with self.config.trainer.use_device_mesh(), hax.axis_mapping(self.config.trainer.compute_axis_mapping):
+            self._inference_server = InferenceServer.create(
+                config.inference_server_config,
+                model=self._policy_model,
+                tokenizer=self._tokenizer,
+            )
         self._inference_thread = threading.Thread(target=lambda: self._inference_server.serve(), daemon=True)
         self._inference_thread.start()
 

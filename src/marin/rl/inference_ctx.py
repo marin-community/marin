@@ -185,9 +185,6 @@ class InferenceContext:
         response_tokens = self.response_tokens_from_choice(choice)
         response_logprobs = self.logprobs_from_choice(choice)
 
-        # Validation
-        if len(response_tokens) < 5:
-            logger.warning(f"Only {len(response_tokens)} tokens for {env_example_id}")
         if len(prompt_tokens) == 0:
             logger.error(f"Prompt tokenization failed for {env_example_id}")
 
