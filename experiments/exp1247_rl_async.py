@@ -19,8 +19,9 @@ import os
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
+from levanter.compat.hf_checkpoints import HFCompatConfig
 from levanter.distributed import RayConfig
-from levanter.models.llama import LlamaConfig
+from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -48,6 +49,7 @@ class ModelConfig:
     type: str
     tokenizer: str
     checkpoint: str
+    config_class: type[HFCompatConfig]
 
     @property
     def safe_name(self) -> str:
@@ -59,6 +61,7 @@ MODEL = ModelConfig(
     type="qwen",
     tokenizer="Qwen/Qwen3-4B-Instruct-2507",
     checkpoint="Qwen/Qwen3-4B-Instruct-2507",
+    config_class=Qwen3Config,
 )
 
 WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
@@ -142,7 +145,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
 
 def rl_train(name: str) -> ExecutorStep:
     hf_config = AutoConfig.from_pretrained(MODEL.name)
-    config = LlamaConfig.from_hf_config(hf_config)
+    config = MODEL.config_class.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
     model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=MODEL.tokenizer)

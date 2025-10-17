@@ -132,8 +132,9 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
         temperature=1.0,
         service=InferenceEngineConfig(
             max_seqs=16,
-            max_pages_per_seq=32,
+            max_seq_len=config.max_input_length + config.max_output_length,
             page_size=32,
+            max_pages=16 * 32,
             max_seqs_in_prefill=16,
         ),
     )
