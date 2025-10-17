@@ -131,6 +131,10 @@ conflicts = [
         { extra = "tpu" },
         { extra = "cpu" },
     ],
+    [
+        { extra = "eval" },
+        { extra = "quality_dedup_consolidate" },
+    ]
 ]
 
 [tool.uv.sources]
@@ -269,14 +273,8 @@ post_training = [
     "swebench ; sys_platform != 'darwin'",
 ]
 
-data_browser = ["zstandard==0.23.0"]
-
 eval = [
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
-]
-
-pm = [
-  "PyGithub>=2.3.0"
+    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
 
 
