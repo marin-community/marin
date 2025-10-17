@@ -34,7 +34,7 @@ from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import executor_main, ExecutorStep, output_path_of
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import mixture_for_evaluation, TokenizerStep
-from src.marin.download.uncheatable_eval.download import make_uncheatable_eval_step
+from marin.download.uncheatable_eval.download import make_uncheatable_eval_step
 from experiments.defaults import default_tokenize
 from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
 from experiments.models import ModelConfig as HFModelConfig, download_model_step

@@ -33,8 +33,8 @@ from pathlib import Path
 
 import click
 
-from src.marin.cluster import cleanup, gcp, monitoring, ray
-from src.marin.cluster.config import (
+from marin.cluster import cleanup, gcp, monitoring, ray
+from marin.cluster.config import (
     RayClusterConfig,
     find_config_by_region,
     list_available_configs,
