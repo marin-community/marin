@@ -20,6 +20,8 @@ using HfFileSystem for direct streaming of data transfer.
 
 import logging
 import os
+import time
+import random
 
 import fsspec
 import ray
@@ -50,6 +52,9 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
 def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: str, fsspec_file_path: str):
     """Ray task to stream a file from HfFileSystem to another fsspec path."""
     target_fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
+    # Use larger chunk size for large files, such as 32B models
+    chunk_size = 16 * 1024 * 1024
+    max_retries = 10
 
     # Tuning knobs (env-overridable)
     timeout = int(os.environ.get("HF_TIMEOUT_SEC", "600"))

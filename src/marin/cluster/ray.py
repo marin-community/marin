@@ -656,6 +656,18 @@ def submit_job(
             os.unlink(runtime_env_file)
 
 
+def stop_job(job_id: str) -> None:
+    """Stop a running Ray job.
+
+    Note: This requires RAY_ADDRESS to be set, typically via ray_dashboard context manager.
+
+    Args:
+        job_id: The job ID or submission ID to stop
+    """
+    cmd = ["ray", "job", "stop", job_id]
+    run_ray_command(cmd, timeout=60, capture_output=False)
+
+
 def download_working_directory(
     cluster_config: str, job_id: str, working_dir: str, remote_working_dir: str, local_path: str
 ) -> str:

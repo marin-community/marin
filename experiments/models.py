@@ -93,7 +93,14 @@ gemma_3_27b = download_model_step(
     )
 )
 
-llama_7b = download_model_step(
+qwen2_5_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-32B",
+        hf_revision="1818d35",
+    )
+)
+
+qwen2_5_72b_instruct = download_model_step(
     ModelConfig(
         hf_repo_id="huggyllama/llama-7b",
         hf_revision="4782ad2",
@@ -165,8 +172,22 @@ llama_3_1_405b = download_model_step(
 
 llama_3_3_70b_instruct = download_model_step(
     ModelConfig(
-        hf_repo_id="meta-llama/Llama-3.3-70B-Instruct",
-        hf_revision="6f6073b",
+        hf_repo_id="allenai/OLMo-2-1124-7B",
+        hf_revision="7df9a82",
+    )
+)
+
+olmo_2_base_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/OLMo-2-0325-32B",
+        hf_revision="stage2-ingredient2-step9000-tokens76B",
+    )
+)
+
+amber_base_7b = download_model_step(
+    ModelConfig(
+        hf_repo_id="LLM360/Amber",
+        hf_revision="83c188f",
     )
 )
 
@@ -336,6 +357,13 @@ qwen3_8b = download_model_step(
     )
 )
 
+qwen3_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-32B",
+        hf_revision="9216db5",
+    )
+)
+
 qwen3_0_6b_base = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-0.6B-Base",
@@ -361,5 +389,12 @@ qwen3_8b_base = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-8B-Base",
         hf_revision="49e3418",
+    )
+)
+
+qwen3_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-32B",
+        hf_revision="9216db5781bf21249d130ec9da846c4624c16137",
     )
 )
