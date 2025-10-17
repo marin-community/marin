@@ -22,6 +22,8 @@ This document provides a starting point for using coding agents (AI or human) in
   * you can provide useful intermediate context and reraise
   * you are actively handling the exception yourself and changing behavior.
 
+- Put all imports at the top of the file. Do not use local imports (imports inside functions) unless there is a specific technical reason (e.g., avoiding circular dependencies, optional dependencies).
+
 - You prefer top-level functions vs methods when writing code that doesn't actively mutate state - aka functional style.
 - Use classes and methods when appropriate to hide data
 - Prefer top-level Python functions & fixtures for tests.
