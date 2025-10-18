@@ -62,3 +62,12 @@ llama_1_4b_all_norm = LlamaConfig(
     hybrid_norm=True,
     use_qk_norm=True,
 )
+
+def main():
+    if os.getenv("CI", None) is not None:
+        logger.info("Skipping experiment execution on CI environment, needs HF access.")
+        return
+
+
+if __name__ == "__main__":
+    main()
