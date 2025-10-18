@@ -72,17 +72,6 @@ llama_150m = LlamaConfig(
     num_layers=6,
 )
 
-
-llama_150m_hybrid_norm = LlamaConfig(
-    seq_len=1024,
-    hidden_dim=512,
-    intermediate_dim=1792,
-    num_heads=8,
-    num_kv_heads=8,
-    num_layers=6,
-    hybrid_norm=True,
-)
-
 llama_300m = LlamaConfig(
     seq_len=1024,
     hidden_dim=768,
@@ -91,7 +80,6 @@ llama_300m = LlamaConfig(
     num_kv_heads=12,
     num_layers=12,
 )
-
 
 llama_600m = LlamaConfig(
     seq_len=1024,
@@ -102,7 +90,6 @@ llama_600m = LlamaConfig(
     num_layers=24,
 )
 
-
 llama_1_4b = LlamaConfig(
     seq_len=4096,
     hidden_dim=2048,
@@ -111,7 +98,6 @@ llama_1_4b = LlamaConfig(
     num_kv_heads=8,
     num_layers=16,
 )
-
 
 llama_1_9b = LlamaConfig(
     seq_len=4096,
