@@ -24,7 +24,7 @@ dependencies = [
     "google-cloud-storage-transfer",
     "jax==0.6.2",
     "haliax>=1.4.dev443",
-    "levanter[serve] @ git+https://github.com/marin-community/levanter.git@db7f474290b98f23d225e2513437e67cd149aa7f",
+    "levanter[serve] @ git+https://github.com/marin-community/levanter.git@c30de5b9ad706da1ddb5e95cf82ed767692f7f7c",
     "lz4",
     "multiprocess==0.70.16",
     "numpy",
