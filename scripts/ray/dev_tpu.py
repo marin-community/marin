@@ -451,17 +451,12 @@ def hold_tpu_allocation(
     config_file: str,
     sync_path: str = ".",
     tpu_type: str = "v4-8",
-    duration_minutes: int = 480,
 ) -> Generator[dict[str, str], None, None]:
     """Context manager that holds a TPU allocation until the context exits.
 
     Uses a Ray actor to manage the TPU allocation lifecycle.
     """
     logger.info(f"{tpu_name}: Beginning TPU allocation")
-
-    actor = None
-    config_obj = yaml.safe_load(open(config_file).read())
-    zone = config_obj["provider"]["availability_zone"]
 
     from marin.cluster.ray import DashboardConfig
 
@@ -557,9 +552,8 @@ def cli(ctx, config, cluster, tpu_name, verbose):
 @click.option("--tpu-type", help="TPU type")
 @click.option("--sync-path", default=".", help="Local path to sync")
 @click.option("--username", help="Username to use for ssh", default=getpass.getuser())
-@click.option("--duration", default=480, help="Allocation duration in minutes")
 @click.pass_context
-def allocate(ctx, tpu_type, sync_path, username, duration):
+def allocate(ctx, tpu_type, sync_path, username):
     """Allocate a development TPU. Holds until Ctrl-C."""
     if not ctx.obj.config_file:
         print("Error: --config required", file=sys.stderr)
@@ -582,9 +576,8 @@ def allocate(ctx, tpu_type, sync_path, username, duration):
 
     print(f"Allocating development TPU '{tpu_name}' for {username}...")
     print(f"TPU type: {tpu_type}")
-    print(f"Duration: {duration} minutes")
 
-    with hold_tpu_allocation(username, tpu_name, ctx.obj.config_file, sync_path, tpu_type, duration):
+    with hold_tpu_allocation(username, tpu_name, ctx.obj.config_file, sync_path, tpu_type):
         print("\nTPU allocation is active. Press Ctrl-C to release...")
         try:
             while True:
