@@ -64,7 +64,12 @@ class LlamaConfig(HFCompatConfig):
     initializer_range: float = 0.02
     layer_norm_epsilon: float = 1e-5
     tie_word_embeddings: bool = False
-    hybrid_norm: bool = False
+    hybrid_norm: bool = (
+        False  # if set to True, this will add an additional layer norm after the attention and MLP layers
+    )
+    use_qk_norm: bool = (
+        False  # if set to True, this will add an additional layer norm after the key and query projections
+    )
     input_embedding_norm: bool = False
 
     # Attention-related config
@@ -135,9 +140,9 @@ class LlamaConfig(HFCompatConfig):
             ValueError: If hybrid_norm or input_embedding_norm are enabled, as these features
                 are not supported in the HuggingFace config format.
         """
-        if self.hybrid_norm or self.input_embedding_norm:
+        if self.hybrid_norm or self.input_embedding_norm or self.use_qk_norm:
             raise ValueError(
-                "Cannot export to HuggingFace format with hybrid_norm or input_embedding_norm enabled. "
+                "Cannot export to HuggingFace format with hybrid_norm, input_embedding_norm, or use_qk_norm enabled. "
                 "These features are not supported in the HuggingFace config format. "
                 "Please disable these features before exporting."
             )
@@ -232,6 +237,7 @@ class LlamaConfig(HFCompatConfig):
             attn_backend=self.attn_backend,
             flash_attention_block_size=self.flash_attention_block_size,
             rope=self.rope,
+            qk_norm=self.norm_config if self.use_qk_norm else None,
         )
 
     @property
