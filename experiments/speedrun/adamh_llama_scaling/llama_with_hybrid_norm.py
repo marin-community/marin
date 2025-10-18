@@ -18,7 +18,7 @@ These models can't be converted to huggingface models due to the use of hybrid n
 """
 
 from levanter.models.llama import LlamaConfig
-
+import os
 llama_150m_all_norm = LlamaConfig(
     seq_len=1024,
     hidden_dim=512,
@@ -63,9 +63,9 @@ llama_1_4b_all_norm = LlamaConfig(
     use_qk_norm=True,
 )
 
+
 def main():
     if os.getenv("CI", None) is not None:
-        logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
 
