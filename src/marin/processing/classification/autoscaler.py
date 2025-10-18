@@ -18,37 +18,12 @@ import time
 import ray
 from threading import Thread, Lock
 from multiprocessing import Event
-from dataclasses import dataclass
 from ray.exceptions import RayActorError
 from ray.util.queue import Queue
 
 from marin.processing.classification.classifier import BaseClassifier
 
 logger = logging.getLogger("ray")
-
-
-@dataclass
-class AutoscalingActorPoolConfig:
-    """Config for the autoscaling actor pool."""
-
-    min_actors: int
-    max_actors: int
-    scale_up_threshold: float
-    scale_down_threshold: float
-    scale_check_interval: float
-    actor_kwargs: dict | None
-    actor_options: dict | None
-
-
-DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG = AutoscalingActorPoolConfig(
-    min_actors=1,
-    max_actors=1,  # No autoscaling since min=max
-    scale_up_threshold=0.8,
-    scale_down_threshold=0.2,
-    scale_check_interval=1.0,
-    actor_kwargs={},
-    actor_options={},
-)
 
 
 class AutoscalingActorPool:
@@ -66,7 +41,13 @@ class AutoscalingActorPool:
         model_type: str,
         task_queue: Queue,
         result_queue: Queue,
-        autoscaler_config: AutoscalingActorPoolConfig,
+        min_actors: int = 1,
+        max_actors: int = 32,
+        scale_up_threshold: float = 0.8,
+        scale_down_threshold: float = 0.2,
+        scale_check_interval: float = 2,
+        actor_kwargs: dict | None = None,
+        actor_options: dict | None = None,
     ):
         """
         The autoscaling actor pool is repsonsible for creating, managing and scaling actors to handle tasks.
@@ -106,12 +87,12 @@ class AutoscalingActorPool:
         self.model_name_or_path = model_name_or_path
         self.attribute_name = attribute_name
         self.model_type = model_type
-        self.min_actors = autoscaler_config.min_actors
-        self.max_actors = autoscaler_config.max_actors
-        self.scale_up_threshold = autoscaler_config.scale_up_threshold
-        self.scale_down_threshold = autoscaler_config.scale_down_threshold
-        self.scale_check_interval = autoscaler_config.scale_check_interval
-        self.actor_kwargs = autoscaler_config.actor_kwargs or {}
+        self.min_actors = min_actors
+        self.max_actors = max_actors
+        self.scale_up_threshold = scale_up_threshold
+        self.scale_down_threshold = scale_down_threshold
+        self.scale_check_interval = scale_check_interval
+        self.actor_kwargs = actor_kwargs or {}
         self.task_queue = task_queue
         self.result_queue = result_queue
 
@@ -120,7 +101,7 @@ class AutoscalingActorPool:
         self.actor_futures = {}  # Track ongoing tasks per actor
         self.future_to_actor = {}
         self.future_to_task = {}
-        self.actor_options = autoscaler_config.actor_options or {}
+        self.actor_options = actor_options or {}
 
         self.actor_task_metadata_lock = Lock()
         """Lock to protect the actor and task metadata mappings
