@@ -26,8 +26,10 @@ from haliax.tree_util import scan_aware_tree_map
 
 try:
     import safetensors
+    import safetensors.numpy as safetensors_numpy
 except ImportError:
     safetensors = None
+    safetensors_numpy = None
 
 
 StateDict = dict[str, Any]
@@ -436,7 +438,9 @@ def save_state_dict(state_dict: StateDict, path):
     state_dict = {k: v for k, v in state_dict.items() if v is not None}
     if jax.process_index() == 0:
         # the "pt" is a lie but it doesn't seem to actually matter and HF demands it
-        safetensors.numpy.save_file(state_dict, path, metadata={"format": "pt"})
+        if safetensors_numpy is None:
+            raise ImportError("safetensors_numpy is not installed")
+        safetensors_numpy.save_file(state_dict, path, metadata={"format": "pt"})
     global _GLOBAL_SAVE_COUNT
     sync_global_devices(f"save_state_dict {_GLOBAL_SAVE_COUNT}")
     _GLOBAL_SAVE_COUNT += 1
@@ -447,5 +451,7 @@ def load_state_dict(path):
     Load a model's state dict from a file, bringing all tensors to the CPU first and then converting to numpy.
     This will load using safetensors format
     """
-    state_dict = safetensors.numpy.load_file(path)
+    if safetensors_numpy is None:
+        raise ImportError("safetensors_numpy is not installed")
+    state_dict = safetensors_numpy.load_file(path)
     return state_dict
