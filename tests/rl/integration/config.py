@@ -258,7 +258,11 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
         trainer=create_nano_trainer_config(output_dir),
         tokenizer=DummyTokenizer(),
         service=InferenceEngineConfig(
-            max_seqs=8, page_size=8, max_pages_per_seq=32, max_queued_tokens=8, enable_logprobs=True
+            max_seqs=8,
+            page_size=8,
+            max_queued_tokens=8,
+            enable_logprobs=True,
+            max_pages=8 * 32,
         ),
         temperature=1.0,
         port=find_open_port(),
@@ -381,11 +385,14 @@ def run_inference_with_engine(
 
     config = InferenceEngineConfig(
         max_seqs=len(prompts),
-        page_size=128,
-        max_pages_per_seq=8,
+        max_seq_len=max_tokens,
+        page_size=32,
+        max_pages=8 * len(prompts) * max(1, max_tokens // 32),
         compute_dtype=jnp.bfloat16,
         enable_logprobs=enable_logprobs,
     )
+
+    print("Creating inference engine with config:", config)
 
     engine = InferenceEngine.from_model_with_config(
         model=model,

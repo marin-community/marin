@@ -19,8 +19,10 @@ import os
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
+from levanter.compat.hf_checkpoints import HFCompatConfig
 from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
+from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -41,16 +43,38 @@ from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 
 logger = logging.getLogger(__name__)
 
-MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
-# MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-# MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-# MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
-MODEL_TYPE = "llama"
-WANDB_PROJECT = f"rl_testing_{MODEL_NAME.split('/')[-1].lower()}"
-MODEL_TOKENIZER = MODEL_NAME
-MODEL_CHECKPOINT = MODEL_NAME
-MAX_TOKENS = 256
-RUN_ID = f"test-{MODEL_NAME.split('/')[-1]}-curriculum"
+
+@dataclasses.dataclass
+class ModelConfig:
+    name: str
+    type: str
+    tokenizer: str
+    checkpoint: str
+    config_class: type[HFCompatConfig]
+
+    @property
+    def safe_name(self) -> str:
+        return self.name.replace("/", "-").lower()
+
+
+qwen4b = ModelConfig(
+    name="Qwen/Qwen3-4B-Instruct-2507",
+    type="qwen",
+    tokenizer="Qwen/Qwen3-4B-Instruct-2507",
+    checkpoint="Qwen/Qwen3-4B-Instruct-2507",
+    config_class=Qwen3Config,
+)
+llama1b = ModelConfig(
+    name="meta-llama/Llama-3.2-1B-Instruct",
+    type="llama",
+    tokenizer="meta-llama/Llama-3.2-1B-Instruct",
+    checkpoint="meta-llama/Llama-3.2-1B-Instruct",
+    config_class=LlamaConfig,
+)
+MODEL = llama1b
+WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
+MAX_TOKENS = 512
+RUN_ID = f"test-{MODEL.name.split('/')[-1]}-curriculum"
 
 
 def stop_tokens(tokenizer_name: str):
@@ -69,7 +93,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
         n_prompts=8,
         n_generations_per_prompt=8,
         max_tokens=MAX_TOKENS,
-        stop_tokens=stop_tokens(MODEL_TOKENIZER),
+        stop_tokens=stop_tokens(MODEL.tokenizer),
     )
 
     lessons = {
@@ -109,6 +133,15 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
             dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
             sampling_params=default_sampling,
         ),
+        "math_full": LessonConfig(
+            lesson_id="math_full",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.math_env.MathEnv",
+                env_args={},
+            ),
+            dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+            sampling_params=default_sampling,
+        ),
     }
 
     return CurriculumConfig(
@@ -119,11 +152,11 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
 
 
 def rl_train(name: str) -> ExecutorStep:
-    hf_config = AutoConfig.from_pretrained(MODEL_NAME)
-    config = LlamaConfig.from_hf_config(hf_config)
+    hf_config = AutoConfig.from_pretrained(MODEL.name)
+    config = MODEL.config_class.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=MODEL_TOKENIZER)
+    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=MODEL.tokenizer)
 
     _ = WandbConfig
 
@@ -132,7 +165,7 @@ def rl_train(name: str) -> ExecutorStep:
         tracker=WandbConfig(
             project="rl-mockenv-testing",
             name=name,
-            tags=["rl", "math", MODEL_NAME.split("/")[-1]],
+            tags=["rl", "math", MODEL.name.split("/")[-1]],
         ),
         # tracker=TensorboardConfig(
         #     logdir=OutputName("tblogs"),
@@ -192,8 +225,8 @@ def rl_train(name: str) -> ExecutorStep:
             ),
         ),
         curriculum=curriculum_config,
-        tokenizer=MODEL_TOKENIZER,
-        initial_checkpoint=MODEL_NAME,
+        tokenizer=MODEL.tokenizer,
+        initial_checkpoint=MODEL.checkpoint,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         run_id=name,
@@ -223,7 +256,7 @@ def main():
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     experiments = [
-        rl_train(name=f"llama-1b-math-rl-test-power-{datestamp}"),
+        rl_train(name=f"{MODEL.safe_name}-math-rl-test-power-{datestamp}"),
     ]
 
     executor_main(
