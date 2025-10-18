@@ -121,8 +121,9 @@ def llama_small_inference_server_config(output_dir: str) -> InferenceServerConfi
         temperature=1.0,
         service=InferenceEngineConfig(
             max_seqs=8,
-            max_pages_per_seq=32,
+            max_seq_len=MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS,
             page_size=128,
+            max_pages=8 * 32,
             max_seqs_in_prefill=4,
         ),
     )
