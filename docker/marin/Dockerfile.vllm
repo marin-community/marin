@@ -27,8 +27,13 @@ RUN curl -sSL https://sdk.cloud.google.com > /tmp/gcl && \
     bash /tmp/gcl --install-dir=/root/gcloud --disable-prompts \
     && chown -R $(whoami) /root/gcloud
 
+# Install uv and use system Python similar to the Marin cluster image
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH=$PATH:/root/.local/bin
+ENV UV_SYSTEM_PYTHON=1
+
 # Install core dependencies
-RUN pip install --no-cache-dir draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1500 haliax==1.4.dev381 lm-eval https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
+RUN uv pip install --system --no-cache-dir draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1500 haliax==1.4.dev381 lm-eval https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
 
 COPY docker/marin/vllm-vmem-oom.patch .
 RUN patch -p0 -d /workspace/vllm < vllm-vmem-oom.patch
