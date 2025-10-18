@@ -32,6 +32,7 @@ from ray.runtime_env import RuntimeEnv
 from transformers import AutoConfig, AutoTokenizer
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.inference.engine import InferenceEngineConfig
+from levanter.infra.ray_tpu import run_on_pod_ray
 
 from marin.resources import TpuPodConfig
 from marin.training.training import _add_run_env_variables
@@ -82,7 +83,6 @@ class EnvironmentEvalConfig:
     """TPU type to use for evaluation."""
 
 
-@ray.remote(max_retries=3)
 def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     """Run environment evaluation."""
 
@@ -143,11 +143,11 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     tokenizer = AutoTokenizer.from_pretrained(config.model_checkpoint)
 
     @ray.remote(**rollout_kwargs)
-    def inference_worker_task():
+    def inference_worker_task_inner():
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
 
-            # Initialize Levanter
+            # Initialize Levanter - this creates the concrete mesh from the abstract one
             env_name = config.env_config.env_class.split(".")[-1]
             trainer_config.id = f"eval-rollout-{env_name}"
             levanter.initialize(trainer_config)
@@ -172,7 +172,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
                 checkpoint=config.model_checkpoint,
                 model_config=model_config,
                 trainer_config=trainer_config,
-                mesh=trainer_config.device_mesh,
+                mesh=trainer_config.device_mesh,  # Now this is concrete after levanter.initialize
                 # use the compute axis mapping for inference
                 axis_mapping=trainer_config.compute_axis_mapping,
                 vocab_axis=Vocab,
@@ -197,6 +197,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
                 stop_tokens=config.stop_tokens,
             )
 
+            # Enter mesh context for sampling, like RolloutWorker does in _sample_batch
             with (
                 trainer_config.device_mesh,
                 hax.axis_mapping(trainer_config.compute_axis_mapping),
@@ -233,7 +234,15 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
 
             return metrics
 
-    inference_task = inference_worker_task.remote()
+    # Use run_on_pod_ray like RLJob does to handle TPU allocation properly
+    # Note: Use num_slices=1 for evaluation (single model inference, not distributed training)
+    inference_task = run_on_pod_ray.remote(
+        inference_worker_task_inner,
+        config.tpu_type,
+        num_slices=1,
+        max_retries_failure=3,
+        max_retries_preemption=10,
+    )
     # Wait for the task to complete and return the actual results
     return ray.get(inference_task)
 
