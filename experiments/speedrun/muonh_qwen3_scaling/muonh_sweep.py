@@ -18,7 +18,7 @@ configs mirroring those in marin/experiments/speedrun/muonh_llama_scaling/muonh_
 """
 
 import logging
-
+import os
 from levanter.models.qwen import Qwen3Config
 from levanter.models.llama import LlamaConfig
 from levanter.optim import MuonHConfig
@@ -201,7 +201,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     return run_name, cfg
 
 
-if __name__ == "__main__":
+def main():
     if os.getenv("CI", None) is not None:
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
@@ -219,3 +219,7 @@ if __name__ == "__main__":
         steps.extend(default_speedrun(name, cfg))
 
     executor_main(steps=steps, description="Qwen3 Muon speedruns (Chinchilla-optimal tokens, w/ QK-Norm)")
+
+
+if __name__ == "__main__":
+    main()

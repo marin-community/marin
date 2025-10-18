@@ -16,7 +16,7 @@
 
 import dataclasses
 import logging
-
+import os
 from levanter.optim import AdamHConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
@@ -174,7 +174,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     return run_name, cfg
 
 
-if __name__ == "__main__":
+def main():
     if os.getenv("CI", None) is not None:
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
@@ -192,3 +192,7 @@ if __name__ == "__main__":
         steps.extend(default_speedrun(name, cfg))
 
     executor_main(steps=steps, description="AdamH speedruns (Chinchilla optimal)")
+
+
+if __name__ == "__main__":
+    main()
