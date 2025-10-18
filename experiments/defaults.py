@@ -595,6 +595,7 @@ def _prepare_data_config(
         validation_sets = {}
 
     if isinstance(tokenized, InputName | ExecutorStep):
+        raise NotImplementedError
         pretraining_data = lm_data_config(
             training_set=tokenized,
             validation_sets=validation_sets,

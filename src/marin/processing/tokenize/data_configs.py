@@ -376,7 +376,7 @@ def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LMMixtureDatasetC
     return lm_mixture_data_config(
         {name: step for name, step in inputs.items()},
         {name: 0.0 for name in inputs},
-        permutation_type="linear",
+        permutation_type="feistel",
         shuffle=False,
         missing_weights_are_validation=True,
     )
