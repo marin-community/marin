@@ -13,17 +13,8 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+
 from marin.core.runtime import TaskConfig
-from marin.processing.classification.autoscaler import DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG, AutoscalingActorPoolConfig
-
-
-@dataclass(frozen=True)
-class DatasetSchemaConfig:
-    input_columns: list[str] = field(default_factory=lambda: ["text", "id"])
-    output_columns: list[str] = field(default_factory=lambda: ["id", "attributes", "generated_text", "text"])
-
-    id_column: tuple[str, ...] = field(default_factory=lambda: ("id",))
-    """Path (tuple of keys) to the unique identifier in a row, e.g. ("metadata", "id")."""
 
 
 @dataclass
@@ -41,7 +32,7 @@ class InferenceConfig:
     model_name: str
     attribute_name: str
 
-    # The type of the model. Check AutoClasssifier for the available models.
+    # The type of the model. Currently: fasttext, fineweb, or None.
     model_type: str | None = None
     output_path: str | None = None
 
@@ -58,18 +49,4 @@ class InferenceConfig:
     # The filetype of the input data.
     filetype: str = "jsonl.gz"
 
-    # Batch size for processing documents
-    batch_size: int = 512
-
-    # Whether to resume from existing progress
-    resume: bool = True
-
     classifier_kwargs: dict = field(default_factory=dict)
-
-    # Whether to use the autoscaling actor pool
-    autoscaling_actor_pool_config: AutoscalingActorPoolConfig = field(
-        default_factory=lambda: DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG
-    )
-
-    # Dataset schema configuration (input/output columns)
-    dataset_schema: DatasetSchemaConfig = field(default_factory=DatasetSchemaConfig)
