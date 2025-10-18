@@ -4,6 +4,7 @@
 import abc
 import contextlib
 import dataclasses
+import functools
 import json
 import logging
 import os
@@ -13,7 +14,7 @@ import urllib.parse
 import warnings
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Generic, Optional, Tuple, Type, TypeVar, Union, cast
+from typing import Generic, Optional, Tuple, Type, TypeVar, Union, cast, Callable
 
 import draccus
 import equinox as eqx
@@ -22,12 +23,12 @@ import huggingface_hub
 import humanfriendly
 import jax
 import jax.numpy as jnp
+from jax._src.mesh import get_concrete_mesh
 import mergedeep
 import numpy as np
-import safetensors
-import safetensors.numpy
 import transformers.utils.hub
 from fsspec import AbstractFileSystem
+from fsspec.asyn import get_loop, sync as fsspec_sync
 from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 from haliax.jax_utils import is_jax_array_like
 from haliax.state_dict import StateDict
@@ -38,7 +39,7 @@ from jax import ShapeDtypeStruct
 from jax._src.partition_spec import PartitionSpec
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
-from tqdm import tqdm
+from tqdm_loggable.auto import tqdm
 
 import haliax
 from haliax import Axis
@@ -46,15 +47,15 @@ from haliax.partitioning import ResourceMapping
 from haliax.state_dict import from_torch_compatible_state_dict, save_state_dict
 
 from levanter.callbacks import StepInfo
+from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
 from levanter.models.asr_model import ASRMixin
 from levanter.models.lm_model import LmConfig, LmHeadModel
-from levanter.utils import jax_utils
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.hf_utils import HfTokenizer
-from levanter.utils.jax_utils import best_effort_sharding, local_cpu_mesh, use_cpu_device, sync_global_devices
+from levanter.utils.jax_utils import best_effort_sharding, use_cpu_device, sync_global_devices
 from levanter.utils.json_utils import ConfigJSONEncoder
 from levanter.utils.logging import silence_transformer_nag
-from levanter.utils.py_utils import dataclass_with_default_init, logical_cpu_memory_size
+from levanter.utils.py_utils import dataclass_with_default_init
 
 
 silence_transformer_nag()
@@ -189,31 +190,60 @@ KEYS_TO_COPY_FROM_BASE_CONFIG = {
 }
 
 
-def _load_torch(path, dtype):
-    import torch
+def _load_torch(path, dtype, fs: AbstractFileSystem | None = None):
+    import torch  # noqa: F401
 
     device = torch.device("cpu")
-    state_dict = torch.load(path, map_location=device)
+    with contextlib.ExitStack() as stack:
+        load_path = path
+        if fs is not None:
+            protocol = getattr(fs, "protocol", None)
+            if isinstance(protocol, (list, tuple, set)):
+                protocols = protocol
+            else:
+                protocols = (protocol,)
+            if not any(p in ("file", "", None) for p in protocols):
+                tmp = stack.enter_context(tempfile.NamedTemporaryFile())
+                fs.get(path, tmp.name)
+                load_path = tmp.name
+                if not getattr(_load_torch, "_warned_download", False):
+                    warnings.warn("Torch checkpoint loading requires downloading shards locally")
+                    _load_torch._warned_download = True  # type: ignore[attr-defined]
+            else:
+                try:
+                    load_path = fs._strip_protocol(path)  # type: ignore[attr-defined]
+                except AttributeError:
+                    load_path = path
+
+        state_dict = torch.load(load_path, map_location=device)
     d = {}
 
     for k, v in tqdm(state_dict.items(), total=len(state_dict), desc="Loading weights"):
         v = _convert_to_jnp(v, dtype)
         if v is not None:
-            v = _maybe_shard_best_effort(v, dtype)
+            v = _shard_best_effort(v, dtype)
         d[k] = v
 
     return d
 
 
-def _load_safe_tensors(path, dtype):
-    d = {}
-    with safetensors.safe_open(path, framework="jax", device="cpu") as f:
-        keys = list(f.keys())
-        for key in tqdm(keys, total=len(keys), desc="Loading weights"):
-            tensor_slice = f.get_slice(key)
-            d[key] = _maybe_shard_best_effort(tensor_slice, dtype)
+def _load_safe_tensors(path, dtype, fs: AbstractFileSystem | None = None):
+    """Stream a safetensors shard from remote storage and return JAX arrays."""
+    if fs is None:
+        fs, stripped = fsspec.core.url_to_fs(path, asynchronous=True)
+        path = stripped
+    else:
+        try:
+            path = fs._strip_protocol(path)  # type: ignore[attr-defined]
+        except AttributeError:
+            pass
 
-    return d
+    mesh = get_concrete_mesh()
+
+    loop = get_loop()
+    bes = functools.partial(best_effort_sharding, mesh=mesh)
+
+    return fsspec_sync(loop, read_safetensors_fsspec, path, dtype_override=dtype, sharding_fn=bes, fs=fs)
 
 
 # NB: for large models this will be jitted several times (once for each unique subset of keys at least)
@@ -493,15 +523,12 @@ class HFCheckpointConverter(Generic[LevConfig]):
         if ref is None:
             raise ValueError("Must provide a checkpoint to load from")
 
-        # Handle GCS paths directly
-        if isinstance(ref, RepoRef) and ref.model_name_or_path.startswith("gs://"):
-            logger.info("\n\n loading hf from GCS! \n\n")
-            return self._load_from_gcs(ref.model_name_or_path, dtype)
-        elif isinstance(ref, str) and ref.startswith("gs://"):
-            logger.info("\n\n loading hf from GCS! \n\n")
-            return self._load_from_gcs(ref, dtype)
-
         id, rev = self._get_ref(ref)
+
+        if "://" in id:
+            if rev is not None:
+                raise ValueError("Revisions not supported for explicit URLs")
+            return self._load_from_remote(id, dtype)
 
         for index_file in [SAFE_TENSORS_INDEX_NAME, PYTORCH_WEIGHTS_INDEX_NAME]:
             try:
@@ -538,10 +565,10 @@ class HFCheckpointConverter(Generic[LevConfig]):
             with open(index_path, "r", encoding="utf-8") as f:
                 index = json.load(f)
 
-            shard_files = list(set(index["weight_map"].values()))
+            # Keep shard order deterministic across hosts.
+            shard_files = list(dict.fromkeys(index["weight_map"].values()))
             final_state_dict = {}
 
-            # right now we do safe tensors thing
             # where we load into memory then update some dict
             if "safetensors" in index_file:
                 loader = _load_safe_tensors
@@ -559,11 +586,41 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         return final_state_dict
 
-    def _load_from_gcs(self, gcs_path: str, dtype: Optional[jnp.dtype] = None) -> dict:
-        """Load a state dict from a GCS path"""
-        fs: AbstractFileSystem
-        fs, path = fsspec.core.url_to_fs(gcs_path)
+    def _load_from_remote(self, url: str, dtype: Optional[jnp.dtype] = None) -> dict:
+        """Load a state dict from a remote URL understood by fsspec."""
 
+        final_state_dict = {}
+
+        fs: AbstractFileSystem
+        fs, path = fsspec.core.url_to_fs(url)
+
+        shard_files, loader = self._locate_shard_files(fs, path)
+
+        if not shard_files:
+            raise FileNotFoundError(f"No HF-ish checkpoint files found in {url}")
+
+        for shard_file in shard_files:
+            shard_path = os.path.join(path, shard_file)
+            if not fs.exists(shard_path):
+                raise FileNotFoundError(f"Shard file {shard_path} not found")
+
+            if loader is _load_safe_tensors:
+                shard_state_dict = _load_safe_tensors(shard_path, dtype, fs=fs)
+            else:
+                assert loader is not None
+                shard_state_dict = _load_torch(shard_path, dtype, fs=fs)
+
+            final_state_dict.update(shard_state_dict)
+
+        return final_state_dict
+
+    def _locate_shard_files(self, fs: AbstractFileSystem, path) -> tuple[list[str] | None, Callable]:
+        """
+        Locate shard files in a GCS path. Returns a list of shard files and a loader function.
+        """
+
+        shard_files = None
+        loader = None
         # First try to load sharded checkpoint
         for index_file in [SAFE_TENSORS_INDEX_NAME, PYTORCH_WEIGHTS_INDEX_NAME]:
             index_path = os.path.join(path, index_file)
@@ -571,39 +628,30 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 with fs.open(index_path, "r") as f:
                     index = json.load(f)
 
-                shard_files = list(set(index["weight_map"].values()))
-                final_state_dict = {}
+                shard_files = list(dict.fromkeys(index["weight_map"].values()))
 
                 if "safetensors" in index_file:
                     loader = _load_safe_tensors
                 else:
                     loader = _load_torch
 
-                for shard_file in shard_files:
-                    shard_path = os.path.join(path, shard_file)
-                    if not fs.exists(shard_path):
-                        raise FileNotFoundError(f"Shard file {shard_path} not found")
-
-                    # Download shard to temporary file
-                    with tempfile.NamedTemporaryFile() as tmp:
-                        fs.get(shard_path, tmp.name)
-                        shard_state_dict = loader(tmp.name, dtype)
-                        final_state_dict.update(shard_state_dict)
-
-                return final_state_dict
+                break
 
         # If no index file found, try loading single file checkpoint
-        for model_file in [SAFE_TENSORS_MODEL, PYTORCH_MODEL]:
-            model_path = os.path.join(path, model_file)
-            if fs.exists(model_path):
-                with tempfile.NamedTemporaryFile() as tmp:
-                    fs.get(model_path, tmp.name)
-                    if model_file == SAFE_TENSORS_MODEL:
-                        return _load_safe_tensors(tmp.name, dtype)
-                    else:
-                        return _load_torch(tmp.name, dtype)
+        if not shard_files:
+            for model_file in [SAFE_TENSORS_MODEL, PYTORCH_MODEL]:
+                model_path = os.path.join(path, model_file)
+                if fs.exists(model_path):
+                    shard_files = [model_file]
 
-        raise FileNotFoundError(f"No checkpoint files found in {gcs_path}")
+                    if model_file == SAFE_TENSORS_MODEL:
+                        loader = _load_safe_tensors
+                    else:
+                        loader = _load_torch
+
+                    break
+
+        return shard_files, loader  # type: ignore
 
     def load_pretrained(
         self,
@@ -622,7 +670,6 @@ class HFCheckpointConverter(Generic[LevConfig]):
             ref: The reference to load from. If None, will use the reference_checkpoint
             axis_mapping: The axis mapping to use for sharding. If None, will use the context axis mapping
         """
-        from contextlib import ExitStack
 
         hf_config = self.hf_config_from_hf_checkpoint(ref)
         if config is None:
@@ -633,19 +680,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
         tokenizer_Vocab = self.Vocab
         Vocab = tokenizer_Vocab.resize(hf_config.vocab_size)
 
-        contexts = ExitStack()
-
-        # we want to use a CPU if (1) we only have 1 device, or (2) the total amount of accelerator memory is less than
-        # the amount of CPU memory.
-        just_use_cpu = _should_use_cpu_for_checkpoint_loading()
-        if just_use_cpu:
-            # if we only have 1 device, use CPU ram
-            contexts.enter_context(local_cpu_mesh())
-
-        with contexts:
-            # TODO: in an ideal world, we would only load the part of the array we needed, but
-            # AFAICT neither torch state dicts nor safetensors support this.
-            state_dict = self.load_state_dict(ref, dtype)
+        # TODO: in an ideal world, we would only load the part of the array we needed, but
+        # AFAICT neither torch state dicts nor safetensors support this.
+        state_dict = self.load_state_dict(ref, dtype)
 
         ignore_prefix: Optional[str] = None
         if self.ignore_prefix:
@@ -679,20 +716,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
             return lev_model
 
-        if just_use_cpu:
-            with local_cpu_mesh():
-                lev_model = eqx.filter_eval_shape(lm_model_cls.init, Vocab, config, key=PRNGKey(0))
-                lev_model = eqx.filter_jit(load_from_state_dict, donate="all")(lev_model, state_dict)
-
-            del state_dict
-            # gotta move it to the accelerator now (assuming there is one!)
-            lev_model = haliax.shard_with_axis_mapping(lev_model, axis_mapping)
-        else:
-            load_from_state_dict = haliax.named_jit(
-                load_from_state_dict, axis_resources=axis_mapping, out_axis_resources=axis_mapping, donate_args=(True,)
-            )
-            lev_model = eqx.filter_eval_shape(lm_model_cls.init, Vocab, config, key=PRNGKey(0))
-            lev_model = load_from_state_dict(lev_model, state_dict)
+        load_from_state_dict = haliax.named_jit(
+            load_from_state_dict, axis_resources=axis_mapping, out_axis_resources=axis_mapping, donate_args=(True,)
+        )
+        lev_model = eqx.filter_eval_shape(lm_model_cls.init, Vocab, config, key=PRNGKey(0))
+        lev_model = load_from_state_dict(lev_model, state_dict)
 
         return lev_model
 
@@ -1223,22 +1251,9 @@ def _shard_hf_checkpoint(
     return shards, index
 
 
-def _maybe_shard_best_effort(array_or_slice, dtype) -> jax.Array:
-    """Shards an array to non-cpu devices if we have more than one device, otherwise just stays on cpu"""
-    # We do this to not waste memory on the target device if it's not going to help us save memory/io
-    # TODO: This mostly helps with Stacked modules, which we should move away from
-    if jax.device_count() > 1:
-        return _shard_best_effort(array_or_slice, dtype)
-    else:
-        with use_cpu_device():
-            if hasattr(array_or_slice, "get_shape"):
-                # this is a PySafeSlice
-                return jnp.array(array_or_slice[:], dtype=dtype)
-            else:
-                return jnp.array(array_or_slice, dtype=dtype)
-
-
 def _shard_best_effort(array_or_slice, dtype) -> jax.Array:
+    # get_shape is for safetensors, shape is for numpy arrays
+    # (there's no exported type for the safetensors array, so we just duck type)
     if hasattr(array_or_slice, "get_shape"):
         shape = array_or_slice.get_shape()
     else:
@@ -1254,24 +1269,6 @@ def _shard_best_effort(array_or_slice, dtype) -> jax.Array:
         return arr
 
     return jax.make_array_from_callback(tuple(shape), sharding, get_slice)
-
-
-def _should_use_cpu_for_checkpoint_loading():
-    if jax.process_count() > 1:
-        return False
-
-    if jax.device_count() == 1:
-        return True
-
-    cpu_memory = logical_cpu_memory_size()
-    devices = jax.devices()
-    accel_memory = [jax_utils.estimated_free_device_memory(d) for d in devices]
-    if any(m is None for m in accel_memory):
-        return False
-    if sum(accel_memory) < cpu_memory:
-        return True
-
-    return False
 
 
 def _is_hf_hub_model(ref: RepoRef):
