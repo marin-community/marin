@@ -21,17 +21,11 @@ python -m marin.processing.classification.inference \
 """
 
 import logging
-import os
 
 import draccus
 import ray
 from marin.core.runtime import cached_or_construct_output
 from marin.processing.classification.config.inference_config import DatasetSchemaConfig, InferenceConfig
-from marin.utils import (
-    fsspec_glob,
-    fsspec_mkdirs,
-    rebase_file_path,
-)
 from marin.processing.classification.autoscaler import AutoscalingActorPoolConfig
 
 logger = logging.getLogger("ray")
@@ -179,80 +173,80 @@ def process_file_ray(
 @ray.remote(num_cpus=0, resources={"head_node": 0.001})
 def run_inference(inference_config: InferenceConfig):
     logger.info(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
-    filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
+    # filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
 
-    if len(filepaths) == 0:
-        pattern = f"**/*.{inference_config.filetype}"
-        raise FileNotFoundError(f"No files found in {inference_config.input_path} with pattern {pattern}")
+    # if len(filepaths) == 0:
+    #     pattern = f"**/*.{inference_config.filetype}"
+    #     raise FileNotFoundError(f"No files found in {inference_config.input_path} with pattern {pattern}")
 
-    input_path = inference_config.input_path
-    output_path = inference_config.output_path
+    # input_path = inference_config.input_path
+    # output_path = inference_config.output_path
 
-    # Resilient wait/get with per-task retries to tolerate preemptions.
-    max_in_flight = inference_config.task.max_in_flight
-    max_retries_per_file = 100
+    # # Resilient wait/get with per-task retries to tolerate preemptions.
+    # max_in_flight = inference_config.task.max_in_flight
+    # max_retries_per_file = 100
 
-    options_kwargs = {
-        "memory": inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
-    }
+    # options_kwargs = {
+    #     "memory": inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
+    # }
 
-    pending_refs: dict = {}
-    attempt_count: dict[str, int] = {}
+    # pending_refs: dict = {}
+    # attempt_count: dict[str, int] = {}
 
-    def submit(input_fp: str):
-        output_fp = rebase_file_path(input_path, input_fp, output_path)
-        fsspec_mkdirs(os.path.dirname(output_fp))
-        ref = process_file_ray.options(**options_kwargs).remote(
-            input_fp,
-            output_fp,
-            inference_config.model_name,
-            inference_config.attribute_name,
-            inference_config.model_type,
-            inference_config.filetype,
-            inference_config.autoscaling_actor_pool_config,
-            inference_config.dataset_schema,
-            inference_config.batch_size,
-            inference_config.resume,
-        )
-        pending_refs[ref] = input_fp
+    # def submit(input_fp: str):
+    #     output_fp = rebase_file_path(input_path, input_fp, output_path)
+    #     fsspec_mkdirs(os.path.dirname(output_fp))
+    #     ref = process_file_ray.options(**options_kwargs).remote(
+    #         input_fp,
+    #         output_fp,
+    #         inference_config.model_name,
+    #         inference_config.attribute_name,
+    #         inference_config.model_type,
+    #         inference_config.filetype,
+    #         inference_config.autoscaling_actor_pool_config,
+    #         inference_config.dataset_schema,
+    #         inference_config.batch_size,
+    #         inference_config.resume,
+    #     )
+    #     pending_refs[ref] = input_fp
 
-    for input_filepath in filepaths:
-        # Throttle submissions
-        while len(pending_refs) >= max_in_flight:
-            ready_refs, _ = ray.wait(list(pending_refs.keys()), num_returns=1)
-            ready_ref = ready_refs[0]
-            file_for_ref = pending_refs.pop(ready_ref)
-            try:
-                ray.get(ready_ref)
-                logger.info(f"Completed: {file_for_ref}")
-            except Exception as e:
-                # Log and resubmit up to max retries (tolerate spot preemptions)
-                count = attempt_count.get(file_for_ref, 0) + 1
-                attempt_count[file_for_ref] = count
-                logger.warning(f"Task failed for {file_for_ref} (attempt {count}): {e}")
-                if count < max_retries_per_file:
-                    submit(file_for_ref)
-                else:
-                    logger.error(f"Giving up after {count} attempts for {file_for_ref}")
+    # for input_filepath in filepaths:
+    #     # Throttle submissions
+    #     while len(pending_refs) >= max_in_flight:
+    #         ready_refs, _ = ray.wait(list(pending_refs.keys()), num_returns=1)
+    #         ready_ref = ready_refs[0]
+    #         file_for_ref = pending_refs.pop(ready_ref)
+    #         try:
+    #             ray.get(ready_ref)
+    #             logger.info(f"Completed: {file_for_ref}")
+    #         except Exception as e:
+    #             # Log and resubmit up to max retries (tolerate spot preemptions)
+    #             count = attempt_count.get(file_for_ref, 0) + 1
+    #             attempt_count[file_for_ref] = count
+    #             logger.warning(f"Task failed for {file_for_ref} (attempt {count}): {e}")
+    #             if count < max_retries_per_file:
+    #                 submit(file_for_ref)
+    #             else:
+    #                 logger.error(f"Giving up after {count} attempts for {file_for_ref}")
 
-        submit(input_filepath)
+    #     submit(input_filepath)
 
-    # Drain remaining tasks
-    while len(pending_refs) > 0:
-        ready_refs, _ = ray.wait(list(pending_refs.keys()), num_returns=1)
-        ready_ref = ready_refs[0]
-        file_for_ref = pending_refs.pop(ready_ref)
-        try:
-            ray.get(ready_ref)
-            logger.info(f"Completed: {file_for_ref}")
-        except Exception as e:
-            count = attempt_count.get(file_for_ref, 0) + 1
-            attempt_count[file_for_ref] = count
-            logger.warning(f"Task failed for {file_for_ref} (attempt {count}): {e}")
-            if count < max_retries_per_file:
-                submit(file_for_ref)
-            else:
-                logger.error(f"Giving up after {count} attempts for {file_for_ref}")
+    # # Drain remaining tasks
+    # while len(pending_refs) > 0:
+    #     ready_refs, _ = ray.wait(list(pending_refs.keys()), num_returns=1)
+    #     ready_ref = ready_refs[0]
+    #     file_for_ref = pending_refs.pop(ready_ref)
+    #     try:
+    #         ray.get(ready_ref)
+    #         logger.info(f"Completed: {file_for_ref}")
+    #     except Exception as e:
+    #         count = attempt_count.get(file_for_ref, 0) + 1
+    #         attempt_count[file_for_ref] = count
+    #         logger.warning(f"Task failed for {file_for_ref} (attempt {count}): {e}")
+    #         if count < max_retries_per_file:
+    #             submit(file_for_ref)
+    #         else:
+    #             logger.error(f"Giving up after {count} attempts for {file_for_ref}")
 
 
 @draccus.wrap()
