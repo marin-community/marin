@@ -25,20 +25,14 @@ import os
 
 import draccus
 import ray
-from ray.util.queue import Queue
 from marin.core.runtime import cached_or_construct_output
-from marin.processing.classification.classifier import (
-    AutoClassifierRayActor,
-)
 from marin.processing.classification.config.inference_config import DatasetSchemaConfig, InferenceConfig
 from marin.utils import (
     fsspec_glob,
     fsspec_mkdirs,
     rebase_file_path,
 )
-from marin.processing.classification.dataset_utils import read_dataset_streaming, write_dataset_streaming
-from marin.processing.classification.checkpoint_utils import get_finished_ids, get_id_from_row
-from marin.processing.classification.autoscaler import AutoscalingActorPool, AutoscalingActorPoolConfig
+from marin.processing.classification.autoscaler import AutoscalingActorPoolConfig
 
 logger = logging.getLogger("ray")
 
@@ -70,89 +64,89 @@ def process_file_with_quality_classifier_streaming(
     """Process a file with streaming I/O and resumption capability"""
     print(f"[*] Processing {input_filename} to {output_filename}")
 
-    # Check if we should resume from existing progress by loading finished IDs
-    finished_ids = set()
-    if resume:
-        finished_ids = get_finished_ids(output_filename, dataset_schema.id_column)
-        if finished_ids:
-            print(f"[*] Resuming: found {len(finished_ids)} already processed IDs")
-        else:
-            print(f"[*] No existing IDs found in {output_filename}")
+    # # Check if we should resume from existing progress by loading finished IDs
+    # finished_ids = set()
+    # if resume:
+    #     finished_ids = get_finished_ids(output_filename, dataset_schema.id_column)
+    #     if finished_ids:
+    #         print(f"[*] Resuming: found {len(finished_ids)} already processed IDs")
+    #     else:
+    #         print(f"[*] No existing IDs found in {output_filename}")
 
-    # Create streaming iterator
-    row_iterator = read_dataset_streaming(input_filename, dataset_schema.input_columns)
+    # # Create streaming iterator
+    # row_iterator = read_dataset_streaming(input_filename, dataset_schema.input_columns)
 
-    # Initialize for batch processing
-    append_mode = len(finished_ids) > 0
+    # # Initialize for batch processing
+    # append_mode = len(finished_ids) > 0
 
-    # Initialize batch
-    batch = []
-    total_processed = len(finished_ids)
-    total_skipped = 0
+    # # Initialize batch
+    # batch = []
+    # total_processed = len(finished_ids)
+    # total_skipped = 0
 
-    task_queue = Queue()
-    result_queue = Queue()
+    # task_queue = Queue()
+    # result_queue = Queue()
 
-    pool = AutoscalingActorPool(
-        AutoClassifierRayActor,
-        model_name_or_path,
-        attribute_name,
-        model_type,
-        task_queue,
-        result_queue,
-        autoscaler_config=autoscaling_actor_pool_config,
-    )
+    # pool = AutoscalingActorPool(
+    #     AutoClassifierRayActor,
+    #     model_name_or_path,
+    #     attribute_name,
+    #     model_type,
+    #     task_queue,
+    #     result_queue,
+    #     autoscaler_config=autoscaling_actor_pool_config,
+    # )
 
-    num_batches = 0
-    for row in row_iterator:
-        # Skip rows that have already been processed
-        row_id = get_id_from_row(row, dataset_schema.id_column)
-        if row_id is None:
-            logger.warning(f"No ID found in row: {row} for ID path: {dataset_schema.id_column} - skipping")
-            continue
-        if row_id in finished_ids:
-            total_skipped += 1
-            continue
+    # num_batches = 0
+    # for row in row_iterator:
+    #     # Skip rows that have already been processed
+    #     row_id = get_id_from_row(row, dataset_schema.id_column)
+    #     if row_id is None:
+    #         logger.warning(f"No ID found in row: {row} for ID path: {dataset_schema.id_column} - skipping")
+    #         continue
+    #     if row_id in finished_ids:
+    #         total_skipped += 1
+    #         continue
 
-        batch.append(row)
+    #     batch.append(row)
 
-        if len(batch) >= batch_size:
-            # Process batch
-            batch_dict = {}
-            for key in dataset_schema.input_columns:
-                batch_dict[key] = [row.get(key, "") for row in batch]
+    #     if len(batch) >= batch_size:
+    #         # Process batch
+    #         batch_dict = {}
+    #         for key in dataset_schema.input_columns:
+    #             batch_dict[key] = [row.get(key, "") for row in batch]
 
-            num_batches += 1
-            # Apply classifier
-            task_queue.put(batch_dict)
-            batch = []
+    #         num_batches += 1
+    #         # Apply classifier
+    #         task_queue.put(batch_dict)
+    #         batch = []
 
-    # Final batch that might not be of size batch_size
-    if batch:
-        batch_dict = {}
-        for key in dataset_schema.input_columns:
-            batch_dict[key] = [row.get(key, "") for row in batch]
-        num_batches += 1
+    # # Final batch that might not be of size batch_size
+    # if batch:
+    #     batch_dict = {}
+    #     for key in dataset_schema.input_columns:
+    #         batch_dict[key] = [row.get(key, "") for row in batch]
+    #     num_batches += 1
 
-        task_queue.put(batch_dict)
+    #     task_queue.put(batch_dict)
 
-    num_collected_batches = 0
-    while num_collected_batches < num_batches:
-        processed_batch = result_queue.get()
-        num_collected_batches += 1
-        output_rows = convert_batch_dict_to_output_rows(
-            processed_batch, dataset_schema.output_columns, len(processed_batch[dataset_schema.output_columns[0]])
-        )
-        write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
-        total_processed += len(processed_batch)
-        logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
+    # num_collected_batches = 0
+    # while num_collected_batches < num_batches:
+    #     processed_batch = result_queue.get()
+    #     num_collected_batches += 1
+    #     output_rows = convert_batch_dict_to_output_rows(
+    #         processed_batch, dataset_schema.output_columns, len(processed_batch[dataset_schema.output_columns[0]])
+    #     )
+    #     write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
+    #     total_processed += len(processed_batch)
+    #     logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
 
-    pool.shutdown()
+    # pool.shutdown()
 
-    print(
-        f"[*] Completed processing {input_filename} - \
-        Total rows: {total_processed} (skipped {total_skipped} already finished)"
-    )
+    # print(
+    #     f"[*] Completed processing {input_filename} - \
+    #     Total rows: {total_processed} (skipped {total_skipped} already finished)"
+    # )
 
 
 @ray.remote(max_calls=1)
