@@ -17,7 +17,7 @@
           "gradient_checkpointing": true,
           "head_dim": null,
           "hidden_dim": 512,
-          "hybrid_norm": false,
+          "hybrid_norm": true,
           "initializer_range": 0.02,
           "input_embedding_norm": false,
           "intermediate_dim": 1792,

@@ -18,11 +18,16 @@ import dataclasses
 import logging
 
 from levanter.optim import AdamHConfig
-from experiments.llama import llama_150m_all_norm, llama_300m_all_norm, llama_600m_all_norm, llama_1_4b_all_norm
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
+from experiments.speedrun.adamh_llama_scaling.llama_with_hybrid_norm import (
+    llama_150m_all_norm,
+    llama_300m_all_norm,
+    llama_600m_all_norm,
+    llama_1_4b_all_norm,
+)
 
 AUTHOR = Author(name="Kaiyue Wen", affiliation="Stanford University", url="https://whenwen.github.io")
 
