@@ -88,6 +88,82 @@ def test_client(baby_llama_config, loaded_model, inference_server):
         yield client, inference_server
 
 
+@pytest.fixture(scope="module")
+def hf_reference_model_and_tokenizer():
+    """Load the HF reference model used for correctness comparisons."""
+    pytest.importorskip("torch")
+    transformers = pytest.importorskip("transformers")
+
+    model_name = "timinar/baby-llama-58m"
+
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = transformers.AutoModelForCausalLM.from_pretrained(model_name)
+    model.to("cpu")
+    model.eval()
+
+    return model, tokenizer
+
+
+def test_greedy_correctness_against_hf(test_client, hf_reference_model_and_tokenizer):
+    """Ensure deterministic (greedy) Levanter generations match HF reference outputs."""
+    (client, _server) = test_client
+    hf_model, hf_tokenizer = hf_reference_model_and_tokenizer
+    torch = pytest.importorskip("torch")
+
+    prompts = [
+        "Hello, my name is",
+        "The capital of France is",
+        "In a distant future, humanity",
+    ]
+    max_tokens = 10
+    levanter_generations: list[tuple[list[int], str]] = []
+
+    for prompt in prompts:
+        response = client.post(
+            "/v1/completions",
+            json={
+                "model": "timinar/baby-llama-58m",
+                "prompt": prompt,
+                "max_tokens": max_tokens,
+                "temperature": 0.0,
+                "logprobs": True,
+                "seed": 0,
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        choice = payload["choices"][0]
+        logprobs = choice.get("logprobs") or {}
+
+        tokens = logprobs.get("tokens") or []
+        token_ids = hf_tokenizer.convert_tokens_to_ids(tokens)
+        levanter_generations.append((token_ids, choice["text"]))
+
+    for prompt, (levanter_ids, levanter_text) in zip(prompts, levanter_generations, strict=True):
+        inputs = hf_tokenizer(prompt, return_tensors="pt")
+        inputs = {k: v.to(hf_model.device) for k, v in inputs.items()}
+        input_length = inputs["input_ids"].shape[-1]
+
+        with torch.no_grad():
+            output_ids = hf_model.generate(
+                **inputs,
+                do_sample=False,
+                max_new_tokens=max_tokens,
+                pad_token_id=hf_tokenizer.eos_token_id,
+                eos_token_id=hf_tokenizer.eos_token_id,
+            )[0]
+
+        generated_ids = output_ids[input_length:].tolist()
+        hf_text = hf_tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+        assert levanter_ids == generated_ids, f"Token mismatch for prompt '{prompt}'"
+        assert levanter_text == hf_text, f"Text mismatch for prompt '{prompt}'"
+
+
 def test_endpoints_exist(test_client):
     """Test that the endpoints are properly defined"""
     _, server = test_client
