@@ -202,6 +202,10 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
 
 if __name__ == "__main__":
+    if os.getenv("CI", None) is not None:
+        logger.info("Skipping experiment execution on CI environment, needs HF access.")
+        return
+
     runs = [
         build_config("130m"),
         build_config("300m"),
