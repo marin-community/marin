@@ -315,6 +315,7 @@ dev = [
     { name = "pygments" },
     { name = "pymdown-extensions" },
     { name = "pytest" },
+    { name = "safetensors" },
 ]
 
 [package.metadata]
@@ -342,6 +343,7 @@ dev = [
     { name = "pygments" },
     { name = "pymdown-extensions" },
     { name = "pytest", specifier = ">=7.4.0" },
+    { name = "safetensors", specifier = ">=0.4.3" },
 ]
 
 [[package]]

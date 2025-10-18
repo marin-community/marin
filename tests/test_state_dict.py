@@ -9,13 +9,14 @@ from typing import Any
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 import haliax as hax
 from haliax._src.state_dict import flatten_modules_for_export, unflatten_modules_from_export
 from haliax.nn import Linear
 from haliax.nn.scan import Stacked, _stack_state_dict, _unstack_state_dict
-from haliax.state_dict import from_state_dict, to_state_dict
+from haliax.state_dict import from_state_dict, load_state_dict, save_state_dict, to_state_dict
 
 
 @pytest.mark.parametrize("out_dims_first", [True, False])
@@ -157,6 +158,44 @@ def test_export_layer_norm():
     new_layer_norm = flat_layer_norm.unflatten_from_export(layer_norm2)
 
     assert layer_norm == new_layer_norm
+
+
+def test_save_state_dict_roundtrip(tmp_path):
+    pytest.importorskip("safetensors.numpy")
+    state_dict = {
+        "weight": np.arange(6, dtype=np.float32).reshape(2, 3),
+        "bias": np.linspace(0.0, 1.0, 3, dtype=np.float32),
+    }
+    path = tmp_path / "state.safetensors"
+
+    save_state_dict(state_dict, path)
+
+    assert path.exists()
+    loaded = load_state_dict(path)
+
+    assert set(loaded.keys()) == {"weight", "bias"}
+    np.testing.assert_array_equal(loaded["weight"], state_dict["weight"])
+    np.testing.assert_array_equal(loaded["bias"], state_dict["bias"])
+
+
+def test_save_state_dict_filters_none_and_sets_metadata(tmp_path):
+    safetensors = pytest.importorskip("safetensors")
+
+    state_dict = {
+        "weight": np.ones((4,), dtype=np.float32),
+        "optional": None,
+    }
+    path = tmp_path / "state.safetensors"
+
+    save_state_dict(state_dict, path)
+
+    with safetensors.safe_open(str(path), framework="numpy") as f:
+        keys = list(f.keys())
+
+        assert "weight" in keys
+        assert "optional" not in keys
+        np.testing.assert_array_equal(f.get_tensor("weight"), state_dict["weight"])
+        assert f.metadata().get("format") == "pt"
 
 
 def test_stacked_layer_norm():

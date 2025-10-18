@@ -45,6 +45,7 @@ dev = [
     "pymdown-extensions",
     "pygments",
     "chex>=0.1.86",
+    "safetensors>=0.4.3",
     "pre-commit",
 ]
 
