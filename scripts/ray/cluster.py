@@ -33,7 +33,7 @@ from pathlib import Path
 
 import click
 
-from marin.cluster import cleanup, gcp, monitoring, ray
+from marin.cluster import gcp, monitoring, ray
 from marin.cluster.cleanup import cleanup_iteration, submit_cleanup_cron_job
 from marin.cluster.config import (
     RayClusterConfig,
