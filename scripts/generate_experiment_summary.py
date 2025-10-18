@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
+# /// script
+# dependencies = ["PyGithub>=2.3.0", "openai"]
+# ///
 # Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,8 +23,7 @@ This script:
 - Writes the summary to `docs/reports/summary.md`.
 
 Usage:
-pip install PyGithub openai
-python scripts/generate_experiment_summary.py
+    ./scripts/generate_experiment_summary.py
 """
 
 import os
