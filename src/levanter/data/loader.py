@@ -321,7 +321,7 @@ class DataLoaderIterator(Iterator[Ex]):
 
         Returns:
             int: The batch number that the data store has data for.
-            int: The size of the final batch if the final batch is partial and needs to be padded.
+            int | None: The size of the final batch if the final batch is partial and needs to be padded.
         """
         if self.dl.data_store.is_finite():
             next_end = self.dl.scheduler.global_data_offset_by_step(target_max_batch_number)

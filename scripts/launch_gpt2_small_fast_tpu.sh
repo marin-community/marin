@@ -1,6 +1,6 @@
 # Launches the "gpt_small_fast" model on a TPU node
 
-uv run python infra/launch.py -e JAX_COMPILATION_CACHE_DIR gs://levanter-checkpoints/compilation-cache \
+uv run python infra/launch.py -e JAX_COMPILATION_CACHE_DIR gs://levanter-checkpoints/compilation-cache -e  LEVANTER_LOG_LEVEL DEBUG \
    --foreground --tpu_name $(whoami)-levanter-itest-32 --zone us-central2-b --tpu_type v4-32 --preemptible -- \
     python -m levanter.main.train_lm \
     --config_path config/llama_small_fast.yaml \
