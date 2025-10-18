@@ -132,8 +132,9 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
         temperature=1.0,
         service=InferenceEngineConfig(
             max_seqs=16,
-            max_pages_per_seq=32,
+            max_seq_len=config.max_input_length + config.max_output_length,
             page_size=32,
+            max_pages=16 * 32,
             max_seqs_in_prefill=16,
         ),
     )
@@ -181,11 +182,12 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             )
             logger.info(f"Policy model: {policy_model}")
 
-            inference_server = InferenceServer.create(
-                inference_server_config,
-                model=policy_model,
-                tokenizer=tokenizer,
-            )
+            with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
+                inference_server = InferenceServer.create(
+                    inference_server_config,
+                    model=policy_model,
+                    tokenizer=tokenizer,
+                )
 
             env = load_environment_from_spec(config.env_config)
             logger.info(f"Loaded environment: {env}")
