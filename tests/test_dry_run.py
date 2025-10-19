@@ -57,6 +57,18 @@ def test_run_dry_runs(config_file, monkeypatch):
             if "Anonymous caller does not have" in str(e) or "Permission" in str(e):
                 pytest.skip(f"Skipping {script} (requires GCS access)")
             raise
+        except OSError as e:
+            # Hugging Face sometimes surfaces gated repo access as OSError
+            msg = str(e)
+            lower_msg = msg.lower()
+            if (
+                "gated repo" in lower_msg
+                or "access to model" in lower_msg
+                or "401 client error" in lower_msg
+                or "you must have access" in lower_msg
+            ):
+                pytest.skip(f"Skipping {script} (requires access to a gated Hugging Face repo): {e}")
+            raise
         except SystemExit as e:
             # Some scripts may call `sys.exit()`, so we catch it to treat `exit(0)` as success
             assert e.code == 0, f"Dry run failed with exit code {e.code} for {script}"
