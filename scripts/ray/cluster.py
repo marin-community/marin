@@ -67,54 +67,42 @@ class Context:
     verbose: bool = False
     config_file: str | None = None
     config_obj: RayClusterConfig | None = None
-    marin_config: str | None = None
 
 
 # Context object to pass global options between commands
 @click.group()
 @click.option("--config", help="Path to Ray cluster config file (infra/marin-*.yaml)")
-@click.option(
-    "--marin-config",
-    help=(
-        "Optional path to a .marin.yaml with shared env keys (e.g., HF_TOKEN, WANDB_API_KEY). "
-        "If provided, those keys are loaded into the environment (existing values are not overridden)."
-    ),
-)
 @click.option("--cluster", help="Cluster name to connect to")
 @click.option("--verbose", is_flag=True, help="Enable verbose logging")
 @click.pass_context
-def cli(ctx, config, marin_config, cluster, verbose):
+def cli(ctx, config, cluster, verbose):
     """Marin cluster management CLI."""
     ctx.ensure_object(Context)
+    # Auto-load shared env from .marin.yaml if present (common workflow)
+    try:
+        marin_yaml = Path(".marin.yaml")
+        if marin_yaml.exists():
+            with open(marin_yaml, "r") as f:
+                data = yaml.safe_load(f) or {}
+            env = data.get("env", {}) or {}
+            if isinstance(env, dict):
+                for k, v in env.items():
+                    if k not in os.environ:
+                        os.environ[k] = "" if v is None else str(v)
+                logger.debug(f"Loaded env vars from {marin_yaml}")
+    except Exception as e:
+        logger.warning(f"Failed to load .marin.yaml: {e}")
     if cluster:
         config = find_config_by_region(cluster)
 
     ctx.obj.config_file = config
     ctx.obj.verbose = verbose
-    ctx.obj.marin_config = marin_config
 
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
     if config:
         ctx.obj.config_obj = RayClusterConfig.from_yaml(config)
-
-    # Load shared env keys from .marin.yaml if provided
-    if marin_config:
-        try:
-            with open(marin_config, "r") as f:
-                data = yaml.safe_load(f) or {}
-            env = data.get("env", {}) or {}
-            if isinstance(env, dict):
-                loaded = 0
-                for k, v in env.items():
-                    if k not in os.environ:
-                        os.environ[k] = "" if v is None else str(v)
-                        loaded += 1
-                if loaded:
-                    logger.debug(f"Loaded {loaded} env vars from {marin_config}")
-        except Exception as e:
-            logger.warning(f"Failed to load --marin-config {marin_config}: {e}")
 
 
 # Cluster commands
