@@ -31,10 +31,10 @@ Reference Issue: https://github.com/marin-community/marin/issues/818
 
 from experiments.defaults import default_train
 from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
-from experiments.dolma.utils import dolma_pipeline_with_modified_dataset
 from experiments.evals.evals import default_eval
 from experiments.exp575_wikipedia_markdownify import wikipedia_resiliparse_custom_fork
 from experiments.exp579_ar5iv_markdownify import ar5iv_no_problem_resiliparse_custom_fork
+from experiments.html2text.utils import dolma_pipeline_with_modified_dataset
 from experiments.llama import llama_1_4b, llama_1_4b_train_config
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
@@ -47,6 +47,7 @@ tokenized_dolma_steps = tokenize_dolma_steps()
 no_mixture_llama3_tokenized = lm_mixture_data_config(
     components=tokenized_dolma_steps,
     weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
+    permutation_type="linear",
 )
 
 no_mixture_dolma_model = default_train(
@@ -96,6 +97,7 @@ wiki_and_arxiv_weights = {
 wiki_and_arxiv_subbed_llama3_tokenized = lm_mixture_data_config(
     components=wiki_and_arxiv_tokenization_steps,
     weights=wiki_and_arxiv_weights,
+    permutation_type="linear",
 )
 
 wiki_and_arxiv_subbed_dolma_model = default_train(

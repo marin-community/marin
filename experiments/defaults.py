@@ -189,7 +189,13 @@ def default_tokenize(
 
 @lru_cache  # LRU to make the executor happier
 def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
-    return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
+    # Avoid circular dependencies
+    # TODO: Will - break apart defaults a bit
+    from experiments.evals.exp1600_uncheatable_evals import uncheatable_eval_tokenized
+
+    validation_sets = dict(paloma_tokenized(base_path=base_path, tokenizer=tokenizer))
+    validation_sets.update(uncheatable_eval_tokenized(base_path=base_path, tokenizer=tokenizer))
+    return validation_sets
 
 
 def simulated_epoching_train(
@@ -589,7 +595,11 @@ def _prepare_data_config(
         validation_sets = {}
 
     if isinstance(tokenized, InputName | ExecutorStep):
-        pretraining_data = lm_data_config(training_set=tokenized, validation_sets=validation_sets)
+        pretraining_data = lm_data_config(
+            training_set=tokenized,
+            validation_sets=validation_sets,
+            permutation_type="linear",
+        )
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures
         pretraining_data = tokenized
