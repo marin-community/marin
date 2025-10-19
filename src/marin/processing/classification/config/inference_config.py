@@ -73,3 +73,6 @@ class InferenceConfig:
 
     # Dataset schema configuration (input/output columns)
     dataset_schema: DatasetSchemaConfig = field(default_factory=DatasetSchemaConfig)
+
+    # Number of batches to wait for before uploading the results to the output file.
+    num_batches_per_upload: int = 10

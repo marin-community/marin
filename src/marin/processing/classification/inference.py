@@ -64,6 +64,7 @@ def process_file_with_quality_classifier_streaming(
     model_type: str,
     dataset_schema: DatasetSchemaConfig,
     autoscaling_actor_pool_config: AutoscalingActorPoolConfig,
+    num_batches_per_upload: int,
     batch_size: int = 512,
     resume: bool = True,
 ):
@@ -137,15 +138,24 @@ def process_file_with_quality_classifier_streaming(
         task_queue.put(batch_dict)
 
     num_collected_batches = 0
+    output_rows_buffer = []
     while num_collected_batches < num_batches:
         processed_batch = result_queue.get()
         num_collected_batches += 1
         output_rows = convert_batch_dict_to_output_rows(
             processed_batch, dataset_schema.output_columns, len(processed_batch[dataset_schema.output_columns[0]])
         )
-        write_dataset_streaming(output_rows, output_filename, append=append_mode or total_processed > 0)
+        output_rows_buffer.extend(output_rows)
+
+        if num_collected_batches % num_batches_per_upload == 0:
+            write_dataset_streaming(output_rows_buffer, output_filename, append=append_mode or total_processed > 0)
+            output_rows_buffer = []
+
         total_processed += len(processed_batch)
         logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
+
+    if output_rows_buffer:
+        write_dataset_streaming(output_rows_buffer, output_filename, append=append_mode or total_processed > 0)
 
     pool.shutdown()
 
@@ -166,6 +176,7 @@ def process_file_ray(
     filetype: str,
     autoscaling_actor_pool_config: AutoscalingActorPoolConfig,
     dataset_schema: DatasetSchemaConfig,
+    num_batches_per_upload: int,
     batch_size: int = 512,
     resume: bool = True,
 ):
@@ -177,6 +188,7 @@ def process_file_ray(
         model_type,
         dataset_schema,
         autoscaling_actor_pool_config,
+        num_batches_per_upload,
         batch_size,
         resume,
     )
@@ -217,6 +229,7 @@ def run_inference(inference_config: InferenceConfig):
             inference_config.filetype,
             inference_config.autoscaling_actor_pool_config,
             inference_config.dataset_schema,
+            inference_config.num_batches_per_upload,
             inference_config.batch_size,
             inference_config.resume,
         )
