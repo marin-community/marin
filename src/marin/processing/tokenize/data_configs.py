@@ -69,6 +69,12 @@ def lm_data_config(
     """
     Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
 
+    Notes:
+
+        If you are seeing this invoked with `permutation_type="linear"`, that means the experiment was
+        run with the old, deprecated shuffle type. The newer shuffle "feistel" is default and you should
+        prefer it for future experiments,
+
     Args:
         training_set: The training set to use
         permutation_type: Strategy used to permute data. Defaults to "feistel".
