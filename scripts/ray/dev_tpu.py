@@ -394,7 +394,7 @@ def list_tracked_files(local_path: Path) -> list[str]:
     return sorted(all_files)
 
 
-def sync_to_remote(target_host: str, local_path: os.PathLike = ".") -> None:
+def sync_to_remote(target_host: str, local_path: os.PathLike | str = ".") -> None:
     local_path = Path(local_path).resolve()
     sync_files = list_tracked_files(local_path)
 
