@@ -33,10 +33,10 @@ def create_eval_step():
 
     # Configure PrimeIntellect environment for testing
     env = PrimeIntellectEnv(
-        env_id="willb/gsm8k",
+        env_id="will/gpqa",
         env_args={
-            "num_train_examples": 0,
-            "num_eval_examples": 100,
+            "use_diamond": True,
+            "use_think": True
         },
     )
 
@@ -47,9 +47,9 @@ def create_eval_step():
     eval_step = evaluate_environment(
         model=model_checkpoint,
         env=env,
-        name="evaluate-test-environment-4B-v18",
+        name="evaluate-test-environment-4B",
         output_path=output_path,
-        tpu_type="v5litepod-4",  # Use smaller TPU for testing
+        tpu_type="v4-8",  # Use v4-8 which has 4 chips (supported configuration)
     )
 
     return eval_step

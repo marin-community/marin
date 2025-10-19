@@ -134,7 +134,6 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             max_seqs=16,
             max_seq_len=config.max_input_length + config.max_output_length,
             page_size=32,
-            max_pages=16 * 32,
             max_seqs_in_prefill=16,
         ),
     )
@@ -154,7 +153,18 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             levanter.initialize(trainer_config)
 
             hf_config = AutoConfig.from_pretrained(config.model_checkpoint)
-            model_config = LlamaConfig.from_hf_config(hf_config)
+            # Ignore this for now will push this on user level in abstraction
+            if "qwen" in config.model_checkpoint.lower():
+                from levanter.models.qwen import Qwen3Config
+                model_config = Qwen3Config.from_hf_config(hf_config)
+                # Qwen3-4B has head_dim=128
+                if hasattr(hf_config, 'head_dim'):
+                    model_config = dataclasses.replace(model_config, head_dim=hf_config.head_dim)
+                else:
+                    # For Qwen3-4B, set the correct head_dim
+                    model_config = dataclasses.replace(model_config, head_dim=128)
+            else:
+                model_config = LlamaConfig.from_hf_config(hf_config)
             logger.info(f"Model config: {model_config}")
 
             # Adjust the max sequence length of the model to reduce memory usage.
@@ -182,28 +192,35 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             )
             logger.info(f"Policy model: {policy_model}")
 
-            with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
-                inference_server = InferenceServer.create(
-                    inference_server_config,
-                    model=policy_model,
-                    tokenizer=tokenizer,
-                )
-
-            env = load_environment_from_spec(config.env_config)
-            logger.info(f"Loaded environment: {env}")
-
-            policy_ctx = InferenceContext(
-                tokenizer=tokenizer,
-                inference_server=inference_server,
-                max_tokens=config.max_input_length + config.max_output_length,
-                stop_tokens=config.stop_tokens,
-            )
-
             # Enter mesh context for sampling, like RolloutWorker does in _sample_batch
             with (
                 trainer_config.device_mesh,
                 hax.axis_mapping(trainer_config.compute_axis_mapping),
             ):
+                inference_server = InferenceServer.create(
+                    inference_server_config,
+                    model=policy_model,
+                    tokenizer=tokenizer,
+                )
+                
+                # Start the server in a background thread
+                import threading
+                threading.Thread(target=inference_server.serve, daemon=True).start()
+                
+                # Wait a moment for server to start
+                import time
+                time.sleep(2)
+
+                env = load_environment_from_spec(config.env_config)
+                logger.info(f"Loaded environment: {env}")
+
+                policy_ctx = InferenceContext(
+                    tokenizer=tokenizer,
+                    inference_server=inference_server,
+                    max_tokens=config.max_input_length + config.max_output_length,
+                    stop_tokens=config.stop_tokens,
+                )
+
                 # Sample examples, generate responses, and create rollouts from selected lesson
                 rollout_groups, metrics = env.sample(
                     inference_ctx=policy_ctx,
