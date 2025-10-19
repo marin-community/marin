@@ -376,7 +376,7 @@ def remove_ssh_host_config(tpu_name: str) -> None:
         logger.info(f"Removed SSH configuration for dev-tpu-{tpu_name}")
 
 
-def list_tracked_files(local_path: str) -> list[str]:
+def list_tracked_files(local_path: Path) -> list[str]:
     """List all files that git would track (excluding gitignored files).
 
     This includes tracked, modified, staged, and untracked files.
