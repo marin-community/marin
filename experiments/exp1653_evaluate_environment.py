@@ -49,7 +49,7 @@ def create_eval_step():
         env=env,
         name="evaluate-test-environment-4B",
         output_path=output_path,
-        tpu_type="v4-8",  # Use v4-8 which has 4 chips (supported configuration)
+        tpu_type="v4-64",  # Use v4-64
     )
 
     return eval_step
