@@ -69,8 +69,8 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     # Resource configs
     resource_cfgs = {
-        "130m": TpuPodConfig(tpu_type="v5p-32"),
-        "300m": TpuPodConfig(tpu_type="v5p-32"),
+        "130m": TpuPodConfig(tpu_type="v4-64"),
+        "300m": TpuPodConfig(tpu_type="v4-64"),
         "520m": TpuPodConfig(tpu_type="v5p-32"),
         "1_2b": TpuPodConfig(tpu_type="v5p-32"),
     }
@@ -153,10 +153,10 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     # Names for the runs
     run_names = {
-        "130m": "llama_130m_muon_4096",
-        "300m": "llama_300m_muon_4096",
-        "520m": "llama_520m_muon_4096",
-        "1_2b": "llama_1_2b_muon_4096",
+        "130m": "llama_130m_kimi_style_muon_4096",
+        "300m": "llama_300m_kimi_style_muon_4096",
+        "520m": "llama_520m_kimi_style_muon_4096",
+        "1_2b": "llama_1_2b_kimi_style_muon_4096",
     }
 
     # Gather config for the requested size
@@ -192,10 +192,10 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
 if __name__ == "__main__":
     runs = [
-        build_config("130m"),
+        # build_config("130m"),
         build_config("300m"),
-        build_config("520m"),
-        build_config("1_2b"),
+        # build_config("520m"),
+        # build_config("1_2b"),
     ]
 
     steps = []
