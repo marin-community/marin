@@ -25,6 +25,7 @@ Usage:
 from dataclasses import dataclass
 import json
 import logging
+import os
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,7 @@ import time
 from pathlib import Path
 
 import click
+import yaml
 
 from marin.cluster import cleanup, gcp, monitoring, ray
 from marin.cluster.cleanup import cleanup_iteration, submit_cleanup_cron_job
@@ -69,13 +71,27 @@ class Context:
 
 # Context object to pass global options between commands
 @click.group()
-@click.option("--config", help="Path to cluster config file")
+@click.option("--config", help="Path to Ray cluster config file (infra/marin-*.yaml)")
 @click.option("--cluster", help="Cluster name to connect to")
 @click.option("--verbose", is_flag=True, help="Enable verbose logging")
 @click.pass_context
 def cli(ctx, config, cluster, verbose):
     """Marin cluster management CLI."""
     ctx.ensure_object(Context)
+    # Auto-load shared env from .marin.yaml if present (common workflow)
+    try:
+        marin_yaml = Path(".marin.yaml")
+        if marin_yaml.exists():
+            with open(marin_yaml, "r") as f:
+                data = yaml.safe_load(f) or {}
+            env = data.get("env", {}) or {}
+            if isinstance(env, dict):
+                for k, v in env.items():
+                    if k not in os.environ:
+                        os.environ[k] = "" if v is None else str(v)
+                logger.debug(f"Loaded env vars from {marin_yaml}")
+    except Exception as e:
+        logger.warning(f"Failed to load .marin.yaml: {e}")
     if cluster:
         config = find_config_by_region(cluster)
 
