@@ -403,20 +403,34 @@ def start_cleanup(ctx, interval):
 @cli.command("run-cleanup")
 @click.option("--dry-run", is_flag=True, help="Show what would be cleaned")
 @click.pass_context
-def run_cleanup(ctx):
+def run_cleanup(ctx, dry_run):
     """Run a single cleanup iteration."""
     config_obj = ctx.obj.config_obj
     if not config_obj:
         print("Error: --config required for cleanup commands", file=sys.stderr)
         sys.exit(1)
 
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file, ray_init=True)):
         print("Running cleanup iteration...")
-        deleted = cleanup_iteration(config_obj.project_id, config_obj.zone, dry_run=True)
-        if deleted:
-            print(f"Deleted {len(deleted)} preempted TPUs: {deleted}")
+        results = cleanup_iteration(config_obj.project_id, config_obj.zone, dry_run=dry_run)
+
+        # Display TPU cleanup results
+        if results["deleted_tpus"]:
+            action = "Would delete" if dry_run else "Deleted"
+            print(f"{action} {len(results['deleted_tpus'])} preempted TPUs: {results['deleted_tpus']}")
         else:
             print("No preempted TPUs found")
+
+        # Display lockfile cleanup results
+        if not dry_run and results.get("lockfile_cleanup"):
+            stats = results["lockfile_cleanup"]
+            print(f"\nTPU Lockfile Cleanup:")
+            print(f"  Workers targeted: {stats.get('workers_targeted', 0)}")
+            print(f"  Workers cleaned: {stats.get('workers_cleaned', 0)}")
+            if stats.get("errors"):
+                print(f"  Errors: {len(stats['errors'])}")
+                for error in stats["errors"][:5]:  # Show first 5 errors
+                    print(f"    - {error}")
 
 
 @cli.command("clean-preempted-tpus")

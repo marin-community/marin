@@ -427,7 +427,7 @@ def create_ssh_proxy_chain(
 
     ssh_cmd.extend([f"ray@{cluster_to_use.external_ip}", "while true; do sleep 86400; done"])
     logger.info(f"Creating SSH proxy chain through {cluster_to_use.cluster_name}")
-    logger.info(f"Tunneling to {len(clusters)} clusters")
+    logger.info(f"Tunneling to {len(clusters)} clusters. Port mapping: {port_mappings}")
 
     return subprocess.Popen(
         ssh_cmd,
