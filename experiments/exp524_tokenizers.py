@@ -21,13 +21,14 @@ from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_1_4b, llama_1_4b_train_config
 from experiments.pretraining_datasets import fineweb_edu
 from marin.execution.executor import executor_main
+from marin.processing.tokenize import lm_data_config
 
 fineweb_edu_llama3_tokenized = default_tokenize(
     name="fineweb-edu", dataset=fineweb_edu, tokenizer="meta-llama/Meta-Llama-3.1-8B"
 )
 llama_1_4b_fineweb_edu_llama3_model = default_train(
     name="llama3-tokenizer",
-    tokenized=fineweb_edu_llama3_tokenized,
+    tokenized=lm_data_config(fineweb_edu_llama3_tokenized, permutation_type="linear"),
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
@@ -37,7 +38,7 @@ fineweb_edu_llama2_tokenized = default_tokenize(
 )
 llama_1_4b_fineweb_edu_llama2_model = default_train(
     name="llama2-tokenizer",
-    tokenized=fineweb_edu_llama2_tokenized,
+    tokenized=lm_data_config(fineweb_edu_llama2_tokenized, permutation_type="linear"),
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
@@ -47,7 +48,7 @@ fineweb_edu_neox_tokenized = default_tokenize(
 )
 llama_1_4b_fineweb_edu_neox_model = default_train(
     name="neox-tokenizer",
-    tokenized=fineweb_edu_neox_tokenized,
+    tokenized=lm_data_config(fineweb_edu_neox_tokenized, permutation_type="linear"),
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )

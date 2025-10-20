@@ -28,6 +28,7 @@ from experiments.llama import llama_8b
 from experiments.tootsie.exp916_tootsie_spoonbill_cooldown import spoonbill_zloss_tulu3_sft_config
 from marin.download.huggingface.download import DownloadConfig, download
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.processing.tokenize import lm_data_config
 from marin.resources import TpuPodConfig
 
 sft_experiments = []
@@ -61,7 +62,6 @@ tokenized_swe_smith_trajectories = default_tokenize(
     "stanford-crfm/marin-tokenizer",
     format=ChatLmDatasetFormat(),
 )
-
 yarn_llama_8b = dataclasses.replace(
     llama_8b,
     rope=YarnRotaryEmbeddingsConfig(original_max_position_embeddings=4096),
@@ -73,10 +73,9 @@ no_yarn_llama_8b = dataclasses.replace(
     seq_len=32768,
 )
 
-
 marin_8b_swe_smith_sft = default_sft(
     name="sft/marin-swe-smith-8b-yarn-3epoch",
-    tokenized=tokenized_swe_smith_trajectories,
+    tokenized=lm_data_config(tokenized_swe_smith_trajectories, permutation_type="linear"),
     model_config=yarn_llama_8b,
     sft_config=swe_smith_sft_config,
     tags=["marin-8b", "sft", "agent"],
@@ -84,7 +83,7 @@ marin_8b_swe_smith_sft = default_sft(
 
 marin_8b_swe_smith_sft_no_yarn = default_sft(
     name="sft/marin-swe-smith-8b-no-yarn-3epoch",
-    tokenized=tokenized_swe_smith_trajectories,
+    tokenized=lm_data_config(tokenized_swe_smith_trajectories, permutation_type="linear"),
     model_config=no_yarn_llama_8b,
     sft_config=swe_smith_sft_config,
     tags=["marin-8b", "sft", "agent"],

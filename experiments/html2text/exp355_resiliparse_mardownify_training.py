@@ -23,6 +23,7 @@ from experiments.defaults import default_tokenize, default_train
 from experiments.evals.evals import default_eval
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.execution.executor import executor_main
+from marin.processing.tokenize import lm_data_config
 
 logger = logging.getLogger("ray")
 step_name = "fineweb-small-resiliparse-custom-fork"
@@ -34,7 +35,7 @@ fineweb_resiliparse_custom_fork_tokenized = default_tokenize(
 )
 fineweb_resiliparse_custom_fork_1_4b_model = default_train(
     name=f"{step_name}-1.4b",
-    tokenized=fineweb_resiliparse_custom_fork_tokenized,
+    tokenized=lm_data_config(fineweb_resiliparse_custom_fork_tokenized, permutation_type="linear"),
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )

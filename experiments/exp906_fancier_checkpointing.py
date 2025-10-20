@@ -22,7 +22,7 @@ import math
 
 from haliax import ScanCheckpointPolicy
 
-from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
+from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3_old
 from experiments.defaults import default_train
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
@@ -60,7 +60,7 @@ baseline_1b = default_train(
     name="fancy_ckpt-v4-1b-baseline",
     train_config=baseline_train_config,
     model_config=llama_1_4b,
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     tags=("llama", "1.4b", "fancy_ckpt", "dclm"),
     eval_harness_tasks=[],
 )
@@ -79,7 +79,7 @@ offload_1b = default_train(
     name="fancy_ckpt-2-v4-1b-offload",
     train_config=baseline_train_config,
     model_config=llama_offload,
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     tags=("llama", "1.4b", "fancy_ckpt", "dclm"),
     eval_harness_tasks=[],
 )
@@ -88,7 +88,7 @@ full_1b = default_train(
     name="fancy_ckpt-2-v4-1b-full",
     train_config=baseline_train_config,
     model_config=llama_full,
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     tags=("llama", "1.4b", "fancy_ckpt", "dclm"),
     eval_harness_tasks=[],
 )
@@ -97,7 +97,7 @@ nested_1b = default_train(
     name="fancy_ckpt-2-v4-1b-nested",
     train_config=baseline_train_config,
     model_config=llama_nested,
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     tags=("llama", "1.4b", "fancy_ckpt", "dclm"),
     eval_harness_tasks=[],
 )
