@@ -186,7 +186,7 @@ def restart_cluster(ctx, preserve_jobs):
         print("Backing up jobs...")
         try:
             with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-                ray.backup_jobs(config_path, backup_dir)
+                ray.backup_jobs(config_path, str(backup_dir))
         except Exception as e:
             print()
             print("=" * 60)
@@ -211,7 +211,7 @@ def restart_cluster(ctx, preserve_jobs):
     if preserve_jobs:
         print("Restoring jobs...")
         with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-            ray.restore_jobs(backup_dir)
+            ray.restore_jobs(str(backup_dir))
 
     # Auto-start cleanup cron
     print("Starting automated cleanup cron...")
