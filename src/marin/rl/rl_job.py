@@ -68,7 +68,7 @@ class RunConfig:
     max_retries_failure: int = 3
     """Maximum retries on worker failure"""
 
-    max_retries_preemption: int = 10
+    max_retries_preemption: int = 100
     """Maximum retries on preemption"""
 
     runtime_env: RuntimeEnv | None = None
