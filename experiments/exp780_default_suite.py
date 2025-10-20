@@ -22,13 +22,13 @@ Link to issue for scaling law experiments: https://github.com/marin-community/ma
 
 from experiments.defaults import default_scaling_law_pred
 from experiments.evals.task_configs import CORE_TASKS
-from experiments.tootsie.exp600_tootsie import dclm_mixture_config_llama3
+from experiments.tootsie.exp600_tootsie import dclm_mixture_config_llama3_old
 from marin.execution.executor import executor_main
 from marin.scaling_laws.create_ladder_suite import scaling_law_suite
 
 default_suite = scaling_law_suite(
     sweep_name="scaling-law-suite-default-v2",
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     tags=["scaling_laws"],
 )
 
