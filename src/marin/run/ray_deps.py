@@ -55,7 +55,7 @@ def accelerator_type_from_extra(extra: list[str] | None = None) -> AcceleratorTy
     extra = set(extra)
     if "tpu" in extra:
         return AcceleratorType.TPU
-    elif "gpu" in extra or "cuda12" in extra:
+    elif "gpu" in extra or "cuda12" in extra or "vllm" in extra:
         return AcceleratorType.GPU
     elif "cpu" in extra:
         return AcceleratorType.CPU
