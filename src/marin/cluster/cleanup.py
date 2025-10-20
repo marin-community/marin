@@ -27,31 +27,145 @@ import subprocess
 import time
 from typing import Any
 
+import ray
+
 from .gcp import cleanup_preempted_tpus
 
 logger = logging.getLogger(__name__)
 
+
+def get_tpu_worker_resources() -> dict[str, int]:
+    """Get list of unique worker resource names from Ray cluster.
+
+    Queries the Ray GCS to find all worker nodes with TPU resources and returns
+    their unique resource identifiers.
+
+    Returns:
+        List of worker resource names like:
+        - ray-marin-us-east5-a-worker-09614199-tpu
+        - ray-marin-us-east5-a-worker-2f248a95-tpu
+    """
+    from .ray import list_nodes
+
+    worker_resources = {}
+    try:
+        nodes = list_nodes()
+
+        for node in nodes:
+            # Only process alive nodes
+            if node.get("state") != "ALIVE":
+                continue
+
+            resources = node.get("resources_total", {})
+            # Find worker-specific resources (format: ray-*-worker-*-tpu)
+            for resource_name in resources.keys():
+                if resource_name.startswith("ray-") and "-worker-" in resource_name and resource_name.endswith("-tpu"):
+                    worker_resources[resource_name] = resources[resource_name]
+
+        logger.info(f"Found {len(worker_resources)} TPU worker resources")
+    except Exception as e:
+        logger.error(f"Failed to get TPU worker resources: {e}")
+
+    return worker_resources
+
+
+def cleanup_tpu_lockfiles() -> dict[str, Any]:
+    """Clean TPU lockfiles across all worker nodes.
+
+    Schedules cleanup tasks on each worker using Ray remote functions
+    with specific resource requirements to target individual workers.
+    Each task removes /tmp/libtpu_lockfile which can prevent TPU access
+    when it persists across Ray tasks.
+
+    Returns:
+        Dict with cleanup statistics containing:
+        - workers_targeted: Number of workers where cleanup was attempted
+        - workers_cleaned: Number of workers successfully cleaned
+        - errors: List of error messages for failed cleanups
+    """
+
+    @ray.remote(num_cpus=0)
+    def _cleanup_lockfile_on_worker():
+        """Remote task to clean lockfile on a specific worker."""
+        subprocess.run(["sudo", "rm", "-f", "/tmp/libtpu_lockfile"], check=False)
+
+    worker_resources = get_tpu_worker_resources()
+
+    if not worker_resources:
+        logger.info("No TPU workers found for lockfile cleanup")
+        return {"workers_targeted": 0, "workers_cleaned": 0, "errors": []}
+
+    logger.info(f"Cleaning TPU lockfiles on {len(worker_resources)} workers")
+
+    # Schedule cleanup task on each worker using its specific resource
+    futures = {}
+    for resource_name, count in worker_resources.items():
+        # Schedule with resource requirement to target the given slice.
+        # For slices, we best-effort target one task per host.
+        for _ in range(int(count)):
+            task = _cleanup_lockfile_on_worker.options(resources={resource_name: 1}).remote()
+        futures[resource_name] = task
+
+    results = {"workers_targeted": len(worker_resources), "workers_cleaned": 0, "errors": []}
+    ready, not_ready = ray.wait(list(futures.values()), num_returns=len(futures), timeout=60)
+
+    # Process completed tasks
+    for resource_name, future in futures.items():
+        if future in ready:
+            try:
+                ray.get(future)
+                results["workers_cleaned"] += 1
+            except Exception as e:
+                results["errors"].append(f"{resource_name}: {e}")
+        elif future in not_ready:
+            results["errors"].append(f"{resource_name}: Timed out after 60 seconds")
+
+    logger.info(f"Cleaned lockfiles on {results['workers_cleaned']}/{results['workers_targeted']} workers")
+
+    if results["errors"]:
+        logger.warning(f"Encountered {len(results['errors'])} errors during lockfile cleanup")
+
+    return results
+
+
 CLEANUP_JOB_PREFIX = "marin-cleanup-cron"
 
 
-def cleanup_iteration(project: str, zone: str, dry_run: bool) -> list[str]:
+def cleanup_iteration(project: str, zone: str, dry_run: bool = False) -> dict[str, Any]:
     """Run one iteration of cleanup checks.
 
-    Removes terminated/preempted TPU nodes.
+    Performs:
+    - Removes terminated/preempted TPU nodes
+    - Cleans TPU lockfiles on active workers
 
     Args:
         project: GCP project ID
         zone: GCP zone
+        dry_run: If True, only report what would be cleaned without making changes
 
     Returns:
-        List of deleted TPU names
+        Dict with cleanup results containing:
+        - deleted_tpus: List of deleted TPU names
+        - lockfile_cleanup: Dict with lockfile cleanup statistics
     """
+    results = {"deleted_tpus": [], "lockfile_cleanup": {}}
+
+    # Cleanup preempted/terminated TPU nodes
     deleted = cleanup_preempted_tpus(project, zone, dry_run=dry_run)
+    results["deleted_tpus"] = deleted
 
     if deleted:
         logger.info(f"Cleaned up {len(deleted)} preempted/terminated TPUs: {deleted}")
 
-    return deleted
+    # Clean TPU lockfiles on active workers (skip during dry-run)
+    if not dry_run:
+        lockfile_results = cleanup_tpu_lockfiles()
+        results["lockfile_cleanup"] = lockfile_results
+        logger.info(
+            f"TPU lockfile cleanup: {lockfile_results['workers_cleaned']}/{lockfile_results['workers_targeted']} workers"
+        )
+
+    return results
 
 
 def run_cleanup_loop(project: str, zone: str, interval: int = 600) -> None:
@@ -72,11 +186,19 @@ def run_cleanup_loop(project: str, zone: str, interval: int = 600) -> None:
         logger.info(f"=== Cleanup iteration {iteration} ===")
 
         try:
-            deleted = cleanup_iteration(project, zone)
+            results = cleanup_iteration(project, zone, dry_run=False)
 
-            if deleted:
-                logger.info(f"Iteration {iteration} complete: {len(deleted)} TPUs terminated")
-            else:
+            if results["deleted_tpus"]:
+                logger.info(f"Iteration {iteration}: {len(results['deleted_tpus'])} TPUs terminated")
+
+            lockfile_stats = results.get("lockfile_cleanup", {})
+            workers_cleaned = lockfile_stats.get("workers_cleaned", 0)
+            workers_targeted = lockfile_stats.get("workers_targeted", 0)
+            logger.info(f"Iteration {iteration}: Lockfile cleanup - {workers_cleaned}/{workers_targeted} workers")
+            if lockfile_stats.get("errors"):
+                logger.warning(f"Iteration {iteration}: Lockfile cleanup errors - {lockfile_stats['errors']}")
+
+            if not results["deleted_tpus"] and not lockfile_stats:
                 logger.info(f"Iteration {iteration} complete: No cleanup needed")
         except Exception as e:
             logger.error(f"Cleanup iteration {iteration} failed: {e}", exc_info=True)
