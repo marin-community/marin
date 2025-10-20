@@ -129,7 +129,7 @@ def build_env_dict(extra_env: list[str] | None = None, forward_all: bool = False
             try:
                 config_yaml = yaml.safe_load(open(config_file).read())
             except Exception as e:
-                logger.warning(f"Failed to load config from environment {e}")
+                raise RuntimeError(f"Failed to load config from environment")
 
             for key, value in config_yaml.get("env", {}).items():
                 env_dict[key] = str(value)
