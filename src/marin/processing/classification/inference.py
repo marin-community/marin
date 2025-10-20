@@ -197,8 +197,7 @@ def process_file_ray(
 # NOTE(chris): Ideally this function is run on the head node, but
 # due to some issues with stalling in the unit tests, we can't allow
 # this yet.
-# @ray.remote(num_cpus=0, resources={"head_node": 0.001})
-@ray.remote
+@ray.remote(num_cpus=0, resources={"head_node": 0.001})
 def run_inference(inference_config: InferenceConfig):
     logger.info(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
     filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
