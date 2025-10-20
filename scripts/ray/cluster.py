@@ -211,7 +211,7 @@ def restart_cluster(ctx, preserve_jobs):
     if preserve_jobs:
         print("Restoring jobs...")
         with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-            ray.restore_jobs(config_path, backup_dir)
+            ray.restore_jobs(backup_dir)
 
     # Auto-start cleanup cron
     print("Starting automated cleanup cron...")
@@ -239,7 +239,7 @@ def cluster_backup_jobs(ctx, backup_dir):
 def cluster_restore_jobs(ctx, backup_dir):
     """Restore Ray jobs from specified directory."""
     with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
-        ray.restore_jobs(ctx.obj.config_file, backup_dir)
+        ray.restore_jobs(backup_dir)
         print(f"Jobs restored successfully from {backup_dir}")
 
 

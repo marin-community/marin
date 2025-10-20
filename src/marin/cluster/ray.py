@@ -754,7 +754,7 @@ def backup_jobs(cluster_config: str, local_path: str, raise_errors: bool = False
     logger.info("All jobs backed up.")
 
 
-def restore_jobs(cluster_config: str, local_path: str, raise_errors: bool = False) -> None:
+def restore_jobs(local_path: str, raise_errors: bool = False) -> None:
     """Perform the 'after' stage actions: resubmit jobs.
 
     Note: This requires RAY_ADDRESS to be set, typically via start_ray_dashboard_with_wait.
