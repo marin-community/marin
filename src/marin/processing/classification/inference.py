@@ -194,8 +194,7 @@ def process_file_ray(
     )
 
 
-@ray.remote(num_cpus=0, resources={"head_node": 0.001})
-def run_inference(inference_config: InferenceConfig):
+def _run_inference(inference_config: InferenceConfig):
     logger.info(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
     filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
 
@@ -272,6 +271,11 @@ def run_inference(inference_config: InferenceConfig):
                 submit(file_for_ref)
             else:
                 logger.error(f"Giving up after {count} attempts for {file_for_ref}")
+
+
+@ray.remote(num_cpus=0, resources={"head_node": 0.001})
+def run_inference(inference_config: InferenceConfig):
+    _run_inference(inference_config)
 
 
 @draccus.wrap()

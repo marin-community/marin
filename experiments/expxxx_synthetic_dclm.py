@@ -921,7 +921,7 @@ if __name__ == "__main__":
             # active_reading_steps_1b_rewrite_autoscale,
             # wikipedia_subset_1_5M,
             # active_reading_1_5M_with_attributes,
-            # active_reading_steps_1_5M_rewrite,
-            active_reading_1_5M_qa,
+            active_reading_steps_1_5M_rewrite,
+            # active_reading_1_5M_qa,
         ]
     )
