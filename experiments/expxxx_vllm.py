@@ -135,6 +135,30 @@ def test_arrow_flight_transfer_to_vllm():
         client.cleanup()
 
 
+@ray.remote(resources={"TPU-v4-8-head": 1}, runtime_env={"env_vars": {"VLLM_ENABLE_V1_MULTIPROCESSING": "0"}})
+def test_vllm_inference():
+    """Test vLLM inference."""
+    from marin.rl.environments.inference_ctx.vllm import vLLMInferenceContext
+
+    inference_ctx = vLLMInferenceContext(
+        model_name="meta-llama/Llama-3.2-1B-Instruct", max_model_len=1024, tensor_parallel_size=4
+    )
+    outputs = inference_ctx.batch_completions(prompts=["Hello, how are you?"], temperature=0.8, n=1)
+    response_tokens = inference_ctx.response_tokens_from_choice(outputs[0].outputs[0])
+    logprobs = inference_ctx.logprobs_from_choice(outputs[0].outputs[0])
+    print(f"Response tokens: {response_tokens}")
+    print(logprobs)
+
+
+@ray.remote(resources={"TPU-v4-8-head": 1}, runtime_env={"env_vars": {"VLLM_ENABLE_V1_MULTIPROCESSING": "0"}})
+def test_rollout_worker_vllm():
+    """Test rollout worker with vLLM."""
+    from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
+
+    rollout_worker = RolloutWorker(config=RolloutWorkerConfig(inference_type="vllm"))
+    rollout_worker.run()
+
+
 if __name__ == "__main__":
-    outputs = ray.get(test_arrow_flight_transfer_to_vllm.remote())
+    outputs = ray.get(test_vllm_inference.remote())
     print(outputs)

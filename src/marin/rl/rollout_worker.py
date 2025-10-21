@@ -39,12 +39,14 @@ from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
 from transformers import PreTrainedTokenizer
+from typing import Literal
 
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
-from marin.rl.inference_ctx import InferenceContext
+from marin.rl.inference_ctx import InferenceContext, vLLMInferenceContext
 from marin.rl.model_utils import load_model_from_checkpoint
+from marin.rl.weight_utils import levanter_to_nnx_state, MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .types import (
@@ -81,6 +83,18 @@ class RolloutWorkerConfig:
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
 
     log_freq: int = 10
+
+    inference_type: Literal["levanter", "vllm"] = "levanter"
+    """Type of inference to use for rollouts."""
+
+    vllm_model_name: str = "meta-llama/Llama-3.2-1B-Instruct"
+    """Model name for vLLM."""
+
+    vllm_max_model_len: int = 1024
+    """Max model length for vLLM."""
+
+    vllm_tensor_parallel_size: int = 4
+    """Tensor parallel size for vLLM."""
 
 
 def find_open_port() -> int:
@@ -175,14 +189,6 @@ class RolloutWorker:
 
         self._rollout_writer = config.rollout_storage.create_writer()
         self._build_models()
-        with self.config.trainer.use_device_mesh(), hax.axis_mapping(self.config.trainer.compute_axis_mapping):
-            self._inference_server = InferenceServer.create(
-                config.inference_server_config,
-                model=self._policy_model,
-                tokenizer=self._tokenizer,
-            )
-        self._inference_thread = threading.Thread(target=lambda: self._inference_server.serve(), daemon=True)
-        self._inference_thread.start()
 
         # TODO(power) -- replace this with a wait_until_ready() on the levanter inference server
         time.sleep(1.0)
@@ -191,6 +197,22 @@ class RolloutWorker:
 
         # Create curriculum actor (no checkpoint path for rollout workers)
         self._curriculum_actor = get_or_create_curriculum_actor(self.config.curriculum_config)
+
+        if self.config.inference_type == "vllm":
+            self._policy_ctx = vLLMInferenceContext(
+                model_name=self.config.vllm_model_name,
+                max_model_len=self.config.vllm_max_model_len,
+                tensor_parallel_size=self.config.vllm_tensor_parallel_size,
+            )
+        elif self.config.inference_type == "levanter":
+            with self.config.trainer.use_device_mesh(), hax.axis_mapping(self.config.trainer.compute_axis_mapping):
+                self._inference_server = InferenceServer.create(
+                    config.inference_server_config,
+                    model=self._policy_model,
+                    tokenizer=self._tokenizer,
+                )
+            self._inference_thread = threading.Thread(target=lambda: self._inference_server.serve(), daemon=True)
+            self._inference_thread.start()
 
     def _load_environment(self, lesson_id: str) -> MarinEnv:
         """Load environment from lesson ID."""
@@ -214,20 +236,31 @@ class RolloutWorker:
         stop_tokens = lesson_config.sampling_params.stop_tokens
         max_tokens = lesson_config.sampling_params.max_tokens
 
-        policy_ctx = InferenceContext(
-            tokenizer=self._tokenizer,
-            inference_server=self._inference_server,
-            max_tokens=max_tokens,
-            stop_tokens=stop_tokens,
-        )
+        if self.config.inference_type == "levanter":
+            self._policy_ctx = InferenceContext(
+                tokenizer=self._tokenizer,
+                inference_server=self._inference_server,
+                max_tokens=max_tokens,
+                stop_tokens=stop_tokens,
+            )
 
-        with (
-            self.config.trainer.device_mesh,
-            hax.axis_mapping(self.config.trainer.compute_axis_mapping),
-        ):
-            # Sample examples, generate responses, and create rollouts from selected lesson
+        if self.config.inference_type == "levanter":
+            with (
+                self.config.trainer.device_mesh,
+                hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+            ):
+                # Sample examples, generate responses, and create rollouts from selected lesson
+                rollout_groups, metrics = env.sample(
+                    inference_ctx=self._policy_ctx,
+                    n_examples=n_examples,
+                    n_generations=n_generations,
+                    temperature=temperature,
+                    prng_key=rng,
+                    mode=mode,
+                )
+        elif self.config.inference_type == "vllm":  # without mesh
             rollout_groups, metrics = env.sample(
-                inference_ctx=policy_ctx,
+                inference_ctx=self._policy_ctx,
                 n_examples=n_examples,
                 n_generations=n_generations,
                 temperature=temperature,
@@ -330,7 +363,18 @@ class RolloutWorker:
             self._current_weight_step = update.weight_id
             logger.info(f"Received new weights from step {update.weight_id}")
             self._policy_model = update.model
-            self._inference_server.reload(lambda model: self._policy_model)
+
+            if self.config.inference_type == "levanter":
+                self._inference_server.reload(lambda model: self._policy_model)
+            elif self.config.inference_type == "vllm":
+                nnx_state = levanter_to_nnx_state(self._policy_model)
+                self._policy_ctx.llm.llm_engine.model_executor.driver_worker.sync_weights(
+                    nnx_state,
+                    mappings=MODEL_MAPPINGS[self.config.vllm_model_name],
+                    transpose_keys=MODEL_TRANSPOSE_KEYS[self.config.vllm_model_name],
+                    reshard_fn=None,
+                )
+
             return update.model
         else:
             logger.info("No new weights available")

@@ -23,7 +23,7 @@ import jax
 import numpy as np
 from transformers import PreTrainedTokenizer
 
-from marin.rl.inference_ctx import InferenceContext
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import RolloutGroup
 
 from .base import MarinEnv
@@ -284,7 +284,7 @@ class MockEnv(MarinEnv):
 
     def sample(
         self,
-        inference_ctx: InferenceContext,
+        inference_ctx: BaseInferenceContext,
         n_examples: int,
         n_generations: int,
         temperature: float,
