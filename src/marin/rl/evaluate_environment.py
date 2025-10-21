@@ -32,6 +32,7 @@ from ray.runtime_env import RuntimeEnv
 from transformers import AutoConfig, AutoTokenizer
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.inference.engine import InferenceEngineConfig
+from levanter.infra.ray_tpu import run_on_pod_ray
 
 from marin.resources import TpuPodConfig
 from marin.training.training import _add_run_env_variables
@@ -82,7 +83,6 @@ class EnvironmentEvalConfig:
     """TPU type to use for evaluation."""
 
 
-@ray.remote(max_retries=3)
 def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     """Run environment evaluation."""
 
@@ -134,7 +134,6 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             max_seqs=16,
             max_seq_len=config.max_input_length + config.max_output_length,
             page_size=32,
-            max_pages=16 * 32,
             max_seqs_in_prefill=16,
         ),
     )
@@ -144,17 +143,28 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     tokenizer = AutoTokenizer.from_pretrained(config.model_checkpoint)
 
     @ray.remote(**rollout_kwargs)
-    def inference_worker_task():
+    def inference_worker_task_inner():
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
 
-            # Initialize Levanter
+            # Initialize Levanter - this creates the concrete mesh from the abstract one
             env_name = config.env_config.env_class.split(".")[-1]
             trainer_config.id = f"eval-rollout-{env_name}"
             levanter.initialize(trainer_config)
 
             hf_config = AutoConfig.from_pretrained(config.model_checkpoint)
-            model_config = LlamaConfig.from_hf_config(hf_config)
+            # Ignore this for now will push this on user level in abstraction
+            if "qwen" in config.model_checkpoint.lower():
+                from levanter.models.qwen import Qwen3Config
+                model_config = Qwen3Config.from_hf_config(hf_config)
+                # Qwen3-4B has head_dim=128
+                if hasattr(hf_config, 'head_dim'):
+                    model_config = dataclasses.replace(model_config, head_dim=hf_config.head_dim)
+                else:
+                    # For Qwen3-4B, set the correct head_dim
+                    model_config = dataclasses.replace(model_config, head_dim=128)
+            else:
+                model_config = LlamaConfig.from_hf_config(hf_config)
             logger.info(f"Model config: {model_config}")
 
             # Adjust the max sequence length of the model to reduce memory usage.
@@ -173,7 +183,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
                 checkpoint=config.model_checkpoint,
                 model_config=model_config,
                 trainer_config=trainer_config,
-                mesh=trainer_config.device_mesh,
+                mesh=trainer_config.device_mesh,  # Now this is concrete after levanter.initialize
                 # use the compute axis mapping for inference
                 axis_mapping=trainer_config.compute_axis_mapping,
                 vocab_axis=Vocab,
@@ -182,27 +192,35 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             )
             logger.info(f"Policy model: {policy_model}")
 
-            with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
+            # Enter mesh context for sampling, like RolloutWorker does in _sample_batch
+            with (
+                trainer_config.device_mesh,
+                hax.axis_mapping(trainer_config.compute_axis_mapping),
+            ):
                 inference_server = InferenceServer.create(
                     inference_server_config,
                     model=policy_model,
                     tokenizer=tokenizer,
                 )
+                
+                # Start the server in a background thread
+                import threading
+                threading.Thread(target=inference_server.serve, daemon=True).start()
+                
+                # Wait a moment for server to start
+                import time
+                time.sleep(2)
 
-            env = load_environment_from_spec(config.env_config)
-            logger.info(f"Loaded environment: {env}")
+                env = load_environment_from_spec(config.env_config)
+                logger.info(f"Loaded environment: {env}")
 
-            policy_ctx = InferenceContext(
-                tokenizer=tokenizer,
-                inference_server=inference_server,
-                max_tokens=config.max_input_length + config.max_output_length,
-                stop_tokens=config.stop_tokens,
-            )
+                policy_ctx = InferenceContext(
+                    tokenizer=tokenizer,
+                    inference_server=inference_server,
+                    max_tokens=config.max_input_length + config.max_output_length,
+                    stop_tokens=config.stop_tokens,
+                )
 
-            with (
-                trainer_config.device_mesh,
-                hax.axis_mapping(trainer_config.compute_axis_mapping),
-            ):
                 # Sample examples, generate responses, and create rollouts from selected lesson
                 rollout_groups, metrics = env.sample(
                     inference_ctx=policy_ctx,
@@ -235,7 +253,15 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
 
             return metrics
 
-    inference_task = inference_worker_task.remote()
+    # Use run_on_pod_ray like RLJob does to handle TPU allocation properly
+    # Note: Use num_slices=1 for evaluation (single model inference, not distributed training)
+    inference_task = run_on_pod_ray.remote(
+        inference_worker_task_inner,
+        config.tpu_type,
+        num_slices=1,
+        max_retries_failure=3,
+        max_retries_preemption=10,
+    )
     # Wait for the task to complete and return the actual results
     return ray.get(inference_task)
 
