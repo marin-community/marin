@@ -43,22 +43,49 @@ def evaluate(config: EvaluationConfig) -> None:
 
     start_time: float = time.time()
     if config.launch_with_ray:
-        evaluator.launch_evaluate_with_ray(
-            model,
-            evals=config.evals,
-            output_path=config.evaluation_path,
-            max_eval_instances=config.max_eval_instances,
-            resource_config=config.resource_config,
-            max_length=config.max_length,
-        )
+        # Pass generation_kwargs only for Levanter evaluator
+        if config.evaluator == "levanter_lm_evaluation_harness":
+            evaluator.launch_evaluate_with_ray(
+                model,
+                evals=config.evals,
+                output_path=config.evaluation_path,
+                max_eval_instances=config.max_eval_instances,
+                resource_config=config.resource_config,
+                wandb_tags=config.wandb_tags,
+                max_length=config.max_length,
+                generation_kwargs=config.generation_params,
+            )
+        else:
+            evaluator.launch_evaluate_with_ray(
+                model,
+                evals=config.evals,
+                output_path=config.evaluation_path,
+                max_eval_instances=config.max_eval_instances,
+                resource_config=config.resource_config,
+                wandb_tags=config.wandb_tags,
+                max_length=config.max_length,
+            )
     else:
-        evaluator.evaluate(
-            model,
-            evals=config.evals,
-            output_path=config.evaluation_path,
-            max_eval_instances=config.max_eval_instances,
-            max_length=config.max_length,
-        )
+        # Pass generation_kwargs only for Levanter evaluator
+        if config.evaluator == "levanter_lm_evaluation_harness":
+            evaluator.evaluate(
+                model,
+                evals=config.evals,
+                output_path=config.evaluation_path,
+                max_eval_instances=config.max_eval_instances,
+                wandb_tags=config.wandb_tags,
+                max_length=config.max_length,
+                generation_kwargs=config.generation_params,
+            )
+        else:
+            evaluator.evaluate(
+                model,
+                evals=config.evals,
+                output_path=config.evaluation_path,
+                max_eval_instances=config.max_eval_instances,
+                wandb_tags=config.wandb_tags,
+                max_length=config.max_length,
+            )
 
     logger.info(f"Done (total time: {time.time() - start_time} seconds)")
 

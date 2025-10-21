@@ -141,6 +141,8 @@ class VllmTpuEvaluator(Evaluator, ABC):
         output_path: str,
         max_eval_instances: int | None = None,
         resource_config: ResourceConfig | None = None,
+        wandb_tags: list[str] | None = None,
+        max_length: int | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
@@ -157,7 +159,9 @@ class VllmTpuEvaluator(Evaluator, ABC):
             evals: list[EvalTaskConfig],
             output_path: str,
             max_eval_instances: int | None = None,
+            wandb_tags: list[str] | None = None,
+            max_length: int | None = None,
         ) -> None:
-            self.evaluate(model, evals, output_path, max_eval_instances)
+            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags, max_length)
 
-        ray.get(launch.remote(model, evals, output_path, max_eval_instances))
+        ray.get(launch.remote(model, evals, output_path, max_eval_instances, wandb_tags, max_length))

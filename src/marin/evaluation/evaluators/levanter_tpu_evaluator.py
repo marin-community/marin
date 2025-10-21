@@ -83,6 +83,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         resource_config: ResourceConfig | None = None,
         wandb_tags: list[str] | None = None,
         max_length: int | None = None,
+        generation_kwargs: dict | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
@@ -104,7 +105,8 @@ class LevanterTpuEvaluator(Evaluator, ABC):
             max_eval_instances: int | None = None,
             wandb_tags: list[str] | None = None,
             max_length: int | None = None,
+            generation_kwargs: dict | None = None,
         ) -> None:
-            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags, max_length=max_length)
+            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags, max_length=max_length, generation_kwargs=generation_kwargs)
 
-        ray.get(launch.remote(model, evals, output_path, max_eval_instances, wandb_tags, max_length))
+        ray.get(launch.remote(model, evals, output_path, max_eval_instances, wandb_tags, max_length, generation_kwargs))

@@ -81,6 +81,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         show_logs_from_ray: bool = False,
         max_length: int | None = None,
         print_every_n: int | None = None,
+        generation_kwargs: dict | None = None,
     ) -> None:
         """
         Runs Levanter's lm-eval harness on the specified model and set of tasks.
@@ -116,7 +117,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             # In the future, we should make this user-configurable.
             #
             # NOTE (chiheem 2025-09-30): We should make the users pass TrainerConfig so that they
-            # are forced to customize the TrainerConfig according to their device, device, and model.
+            # are forced to customize the TrainerConfig according to their data, device, and model.
             # Current config is customized for our 8B model on v6e-8.
             #
             trainer_config = TrainerConfig(
@@ -152,6 +153,11 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 "apply_chat_template": model.apply_chat_template,
                 "sample_logging": eval_harness.SampleLoggingConfig(log_all=True),  # Enable sample collection
             }
+            
+            # Add generation_kwargs if provided
+            if generation_kwargs is not None:
+                harness_config_kwargs["generation_kwargs"] = generation_kwargs
+                logger.info(f"Setting generation_kwargs={generation_kwargs} in LmEvalHarnessConfig")
 
             if max_length is not None:
                 logger.info(f"Setting max_length={max_length} in LmEvalHarnessConfig")
