@@ -1208,7 +1208,7 @@ class InferenceEngine:
             submit_time = submit_done - submit_start
             if iter_time > 0:
                 tps_total = new_tokens / iter_time
-                logger.info(
+                logger.debug(
                     f"Decode iter: total {iter_time:.3f}s (device {device_time:.3f}s, host {host_time:.3f}s, "
                     f"submit {submit_time:.3f}s), "
                     f"fake_submit {fake_submit_done - fake_submit_start:.3f}s, "
@@ -1252,7 +1252,7 @@ class InferenceEngine:
         total_generated = sum(len(seq_outputs) for seq_outputs in outputs_list)
         total_time = time.time() - time_in
         tps_overall = (total_generated / total_time) if total_time > 0 else 0.0
-        logger.info(f"Batch generated in {total_time:.2f}s, {total_generated} tokens, {tps_overall:.2f} tok/s")
+        logger.debug(f"Batch generated in {total_time:.2f}s, {total_generated} tokens, {tps_overall:.2f} tok/s")
         # Clear results for these requests now that we've assembled outputs
         for rid in call_rids:
             if rid in self.results:
@@ -1351,6 +1351,16 @@ class InferenceEngine:
             dr.tokens_decoded += 1
             appended += 1
 
+            # # Print accumulated decoded text as it is generated -- For debugging
+            # print_every_n = 10
+            # if dr.tokens_decoded % print_every_n == 0:
+            #     try:
+            #         # Decode the full sequence so far
+            #         full_text = self.tokenizer.decode(dr.token_list, skip_special_tokens=False)
+            #         logger.info(f"[Request {rid}, Choice {cid}] Tokens {dr.tokens_decoded}: '{full_text}'")
+            #     except Exception as e:
+            #         logger.info(f"[Request {rid}, Choice {cid}] Tokens {dr.tokens_decoded}: <decode_error: {e}>")
+
         # Update done flags based on snapshot
         for local_slot, is_done in enumerate(fins):
             if not bool(is_done):
@@ -1362,8 +1372,15 @@ class InferenceEngine:
             dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
             dr.done = True
 
+            # Print final complete text when sequence is finished
+            try:
+                full_text = self.tokenizer.decode(dr.token_list, skip_special_tokens=False)
+                logger.debug(f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): '{full_text}'")
+            except Exception as e:
+                logger.error(f"[Request {rid}, Choice {cid}] FINAL ({dr.tokens_decoded} tokens): <decode_error: {e}>")
+
         num_finished = int(fins.sum()) if hasattr(fins, "sum") else 0
-        logger.info(f"extract: appended={appended} (drained={n}) unmapped={unmapped} finished_count={num_finished}")
+        logger.debug(f"extract: appended={appended} (drained={n}) unmapped={unmapped} finished_count={num_finished}")
 
         return appended
 

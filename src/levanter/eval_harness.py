@@ -82,6 +82,7 @@ from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, use_cpu_device
 from levanter.utils.tree_utils import inference_mode
+from levanter.utils.py_utils import FailSafeJSONEncoder
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +243,12 @@ class _LmEvalHarnessWorker:
             raise ValueError("Only process 0 can create the harness")
 
     def worker_message_loop(self):
+        """
+        Main message loop for worker processes.
+
+        Continuously listens for messages from the main process and handles
+        loglikelihood computation requests until a STOP message is received.
+        """
         while True:
             message = self._receive_message()
 
@@ -291,6 +298,8 @@ class _LmEvalHarnessWorker:
 
 
 class _Message:
+    """Message types for communication between worker processes."""
+
     STOP = 0
     LOGLIKELIHOOD = 1
 
@@ -326,6 +335,14 @@ def get_padding_count_from_batch(batch: LmExample, pad_token_id: int) -> tuple[i
 
 
 class LevanterHarnessLM(TemplateLM):
+    """
+    Levanter implementation of the LM Eval Harness TemplateLM interface.
+
+    This class provides the interface between Levanter models and the LM Eval Harness
+    evaluation framework. It handles loglikelihood computation and text generation
+    for various evaluation tasks.
+    """
+
     def __init__(self, leader: _LmEvalHarnessWorker):
         super().__init__()
         self.leader = leader
@@ -403,17 +420,25 @@ class LevanterHarnessLM(TemplateLM):
         return self.tokenizer.eos_token_id
 
     def set_current_task(self, task_name: str):
-        """Set the current task name for organizing sample outputs."""
         self._current_task = task_name
         if self.sample_logging_config.should_log() and task_name not in self.sample_outputs:
             self.sample_outputs[task_name] = []
 
     def get_sample_outputs(self) -> dict[str, list[dict]]:
-        """Get all stored sample outputs."""
+        """
+        Get all stored sample outputs.
+
+        Returns:
+            Dictionary mapping task names to lists of sample outputs
+        """
         return self.sample_outputs
 
     def clear_sample_outputs(self):
-        """Clear all stored sample outputs."""
+        """
+        Clear all stored sample outputs.
+
+        Removes all previously collected sample outputs from memory.
+        """
         self.sample_outputs.clear()
 
     def _prepare_bucket(self, task_name: str) -> list[dict[str, str]] | None:
@@ -679,9 +704,13 @@ class LevanterHarnessLM(TemplateLM):
             # Copy and process generation kwargs
             processed_gen_kwargs = gen_kwargs.copy()
 
-            # Apply defaults from generation_kwargs (user config) first
+            # Override lm-eval defaults with our generation_kwargs (user config)
+            # This ensures our parameters take precedence over lm-eval's defaults
             for key, value in self.generation_kwargs.items():
-                processed_gen_kwargs.setdefault(key, value)
+                old_value = processed_gen_kwargs.get(key)
+                processed_gen_kwargs[key] = value
+                if old_value != value:
+                    logger.info(f"Overriding lm-eval config {key}={old_value} with {key}={value}")
 
             # Standardize kwargs using our _modify_gen_kwargs method
             processed_gen_kwargs = self._modify_gen_kwargs(processed_gen_kwargs)
@@ -723,7 +752,8 @@ class LevanterHarnessLM(TemplateLM):
                 max_stop_seqs = max(max_stop_seqs, num_stop_seqs)
                 max_stop_tokens = max(max_stop_tokens, num_stop_tokens)
 
-        # Taken from: config/sampler/sample_llama8b.yaml
+        # [ChiHeem,2025-10-06] TODO: Pass this from marin to allow users to
+        # optimize the inference based on hardware and model.
         engine_cfg = InferenceEngineConfig(
             max_stop_seqs=max_stop_seqs,
             max_stop_tokens=max_stop_tokens,
@@ -732,7 +762,6 @@ class LevanterHarnessLM(TemplateLM):
             page_size=8,
             compute_dtype=jnp.bfloat16,
         )
-
         engine = InferenceEngine.from_model_with_config(
             model=self.leader.model, tokenizer=self.tokenizer, config=engine_cfg
         )
@@ -778,7 +807,10 @@ class LevanterHarnessLM(TemplateLM):
 
         # Pass the callback to the engine if profiling is enabled
         step_callback = decode_step_callback if self.profiler_config.enabled else None
-        result = engine.generate(gen_requests, step_callback=step_callback)
+        result = engine.generate(
+            gen_requests,
+            step_callback=step_callback,
+        )
 
         # Decode first generation per request (LM Harness expects one string per request)
         outputs: list[str] = []
@@ -798,6 +830,7 @@ class LevanterHarnessLM(TemplateLM):
                 output_idx += 1  # consume one generation per request
             else:
                 text = ""
+                logger.info(f"Generation {i} - No tokens available, using empty string")
                 outputs.append(text)
 
             current_task = getattr(self, "_current_task", "generation_task")
@@ -901,13 +934,30 @@ class TaskConfig:
     doc_to_choice: str | None = None
     """Jinja2 template string to process a sample into a list of possible string choices for multiple_choice tasks. """
 
+    # Extra Levanter-only config to control generation stops per task
+    additional_stop_strings: list[str] | None = None
+
     def to_dict(self):
+        """
+        Convert the TaskConfig to a dictionary, excluding None values.
+
+        Returns:
+            Dictionary representation of the task configuration
+        """
         base_dict = dataclasses.asdict(self)
         return {k: v for k, v in base_dict.items() if v is not None}
 
 
 @dataclass(frozen=True)
 class LmEvalHarnessConfig:
+    """
+    Configuration for running the LM Eval Harness.
+
+    This class contains all the configuration options needed to run the LM Eval Harness
+    on a Levanter model, including task specifications, generation parameters, and
+    logging options.
+    """
+
     task_spec: list[TaskConfig | str]
     max_examples: int | None = None
     max_length: int | None = None
@@ -938,6 +988,12 @@ class LmEvalHarnessConfig:
         return self.generation_kwargs.get("max_gen_toks", 256)
 
     def to_task_spec(self) -> list[str | dict]:
+        """
+        Convert task specifications to a list of dictionaries or strings.
+
+        Returns:
+            List of task specifications, with TaskConfig objects converted to dictionaries
+        """
         return [task.to_dict() if isinstance(task, TaskConfig) else task for task in self.task_spec]
 
     def to_task_dict(self) -> dict:
@@ -1062,6 +1118,13 @@ class LmEvalHarnessConfig:
 
 @dataclass(frozen=True)
 class EvalHarnessMainConfig:
+    """
+    Main configuration for running the LM Eval Harness as a standalone script.
+
+    This configuration combines the evaluation harness settings with model and
+    training configuration needed to load and run a Levanter model for evaluation.
+    """
+
     eval_harness: LmEvalHarnessConfig
     tokenizer: str
     checkpoint_path: str
@@ -1077,10 +1140,12 @@ class EvalHarnessMainConfig:
 
     @property
     def EvalBatch(self):
+        """Get the evaluation batch axis from the trainer configuration."""
         return self.trainer.EvalBatch
 
     @cached_property
     def the_tokenizer(self):
+        """Load and return the tokenizer from the specified path."""
         return load_tokenizer(self.tokenizer)
 
 
@@ -1097,13 +1162,20 @@ def run_lm_eval_harness(
     Run the LM Eval Harness on the given model and tasks.
 
     Args:
+        config: Configuration for the evaluation harness
+        model: The Levanter model to evaluate
+        tokenizer: Tokenizer for the model
+        EvalBatch: Batch axis for evaluation
+        axis_resources: Resource mapping for distributed computation
+        mp: Mixed precision policy
         profiler_config: Optional ProfilerConfig for profiling during evaluation
 
     Returns:
-        If running on process 0, returns the outputs of the LM Eval Harness with the following extra keys.
+        If running on process 0, returns the outputs of the LM Eval Harness with the following extra keys:
         - "averages": A dictionary with macro and micro averages for all metrics.
         Otherwise, returns None.
     """
+    # Build the tasks dictionary
     tasks_to_run = config.to_task_dict()
 
     outputs = _actually_run_eval_harness(
@@ -1251,6 +1323,12 @@ def _compute_averages(outputs):
 
 
 def run_eval_harness_main(config: EvalHarnessMainConfig):
+    """
+    Main function for running the LM Eval Harness as a standalone script.
+
+    Args:
+        config: Configuration containing model, tokenizer, and evaluation settings
+    """
     config.trainer.initialize()
     # Ensure __main__ logger is at INFO level for profiler messages
     logger.setLevel(logging.INFO)
@@ -1275,7 +1353,10 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
             converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
             converter = converter.replaced(reference_checkpoint=config.checkpoint_path, tokenizer=tokenizer)
             model = converter.load_pretrained(
-                model_config.model_type, ref=config.checkpoint_path, dtype=config.trainer.mp.compute_dtype  # type: ignore
+                model_config.model_type,
+                ref=config.checkpoint_path,
+                dtype=config.trainer.mp.compute_dtype,  # type: ignore
+                axis_mapping=parameter_axis_mapping,
             )
         else:
             with use_cpu_device():
@@ -1322,17 +1403,25 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
             # log the results as json
             logger.info("uploading artifacts...")
             with open("lm_eval_harness_results.json", "w") as f:
-                json.dump(outputs, f, indent=2, default=_json_default)
+                json.dump(outputs, f, indent=2, cls=FailSafeJSONEncoder)
                 f.flush()
                 f_path = f.name
                 levanter.tracker.current_tracker().log_artifact(f_path, name="lm_eval_harness_results")
 
-            print(json.dumps(outputs, indent=2, default=_json_default), flush=True)
+            print(json.dumps(outputs, indent=2, cls=FailSafeJSONEncoder), flush=True)
 
         return outputs
 
 
 def log_report_to_tracker(prefix: str, report: dict, tracker: Optional[levanter.tracker.Tracker] = None):
+    """
+    Log evaluation results to the tracker.
+
+    Args:
+        prefix: Prefix for the logged metrics
+        report: Dictionary containing evaluation results
+        tracker: Optional tracker instance, uses current tracker if None
+    """
     if tracker is None:
         tracker = levanter.tracker.current_tracker()
 
@@ -1358,29 +1447,20 @@ def log_report_to_tracker(prefix: str, report: dict, tracker: Optional[levanter.
         tracker.log(to_log, step=None)
 
 
-def _json_default(value):
-    """
-    Provide a best-effort JSON serialization for objects returned by the eval harness.
-    """
-    if dataclasses.is_dataclass(value):
-        return dataclasses.asdict(value)
-
-    if isinstance(value, set):
-        return list(value)
-
-    if hasattr(value, "to_dict") and callable(value.to_dict):
-        try:
-            return value.to_dict()
-        except Exception:
-            pass
-
-    if hasattr(value, "__dict__"):
-        return vars(value)
-
-    return repr(value)
-
-
 def lm_eval_harness(config: LmEvalHarnessConfig, tokenizer, EvalBatch, axis_resources, mp: jmp.Policy | None):
+    """
+    Create a callback function for running the LM Eval Harness during training.
+
+    Args:
+        config: Configuration for the evaluation harness
+        tokenizer: Tokenizer for the model
+        EvalBatch: Batch axis for evaluation
+        axis_resources: Resource mapping for distributed computation
+        mp: Mixed precision policy
+
+    Returns:
+        Callback function that can be used with the trainer
+    """
     tasks_to_run = config.to_task_dict()
 
     def lm_eval_harness(step: StepInfo, force=False):
@@ -1412,7 +1492,7 @@ def lm_eval_harness(config: LmEvalHarnessConfig, tokenizer, EvalBatch, axis_reso
             with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as f:
                 import json
 
-                json.dump(outputs, f, default=_json_default)
+                json.dump(outputs, f, cls=FailSafeJSONEncoder)
                 f.flush()
                 levanter.tracker.current_tracker().log_artifact(
                     f.name, name=f"lm_eval_harness_results.{step.step}.json", type="lm_eval_output"

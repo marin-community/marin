@@ -5,11 +5,9 @@ import dataclasses
 from dataclasses import dataclass
 from typing import NamedTuple
 
-import chex
 import jax
 import jax.numpy as jnp
 import optax
-from jax.sharding import PartitionSpec
 from optax import tree_utils as otu
 
 import haliax
@@ -20,6 +18,7 @@ from levanter.optim.util import map_flattened_linear_layers
 from levanter.utils.jax_utils import leaf_key_paths
 from levanter.optim.adamh import scale_by_adamh
 from levanter.optim.muon import zeropower_via_newtonschulz5
+
 
 @OptimizerConfig.register_subclass("muonH")
 @dataclass(frozen=True)
