@@ -77,7 +77,7 @@ class RolloutBatch(eqx.Module):
 
 ### Phase 1: Add metadata field to Rollout
 
-**File:** `src/marin/rl/types.py`
+**File:** `lib/marin/src/marin/rl/types.py`
 
 ```python
 class Rollout(eqx.Module):
@@ -99,7 +99,7 @@ Keep `RolloutMetadata` and `RolloutBatch` unchanged.
 
 ### Phase 2: Update rollout worker to attach metadata
 
-**File:** `src/marin/rl/rollout_worker.py`
+**File:** `lib/marin/src/marin/rl/rollout_worker.py`
 
 The rollout worker should:
 1. Generate rollouts from environment (environment stays unchanged)
@@ -165,7 +165,7 @@ def _sample_batch(self, lesson_id: str, mode: str, rng) -> tuple[RolloutBatch | 
 
 ### Phase 3: Update replay buffer to read from rollout metadata
 
-**File:** `src/marin/rl/replay_buffer.py`
+**File:** `lib/marin/src/marin/rl/replay_buffer.py`
 
 #### Update config
 
@@ -291,7 +291,7 @@ def add_batches(self, new_batches: list[RolloutBatch]) -> None:
 
 ### Phase 4: Update train_worker.py
 
-**File:** `src/marin/rl/train_worker.py`
+**File:** `lib/marin/src/marin/rl/train_worker.py`
 
 Update ReplayBuffer instantiation to use renamed parameter:
 
@@ -311,7 +311,7 @@ self.replay_buffer = ReplayBuffer(
 
 ### Phase 5: Update rl_job.py config
 
-**File:** `src/marin/rl/rl_job.py`
+**File:** `lib/marin/src/marin/rl/rl_job.py`
 
 Add timestamp delay parameter:
 
@@ -404,9 +404,9 @@ replay_buffer = ReplayBuffer(
 ### Phase 7: Update environment implementations
 
 Since environments don't need to know about metadata in this design, no changes are required to:
-- `src/marin/rl/environments/base.py`
-- `src/marin/rl/environments/mock_env.py`
-- `src/marin/rl/environments/prime_intellect_env.py`
+- `lib/marin/src/marin/rl/environments/base.py`
+- `lib/marin/src/marin/rl/environments/mock_env.py`
+- `lib/marin/src/marin/rl/environments/prime_intellect_env.py`
 
 The environment interface stays clean and focused on domain logic.
 
