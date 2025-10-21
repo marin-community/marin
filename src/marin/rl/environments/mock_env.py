@@ -25,6 +25,7 @@ from transformers import PreTrainedTokenizer
 
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import RolloutGroup
+from openai.types.chat import ChatCompletion
 
 from .base import MarinEnv
 
@@ -322,7 +323,12 @@ class MockEnv(MarinEnv):
 
         for prompt, completion in zip(prompts, completions, strict=True):
             group = []
-            for choice in completion.choices:
+            if isinstance(completion, ChatCompletion):
+                choices = completion.choices
+            else:
+                choices = completion.outputs
+
+            for choice in choices:
                 true_answer = sampled_examples[prompt]
                 reward = self.task.compute_reward(true_answer, choice.message.content, tokenizer=inference_ctx.tokenizer)
                 rollout = inference_ctx.create_rollout_from_choice(

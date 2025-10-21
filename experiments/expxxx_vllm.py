@@ -153,9 +153,46 @@ def test_vllm_inference():
 @ray.remote(resources={"TPU-v4-8-head": 1}, runtime_env={"env_vars": {"VLLM_ENABLE_V1_MULTIPROCESSING": "0"}})
 def test_rollout_worker_vllm():
     """Test rollout worker with vLLM."""
-    from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
+    from marin.rl.rollout_worker import RolloutWorker, VLLMRolloutWorkerConfig, RolloutStorageConfig
+    from marin.rl.curriculum import CurriculumConfig, LessonConfig, EnvConfig
 
-    rollout_worker = RolloutWorker(config=RolloutWorkerConfig(inference_type="vllm"))
+    rollout_worker = RolloutWorker(
+        config=VLLMRolloutWorkerConfig(
+            inference_type="vllm",
+            vllm_model_name="meta-llama/Llama-3.2-1B-Instruct",
+            vllm_max_model_len=1024,
+            vllm_tensor_parallel_size=4,
+            tokenizer=AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct"),
+            run_id=f"test_rollout_worker_vllm_{uuid.uuid4().hex[:8]}",
+            log_freq=10,
+            max_rollouts=10,
+            initial_checkpoint=None,
+            rollout_storage=RolloutStorageConfig(
+                storage_type="memory",
+                queue_name=f"test_rollout_worker_vllm_{uuid.uuid4().hex[:8]}",
+            ),
+            weight_transfer=WeightTransferConfig(
+                mode=WeightTransferMode.ARROW_FLIGHT,
+                sync_interval_steps=1,
+            ),
+            curriculum_config=CurriculumConfig(
+                lessons=[
+                    LessonConfig(
+                        env_config=EnvConfig(
+                            type="marin.rl.environments.mock_env.MockEnv",
+                            config={
+                                "num_examples": 10,
+                                "num_generations": 10,
+                                "max_tokens": 1024,
+                                "temperature": 0.8,
+                                "mode": "train",
+                            },
+                        ),
+                    )
+                ],
+            ),
+        )
+    )
     rollout_worker.run()
 
 

@@ -44,7 +44,7 @@ from typing import Literal
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
-from marin.rl.inference_ctx import InferenceContext, vLLMInferenceContext
+from marin.rl.environments.inference_ctx import InferenceContext, vLLMInferenceContext
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.weight_utils import levanter_to_nnx_state, MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 
@@ -60,40 +60,47 @@ from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class RolloutWorkerConfig:
-    """Configuration for RolloutWorker."""
+@dataclass(kw_only=True)
+class BaseRolloutWorkerConfig:
+    """Base configuration for RolloutWorker."""
 
-    inference_server_config: InferenceServerConfig
-    trainer: TrainerConfig
-    model: LmConfig
     curriculum_config: CurriculumConfig
     rollout_storage: RolloutStorageConfig
     weight_transfer: WeightTransferConfig
     tokenizer: PreTrainedTokenizer
     run_id: str
-
+    trainer: TrainerConfig
     seed: int = 0
     """Random seed to use for sampling."""
-
     max_rollouts: int | None = None
     """Maximum number of rollouts to generate before stopping. Defaults to running forever."""
-
-    initial_checkpoint: str | None = None
-    """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
 
     log_freq: int = 10
 
     inference_type: Literal["levanter", "vllm"] = "levanter"
-    """Type of inference to use for rollouts."""
 
-    vllm_model_name: str = "meta-llama/Llama-3.2-1B-Instruct"
+
+@dataclass
+class LevanterRolloutWorkerConfig(BaseRolloutWorkerConfig):
+    """Configuration for RolloutWorker."""
+
+    inference_server_config: InferenceServerConfig
+    model: LmConfig
+    initial_checkpoint: str | None = None
+    """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
+
+
+@dataclass
+class VLLMRolloutWorkerConfig(BaseRolloutWorkerConfig):
+    """Configuration for RolloutWorker."""
+
+    vllm_model_name: str
     """Model name for vLLM."""
 
-    vllm_max_model_len: int = 1024
+    vllm_max_model_len: int
     """Max model length for vLLM."""
 
-    vllm_tensor_parallel_size: int = 4
+    vllm_tensor_parallel_size: int
     """Tensor parallel size for vLLM."""
 
 
@@ -141,6 +148,18 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
     )
 
 
+class BaseRolloutWorker:
+    """Base class for RolloutWorker."""
+
+    _transfer_client: WeightTransferClient
+    _rollout_writer: RolloutWriter
+    _tokenizer: PreTrainedTokenizer
+    _environments: dict[str, MarinEnv]
+
+    def __init__(self, config: BaseRolloutWorkerConfig):
+        self.config = config
+
+
 class RolloutWorker:
     """Asynchronous inference & rollout worker for RL training.
 
@@ -157,7 +176,7 @@ class RolloutWorker:
     _tokenizer: PreTrainedTokenizer
     _environments: dict[str, MarinEnv]
 
-    def __init__(self, config: RolloutWorkerConfig):
+    def __init__(self, config: BaseRolloutWorkerConfig):
         config.trainer.id = f"{config.run_id}-rollout"
         levanter.initialize(config.trainer)
 
