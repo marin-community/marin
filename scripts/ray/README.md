@@ -13,6 +13,27 @@ The `cluster.py` script is the main entry point for managing Ray clusters. It pr
 - Clean up resources and temporary files
 - Monitor cluster health with optional wandb integration
 
+## Shared Keys with `--marin-config`
+
+You can provide a project-level `.marin.yaml` to supply shared environment keys (for example `HF_TOKEN`, `WANDB_API_KEY`).
+Pass the file via `--marin-config` and the CLI will load those keys into the environment for the session (existing env vars are not overridden).
+
+Example:
+
+```bash
+# Load shared keys, then operate on a specific cluster config
+uv run scripts/ray/cluster.py \
+  --marin-config .marin.yaml \
+  --config infra/marin-us-east5-a.yaml \
+  list-jobs
+
+# Or specify by cluster name resolution
+uv run scripts/ray/cluster.py \
+  --marin-config .marin.yaml \
+  --cluster us-east5-a \
+  get-status
+```
+
 ## Command Reference
 
 ### Specifying Clusters

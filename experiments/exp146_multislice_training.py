@@ -22,6 +22,7 @@ from experiments.exp72_baselines import slimpajama_tokenized
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
+from marin.processing.tokenize import lm_data_config
 from marin.resources import TpuPodConfig
 
 llama_1_4b_multislice_train_config = SimpleTrainConfig(
@@ -34,7 +35,7 @@ llama_1_4b_multislice_train_config = SimpleTrainConfig(
 
 slimpajama_model = default_train(
     name="cathy-pjama-12",
-    tokenized=slimpajama_tokenized,
+    tokenized=lm_data_config(slimpajama_tokenized, permutation_type="linear"),
     model_config=llama_1_4b,
     train_config=llama_1_4b_multislice_train_config,
 )

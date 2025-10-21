@@ -53,7 +53,7 @@ class QualityAblationConfig:
     # Naming
     model_name_prefix: str = "8b-quality-eval"
 
-    permutation_type: PermutationType = "linear"
+    permutation_type: PermutationType = "feistel"
 
     def get_dataset_config(self, candidate_tokenized: TokenizerStep):
         """Creates the dataset configuration for the ablation."""

@@ -22,7 +22,7 @@ We try learning rates of [1e-5, 2e-5, 3e-5, 5e-5, 1e-4] to find the optimal rate
 import dataclasses
 
 from experiments.defaults import default_sft
-from experiments.exp606_sft import tulu3_llama_tokenize_step
+from experiments.exp606_sft import tulu3_llama_data_old
 from experiments.tootsie.exp916_tootsie_spoonbill_cooldown import llama_8b_fp32_attn, spoonbill_zloss_tulu3_sft_config
 from marin.execution.executor import executor_main
 
@@ -43,7 +43,7 @@ sft_experiments = []
 for lr, sft_config in zip(LEARNING_RATES, sft_configs, strict=True):
     experiment = default_sft(
         name=f"sft/tulu3_sft_spoonbill_945_lr_{lr:.0e}",
-        tokenized=tulu3_llama_tokenize_step,
+        tokenized=tulu3_llama_data_old,
         model_config=llama_8b_fp32_attn,
         sft_config=sft_config,
         tags=["llama", "8b", "exp945", "tootsie", "sft", "spoonbill"],

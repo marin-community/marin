@@ -23,12 +23,13 @@ from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config, llama_300m, llama_300m_train_config
 from experiments.pretraining_datasets import fineweb_edu, nemotron_cc, slimpajama, slimpajama_6b
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 
 slimpajama_6b_tokenized = default_tokenize(name="SlimPajama-6B", dataset=slimpajama_6b, tokenizer=llama3_tokenizer)
+slimpajama_6b_config = lm_data_config(slimpajama_6b_tokenized, permutation_type="linear")
 slimpajama_6b_model = default_train(
     name="SlimPajama-6B-300m",
-    tokenized=slimpajama_6b_tokenized,
+    tokenized=slimpajama_6b_config,
     model_config=llama_300m,
     train_config=llama_300m_train_config,
 )
@@ -43,25 +44,28 @@ slimpajama_tokenized = ExecutorStep(
         tokenizer=versioned(llama3_tokenizer),
     ),
 )
+slimpajama_config = lm_data_config(slimpajama_tokenized, permutation_type="linear")
 slimpajama_model = default_train(
     name="SlimPajama-627B-1.4b",
-    tokenized=slimpajama_tokenized,
+    tokenized=slimpajama_config,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
 
 fineweb_edu_tokenized = default_tokenize(name="fineweb-edu", dataset=fineweb_edu, tokenizer=llama3_tokenizer)
+fineweb_edu_config = lm_data_config(fineweb_edu_tokenized, permutation_type="linear")
 fineweb_edu_model = default_train(
     name="fineweb-edu-1.4b",
-    tokenized=fineweb_edu_tokenized,
+    tokenized=fineweb_edu_config,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
 
 nemotron_cc_tokenized = default_tokenize(name="nemotron_cc", dataset=nemotron_cc, tokenizer=llama3_tokenizer)
+nemotron_cc_config = lm_data_config(nemotron_cc_tokenized, permutation_type="linear")
 nemotron_cc_model = default_train(
     name="nemotron_cc-1.4b",
-    tokenized=nemotron_cc_tokenized,
+    tokenized=nemotron_cc_config,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )

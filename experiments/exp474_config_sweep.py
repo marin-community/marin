@@ -29,6 +29,7 @@ from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama_150m, llama_300m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, executor_main, versioned
+from marin.processing.tokenize import lm_data_config
 from marin.resources import TpuPodConfig
 
 # TODO: might be nice to do use wandb sweeps, but not today.
@@ -170,7 +171,7 @@ steps_150m = make_sweep_steps(
     prefix="sweep474-150m",
     model_config=llama_150m,
     train_configs=train_configs_150m,
-    tokenized_data=fineweb_edu_tokenized,
+    tokenized_data=lm_data_config(fineweb_edu_tokenized, permutation_type="linear"),
     tags=("llama", "150m", "474_config_sweep", "fineweb_edu"),
 )
 
@@ -178,7 +179,7 @@ steps_300m = make_sweep_steps(
     prefix="sweep474-300m",
     model_config=llama_300m,
     train_configs=train_configs_300m,
-    tokenized_data=fineweb_edu_tokenized,
+    tokenized_data=lm_data_config(fineweb_edu_tokenized, permutation_type="linear"),
     tags=("llama", "300m", "474_config_sweep", "fineweb_edu"),
 )
 

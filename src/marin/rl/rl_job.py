@@ -95,7 +95,7 @@ class RunConfig:
     max_retries_failure: int = 3
     """Maximum retries on worker failure"""
 
-    max_retries_preemption: int = 10
+    max_retries_preemption: int = 100
     """Maximum retries on preemption"""
 
     runtime_env: RuntimeEnv | None = None
@@ -282,8 +282,14 @@ class RLJob:
                 service=InferenceEngineConfig(
                     max_seq_len=max_tokens,  # New required parameter
                     max_seqs=max_seqs,
+<<<<<<< HEAD
                     page_size=page_size,
                     max_pages=max_pages,  # Replaces max_pages_per_seq
+=======
+                    max_seq_len=max_tokens,
+                    page_size=128,
+                    hbm_utilization=0.1,
+>>>>>>> origin/main
                     enable_logprobs=True,
                 ),
                 port=0,

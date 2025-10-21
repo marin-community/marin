@@ -19,6 +19,7 @@ from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
+from marin.processing.tokenize import lm_data_config
 
 # Get instruction dataset
 synthetic_instruction_dataset = get_instruction_dataset("sherryy/tulu-3-sft-personas-instruction-following-expanded")
@@ -33,12 +34,11 @@ synthetic_instruction_llama_tokenized = default_tokenize(
     tokenizer=llama3_instruct_tokenizer,
     format=llama3_instruct_trainable_chat_template,
 )
-
 seed = 1
 
 tulu3_sft_8b_synthetic_instruction_model = default_sft(
     name=f"checkpoints/tulu3_sft_synthetic_instruction{seed}",
-    tokenized=synthetic_instruction_llama_tokenized,
+    tokenized=lm_data_config(synthetic_instruction_llama_tokenized, permutation_type="linear"),
     model_config=llama_8b,
     sft_config=SimpleSFTConfig(
         train_batch_size=64,

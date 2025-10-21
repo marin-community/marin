@@ -116,11 +116,10 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
     Args:
         config (EvalLmConfig): The configuration for visualizing log probabilities.
     """
-    # _separate_process_fn(eval_lm_main, (config,), {})
-
     try:
-        if config.hf_checkpoint and is_remote_path(config.hf_checkpoint):
-            local_path = os.path.join("/dev/shm/levanter-lm-eval", ckpt_path_to_step_name(config.hf_checkpoint))
+        if config.hf_checkpoint:
+            # Use GCSFuse directly so that we don't have to download the checkpoint to the local filesystem
+            local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.hf_checkpoint))
             download_from_gcs(
                 gcs_path=config.hf_checkpoint,
                 destination_path=local_path,
@@ -128,8 +127,12 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
             config.hf_checkpoint = local_path
             print(f"Downloaded model checkpoint to {local_path}: {os.listdir(local_path)}")
         elif config.checkpoint_path and is_remote_path(config.checkpoint_path):
-            config.checkpoint_path = discover_levanter_checkpoints(config.checkpoint_path)[-1]
-
+            local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.checkpoint_path))
+            download_from_gcs(
+                gcs_path=config.checkpoint_path,
+                destination_path=local_path,
+            )
+            config.checkpoint_path = discover_levanter_checkpoints(local_path)[-1]
         eval_lm_main(config)
     finally:
         if config.hf_checkpoint:
@@ -139,6 +142,9 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
             else:
                 shutil.rmtree(HUGGINGFACE_CACHE_PATH, ignore_errors=True)
                 print(f"Deleted local checkpoint at {HUGGINGFACE_CACHE_PATH}.")
+        if "gcsfuse" not in local_path:
+            shutil.rmtree(local_path, ignore_errors=True)
+            print(f"Deleted local checkpoint at {local_path}.")
 
 
 def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
@@ -166,7 +172,7 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
         model=config.model,
         data=config.datasets,
         trainer=TrainerConfig(
-            tracker=WandbConfig(project="marin", tags=["eval_lm", *config.wandb_tags], name=name, id=name[:64]),
+            tracker=WandbConfig(project="marin", tags=["eval_lm", *config.wandb_tags], name=name),
             ray=RayConfig(auto_start_cluster=False),
             per_device_eval_parallelism=config.per_device_batch_size,
             max_eval_batches=max_eval_batches,
@@ -174,7 +180,5 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
         log_entropy=config.log_entropy,
     )
     ray.get(
-        do_eval_lm.options(resources={"TPU": 4, f"TPU-{config.resource_config.tpu_type}-head": 1}).remote(
-            levanter_config
-        )
+        do_eval_lm.options(resources={"TPU": 4, f"{config.resource_config.tpu_type}-head": 1}).remote(levanter_config)
     )
