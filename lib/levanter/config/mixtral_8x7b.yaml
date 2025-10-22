@@ -1,0 +1,31 @@
+data:
+  train_urls:
+    - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz"
+  validation_urls:
+    - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz"
+  cache_dir: "gs://levanter-data/tokenized/openwebtext_llama/"
+  tokenizer: "mistralai/Mixtral-8x7B-v0.1"
+model:
+  type: mixtral
+# TODO: uncomment this once we resolve the resource exhaustion issue
+# initialize_from_hf: "mistralai/Mistral-7B-v0.1"
+# use_hf_model_config: true
+trainer:
+  tracker:
+    - type: wandb
+      project: "levanter"
+      tags: [ "openwebtext", "llama", "itest"]
+
+  mp: p=f32,c=bfloat16
+  train_batch_size: 256  # set for v4-64 TPU
+  num_train_steps: 1000
+  steps_per_eval: 50
+  tensor_parallel_axes: ["mlp", "heads"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+  axis_resources:
+    token: "data"
+optimizer:
+  learning_rate: 1.2E-5  # set low for fine-tuning
+  weight_decay: 0.1
+  min_lr_ratio: 0.1

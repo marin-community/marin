@@ -12,9 +12,12 @@ requires-python = ">=3.11"
 dependencies = ["marin"]
 
 [tool.uv.workspace]
-members = ["lib/marin"]
+members = ["lib/marin", "lib/levanter"]
 
 [tool.uv.sources.marin]
+workspace = true
+
+[tool.uv.sources.levanter]
 workspace = true
 
 [tool.black]
