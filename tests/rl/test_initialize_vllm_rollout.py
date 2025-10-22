@@ -24,9 +24,12 @@ from pathlib import Path
 from levanter.tracker.json_logger import JsonLoggerConfig
 import jmp
 from levanter.distributed import RayConfig
+from levanter.models.llama import LlamaConfig
+import ray
+from vllm import SamplingParams
 
 
-def test_initialize_vllm_rollout(tmpdir):
+def test_initialize_vllm_rollout(tmpdir, ray_tpu_cluster):
     # weight_transfer_config = WeightTransferConfig(
     #         mode=WeightTransferMode.ARROW_FLIGHT,
     #         sync_interval_steps=1,
@@ -46,13 +49,49 @@ def test_initialize_vllm_rollout(tmpdir):
     #     axis_mapping=axis_mapping,
     # )
 
+    # os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+    # os.environ["SKIP_JAX_PRECOMPILE"] = "1"
+    # vllm_inference_ctx = vLLMInferenceContext(
+    #     model_name="meta-llama/Llama-3.2-1B-Instruct",
+    #     max_model_len=1024,
+    #     tensor_parallel_size=1,
+    #     gpu_memory_utilization=0.60,
+    # )
+    # print(vllm_inference_ctx.llm.llm_engine.model_executor.driver_worker.model_runner.state)
+    # completions = vllm_inference_ctx.batch_completions(
+    #     prompts=["Hello, how are you?"],
+    #     temperature=1.0,
+    #     n=1,
+    #     max_tokens=16,
+    #     stop=None,
+    # )
+    # print(completions)
+
+    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
+
     rollout_worker = RolloutWorker(
         config=VLLMRolloutWorkerConfig(
+            model=LlamaConfig(
+                seq_len=4096,
+                hidden_dim=2048,
+                intermediate_dim=8192,
+                num_heads=32,
+                num_kv_heads=8,
+                num_layers=16,
+            ),
             inference_type="vllm",
             vllm_model_name="meta-llama/Llama-3.2-1B-Instruct",
             vllm_max_model_len=1024,
-            vllm_tensor_parallel_size=4,
-            tokenizer=AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct"),
+            vllm_tensor_parallel_size=1,
+            gpu_memory_utilization=0.60,
+            sampling_params=SamplingParams(
+                temperature=1.0,
+                n=4,
+                max_tokens=16,
+                stop=None,
+                logprobs=1,
+            ),
+            tokenizer=tokenizer,
             run_id=f"test_rollout_worker_vllm_{uuid.uuid4().hex[:8]}",
             log_freq=10,
             max_rollouts=10,
@@ -92,20 +131,30 @@ def test_initialize_vllm_rollout(tmpdir):
                 # not really that often since just want to test out rollout worker capability
             ),
             curriculum_config=CurriculumConfig(
-                lessons=[
-                    LessonConfig(
-                        lesson_id="test_lesson",
+                lessons={
+                    "test": LessonConfig(
+                        lesson_id="test",
                         env_config=EnvConfig(
                             env_class="marin.rl.environments.mock_env.MockEnv",
-                            env_args={
-                                "num_examples": 1,
-                                "num_generations": 5,
-                                "max_tokens": 256,
-                            },
+                            env_args={"seed": 42, "task_type": "number_comparison"},
                         ),
-                    )
-                ],
+                        dependencies=[],
+                    ),
+                }
             ),
         )
     )
     rollout_worker.run()
+
+
+if __name__ == "__main__":
+    # log to stderr
+    import logging
+    import sys
+
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    cluster = ray.init(
+        "local", runtime_env={"env_vars": {"VLLM_ENABLE_V1_MULTIPROCESSING": "0", "SKIP_JAX_PRECOMPILE": "1"}}
+    )
+    test_initialize_vllm_rollout(ray_tpu_cluster=cluster)

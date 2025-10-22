@@ -40,6 +40,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
 from transformers import PreTrainedTokenizer
 from typing import Literal
+from vllm import SamplingParams
 
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
@@ -70,6 +71,7 @@ class BaseRolloutWorkerConfig:
     tokenizer: PreTrainedTokenizer
     run_id: str
     trainer: TrainerConfig
+    model: LmConfig
     seed: int = 0
     """Random seed to use for sampling."""
     max_rollouts: int | None = None
@@ -79,15 +81,15 @@ class BaseRolloutWorkerConfig:
 
     inference_type: Literal["levanter", "vllm"] = "levanter"
 
+    initial_checkpoint: str | None = None
+    """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
+
 
 @dataclass
 class LevanterRolloutWorkerConfig(BaseRolloutWorkerConfig):
     """Configuration for RolloutWorker."""
 
     inference_server_config: InferenceServerConfig
-    model: LmConfig
-    initial_checkpoint: str | None = None
-    """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
 
 
 @dataclass
@@ -102,6 +104,12 @@ class VLLMRolloutWorkerConfig(BaseRolloutWorkerConfig):
 
     vllm_tensor_parallel_size: int
     """Tensor parallel size for vLLM."""
+
+    gpu_memory_utilization: float
+    """GPU memory utilization for vLLM."""
+
+    sampling_params: SamplingParams
+    """Sampling parameters for vLLM."""
 
 
 def find_open_port() -> int:
@@ -182,13 +190,14 @@ class RolloutWorker:
 
         # Infer model_axis_size from the actual TPU configuration now that JAX is initialized.
         # For inference servers, we shard across all local devices on a single host.
-        config.inference_server_config = dataclasses.replace(
-            config.inference_server_config,
-            trainer=dataclasses.replace(
-                config.inference_server_config.trainer,
-                model_axis_size=jax.local_device_count(),
-            ),
-        )
+        if config.inference_type == "levanter":
+            config.inference_server_config = dataclasses.replace(
+                config.inference_server_config,
+                trainer=dataclasses.replace(
+                    config.inference_server_config.trainer,
+                    model_axis_size=jax.local_device_count(),
+                ),
+            )
 
         self.tracker = levanter.current_tracker()
         self.config = config
@@ -222,6 +231,8 @@ class RolloutWorker:
                 model_name=self.config.vllm_model_name,
                 max_model_len=self.config.vllm_max_model_len,
                 tensor_parallel_size=self.config.vllm_tensor_parallel_size,
+                gpu_memory_utilization=self.config.gpu_memory_utilization,
+                sampling_params=self.config.sampling_params,
             )
         elif self.config.inference_type == "levanter":
             with self.config.trainer.use_device_mesh(), hax.axis_mapping(self.config.trainer.compute_axis_mapping):

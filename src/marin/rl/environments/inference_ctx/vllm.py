@@ -14,20 +14,36 @@
 
 import logging
 import numpy as np
+import os
+from vllm import LLM, SamplingParams
 from vllm.outputs import RequestOutput, CompletionOutput
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 
 logger = logging.getLogger(__name__)
 
+os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+
 
 class vLLMInferenceContext(BaseInferenceContext):
     """Inference context for vLLM."""
 
-    def __init__(self, model_name: str, max_model_len: int, tensor_parallel_size: int):
-        from vllm import LLM
+    def __init__(
+        self,
+        model_name: str,
+        max_model_len: int,
+        tensor_parallel_size: int,
+        gpu_memory_utilization: float,
+        sampling_params: SamplingParams,
+    ):
 
-        self.llm = LLM(model=model_name, max_model_len=max_model_len, tensor_parallel_size=tensor_parallel_size)
+        self.llm = LLM(
+            model=model_name,
+            max_model_len=max_model_len,
+            tensor_parallel_size=tensor_parallel_size,
+            gpu_memory_utilization=gpu_memory_utilization,
+        )
         self.tokenizer = self.llm.get_tokenizer()
+        self.sampling_params = sampling_params
 
     def response_tokens_from_choice(self, choice: CompletionOutput) -> np.ndarray:
         """Extract token IDs with BPE round-trip."""
@@ -51,7 +67,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         stop: list[str] | None = None,
     ) -> list[RequestOutput]:
         """Batch completions from the inference server."""
-        from vllm import SamplingParams
+        # TODO(chris): allow the override of sampling params for each lessonconfig
 
         prompts_with_templates = [
             self.tokenizer.apply_chat_template(
@@ -60,13 +76,5 @@ class vLLMInferenceContext(BaseInferenceContext):
             for prompt in prompts
         ]
 
-        sampling_params = SamplingParams(
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stop=stop,
-            n=n,
-            seed=None,
-            logprobs=1,
-        )
-        outputs = self.llm.generate(prompts_with_templates, sampling_params)
+        outputs = self.llm.generate(prompts_with_templates, self.sampling_params)
         return outputs

@@ -19,8 +19,10 @@ import os
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
+from levanter.compat.hf_checkpoints import HFCompatConfig
 from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
+from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -42,43 +44,38 @@ from vllm import SamplingParams
 
 logger = logging.getLogger(__name__)
 
-MAX_TOKENS = 1024
-
 
 @dataclasses.dataclass
 class ModelConfig:
-    model_name: str
-    model_type: str
-    model_tokenizer: str
-    model_checkpoint: str
+    name: str
+    type: str
+    tokenizer: str
+    checkpoint: str
+    config_class: type[HFCompatConfig]
+
+    @property
+    def safe_name(self) -> str:
+        return self.name.replace("/", "-").lower()
 
 
-experiment_configs = [
-    ModelConfig(
-        model_name="meta-llama/Llama-3.2-1B-Instruct",
-        model_type="llama",
-        model_tokenizer="meta-llama/Llama-3.2-1B-Instruct",
-        model_checkpoint="meta-llama/Llama-3.2-1B-Instruct",
-    ),
-    # ModelConfig(
-    #     model_name="meta-llama/Llama-3.1-8B-Instruct",
-    #     model_type="llama",
-    #     model_tokenizer="meta-llama/Llama-3.1-8B-Instruct",
-    #     model_checkpoint="meta-llama/Llama-3.1-8B-Instruct",
-    # ),
-    # ModelConfig(
-    #     model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-    #     model_type="qwen",
-    #     model_tokenizer="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-    #     model_checkpoint="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-    # ),
-    # ModelConfig(
-    #     model_name="Qwen/Qwen3-4B-Instruct-2507",
-    #     model_type="qwen",
-    #     model_tokenizer="Qwen/Qwen3-4B-Instruct-2507",
-    #     model_checkpoint="Qwen/Qwen3-4B-Instruct-2507",
-    # ),
-]
+qwen4b = ModelConfig(
+    name="Qwen/Qwen3-4B-Instruct-2507",
+    type="qwen",
+    tokenizer="Qwen/Qwen3-4B-Instruct-2507",
+    checkpoint="Qwen/Qwen3-4B-Instruct-2507",
+    config_class=Qwen3Config,
+)
+llama1b = ModelConfig(
+    name="meta-llama/Llama-3.2-1B-Instruct",
+    type="llama",
+    tokenizer="meta-llama/Llama-3.2-1B-Instruct",
+    checkpoint="meta-llama/Llama-3.2-1B-Instruct",
+    config_class=LlamaConfig,
+)
+MODEL = llama1b
+WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
+MAX_TOKENS = 512
+RUN_ID = f"test-{MODEL.name.split('/')[-1]}-curriculum"
 
 
 def stop_tokens(tokenizer_name: str):
@@ -87,28 +84,64 @@ def stop_tokens(tokenizer_name: str):
     return [tokenizer.eos_token_id]
 
 
-def create_math_curriculum(run_id: str, model_name: str) -> CurriculumConfig:
-    from marin.rl.curriculum import SamplingParams
+def create_math_curriculum(run_id: str) -> CurriculumConfig:
+    """Create progressive math curriculum: comparison -> easy -> medium -> hard."""
 
     # Default sampling params for all lessons
-    default_sampling = SamplingParams(
-        temperature=1.0,
-        n_prompts=8,
-        n_generations_per_prompt=8,
-        max_tokens=MAX_TOKENS,
-        stop_tokens=stop_tokens(model_name),
-    )
+    # default_sampling = SamplingParams(
+    #     temperature=1.0,
+    #     n_prompts=8,
+    #     n_generations_per_prompt=8,
+    #     max_tokens=MAX_TOKENS,
+    #     stop_tokens=stop_tokens(MODEL.tokenizer),
+    # )
 
     lessons = {
-        "math": LessonConfig(
-            lesson_id="math",
+        "number_comparison": LessonConfig(
+            lesson_id="number_comparison",
             env_config=EnvConfig(
-                env_class="marin.rl.environments.math_env.MathEnv",
-                env_args={"seed": 42},
+                env_class="marin.rl.environments.mock_env.MockEnv",
+                env_args={"task_type": "number_comparison", "seed": 42},
             ),
             dependencies=[],
-            sampling_params=default_sampling,
+            # sampling_params=default_sampling,
         ),
+        # "addition_easy": LessonConfig(
+        #     lesson_id="addition_easy",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.mock_env.MockEnv",
+        #         env_args={"task_type": "addition", "difficulty": "easy", "seed": 42},
+        #     ),
+        #     dependencies=[LessonDependency(dependency_id="number_comparison", reward_threshold=0.8)],
+        #     # sampling_params=default_sampling,
+        # ),
+        # "addition_medium": LessonConfig(
+        #     lesson_id="addition_medium",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.mock_env.MockEnv",
+        #         env_args={"task_type": "addition", "difficulty": "medium", "seed": 42},
+        #     ),
+        #     dependencies=[LessonDependency(dependency_id="addition_easy", reward_threshold=0.8)],
+        #     # sampling_params=default_sampling,
+        # ),
+        # "addition_hard": LessonConfig(
+        #     lesson_id="addition_hard",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.mock_env.MockEnv",
+        #         env_args={"task_type": "addition", "difficulty": "hard", "seed": 42},
+        #     ),
+        #     dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+        #     # sampling_params=default_sampling,
+        # ),
+        # "math_full": LessonConfig(
+        #     lesson_id="math_full",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.math_env.MathEnv",
+        #         env_args={},
+        #     ),
+        #     dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+        #     # sampling_params=default_sampling,
+        # ),
     }
 
     return CurriculumConfig(
@@ -118,21 +151,21 @@ def create_math_curriculum(run_id: str, model_name: str) -> CurriculumConfig:
     )
 
 
-def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
-    hf_config = AutoConfig.from_pretrained(experiment_config.model_name)
-    config = LlamaConfig.from_hf_config(hf_config)
+def rl_train(name: str) -> ExecutorStep:
+    hf_config = AutoConfig.from_pretrained(MODEL.name)
+    config = MODEL.config_class.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=experiment_config.model_tokenizer)
+    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=MODEL.tokenizer)
 
     _ = WandbConfig
 
     trainer_config = TrainerConfig(
         # wandb is persistently crashing
         tracker=WandbConfig(
-            project="marin",
+            project="rl-mockenv-testing",
             name=name,
-            tags=["rl", "math", experiment_config.model_name.split("/")[-1]],
+            tags=["rl", "math", MODEL.name.split("/")[-1]],
         ),
         # tracker=TensorboardConfig(
         #     logdir=OutputName("tblogs"),
@@ -142,11 +175,11 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         # Set the train batch size to num_rollout_workers * n_generations * n_prompts
         # to ensure we accept an entire training batch from the rollout workers.
-        train_batch_size=64,
+        train_batch_size=64 * 4,
         # microbatch to avoid OOM
         per_device_parallelism=16,
-        num_train_steps=200,
-        steps_per_eval=10,
+        num_train_steps=50000,
+        steps_per_eval=100,
         checkpointer=CheckpointerConfig(
             base_path=OutputName("checkpoints"),
             save_interval=datetime.timedelta(seconds=600),
@@ -175,7 +208,7 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         max_weight_transfer_wait_time=10,
     )
 
-    curriculum_config = create_math_curriculum(name, experiment_config.model_name)
+    curriculum_config = create_math_curriculum(name)
 
     # Create RLJobConfig using the new unified interface
     config = RLJobConfig(
@@ -191,8 +224,10 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
                 max_rollout_step_delay=1,
             ),
         ),
-        vllm_model_name=experiment_config.model_name,
-        vllm_max_model_len=MAX_TOKENS,
+        curriculum=curriculum_config,
+        tokenizer=MODEL.tokenizer,
+        vllm_model_name="meta-llama/Llama-3.2-1B-Instruct",
+        vllm_max_model_len=1024,
         vllm_tensor_parallel_size=1,
         gpu_memory_utilization=0.60,
         eval_sampling_params=SamplingParams(
@@ -202,9 +237,7 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
             stop=None,
             logprobs=1,
         ),
-        curriculum=curriculum_config,
-        tokenizer=experiment_config.model_tokenizer,
-        initial_checkpoint=experiment_config.model_checkpoint,
+        initial_checkpoint=MODEL.checkpoint,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         run_id=name,
@@ -222,7 +255,7 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         description=f"Async RL training: {name}",
         fn=RLJob.make_step_fn(),
         config=config,
-        pip_dependency_groups=["post_training"],
+        pip_dependency_groups=["post_training", "vllm"],
     )
 
 
@@ -233,12 +266,9 @@ def main():
 
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    experiments = []
-    for experiment_config in experiment_configs:
-        model_base_name = experiment_config.model_name.split("/")[-1].lower()
-        experiments.append(
-            rl_train(name=f"{model_base_name}-math-rl-test-chris-{datestamp}", experiment_config=experiment_config),
-        )
+    experiments = [
+        rl_train(name=f"{MODEL.safe_name}-math-rl-test-chris-{datestamp}"),
+    ]
 
     executor_main(
         steps=experiments,

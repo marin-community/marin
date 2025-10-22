@@ -32,6 +32,16 @@ from marin.rl.weight_transfer import (
     create_weight_transfer_server,
 )
 from marin.rl.weight_utils import levanter_to_nnx_state, MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
+import datetime
+from marin.rl.rollout_worker import RolloutWorker, VLLMRolloutWorkerConfig, RolloutStorageConfig
+from marin.rl.curriculum import CurriculumConfig, LessonConfig, EnvConfig
+from levanter.trainer import TrainerConfig
+from levanter.checkpoint import CheckpointerConfig
+from pathlib import Path
+from levanter.tracker.json_logger import JsonLoggerConfig
+from levanter.distributed import RayConfig
+from vllm import SamplingParams
+from marin.rl.environments.inference_ctx.vllm import vLLMInferenceContext
 
 
 @ray.remote(resources={"TPU-v4-8-head": 1}, runtime_env={"env_vars": {"VLLM_ENABLE_V1_MULTIPROCESSING": "0"}})
@@ -138,10 +148,13 @@ def test_arrow_flight_transfer_to_vllm():
 @ray.remote(resources={"TPU-v4-8-head": 1}, runtime_env={"env_vars": {"VLLM_ENABLE_V1_MULTIPROCESSING": "0"}})
 def test_vllm_inference():
     """Test vLLM inference."""
-    from marin.rl.environments.inference_ctx.vllm import vLLMInferenceContext
 
     inference_ctx = vLLMInferenceContext(
-        model_name="meta-llama/Llama-3.2-1B-Instruct", max_model_len=1024, tensor_parallel_size=4
+        model_name="meta-llama/Llama-3.2-1B-Instruct",
+        max_model_len=1024,
+        tensor_parallel_size=4,
+        gpu_memory_utilization=0.60,
+        sampling_params=SamplingParams(temperature=0.8, n=1, max_tokens=16, stop=None, logprobs=1),
     )
     outputs = inference_ctx.batch_completions(prompts=["Hello, how are you?"], temperature=0.8, n=1)
     response_tokens = inference_ctx.response_tokens_from_choice(outputs[0].outputs[0])
@@ -151,45 +164,69 @@ def test_vllm_inference():
 
 
 @ray.remote(resources={"TPU-v4-8-head": 1}, runtime_env={"env_vars": {"VLLM_ENABLE_V1_MULTIPROCESSING": "0"}})
-def test_rollout_worker_vllm():
-    """Test rollout worker with vLLM."""
-    from marin.rl.rollout_worker import RolloutWorker, VLLMRolloutWorkerConfig, RolloutStorageConfig
-    from marin.rl.curriculum import CurriculumConfig, LessonConfig, EnvConfig
-
+def test_initialize_vllm_rollout():
     rollout_worker = RolloutWorker(
         config=VLLMRolloutWorkerConfig(
+            model=LlamaConfig(
+                seq_len=4096,
+                hidden_dim=2048,
+                intermediate_dim=8192,
+                num_heads=32,
+                num_kv_heads=8,
+                num_layers=16,
+            ),
             inference_type="vllm",
             vllm_model_name="meta-llama/Llama-3.2-1B-Instruct",
             vllm_max_model_len=1024,
-            vllm_tensor_parallel_size=4,
+            vllm_tensor_parallel_size=1,
+            gpu_memory_utilization=0.60,
+            sampling_params=SamplingParams(
+                temperature=1.0,
+                n=4,
+                max_tokens=16,
+                stop=None,
+                logprobs=1,
+            ),
             tokenizer=AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct"),
             run_id=f"test_rollout_worker_vllm_{uuid.uuid4().hex[:8]}",
             log_freq=10,
             max_rollouts=10,
-            initial_checkpoint=None,
+            trainer=TrainerConfig(
+                tracker=JsonLoggerConfig(),
+                mp=jmp.get_policy("p=f32,c=bfloat16"),
+                train_batch_size=16,
+                num_train_steps=1000,
+                steps_per_eval=1,
+                checkpointer=CheckpointerConfig(
+                    base_path=Path("/tmp") / "checkpoints",
+                    save_interval=datetime.timedelta(seconds=10),
+                ),
+                tensor_parallel_axes=["mlp", "kv_heads"],
+                fsdp_axis="embed",
+                batch_axis="batch",
+                ray=RayConfig(auto_start_cluster=False),
+            ),
             rollout_storage=RolloutStorageConfig(
                 storage_type="memory",
                 queue_name=f"test_rollout_worker_vllm_{uuid.uuid4().hex[:8]}",
             ),
             weight_transfer=WeightTransferConfig(
                 mode=WeightTransferMode.ARROW_FLIGHT,
-                sync_interval_steps=1,
+                sync_interval_steps=4,
+                max_weight_transfer_wait_time=1,
+                # not really that often since just want to test out rollout worker capability
             ),
             curriculum_config=CurriculumConfig(
-                lessons=[
-                    LessonConfig(
+                lessons={
+                    "test": LessonConfig(
+                        lesson_id="test",
                         env_config=EnvConfig(
-                            type="marin.rl.environments.mock_env.MockEnv",
-                            config={
-                                "num_examples": 10,
-                                "num_generations": 10,
-                                "max_tokens": 1024,
-                                "temperature": 0.8,
-                                "mode": "train",
-                            },
+                            env_class="marin.rl.environments.mock_env.MockEnv",
+                            env_args={"seed": 42, "task_type": "number_comparison"},
                         ),
-                    )
-                ],
+                        dependencies=[],
+                    ),
+                }
             ),
         )
     )
@@ -197,5 +234,5 @@ def test_rollout_worker_vllm():
 
 
 if __name__ == "__main__":
-    outputs = ray.get(test_vllm_inference.remote())
-    print(outputs)
+    ray.get(test_vllm_inference.remote())
+    # print(outputs)
