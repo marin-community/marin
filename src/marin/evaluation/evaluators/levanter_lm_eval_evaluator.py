@@ -241,8 +241,15 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                             json.dump(task_samples, f, indent=2)
                         logger.info(f"Uploaded samples for {task_name} to GCS: {samples_output_path}")
 
-                levanter.tracker.current_tracker().finish()
-                logger.info("Upload completed successfully.")
+                # Finish wandb tracker with proper error handling
+                try:
+                    tracker = levanter.tracker.current_tracker()
+                    if tracker is not None:
+                        tracker.finish()
+                except Exception as wandb_error:
+                    logger.warning(f"Failed to finish wandb tracker gracefully: {wandb_error}")
+                
+                logger.info("Upload to GCS completed successfully.")
 
             except Exception as upload_error:
                 logger.info(f"Failed to upload results to GCS: {upload_error}")
