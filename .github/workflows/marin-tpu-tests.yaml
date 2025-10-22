@@ -1,4 +1,4 @@
-name: CI with GCP TPU
+name: Marin - CI with GCP TPU
 on: 
   issue_comment:
     types: [created]

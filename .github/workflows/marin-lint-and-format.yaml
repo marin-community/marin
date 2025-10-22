@@ -1,4 +1,4 @@
-name: Lint and Format Check
+name: Marin - Lint and Format Check
 
 on:
   push:
