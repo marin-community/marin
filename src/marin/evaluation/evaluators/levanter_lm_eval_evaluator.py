@@ -26,7 +26,6 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.distributed import RayConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-
 from experiments.evals.task_configs import convert_to_levanter_task_config
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
@@ -50,6 +49,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 "TOKENIZERS_PARALLELISM": "false",
                 "HF_DATASETS_TRUST_REMOTE_CODE": "1",
                 "HF_ALLOW_CODE_EVAL": "1",
+                # "LIBTPU_INIT_ARGS": "--xla_tpu_scoped_vmem_limit_kib=98304",
             },
         )
 
@@ -79,7 +79,10 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             print("before download")
             model_name_or_path: str = self.download_model(model)
             print(f"in lm_eval: {model_name_or_path}")
-            name = model.name + "_lmeval_" + "-".join([eval_task.name for eval_task in evals])
+            # limit the name to 64 characters
+            name = model.name + "_lmeval_v2_" + "-".join([eval_task.name for eval_task in evals])[:64]
+            # name = model.name + "_lmeval_" + "-".join([eval_task.name for eval_task in evals])
+
             print(name)
             logger.info(f"WandB Run Name: {name}")
             logger.info(f"Running eval harness on model: {model_name_or_path}")
@@ -91,17 +94,26 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 per_device_eval_parallelism=1,
                 ray=RayConfig(auto_start_cluster=False),
+                model_axis_size=4,
+                tensor_parallel_axes=["mlp", "heads", "kv_head"] #, "vocab"],
             )
-            print("after trainer?")
 
-            model_config = HFCheckpointConverter.from_hf(model_name_or_path).LevConfigClass()
+            print("after trainer?")
 
             # convert to the config that Levanter's eval_harness expects
             tasks = convert_to_levanter_task_config(evals)
             logger.info(f"Tasks: {tasks}")
             print("converted tasks")
 
-            model_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.path)
+            if model.path is None:
+                model_path = model_name_or_path
+            elif os.path.isabs(model.path):
+                model_path = model.path
+            else:
+                model_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.path)
+
+            converter = HFCheckpointConverter.from_hf(model_path, trust_remote_code=True)
+            model_config = converter.LevConfigClass()
 
             logger.info(f"Model path: {model_path}")
             logger.info(f"Levanter Cache Path: {LevanterTpuEvaluator.CACHE_PATH}")

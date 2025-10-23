@@ -192,7 +192,7 @@ LANGUAGE_TASKS = (
     EvalTaskConfig("squadv2", 0, task_alias="squadv2_0shot"),
     EvalTaskConfig("swag", 0, task_alias="swag_0shot"),
     EvalTaskConfig("triviaqa", 0, task_alias="triviaqa_0shot"),
-    EvalTaskConfig("wikitext", 0, task_alias="wikitext_0shot"),
+    # EvalTaskConfig("wikitext", 0, task_alias="wikitext_0shot"),
 )
 
 # Code Generation and Programming Tasks
@@ -261,7 +261,7 @@ BIAS_SAFETY_TASKS = (
         "crows_pairs_english_sexual_orientation", 0, task_alias="crows_pairs_english_sexual_orientation_0shot"
     ),
     EvalTaskConfig("crows_pairs_english_socioeconomic", 0, task_alias="crows_pairs_english_socioeconomic_0shot"),
-    EvalTaskConfig("realtoxicityprompts", 0, task_alias="realtoxicityprompts_0shot"),
+    # EvalTaskConfig("realtoxicityprompts", 0, task_alias="realtoxicityprompts_0shot"), # TODO: need PERSPECTIVE_API_KEY
     EvalTaskConfig("simple_cooccurrence_bias", 0, task_alias="simple_cooccurrence_bias_0shot"),
     EvalTaskConfig("toxigen", 0, task_alias="toxigen_0shot"),
     EvalTaskConfig("winogender_all", 0, task_alias="winogender_0shot"),

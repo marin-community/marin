@@ -36,11 +36,12 @@ from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import mixture_for_evaluation, TokenizerStep
 from marin.download.uncheatable_eval.download import make_uncheatable_eval_step
 from experiments.defaults import default_tokenize
-from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
+from experiments.evals.resource_configs import *
 from experiments.models import ModelConfig as HFModelConfig, download_model_step
 
 logger = logging.getLogger(__name__)
 
+TPU = SINGLE_TPU_V5p_8_FULL
 # Complete mapping of all available datasets
 ALL_UNCHEATABLE_EVAL_DATASETS = {
     "wikipedia_arabic": "wikipedia_arabic_*.jsonl.gz",
@@ -100,20 +101,22 @@ class ModelConfig:
 # If tokenizer is None, uses model_name as tokenizer
 
 models = [
-    ModelConfig(model_name="marin-community/marin-8b-base", revision="main", tokenizer=llama3_tokenizer),
-    ModelConfig(model_name="allenai/OLMo-2-0325-32B", revision="main"),
-    ModelConfig(model_name="Qwen/Qwen3-32B", revision="main"),
-    ModelConfig(model_name="meta-llama/Llama-3.1-8B", revision="main", tokenizer=llama3_tokenizer),
-    ModelConfig(model_name="meta-llama/Llama-3.2-1B", revision="main", tokenizer=llama3_tokenizer),
-    ModelConfig(model_name="allenai/OLMo-2-1124-7B", revision="main"),
-    ModelConfig(model_name="Qwen/Qwen3-0.6B", revision="main"),
-    ModelConfig(model_name="Qwen/Qwen3-1.7B", revision="main"),
-    ModelConfig(model_name="Qwen/Qwen3-4B", revision="main"),
-    ModelConfig(model_name="Qwen/Qwen3-8B", revision="main"),
-    ModelConfig(model_name="Qwen/Qwen3-0.6B-Base", revision="main", tokenizer="Qwen/Qwen3-0.6B"),
-    ModelConfig(model_name="Qwen/Qwen3-1.7B-Base", revision="main", tokenizer="Qwen/Qwen3-1.7B"),
-    ModelConfig(model_name="Qwen/Qwen3-4B-Base", revision="main", tokenizer="Qwen/Qwen3-4B"),
-    ModelConfig(model_name="Qwen/Qwen3-8B-Base", revision="main", tokenizer="Qwen/Qwen3-8B"),
+    # ModelConfig(model_name="marin-community/marin-8b-base", revision="main", tokenizer=llama3_tokenizer),
+    # ModelConfig(model_name="allenai/OLMo-2-0325-32B", revision="main"),
+    # ModelConfig(model_name="Qwen/Qwen3-32B", revision="main"),
+    ModelConfig(model_name="Qwen/Qwen2.5-32B", revision="1818d35"),
+    # ModelConfig(model_name="google/gemma-2-27b", revision="main"),
+#     ModelConfig(model_name="meta-llama/Llama-3.1-8B", revision="main", tokenizer=llama3_tokenizer),
+#     ModelConfig(model_name="meta-llama/Llama-3.2-1B", revision="main", tokenizer=llama3_tokenizer),
+    # ModelConfig(model_name="allenai/OLMo-2-1124-7B", revision="main"),
+    # ModelConfig(model_name="Qwen/Qwen3-0.6B", revision="main"),
+#     ModelConfig(model_name="Qwen/Qwen3-1.7B", revision="main"),
+#     ModelConfig(model_name="Qwen/Qwen3-4B", revision="main"),
+#     ModelConfig(model_name="Qwen/Qwen3-8B", revision="main"),
+#     ModelConfig(model_name="Qwen/Qwen3-0.6B-Base", revision="main", tokenizer="Qwen/Qwen3-0.6B"),
+#     ModelConfig(model_name="Qwen/Qwen3-1.7B-Base", revision="main", tokenizer="Qwen/Qwen3-1.7B"),
+#     ModelConfig(model_name="Qwen/Qwen3-4B-Base", revision="main", tokenizer="Qwen/Qwen3-4B"),
+#     ModelConfig(model_name="Qwen/Qwen3-8B-Base", revision="main", tokenizer="Qwen/Qwen3-8B"),
 ]
 
 
@@ -149,7 +152,7 @@ def build_steps() -> list[ExecutorStep]:
                 checkpoint=output_path_of(model_instance),
                 model=hf_model_config,
                 data=eval_data,
-                resource_config=SINGLE_TPU_V5p_8_FULL,
+                resource_config=TPU,
                 checkpoint_is_hf=True,
                 per_device_batch_size=1,
                 name=f"{directory_friendly_name}-uncheatable-eval-logprobs",

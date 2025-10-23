@@ -549,6 +549,19 @@ class ArrowFlightClient(WeightTransferClient):
                 param_name, param_array = future.result()
                 state_dict[param_name] = param_array
 
+            # Fill in any parameters that were not transmitted by falling back to the existing model values.
+            # Some older checkpoints omit optional parameters (e.g., MLP biases), but the receiving model expects them.
+            template_state_dict = hsd.to_state_dict(old_model)
+            missing_keys = [key for key in template_state_dict.keys() if key not in state_dict]
+            if missing_keys:
+                logger.warning(
+                    "Arrow Flight weight transfer missing %d parameter(s); using existing model values for %s",
+                    len(missing_keys),
+                    missing_keys,
+                )
+                for key in missing_keys:
+                    state_dict[key] = template_state_dict[key]
+
             fetch_time = time.time()
 
             # Convert back to model using state_dict and move to target device

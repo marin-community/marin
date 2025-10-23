@@ -237,7 +237,7 @@ def tokenize(config: TokenizeConfigBase):
         options = config.cache_options
         if options is None and isinstance(config, TokenizeConfig):
             options = _heuristic_cache_options(config.train_paths)
-        else:
+        elif options is None:
             options = CacheOptions()
 
         train_ledger = (
@@ -261,7 +261,7 @@ def tokenize(config: TokenizeConfigBase):
         options = config.cache_options
         if options is None and isinstance(config, TokenizeConfig):
             options = _heuristic_cache_options(config.validation_paths)
-        else:
+        elif options is None:
             options = CacheOptions()
 
         validation_ledger = (

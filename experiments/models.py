@@ -160,7 +160,7 @@ olmo_2_base_8b = download_model_step(
 olmo_2_base_32b = download_model_step(
     ModelConfig(
         hf_repo_id="allenai/OLMo-2-0325-32B",
-        hf_revision="stage2-ingredient2-step9000-tokens76B",
+        hf_revision="stage2-ingredient3-step9000-tokens76B",
     )
 )
 
@@ -183,6 +183,12 @@ marin_8b_base = download_model_step(
     ModelConfig(
         hf_repo_id="marin-community/marin-8b-base",
         hf_revision="0f1f658",
+    )
+)
+
+marin_32b_base = download_model_step(
+    ModelConfig(
+        hf_repo_id="tootsie/tootsie-32b-cooldown-bison-adamc", hf_revision="step-192000"
     )
 )
 
@@ -260,5 +266,12 @@ qwen3_32b = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-32B",
         hf_revision="9216db5781bf21249d130ec9da846c4624c16137",
+    )
+)
+
+gemma2_27b = download_model_step(
+    ModelConfig(
+        hf_repo_id="google/gemma-2-27b",
+        hf_revision="main",
     )
 )

@@ -540,6 +540,7 @@ class Executor:
         self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
+        self.encountered_failures: dict[str, str] = {}
         if not is_local_ray_cluster():
             strategy = schedule_on_head_node_strategy()
         else:
@@ -561,6 +562,7 @@ class Executor:
         dry_run: bool = False,
         run_only: list[str] | None = None,
         force_run_failed: bool = False,
+        continue_on_step_failure: bool = False,
     ):
         """
         Run the pipeline of `ExecutorStep`s.
@@ -570,6 +572,7 @@ class Executor:
             dry_run: If True, only print out what needs to be done.
             run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
+            continue_on_step_failure: If True, allow other steps to proceed even if one step fails.
         """
 
         # Gather all the steps, compute versions and output paths for all of them.
@@ -595,10 +598,22 @@ class Executor:
         self.write_infos()
 
         logger.info(f"### Launching {len(steps_to_run)} steps ###")
-        self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
+        failures = self._run_steps(
+            steps_to_run,
+            dry_run=dry_run,
+            force_run_failed=force_run_failed,
+            continue_on_step_failure=continue_on_step_failure,
+        )
+        # stash for external inspection
+        self.encountered_failures = failures
 
         logger.info("### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
+
+        if continue_on_step_failure and failures:
+            logger.error("### %d step(s) failed or were skipped due to dependency failures ###", len(failures))
+            for step_name, message in failures.items():
+                logger.error("  %s -> %s", step_name, message.splitlines()[0] if message else "unknown error")
 
     def _run_steps(
         self,
@@ -606,7 +621,8 @@ class Executor:
         *,
         dry_run: bool,
         force_run_failed: bool,
-    ) -> None:
+        continue_on_step_failure: bool,
+    ) -> dict[str, str]:
         remaining_deps: dict[ExecutorStep, set[ExecutorStep]] = {
             step: set(dep for dep in self.dependencies[step] if dep in steps_to_run) for step in steps_to_run
         }
@@ -617,10 +633,37 @@ class Executor:
 
         ready = [step for step, deps in remaining_deps.items() if not deps]
         running: dict[ExecutorStep, tuple[ray.ObjectRef, bool]] = {}
+        skipped_steps: set[ExecutorStep] = set()
+        failures: dict[str, str] = {}
+
+        def propagate_dependency_failure(failed_step: ExecutorStep, root_reason: str):
+            """Recursively mark downstream steps as dependency failures."""
+            for child in dependents.get(failed_step, []):
+                if child in skipped_steps:
+                    continue
+
+                reason = f"Dependency {failed_step.name} failed"
+                if root_reason:
+                    reason = f"{reason}: {root_reason.splitlines()[0].strip()}"
+
+                logger.error("Marking %s as DEP_FAILED (%s)", child.name, reason)
+                status_path_child = get_status_path(self.output_paths[child])
+                fsspec_utils.mkdirs(os.path.dirname(status_path_child))
+                append_status(status_path_child, STATUS_DEP_FAILED, message=reason)
+
+                skipped_steps.add(child)
+                failures[child.name] = reason
+                remaining_deps.pop(child, None)
+                ready[:] = [s for s in ready if s != child]
+                propagate_dependency_failure(child, root_reason)
 
         while ready or running:
             while ready:
                 step = ready.pop()
+                # Skip steps that were marked as failed due to dependency failures.
+                if continue_on_step_failure and step in skipped_steps:
+                    logger.info("Skipping %s because one or more dependencies failed.", step.name)
+                    continue
                 ref, ran = self._launch_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
                 self.refs[step] = ref
                 running[step] = (ref, ran)
@@ -633,22 +676,42 @@ class Executor:
                 finished_step = next(step for step, r in running.items() if r[0] == ref)
                 status_path = get_status_path(self.output_paths[finished_step])
                 ran = running[finished_step][1]
+                success = False
+                failure_message = ""
                 try:
                     logger.info("Waiting for %s to finish for step %s", ref, finished_step.name)
                     ray.get(ref)
+                    success = True
                 except Exception:
-                    message = traceback.format_exc()
-                    append_status(status_path, STATUS_FAILED, message=message)
-                    raise
+                    failure_message = traceback.format_exc()
+                    append_status(status_path, STATUS_FAILED, message=failure_message)
+                    if not continue_on_step_failure:
+                        raise
+
+                    logger.error("Step %s failed; continuing execution of other steps.", finished_step.name)
+                    self.refs[finished_step] = self._dry_run_result
+                    skipped_steps.add(finished_step)
+                    failures[finished_step.name] = failure_message
+                    remaining_deps.pop(finished_step, None)
                 else:
                     if ran:
                         append_status(status_path, STATUS_SUCCESS)
 
                 running.pop(finished_step)
-                for child in dependents.get(finished_step, []):
-                    remaining_deps[child].remove(finished_step)
-                    if not remaining_deps[child]:
-                        ready.append(child)
+
+                if success:
+                    for child in dependents.get(finished_step, []):
+                        # child may already have been removed if another dependency failed earlier
+                        if child not in remaining_deps:
+                            continue
+                        remaining_deps[child].remove(finished_step)
+                        if not remaining_deps[child]:
+                            ready.append(child)
+                else:
+                    if continue_on_step_failure:
+                        propagate_dependency_failure(finished_step, failure_message)
+
+        return failures
 
     def _filter_unique_waitables(self, running):
         # Ray now requires the waitables be unique, so we filter them out.
@@ -1096,6 +1159,8 @@ class ExecutorMainConfig:
     force_run_failed: bool = False  # Force run failed steps
     run_only: list[str] | None = None
     """Run these steps (matched by regex.search) and their dependencies only. If None, run all steps."""
+    continue_on_step_failure: bool = False
+    """When True, continue executing independent steps even if a step fails."""
 
 
 @draccus.wrap()
@@ -1140,7 +1205,13 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
         description=description,
     )
 
-    executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
+    executor.run(
+        steps=steps,
+        dry_run=config.dry_run,
+        run_only=config.run_only,
+        force_run_failed=config.force_run_failed,
+        continue_on_step_failure=config.continue_on_step_failure,
+    )
     time_out = time.time()
     logger.info(f"Executor run took {time_out - time_in:.2f}s")
     # print json path again so it's easy to copy

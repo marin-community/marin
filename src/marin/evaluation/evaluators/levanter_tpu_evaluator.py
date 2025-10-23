@@ -42,11 +42,19 @@ class LevanterTpuEvaluator(Evaluator, ABC):
             local_path=os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
         )
 
-        print(f"IN TPU: {downloaded_path}")
-        # Use the model name if a path is not specified (e.g., for Hugging Face models)
-        model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
+        # Prefer the resolved checkpoint path when available so downstream code can
+        # locate tokenizer assets (some models rely on custom tokenizers).
+        if downloaded_path:
+            print(f"IN TPU: {downloaded_path}")
+            return downloaded_path
 
-        return model_name_or_path
+        if model.path:
+            print(f"IN TPU: {model.path}")
+            return model.path
+
+        print(f"IN TPU: {model.name}")
+        # Fall back to the model name for cases where we rely on HF hub loading.
+        return model.name
 
     @staticmethod
     def cleanup(model: ModelConfig) -> None:
