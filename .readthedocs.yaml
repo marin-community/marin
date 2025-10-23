@@ -6,12 +6,9 @@ build:
     python: "3.11"
   jobs:
     pre_install:
-      - pip install mkdocs
-      - pip install mkdocs-material
-      - pip install mkdocstrings[python]
-      - pip install markdown-include
-      - pip install mkdocs-include-markdown-plugin
-      - pip install -e lib/marin
+      - pip install uv
+      - uv sync --package marin
+      - uv pip install mkdocs mkdocs-material mkdocstrings[python] markdown-include mkdocs-include-markdown-plugin
 
 mkdocs:
   configuration: mkdocs.yml
