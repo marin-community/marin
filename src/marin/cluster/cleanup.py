@@ -69,25 +69,27 @@ def get_tpu_worker_resources() -> dict[str, int]:
     return worker_resources
 
 
-def cleanup_tpu_lockfiles() -> dict[str, Any]:
-    """Clean TPU lockfiles across all worker nodes.
-
-    Schedules cleanup tasks on each worker using Ray remote functions
-    with specific resource requirements to target individual workers.
-    Each task removes /tmp/libtpu_lockfile which can prevent TPU access
-    when it persists across Ray tasks.
-
-    Returns:
-        Dict with cleanup statistics containing:
-        - workers_targeted: Number of workers where cleanup was attempted
-        - workers_cleaned: Number of workers successfully cleaned
-        - errors: List of error messages for failed cleanups
-    """
+def cleanup_tpu_processes() -> dict[str, Any]:
+    """Clean TPU lockfiles across all worker nodes."""
 
     @ray.remote(num_cpus=0)
-    def _cleanup_lockfile_on_worker():
+    def _cleanup_worker():
         """Remote task to clean lockfile on a specific worker."""
         subprocess.run(["sudo", "rm", "-f", "/tmp/libtpu_lockfile"], check=False)
+        # now delete any running TPU processes using lsof
+        accels = []
+        for path in ["/dev/vfio/", "/dev/accel"]:
+            for chip in range(8):
+                accels.append(f"{path}{chip}")
+
+        for chip in accels:
+            try:
+                pids = subprocess.check_output(["lsof", "-t", chip])
+                pids = pids.split()
+                for p in pids:
+                    subprocess.run(["sudo", "--non-interactive", "kill", "-9", str(p)])
+            except subprocess.CalledProcessError:
+                pass
 
     worker_resources = get_tpu_worker_resources()
 
@@ -95,16 +97,16 @@ def cleanup_tpu_lockfiles() -> dict[str, Any]:
         logger.info("No TPU workers found for lockfile cleanup")
         return {"workers_targeted": 0, "workers_cleaned": 0, "errors": []}
 
-    logger.info(f"Cleaning TPU lockfiles on {len(worker_resources)} workers")
+    logger.info(f"Cleaning TPU on {len(worker_resources)} workers")
 
     # Schedule cleanup task on each worker using its specific resource
     futures = {}
     for resource_name, count in worker_resources.items():
         # Schedule with resource requirement to target the given slice.
         # For slices, we best-effort target one task per host.
-        for _ in range(int(count)):
-            task = _cleanup_lockfile_on_worker.options(resources={resource_name: 1}).remote()
-        futures[resource_name] = task
+        for i in range(int(count)):
+            task = _cleanup_worker.options(resources={resource_name: 1}).remote()
+            futures[f"{resource_name}:{i}"] = task
 
     results = {"workers_targeted": len(worker_resources), "workers_cleaned": 0, "errors": []}
     ready, not_ready = ray.wait(list(futures.values()), num_returns=len(futures), timeout=60)
@@ -159,7 +161,7 @@ def cleanup_iteration(project: str, zone: str, dry_run: bool = False) -> dict[st
 
     # Clean TPU lockfiles on active workers (skip during dry-run)
     if not dry_run:
-        lockfile_results = cleanup_tpu_lockfiles()
+        lockfile_results = cleanup_tpu_processes()
         results["lockfile_cleanup"] = lockfile_results
         logger.info(
             f"TPU lockfile cleanup: {lockfile_results['workers_cleaned']}/{lockfile_results['workers_targeted']} workers"
