@@ -551,7 +551,7 @@ class vLLMClassifierWithDocsAndAttributes(vLLMClassifier):
                 templates.append(self._change_template_based_on_attributes(attribute))
                 current_index += 1
 
-        self.text_generator.template = templates
+        self.text_generator.templates = templates
 
         # Generate text for each flattened batch
         batch_with_generations = self.text_generator(flattened_batch_keys_to_values)

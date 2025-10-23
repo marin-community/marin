@@ -18,7 +18,7 @@ import pytest
 import ray
 from ray.util.queue import Queue
 
-from marin.processing.classification.autoscaler import AutoscalingActorPool
+from marin.processing.classification.autoscaler import AutoscalingActorPool, DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG
 from marin.processing.classification.classifier import AutoClassifierRayActor
 
 
@@ -33,8 +33,7 @@ def test_autoscaler_requeues_failed_tasks(ray_tpu_cluster):
         model_type="dummy",
         task_queue=task_queue,
         result_queue=result_queue,
-        min_actors=1,
-        max_actors=2,
+        autoscaler_config=DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG,
     )
 
     try:
@@ -59,8 +58,6 @@ def test_autoscaler_requeues_failed_tasks(ray_tpu_cluster):
 
         ray.kill(initial_actor)
         print(f"Killed initial actor: {initial_actor_id}")
-
-        time.sleep(3.0)  # Greater than the actor health check interval so that we see that the initial actor is dead
 
         with pool.actor_task_metadata_lock:
             print(f"Actor futures: {pool.actor_futures}")
