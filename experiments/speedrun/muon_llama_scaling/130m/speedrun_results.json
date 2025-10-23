@@ -8,6 +8,7 @@
           "url": "https://WilliamHeld.com"
         },
         "description": "130M parameter model trained with the Muon optimizer.",
+        "device_flops": 459000000000000.0,
         "eval/paloma/c4_en/bpb": 1.169844388961792,
         "model_config": {
           "activation_function": "silu",
@@ -40,6 +41,8 @@
         },
         "model_flops": 1.777337490915459e+18,
         "model_size": 154147328,
+        "num_chips": 16,
+        "num_devices": 32,
         "resources": {
           "device_flops_override": null,
           "slice_count": 1,
@@ -115,7 +118,7 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 1.770128556749164e+19,
+        "training_hardware_flops": 8.85064278374582e+18,
         "training_time": 1205.1528844969798,
         "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/llama_130m_muon_4096-0a1d9c"
       }

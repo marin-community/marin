@@ -29,6 +29,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+from marin.processing.tokenize import lm_data_config
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig, TrafilaturaConfig
 from marin.transform.fineweb.process_parquet_fw import ParquetFWConfig, process_fw_dump
 
@@ -60,10 +61,9 @@ fineweb_trafilatura_tokenized = default_tokenize(
     dataset=transform_trafilatura_default,
     tokenizer=llama3_tokenizer,
 )
-
 fineweb_trafilatura_1_4b_model = default_train(
     name="fineweb-small-1.4b-trafilatura",
-    tokenized=fineweb_trafilatura_tokenized,
+    tokenized=lm_data_config(fineweb_trafilatura_tokenized, permutation_type="linear"),
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
@@ -93,10 +93,14 @@ fineweb_trafilatura_favor_precision_tokenized = default_tokenize(
     dataset=transform_trafilatura_favor_precision,
     tokenizer=llama3_tokenizer,
 )
+fineweb_trafilatura_favor_precision_data = lm_data_config(
+    fineweb_trafilatura_favor_precision_tokenized,
+    permutation_type="linear",
+)
 
 fineweb_trafilatura_favor_precision_1_4b_model = default_train(
     name="fineweb-small-1.4b-trafilatura-favor-precision",
-    tokenized=fineweb_trafilatura_favor_precision_tokenized,
+    tokenized=fineweb_trafilatura_favor_precision_data,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
@@ -125,10 +129,11 @@ fineweb_resiliparse_tokenized = default_tokenize(
     dataset=transform_resiliparse_default,
     tokenizer=llama3_tokenizer,
 )
+fineweb_resiliparse_data = lm_data_config(fineweb_resiliparse_tokenized, permutation_type="linear")
 
 fineweb_resiliparse_1_4b_model = default_train(
     name="fineweb-small-1.4b-resiliparse",
-    tokenized=fineweb_resiliparse_tokenized,
+    tokenized=fineweb_resiliparse_data,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
@@ -158,10 +163,14 @@ fineweb_resiliparse_preserve_formatting_tokenized = default_tokenize(
     dataset=transform_resiliparse_preserve_formatting,
     tokenizer=llama3_tokenizer,
 )
+fineweb_resiliparse_preserve_formatting_data = lm_data_config(
+    fineweb_resiliparse_preserve_formatting_tokenized,
+    permutation_type="linear",
+)
 
 fineweb_resiliparse_preserve_formatting_1_4b_model = default_train(
     name="fineweb-small-1.4b-resiliparse-preserve-formatting",
-    tokenized=fineweb_resiliparse_preserve_formatting_tokenized,
+    tokenized=fineweb_resiliparse_preserve_formatting_data,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
@@ -189,10 +198,11 @@ fineweb_readability_tokenized = default_tokenize(
     dataset=transform_readability,
     tokenizer=llama3_tokenizer,
 )
+fineweb_readability_data = lm_data_config(fineweb_readability_tokenized, permutation_type="linear")
 
 fineweb_readability_1_4b_model = default_train(
     name="fineweb-small-1.4b-readability",
-    tokenized=fineweb_readability_tokenized,
+    tokenized=fineweb_readability_data,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )

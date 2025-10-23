@@ -68,7 +68,7 @@ class RunConfig:
     max_retries_failure: int = 3
     """Maximum retries on worker failure"""
 
-    max_retries_preemption: int = 10
+    max_retries_preemption: int = 100
     """Maximum retries on preemption"""
 
     runtime_env: RuntimeEnv | None = None
@@ -250,8 +250,9 @@ class RLJob:
                 temperature=self.config.eval_sampling_params.temperature,
                 service=InferenceEngineConfig(
                     max_seqs=max_seqs,
+                    max_seq_len=max_tokens,
                     page_size=128,
-                    max_pages_per_seq=1 + max_tokens // 128,
+                    hbm_utilization=0.1,
                     enable_logprobs=True,
                 ),
                 port=0,
