@@ -149,8 +149,6 @@ class TrainWorker:
         self.loss_module = config.loss
 
         # Timing metrics for benchmarking
-        self._step_start_time = None
-        self._last_step_duration = 0.0
         self._total_tokens_trained = 0
 
         self.rollout_reader = config.rollout_storage.create_reader()
@@ -249,18 +247,6 @@ class TrainWorker:
                 pass
 
     def _configure_training_hooks(self, trainer):
-        def _step_start_hook(info: levanter.callbacks.StepInfo):
-            self._step_start_time = time.time()
-
-        trainer.add_hook(_step_start_hook, every=1)
-
-        def _step_end_hook(info: levanter.callbacks.StepInfo):
-            if self._step_start_time is not None:
-                self._last_step_duration = time.time() - self._step_start_time
-                self._step_start_time = None
-
-        trainer.add_hook(_step_end_hook, every=1)
-
         def _weight_transfer_hook(info: levanter.callbacks.StepInfo):
             self.weight_transfer_hook(trainer, info)
 
@@ -311,8 +297,9 @@ class TrainWorker:
             f"train.weight_transfer.{k}": v for k, v in dataclasses.asdict(server_metrics).items()
         }
         
-        # Add timing metrics
-        metrics["train.step_duration_sec"] = self._last_step_duration
+        # Add timing metrics - use Levanter's built-in step_duration
+        step_duration = info.step_duration
+        metrics["train.step_duration_sec"] = step_duration
         metrics["train.weight_transfer_duration_sec"] = transfer_duration
         
         # Communication overhead = time spent in weight transfer
@@ -321,15 +308,15 @@ class TrainWorker:
         # Calculate throughput if we have token counts
         if hasattr(info, 'ntokens') and info.ntokens > 0:
             self._total_tokens_trained += info.ntokens
-            if self._last_step_duration > 0:
-                tokens_per_sec = info.ntokens / self._last_step_duration
+            if step_duration > 0:
+                tokens_per_sec = info.ntokens / step_duration
                 metrics["train.tokens_per_second"] = tokens_per_sec
             metrics["train.total_tokens_trained"] = self._total_tokens_trained
         
         trainer.tracker.log(metrics, step=step)
         logger.info(
             f"Successfully transferred weights with ID {step} in {transfer_duration:.2f}s, "
-            f"step duration: {self._last_step_duration:.2f}s"
+            f"step duration: {step_duration:.2f}s"
         )
 
     def stop(self):
