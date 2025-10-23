@@ -51,6 +51,7 @@ def create_eval_steps() -> list:
             output_path_of(model).cd("checkpoints"),
             metadata[-1],
             dist_eval,
+            resource_config=SINGLE_TPU_V5p_8,
             checkpoint_is_hf=False,
             name=versioned(f"{name}-DistRobust-ICE-logprobs"),
         )
@@ -72,6 +73,7 @@ def create_eval_steps() -> list:
             output_path_of(model).cd("checkpoints"),
             metadata[-1],
             dist_eval,
+            resource_config=SINGLE_TPU_V5p_8,
             checkpoint_is_hf=False,
             name=versioned(f"{name}-DistRobust-ICE-logprobs"),
         )
@@ -93,6 +95,7 @@ def create_eval_steps() -> list:
         output_path_of(model).cd("checkpoints"),
         metadata[-1],
         dist_eval,
+        resource_config=SINGLE_TPU_V5p_8,
         checkpoint_is_hf=False,
         name=versioned(f"{name}-DistRobust-ICE-logprobs"),
     )
