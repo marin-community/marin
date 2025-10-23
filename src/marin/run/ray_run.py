@@ -112,7 +112,7 @@ async def submit_and_track_job(
     }
 
     # add the TPU dependency for cluster jobs.
-    runtime_dict = build_runtime_env_for_packages(extra=[*extra.split(","), "tpu"], env_vars=env_vars) | runtime_dict
+    runtime_dict = build_runtime_env_for_packages(extra=[*extra.split(",")], env_vars=env_vars) | runtime_dict
 
     logger.info(
         f"Terminal command: \n"

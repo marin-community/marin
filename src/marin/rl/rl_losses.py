@@ -112,6 +112,7 @@ def rloo_loss_with_importance_sampling(
     current_logprobs = jnp.concatenate([jnp.zeros((batch_size, 1)), current_logprobs_shifted], axis=1)
     reference_logprobs_array = jnp.concatenate([jnp.zeros((batch_size, 1)), reference_logprobs_shifted], axis=1)
 
+    jax.debug.print("advantages sum: {loss_weights_array_sum}", loss_weights_array_sum=loss_weights_array.sum())
     # jax.debug.print("predicted_logprobs_array {current_logprobs}", current_logprobs=current_logprobs)
     # jax.debug.print(
     #     "reference_logprobs_array {reference_logprobs_array}", reference_logprobs_array=reference_logprobs_array
@@ -155,6 +156,7 @@ def rloo_loss_with_importance_sampling(
 def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     """Compute RLOO (Reward Leave-One-Out) advantages for a group of rollouts."""
     rewards = np.array([r.episode_reward for r in rollouts])
+
     n = len(rewards)
     if n <= 1:
         return np.zeros_like(rewards)

@@ -23,8 +23,9 @@ import jax
 import numpy as np
 from transformers import PreTrainedTokenizer
 
-from marin.rl.inference_ctx import InferenceContext
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import RolloutGroup
+from openai.types.chat import ChatCompletion
 
 from .base import MarinEnv
 
@@ -284,7 +285,7 @@ class MockEnv(MarinEnv):
 
     def sample(
         self,
-        inference_ctx: InferenceContext,
+        inference_ctx: BaseInferenceContext,
         n_examples: int,
         n_generations: int,
         temperature: float,
@@ -322,9 +323,19 @@ class MockEnv(MarinEnv):
 
         for prompt, completion in zip(prompts, completions, strict=True):
             group = []
-            for choice in completion.choices:
+            if isinstance(completion, ChatCompletion):
+                choices = completion.choices
+            else:
+                choices = completion.outputs
+
+            for choice in choices:
                 true_answer = sampled_examples[prompt]
-                reward = self.task.compute_reward(true_answer, choice.message.content, tokenizer=inference_ctx.tokenizer)
+                if isinstance(completion, ChatCompletion):
+                    reward = self.task.compute_reward(
+                        true_answer, choice.message.content, tokenizer=inference_ctx.tokenizer
+                    )
+                else:
+                    reward = self.task.compute_reward(true_answer, choice.text, tokenizer=inference_ctx.tokenizer)
                 rollout = inference_ctx.create_rollout_from_choice(
                     prompt, choice, env_name=f"mock_env:{self.task_type}", env_example_id=hash(prompt), reward=reward
                 )

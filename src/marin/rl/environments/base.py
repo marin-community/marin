@@ -16,8 +16,9 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from marin.rl.inference_ctx import InferenceContext
+
 from marin.rl.types import RolloutGroup
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ class MarinEnv(ABC):
     @abstractmethod
     def sample(
         self,
-        inference_ctx: InferenceContext,
+        inference_ctx: BaseInferenceContext,
         n_examples: int,
         n_generations: int,
         temperature: float,
