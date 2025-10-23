@@ -1,4 +1,4 @@
-name: Build and Push Cluster Docker Image
+name: Levanter - Build and Push Cluster Docker Image
 
 on:
   workflow_run:

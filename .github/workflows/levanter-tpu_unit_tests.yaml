@@ -1,4 +1,4 @@
-name: CI with GCP TPU
+name: Levanter - CI with GCP TPU
 
 on: [pull_request]
 

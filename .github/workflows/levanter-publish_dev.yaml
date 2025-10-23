@@ -1,4 +1,4 @@
-name: Publish Dev Build
+name: Levanter - Publish Dev Build
 
 on:
   workflow_run:

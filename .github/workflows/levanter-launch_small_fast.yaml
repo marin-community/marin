@@ -1,4 +1,4 @@
-name: Launch Llama 2 Small Fast
+name: Levanter - Launch Llama 2 Small Fast
 
 on:
   workflow_run:

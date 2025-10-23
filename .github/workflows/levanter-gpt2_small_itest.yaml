@@ -1,4 +1,4 @@
-name: GPT-2 Small Integration Test
+name: Levanter - GPT-2 Small Integration Test
 
 on:
   workflow_run:
@@ -39,6 +39,7 @@ jobs:
           version: "0.7.20"
           python-version-file: "pyproject.toml"
           enable-cache: true
+          working-directory: lib/levanter
       - name: Set up Python
         run: uv python install
       - name: Create virtual environment
@@ -56,7 +57,7 @@ jobs:
       - name: Run GPT-2 Small Integration Test
         run: |
           # The launch script handles TPU creation and deletion
-          uv run python infra/launch.py --foreground --tpu_name levanter-itest-${{ github.run_id }} \
+          uv run --package levanter python infra/launch.py --foreground --tpu_name levanter-itest-${{ github.run_id }} \
               --zone us-central2-b --tpu_type v4-32 --preemptible \
               --run_id ${{ github.run_id }} \
               --docker_registry ghcr --github_user ${{ github.actor }} \

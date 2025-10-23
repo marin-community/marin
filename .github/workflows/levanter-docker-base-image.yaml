@@ -1,4 +1,4 @@
-name: Build and Push Docker TPU Images
+name: Levanter - Build and Push Docker TPU Images
 
 on:
   workflow_run:
