@@ -25,6 +25,7 @@ import json
 import logging
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
 
 import ray
@@ -74,27 +75,51 @@ def cleanup_tpu_processes() -> dict[str, Any]:
 
     @ray.remote(num_cpus=0)
     def _cleanup_worker():
-        """Remote task to clean lockfile on a specific worker."""
+        """Remote task kill any TPU processes on a specific worker and cleanup the lockfile."""
         subprocess.run(["sudo", "rm", "-f", "/tmp/libtpu_lockfile"], check=False)
-        # now delete any running TPU processes using lsof
+
+        # Find and kill any running TPU processes by traversing /proc
         accels = []
         for path in ["/dev/vfio/", "/dev/accel"]:
             for chip in range(8):
                 accels.append(f"{path}{chip}")
 
-        for chip in accels:
+        pids = _find_pids_using_device(accels)
+        for pid in pids:
+            subprocess.run(["sudo", "--non-interactive", "kill", "-9", str(pid)], check=False)
+
+    def _find_pids_using_device(accels: list[str]) -> list[int]:
+        """Find PIDs that have the given device file open by traversing /proc.
+
+        Ignores processes we don't have permission to inspect.
+        """
+        pids = []
+        proc_dir = Path("/proc")
+
+        for pid_dir in proc_dir.iterdir():
+            if not pid_dir.name.isdigit():
+                continue
+
+            fd_dir = pid_dir / "fd"
+            if not fd_dir.exists():
+                continue
+
             try:
-                pids = subprocess.check_output(["lsof", "-t", chip])
-                pids = pids.split()
-                for p in pids:
-                    subprocess.run(["sudo", "--non-interactive", "kill", "-9", str(p)])
-            except subprocess.CalledProcessError:
-                pass
+                for fd in fd_dir.iterdir():
+                    target = fd.resolve()
+                    if str(target) in accels:
+                        pids.append(int(pid_dir.name))
+                        break
+            except (OSError, PermissionError):
+                # Can't access this process's fds, skip it
+                continue
+
+        return pids
 
     worker_resources = get_tpu_worker_resources()
 
     if not worker_resources:
-        logger.info("No TPU workers found for lockfile cleanup")
+        logger.info("No TPU workers found for cleanup")
         return {"workers_targeted": 0, "workers_cleaned": 0, "errors": []}
 
     logger.info(f"Cleaning TPU on {len(worker_resources)} workers")
@@ -122,10 +147,10 @@ def cleanup_tpu_processes() -> dict[str, Any]:
         elif future in not_ready:
             results["errors"].append(f"{resource_name}: Timed out after 60 seconds")
 
-    logger.info(f"Cleaned lockfiles on {results['workers_cleaned']}/{results['workers_targeted']} workers")
+    logger.info(f"Cleaned {results['workers_cleaned']}/{results['workers_targeted']} workers")
 
     if results["errors"]:
-        logger.warning(f"Encountered {len(results['errors'])} errors during lockfile cleanup")
+        logger.warning(f"Encountered {len(results['errors'])} errors during cleanup")
 
     return results
 
@@ -138,7 +163,7 @@ def cleanup_iteration(project: str, zone: str, dry_run: bool = False) -> dict[st
 
     Performs:
     - Removes terminated/preempted TPU nodes
-    - Cleans TPU lockfiles on active workers
+    - Terminates any processes using the TPU on idle workers
 
     Args:
         project: GCP project ID
