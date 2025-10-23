@@ -1,14 +1,24 @@
-"""Run CORE evaluations on Gemstone models."""
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
 from experiments.evals.resource_configs import SINGLE_TPU_V5p_8
 from experiments.evals.task_configs import EvalTaskConfig
 
-# from experiments.lima import lima_tokenized
 from experiments.llama import llama3_tokenizer
 
-# from experiments.exp1342_gemstones_scaling_law import distributional_eval_sets
-from marin.processing.tokenize.data_configs import mixture_for_evaluation
+from experiments.exp1342_gemstones_scaling_law import distributional_eval_sets
 from experiments.isoflop_sweep import MARIN_SCALING_SUITES
 from experiments.models import ModelConfig, download_model_step
 from marin.execution.executor import executor_main, output_path_of, versioned
@@ -26,7 +36,7 @@ def create_eval_steps() -> list:
 
     steps = []
     dist_eval = distributional_eval_sets(llama3_tokenizer)
-    for model, metadata in list(zip(*MARIN_SCALING_SUITES["nemotron"])):
+    for model, metadata in list(zip(*MARIN_SCALING_SUITES["nemotron"], strict=False)):
         name = f"marin-nemo-{metadata[0]}C-{metadata[-3] * metadata[-2] * 4096}T-{metadata[1]}W-{metadata[2]}D"
 
         step = evaluate_levanter_lm_evaluation_harness(
@@ -47,7 +57,7 @@ def create_eval_steps() -> list:
 
         steps.append(logprobs_step)
 
-    for model, metadata in list(zip(*MARIN_SCALING_SUITES["common_pile"])):
+    for model, metadata in list(zip(*MARIN_SCALING_SUITES["common_pile"], strict=False)):
         name = f"marin-comma-{metadata[0]}C-{metadata[-3] * metadata[-2] * 4096}T-{metadata[1]}W-{metadata[2]}D"
 
         step = evaluate_levanter_lm_evaluation_harness(
@@ -68,7 +78,7 @@ def create_eval_steps() -> list:
 
         steps.append(logprobs_step)
 
-    for model, metadata in list(zip(*MARIN_SCALING_SUITES["dclm-default"])):
+    for model, metadata in list(zip(*MARIN_SCALING_SUITES["dclm-default"], strict=False)):
         name = f"marin-dclm-{metadata[0]}C-{metadata[-3] * metadata[-2] * 4096}T-{metadata[1]}W-{metadata[2]}D"
 
         step = evaluate_levanter_lm_evaluation_harness(
