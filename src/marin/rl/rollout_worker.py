@@ -572,6 +572,12 @@ class RolloutWorker:
                 log_metrics = eval_metrics
                 log_metrics.update(self._transfer_client.get_metrics())
                 log_metrics.update({f"env.{k}": v for k, v in (env_metrics or {}).items()})
+                
+                # Add vLLM inference metrics if available
+                if hasattr(self._policy_ctx, 'get_metrics'):
+                    vllm_metrics = self._policy_ctx.get_metrics()
+                    log_metrics.update({f"vllm.{k}": v for k, v in vllm_metrics.items()})
+                
                 log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
                 logger.info(f"Logging metrics at step {step}... {log_metrics}")
                 self.tracker.log(log_metrics, step=step)

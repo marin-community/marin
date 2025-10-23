@@ -409,16 +409,27 @@ class ArrowFlightServer(WeightTransferServer):
                 update_time = time.time()
 
                 self.metrics.successful_transfers += 1
+                transfer_time = update_time - start_time
+                self.metrics.total_transfer_time += transfer_time
+                
+                # Calculate total bytes
+                total_bytes = sum(
+                    sum(batch.nbytes for batch in batches) 
+                    for _, batches in params_dict.values()
+                )
+                self.metrics.total_bytes_transferred += total_bytes
 
                 logger.info(
                     "Served weights for weight_id %s. "
-                    "timings: state_dict=%.2fs, copy=%.2fs, serialize=%.2fs, store=%.2fs, update=%.2fs",
+                    "timings: state_dict=%.2fs, copy=%.2fs, serialize=%.2fs, store=%.2fs, update=%.2fs, total=%.2fs, bytes=%d MB",
                     weight_id,
                     state_dict_time - start_time,
                     copy_time - state_dict_time,
                     serialize_time - copy_time,
                     store_time - serialize_time,
                     update_time - store_time,
+                    transfer_time,
+                    total_bytes // (1024 * 1024),
                 )
 
             barrier_sync()

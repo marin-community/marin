@@ -12,6 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+vLLM RL Pipeline Experiment with Automatic Benchmarking
+
+This experiment automatically logs the following benchmark metrics to wandb:
+
+1. Communication Overhead:
+   - train.communication_overhead_sec: Time spent in weight transfer per step
+   - train.step_duration_sec: Total training step duration
+   - Overhead = weight transfer time (measure T_normal - T_no_weight_sync by comparing steps)
+
+2. vLLM Inference Throughput:
+   - inference.vllm.avg_tokens_per_second: Running average of tokens/second
+   - inference.vllm.total_tokens_generated: Cumulative token count
+   - inference.vllm.total_requests: Number of inference requests
+
+3. Levanter Training Throughput:
+   - train.tokens_per_second: Training throughput in tokens/second
+   - train.total_tokens_trained: Cumulative tokens processed
+
+All metrics are automatically logged to wandb at the configured log_freq interval.
+Use marin.rl.benchmark_utils to compute summary statistics from the run.
+"""
+
 import dataclasses
 import datetime
 import logging

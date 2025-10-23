@@ -42,6 +42,8 @@ class WeightTransferServerMetrics:
     total_transfers: int = 0
     successful_transfers: int = 0
     failed_transfers: int = 0
+    total_transfer_time: float = 0.0
+    total_bytes_transferred: int = 0
 
 
 @dataclass
