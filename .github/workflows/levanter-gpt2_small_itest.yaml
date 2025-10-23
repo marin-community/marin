@@ -11,6 +11,9 @@ on:
 jobs:
   integration_test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lib/levanter
     env:
       TPU_ZONE: "us-central2-b" # Matching the launch script
       WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
