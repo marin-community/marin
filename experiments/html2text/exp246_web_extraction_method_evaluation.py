@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from experiments.evals.evals import default_eval
-from experiments.exp246_web_extraction_method_training import (
+from experiments.html2text.exp246_web_extraction_method_training import (
     fineweb_readability_1_4b_model,
     fineweb_resiliparse_preserve_formatting_1_4b_model,
     fineweb_trafilatura_1_4b_model,

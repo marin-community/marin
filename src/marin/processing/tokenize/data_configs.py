@@ -69,6 +69,12 @@ def lm_data_config(
     """
     Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
 
+    Notes:
+
+        If you are seeing this invoked with `permutation_type="linear"`, that means the experiment was
+        run with the old, deprecated shuffle type. The newer shuffle "feistel" is default and you should
+        prefer it for future experiments,
+
     Args:
         training_set: The training set to use
         permutation_type: Strategy used to permute data. Defaults to "feistel".
@@ -376,7 +382,7 @@ def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LMMixtureDatasetC
     return lm_mixture_data_config(
         {name: step for name, step in inputs.items()},
         {name: 0.0 for name in inputs},
-        permutation_type="linear",
+        permutation_type="feistel",
         shuffle=False,
         missing_weights_are_validation=True,
     )

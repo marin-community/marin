@@ -436,9 +436,7 @@ def create_ssh_proxy_chain(
     )
 
 
-def wait_for_tunnel(
-    clusters: dict[str, ClusterInfo], port_mappings: dict[str, RayPortMapping], timeout: int = 3
-) -> None:
+def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, RayPortMapping]) -> None:
     """Wait for SSH tunnel to be ready by testing dashboard connections."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -514,7 +512,7 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
     ssh_process = create_ssh_proxy_chain(clusters, port_mappings)
 
     # Wait for SSH tunnel to be ready
-    wait_for_tunnel(clusters, port_mappings, timeout=30)
+    wait_for_tunnel(clusters, port_mappings)
 
     # Create connection object
     connection = DashboardConnection(clusters=clusters, port_mappings=port_mappings, ssh_process=ssh_process)
@@ -754,7 +752,7 @@ def backup_jobs(cluster_config: str, local_path: str, raise_errors: bool = False
     logger.info("All jobs backed up.")
 
 
-def restore_jobs(cluster_config: str, local_path: str, raise_errors: bool = False) -> None:
+def restore_jobs(local_path: str, raise_errors: bool = False) -> None:
     """Perform the 'after' stage actions: resubmit jobs.
 
     Note: This requires RAY_ADDRESS to be set, typically via start_ray_dashboard_with_wait.
