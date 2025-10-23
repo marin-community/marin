@@ -92,7 +92,7 @@ def create_math_curriculum(run_id: str, model_name: str) -> CurriculumConfig:
 
     # Default sampling params for all lessons
     default_sampling = SamplingParams(
-        temperature=1.0,
+        temperature=0.7,
         n_prompts=8,
         n_generations_per_prompt=8,
         max_tokens=MAX_TOKENS,
@@ -196,7 +196,7 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         vllm_tensor_parallel_size=1,
         gpu_memory_utilization=0.60,
         eval_sampling_params=SamplingParams(
-            temperature=1.0,
+            temperature=0.7,
             n=8,
             max_tokens=16,
             stop=None,
@@ -222,7 +222,7 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         description=f"Async RL training: {name}",
         fn=RLJob.make_step_fn(),
         config=config,
-        pip_dependency_groups=["post_training"],
+        pip_dependency_groups=["post_training", "vllm"],
     )
 
 

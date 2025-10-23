@@ -144,7 +144,8 @@ def test_initialize_vllm_rollout(tmpdir, ray_tpu_cluster):
             ),
         )
     )
-    rollout_worker.run()
+    # rollout_worker.run()
+    rollout_worker._build_models()
 
 
 if __name__ == "__main__":

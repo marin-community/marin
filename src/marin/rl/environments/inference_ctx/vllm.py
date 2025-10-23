@@ -54,7 +54,10 @@ class vLLMInferenceContext(BaseInferenceContext):
         logprobs = []
         for logprob_dict in choice.logprobs:
             for _, logprob in logprob_dict.items():
-                logprobs.append(logprob.logprob)
+                if (
+                    logprob.rank == 1
+                ):  # Only support taking the top logprob since multiple tokens can have the same logprob
+                    logprobs.append(logprob.logprob)
 
         return np.array(logprobs, dtype=np.float32)
 
@@ -68,6 +71,15 @@ class vLLMInferenceContext(BaseInferenceContext):
     ) -> list[RequestOutput]:
         """Batch completions from the inference server."""
         # TODO(chris): allow the override of sampling params for each lessonconfig
+        sampling_params = SamplingParams(
+            temperature=temperature,
+            n=n,
+            max_tokens=max_tokens or self.sampling_params.max_tokens,
+            # NOTE(chris): This is a bandaid patch because envs don't usually pass in the max token, so we need
+            # to do this or else VLLM will fail.
+            stop=stop or self.sampling_params.stop,
+            logprobs=1,
+        )
 
         prompts_with_templates = [
             self.tokenizer.apply_chat_template(
@@ -76,5 +88,5 @@ class vLLMInferenceContext(BaseInferenceContext):
             for prompt in prompts
         ]
 
-        outputs = self.llm.generate(prompts_with_templates, self.sampling_params)
+        outputs = self.llm.generate(prompts_with_templates, sampling_params)
         return outputs

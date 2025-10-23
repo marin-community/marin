@@ -111,6 +111,11 @@ class BaseInferenceContext:
         response_tokens = self.response_tokens_from_choice(choice)
         response_logprobs = self.logprobs_from_choice(choice)
 
+        assert len(response_tokens) == len(
+            response_logprobs
+        ), f"Length mismatch between response_tokens ({len(response_tokens)}) \
+            and response_logprobs ({len(response_logprobs)})"
+
         if len(prompt_tokens) == 0:
             logger.error(f"Prompt tokenization failed for {env_example_id}")
 

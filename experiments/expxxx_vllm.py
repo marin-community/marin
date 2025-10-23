@@ -44,7 +44,7 @@ from vllm import SamplingParams
 from marin.rl.environments.inference_ctx.vllm import vLLMInferenceContext
 
 
-@ray.remote(resources={"TPU-v4-8-head": 1}, runtime_env={"env_vars": {"VLLM_ENABLE_V1_MULTIPROCESSING": "0"}})
+@ray.remote(resources={"TPU-v6e-8-head": 1}, runtime_env={"env_vars": {"VLLM_ENABLE_V1_MULTIPROCESSING": "0"}})
 def run_vllm():
     from vllm import LLM
 
@@ -145,7 +145,7 @@ def test_arrow_flight_transfer_to_vllm():
         client.cleanup()
 
 
-@ray.remote(resources={"TPU-v4-8-head": 1}, runtime_env={"env_vars": {"VLLM_ENABLE_V1_MULTIPROCESSING": "0"}})
+@ray.remote(resources={"TPU-v6e-8-head": 1}, runtime_env={"env_vars": {"VLLM_ENABLE_V1_MULTIPROCESSING": "0"}})
 def test_vllm_inference():
     """Test vLLM inference."""
 
