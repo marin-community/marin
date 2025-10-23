@@ -46,7 +46,7 @@ def main():
     
     # Print key benchmark results in machine-readable format
     print("\nKey Metrics (copy-paste friendly):")
-    print(f"Communication overhead per step: {metrics.avg_communication_overhead_sec:.3f} seconds")
+    print(f"Weight transfer time per step: {metrics.avg_weight_transfer_duration_sec:.3f} seconds")
     print(f"vLLM inference throughput: {metrics.avg_inference_tokens_per_sec:.1f} tokens/second")
     print(f"Levanter training throughput: {metrics.avg_training_tokens_per_sec:.1f} tokens/second")
 

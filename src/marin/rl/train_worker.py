@@ -302,9 +302,6 @@ class TrainWorker:
         metrics["train.step_duration_sec"] = step_duration
         metrics["train.weight_transfer_duration_sec"] = transfer_duration
         
-        # Communication overhead = time spent in weight transfer
-        metrics["train.communication_overhead_sec"] = transfer_duration
-        
         # Calculate throughput if we have token counts
         if hasattr(info, 'ntokens') and info.ntokens > 0:
             self._total_tokens_trained += info.ntokens

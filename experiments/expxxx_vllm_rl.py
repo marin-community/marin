@@ -17,10 +17,9 @@ vLLM RL Pipeline Experiment with Automatic Benchmarking
 
 This experiment automatically logs the following benchmark metrics to wandb:
 
-1. Communication Overhead:
-   - train.communication_overhead_sec: Time spent in weight transfer per step
-   - train.step_duration_sec: Total training step duration
-   - Overhead = weight transfer time (measure T_normal - T_no_weight_sync by comparing steps)
+1. Weight Transfer Timing:
+   - train.weight_transfer_duration_sec: Time spent transferring weights per sync
+   - train.step_duration_sec: Total training step duration (forward + backward + optimizer)
 
 2. vLLM Inference Throughput:
    - inference.vllm.avg_tokens_per_second: Running average of tokens/second

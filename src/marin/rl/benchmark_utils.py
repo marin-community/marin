@@ -33,7 +33,6 @@ class BenchmarkMetrics:
     
     # Training metrics
     avg_step_duration_sec: float = 0.0
-    avg_communication_overhead_sec: float = 0.0
     avg_training_tokens_per_sec: float = 0.0
     total_training_steps: int = 0
     
@@ -71,11 +70,6 @@ def compute_benchmark_summary(wandb_run) -> BenchmarkMetrics:
             if len(train_data) > 0:
                 metrics.avg_step_duration_sec = train_data.mean()
                 metrics.total_training_steps = len(train_data)
-        
-        if 'train.communication_overhead_sec' in history.columns:
-            comm_data = history['train.communication_overhead_sec'].dropna()
-            if len(comm_data) > 0:
-                metrics.avg_communication_overhead_sec = comm_data.mean()
         
         if 'train.tokens_per_second' in history.columns:
             tps_data = history['train.tokens_per_second'].dropna()
@@ -136,7 +130,6 @@ def log_benchmark_summary(wandb_run, step: int = None):
     
     summary_dict = {
         "benchmark/avg_step_duration_sec": metrics.avg_step_duration_sec,
-        "benchmark/avg_communication_overhead_sec": metrics.avg_communication_overhead_sec,
         "benchmark/avg_training_tokens_per_sec": metrics.avg_training_tokens_per_sec,
         "benchmark/avg_inference_tokens_per_sec": metrics.avg_inference_tokens_per_sec,
         "benchmark/total_training_steps": metrics.total_training_steps,
@@ -154,10 +147,9 @@ def log_benchmark_summary(wandb_run, step: int = None):
         wandb_run.log(summary_dict, step=step)
     
     logger.info("Benchmark Summary:")
-    logger.info(f"  Communication overhead: {metrics.avg_communication_overhead_sec:.3f}s per step")
+    logger.info(f"  Weight transfer time: {metrics.avg_weight_transfer_duration_sec:.3f}s per step")
     logger.info(f"  Training throughput: {metrics.avg_training_tokens_per_sec:.1f} tokens/sec")
     logger.info(f"  Inference throughput: {metrics.avg_inference_tokens_per_sec:.1f} tokens/sec")
-    logger.info(f"  Weight transfer time: {metrics.avg_weight_transfer_duration_sec:.3f}s")
     
     return metrics
 
@@ -174,10 +166,6 @@ def print_benchmark_report(metrics: BenchmarkMetrics):
     print("=" * 70)
     print("\nTraining Performance:")
     print(f"  Average step duration:        {metrics.avg_step_duration_sec:.3f} seconds")
-    print(f"  Communication overhead:       {metrics.avg_communication_overhead_sec:.3f} seconds")
-    if metrics.avg_step_duration_sec > 0:
-        overhead_pct = (metrics.avg_communication_overhead_sec / metrics.avg_step_duration_sec) * 100
-        print(f"  Overhead as % of step time:   {overhead_pct:.1f}%")
     print(f"  Training throughput:          {metrics.avg_training_tokens_per_sec:.1f} tokens/sec")
     print(f"  Total training steps:         {metrics.total_training_steps}")
     
