@@ -12,117 +12,104 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Common dataclasses and interfaces for Marin's RL subsystem.
+"""
+Type definitions for RL/post-training.
 
-This module purposefully contains *only* lightweight type definitions and
-interfaces that are shared across the training, environment, and inference
-components.  Implementation-specific logic should live elsewhere to avoid
-introducing heavy dependencies at import time.
+This module contains training-focused type definitions:
+- Rollout types (Rollout, RolloutGroup, RolloutBatch, etc.)
+- Training types (TrainingBatch, RolloutWithAdvantage)
+
+For inference-related types, see marin.rl.inference_ctx
 """
 
-from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any
 
-__all__ = [
-    "InferenceEndpoint",
-    "Rollout",
-    "RolloutGroup",
-    "RolloutSink",
-    "Turn",
-]
+import equinox as eqx
+import haliax.haxtyping as ht
+import jax
+from haliax import NamedArray
 
 
-# ---------------------------------------------------------------------------
-# Rollouts & Turns
-# ---------------------------------------------------------------------------
+@dataclass
+class RolloutStats:
+    """Statistics from a Rollout. Used for curriculum feedback."""
+
+    episode_reward: float
+    env_example_id: str
+    lesson_id: str
 
 
-@dataclass(slots=True, frozen=True)
-class Turn:
-    """A single message-level interaction within a rollout.
+@dataclass(frozen=True)
+class RolloutMetadata:
+    """Metadata about when/where rollouts were generated."""
 
-    Parameters
-    ----------
-    message:
-        The textual contents of the turn (usually a single chat message).
-    logprobs:
-        Token-level log probabilities corresponding to *message*.  The length of
-        *logprobs* should match the number of generated tokens, but can be
-        omitted when not available.
-    role:
-        The role that produced the message (e.g. "user", "assistant",
-        "system", "tool").
-    reward:
-        Scalar reward obtained *after* the turn.  Can be ``None`` if the reward
-        is computed later or not applicable.
-    inference_metadata:
-        Arbitrary key/value pairs describing how the message was generated
-        (model version, sampling parameters, etc.).
-    """
+    worker_id: str = ""
+    """Worker that generated the rollout."""
 
-    message: str
-    logprobs: Sequence[float] | None
-    role: str
-    reward: float | None | None
-    inference_metadata: dict[str, Any]
+    timestamp: float = 0.0
+    """The timestamp at which the rollout was generated."""
+
+    weight_step: int = -1
+    """The step at which the model weights were used to generate this rollout."""
 
 
-@dataclass(slots=True, frozen=True)
-class Rollout:
-    """A sequence of :class:`Turn` objects plus auxiliary metadata."""
+class Rollout(eqx.Module):
+    """A single rollout: one prompt + one generated response + rewards."""
 
-    turns: list[Turn]
-    metadata: dict[str, Any]
+    env_name: str
+    """The name of the environment used to generate this rollout."""
 
-    def __iter__(self):
-        return iter(self.turns)
+    env_example_id: str
+    """An identifier for the example used to initialize the environment."""
+
+    prompt_tokens: jax.Array
+    """Array of (prompt_length,) token IDs representing the input prompt."""
+
+    response_tokens: jax.Array
+    """Array of (response_length,) token IDs representing the generated response."""
+
+    response_logprobs: jax.Array
+    """Array of (response_length,) log probabilities for each generated token."""
+
+    token_rewards: jax.Array
+    """The reward assigned to each generated token."""
+
+    episode_reward: float
+    """The overall reward for the episode."""
+
+    metadata: RolloutMetadata = RolloutMetadata()
+    """Metadata about when/where this rollout was generated."""
 
 
-@dataclass(slots=True, frozen=True)
-class RolloutGroup:
-    """A collection of rollouts that should be processed together (e.g. a batch).
+class RolloutGroup(eqx.Module):
+    """Multiple rollouts for the same prompt (e.g., n_generations samples)."""
 
-    Grouping rollouts enables algorithms such as GRPO that operate on multiple
-    trajectories simultaneously while preserving per-group metadata (problem
-    name, seed, etc.).
-    """
-
-    id: str
-    source: str  # name of the environment that produced the rollouts
-    created: float  # POSIX timestamp (seconds since epoch)
     rollouts: list[Rollout]
-    metadata: dict[str, Any]
-
-    def __iter__(self):
-        return iter(self.rollouts)
 
 
-# A callable that accepts a *batch* of :class:`RolloutGroup` objects.
-RolloutSink = Callable[[list[RolloutGroup]], None]
+class RolloutBatch(eqx.Module):
+    """A batch of rollout groups with metadata."""
+
+    groups: list[RolloutGroup]
+    metadata: RolloutMetadata
 
 
-# ---------------------------------------------------------------------------
-# Inference endpoint placeholder
-# ---------------------------------------------------------------------------
+@dataclass
+class RolloutWithAdvantage:
+    """A rollout paired with its computed advantage."""
+
+    rollout: Rollout
+    advantage: float
 
 
-@dataclass(slots=True, frozen=True)
-class InferenceEndpoint:
-    """Location of an OAI-compatible inference server.
+class TrainingBatch(eqx.Module):
+    """A batch ready for training with Haliax named arrays."""
 
-    For now this is just a plain address string (e.g. "http://host:8000" or a
-    Ray actor name).  Additional connection metadata can be added later without
-    affecting existing code because the dataclass is frozen and explicit.
-    """
+    input_ids: ht.Int[NamedArray, "batch position"]
+    position_ids: ht.Int[NamedArray, "batch position"]
+    loss_weights: ht.Float[NamedArray, "batch position"]
+    loss_masks: ht.Int[NamedArray, "batch position"]
+    policy_logprobs: ht.Float[NamedArray, "batch position"]
 
-    address: str
-
-
-# Placeholders for inference endpoints and environments.
-InferenceConfig = Any
-
-
-# ---------------------------------------------------------------------------
-# Configs now reside in :pymod:`marin.rl.config`.
-# ---------------------------------------------------------------------------
+    def __len__(self) -> int:
+        return self.input_ids.axis_size("batch")

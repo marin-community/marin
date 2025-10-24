@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
 import json
 import logging
 import os
@@ -43,11 +44,12 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         Returns the runtime environment to run the evaluator on the Ray cluster.
         """
         return build_runtime_env_for_packages(
-            extra=[],
+            extra=["eval", "tpu"],
             pip_packages=["statsmodels==0.14.4"],
             env_vars={
                 "TOKENIZERS_PARALLELISM": "false",
                 "HF_DATASETS_TRUST_REMOTE_CODE": "1",
+                "HF_ALLOW_CODE_EVAL": "1",
             },
         )
 
@@ -74,25 +76,30 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
         try:
             # Download the model from GCS or HuggingFace
+            print("before download")
             model_name_or_path: str = self.download_model(model)
+            print(f"in lm_eval: {model_name_or_path}")
             name = model.name + "_lmeval_" + "-".join([eval_task.name for eval_task in evals])
+            print(name)
             logger.info(f"WandB Run Name: {name}")
             logger.info(f"Running eval harness on model: {model_name_or_path}")
-
+            print("after wandb log")
             # NOTE(chris): Before, the batch size was 16, but this is too large for the 8B model.
             # In the future, we should make this user-configurable.
             trainer_config = TrainerConfig(
                 tracker=WandbConfig(project="marin", tags=wandb_tags, name=name),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
-                per_device_eval_parallelism=8,
+                per_device_eval_parallelism=1,
                 ray=RayConfig(auto_start_cluster=False),
             )
+            print("after trainer?")
 
             model_config = HFCheckpointConverter.from_hf(model_name_or_path).LevConfigClass()
 
             # convert to the config that Levanter's eval_harness expects
             tasks = convert_to_levanter_task_config(evals)
             logger.info(f"Tasks: {tasks}")
+            print("converted tasks")
 
             model_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.path)
 
@@ -101,13 +108,16 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             logger.info(f"Model name: {model.name}")
             logger.info(f"model_name_or_path: {model_name_or_path}")
 
+            print("starting harness")
             eval_config = eval_harness.EvalHarnessMainConfig(
                 eval_harness=eval_harness.LmEvalHarnessConfig(
                     task_spec=tasks,
                     max_examples=max_eval_instances,
                     log_samples=False,
-                    max_eval_length=4096,
+                    max_length=4096,
                     apply_chat_template=model.apply_chat_template,
+                    confirm_run_unsafe_code=True,
+                    sample_logging=eval_harness.SampleLoggingConfig(max_samples_per_benchmark=20),
                 ),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,
@@ -117,6 +127,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             )
 
             results = eval_harness.run_eval_harness_main(eval_config)
+            print("finished harness")
 
             try:
                 # add a results.json to output path
@@ -127,7 +138,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 # write output JSON directly to output_path on GCS
                 fs = fsspec.filesystem("gcs")
                 with fs.open(output_path, "w") as f:
-                    json.dump(results, f, indent=2)
+                    json.dump(results, f, indent=2, default=_json_default)
 
                 levanter.tracker.current_tracker().finish()
                 logger.info("Upload completed successfully.")
@@ -143,5 +154,24 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             # Clean up resources
             self.cleanup(model)
 
-            if os.path.exists(LevanterTpuEvaluator.CACHE_PATH):
+            if os.path.exists(LevanterTpuEvaluator.CACHE_PATH) and "gcsfuse" not in LevanterTpuEvaluator.CACHE_PATH:
                 shutil.rmtree(LevanterTpuEvaluator.CACHE_PATH)
+
+
+def _json_default(value):
+    """
+    Provide a best-effort JSON serialization for objects returned by the eval harness.
+    """
+    if dataclasses.is_dataclass(value):
+        return dataclasses.asdict(value)
+
+    if isinstance(value, set):
+        return list(value)
+
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        try:
+            return value.to_dict()
+        except Exception:
+            pass
+
+    return repr(value)

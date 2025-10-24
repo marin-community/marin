@@ -30,6 +30,7 @@ import fsspec
 import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
+from levanter.infra.ray_tpu import TPU_CONFIGS
 
 from experiments.defaults import _get_tokenizer_for_train, default_train
 from experiments.llama import llama3_tokenizer_vocab_size
@@ -37,12 +38,35 @@ from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize import add_validation_sets_to_mixture, lm_data_config
+from marin.resources import TpuPodConfig
 from marin.speedrun.paloma_local_download import speedrun_paloma_tokenized
 from marin.training.training import TrainLmOnPodConfig
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 from marin.utils import asdict_excluding
 
 logger = logging.getLogger("ray")
+
+_TPU_CONFIG_BY_NAME = {config.name: config for config in TPU_CONFIGS}
+
+
+def _num_accelerator_chips(resources) -> int:
+    """Return the total number of accelerator chips for the provided resources."""
+
+    if isinstance(resources, TpuPodConfig):
+        tpu_config = _TPU_CONFIG_BY_NAME.get(resources.tpu_type)
+        if tpu_config is None:
+            raise ValueError(f"Unknown TPU type: {resources.tpu_type}")
+
+        if isinstance(resources.slice_count, int):
+            slice_count = resources.slice_count
+        elif resources.slice_count is None:
+            slice_count = 1
+        else:
+            slice_count = max(resources.slice_count)
+
+        return tpu_config.chip_count * slice_count
+
+    return resources.total_device_count()
 
 
 @dataclass(frozen=True)
@@ -94,8 +118,9 @@ class SpeedrunConfig:
         Mainly to sanity-check runs by calling speedrun_config.print_run_info() before actually running it."""
 
         num_devices = self.num_devices
+        num_chips = self.num_chips
         device_flops = self.device_flops
-        total_peak_flops = device_flops * num_devices
+        total_peak_flops = device_flops * num_chips
 
         # Print simplified config info
         logger.info("Speedrun Configuration:")
@@ -105,6 +130,7 @@ class SpeedrunConfig:
 
         logger.info("Hardware and Model FLOPS Information:")
         logger.info(f"Number of devices: {num_devices}")
+        logger.info(f"Number of chips: {num_chips}")
         logger.info(f"Device FLOPs: {device_flops:.2e} FLOP/s")
         logger.info(f"Total peak hardware FLOPs: {total_peak_flops:.2e} FLOP/s")
         logger.info(f"Model FLOPs: {model_flops:.2e} FLOP")
@@ -156,6 +182,12 @@ This is calculated based on assumed MFU values and can be used as a rough estima
         """Get the number of devices."""
         return self.train_config.resources.total_device_count()
 
+    @property
+    def num_chips(self) -> int:
+        """Get the number of accelerator chips."""
+
+        return _num_accelerator_chips(self.train_config.resources)
+
 
 @dataclass
 class SpeedrunResultsConfig:
@@ -202,10 +234,13 @@ def speedrun_results(config: SpeedrunResultsConfig):
     )
 
     training_time = sum(step_times)
-    training_hardware_flops = training_time * config.speedrun_config.num_devices * config.speedrun_config.device_flops
+    num_devices = config.speedrun_config.num_devices
+    num_chips = config.speedrun_config.num_chips
+    training_hardware_flops = training_time * num_chips * config.speedrun_config.device_flops
     logger.info(f"Training time: {training_time:.2f} seconds")
     # devices
-    logger.info(f"Number of devices: {config.speedrun_config.num_devices}")
+    logger.info(f"Number of devices: {num_devices}")
+    logger.info(f"Number of chips: {num_chips}")
     logger.info(f"Device FLOPs: {config.speedrun_config.device_flops:.2e} FLOPs")
     logger.info(f"Training hardware FLOPs: {training_hardware_flops:.2e} FLOPs")
 
@@ -250,6 +285,9 @@ def speedrun_results(config: SpeedrunResultsConfig):
         "total_tokens": total_tokens,
         "model_flops": model_flops,
         # Training metrics
+        "num_devices": num_devices,
+        "num_chips": num_chips,
+        "device_flops": config.speedrun_config.device_flops,
         "training_time": training_time,
         "training_hardware_flops": training_hardware_flops,
         "eval/paloma/c4_en/bpb": (
@@ -307,6 +345,8 @@ def default_speedrun(
         pretraining_data = lm_data_config(
             training_set=config.tokenized_dataset,
             validation_sets=speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
+            # TODO: when should we update this
+            permutation_type="linear",
         )
     else:
         pretraining_data = add_validation_sets_to_mixture(

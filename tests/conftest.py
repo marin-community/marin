@@ -83,6 +83,10 @@ def ray_tpu_cluster(tmp_path_factory, worker_id):
 
     When running under pytest-xdist, we need to ensure each cluster is isolated
     by specifying unique temp directories and ports.
+
+    We additionally set the "RAY_LOCAL_CLUSTER" environment variable to signal to code like
+    executor that this is a test cluster. This allows us to skip things like dependency collection
+    that are unnecessary in a test environment.
     """
     if not worker_id or worker_id == "master":
         worker_id = 0
@@ -104,23 +108,34 @@ def ray_tpu_cluster(tmp_path_factory, worker_id):
     }
     print("Starting on worker_id", worker_id, "with init_args", init_args)
     if os.getenv("START_RAY_TPU_CLUSTER") == "true":
-        ray.init(
+        ctx = ray.init(
             resources={"TPU": 8, "TPU-v6e-8-head": 1, "head_node": 1},
             num_cpus=120,
             **init_args,
         )
     elif os.getenv("START_RAY_CPU_CLUSTER") == "true":
-        ray.init(
+        ctx = ray.init(
             **init_args,
             num_cpus=8,
             resources={"head_node": 1},
         )
     else:
-        ray.init(
+        ctx = ray.init(
             **init_args,
             num_cpus=8,
             resources={"head_node": 1},
         )
+
+    # update environment variable to pass Ray address to subprocesses
+    os.environ["RAY_ADDRESS"] = ctx.address_info["address"]
+    os.environ["RAY_DASHBOARD_URL"] = ctx.address_info["webui_url"]
+    os.environ["RAY_API_SERVER_ADDRESS"] = ctx.address_info["gcs_address"]
+    os.environ["RAY_LOCAL_CLUSTER"] = "1"
+
+    print(
+        f"Initialized ray with address={ctx.address_info['address']}",
+        f"webui_url={ctx.address_info['webui_url']}, gcs_address={ctx.address_info['gcs_address']}",
+    )
 
     yield
 
