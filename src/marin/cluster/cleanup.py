@@ -25,6 +25,7 @@ import json
 import logging
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
 
 import ray
@@ -69,42 +70,68 @@ def get_tpu_worker_resources() -> dict[str, int]:
     return worker_resources
 
 
-def cleanup_tpu_lockfiles() -> dict[str, Any]:
-    """Clean TPU lockfiles across all worker nodes.
-
-    Schedules cleanup tasks on each worker using Ray remote functions
-    with specific resource requirements to target individual workers.
-    Each task removes /tmp/libtpu_lockfile which can prevent TPU access
-    when it persists across Ray tasks.
-
-    Returns:
-        Dict with cleanup statistics containing:
-        - workers_targeted: Number of workers where cleanup was attempted
-        - workers_cleaned: Number of workers successfully cleaned
-        - errors: List of error messages for failed cleanups
-    """
+def cleanup_tpu_processes() -> dict[str, Any]:
+    """Clean TPU lockfiles across all worker nodes."""
 
     @ray.remote(num_cpus=0)
-    def _cleanup_lockfile_on_worker():
-        """Remote task to clean lockfile on a specific worker."""
+    def _cleanup_worker():
+        """Remote task kill any TPU processes on a specific worker and cleanup the lockfile."""
         subprocess.run(["sudo", "rm", "-f", "/tmp/libtpu_lockfile"], check=False)
+
+        # Find and kill any running TPU processes by traversing /proc
+        accels = []
+        for path in ["/dev/vfio/", "/dev/accel"]:
+            for chip in range(8):
+                accels.append(f"{path}{chip}")
+
+        pids = _find_pids_using_device(accels)
+        for pid in pids:
+            subprocess.run(["sudo", "--non-interactive", "kill", "-9", str(pid)], check=False)
+
+    def _find_pids_using_device(accels: list[str]) -> list[int]:
+        """Find PIDs that have the given device file open by traversing /proc.
+
+        Ignores processes we don't have permission to inspect.
+        """
+        pids = []
+        proc_dir = Path("/proc")
+
+        for pid_dir in proc_dir.iterdir():
+            if not pid_dir.name.isdigit():
+                continue
+
+            fd_dir = pid_dir / "fd"
+            if not fd_dir.exists():
+                continue
+
+            try:
+                for fd in fd_dir.iterdir():
+                    target = fd.resolve()
+                    if str(target) in accels:
+                        pids.append(int(pid_dir.name))
+                        break
+            except (OSError, PermissionError):
+                # Can't access this process's fds, skip it
+                continue
+
+        return pids
 
     worker_resources = get_tpu_worker_resources()
 
     if not worker_resources:
-        logger.info("No TPU workers found for lockfile cleanup")
+        logger.info("No TPU workers found for cleanup")
         return {"workers_targeted": 0, "workers_cleaned": 0, "errors": []}
 
-    logger.info(f"Cleaning TPU lockfiles on {len(worker_resources)} workers")
+    logger.info(f"Cleaning TPU on {len(worker_resources)} workers")
 
     # Schedule cleanup task on each worker using its specific resource
     futures = {}
     for resource_name, count in worker_resources.items():
         # Schedule with resource requirement to target the given slice.
         # For slices, we best-effort target one task per host.
-        for _ in range(int(count)):
-            task = _cleanup_lockfile_on_worker.options(resources={resource_name: 1}).remote()
-        futures[resource_name] = task
+        for i in range(int(count)):
+            task = _cleanup_worker.options(resources={resource_name: 1}).remote()
+            futures[f"{resource_name}:{i}"] = task
 
     results = {"workers_targeted": len(worker_resources), "workers_cleaned": 0, "errors": []}
     ready, not_ready = ray.wait(list(futures.values()), num_returns=len(futures), timeout=60)
@@ -120,10 +147,10 @@ def cleanup_tpu_lockfiles() -> dict[str, Any]:
         elif future in not_ready:
             results["errors"].append(f"{resource_name}: Timed out after 60 seconds")
 
-    logger.info(f"Cleaned lockfiles on {results['workers_cleaned']}/{results['workers_targeted']} workers")
+    logger.info(f"Cleaned {results['workers_cleaned']}/{results['workers_targeted']} workers")
 
     if results["errors"]:
-        logger.warning(f"Encountered {len(results['errors'])} errors during lockfile cleanup")
+        logger.warning(f"Encountered {len(results['errors'])} errors during cleanup")
 
     return results
 
@@ -136,7 +163,7 @@ def cleanup_iteration(project: str, zone: str, dry_run: bool = False) -> dict[st
 
     Performs:
     - Removes terminated/preempted TPU nodes
-    - Cleans TPU lockfiles on active workers
+    - Terminates any processes using the TPU on idle workers
 
     Args:
         project: GCP project ID
@@ -159,7 +186,7 @@ def cleanup_iteration(project: str, zone: str, dry_run: bool = False) -> dict[st
 
     # Clean TPU lockfiles on active workers (skip during dry-run)
     if not dry_run:
-        lockfile_results = cleanup_tpu_lockfiles()
+        lockfile_results = cleanup_tpu_processes()
         results["lockfile_cleanup"] = lockfile_results
         logger.info(
             f"TPU lockfile cleanup: {lockfile_results['workers_cleaned']}/{lockfile_results['workers_targeted']} workers"
