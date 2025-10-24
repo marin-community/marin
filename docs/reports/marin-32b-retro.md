@@ -1,5 +1,7 @@
 # Marin 32B Retrospective
 
+> Total tokens trained: ≈6.437T (Phase 1: 2.679T + Phase 3/QK‑Norm: 2.684T + Phase 4/Mantis cooldown: 1.074T; excludes diagnostic restarts and the abandoned Bison cooldown attempt).
+
 <!--
 
 - [Introduction](#introduction)
@@ -123,6 +125,8 @@ For ~70k steps training behaved as expected though we had some loss spikes that 
 
 Unfortunately, at 80k steps we began to see spikes that were unavoidable even with all the update clipping that we had added. This launched a bit of a fire-drill to see how and whether we could salvage this run!
 
+- Tokens trained: ≈2.679T tokens (80,000 steps; 4096 seq len; batch schedule 0–18,499: 8192, 18,500–21,009: 7680, 21,010–79,999: 8192).
+
 ### Phase 2: Recovery Without Architecture Changes
 
 We treated the 80k checkpoint as salvageable and attempted to coax the run back while keeping the Llama backbone.
@@ -140,6 +144,8 @@ We next swapped optimizers without touching weights! There's been lots of recent
 
 Both restarts warm‑started from step 77,096 (pre‑spike). Both showed short‑term progress, then inevitable recurrence of loss spikes—consistent with a structural stability gap at 32B rather than a purely optimizer‑choice artifact. Identifying whether these intermediate checkpoints could have been salvaged or identifying what made them unsalvageable would be a great place for community researchers to utilize our intermediate releases!
 
+- Tokens trained: Diagnostic restarts only (short runs of a few thousand steps); excluded from cumulative phase totals due to restart to 80k Llama checkpoint for Phase 3.
+
 ### Phase 3: Switch to QK-Norm (`exp1395_qwen3_32b`)
 
 At this point we concluded that stabilizing a 32B Llama without architectural help wasn’t feasible under our constraints. We switched to Qwen3 32B, which adds QK‑Norm in attention, and warm‑started from the 80k Llama weights. This preserved useful signal in embeddings and MLPs while letting the normalized attention heads relearn.
@@ -155,6 +161,8 @@ Warm‑start + rewarm parameters (exp1395_32b):
 | Warm start checkpoint  | step‑80,000 (Llama 32B) |
 | Cycles                 | [80k, 1,000,000,000] |
 | Re‑warmup              | 1,000 steps |
+
+- Tokens trained: ≈2.684T tokens (80,000 steps from 80k → 160k at 4096 seq len, global batch 8192).
 
 ### Phase 4: Midtraining Runs
 
@@ -214,6 +222,8 @@ Dolmino’s GSM8k uses OLMes formatting, not LM Eval’s default. Therefore, rat
 ![Shuffling](../images/PLACEHOLDER_SHUFFLE1.png)
 **Additional anomaly — Shuffling.** Near 190k steps, training loss phase‑shifted while validation remained stable. This is normally observed when we change the underlying training data mix, but in this case we hadn't! We had separately begun to wonder whether our pseudo-random shuffle, which finds a co-prime step size across data indices, was leading to a somewhat unlucky shuffle where batches came from correlated data. This phase shift in cooldown increased our confidence this was happening!
 
+- Tokens trained: ≈1.074T tokens (32,000 steps from 160k → 192k at 4096 seq len, global batch 8192).
+
 #### Attempt 2 — Mantis Cooldown (`exp1529_32b_mantis_cooldown`)
 
 We restarted from 160k with two major changes:
@@ -254,6 +264,8 @@ Notes:
 - Sampling permutation switched to Feistel.
 
 We kept the optimizer schedule identical to Bison. With better shuffling and clean math, both failure modes disappeared, yielding a clean cooldown target for post‑training.
+
+- Tokens trained: ≈1.074T tokens (32,000 steps from 160k → 192k at 4096 seq len, global batch 8192).
 
 #### Shuffling: Linear vs. Feistel
 
