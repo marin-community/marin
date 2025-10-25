@@ -1,6 +1,18 @@
-name: CI with GCP TPU
+name: Levanter - CI with GCP TPU
 
-on: [pull_request]
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - lib/levanter/**
+      - uv.lock
+      - .github/workflows/levanter-tpu_unit_tests.yaml
+  pull_request:
+    paths:
+      - lib/levanter/**
+      - uv.lock
+      - .github/workflows/levanter-tpu_unit_tests.yaml
 
 jobs:
   test:
@@ -8,6 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TPU_ZONE: "us-central2-b"
+    defaults:
+      run:
+        working-directory: lib/levanter
 
     steps:
       - name: Checkout code
@@ -39,7 +54,8 @@ jobs:
       - name: Run most tests
         run: |
           export TPU_NAME=ci-run-${{ github.run_id }}
-          gcloud compute tpus tpu-vm ssh $TPU_NAME --zone ${TPU_ZONE} --command "JAX_TRACEBACK_FILTERING=off PYTHONPATH=$PYTHONPATH:levanter/tests CI=1 bash levanter/infra/run.sh pytest levanter/tests -m 'not entry and not ray' --durations=20"
+          gcloud compute tpus tpu-vm ssh $TPU_NAME --zone ${TPU_ZONE} --command "JAX_TRACEBACK_FILTERING=off PYTHONPATH=$PYTHONPATH:marin/lib/levanter/tests CI=1 bash marin/lib/levanter/infra/run.sh pytest marin/lib/levanter/tests -m 'not entry and not ray' --durations=20"
+
 # Something's wrong with these
 #
 #      - name: Run forked tests

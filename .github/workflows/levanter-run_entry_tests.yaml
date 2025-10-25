@@ -1,6 +1,18 @@
-name: Run entry tests
+name: Levanter - Run entry tests
 
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - lib/levanter/**
+      - uv.lock
+      - .github/workflows/levanter-run_entry_tests.yaml
+  pull_request:
+    paths:
+      - lib/levanter/**
+      - uv.lock
+      - .github/workflows/levanter-run_entry_tests.yaml
 
 jobs:
   entry_tests:
@@ -10,6 +22,9 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11"]
+    defaults:
+      run:
+        working-directory: lib/levanter
 
     steps:
       - uses: actions/checkout@v4
@@ -19,11 +34,11 @@ jobs:
           version: "0.7.20"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
+          working-directory: lib/levanter
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --package levanter --dev --frozen
       - name: Test with pytest
         run: |
-          PYTHONPATH=tests:src:. uv run pytest tests -m "entry" --durations=20
-
+          PYTHONPATH=tests:src:. uv run --package levanter pytest tests -m "entry" --durations=20
