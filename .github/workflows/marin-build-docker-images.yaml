@@ -1,4 +1,4 @@
-name: Build Docker images
+name: Marin - Build Docker images
 
 on:
   # TODO: Add a weekly schedule.

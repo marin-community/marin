@@ -1,4 +1,4 @@
-name: GPT-2 Small Integration Test
+name: Levanter - GPT-2 Small Integration Test
 
 on:
   workflow_run:
@@ -14,6 +14,9 @@ jobs:
     env:
       TPU_ZONE: "us-central2-b" # Matching the launch script
       WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+    defaults:
+      run:
+        working-directory: lib/levanter
 
     steps:
       - name: Checkout code
@@ -39,6 +42,7 @@ jobs:
           version: "0.7.20"
           python-version-file: "pyproject.toml"
           enable-cache: true
+          working-directory: lib/levanter
       - name: Set up Python
         run: uv python install
       - name: Create virtual environment
@@ -56,13 +60,14 @@ jobs:
       - name: Run GPT-2 Small Integration Test
         run: |
           # The launch script handles TPU creation and deletion
-          uv run python infra/launch.py --foreground --tpu_name levanter-itest-${{ github.run_id }} \
+          uv run --package levanter --frozen python infra/launch.py --foreground --tpu_name levanter-itest-${{ github.run_id }} \
               --zone us-central2-b --tpu_type v4-32 --preemptible \
               --run_id ${{ github.run_id }} \
               --docker_registry ghcr --github_user ${{ github.actor }} \
               python -m levanter.main.train_lm \
               --config_path config/llama_small_fast_itest.yaml \
               --trainer.checkpointer.base_path gs://levanter-checkpoints/gpt-itest/ --trainer.checkpointer.save_interval 30m $*
+
         env:
           USER: ci-runner-${{ github.run_id }} # Set a unique user for TPU naming in the script
           GITHUB_DOCKER_TOKEN: ${{ secrets.DOCKER_PUSH_TOKEN }} # Required for the script to access GitHub resources
