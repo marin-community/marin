@@ -289,6 +289,12 @@ def create_test_mesh(tensor_parallelism: int = 1, skip_ok: bool = False) -> Mesh
     if not devices:
         raise RuntimeError("No JAX devices available for creating a mesh")
 
+    # DEBUG: Print device info
+    import sys
+    print(f"DEBUG create_test_mesh: jax.devices() = {devices}", file=sys.stderr)
+    print(f"DEBUG create_test_mesh: device IDs = {[d.id for d in devices]}", file=sys.stderr)
+    print(f"DEBUG create_test_mesh: tensor_parallelism = {tensor_parallelism}", file=sys.stderr)
+
     if len(devices) % tensor_parallelism != 0:
         if skip_ok:
             pytest.skip(
@@ -299,7 +305,9 @@ def create_test_mesh(tensor_parallelism: int = 1, skip_ok: bool = False) -> Mesh
         )
 
     mesh_devices = np.array(devices).reshape(-1, tensor_parallelism)
-    return Mesh(mesh_devices, (ResourceAxis.DATA, ResourceAxis.MODEL))
+    mesh = Mesh(mesh_devices, (ResourceAxis.DATA, ResourceAxis.MODEL))
+    print(f"DEBUG create_test_mesh: created mesh with device_ids = {mesh.device_ids}", file=sys.stderr)
+    return mesh
 
 
 @contextmanager

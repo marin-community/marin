@@ -1,0 +1,67 @@
+name: DEBUG - TPU Device Ordering
+
+on:
+  push:
+    branches:
+      - ws-2
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  debug:
+    if: (github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      TPU_ZONE: "us-central2-b"
+    defaults:
+      run:
+        working-directory: lib/levanter
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Google Cloud
+        run: |
+          gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Create VM
+        run: |
+          export TPU_NAME=debug-${{ github.run_id }}
+          eval "$(ssh-agent -s)"
+          TRUE_SHA=${{ github.event.pull_request.head.sha }}
+          bash infra/spin-up-vm.sh $TPU_NAME -z ${TPU_ZONE} -t v4-8 --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${TRUE_SHA} --retries 1
+
+      - name: Debug device ordering
+        run: |
+          export TPU_NAME=debug-${{ github.run_id }}
+          gcloud compute tpus tpu-vm ssh $TPU_NAME --zone ${TPU_ZONE} --command "
+            cd marin/lib/levanter
+            source ../../.venv/bin/activate
+
+            # Print device info
+            echo '=== JAX Device Info ==='
+            python -c 'import jax; print(\"JAX devices:\", jax.devices()); print(\"Device IDs:\", [d.id for d in jax.devices()])'
+
+            # Run a single failing test with maximum verbosity
+            echo '=== Running test_tpu_splash_attention ==='
+            pytest tests/test_attention.py::test_tpu_splash_attention -vv -s --tb=short
+          "
+
+      - name: Cleanup
+        if: ${{ always() }}
+        run: |
+          export TPU_NAME=debug-${{ github.run_id }}
+          echo gcloud compute tpus tpu-vm delete $TPU_NAME --zone ${TPU_ZONE} --quiet
+          gcloud compute tpus tpu-vm delete $TPU_NAME --zone ${TPU_ZONE} --quiet
