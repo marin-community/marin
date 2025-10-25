@@ -8,4 +8,4 @@ build:
     - pip install uv
     - uv sync --package marin --frozen
     - uv pip install mkdocs mkdocs-material mkdocstrings[python] markdown-include mkdocs-include-markdown-plugin
-    - uv run mkdocs build --strict --site-dir $READTHEDOCS_OUTPUT/html
+    - uv run --frozen mkdocs build --strict --site-dir $READTHEDOCS_OUTPUT/html
