@@ -43,4 +43,4 @@ jobs:
       - name: Test with pytest
         run: |
           # check we are using the right jax version
-          PYTHONPATH=tests:src:. uv run --package levanter --with "jax[cpu]==${{ matrix.jax-version }}" pytest tests -m "not entry and not slow and not ray" --durations=20
+          PYTHONPATH=tests:src:. uv run --package levanter --frozen --with "jax[cpu]==${{ matrix.jax-version }}" pytest tests -m "not entry and not slow and not ray" --durations=20

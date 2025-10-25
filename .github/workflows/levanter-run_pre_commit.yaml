@@ -39,6 +39,6 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: "Run Pre-commit"
-        run: uv run --package levanter pre-commit run --all-files --show-diff-on-failure
+        run: uv run --package levanter --frozen pre-commit run --all-files --show-diff-on-failure
 
 
