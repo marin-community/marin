@@ -1,0 +1,39 @@
+data: !include data/pile_source_old.yaml
+model:
+  type: gpt2
+  hidden_dim: 6144
+  num_heads: 64
+  num_layers: 44
+  seq_len: 2048
+  gradient_checkpointing: true
+  scale_attn_by_inverse_layer_idx: true
+  attn_pdrop: 0.0
+  resid_pdrop: 0.0
+  use_bias: false
+trainer:
+  tracker:
+    project: "levanter"
+    tags: ["pile", "gpt2"]
+
+  mp: p=f32,c=bfloat16
+
+
+  per_device_eval_parallelism: 4
+
+  train_batch_size: 1024
+  num_train_steps: 100000
+  steps_per_eval: 500
+
+  axis_resources:
+    batch: "data"
+    vocab: "model"
+    mlp: "model"
+    heads: "model"
+  # ZERO-3
+  parameter_axis_resources:
+    embed: "data"
+
+optimizer:
+  learning_rate: 1.2E-4
+  weight_decay: 0.1
+  min_lr_ratio: 0.1

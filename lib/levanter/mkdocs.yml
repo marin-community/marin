@@ -1,0 +1,117 @@
+site_name: Levanter
+repo_url: https://github.com/stanford-crfm/levanter/
+edit_uri: blob/main/docs/
+theme:
+  name: material
+  highlightjs: false
+  features:
+    - content.code.copy
+markdown_extensions:
+- attr_list
+- admonition
+- def_list
+- pymdownx.tasklist:
+    custom_checkbox: true
+  #- callouts
+- footnotes
+- codehilite
+- pymdownx.details  # Allowing hidden expandable regions denoted by ???
+- pymdownx.magiclink
+- pymdownx.superfences
+- pymdownx.arithmatex: # Render LaTeX via MathJax
+      generic: true
+- pymdownx.superfences  # Seems to enable syntax highlighting when used with the Material theme.
+- pymdownx.snippets: # Include one Markdown file into another
+      base_path: docs
+- pymdownx.inlinehilite
+- pymdownx.snippets:
+    check_paths: true
+- pymdownx.superfences
+- toc:
+    permalink: "¤"
+    toc_depth: "1-3"
+
+plugins:
+  - search
+  - autorefs
+  - mkdocstrings:
+      handlers:
+        python:
+#          setup_commands:
+#              - import pytkdocs_tweaks
+#              - pytkdocs_tweaks.main()
+          paths: [src]
+          inventories:
+            - https://docs.python.org/3/objects.inv
+            - https://jax.readthedocs.io/en/latest/objects.inv
+            - https://haliax.readthedocs.io/en/latest/objects.inv
+            - https://docs.kidger.site/equinox/objects.inv
+            - https://einops.rocks/objects.inv
+          options:
+            docstring_options:
+              ignore_init_summary: true
+            show_source: false
+            filters:
+              - "!^_"
+            heading_level: 4
+            inherited_members: true
+            members_order: source
+            merge_init_into_class: true
+            parameter_headings: true
+            separate_signature: false
+            load_external_modules: true
+            preload_modules: [haliax, haliax.core]
+            show_if_no_docstring: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_signature_annotations: true
+            docstring_section_style: list
+            show_symbol_type_heading: true
+            show_symbol_type_toc: false
+            signature_crossrefs: true
+            line_length: 100
+            summary: true
+  - include-markdown
+extra_css:
+  - css/mkdocstrings.css
+  - css/custom.css
+  - css/friendly.css
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+
+watch:
+  - src
+  - docs
+nav:
+  - 'Home': 'index.md'
+  - 'Installation and Setup':
+      - 'Installation.md'
+      - 'Getting-Started-TPU-VM.md'
+      - 'Getting-Started-GPU.md'
+  - 'User Guide':
+      - 'Getting-Started-Training.md'
+      - "Training-On-Your-Data.md"
+      - 'Performance-Guide.md'
+      - "guides/Training-Data-Guide.md"
+      - "guides/Direct-Cache-Construction.md"
+      - "guides/Training-On-Audio-Data.md"
+  - 'Tutorials':
+      - "Fine-Tuning.md"
+      - "LoRA.md"
+      - "tutorials/Fine-Tuning-Semantic-Parsing.md"
+      - "Hardware-Agnostic-Training.md"
+  - 'Reference':
+      - 'reference/Configuration.md'
+      - "reference/Data-Formats.md"
+      - 'reference/Trackers.md'
+  - 'Developer Guide':
+      - 'dev/Port-Models.md'
+      - 'dev/GPU-Docker-Dev.md'
+  - 'FAQ' : 'faq.md'
+  - Other:
+      - Release Announcement: 'Levanter-1.0-Release.md'
+      - "design/Data-Loader-Design.md"

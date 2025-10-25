@@ -1,0 +1,127 @@
+name: Marin - Build Docker images
+
+on:
+  # TODO: Add a weekly schedule.
+  # For now, this is manually triggered.
+  # Do not trigger this too often becuase it can cause
+  # images that are still in use to get evicted due to the
+  # "last N most recent images" retention policy.
+  workflow_dispatch:
+
+jobs:
+  build-docker-images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: 'actions/checkout@v4'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set tags
+        id: set-tags
+        run: |
+          echo "DATE_TAG=`date -u +"%Y%m%d"`" >> "$GITHUB_OUTPUT"
+          echo "HASH_TAG=`git rev-parse --short HEAD`" >> "$GITHUB_OUTPUT"
+
+      # Documentation: https://github.com/google-github-actions/auth/blob/v2.1.12/README.md
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          token_format: access_token
+          credentials_json: ${{ secrets.GCP_ARTIFACT_REPOSITORY_SA_KEY }}
+          service_account: github-artifact-repository@hai-gcp-models.iam.gserviceaccount.com
+
+      # Documentation: https://github.com/docker/login-action/blob/v3.5.0/README.md#google-artifact-registry-gar
+      - name: Login to Google Artifact Registry in europe-west4
+        uses: docker/login-action@v3
+        with:
+          registry: europe-west4-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Login to Google Artifact Registry in us-central1
+        uses: docker/login-action@v3
+        with:
+          registry: us-central1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Login to Google Artifact Registry in us-central2
+        uses: docker/login-action@v3
+        with:
+          registry: us-central2-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Login to Google Artifact Registry in us-east1
+        uses: docker/login-action@v3
+        with:
+          registry: us-east1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Login to Google Artifact Registry in us-east5
+        uses: docker/login-action@v3
+        with:
+          registry: us-east5-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Login to Google Artifact Registry in us-west4
+        uses: docker/login-action@v3
+        with:
+          registry: us-west4-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Build Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          file: docker/marin/Dockerfile.cluster
+          tags: |
+            europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
+            europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
+            europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
+            us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
+            us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
+            us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
+            us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
+            us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
+            us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
+            us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
+            us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
+            us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
+            us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
+            us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
+            us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
+            us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
+            us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
+            us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install pyyaml jinja2
+
+      - name: Update Docker image tag in cluster config script
+        run: sed -i -E 's/LATEST = "[a-z0-9]+"/LATEST = "${{ steps.set-tags.outputs.HASH_TAG }}"/' lib/marin/src/marin/cluster/config.py
+
+      - name: Generate cluster configs
+        run: python infra/update-cluster-configs.py
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: Update Docker image tag
+          title: Update Docker image tag
+          branch: actions/update-docker-image-tag
+          body: Auto-generated from GitHub Actions.
