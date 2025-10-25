@@ -1,0 +1,44 @@
+# See https://pre-commit.com
+exclude: ".git|tests/snapshots/.*/.*"
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.10
+    hooks:
+      - id: ruff
+        args: [ --fix, --exit-non-zero-on-fix ]
+
+  - repo: https://github.com/Lucas-C/pre-commit-hooks
+    rev: v1.5.5
+    hooks:
+      - id: insert-license
+        files: \.py$
+        args:
+          - --license-filepath
+          - etc/license_header.txt
+          - --use-current-year
+
+  - repo: https://github.com/psf/black
+    rev: 25.1.0
+    hooks:
+      - id: black
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-ast
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+        args: [ --unsafe ]
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.4.1
+    hooks:
+      - id: mypy
+        args: [--ignore-missing-imports]
+        additional_dependencies: [wandb==0.17.8, types-PyYAML]
