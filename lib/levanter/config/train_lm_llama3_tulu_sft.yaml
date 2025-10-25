@@ -1,0 +1,76 @@
+# Config adapted from sft_tootsie_mixture.yaml for use with train_lm.py
+# Trains only on the tulu dataset using the chat format.
+
+data:
+  # Using LMMixtureDatasetConfig structure like gpt2_small_fast_mix_chat.yaml
+  configs:
+    tulu:
+      id: allenai/tulu-3-sft-mixture
+      format:
+        type: "chat"
+  train_weights:
+    tulu: 1.0 # Weight for the single dataset
+  tokenizer: stanford-crfm/marin-tokenizer
+  cache_dir: "gs://marin-us-central2/tokenized/marin-tokenizer/tulu-3-sft-mixture"
+  shuffle: true
+  # permutation_type: "feistel" # Removed due to draccus parsing error for Literal type
+  # cache_dir: # Can optionally specify a top-level cache dir for the mixture if needed
+
+model:  # 8B llama3 class model from sft_tootsie_mixture.yaml
+  type: llama
+  seq_len: 4096
+  hidden_dim: 4096
+  intermediate_dim: 14336
+  num_layers: 32
+  num_heads: 32
+  num_kv_heads: 8
+  flash_attention_block_size: 512
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  rope:
+    type: "llama3"
+
+trainer:
+  seed: 0
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["dolma", "olmo", "llama", "tulu", "train_lm"] # Adjusted tags
+  wandb:
+    project: "marin"
+    name: "llama3_tulu_sft_seed0_shuffle_fixed_tokenizer" # Adjusted name
+
+  mp: p=f32,c=bfloat16
+  train_batch_size: 128
+  num_train_steps: 3834
+  steps_per_eval: 1000 # Note: No eval dataset specified, so this might not do much unless one is added
+  tensor_parallel_axes: ["mlp", "heads"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+  checkpointer:
+    base_path: "gs://marin-us-central2/checkpoints/llama3_tulu_sft_fixed_tokenizer/seed_0/" # Adjusted path
+
+optimizer:
+  learning_rate: 5e-6
+  weight_decay: 0.0
+  min_lr_ratio: 0.0
+  lr_schedule: "linear"
+  warmup: 0.03
+
+# Initialization from the specific HF checkpoint used in sft_tootsie_mixture.yaml
+initialize_from_hf: "meta-llama/Llama-3.1-8B" #"gs://marin-us-central2/checkpoints/tootsie-8b-hypnotic-spoonbill-2/hf/step-829999/"
+use_hf_model_config: False # Use the model config defined above
+
+# HF Saving config from sft_tootsie_mixture.yaml
+hf_save_steps: 1000
+hf_save_path: "gs://marin-us-central2/checkpoints/llama3_tulu_sft_fixed_tokenizer/hf/seed_0/" # Adjusted path
+
+# Defaults or settings not applicable/present in sft_tootsie_mixture.yaml for train_lm:
+# z_loss_weight: 0.0
+# epoch: 0
+# data_seed: None
+# eval_harness: None
+# eval_harness_steps: 10000
+# log_entropy: False
+# reinit_tokens: Not supported by train_lm.py
