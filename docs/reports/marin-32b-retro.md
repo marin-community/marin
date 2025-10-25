@@ -24,21 +24,32 @@
 
 ## Introduction
 
-This is a retrospective on Marin 32B, which is largely a scale-up of the 8B recipe. As with 8B, we followed the “Tootsie Roll” playbook: start training, instrument heavily, and make evidence-driven changes mid-flight. The intent here is to document what worked, what failed, and the mechanics of why and how we made changes so that others can learn from our process beyond the final result.
 
-We deliberately reused the Nemotron-centric pretraining mixture and the AdamW-based schedule that behaved well at 8B. That mostly transferred. The notable exception was a loss-instability episode around 70k–80k steps in `exp1295_32b` that we ultimately resolved by introducing QK-Norm via a switch to the Qwen3 32B backbone. Later, during cooldown, we uncovered GSM8k contamination (from a cached Dolmino bundle) and shuffling pathologies from a linear permutation; both issues were addressed in the "Mantis" cooldown with a Feistel shuffle and a cleaner math mix.
+This is a retrospective on Marin 32B, which is largely a scale-up of the [8B recipe](./marin-8b-retro.md). As with the 8B,
+we followed the “Tootsie Roll” playbook: start training, instrument heavily, and make evidence-driven changes mid-flight.
+The intent here is to document what worked, what failed, and the mechanics of why and how we made changes so that others can learn from our process beyond the final result.
 
-If you’re not already reading this on ReadTheDocs, we recommend viewing it there for the right-hand ToC and better navigation.
+We deliberately reused the [Nemotron-CC](https://arxiv.org/abs/2412.02595)-centric pretraining mixture and the
+AdamW-based schedule that behaved well at 8B. That mostly transferred.
+The notable exception was a loss-instability episode around 70k–80k steps in `exp1295_32b` that we ultimately resolved by introducing QK-Norm via a switch to the Qwen3 32B backbone.
+Later, during cooldown, we uncovered GSM8k contamination (from a cached Dolmino bundle) and shuffling pathologies from a linear congruential-driven permutation; both issues were addressed in the "Mantis" cooldown with a Feistel-based shuffle and a cleaner math mix.
 
+(If you’re not already reading this on ReadTheDocs, we recommend [viewing it there](https://marin.readthedocs.io/en/latest/reports/marin-32b-retro/) for the right-hand ToC and better navigation.)
 
 ## Baseline Configuration
+
+## Hardware
+
+We initially started the 32B run on 4 preemptible TPU v5p-512 slices coordinated with multislice, moving to 3 slices
+as spare capacity dried up and eventually moving to a reserved v4-2048 once the preemptible v5p were no longer
+reliably available. It remained on the v4-2048 slice for the rest of the run.
 
 ### Architecture
 
 - Initial backbone: Llama 32B (Llama‑3–style settings)
 - Gradient checkpointing: offload carries to fit large global batches on a v4‑2048 slice
 
-Llama 32B (Phase 1–2) parameters:
+Llama-3-style 32B (Phase 1–2) parameters:
 
 | **Parameter**          | **Value** |
 |------------------------|-------|
@@ -49,6 +60,8 @@ Llama 32B (Phase 1–2) parameters:
 | `num_kv_heads`         | 8     |
 | `num_layers`           | 64    |
 | `activation_function`  | `silu`|
+
+These dimensions were selected to be the same as those used in Olmo 2 32B.
 
 Qwen3 32B (Phase 3+) parameters:
 
@@ -69,23 +82,31 @@ We retained as many choices as reasonable from the 8B model!
 
 Baseline (exp1295_32b) hyperparameters:
 
-| **Hyperparameter**     | **Value** |
-|------------------------|-------|
-| Optimizer              | AdamW |
-| Peak LR                | 7e‑4  |
-| LR schedule            | linear warmup → hold → decay (WSD‑style) |
-| Warmup                 | 1% of steps |
-| Decay                  | 40% of steps |
-| Weight decay           | 0.05  |
-| Max grad norm          | 0.2   |
-| Clip‑update‑norm       | on (σ=2.0, rolling=128); briefly off ~74k–80k |
-| EMA beta               | 0.995 |
-| z‑loss                 | 1e‑4  |
-| Skip bad steps         | true  |
+| **Hyperparameter**     | **Value**                                                     |
+|------------------------|---------------------------------------------------------------|
+| Optimizer              | AdamW                                                         |
+| Peak LR                | 7e‑4                                                          |
+| LR schedule            | linear warmup → hold → decay (WSD‑style)                      |
+| Warmup                 | 1% of steps                                                   |
+| Decay                  | 40% of steps                                                  |
+| Weight decay           | 0.05                                                          |
+| Max grad norm          | initially 1.0, then 0.2 from 56.4K steps                      |
+| Clip update norm       | on (σ=2.0, rolling=128); added at 72233, briefly off ~74k–80k |
+| EMA beta               | 0.995                                                         |
+| z-loss                 | 1e-4                                                          |
+| Skip bad steps         | true (σ=2.0, rolling=128)                                     |
+
+Some of these were activated mid-run due to loss spikes. These include the tightened max grad norm,
+the "clip update norm" and the "skip bad steps" flag. We discuss these below when we discuss the loss spikes.
+
+
+
 
 ### Data Mix & Batch Schedule
 
-- Pretraining mix: Nemotron‑CC + StarCoderData + ProofPile2 (Mirrors our 8B Phoenix data mix!)
+For pretraining, we followed the same recipe as our [8B Phoenix phase](./marin-8b-retro.md#phase-4-phoenix-reheated):
+[Nemotron-CC](https://arxiv.org/abs/2412.02595), [StarCoder Data](https://huggingface.co/datasets/bigcode/starcoderdata),
+and [Proofpile 2](https://huggingface.co/datasets/EleutherAI/proof-pile-2).
 
 Pretraining mixture (normalized share):
 
@@ -101,17 +122,20 @@ Pretraining mixture (normalized share):
 | starcoderdata              | 2.27%      |
 | proofpile_2                | 0.50%      |
 
-Batch schedule (seq_len = 4096):
-
-| Start step | Global batch size |
-|------------|-------------------|
-| 0          | 8192              |
-| 18,500     | 7680              |
-| 21,010     | 8192              |
+## Batch schedule
 
 
-We intentionally kept data and schedule close to the 8B setup to isolate scale effects!
+| Start step | Global batch size | Tokens per batch |
+|------------|-------------------|------------------|
+| 0          | 8192              | 32Mi             |
+| 18,500     | 7680              | 30Mi             |
+| 21,010     | 8192              | 32Mi             |
 
+The change in global batch size was driven by changing hardware: when we had the 4 v5p-512s we used 8192,
+shifting down to 7680 for divisibility by 3 when we had 3 v5p-512s, and finally changing back to 8192
+when we moved to the v4 slice.
+
+As with the 8b run, we used a sequence length of 4096 tokens.
 
 ## Training Phases
 
@@ -120,6 +144,12 @@ We intentionally kept data and schedule close to the 8B setup to isolate scale e
 ### Phase 1: Scaling up our existing recipe
 
 For ~70k steps training behaved as expected though we had some loss spikes that people on Twitter/X told us to be worried about (Yay for open development!). While some other folks told us they looked fine, we added a bunch of clipping on update norms which seemed to mostly handle these spikes!
+
+Specifically, we looked at:
+
+- *Max grad norm clip*: By default, we have historically used a max grad norm of 1.0. We observed that loss spikes typically occurred after steps with a large grad norm. Therefore, at around 56.4K steps, we tightened the max grad norm to 0.2 to prevent large gradient steps from destabilizing training.
+- *Clip Update Norm*: When that didn't work, we added a "clip update norm" filter at around 72.2K steps. This filter computes a rolling average and standard deviation of the optimizer update norms, and clips updates that exceed the average by a certain threshold (2 stddevs in our case). This helped reduce the impact of outlier updates that could lead to loss spikes. It didn't seem to prevent loss spikes, but it may have reduced their severity. We inadvertently turned this off for a few thousand steps around 74K–80K, which may have contributed to the more significant instability we saw then.
+- *Skip Bad Steps*: Based on a tip from Luca Soldaini, we [added a "skip bad steps" flag](https://github.com/stanford-crfm/levanter/blob/9fde0781a1737e088535c392cf239aba5e1143e2/src/levanter/optim/skipstep.py#L65) (modeled on the version in [Olmo](https://github.com/allenai/OLMo-core/blob/main/src/olmo_core/optim/skip_step_optimizer.py)) that skips optimizer updates when the update norm exceeds a rolling average by a threshold (2 stddevs).
 
 ![Loss Spikes](../images/PLACEHOLDER_SPIKES.png)
 
@@ -228,8 +258,8 @@ Dolmino’s GSM8k uses OLMes formatting, not LM Eval’s default. Therefore, rat
 
 We restarted from 160k with two major changes:
 
-- Feistel shuffle. Switched from linear permutation to a Feistel‑based epochal shuffle, which re‑randomizes every dataset each epoch and breaks long‑range correlations.
-- Cleaner math mix. Replaced Dolmino math with MegaMath splits and later added StackV2 Python (around 174k), redistributing the HQ budget accordingly.
+- Feistel shuffle. Switched from linear permutation to a more robust Feistel‑based shuffle.
+- Cleaner math mix. Replaced Dolmino math with [MegaMath](https://arxiv.org/abs/2504.02807) splits and later added [Common Pile](https://arxiv.org/abs/2506.05209)'s [Stack V2 EDU](https://huggingface.co/datasets/common-pile/stackv2_edu_filtered) Python (around 174k), redistributing the HQ budget accordingly.
 
 Cooldown mixture (normalized share):
 
@@ -263,18 +293,17 @@ Notes:
 - At ~174k steps, we introduced `common_pile_stackv2_edu_filtered_python` and re‑normalized the HQ portion accordingly.
 - Sampling permutation switched to Feistel.
 
-We kept the optimizer schedule identical to Bison. With better shuffling and clean math, both failure modes disappeared, yielding a clean cooldown target for post‑training.
+We kept the optimizer schedule identical to Bison. With better shuffling and clean math, both failure modes disappeared.
 
 - Tokens trained: ≈1.074T tokens (32,000 steps from 160k → 192k at 4096 seq len, global batch 8192).
 
 #### Shuffling: Linear vs. Feistel
 
-Within each batch, we want sample examples that are as i.i.d. as possible from the full training distribution. This reduces within‑batch correlation and avoids long, correlated stretches that can bias updates or create non‑stationary “phases” in the loss curve. This also reduces gradient variance from batch to batch, which recent [NanoGPT speedruns](https://www.lesswrong.com/posts/j3gp8tebQiFJqzBgg/how-the-nanogpt-speedrun-wr-dropped-by-20-in-3-months) have found beneficial
+Within each batch, we want sample examples that are as i.i.d. as possible from the full training distribution. This reduces within‑batch correlation and avoids long, correlated stretches that can bias updates or create non‑stationary “phases” in the loss curve. This also reduces gradient variance from batch to batch, which recent [NanoGPT speedruns](https://www.lesswrong.com/posts/j3gp8tebQiFJqzBgg/how-the-nanogpt-speedrun-wr-dropped-by-20-in-3-months) have found beneficial.
 
 To achieve this in a reproducible way at runtime, we compute pseudo-random permutations over training data blocks inside of the data loader. We previously used an affine/LCG permutation, choosing integers `a` and `b` with `gcd(a, N) = 1` for dataset length `N`, and mapping indices by `p(x) = (a * x + b) % N`. This is a valid permutation (every index appears exactly once), cheap, and stateless.
 
 The issue is that if our step size is very small and the data is not pre-shuffled, there can be clear phases in our training data!
-
 
 In Mantis, we switched to a Feistel‑network permutation, another pseudo‑random permutation (PRP) over the index domain. Conceptually, Feistel splits the bit representation into halves and applies several mixing rounds with per‑round keys, yielding a bijection with much better mixing properties than an affine map. Empirically, this resolved the phase shift effect we had seen earlier.
 
@@ -282,7 +311,8 @@ In Mantis, we switched to a Feistel‑network permutation, another pseudo‑rand
 
 ## Base Model Results
 
-We evaluate with LM Eval Harness defaults across a standard suite. Numbers may differ from model cards or OLMES due to prompt/format differences. “Average” is a simple mean over shown tasks.
+We evaluate with Eleuther's [LM Eval Harness](github.com/EleutherAI/lm-evaluation-harness) defaults across a standard suite. Numbers may differ from model cards or
+other evaluation harnesses (e.g. OLMES) due to prompt/format differences. “Average” is a simple mean over shown tasks.
 
 | Model                                | Average | AGI Eval LSAT-AR | ARC Easy | ARC Challenge | BoolQ | CommonSense QA | COPA | HellaSwag | lambada_openai | OpenBookQA |  PIQA | WinoGrande |   WSC |  MMLU |  GPQA |   BBH | MMLU Pro | HumanEval | GSM8K |  MATH |
 | :----------------------------------- | ------: | ---------------: | -------: | ------------: | ----: | -------------: | ---: | --------: | -------------: | ---------: | ----: | ---------: | ----: | ----: | ----: | ----: | -------: | --------: | ----: | ----: |
@@ -293,6 +323,24 @@ We evaluate with LM Eval Harness defaults across a standard suite. Numbers may d
 | **Gemma 3 27B PT**                   |    65.1 |            22.17 |    88.17 |         65.44 | 87.09 |          73.38 | 93.0 |     83.02 |          78.07 |       45.0 | 84.06 |      79.01 | 91.94 | 75.33 | 35.74 | 61.36 |    49.44 |      17.6 | 82.03 | 25.83 |
 | **NVIDIA Nemotron Nano 12B v2 Base** |    68.6 |             28.7 |    83.59 |         60.58 | 84.83 |          76.09 | 85.0 |     81.42 |          72.93 |       45.8 | 82.81 |      74.35 | 85.35 |  77.9 | 36.58 | 62.02 |    53.13 |     59.15 | 84.08 | 68.28 |
 
+The newer Mantis cooldown is better in almost every respect compared to Bison: COPA, PIQA and WSC see slight degradations, but, as expected, the coding evaluation HumanEval and math evals GMS8K and MATH
+see marked improvements.
+
+XXX
+
+Overall, the Mantis 32B model does quite well! It manages to surpass Olmo 32B, the previous best open source base model, and very slightly edges past Gemma 3 27B.
+The model is still not as good as
+
+
+
+## Acknowledgments
+
+We would like to particularly acknowledge:
+
+* Google, especially Google TPU Research Cloud for providing the compute;
+* The datasets produced by AI2, Eleuther, Hugging Face, LLM360, NVIDIA, among others;
+* Advice from Elie Bakouch, Lucas Nestler, Omead Pooladzandi, Alec Radford, Luca Soldaini, and Evan Walters on loss spikes (as well as many people on X and privately elsewhere);
+* Our Discord community!
 
 ## Glossary
 
@@ -302,4 +350,4 @@ We evaluate with LM Eval Harness defaults across a standard suite. Numbers may d
 - **Feistel shuffle** — A deterministic, epoch‑wise re‑randomization scheme that avoids the autocorrelation of simple linear permutations.
 - **QK‑Norm** — Normalization of query/key vectors in attention; improves headroom against spikes at large scales.
 - **Tootsie Roll process** — Marin’s pragmatic strategy: start quickly, keep training, fold in changes mid‑flight as evidence accumulates.
-- **Z‑loss** — A small penalty on the logit norm to prevent `lm_head` explosions during deep cooldowns.
+- **Z-loss** — A small penalty on the logit norm to prevent `lm_head` explosions during deep cooldowns.
