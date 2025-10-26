@@ -291,9 +291,22 @@ def create_test_mesh(tensor_parallelism: int = 1, skip_ok: bool = False) -> Mesh
 
     # DEBUG: Print device info
     import sys
+    import traceback
     print(f"DEBUG create_test_mesh: jax.devices() = {devices}", file=sys.stderr)
     print(f"DEBUG create_test_mesh: device IDs = {[d.id for d in devices]}", file=sys.stderr)
     print(f"DEBUG create_test_mesh: tensor_parallelism = {tensor_parallelism}", file=sys.stderr)
+    print(f"DEBUG create_test_mesh: call stack:", file=sys.stderr)
+    for line in traceback.format_stack()[:-1]:
+        print(f"  {line.strip()}", file=sys.stderr)
+
+    # Check if there's already a global mesh set
+    try:
+        from jax.experimental import mesh_utils
+        from jax._src import distributed
+        if hasattr(distributed, 'global_state') and distributed.global_state() is not None:
+            print(f"DEBUG create_test_mesh: JAX has global distributed state", file=sys.stderr)
+    except Exception as e:
+        print(f"DEBUG create_test_mesh: Could not check JAX global state: {e}", file=sys.stderr)
 
     if len(devices) % tensor_parallelism != 0:
         if skip_ok:
