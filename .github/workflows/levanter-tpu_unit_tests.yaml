@@ -13,13 +13,20 @@ on:
       - lib/levanter/**
       - uv.lock
       - .github/workflows/levanter-tpu_unit_tests.yaml
+  workflow_dispatch:
+    inputs:
+      tpu_zone:
+        description: 'TPU zone to use (e.g., us-central2-b, us-east5-b)'
+        required: false
+        default: 'us-central2-b'
+        type: string
 
 jobs:
   test:
-    if: (github.event.pull_request.head.repo.full_name == github.repository)
+    if: (github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
-      TPU_ZONE: "us-central2-b"
+      TPU_ZONE: ${{ inputs.tpu_zone || 'us-central2-b' }}
     defaults:
       run:
         working-directory: lib/levanter
