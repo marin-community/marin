@@ -50,13 +50,20 @@ jobs:
             cd marin/lib/levanter
             source ../../.venv/bin/activate
 
+            # Print environment info
+            echo '=== Environment Info ==='
+            python --version
+            echo 'Python path:' \$(which python)
+            echo 'JAX version:' \$(python -c 'import jax; print(jax.__version__)')
+            echo 'JAX backend:' \$(python -c 'import jax; print(jax.default_backend())')
+
             # Print device info
             echo '=== JAX Device Info ==='
             python -c 'import jax; print(\"JAX devices:\", jax.devices()); print(\"Device IDs:\", [d.id for d in jax.devices()])'
 
             # Run a single failing test with maximum verbosity
             echo '=== Running test_tpu_splash_attention ==='
-            pytest tests/test_attention.py::test_tpu_splash_attention -vv -s --tb=short
+            pytest tests/test_attention.py::test_tpu_splash_attention -vv -s --tb=short 2>&1 | grep -E '(DEBUG create_test_mesh|PASSED|FAILED|device.*ids|test_tpu_splash)' || pytest tests/test_attention.py::test_tpu_splash_attention -vv -s --tb=short
           "
 
       - name: Cleanup
