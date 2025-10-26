@@ -7,13 +7,20 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      tpu_zone:
+        description: 'TPU zone to use (e.g., us-central2-b, us-central1-a, us-east1-d)'
+        required: false
+        default: 'us-central2-b'
+        type: string
 
 jobs:
   debug:
-    if: (github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'push'
+    if: (github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
-      TPU_ZONE: "us-central2-b"
+      TPU_ZONE: ${{ inputs.tpu_zone || 'us-central2-b' }}
     defaults:
       run:
         working-directory: lib/levanter
