@@ -15,8 +15,13 @@ on:
       - .github/workflows/levanter-tpu_unit_tests.yaml
   workflow_dispatch:
     inputs:
+      tpu_type:
+        description: 'TPU type (v4-8, v5litepod-4, v5litepod-8, v6e-8)'
+        required: false
+        default: 'v4-8'
+        type: string
       tpu_zone:
-        description: 'TPU zone to use (e.g., us-central2-b, us-east5-b)'
+        description: 'TPU zone (v4-8: us-central2-b only; v5/v6: multiple zones available)'
         required: false
         default: 'us-central2-b'
         type: string
@@ -28,10 +33,11 @@ on:
 
 jobs:
   test:
-    name: test (${{ inputs.tpu_zone || 'us-central2-b' }})
+    name: test (${{ inputs.tpu_type || 'v4-8' }} @ ${{ inputs.tpu_zone || 'us-central2-b' }})
     if: (github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
+      TPU_TYPE: ${{ inputs.tpu_type || 'v4-8' }}
       TPU_ZONE: ${{ inputs.tpu_zone || 'us-central2-b' }}
     defaults:
       run:
@@ -60,7 +66,7 @@ jobs:
           export TPU_NAME=ci-run-${{ github.run_id }}
           eval "$(ssh-agent -s)"
           TRUE_SHA=${{ github.event.pull_request.head.sha || github.sha }}
-          bash infra/spin-up-vm.sh $TPU_NAME -z ${TPU_ZONE} -t v4-8 --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${TRUE_SHA} --retries 1
+          bash infra/spin-up-vm.sh $TPU_NAME -z ${TPU_ZONE} -t ${TPU_TYPE} --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${TRUE_SHA} --retries 1
 #          infra/babysit-tpu-vm.sh $TPU_NAME -z ${{ TPU_ZONE }} -t v4-8 --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${{ github.sha }} --retries 1 -- \
 #            PYTHONPATH=$PYTHONPATH:levanter/tests bash levanter/infra/run.sh pytest levanter/tests -m "not entry"
 
