@@ -153,8 +153,6 @@ when we moved to the v4 slice.
 As with the 8b run, we used a sequence length of 4096 tokens.
 
 ## Training Phases
-minor
-![Training phases. See text for details.](../images/PLACEHOLDER_TIMELINE.png)
 
 ### Phase 1: Scaling up our existing recipe
 
@@ -396,7 +394,15 @@ The issue is that if our step size is very small (or very large) and the data is
 
 In Mantis, we switched to a Feistel‑network permutation, another pseudo‑random permutation (PRP) over the index domain. Conceptually, Feistel splits the bit representation into halves and applies several mixing rounds with per‑round keys, yielding a bijection with much better mixing properties than an affine map. Empirically, this resolved the phase shift effect we had seen earlier.
 
-![Shuffling](../images/PLACEHOLDER_SHUFFLE2.png)
+![Improved shuffling removed the phase shift in training loss](32b-feistel-vs-lcg.png)
+
+In addition, our validation losses looked better across the board (not just code!)
+
+![Mantis' c4_en losses are much lower than Bison's](32b-paloma-c4-en-permutation.png)
+
+![Mantis' overall paloma losses look better too!](32b-paloma-average-permutation.png)
+
+Needless to say, we'll be using Feistel going forward!
 
 ## Base Model Results
 
@@ -417,46 +423,47 @@ see marked improvements.
 
 In terms of mean rank, Marin fairs quite well among other open weights base models:
 
-<!--
-Marin 32B Base	3.68
-Marin 32B Base v2	3.05
-OLMo 2 32B Base	3.89
-Qwen 2.5 32B Base	3.16
-Gemma 3 27B PT	3.37
-NVIDIA Nemotron Nano 12B v2 Base	3.68
-
-MRR Across Tasks
-0.39
-0.44
-0.34
-0.54
-0.39
-0.38
--->
-
 | Model                                | Mean Rank | Mean Reciprocal Rank |
-| :----------------------------------- | ---------:|--------:|
-| **Marin 32B (Bison)**                |      3.68 |       0.39 |
-| **Marin 32B (Mantis)**               |      3.05 |       0.44 |
-| **OLMo 2 32B Base**                  |      3.89 |       0.34 |
-| **Qwen 2.5 32B Base**                |      3.16 |       0.54 |
-| **Gemma 3 27B PT**                   |      3.37 |       0.39 |
-| **NVIDIA Nemotron Nano 12B v2 Base** |      3.68 |       0.38 |
+| :----------------------------------- | ---------:|---------------------:|
+| **Marin 32B (Bison)**                |      3.68 |                 0.39 |
+| **Marin 32B (Mantis)**               |      3.05 |                 0.44 |
+| **OLMo 2 32B Base**                  |      3.89 |                 0.34 |
+| **Qwen 2.5 32B Base**                |      3.16 |                 0.54 |
+| **Gemma 3 27B PT**                   |      3.37 |                 0.39 |
+| **NVIDIA Nemotron Nano 12B v2 Base** |      3.68 |                 0.38 |
 
 Overall, the Mantis 32B Mantis model does quite well! In terms of mean rank, it is the best of these models (lower is better).
 That said, Qwen 2.5 32B Base has a higher mean reciprocal rank.
 
-In terms of average accuracy, it manages to surpass OLMo 32B (+2.0, better on 14 of 19), the previous best open source base model, and is
-more or less on par with Gemma 3 27B PT (+0.1, better on 9 of 19).
+In terms of average accuracy, it manages to surpass OLMo 32B (+2.0, better on 14 of 19), the previous best open source base model,
+and is more or less on par with Gemma 3 27B PT (+0.1, better on 9 of 19).
 It is a bit behind Qwen 2.5 32B Base (-2.8, better on 8/19) and NVIDIA Nemotron Nano 12B v2 Base (-3.4, better on 10/19).
 (Nemotron Nano has particularly strong math and code performance, likely due to its training mixture.)
+
+### An Aside on Terminology
+
+When we say "open weights," we mean that the model weights are publicly available for download without restrictive licenses.
+These models do not necessarily have open training code or data. When we say "open source," we mean that the model weights,
+training code, and training data are all publicly available without restrictive licenses.
+All open source models are open weights, but not all open weights models are open source.
+Qwen, Gemma 3, and Nemotron Nano are open weight, but not open source. Marin and OLMo are open source.
+Note that this is a spectrum: to their credit, NVIDIA released significant details about [Nemotron Nano's training process and data](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-12B-v2#training-datasets).
+
+"Base" here means that these models have not undergone instruction tuning or RLHF, though increasingly
+the line is blurred as Marin, OLMo, and Nemotron Nano include instruction, reasoning, or task data in their pretraining mixtures.
+(We don't know the details of Qwen or Gemma's pretraining mixtures!)
+We have not yet produced or evaluated instruction tuned or RLHF versions of Marin 32B. This is planned.
+
+
+### Caveats
 
 As ever, several caveats are in order:
 
 * These results are from Eleuther's LM Eval Harness with default prompts; other prompt styles (e.g. OLMes) may yield different results.
   Eleuther tends to be a bit stricter than other frameworks, and it doesn't allow any prompt engineering. Your mileage may vary!
 * These results are for base models without any instruction tuning or RLHF.
-* Gemma 3 supports images, and the other open weights models support more natural languages than English; these results are only for English text tasks.
+* Gemma 3 supports images, and the open weights models support more natural languages than English; these results are only for English text tasks.
+* These are 19 tasks out of many possible tasks; other tasks may yield different relative results.
 
 ## Limitations
 
@@ -476,7 +483,6 @@ We welcome community contributions to address these and other limitations!
 - **Data shuffling matters.** The phase shift we observed during Bison cooldown highlighted the importance of good shuffling, as others (including OLMo) have noted. The Feistel shuffle we adopted in Mantis seems to have resolved this.
 - **Double check your configs.** We should have caught the GSM8k contamination earlier. While we did eventually identify and fix it, this underscores the importance of verifying dataset contents and preprocessing steps, especially when using cached data. We now have checks in place to prevent similar issues in future runs.
 - **Instrument heavily.** Our ability to diagnose and address issues mid-flight was greatly aided by extensive logging and monitoring. We recommend others invest in good instrumentation from the start.
-
 
 ## Acknowledgments
 
