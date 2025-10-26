@@ -312,13 +312,13 @@ def test_tpu_splash_attention():
     QPos = hax.Axis("QPos", BLOCK_SIZE * 2)
     KPos = hax.Axis("KPos", BLOCK_SIZE * 2)
 
-    q = hax.random.normal(jrandom.PRNGKey(0), (QPos, Head, Key)) * 0.02
-    k = hax.random.normal(jrandom.PRNGKey(1), (KPos, Head, Key)) * 0.02
-    v = hax.random.normal(jrandom.PRNGKey(2), (KPos, Head, Key)) * 0.02
-
     mask = AttentionMask.causal()
 
     with use_test_mesh():
+        q = hax.random.normal(jrandom.PRNGKey(0), (QPos, Head, Key)) * 0.02
+        k = hax.random.normal(jrandom.PRNGKey(1), (KPos, Head, Key)) * 0.02
+        v = hax.random.normal(jrandom.PRNGKey(2), (KPos, Head, Key)) * 0.02
+
         flash_out = _tpu_splash_attention(
             QPos,
             KPos,
@@ -347,13 +347,13 @@ def test_tpu_splash_attention_sliding_window():
     QPos = hax.Axis("QPos", BLOCK_SIZE * 2)
     KPos = hax.Axis("KPos", BLOCK_SIZE * 2)
 
-    q = hax.random.normal(jrandom.PRNGKey(0), (QPos, Head, Key)) * 0.02
-    k = hax.random.normal(jrandom.PRNGKey(1), (KPos, Head, Key)) * 0.02
-    v = hax.random.normal(jrandom.PRNGKey(2), (KPos, Head, Key)) * 0.02
-
     mask = AttentionMask.causal(sliding_window=BLOCK_SIZE)
 
     with use_test_mesh():
+        q = hax.random.normal(jrandom.PRNGKey(0), (QPos, Head, Key)) * 0.02
+        k = hax.random.normal(jrandom.PRNGKey(1), (KPos, Head, Key)) * 0.02
+        v = hax.random.normal(jrandom.PRNGKey(2), (KPos, Head, Key)) * 0.02
+
         flash_out = _tpu_splash_attention(
             QPos,
             KPos,
