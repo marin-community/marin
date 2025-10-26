@@ -153,7 +153,7 @@ when we moved to the v4 slice.
 As with the 8b run, we used a sequence length of 4096 tokens.
 
 ## Training Phases
-
+minor
 ![Training phases. See text for details.](../images/PLACEHOLDER_TIMELINE.png)
 
 ### Phase 1: Scaling up our existing recipe
@@ -204,12 +204,18 @@ We rebuilt optimizer state offline, seeding the warm‑start with update‑histo
 #### Alternative Optimizers (`exp1388`, `exp1380`)
 
 We next swapped optimizers without touching weights! There's been lots of recent work on better conditioned optimizers, including our own empirical validations in our ["Fantastic Optimizers"](https://arxiv.org/abs/2509.02046) paper
+We specifically tried [Muon](https://kellerjordan.github.io/posts/muon/), which is and was all the rage at the time.
 
-- [`exp1388_nadamw32b`](https://github.com/marin-community/marin/issues/1388) → NAdamW with β₁ = 0.95 and Nesterov momentum, intended to smooth oscillations while preserving stability at the original LR schedule.
-- [`exp1380_muon32b`](https://github.com/marin-community/marin/issues/1380) → Muon with a higher effective LR = 2e‑3, but we retained the Adam‑style LR schedule to avoid a full retune.
+InIn [`exp1380_muon32b`](https://github.com/marin-community/marin/issues/1380), we used Muon with a higher effective LR = 2e‑3, but we retained the Adam‑style LR schedule to avoid a full retune.
 
-Both restarts warm‑started from step 77,096 (pre‑spike). Both showed short‑term progress, then inevitable recurrence of loss spikes. This was consistent with a structural stability gap at 32B rather than a purely optimizer‑choice artifact. Identifying whether these intermediate checkpoints could have been salvaged or identifying what made them unsalvageable would be a great place for community researchers to utilize our intermediate releases!
+![muon vs baseline adam around the time of the spike](32b-muon-vs-adam.png)
 
+Aside: The Muon run was still warming up its Adam params here so the loss was lower. The Muon run technically spiked a little later? Might be worth investigating.
+
+We actually let it keep going a little longer, but it decided to turn into gradient ascents after a while. So we abandoned it.
+We probably need more time to properly tune Muon for this setting.
+
+![Muon looking great but then repeatedly spiking, not recovring, and eventually going to space](32b-muon-can-into-space.png)
 
 - Tokens trained: Diagnostic restarts only (short runs of a few thousand steps); excluded from cumulative phase totals due to restart to 80k Llama checkpoint for Phase 3.
 
@@ -219,7 +225,8 @@ Github Issue: [#1395](https://github.com/marin-community/marin/issues/1395)
 
 At this point we concluded that stabilizing a 32B Llama without architectural help wasn’t feasible under our constraints. We switched to Qwen3 32B, which adds QK‑Norm in attention, and warm‑started from the 80k Llama weights. This preserved useful signal in embeddings and MLPs while letting the normalized attention heads relearn.
 
-- Prior reports—from [the OLMo team](https://arxiv.org/abs/2501.00656) and [Google DeepMind](https://arxiv.org/abs/2309.14322)—suggest QK‑Norm provides substantial headroom against loss spikes in large models. You might reasonably ask "Why not use QK-norm to begin with?". While we thought about it, we had some hubris from our 8B experience (stable without QK‑Norm) as well as an earlier trial 70B run (also stable without QK-norm).
+- Prior reports—from [the OLMo team](https://arxiv.org/abs/2501.00656) and [Google DeepMind](https://arxiv.org/abs/2309.14322) among others—suggest QK‑Norm provides substantial headroom against loss spikes in large models.
+You might reasonably ask "Why not use QK-norm to begin with?". While we thought about it, we had some hubris from our 8B experience (stable without QK‑Norm) as well as an earlier trial 70B run (also stable without QK-norm).
 It is worth noting that the Llama 3 team seems to have trained much larger models without QK-Norm, so it seems possible it is not neccesary given the right tuning of underlying hyperparameters, which we continue to explore.
 
 The switch to QK-norm imposed a one‑time loss penalty, but the training loss recovered in about 10B tokens. What's more, the loss spikes disappeared entirely.
@@ -239,16 +246,20 @@ Warm‑start + rewarm parameters (`exp1395_32b`):
 
 ### Phase 4: Midtraining Runs
 
-With stability restored, we trained until we completed 1 Epoch over the Nemotron data and then resumed the 8B playbook.
-The first attempt (*Bison*) mirrored our Starling‑style cooldown and exposed two issues; the second (*Mantis*) fixed them.
+With stability restored, we trained until we completed 1 epoch over the Nemotron data and then resumed the 8B playbook.
+The first attempt (*Bison*) mirrored our [Starling](./marin-8b-retro.md#phase-5-starling-second-cooldown)-style cooldown and exposed two issues; the second (*Mantis*) fixed them.
 
-#### Attempt 1 — Bison Cooldown (`exp1529_32b_bison_cooldown`)
+#### Attempt 1 — Bison Cooldown
 
-**Checkpoint:** 160k from the Qwen run.
+- Issue: [#1529](https://github.com/marin-community/marin/issues/1529)
+- Experiment File: [`exp1529_32b_bison_cooldown`](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp1529_32b_bison_cooldown.py)
 
-**Mixture:** 70% Nemotron PT + 30% Starling HQ.
+Based on the success of our Starling cooldown at 8B, we attempted a similar cooldown at 32B.
+Starting from the 160k qk-norm-enabled checkpoint, we ran a 32k-step cooldown with a 70/30 Nemotron/Starling mixture.
 
-Cooldown mixture (normalized share):
+### Cooldown mixture (normalized share):
+
+In detail, the cooldown used the same Nemotron-CC mixture as before, supplemented with a mix drawn from Dolmino, Finemath-3-Plus, Arxiv Markdownified, StackExchange Custom, and others.
 
 | Dataset                     | Percentage |
 |----------------------------|------------|
@@ -272,7 +283,12 @@ Cooldown mixture (normalized share):
 | dolmino/wiki               | 0.47%      |
 | medu_science_qa            | 0.15%      |
 
-Cooldown LR schedule:
+Within the 70/30 split, each data source was weighted approximately equal to its token size, but we upsampled FLAN (10x)
+and the math from Dolmino (2x). Again, this is the same as the starling cooldown at 8B.
+
+### Training Parameters
+
+We used the following optimizer schedule:
 
 | Setting           | Value |
 |-------------------|-------|
@@ -284,21 +300,45 @@ Cooldown LR schedule:
 **Cooldown specifics (changes vs 8B):**
 
 1. Z‑loss throughout. We previously observed late‑decay divergences at low LR in 8B; adding a small z‑loss stopped `lm_head` norm growth during cooldown.
-2. [AdamC](https://arxiv.org/abs/2506.02285) during decay. We used the adjusted weight‑decay formulation only in decay phases to reduce gradient growth without retuning the entire schedule.
+2. [AdamC](https://arxiv.org/abs/2506.02285) during decay. We opted to include this because in the 8b we observed the same gradient growth that it purpoted to fix.
+We used the adjusted weight‑decay formulation only in decay phases to reduce gradient growth without retuning the entire schedule.
 
-**Outcome:** The run was broadly strong versus OLMo 2 32B, with one extreme exception: GSM8k. Under the standard LM Eval Harness prompt, the model was ~22 points worse than the weakest baseline. Under [OLMes](https://github.com/allenai/olmes)‑style prompts, performance looked much more reasonable, but the extreme prompt fragility made us investigate further.
 
-**Root cause — Contamination.** Our [Dolmino](https://huggingface.co/datasets/allenai/dolmino-mix-1124/tree/main/data/math) math bundle included GSM8k test items in a `test.json`. Although we later updated preprocessing to drop `test.json`, the dataset had already been cached on the cluster, introducing contamination for GSM8K on the Bison cooldown.
+### Outcome
 
-Dolmino’s GSM8k uses OLMes formatting, not LM Eval’s default. Therefore, rather than the expected improvement in results from training on the test, contamination made our model have dramatically increased surprisal on the original prompts structured tags (e.g., `16-8=<<16-7=9>>9`) that don’t appear in the contaminated data.
+#### Contamination anomaly — GSM8k.
+
+The run was broadly strong versus OLMo 2 32B, with one extreme exception: GSM8k.
+Under the standard LM Eval Harness prompt, the model was ~22 points worse than the weakest baseline.
+Under [OLMes](https://github.com/allenai/olmes)‑style prompts, performance looked much more reasonable, but the extreme prompt fragility made us investigate further.
+
+We determined the root cause to be contamination. That is, we (accidentally) cheated but we cheated badly.
+Our [Dolmino](https://huggingface.co/datasets/allenai/dolmino-mix-1124/tree/main/data/math) math bundle included GSM8k test items in a `test.json`.
+Although we later updated preprocessing to drop `test.json`, the dataset had already been cached on the cluster, introducing contamination for GSM8K on the Bison cooldown.
+
+Dolmino’s GSM8k uses OLMes formatting, not LM Eval’s default.
+Therefore, rather than the expected improvement in results from training on the test,
+contamination made our model have dramatically increased surprisal on the original prompts structured tags (e.g., `16-8=<<16-7=9>>9`) that don’t appear in the contaminated data.
 This high surprisal seemed to cause our model to perform much worse than it did on the same questions with those tags removed.
 
-That said, our MATH performance was also quite poor, and we have no reason to believe it was contaminated. So,
-our poor performance on math more generally may have other causes.
+That said, our MATH performance was also quite poor, and we have no reason to believe it was contaminated.
+So, our generally poor performance on math may have other causes.
 
+#### Shuffling anomaly
 
-![Shuffling](../images/PLACEHOLDER_SHUFFLE1.png)
-**Additional anomaly — Shuffling.** Near 190k steps, training loss phase‑shifted while validation remained stable. This is normally observed when we change the underlying training data mix, but in this case we hadn't! We had separately begun to wonder whether our pseudo-random shuffle, which finds a co-prime step size across data indices, was leading to a somewhat unlucky shuffle where batches came from correlated data. This phase shift in cooldown increased our confidence this was happening!
+Near 190k steps, training loss phase‑shifted while validation remained stable.
+This is normally observed when we change the underlying training data mix, but in this case we hadn't!
+We had separately begun to wonder whether our pseudo-random shuffle, which finds a co-prime step size across data indices, was leading to a somewhat unlucky shuffle where batches came from correlated data. This phase shift in cooldown increased our confidence this was happening!
+
+![Phase shift late in cooldown. Eval losses are unaffected](32b-shuffle-spike.png)
+
+As you can see, this "spike" ended up being a phase shift in training loss that never recovered.
+But, eval losses were unaffected.
+This strongly indicated that the underlying data had shifted, rather than any model instability.
+
+Why did we use such a bad shuffle? Because it is cheap and stateless! We can compute the index of any data point on the fly without storing large permutation tables.
+In addition, our training stack Levanter samples from each mixture component directly, meaning that we always have a stable proportion of tokens from each dataset.
+This has historically mitigated the risk of poor shuffles, but in this case it seems to have failed us.
 
 - Tokens trained: ≈1.074T tokens (32,000 steps from 160k → 192k at 4096 seq len, global batch 8192).
 
@@ -347,11 +387,12 @@ We kept the optimizer schedule identical to Bison. With better shuffling and cle
 
 #### Shuffling: Linear vs. Feistel
 
-Within each batch, we want sample examples that are as i.i.d. as possible from the full training distribution. This reduces within‑batch correlation and avoids long, correlated stretches that can bias updates or create non‑stationary “phases” in the loss curve. This also reduces gradient variance from batch to batch, which recent [NanoGPT speedruns](https://www.lesswrong.com/posts/j3gp8tebQiFJqzBgg/how-the-nanogpt-speedrun-wr-dropped-by-20-in-3-months) have found beneficial.
+Within each batch, we want examples that are as i.i.d. as possible from the full training distribution.
+This reduces within‑batch correlation and avoids long, correlated stretches that can bias updates or create non‑stationary “phases” in the loss curve. This also reduces gradient variance from batch to batch, which recent [NanoGPT speedruns](https://www.lesswrong.com/posts/j3gp8tebQiFJqzBgg/how-the-nanogpt-speedrun-wr-dropped-by-20-in-3-months) have found beneficial.
 
 To achieve this in a reproducible way at runtime, we compute pseudo-random permutations over training data blocks inside of the data loader. We previously used an affine/LCG permutation, choosing integers `a` and `b` with `gcd(a, N) = 1` for dataset length `N`, and mapping indices by `p(x) = (a * x + b) % N`. This is a valid permutation (every index appears exactly once), cheap, and stateless.
 
-The issue is that if our step size is very small and the data is not pre-shuffled, there can be clear phases in our training data!
+The issue is that if our step size is very small (or very large) and the data is not pre-shuffled, there can be clear phases in our training data!
 
 In Mantis, we switched to a Feistel‑network permutation, another pseudo‑random permutation (PRP) over the index domain. Conceptually, Feistel splits the bit representation into halves and applies several mixing rounds with per‑round keys, yielding a bijection with much better mixing properties than an affine map. Empirically, this resolved the phase shift effect we had seen earlier.
 
