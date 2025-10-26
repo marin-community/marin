@@ -53,7 +53,7 @@ jobs:
         run: |
           export TPU_NAME=ci-run-${{ github.run_id }}
           eval "$(ssh-agent -s)"
-          TRUE_SHA=${{ github.event.pull_request.head.sha }}
+          TRUE_SHA=${{ github.event.pull_request.head.sha || github.sha }}
           bash infra/spin-up-vm.sh $TPU_NAME -z ${TPU_ZONE} -t v4-8 --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${TRUE_SHA} --retries 1
 #          infra/babysit-tpu-vm.sh $TPU_NAME -z ${{ TPU_ZONE }} -t v4-8 --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${{ github.sha }} --retries 1 -- \
 #            PYTHONPATH=$PYTHONPATH:levanter/tests bash levanter/infra/run.sh pytest levanter/tests -m "not entry"
