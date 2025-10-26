@@ -3,7 +3,7 @@
 > Total tokens trained in final artifact: ≈6.437T
 > Phase 1: 2.679T
 > Phase 3/QK‑Norm: 2.684T
-> Phase 4/Mantis cooldown: 1.074T; excludes diagnostic restarts and the abandoned Bison cooldown attempt).
+> Phase 4/Mantis cooldown: 1.074T; excludes diagnostic restarts and the abandoned Bison cooldown attempt.
 
 <!--
 
@@ -35,7 +35,7 @@ The intent here is to document what worked, what failed, and the mechanics of wh
 We deliberately reused the [Nemotron-CC](https://arxiv.org/abs/2412.02595)-centric pretraining mixture and the
 AdamW-based schedule that behaved well at 8B. That mostly transferred.
 The notable exception was a loss-instability episode around 70k–80k steps in `exp1295_32b` that we ultimately resolved by introducing QK-Norm via a switch to the Qwen3 32B backbone.
-Later, during cooldown, we uncovered GSM8k contamination (from a cached Dolmino bundle) and shuffling pathologies from a linear congruential-driven permutation; both issues were addressed in the "Mantis" cooldown with a Feistel-based shuffle and a cleaner math mix.
+Later, during cooldown, we uncovered GSM8k contamination (from a cached Dolmino bundle) and shuffling pathologies from a linear congruential-driven permutation. Both issues were addressed in the "Mantis" cooldown with a Feistel-based shuffle and a cleaner math mix.
 
 (If you’re not already reading this on ReadTheDocs, we recommend [viewing it there](https://marin.readthedocs.io/en/latest/reports/marin-32b-retro/) for the right-hand ToC and better navigation.)
 
@@ -46,8 +46,8 @@ We break the run into four phases:
 | Phase | Steps      | Tokens (T) | Key Changes                                        | Notes                                            |
 |-------|------------|------------|----------------------------------------------------|--------------------------------------------------|
 | 1     | 0 → 80,000 | 2.679      | Baseline Llama 32B                                 | Very spiky loss; attempted mitigations failed    |
-| 2     | -          | —        | Recovery attempts (necromancy, alt optimizers)     | More failed mitigations; structural instability suspected   |
-| 3     | 80,000 → 160,000 | 2.684      | Switch to Qwen3 32B (QK-Norm); Bison Cooldown      | Loss stabilized; training recovered               |
+| 2     | —          | —          | Recovery attempts (necromancy, alt optimizers)     | More failed mitigations; structural instability suspected   |
+| 3     | 80,000 → 160,000 | 2.684      | Switch to Qwen3 32B (QK-Norm)                      | Loss stabilized; training recovered               |
 | 4     | 160,000 → 192,000 | 1.074      | Mantis cooldown (Feistel shuffle, better math mix) | Strong results; resolved anomalies from Bison    |
 
 
@@ -56,7 +56,7 @@ We break the run into four phases:
 ### Hardware
 
 We initially started the 32B run on 4 preemptible TPU v5p-512 slices coordinated with multislice, moving to 3 slices
-at 18500 steps as spare capacity dried up, and eventually moving to a reserved v4-2048 once the preemptible v5p were no longer
+at 18,500 steps as spare capacity dried up, and eventually moving to a reserved v4-2048 once the preemptible v5p were no longer
 reliably available (21,010 steps). It remained on the v4-2048 slice for the rest of the run.
 
 ### Architecture
@@ -157,7 +157,7 @@ As with the 8b run, we used a sequence length of 4096 tokens.
 ### Phase 1: Scaling up our existing recipe
 
 For ~70k steps training behaved as expected though we had many more loss spikes than we had seen at 8b (and in 70b trials).
-We got a lot of of feedback from the community on these spikes, with some folks telling us we were doomed,
+We got a lot of feedback from the community on these spikes, with some folks telling us we were doomed,
 others a bit more hedgey, and some folks telling us they looked acceptable. (Yay for open development!)
 
 ![a very spiky loss curve!](32b-spiky-loss.png)
@@ -201,19 +201,19 @@ We rebuilt optimizer state offline, seeding the warm‑start with update‑histo
 
 #### Alternative Optimizers (`exp1388`, `exp1380`)
 
-We next swapped optimizers without touching weights! There's been lots of recent work on better conditioned optimizers, including our own empirical validations in our ["Fantastic Optimizers"](https://arxiv.org/abs/2509.02046) paper
+We next swapped optimizers without touching weights! There's been lots of recent work on better conditioned optimizers, including our own empirical validations in our ["Fantastic Optimizers"](https://arxiv.org/abs/2509.02046) paper.
 We specifically tried [Muon](https://kellerjordan.github.io/posts/muon/), which is and was all the rage at the time.
 
-InIn [`exp1380_muon32b`](https://github.com/marin-community/marin/issues/1380), we used Muon with a higher effective LR = 2e‑3, but we retained the Adam‑style LR schedule to avoid a full retune.
+In [`exp1380_muon32b`](https://github.com/marin-community/marin/issues/1380), we used Muon with a higher effective LR = 2e‑3, but we retained the Adam‑style LR schedule to avoid a full retune.
 
 ![muon vs baseline adam around the time of the spike](32b-muon-vs-adam.png)
 
-Aside: The Muon run was still warming up its Adam params here so the loss was lower. The Muon run technically spiked a little later? Might be worth investigating.
+Aside: The Muon run was still warming up its Adam params here so the loss was lower. The Muon run technically spiked a little later, which might be worth investigating.
 
 We actually let it keep going a little longer, but it decided to turn into gradient ascents after a while. So we abandoned it.
 We probably need more time to properly tune Muon for this setting.
 
-![Muon looking great but then repeatedly spiking, not recovring, and eventually going to space](32b-muon-can-into-space.png)
+![Muon looking great but then repeatedly spiking, not recovering, and eventually going to space](32b-muon-can-into-space.png)
 
 - Tokens trained: Diagnostic restarts only (short runs of a few thousand steps); excluded from cumulative phase totals due to restart to 80k Llama checkpoint for Phase 3.
 
@@ -224,8 +224,8 @@ Github Issue: [#1395](https://github.com/marin-community/marin/issues/1395)
 At this point we concluded that stabilizing a 32B Llama without architectural help wasn’t feasible under our constraints. We switched to Qwen3 32B, which adds QK‑Norm in attention, and warm‑started from the 80k Llama weights. This preserved useful signal in embeddings and MLPs while letting the normalized attention heads relearn.
 
 - Prior reports—from [the OLMo team](https://arxiv.org/abs/2501.00656) and [Google DeepMind](https://arxiv.org/abs/2309.14322) among others—suggest QK‑Norm provides substantial headroom against loss spikes in large models.
-You might reasonably ask "Why not use QK-norm to begin with?". While we thought about it, we had some hubris from our 8B experience (stable without QK‑Norm) as well as an earlier trial 70B run (also stable without QK-norm).
-It is worth noting that the Llama 3 team seems to have trained much larger models without QK-Norm, so it seems possible it is not neccesary given the right tuning of underlying hyperparameters, which we continue to explore.
+You might reasonably ask "Why not use QK-norm to begin with?" While we thought about it, we had some hubris from our 8B experience (stable without QK‑Norm) as well as an earlier trial 70B run (also stable without QK-norm).
+It is worth noting that the Llama 3 team seems to have trained much larger models without QK-Norm, so it seems possible it is not necessary given the right tuning of underlying hyperparameters, which we continue to explore.
 
 The switch to QK-norm imposed a one‑time loss penalty, but the training loss recovered in about 10B tokens. What's more, the loss spikes disappeared entirely.
 
@@ -406,7 +406,7 @@ Needless to say, we'll be using Feistel going forward!
 
 ## Base Model Results
 
-We evaluate with Eleuther's [LM Eval Harness](github.com/EleutherAI/lm-evaluation-harness) defaults across a standard suite. Numbers may differ from model cards or
+We evaluate with Eleuther's [LM Eval Harness](https://github.com/EleutherAI/lm-evaluation-harness) defaults across a standard suite. Numbers may differ from model cards or
 other evaluation harnesses (e.g. OLMES) due to prompt/format differences. “Average” is a simple mean over shown tasks.
 
 | Model                                | Average | AGI Eval LSAT-AR | ARC Easy | ARC Challenge | BoolQ | CommonSense QA | COPA | HellaSwag | lambada_openai | OpenBookQA |  PIQA | WinoGrande |   WSC |  MMLU |  GPQA |   BBH | MMLU Pro | HumanEval | GSM8K |  MATH |
@@ -418,10 +418,10 @@ other evaluation harnesses (e.g. OLMES) due to prompt/format differences. “Ave
 | **Gemma 3 27B PT**                   |    65.1 |            22.17 |    88.17 |         65.44 | 87.09 |          73.38 | 93.0 |     83.02 |          78.07 |       45.0 | 84.06 |      79.01 | 91.94 | 75.33 | 35.74 | 61.36 |    49.44 |      17.6 | 82.03 | 25.83 |
 | **NVIDIA Nemotron Nano 12B v2 Base** |    68.6 |             28.7 |    83.59 |         60.58 | 84.83 |          76.09 | 85.0 |     81.42 |          72.93 |       45.8 | 82.81 |      74.35 | 85.35 |  77.9 | 36.58 | 62.02 |    53.13 |     59.15 | 84.08 | 68.28 |
 
-The newer Mantis cooldown is better in almost every respect compared to Bison: COPA, PIQA and WSC see slight degradations, but, as expected, the coding evaluation HumanEval and math evals GMS8K and MATH
+The newer Mantis cooldown is better in almost every respect compared to Bison. COPA, PIQA and WSC see slight degradations, but, as expected, the coding evaluation HumanEval and math evals GSM8K and MATH
 see marked improvements.
 
-In terms of mean rank, Marin fairs quite well among other open weights base models:
+In terms of mean rank, Marin fares quite well among other open weights base models:
 
 | Model                                | Mean Rank | Mean Reciprocal Rank |
 | :----------------------------------- | ---------:|---------------------:|
@@ -432,7 +432,7 @@ In terms of mean rank, Marin fairs quite well among other open weights base mode
 | **Gemma 3 27B PT**                   |      3.37 |                 0.39 |
 | **NVIDIA Nemotron Nano 12B v2 Base** |      3.68 |                 0.38 |
 
-Overall, the Mantis 32B Mantis model does quite well! In terms of mean rank, it is the best of these models (lower is better).
+Overall, the Mantis 32B model does quite well! In terms of mean rank, it is the best of these models (lower is better).
 That said, Qwen 2.5 32B Base has a higher mean reciprocal rank.
 
 In terms of average accuracy, it manages to surpass OLMo 32B (+2.0, better on 14 of 19), the previous best open source base model,
