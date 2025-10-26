@@ -78,7 +78,7 @@ reliably available (21,010 steps). It remained on the v4-2048 slice for the rest
 
 These dimensions were selected to be the same as those used in OLMo 2 32B.
 
-#### Qwen3 32B (Phase 3+) parameters:
+#### Qwen3-style 32B (Phase 3+) parameters:
 
 (These are the same except for the addition of QK-Norm in attention.)
 
@@ -168,7 +168,7 @@ Ideally, there wouldn't be spikes of course. But many of the people we talked to
 
 ![Comparison of eval losses for our 32B versus other runs](32b-loss-comparisons.png)
 
-Nevertheless, we were a bit worried, so we added a bunch of instrumentation and a few interventions:
+Nevertheless, we were a bit worried, so we added a bunch of instrumentation and a few interventions.
 
 Specifically, we looked at the following mitigations (documented in [#1368](https://github.com/marin-community/marin/issues/1368))
 
