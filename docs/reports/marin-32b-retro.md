@@ -486,10 +486,10 @@ We welcome community contributions to address these and other limitations!
 
 ## Acknowledgments
 
-We would like to particularly acknowledge:
+We would like to acknowledge:
 
 * Google, especially Google TPU Research Cloud for providing the compute;
-* The datasets produced by AI2, Eleuther, Hugging Face, LLM360, NVIDIA, among others;
+* The datasets and evals produced by AI2, Eleuther, Hugging Face, LLM360, NVIDIA, among others;
 * Advice from Elie Bakouch, Lucas Nestler, Omead Pooladzandi, Alec Radford, Luca Soldaini, and Evan Walters on loss spikes (as well as many people privately);
 * and our Discord community!
 
