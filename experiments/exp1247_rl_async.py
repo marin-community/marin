@@ -203,9 +203,8 @@ def rl_train(name: str) -> ExecutorStep:
     )
     weight_transfer = WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
-        sync_interval_steps=1,
-        # We are running on-policy, so wait for new weights from the trainer after each episode.
-        max_weight_transfer_wait_time=10,
+        sync_interval_steps=2,
+        max_weight_transfer_wait_time=5,
     )
 
     curriculum_config = create_math_curriculum(name)
@@ -221,7 +220,7 @@ def rl_train(name: str) -> ExecutorStep:
                 capacity=4096,
                 alpha=3,
                 max_samples=1,
-                max_rollout_step_delay=1,
+                max_rollout_step_delay=8,
             ),
         ),
         curriculum=curriculum_config,
