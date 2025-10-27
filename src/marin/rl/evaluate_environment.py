@@ -104,7 +104,7 @@ class EnvironmentEvalConfig:
     max_input_length: int = 2048
     """Maximum input sequence length."""
 
-    max_output_length: int = 2048
+    max_output_length: int = 8192
     """Maximum output sequence length."""
 
     stop_tokens: list[str] | None = None

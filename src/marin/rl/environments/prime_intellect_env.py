@@ -107,14 +107,12 @@ class PrimeIntellectEnv(MarinEnv):
         vf_env = self.load_prime_intellect_env(env_id, self.env_args)
 
         # Prepare sampling arguments
-        # Request tokens as token IDs for correct parsing
         sampling_args = {
             "max_tokens": self.max_tokens,
             "temperature": temperature,
             "logprobs": True,
-            "extra_body": {
-                "return_tokens_as_token_ids": True,
-            },
+            # Note: return_tokens_as_token_ids is not supported by current vLLM version
+            # We use convert_tokens_to_ids() in process_vllm_results.py instead
         }
 
         logger.info(

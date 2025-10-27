@@ -44,13 +44,12 @@ def parse_chat_completion_tokens_from_bytes(chat_completion: Any, tokenizer: Any
     """
     Parse token IDs from chat completion.
     
-    This handles two cases:
-    1. Tokens returned in format "token_id:<int>" (when return_tokens_as_token_ids=True)
-    2. Tokens returned as text (fallback case)
+    vLLM returns tokens as their string representations (from convert_ids_to_tokens()).
+    We need to convert them back using convert_tokens_to_ids() to get the correct token IDs.
     
     Args:
         chat_completion: ChatCompletion object from vLLM
-        tokenizer: Tokenizer to use for encoding in fallback case
+        tokenizer: Tokenizer to use for converting token strings to IDs
         
     Returns:
         List of token IDs
@@ -70,7 +69,7 @@ def parse_chat_completion_tokens_from_bytes(chat_completion: Any, tokenizer: Any
     for token_logprob in logprob_content:
         token_str = token_logprob.token
         
-        # Case 1: Token is in format "token_id:<int>"
+        # Case 1: Token is in format "token_id:<int>" (when return_tokens_as_token_ids=True works)
         if token_str.startswith("token_id:"):
             try:
                 token_id = int(token_str.split(":", 1)[1])
@@ -79,35 +78,18 @@ def parse_chat_completion_tokens_from_bytes(chat_completion: Any, tokenizer: Any
             except (ValueError, IndexError):
                 pass
         
-        # Case 2: Token is actual text - need to encode it
-        # Try using bytes field first if available
-        if hasattr(token_logprob, 'bytes') and token_logprob.bytes:
-            try:
-                # Decode bytes to text
-                token_text = bytes(token_logprob.bytes).decode('utf-8', errors='replace')
-                # Encode with tokenizer - add_special_tokens=False to avoid adding extra tokens
-                encoded = tokenizer.encode(token_text, add_special_tokens=False)
-                if len(encoded) == 1:
-                    # Perfect match - single token
-                    tokens.append(encoded[0])
-                    continue
-                elif len(encoded) > 1:
-                    # Multiple tokens - this shouldn't happen for a single token logprob
-                    # but we'll take the first one
-                    tokens.append(encoded[0])
-                    continue
-            except Exception:
-                pass
-        
-        # Fallback: encode the token string directly
+        # Case 2: Token is a string representation (the standard case with vLLM)
+        # Use convert_tokens_to_ids for correct BPE round-trip
+        # The server uses convert_ids_to_tokens which preserves BPE format (e.g., Ġ for spaces)
         try:
-            encoded = tokenizer.encode(token_str, add_special_tokens=False)
-            if len(encoded) > 0:
-                tokens.append(encoded[0])
-            else:
-                # If encoding fails, use a default token (like unk_token_id)
-                tokens.append(tokenizer.unk_token_id or 0)
-        except Exception:
+            token_id = tokenizer.convert_tokens_to_ids(token_str)
+            # Check if we got the unknown token ID
+            if token_id == tokenizer.unk_token_id:
+                logger.warning(f"Token '{token_str}' converted to unk_token_id, may indicate tokenizer mismatch")
+            tokens.append(token_id)
+        except Exception as e:
+            logger.warning(f"Failed to convert token '{token_str}' to ID: {e}")
+            # Use unk_token_id as fallback
             tokens.append(tokenizer.unk_token_id or 0)
     
     return tokens

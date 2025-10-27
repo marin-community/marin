@@ -46,23 +46,24 @@ def create_eval_step():
     # Set seq_len and tokenizer
     model_config = dataclasses.replace(
         model_config,
-        seq_len=4096,  # 2048 input + 2048 output
+        seq_len=10240,  # 2048 input + 2048 output
         tokenizer=model_checkpoint,
     )
 
     # Configure PrimeIntellect environment for testing
     env = PrimeIntellectEnv(
-        env_id="primeintellect/gpqa",
+        env_id="will/gsm8k",
+        env_args={"num_train_examples": -1, "num_eval_examples": -1},
     )
 
     # Create evaluation step
     # Use InputName.hardcoded to create a path relative to the prefix
-    output_path = InputName.hardcoded("env_evals/test_evaluation")
+    output_path = InputName.hardcoded("env_evals/gsm8k")
 
     eval_step = evaluate_environment(
         model_config=model_config,
         env=env,
-        name="prime-intellect/gpqa-test-environment-4B-v20",
+        name="prime-intellect/gsm8k-test-environment-4B-will-v22",
         output_path=output_path,
         tpu_type="v4-8",  # Use v4-8 for smaller memory footprint
     )
