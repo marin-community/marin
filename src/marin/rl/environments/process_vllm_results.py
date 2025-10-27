@@ -18,8 +18,6 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-import numpy as np
-
 logger = logging.getLogger(__name__)
 
 
@@ -43,32 +41,32 @@ class ProcessedVLLMOutputs:
 def parse_chat_completion_tokens_from_bytes(chat_completion: Any, tokenizer: Any) -> list[int]:
     """
     Parse token IDs from chat completion.
-    
+
     vLLM returns tokens as their string representations (from convert_ids_to_tokens()).
     We need to convert them back using convert_tokens_to_ids() to get the correct token IDs.
-    
+
     Args:
         chat_completion: ChatCompletion object from vLLM
         tokenizer: Tokenizer to use for converting token strings to IDs
-        
+
     Returns:
         List of token IDs
     """
     if len(chat_completion.choices) != 1:
         raise ValueError("Response should always have one choice")
-    
+
     if chat_completion.choices[0].logprobs is None:
         raise ValueError("Logprobs should not be None")
-    
+
     if chat_completion.choices[0].logprobs.content is None:
         raise ValueError("Logprob content should not be None")
-    
+
     tokens = []
     logprob_content = chat_completion.choices[0].logprobs.content
-    
+
     for token_logprob in logprob_content:
         token_str = token_logprob.token
-        
+
         # Case 1: Token is in format "token_id:<int>" (when return_tokens_as_token_ids=True works)
         if token_str.startswith("token_id:"):
             try:
@@ -77,7 +75,7 @@ def parse_chat_completion_tokens_from_bytes(chat_completion: Any, tokenizer: Any
                 continue
             except (ValueError, IndexError):
                 pass
-        
+
         # Case 2: Token is a string representation (the standard case with vLLM)
         # Use convert_tokens_to_ids for correct BPE round-trip
         # The server uses convert_ids_to_tokens which preserves BPE format (e.g., Ġ for spaces)
@@ -91,32 +89,30 @@ def parse_chat_completion_tokens_from_bytes(chat_completion: Any, tokenizer: Any
             logger.warning(f"Failed to convert token '{token_str}' to ID: {e}")
             # Use unk_token_id as fallback
             tokens.append(tokenizer.unk_token_id or 0)
-    
+
     return tokens
 
 
 def parse_chat_completion_logprobs(chat_completion: Any) -> list[float]:
     """
     Parse log probabilities from chat completion.
-    
+
     Args:
         chat_completion: ChatCompletion object from vLLM
-        
+
     Returns:
         List of log probabilities
     """
     if len(chat_completion.choices) != 1:
         raise ValueError("Response should always have one choice")
-    
+
     if chat_completion.choices[0].logprobs is None:
         raise ValueError("Logprobs should not be None")
-    
+
     if chat_completion.choices[0].logprobs.content is None:
         raise ValueError("Logprob content should not be None")
-    
-    logprobs = [
-        logprob.logprob for logprob in chat_completion.choices[0].logprobs.content
-    ]
+
+    logprobs = [logprob.logprob for logprob in chat_completion.choices[0].logprobs.content]
     return logprobs
 
 
@@ -129,14 +125,14 @@ def process_vllm_chat_results(
 ) -> ProcessedVLLMOutputs:
     """
     Process vLLM results for chat format conversations.
-    
+
     Args:
         prompts: List of chat message prompts
         completions: List of chat message completions
         states: List of state dicts containing responses
         rewards: List of rewards
         tokenizer: Tokenizer to use for encoding
-        
+
     Returns:
         ProcessedVLLMOutputs with tokenized data and logprobs
     """
@@ -144,34 +140,34 @@ def process_vllm_chat_results(
     all_completion_ids = []
     all_completion_logprobs = []
     all_rewards = []
-    
-    for idx, (prompt, completion, state, reward) in enumerate(zip(prompts, completions, states, rewards)):
+
+    for idx, (prompt, completion, state, reward) in enumerate(zip(prompts, completions, states, rewards, strict=False)):
         try:
             # Tokenize the prompt using chat template
             prompt_ids = tokenizer.apply_chat_template(
                 conversation=prompt,
                 add_generation_prompt=True,
             )
-            
+
             # Extract responses from state
             responses = state.get("responses", [])
-            
+
             # Process completion messages and extract tokens/logprobs from responses
             completion_ids = []
             completion_logprobs = []
-            
+
             response_idx = 0
             for msg_idx, message in enumerate(completion):
                 if message["role"] == "assistant":
                     # This is a model-generated response
                     if response_idx < len(responses):
                         response = responses[response_idx]
-                        
+
                         # Parse tokens and logprobs from the response
                         try:
                             tokens = parse_chat_completion_tokens_from_bytes(response, tokenizer)
                             logprobs = parse_chat_completion_logprobs(response)
-                            
+
                             if len(tokens) != len(logprobs):
                                 logger.warning(
                                     f"Example {idx}, message {msg_idx}: Token count ({len(tokens)}) "
@@ -181,23 +177,19 @@ def process_vllm_chat_results(
                                 min_len = min(len(tokens), len(logprobs))
                                 tokens = tokens[:min_len]
                                 logprobs = logprobs[:min_len]
-                            
+
                             completion_ids.extend(tokens)
                             completion_logprobs.extend(logprobs)
-                            logger.debug(
-                                f"Example {idx}, message {msg_idx}: Parsed {len(tokens)} tokens"
-                            )
+                            logger.debug(f"Example {idx}, message {msg_idx}: Parsed {len(tokens)} tokens")
                         except Exception as e:
                             # If parsing fails, fall back to tokenizing the message content
-                            logger.warning(
-                                f"Example {idx}, message {msg_idx}: Failed to parse response tokens: {e}"
-                            )
+                            logger.warning(f"Example {idx}, message {msg_idx}: Failed to parse response tokens: {e}")
                             content = message.get("content", "")
                             fallback_tokens = tokenizer.encode(content, add_special_tokens=False)
                             completion_ids.extend(fallback_tokens)
                             # Use zero logprobs as fallback
                             completion_logprobs.extend([0.0] * len(fallback_tokens))
-                        
+
                         response_idx += 1
                     else:
                         # No response available, tokenize the message content
@@ -214,21 +206,19 @@ def process_vllm_chat_results(
                     logger.debug(
                         f"Example {idx}, message {msg_idx}: Skipping non-assistant message with role {message['role']}"
                     )
-            
+
             all_prompt_ids.append(prompt_ids)
             all_completion_ids.append(completion_ids)
             all_completion_logprobs.append(completion_logprobs)
             all_rewards.append(reward)
-        
+
         except Exception as e:
             logger.error(f"Example {idx}: Failed to process: {e}", exc_info=True)
             # Skip this example
             continue
-    
-    logger.info(
-        f"Processed {len(all_prompt_ids)} examples successfully out of {len(prompts)} total"
-    )
-    
+
+    logger.info(f"Processed {len(all_prompt_ids)} examples successfully out of {len(prompts)} total")
+
     return ProcessedVLLMOutputs(
         prompt_ids=all_prompt_ids,
         completion_ids=all_completion_ids,
@@ -240,21 +230,20 @@ def process_vllm_chat_results(
 def extract_completion_text_from_state(state: dict[str, Any]) -> str:
     """
     Extract the completion text from a state dict.
-    
+
     Args:
         state: State dict containing responses
-        
+
     Returns:
         Concatenated completion text
     """
     responses = state.get("responses", [])
     texts = []
-    
+
     for response in responses:
-        if hasattr(response, 'choices') and len(response.choices) > 0:
+        if hasattr(response, "choices") and len(response.choices) > 0:
             content = response.choices[0].message.content
             if content:
                 texts.append(content)
-    
-    return "".join(texts)
 
+    return "".join(texts)

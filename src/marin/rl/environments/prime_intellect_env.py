@@ -44,7 +44,7 @@ class PrimeIntellectEnv(MarinEnv):
     def __init__(
         self,
         env_id: str,
-        env_args: dict = {},
+        env_args: dict = {},  # noqa: B006
         max_tokens: int = 1024,
         max_concurrent: int = 32,
     ):
@@ -145,7 +145,7 @@ class PrimeIntellectEnv(MarinEnv):
             ),
         )
 
-        logger.info(f"Result:")
+        logger.info("Result:")
         logger.info(f"Prompt: {result.prompt[0]}")
         logger.info(f"Completion: {result.completion[0]}")
         logger.info(f"State: {result.state[0]}")

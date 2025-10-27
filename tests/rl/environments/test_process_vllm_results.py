@@ -46,7 +46,7 @@ def create_mock_chat_completion_with_logprobs(
             bytes=list(token_str.encode("utf-8")),
             top_logprobs=[],
         )
-        for token_str, logprob in zip(token_strs, logprobs)
+        for token_str, logprob in zip(token_strs, logprobs, strict=False)
     ]
 
     return ChatCompletion(
@@ -187,4 +187,3 @@ def test_parse_chat_completion_tokens_no_logprobs():
     # Should raise ValueError
     with pytest.raises(ValueError, match="Logprobs should not be None"):
         parse_chat_completion_tokens_from_bytes(chat_completion, tokenizer)
-

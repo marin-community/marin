@@ -21,7 +21,6 @@ import logging
 import levanter
 import haliax as hax
 import jax.random as jrandom
-import jax.numpy as jnp
 import fsspec
 import json
 
@@ -30,7 +29,7 @@ from dataclasses import dataclass, asdict
 from levanter.trainer import TrainerConfig
 from levanter.models.lm_model import LmConfig
 from ray.runtime_env import RuntimeEnv
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoTokenizer
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.infra.ray_tpu import run_on_pod_ray
@@ -74,9 +73,7 @@ def rollout_to_dict(rollout: "Rollout") -> dict[str, Any]:
 
 def rollout_group_to_dict(group: "RolloutGroup") -> dict[str, Any]:
     """Convert a RolloutGroup to a JSON-serializable dictionary."""
-    return {
-        "rollouts": [rollout_to_dict(r) for r in group.rollouts]
-    }
+    return {"rollouts": [rollout_to_dict(r) for r in group.rollouts]}
 
 
 @dataclass
@@ -206,7 +203,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
 
             # Get checkpoint path from model config's tokenizer field
             checkpoint_path = model_config.tokenizer
-            
+
             policy_model = load_model_from_checkpoint(
                 checkpoint=checkpoint_path,
                 model_config=model_config,
@@ -230,13 +227,15 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
                     model=policy_model,
                     tokenizer=tokenizer,
                 )
-                
+
                 # Start the server in a background thread
                 import threading
+
                 threading.Thread(target=inference_server.serve, daemon=True).start()
-                
+
                 # Wait a moment for server to start
                 import time
+
                 time.sleep(2)
 
                 env = load_environment_from_spec(config.env_config)
@@ -340,7 +339,7 @@ def evaluate_environment(
     model_identifier = model_config.tokenizer or "model"
     if "/" in model_identifier:
         model_identifier = model_identifier.split("/")[-1]
-    
+
     config = EnvironmentEvalConfig(
         model_config=model_config,
         env_config=env_config,
