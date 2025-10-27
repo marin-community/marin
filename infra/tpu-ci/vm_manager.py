@@ -98,6 +98,10 @@ fi
 systemctl enable docker
 systemctl start docker
 
+# Configure Docker authentication for Artifact Registry
+echo "Configuring Docker authentication..."
+gcloud auth configure-docker {config.DOCKER_REGISTRY} --quiet
+
 # Pull TPU CI image to speed up first test run
 echo "Pre-pulling TPU CI Docker image..."
 docker pull {config.DOCKER_IMAGE_FULL} || true
@@ -152,7 +156,7 @@ sudo -u $RUNNER_USER ./config.sh \\
   --url https://github.com/{config.GITHUB_ORG}/{config.GITHUB_REPO} \\
   --token $REGISTRATION_TOKEN \\
   --name "tpu-$INSTANCE_NAME" \\
-  --labels {','.join(config.RUNNER_LABELS)} \\
+  --labels {",".join(config.RUNNER_LABELS)} \\
   --work _work \\
   --unattended
 
@@ -481,8 +485,8 @@ sudo docker ps -a || true
 
 @cli.command()
 @click.argument("index", type=int)
-@click.option("--test-path", default="tests/tpu/", help="Path to tests to run (default: tests/)")
-@click.option("--pytest-args", default="-vs -o log_cli_level=INFO", help="Additional pytest arguments (default: -v)")
+@click.option("--test-path", default="tests/tpu/")
+@click.option("--pytest-args", default="-vs -o log_cli_level=INFO")
 def debug_tpu(index: int, test_path: str, pytest_args: str):
     """Rsync marin directory to VM and run pytest in Docker container."""
     vm_name = f"{config.TPU_VM_PREFIX}-{index}"
