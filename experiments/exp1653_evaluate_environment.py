@@ -16,7 +16,11 @@
 Experiment to test environment evaluation using evaluate_environment.py
 """
 
+import dataclasses
 import logging
+
+from levanter.models.qwen import Qwen3Config
+from transformers import AutoConfig
 
 from marin.execution.executor import InputName, executor_main
 from marin.rl.environments.prime_intellect_env import PrimeIntellectEnv
@@ -31,13 +35,24 @@ def create_eval_step():
     # Example model checkpoint path - update this to a real checkpoint
     model_checkpoint = "Qwen/Qwen3-4B"
 
+    # Create model config directly from HF config
+    hf_config = AutoConfig.from_pretrained(model_checkpoint)
+    model_config = Qwen3Config.from_hf_config(hf_config)
+    
+    # Set head_dim for Qwen3-4B if needed
+    if hasattr(hf_config, 'head_dim'):
+        model_config = dataclasses.replace(model_config, head_dim=hf_config.head_dim)
+    
+    # Set seq_len and tokenizer
+    model_config = dataclasses.replace(
+        model_config,
+        seq_len=4096,  # 2048 input + 2048 output
+        tokenizer=model_checkpoint,
+    )
+
     # Configure PrimeIntellect environment for testing
     env = PrimeIntellectEnv(
-        env_id="will/gpqa",
-        env_args={
-            "use_diamond": True,
-            "use_think": True
-        },
+        env_id="primeintellect/gpqa",
     )
 
     # Create evaluation step
@@ -45,11 +60,11 @@ def create_eval_step():
     output_path = InputName.hardcoded("env_evals/test_evaluation")
 
     eval_step = evaluate_environment(
-        model=model_checkpoint,
+        model_config=model_config,
         env=env,
-        name="evaluate-test-environment-4B",
+        name="prime-intellect/gpqa-test-environment-4B-v20",
         output_path=output_path,
-        tpu_type="v4-64",  # Use v4-64
+        tpu_type="v4-8",  # Use v4-8 for smaller memory footprint
     )
 
     return eval_step
