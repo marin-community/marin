@@ -80,10 +80,7 @@ def test_train_worker_checkpoint_restart(ray_tpu_cluster, tmp_path):
             )
             queue_writer.write_batch(batch)
 
-        # Wait for completion or timeout
-        start_time = time.time()
-        while runner.alive() and not runner.done.is_set() and time.time() - start_time < 30:
-            time.sleep(0.5)
+        runner.wait_for_result(timeout=30)
 
         first_run_steps = runner.all_steps_seen.copy()
         last_step_first_run = runner.steps_completed
@@ -131,10 +128,7 @@ def test_train_worker_checkpoint_restart(ray_tpu_cluster, tmp_path):
             )
             queue_writer.write_batch(batch)
 
-        # Wait for completion or timeout
-        start_time = time.time()
-        while runner.alive() and not runner.done.is_set() and time.time() - start_time < 30:
-            time.sleep(0.5)
+        runner.wait_for_result(timeout=30)
 
     second_run_steps = runner.all_steps_seen
 

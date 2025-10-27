@@ -41,6 +41,7 @@ def test_alpaca_eval(current_date_time, ray_tpu_cluster, model_config):
         evaluation_path=f"gs://marin-us-east5/evaluation/alpaca_eval/{model_config.name}-{current_date_time}",
         resource_config=SINGLE_TPU_V6E_8,
         max_eval_instances=5,
+        launch_with_ray=False,
         engine_kwargs={
             "temperature": TEMPERATURE,
             "presence_penalty": PRESENCE_PENALTY,

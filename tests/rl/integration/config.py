@@ -16,6 +16,7 @@
 
 import datetime
 import logging
+import queue
 import sys
 import threading
 import time
@@ -436,8 +437,7 @@ class ThreadedWorkerRunner(ABC):
         # State tracking
         self.worker = None
         self.thread = None
-        self.error = None
-        self.done = threading.Event()
+        self.result_queue = queue.Queue(maxsize=1)
 
     @abstractmethod
     def _create_and_run_worker(self):
@@ -448,12 +448,11 @@ class ThreadedWorkerRunner(ABC):
         """Thread target - runs the worker with error handling."""
         try:
             self._create_and_run_worker()
+            self.result_queue.put(("success", None))
         except Exception as e:
             print(f"{self.__class__.__name__} encountered exception:", e, file=sys.stderr)
             logger.error(f"{self.__class__.__name__} failed", exc_info=True)
-            self.error = e
-        finally:
-            self.done.set()
+            self.result_queue.put(("error", e))
 
     def start(self):
         """Start worker in background thread."""
@@ -473,31 +472,55 @@ class ThreadedWorkerRunner(ABC):
         if self.thread:
             self.thread.join(timeout)
 
+    def wait_for_result(self, timeout=None):
+        """Wait for worker completion, raising immediately on error.
+
+        Args:
+            timeout: Maximum time to wait in seconds (None = infinite)
+
+        Raises:
+            RuntimeError: If worker failed
+            TimeoutError: If timeout expires before completion
+        """
+        try:
+            status, error = self.result_queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+        if status == "error":
+            raise RuntimeError(f"{self.__class__.__name__} failed") from error
+
+        return None
+
     def __enter__(self):
         """Context manager entry - start the worker."""
         self.start()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit - stop worker and check for errors."""
+        """Context manager exit - stop worker and wait for completion."""
         self.stop()
         self.join(timeout=5)
 
-        if self.error:
-            import traceback
+        try:
+            status, error = self.result_queue.get_nowait()
+            if status == "error":
+                import traceback
 
-            print(f"{self.__class__.__name__} error: {self.error}")
-            print(
-                "Traceback:",
-                "".join(
-                    traceback.format_exception(
-                        type(self.error),
-                        self.error,
-                        self.error.__traceback__,
-                    )
-                ),
-            )
-            pytest.fail(f"{self.__class__.__name__} failed: {self.error}")
+                print(f"{self.__class__.__name__} error: {error}")
+                print(
+                    "Traceback:",
+                    "".join(
+                        traceback.format_exception(
+                            type(error),
+                            error,
+                            error.__traceback__,
+                        )
+                    ),
+                )
+                pytest.fail(f"{self.__class__.__name__} failed: {error}")
+        except queue.Empty:
+            pass
 
         return False
 

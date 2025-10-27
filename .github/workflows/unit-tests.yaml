@@ -85,9 +85,10 @@ jobs:
 
           timeout 900 docker run --rm --privileged \
             --device /dev/vfio:/dev/vfio \
-            --shm-size=10g \
+            --net=host \
+            --shm-size=100g \
+            --stop-timeout=10 \
             -e JAX_PLATFORMS=tpu \
-            -e PJRT_DEVICE=TPU \
             -e TPU_CI=true \
             -e START_RAY_TPU_CLUSTER=true \
             -e PYTHONPATH=/workspace \
