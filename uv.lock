@@ -1528,7 +1528,7 @@ wheels = [
 
 [[package]]
 name = "haliax"
-version = "1.4.dev443"
+version = "1.4.dev450"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aqtp" },
@@ -1538,9 +1538,9 @@ dependencies = [
     { name = "jmp" },
     { name = "safetensors" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/66/e5/680fa8a8a9957e9f08c723abf215da8dbb28022ba0a56f9782c304ff5a53/haliax-1.4.dev443.tar.gz", hash = "sha256:9c95daf724d0be9a422b23a6c54679b741d0e1e410f93f8e303738a27495e600", size = 813662, upload-time = "2025-10-09T07:24:19.853Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/30/e8/5f98068edde2e7b9ca1d01efcb293ca8022e215ef67dba3abd6c4b33436f/haliax-1.4.dev450.tar.gz", hash = "sha256:f518d6e816970a0f43c669e6794bbce73be11859a7765abf4a5aabb8f62090e2", size = 827440, upload-time = "2025-10-18T07:13:09.096Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d9/61/ac171150ff12a32e589459f3a999126a9cd787de9de7abb14377302ce6ad/haliax-1.4.dev443-py3-none-any.whl", hash = "sha256:e523af1024afe2d6ab305ecabb5facdb7c1b256cd002b68fa144bbc8d1a20c79", size = 138799, upload-time = "2025-10-09T07:24:18.05Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/ba/d974b95b0a5a005efe7f5a6f88b968348402770a6f254ab549b508c09395/haliax-1.4.dev450-py3-none-any.whl", hash = "sha256:602170959b08665755081d28bf4679e57eca5731f73e85a4a6f0f6695d66aa14", size = 144495, upload-time = "2025-10-18T07:13:07.598Z" },
 ]
 
 [[package]]
@@ -2226,7 +2226,7 @@ requires-dist = [
     { name = "google-auth", marker = "extra == 'gcp'" },
     { name = "google-cloud-storage", marker = "extra == 'gcp'" },
     { name = "google-cloud-storage-transfer", marker = "extra == 'gcp'" },
-    { name = "haliax", specifier = ">=1.4.dev443" },
+    { name = "haliax", specifier = ">=1.4.dev450" },
     { name = "humanfriendly", specifier = "==10.0" },
     { name = "jax", specifier = ">=0.6.2,!=0.7.0,!=0.7.1" },
     { name = "jax", extras = ["cuda12"], marker = "extra == 'gpu'", specifier = ">=0.6.2" },
