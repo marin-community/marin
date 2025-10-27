@@ -30,6 +30,7 @@
 This is a retrospective on Marin 32B, which is largely a scale-up of the [8B recipe](./marin-8b-retro.md). As with the 8B,
 we followed the “Tootsie Roll” playbook: start training, instrument heavily, and make evidence-driven changes mid-flight.
 The intent here is to document what worked, what failed, and the mechanics of why and how we made changes so that others can learn from our process beyond the final result.
+You can download the base checkpoint on Hugging Face at [marin-community/marin-32b-base](https://huggingface.co/marin-community/marin-32b-base).
 
 We deliberately reused the [Nemotron-CC](https://arxiv.org/abs/2412.02595)-centric pretraining mixture and the
 AdamW-based schedule that behaved well at 8B. That mostly transferred.
