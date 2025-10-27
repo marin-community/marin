@@ -32,7 +32,7 @@ import dataclasses
 from levanter.schedule import ScheduleStep
 
 from experiments.cooldown_anneal import dolmino_dclm
-from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3
+from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3_old
 from experiments.defaults import default_train
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from experiments.dolmino.tokenize_dolmino import dolmino_math_tokenized_llama3, get_dolmino_step_llama3
@@ -86,7 +86,7 @@ tootsie_phase1_config = SimpleTrainConfig(
 llama_8b_tootsie_phase1 = dataclasses.replace(
     default_train(
         name="llama-8b-tootsie-0.001",
-        tokenized=dclm_mixture_config_llama3,
+        tokenized=dclm_mixture_config_llama3_old,
         # I am a dummy and use old rotary config
         model_config=llama_8b_old_rotary,
         train_config=tootsie_phase1_config,
@@ -133,7 +133,7 @@ llama_8b_train_config_phase2 = SimpleTrainConfig(
 llama_8b_tootsie_phase2 = dataclasses.replace(
     default_train(
         name="llama-8b-tootsie-phase2",
-        tokenized=dclm_mixture_config_llama3,
+        tokenized=dclm_mixture_config_llama3_old,
         model_config=llama_8b,
         train_config=llama_8b_train_config_phase2,
         tags=["llama", "8b", "ema", "exp600"],

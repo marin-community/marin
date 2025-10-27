@@ -25,6 +25,7 @@ Usage:
 from dataclasses import dataclass
 import json
 import logging
+import os
 import subprocess
 import sys
 import tempfile
@@ -32,8 +33,9 @@ import time
 from pathlib import Path
 
 import click
+import yaml
 
-from marin.cluster import cleanup, gcp, monitoring, ray
+from marin.cluster import gcp, monitoring, ray
 from marin.cluster.cleanup import cleanup_iteration, submit_cleanup_cron_job
 from marin.cluster.config import (
     RayClusterConfig,
@@ -69,13 +71,27 @@ class Context:
 
 # Context object to pass global options between commands
 @click.group()
-@click.option("--config", help="Path to cluster config file")
+@click.option("--config", help="Path to Ray cluster config file (infra/marin-*.yaml)")
 @click.option("--cluster", help="Cluster name to connect to")
 @click.option("--verbose", is_flag=True, help="Enable verbose logging")
 @click.pass_context
 def cli(ctx, config, cluster, verbose):
     """Marin cluster management CLI."""
     ctx.ensure_object(Context)
+    # Auto-load shared env from .marin.yaml if present (common workflow)
+    try:
+        marin_yaml = Path(".marin.yaml")
+        if marin_yaml.exists():
+            with open(marin_yaml, "r") as f:
+                data = yaml.safe_load(f) or {}
+            env = data.get("env", {}) or {}
+            if isinstance(env, dict):
+                for k, v in env.items():
+                    if k not in os.environ:
+                        os.environ[k] = "" if v is None else str(v)
+                logger.debug(f"Loaded env vars from {marin_yaml}")
+    except Exception as e:
+        logger.warning(f"Failed to load .marin.yaml: {e}")
     if cluster:
         config = find_config_by_region(cluster)
 
@@ -170,7 +186,7 @@ def restart_cluster(ctx, preserve_jobs):
         print("Backing up jobs...")
         try:
             with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-                ray.backup_jobs(config_path, backup_dir)
+                ray.backup_jobs(config_path, str(backup_dir))
         except Exception as e:
             print()
             print("=" * 60)
@@ -195,7 +211,7 @@ def restart_cluster(ctx, preserve_jobs):
     if preserve_jobs:
         print("Restoring jobs...")
         with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-            ray.restore_jobs(config_path, backup_dir)
+            ray.restore_jobs(str(backup_dir))
 
     # Auto-start cleanup cron
     print("Starting automated cleanup cron...")
@@ -223,7 +239,7 @@ def cluster_backup_jobs(ctx, backup_dir):
 def cluster_restore_jobs(ctx, backup_dir):
     """Restore Ray jobs from specified directory."""
     with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
-        ray.restore_jobs(ctx.obj.config_file, backup_dir)
+        ray.restore_jobs(backup_dir)
         print(f"Jobs restored successfully from {backup_dir}")
 
 
@@ -387,20 +403,34 @@ def start_cleanup(ctx, interval):
 @cli.command("run-cleanup")
 @click.option("--dry-run", is_flag=True, help="Show what would be cleaned")
 @click.pass_context
-def run_cleanup(ctx):
+def run_cleanup(ctx, dry_run):
     """Run a single cleanup iteration."""
     config_obj = ctx.obj.config_obj
     if not config_obj:
         print("Error: --config required for cleanup commands", file=sys.stderr)
         sys.exit(1)
 
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file, ray_init=True)):
         print("Running cleanup iteration...")
-        deleted = cleanup_iteration(config_obj.project_id, config_obj.zone, dry_run=True)
-        if deleted:
-            print(f"Deleted {len(deleted)} preempted TPUs: {deleted}")
+        results = cleanup_iteration(config_obj.project_id, config_obj.zone, dry_run=dry_run)
+
+        # Display TPU cleanup results
+        if results["deleted_tpus"]:
+            action = "Would delete" if dry_run else "Deleted"
+            print(f"{action} {len(results['deleted_tpus'])} preempted TPUs: {results['deleted_tpus']}")
         else:
             print("No preempted TPUs found")
+
+        # Display lockfile cleanup results
+        if not dry_run and results.get("lockfile_cleanup"):
+            stats = results["lockfile_cleanup"]
+            print(f"\nTPU Lockfile Cleanup:")
+            print(f"  Workers targeted: {stats.get('workers_targeted', 0)}")
+            print(f"  Workers cleaned: {stats.get('workers_cleaned', 0)}")
+            if stats.get("errors"):
+                print(f"  Errors: {len(stats['errors'])}")
+                for error in stats["errors"][:5]:  # Show first 5 errors
+                    print(f"    - {error}")
 
 
 @cli.command("clean-preempted-tpus")

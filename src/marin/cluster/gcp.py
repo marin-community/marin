@@ -305,6 +305,8 @@ def cleanup_preempted_tpus(project: str, zone: str, dry_run: bool = False) -> li
     nodes = list_tpu_nodes(project, zone)
     preempted_nodes = []
 
+    logger.info(f"Found {len(nodes)} TPU nodes in zone {zone} for project {project}.")
+
     for node in nodes:
         state = node.get("state")
         if state in ["PREEMPTED", "TERMINATED"]:
