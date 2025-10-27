@@ -8,8 +8,6 @@ on:
       - main
   pull_request_review:
     types: [submitted]
-  issue_comment:
-    types: [created]
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -72,18 +70,12 @@ jobs:
     timeout-minutes: 10
     if: |
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-tpu-tests')) ||
-      (github.event_name == 'pull_request_review' && github.event.review.state == 'approved') ||
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request &&
-       contains(github.event.comment.body, 'run-tpu-tests') &&
-       (github.event.comment.author_association == 'OWNER' ||
-        github.event.comment.author_association == 'MEMBER' ||
-        github.event.comment.author_association == 'COLLABORATOR'))
+      (github.event_name == 'pull_request_review' && github.event.review.state == 'approved')
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
         with:
-          ref: ${{ (github.event_name == 'issue_comment' && format('refs/pull/{0}/merge', github.event.issue.number)) || (github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number)) || '' }}
+          ref: ${{ (github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number)) || '' }}
 
       - name: Run TPU tests in Docker
         run: |

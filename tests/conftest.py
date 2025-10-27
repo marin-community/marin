@@ -108,9 +108,9 @@ def ray_tpu_cluster(tmp_path_factory, worker_id):
     }
     print("Starting on worker_id", worker_id, "with init_args", init_args)
     if os.getenv("START_RAY_TPU_CLUSTER") == "true":
-        print("Starting TPU Ray cluster with resources TPU:8, TPU-v6e-head:1")
+        print("Starting TPU Ray cluster with resources TPU:8, TPU-v6e-8-head:1")
         ctx = ray.init(
-            resources={"TPU": 8, "TPU-v6e-head": 1, "head_node": 1},
+            resources={"TPU": 8, "TPU-v6e-8-head": 1, "head_node": 1},
             num_cpus=120,
             **init_args,
         )

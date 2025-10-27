@@ -1,6 +1,5 @@
 # TPU CI Docker Image
-# Provides a reproducible environment for running GitHub Actions CI on TPU VMs
-# Includes JAX with TPU support, all Marin dependencies, and the GitHub Actions runner
+# Sets up the initial dependencies in UV and all required packages to run Marin TPU tests.
 
 FROM ubuntu:22.04
 
@@ -51,5 +50,4 @@ WORKDIR /opt/marin
 
 RUN uv sync --frozen --extra tpu --extra gcp
 
-# The entrypoint will be configured by slurmactiond to run the GitHub Actions runner
-# This allows the runner to be started with the appropriate configuration tokens
+# The entrypoint will be set by the Github runner
