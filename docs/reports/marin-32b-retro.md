@@ -27,7 +27,6 @@
 
 ## Introduction
 
-
 This is a retrospective on Marin 32B, which is largely a scale-up of the [8B recipe](./marin-8b-retro.md). As with the 8B,
 we followed the “Tootsie Roll” playbook: start training, instrument heavily, and make evidence-driven changes mid-flight.
 The intent here is to document what worked, what failed, and the mechanics of why and how we made changes so that others can learn from our process beyond the final result.
@@ -51,6 +50,15 @@ We break the run into four phases:
 | 4     | 160,000 → 192,000 | 1.074      | Mantis cooldown (Feistel shuffle, better math mix) | Strong results; resolved anomalies from Bison    |
 
 † Approximate; Phase 2 comprised short diagnostic bursts that were later discarded, so they are excluded from cumulative token totals.
+
+This report covers the following experiments/phases:
+
+- Phase 1 \- Baseline: [#1295](https://github.com/marin-community/marin/issues/1295) [`exp1295_32b`](https://github.com/marin-community/marin/blob/5e88b5253975ffd13e63a5db0b946883c8660e1b/experiments/tootsie/exp1295_32b.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp859_big_tootsies-e9092f.json)
+- Phase 2a \- Necromancy Restart: [#1390](https://github.com/marin-community/marin/issues/1390) [`exp1390_32b_necro`](https://github.com/marin-community/marin/blob/fe373c233ee7288cbf8e7600765c3fc6fb6fa3ac/experiments/tootsie/exp1390_32b_necro.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1380_32b_necro-51ba55.json)
+- Phase 2b \- Optimizer Swap (Muon): [#1380](https://github.com/marin-community/marin/issues/1380) [`exp1380_muon32b`](https://github.com/marin-community/marin/blob/fe373c233ee7288cbf8e7600765c3fc6fb6fa3ac/experiments/tootsie/exp1380_muon32b.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1380_muon32b-898f42.json)
+- Phase 3 \- QK\-Norm Switch: [#1395](https://github.com/marin-community/marin/issues/1395) [`exp1395_qwen3_32b`](https://github.com/marin-community/marin/blob/fe373c233ee7288cbf8e7600765c3fc6fb6fa3ac/experiments/tootsie/exp1395_qwen3_32b.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1395_qwen3_32b-de6f47.json)
+- Phase 4a \- Bison Cooldown: [#1529](https://github.com/marin-community/marin/issues/1529) [`exp1529_32b_bison_cooldown`](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp1529_32b_bison_cooldown.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_bison_cooldown-48ddfe.json)
+- Phase 4b \- Mantis Cooldown: [#1581](https://github.com/marin-community/marin/issues/1681) [`exp1529_32b_mantis_cooldown`](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp1529_32b_mantis_cooldown.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_mantis_cooldown-c6f4b0.json)
 
 
 ## Baseline Configuration
@@ -421,12 +429,12 @@ other evaluation harnesses (e.g. OLMES) due to prompt/format differences. “Ave
 
 | Model                                | Average | AGI Eval LSAT-AR | ARC Easy | ARC Challenge | BoolQ | CommonSense QA | COPA | HellaSwag | lambada_openai | OpenBookQA |  PIQA | WinoGrande |   WSC |  MMLU |  GPQA |   BBH | MMLU Pro | HumanEval | GSM8K |  MATH |
 | :----------------------------------- | ------: | ---------------: | -------: | ------------: | ----: | -------------: | ---: | --------: | -------------: | ---------: | ----: | ---------: | ----: | ----: | ----: | ----: | -------: | --------: | ----: | ----: |
-| **Marin 32B (Bison)**                |    63.0 |             23.4 |     87.8 |          65.8 |  88.9 |           82.3 | 94.0 |      86.6 |           77.4 |       46.6 |  86.1 |      78.61 | 82.42 |  72.9 | 32.13 |  55.2 |     41.9 |     29.27 | 54.71 | 10.35 |
-| **Marin 32B (Mantis)**               |    65.2 |             24.8 |     88.0 |          65.7 |  89.4 |           82.8 | 93.0 |      86.9 |           77.2 |       46.4 |  85.9 |       79.3 |  79.5 |  74.7 |  34.0 |  59.6 |     45.1 |      42.7 |  69.1 |  15.3 |
-| **OLMo 2 32B Base**                  |    63.2 |             22.6 |     85.9 |         61.86 |  83.0 |           78.6 | 93.0 |      85.9 |           78.3 |       47.2 | 83.08 |      78.85 | 86.81 | 71.85 | 32.21 | 56.07 |     42.0 |     23.78 | 76.35 | 12.69 |
-| **Qwen 2.5 32B Base**                |    68.1 |            30.43 |    80.81 |         55.89 | 87.65 |          88.45 | 87.0 |     84.11 |          77.62 |       44.4 |  82.4 |       75.7 | 80.95 | 80.83 | 39.01 | 67.35 |     57.9 |     48.78 | 89.31 | 36.25 |
-| **Gemma 3 27B PT**                   |    65.1 |            22.17 |    88.17 |         65.44 | 87.09 |          73.38 | 93.0 |     83.02 |          78.07 |       45.0 | 84.06 |      79.01 | 91.94 | 75.33 | 35.74 | 61.36 |    49.44 |      17.6 | 82.03 | 25.83 |
-| **NVIDIA Nemotron Nano 12B v2 Base** |    68.6 |             28.7 |    83.59 |         60.58 | 84.83 |          76.09 | 85.0 |     81.42 |          72.93 |       45.8 | 82.81 |      74.35 | 85.35 |  77.9 | 36.58 | 62.02 |    53.13 |     59.15 | 84.08 | 68.28 |
+| **Marin 32B (Bison)**                |    63.0 |             23.4 |     87.8 |      **65.8** |  88.9 |           82.3 | **94.0** |      86.6 |           77.4 |       46.6 | **86.1** |      78.61 | 82.42 |  72.9 | 32.13 |  55.2 |     41.9 |     29.27 | 54.71 | 10.35 |
+| **Marin 32B (Mantis)**               |    65.2 |             24.8 |     88.0 |          65.7 | **89.4** |           82.8 | 93.0 |   **86.9** |           77.2 |       46.4 |  85.9 |   **79.3** |  79.5 |  74.7 |  34.0 |  59.6 |     45.1 |      42.7 |  69.1 |  15.3 |
+| **OLMo 2 32B Base**                  |    63.2 |             22.6 |     85.9 |         61.86 |  83.0 |           78.6 | 93.0 |      85.9 |      **78.3** |   **47.2** | 83.08 |      78.85 | 86.81 | 71.85 | 32.21 | 56.07 |     42.0 |     23.78 | 76.35 | 12.69 |
+| **Qwen 2.5 32B Base**                |    68.1 |         **30.43** |    80.81 |         55.89 | 87.65 |       **88.45** | 87.0 |     84.11 |          77.62 |       44.4 |  82.4 |       75.7 | 80.95 | **80.83** | **39.01** | **67.35** |    **57.9** |     **48.78** | **89.31** | 36.25 |
+| **Gemma 3 27B PT**                   |    65.1 |            22.17 | **88.17** |         65.44 | 87.09 |          73.38 | 93.0 |     83.02 |          78.07 |       45.0 | 84.06 |      79.01 | **91.94** | 75.33 | 35.74 | 61.36 |    49.44 |      17.6 | 82.03 | 25.83 |
+| **NVIDIA Nemotron Nano 12B v2 Base** | **68.6** |             28.7 |    83.59 |         60.58 | 84.83 |          76.09 | 85.0 |     81.42 |          72.93 |       45.8 | 82.81 |      74.35 | 85.35 |  77.9 | 36.58 | 62.02 |     53.13 |     **59.15** | 84.08 | **68.28** |
 
 The newer Mantis cooldown is better in almost every respect compared to Bison. COPA, PIQA and WSC see slight degradations, but, as expected, the coding evaluation HumanEval and math evals GSM8K and MATH
 see marked improvements.
