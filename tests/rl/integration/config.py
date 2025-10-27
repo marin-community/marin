@@ -24,6 +24,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -54,6 +55,11 @@ from marin.rl.weight_transfer import WeightTransferConfig
 from marin.rl.weight_transfer.base import WeightTransferMode
 
 logger = logging.getLogger(__name__)
+
+
+class WaitResult(Enum):
+    SUCCESS = "success"
+    TIMEOUT = "timeout"
 
 
 class DummyTokenizer:
@@ -478,19 +484,22 @@ class ThreadedWorkerRunner(ABC):
         Args:
             timeout: Maximum time to wait in seconds (None = infinite)
 
+        Returns:
+            WaitResult.SUCCESS if completed successfully
+            WaitResult.TIMEOUT if timeout expires before completion
+
         Raises:
             RuntimeError: If worker failed
-            TimeoutError: If timeout expires before completion
         """
         try:
             status, error = self.result_queue.get(timeout=timeout)
         except queue.Empty:
-            return None
+            return WaitResult.TIMEOUT
 
         if status == "error":
             raise RuntimeError(f"{self.__class__.__name__} failed") from error
 
-        return None
+        return WaitResult.SUCCESS
 
     def __enter__(self):
         """Context manager entry - start the worker."""
@@ -656,7 +665,7 @@ class RolloutBatchFeeder:
     def _run(self):
         """Thread target - continuously generate batches until runner completes."""
         try:
-            while not self.runner.worker and not self.runner.done.is_set():
+            while not self.runner.worker and self.runner.alive():
                 time.sleep(0.1)
 
             if not self.runner.worker:
@@ -667,7 +676,7 @@ class RolloutBatchFeeder:
             batch_size = self.runner.training_worker_config.trainer.train_batch_size
 
             # Continuously generate batches
-            while not self.runner.done.is_set() and not self.stop_flag.is_set():
+            while self.runner.alive() and not self.stop_flag.is_set():
                 # Use trained model if available, otherwise reference
                 if self.runner.trained_model:
                     model = self.runner.trained_model

@@ -25,6 +25,7 @@ from tests.rl.integration.config import (
     DummyTokenizer,
     RolloutWorkerRunner,
     TrainWorkerRunner,
+    WaitResult,
     create_nano_llama_config,
     create_nano_optimizer_config,
     create_nano_trainer_config,
@@ -67,7 +68,8 @@ def test_rollout_and_train_workers(ray_tpu_cluster, tmp_path):
     with training_runner:
         time.sleep(1)
         with rollout_runner:
-            training_runner.wait_for_result(timeout=60)
+            result = training_runner.wait_for_result(timeout=60)
+            assert result == WaitResult.SUCCESS, "Training timed out after 60s"
 
     assert (
         rollout_runner.rollouts_generated >= 1

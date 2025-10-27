@@ -485,7 +485,7 @@ def debug_tpu(index: int, test_path: str, pytest_args: str):
         gcloud compute tpus tpu-vm ssh {vm_name} \
         --zone {config.ZONE} \
         --project {config.GCP_PROJECT_ID} \
-        --command 'rm -rf {remote_dir} && mkdir -p {remote_dir} && tar xzf - -C {remote_dir}'"""
+        --command 'sudo rm -rf {remote_dir} && mkdir -p {remote_dir} && tar xzf - -C {remote_dir} && sudo chown -R github-runner:github-runner {remote_dir}'"""  # noqa: E501
 
     result = run(tar_cmd, shell=True, check=False)
     if result.returncode != 0:
@@ -528,18 +528,22 @@ def debug_tpu(index: int, test_path: str, pytest_args: str):
         "--project",
         config.GCP_PROJECT_ID,
         "--command",
-        f"""timeout 60 sudo -u github-runner bash -c 'docker run --rm --privileged \
+        f"""timeout 60 sudo -u github-runner bash -c 'docker run --rm \
             --device /dev/vfio:/dev/vfio \
             --net=host \
-            --shm-size=10g \
+            --shm-size=100g \
             --stop-timeout=1 \
+            --cap-add=SYS_RESOURCE \
+             --ulimit memlock=68719476736:68719476736 \
             -e JAX_PLATFORMS=tpu \
             -e PJRT_DEVICE=TPU \
             -e TPU_CI=true \
             -e START_RAY_TPU_CLUSTER=true \
             -e PYTHONPATH=/workspace \
             -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \
-            -v {remote_dir}:/workspace:ro \
+            -v {remote_dir}:/workspace:rw \
+            --tmpfs /workspace/logs:rw \
+            --tmpfs /workspace/.pytest_cache:rw \
             -w /workspace \
             {config.DOCKER_IMAGE_FULL} \
             uv run pytest {test_path} {pytest_args}'""",

@@ -87,13 +87,16 @@ jobs:
             --device /dev/vfio:/dev/vfio \
             --net=host \
             --shm-size=100g \
-            --stop-timeout=10 \
+            --stop-timeout=1 \
+            --cap-add=SYS_RESOURCE \
+             --ulimit memlock=68719476736:68719476736 \
             -e JAX_PLATFORMS=tpu \
+            -e PJRT_DEVICE=TPU \
             -e TPU_CI=true \
             -e START_RAY_TPU_CLUSTER=true \
             -e PYTHONPATH=/workspace \
             -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \
-            -v ${{ github.workspace }}:/workspace:ro \
+            -v ${{ github.workspace }}:/workspace:rw \
             -w /workspace \
             us-west4-docker.pkg.dev/hai-gcp-models/marin-ci/tpu-ci:latest \
             uv run pytest tests/tpu/ -v --tb=short -s --log-cli-level=INFO

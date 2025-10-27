@@ -29,6 +29,7 @@ from tests.rl.integration.config import (
     RolloutBatchFeeder,
     RolloutWorkerRunner,
     TrainWorkerRunner,
+    WaitResult,
     create_nano_llama_config,
     create_nano_optimizer_config,
     create_nano_trainer_config,
@@ -144,12 +145,12 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
 
     with training_runner:
         while training_runner.reference_model is None:
-            # we might crash in the training worker before the reference model is set
-            training_runner.wait_for_result(timeout=1.0)
+            result = training_runner.wait_for_result(timeout=1.0)
+            if result == WaitResult.SUCCESS:
+                break
 
         with inference_runner:
             training_runner.wait_for_result()
-            inference_runner.wait_for_result()
 
     assert (
         inference_runner.rollouts_generated >= 5

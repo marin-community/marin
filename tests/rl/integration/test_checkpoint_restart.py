@@ -26,6 +26,7 @@ from marin.rl.rl_losses import RLOOLoss
 from tests.rl.integration.config import (
     DummyTokenizer,
     TrainWorkerRunner,
+    WaitResult,
     create_nano_llama_config,
     create_nano_optimizer_config,
     create_nano_trainer_config,
@@ -80,7 +81,8 @@ def test_train_worker_checkpoint_restart(ray_tpu_cluster, tmp_path):
             )
             queue_writer.write_batch(batch)
 
-        runner.wait_for_result(timeout=30)
+        result = runner.wait_for_result(timeout=30)
+        assert result == WaitResult.SUCCESS, "Training timed out after 30s"
 
         first_run_steps = runner.all_steps_seen.copy()
         last_step_first_run = runner.steps_completed
@@ -128,7 +130,8 @@ def test_train_worker_checkpoint_restart(ray_tpu_cluster, tmp_path):
             )
             queue_writer.write_batch(batch)
 
-        runner.wait_for_result(timeout=30)
+        result = runner.wait_for_result(timeout=30)
+        assert result == WaitResult.SUCCESS, "Training timed out after 30s"
 
     second_run_steps = runner.all_steps_seen
 
