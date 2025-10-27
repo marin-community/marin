@@ -45,6 +45,12 @@ from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
 from marin.rl.inference_ctx import InferenceContext
 from marin.rl.model_utils import load_model_from_checkpoint
+from marin.rl.rollout_context import (
+    RolloutContext,
+    compute_batch_metrics,
+    build_eval_metrics,
+    format_sample_for_logging,
+)
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .types import (
@@ -90,41 +96,7 @@ def find_open_port() -> int:
         return s.getsockname()[1]
 
 
-@dataclass
-class RolloutBatchStats:
-    total_count: int
-    success_count: int
-    rollout_stats: list[RolloutStats]
-    avg_reward: float
-
-
-def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
-    rollout_stats_list = []
-    total_count = 0
-    success_count = 0
-    reward_sum = 0.0
-
-    for group in batch.groups:
-        for rollout in group.rollouts:
-            rollout_stats_list.append(
-                RolloutStats(
-                    lesson_id=lesson_id,
-                    episode_reward=rollout.episode_reward,
-                    env_example_id=rollout.env_example_id,
-                )
-            )
-
-            total_count += 1
-            if rollout.episode_reward > 0:
-                success_count += 1
-            reward_sum += rollout.episode_reward
-
-    return RolloutBatchStats(
-        total_count=total_count,
-        success_count=success_count,
-        rollout_stats=rollout_stats_list,
-        avg_reward=(reward_sum / total_count) if total_count > 0 else 0.0,
-    )
+# Removed _compute_batch_stats - now using compute_batch_metrics from rollout_context
 
 
 class RolloutWorker:
@@ -141,7 +113,7 @@ class RolloutWorker:
     _transfer_client: WeightTransferClient
     _rollout_writer: RolloutWriter
     _tokenizer: PreTrainedTokenizer
-    _environments: dict[str, MarinEnv]
+    _rollout_context: RolloutContext
 
     def __init__(self, config: RolloutWorkerConfig):
         config.trainer.id = f"{config.run_id}-rollout"
@@ -187,26 +159,23 @@ class RolloutWorker:
         # TODO(power) -- replace this with a wait_until_ready() on the levanter inference server
         time.sleep(1.0)
 
-        self._environments = {}
+        # Create rollout context for managing environments and rollout generation
+        self._rollout_context = RolloutContext(
+            tokenizer=self._tokenizer,
+            curriculum_config=self.config.curriculum_config,
+            seed=self.config.seed,
+            worker_id=f"{self.config.run_id}-rollout",
+        )
 
         # Create curriculum actor (no checkpoint path for rollout workers)
         self._curriculum_actor = get_or_create_curriculum_actor(self.config.curriculum_config)
 
-    def _load_environment(self, lesson_id: str) -> MarinEnv:
-        """Load environment from lesson ID."""
-        if lesson_id in self._environments:
-            return self._environments[lesson_id]
-
-        lesson_config = self.config.curriculum_config.lessons[lesson_id]
-        env = load_environment_from_spec(lesson_config.env_config)
-        self._environments[lesson_id] = env
-        return env
+    # Removed _load_environment - now handled by RolloutContext
 
     def _sample_batch(
         self, lesson_id: str, n_examples: int, n_generations: int, mode: str, rng
     ) -> tuple[RolloutBatch | None, dict | None]:
         """Sample a batch of rollouts from the environment for the given lesson ID."""
-        env = self._load_environment(lesson_id)
         lesson_config = self.config.curriculum_config.lessons[lesson_id]
 
         # Get sampling params from lesson config
@@ -225,50 +194,16 @@ class RolloutWorker:
             self.config.trainer.device_mesh,
             hax.axis_mapping(self.config.trainer.compute_axis_mapping),
         ):
-            # Sample examples, generate responses, and create rollouts from selected lesson
-            rollout_groups, metrics = env.sample(
+            # Use RolloutContext to handle sampling
+            return self._rollout_context.sample_rollouts(
                 inference_ctx=policy_ctx,
+                env_or_lesson_id=lesson_id,
                 n_examples=n_examples,
                 n_generations=n_generations,
                 temperature=temperature,
-                prng_key=rng,
                 mode=mode,
+                weight_step=self._current_weight_step,
             )
-
-        if len(rollout_groups) == 0:
-            logger.warning("No valid rollouts generated in this batch...")
-            return None, None
-
-        logger.info(
-            "Generated rollout with %d groups from lesson %s at step %d",
-            len(rollout_groups),
-            lesson_id,
-            self._current_weight_step,
-        )
-
-        # Create metadata once for this batch
-        batch_metadata = RolloutMetadata(
-            worker_id=f"{socket.gethostname()}_{os.getpid()}",
-            timestamp=time.time(),
-            weight_step=self._current_weight_step,
-        )
-
-        # Attach metadata to each rollout in each group
-        rollout_groups_with_metadata = []
-        for group in rollout_groups:
-            rollouts_with_metadata = []
-            for rollout in group.rollouts:
-                # Create new rollout with metadata attached
-                rollout_with_meta = eqx.tree_at(lambda r: r.metadata, rollout, batch_metadata)
-                rollouts_with_metadata.append(rollout_with_meta)
-
-            rollout_groups_with_metadata.append(RolloutGroup(rollouts=rollouts_with_metadata))
-
-        rollout_batch = RolloutBatch(
-            groups=rollout_groups_with_metadata,
-            metadata=batch_metadata,
-        )
-        return rollout_batch, metrics
 
     def _build_models(self):
         if self.config.initial_checkpoint is not None:
@@ -345,36 +280,19 @@ class RolloutWorker:
             step: Current training step
             mode: Either "eval" or "micro_eval"
         """
-        if not batch or not batch.groups:
+        sample_data = format_sample_for_logging(batch, self._tokenizer)
+        if not sample_data:
             return
-
-        # Take first rollout from first group as representative
-        sample = batch.groups[0].rollouts[0]
-
-        # Decode tokens to human-readable text
-        prompt_text = self._tokenizer.decode(sample.prompt_tokens, skip_special_tokens=True)
-        response_text = self._tokenizer.decode(sample.response_tokens, skip_special_tokens=True)
-
+            
         # Log with structured keys
         prefix = f"inference.{eval_type}/{lesson_id}"
-        metrics = {
-            f"{prefix}/sample_prompt": prompt_text,
-            f"{prefix}/sample_response": response_text,
-            f"{prefix}/sample_example_id": sample.env_example_id,
-        }
+        metrics = {f"{prefix}/{k}": v for k, v in sample_data.items()}
         self.tracker.log(metrics, step=step)
         logger.info(f"Eval sample for lesson {lesson_id} at step {step}: {metrics}")
 
     def _build_eval_metrics(self, prefix: str, lesson_id: str, batch: RolloutBatch) -> dict[str, Any]:
-        metrics = {}
-        stats = _compute_batch_stats(batch, lesson_id)
-        if stats.total_count == 0:
-            return metrics
-        success_rate = stats.success_count / stats.total_count
-        metrics[f"{prefix}/{lesson_id}/success_rate"] = success_rate
-        metrics[f"{prefix}/{lesson_id}/avg_reward"] = stats.avg_reward
-        metrics[f"{prefix}/{lesson_id}/total_count"] = stats.total_count
-        return metrics
+        batch_metrics = compute_batch_metrics(batch, lesson_id)
+        return build_eval_metrics(prefix, lesson_id, batch_metrics)
 
     def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> dict:
         """Evaluate a single lesson and log metrics."""
@@ -385,7 +303,7 @@ class RolloutWorker:
             mode="eval",
             rng=rng,
         )
-        stats = _compute_batch_stats(batch, lesson_id)
+        batch_metrics = compute_batch_metrics(batch, lesson_id)
         self._log_prompt_example(lesson_id, batch, step, eval_type=eval_type)
         metrics = self._build_eval_metrics(prefix=f"inference.{eval_type}", lesson_id=lesson_id, batch=batch)
         self.tracker.log(metrics, step=step)
@@ -393,9 +311,9 @@ class RolloutWorker:
         # only update curriculum for full evals
         if eval_type == "eval":
             self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
-                stats.rollout_stats, mode="eval", current_step=step
+                batch_metrics.rollout_stats, mode="eval", current_step=step
             )
-        return stats
+        return batch_metrics
 
     def _evaluate_curriculum(self, rng, step: int) -> dict:
         """Evaluate all lessons and update the curriculum actor."""
@@ -471,9 +389,9 @@ class RolloutWorker:
             if rollout_batch is None:
                 continue
 
-            stats = _compute_batch_stats(rollout_batch, lesson_id)
+            batch_metrics = compute_batch_metrics(rollout_batch, lesson_id)
             self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
-                stats.rollout_stats, mode="training", current_step=step
+                batch_metrics.rollout_stats, mode="training", current_step=step
             )
             eval_metrics = self._build_eval_metrics(prefix="rollout", lesson_id=lesson_id, batch=rollout_batch)
 
@@ -495,13 +413,9 @@ class RolloutWorker:
 
 class RolloutManager:
     """Lightweight rollout manager for testing and debugging.
-
-    Provides synchronous rollout generation without requiring:
-    - JAX device mesh setup
-    - Background InferenceServer threads
-    - Arrow Flight weight transfer
-    - Ray curriculum actors
-    - Rollout storage backends
+    
+    This is a backward-compatibility wrapper around RolloutContext.
+    For new code, prefer using RolloutContext directly.
 
     Example:
         # Simple test without infrastructure
@@ -538,10 +452,14 @@ class RolloutManager:
         self.env = env
         self.tokenizer = tokenizer
         self.inference_ctx = inference_ctx
-        self.seed = seed
-        self.worker_id = worker_id or f"{socket.gethostname()}_{os.getpid()}"
-        self.rng = jrandom.PRNGKey(seed)
-        self._weight_step = 0
+        
+        # Create underlying context
+        self._context = RolloutContext(
+            tokenizer=tokenizer,
+            curriculum_config=None,
+            seed=seed,
+            worker_id=worker_id,
+        )
 
     def sample_rollout_batch(
         self,
@@ -553,8 +471,6 @@ class RolloutManager:
     ) -> tuple[RolloutBatch | None, dict | None]:
         """Sample a batch of rollouts synchronously.
 
-        This mirrors RolloutWorker._sample_batch() but without infrastructure.
-
         Args:
             n_examples: Number of examples to sample
             n_generations: Number of generations per example
@@ -565,48 +481,12 @@ class RolloutManager:
         Returns:
             Tuple of (rollout_batch, metrics) or (None, None) if no rollouts
         """
-        # Split RNG
-        self.rng, sample_rng = jrandom.split(self.rng)
-
-        # Sample from environment
-        rollout_groups, metrics = self.env.sample(
+        return self._context.sample_rollouts(
             inference_ctx=self.inference_ctx,
+            env_or_lesson_id=self.env,
             n_examples=n_examples,
             n_generations=n_generations,
             temperature=temperature,
-            prng_key=sample_rng,
             mode=mode,
-        )
-
-        if len(rollout_groups) == 0:
-            logger.warning("No valid rollouts generated")
-            return None, None
-
-        # Use provided weight_step or internal counter
-        if weight_step is None:
-            weight_step = self._weight_step
-            self._weight_step += 1
-
-        # Create metadata
-        batch_metadata = RolloutMetadata(
-            worker_id=self.worker_id,
-            timestamp=time.time(),
             weight_step=weight_step,
         )
-
-        # Attach metadata to rollouts
-        rollout_groups_with_metadata = []
-        for group in rollout_groups:
-            rollouts_with_metadata = []
-            for rollout in group.rollouts:
-                rollout_with_meta = eqx.tree_at(lambda r: r.metadata, rollout, batch_metadata)
-                rollouts_with_metadata.append(rollout_with_meta)
-
-            rollout_groups_with_metadata.append(RolloutGroup(rollouts=rollouts_with_metadata))
-
-        rollout_batch = RolloutBatch(
-            groups=rollout_groups_with_metadata,
-            metadata=batch_metadata,
-        )
-
-        return rollout_batch, metrics
