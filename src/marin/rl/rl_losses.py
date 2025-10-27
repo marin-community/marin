@@ -47,6 +47,23 @@ class RLLossModule(Protocol):
         ...
 
 
+def compute_metadata_metrics(
+    current_logprobs: jax.Array,
+    policy_logprobs_array: jax.Array,
+    loss_weights_array: jax.Array,
+    loss_masks_array: jax.Array,
+) -> dict[str, jax.Array]:
+    """Compute metadata metrics for the loss function."""
+    return {
+        "max_ratio_difference": jnp.max((current_logprobs - policy_logprobs_array) * loss_masks_array),
+        "mean_ratio_difference": (
+            jnp.sum((current_logprobs - policy_logprobs_array) * loss_masks_array) / jnp.sum(loss_masks_array)
+        ),
+        "max_advantages": jnp.max(loss_weights_array),
+        "mean_advantages": jnp.mean(loss_weights_array),
+    }
+
+
 def rloo_loss_with_importance_sampling(
     model: LmHeadModel,
     reference_model: LmHeadModel,
@@ -112,7 +129,7 @@ def rloo_loss_with_importance_sampling(
     current_logprobs = jnp.concatenate([jnp.zeros((batch_size, 1)), current_logprobs_shifted], axis=1)
     reference_logprobs_array = jnp.concatenate([jnp.zeros((batch_size, 1)), reference_logprobs_shifted], axis=1)
 
-    jax.debug.print("advantages sum: {loss_weights_array_sum}", loss_weights_array_sum=loss_weights_array.sum())
+    # jax.debug.print("advantages sum: {loss_weights_array_sum}", loss_weights_array_sum=loss_weights_array.sum())
     # jax.debug.print("predicted_logprobs_array {current_logprobs}", current_logprobs=current_logprobs)
     # jax.debug.print(
     #     "reference_logprobs_array {reference_logprobs_array}", reference_logprobs_array=reference_logprobs_array
@@ -132,6 +149,10 @@ def rloo_loss_with_importance_sampling(
     # off of policy that we're not learning anything when we clip.
     clipped_ratio = jnp.clip(ratio, min=1.0 - clip_epsilon, max=1.0 + clip_epsilon)
 
+    # Compute fraction of ratios that were clipped
+    is_clipped = jnp.logical_or(ratio > 1.0 + clip_epsilon, ratio < 1.0 - clip_epsilon)
+    clip_fraction = jnp.sum(is_clipped * loss_masks_array) / jnp.sum(loss_masks_array)
+
     # RLOO loss with importance sampling
     # batch["loss_weights"] contains RLOO advantages: r_i - mean(r_j for j≠i)
     weighted_loss = -clipped_ratio * loss_weights_array * loss_masks_array
@@ -144,12 +165,15 @@ def rloo_loss_with_importance_sampling(
     kl_loss = kl_coef * jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
 
     loss = reinforce_loss + kl_loss
+
     return loss, {
         "ratio_mean": jnp.mean(ratio),
         "clipped_ratio_mean": jnp.mean(clipped_ratio),
+        "clip_fraction": clip_fraction,
         "reinforce_loss": reinforce_loss,
         "kl_loss": kl_loss,
         "kl_penalty": jnp.mean(kl_penalty),
+        **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
     }
 
 

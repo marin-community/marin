@@ -63,6 +63,17 @@ def levanter_llama_to_vllm_mapping():
     }
 
 
+def levanter_qwen_to_vllm_mapping():
+    mapping = levanter_llama_to_vllm_mapping()
+    mapping.update(
+        {
+            "model.layers.*.self_attn.q_norm": ("model.layers.*.self_attn.q_norm.scale", (None,)),
+            "model.layers.*.self_attn.k_norm": ("model.layers.*.self_attn.k_norm.scale", (None,)),
+        }
+    )
+    return mapping
+
+
 llama_transpose_keys = {
     "lm_head": (1, 0),
     "gate_proj": (1, 0),
@@ -77,11 +88,15 @@ llama_transpose_keys = {
 MODEL_MAPPINGS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
     "meta-llama/Llama-3.2-1B-Instruct": levanter_llama_to_vllm_mapping(),
     "meta-llama/Llama-3.2-3B-Instruct": levanter_llama_to_vllm_mapping(),
+    "Qwen/Qwen3-0.6B": levanter_qwen_to_vllm_mapping(),
+    "Qwen/Qwen3-1.7B": levanter_qwen_to_vllm_mapping(),
 }
 
 MODEL_TRANSPOSE_KEYS: dict[str, tuple[int, ...]] = {
     "meta-llama/Llama-3.2-1B-Instruct": llama_transpose_keys,
     "meta-llama/Llama-3.2-3B-Instruct": llama_transpose_keys,
+    "Qwen/Qwen3-0.6B": llama_transpose_keys,
+    "Qwen/Qwen3-1.7B": llama_transpose_keys,
 }
 
 
@@ -108,6 +123,10 @@ def levanter_to_nnx_state(levanter_model):
             if part not in current:
                 current[part] = {}
             current = current[part]
+
+        # Levanter sometimes resizes the embedding layer to fit the tokenizer vocab size
+        # but we don't want to do that
+        # if "embed_tokens" in split_key_without_weight:
 
         # for q, k, v projections, we need to pad the 2nd dimension to next multiple of 128
         # vLLM expects the weights to be padded to the next multiple of 128. I assume this is

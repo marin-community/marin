@@ -21,7 +21,11 @@ from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 
 logger = logging.getLogger(__name__)
 
+# Disable multiprocessing to have direct access to the model weights
 os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+# Init vLLM model with random weights to speed up bootstrap time, because
+# model weights are synced from trainer later on
+os.environ["JAX_RANDOM_WEIGHTS"] = "True"
 
 
 class vLLMInferenceContext(BaseInferenceContext):
@@ -70,13 +74,11 @@ class vLLMInferenceContext(BaseInferenceContext):
         stop: list[str] | None = None,
     ) -> list[RequestOutput]:
         """Batch completions from the inference server."""
-        # TODO(chris): allow the override of sampling params for each lessonconfig
         sampling_params = SamplingParams(
             temperature=temperature,
             n=n,
+            # NOTE(chris): We allow the override to take precedence over the default sampling params.
             max_tokens=max_tokens or self.sampling_params.max_tokens,
-            # NOTE(chris): This is a bandaid patch because envs don't usually pass in the max token, so we need
-            # to do this or else VLLM will fail.
             stop=stop or self.sampling_params.stop,
             logprobs=1,
         )

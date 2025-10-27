@@ -33,9 +33,8 @@ from marin.rl.math_utils import (
     normalize_answer,
     validate_format,
 )
-from marin.rl.inference_ctx import InferenceContext
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import Rollout, RolloutGroup
-
 from .base import MarinEnv
 
 logger = logging.getLogger(__name__)
@@ -191,12 +190,14 @@ class MathEnv(MarinEnv):
     # ------------------------------------------------------------------
     def sample(
         self,
-        inference_ctx: InferenceContext,
+        inference_ctx: BaseInferenceContext,
         n_examples: int,
         n_generations: int,
         temperature: float,
         prng_key,
         mode: str = "train",
+        max_tokens: int | None = None,
+        stop: list[str] | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample prompts, evaluate responses, and create rollouts."""
 
@@ -214,7 +215,9 @@ class MathEnv(MarinEnv):
         sampled_examples = [available_examples[int(idx)] for idx in indices]
 
         prompts = [example.processed_prompt for example in sampled_examples]
-        completions = inference_ctx.batch_completions(prompts=prompts, temperature=temperature, n=n_generations)
+        completions = inference_ctx.batch_completions(
+            prompts=prompts, temperature=temperature, n=n_generations, max_tokens=max_tokens, stop=stop
+        )
 
         rollout_groups: list[RolloutGroup] = []
         total_choices = 0
@@ -226,8 +229,10 @@ class MathEnv(MarinEnv):
         for example, completion in zip(sampled_examples, completions, strict=True):
             group_rollouts: list[Rollout] = []
 
-            for choice in completion.choices:
-                response_text = choice.message.content or ""
+            choices = self.get_choices_from_completion(completion)
+
+            for choice in choices:
+                response_text = self.get_response_text_from_choice(choice)
 
                 (
                     reward,
@@ -243,6 +248,9 @@ class MathEnv(MarinEnv):
                     env_example_id=example.example_id,
                     reward=token_reward,
                 )
+
+                rollout = self.maybe_edit_prompt_tokens(rollout, completion)
+
                 group_rollouts.append(rollout)
 
                 total_choices += 1

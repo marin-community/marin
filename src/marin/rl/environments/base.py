@@ -16,8 +16,11 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-
-from marin.rl.types import RolloutGroup
+from openai.types.chat.chat_completion import Choice, ChatCompletion
+from vllm.outputs import RequestOutput
+import jax.numpy as jnp
+from jax import replace
+from marin.rl.types import Rollout, RolloutGroup
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 
 logger = logging.getLogger(__name__)
@@ -30,6 +33,34 @@ class MarinEnv(ABC):
     Subclasses must implement sample() method.
     """
 
+    @staticmethod
+    def get_choices_from_completion(completion: ChatCompletion | RequestOutput) -> list[Choice] | list[RequestOutput]:
+        if isinstance(completion, ChatCompletion):
+            return completion.choices
+        elif isinstance(completion, RequestOutput):
+            return completion.outputs
+        else:
+            raise ValueError(f"Invalid completion type: {type(completion)}")
+
+    @staticmethod
+    def get_response_text_from_choice(choice: Choice | RequestOutput) -> str:
+        if isinstance(choice, Choice):
+            return choice.message.content
+        elif isinstance(choice, RequestOutput):
+            return choice.text
+        else:
+            raise ValueError(f"Invalid choice type: {type(choice)}")
+
+    @staticmethod
+    def maybe_edit_prompt_tokens(rollout: Rollout, completion: ChatCompletion | RequestOutput) -> Rollout:
+        is_vllm_completion = isinstance(completion, RequestOutput)
+        if is_vllm_completion:
+            rollout = replace(rollout, prompt_tokens=jnp.array(completion.prompt_token_ids, dtype=jnp.int32))
+            assert rollout.prompt_tokens.shape[0] == len(
+                completion.prompt_token_ids
+            ), f"Prompt token IDs mismatch: {rollout.prompt_tokens} != {completion.prompt_token_ids}"
+        return rollout
+
     @abstractmethod
     def sample(
         self,
@@ -39,6 +70,8 @@ class MarinEnv(ABC):
         temperature: float,
         prng_key,
         mode: str = "train",
+        max_tokens: int | None = None,
+        stop: list[str] | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample examples, generate responses, and create rollouts.
 
@@ -49,6 +82,8 @@ class MarinEnv(ABC):
             temperature: Sampling temperature for generation
             prng_key: JAX random key for sampling
             mode: "train" or "eval" - which dataset to sample from
+            max_tokens: Maximum number of tokens to generate
+            stop: Stop tokens to use for generation
 
         Returns:
             Tuple of (rollout_groups, metrics)
