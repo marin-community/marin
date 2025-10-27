@@ -48,7 +48,7 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
         raise ValueError(f"No write access to fsspec path: {output_path} ({e})") from e
 
 
-@ray.remote
+@ray.remote(max_retries=5, retry_exceptions=True)
 def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: str, fsspec_file_path: str):
     """Ray task to stream a file from HfFileSystem to another fsspec path."""
     target_fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
@@ -56,21 +56,25 @@ def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: s
     chunk_size = 16 * 1024 * 1024
     max_retries = 10
 
-    # Retry when there is an error, such as hf rate limit
-    for attempt in range(max_retries):
-        try:
-            with hf_fs.open(file_path, "rb") as src_file:
-                target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
-                with target_fs.open(fsspec_file_path, "wb") as dest_file:
-                    while chunk := src_file.read(chunk_size):
-                        dest_file.write(chunk)
-            logger.info(f"Streamed {file_path} successfully to {fsspec_file_path}")
-            return
-        except Exception as e:
-            wait_time = (2**attempt) + random.uniform(0, 5)
-            logger.warning(f"Attempt {attempt+1} failed for {file_path}: {e}, retrying in {wait_time:.1f}s")
-            time.sleep(wait_time)
-    raise RuntimeError(f"Failed to download {file_path} after {max_retries} attempts")
+    # Tuning knobs (env-overridable)
+    timeout = int(os.environ.get("HF_TIMEOUT_SEC", "600"))
+    block_size_mb = int(os.environ.get("HF_BLOCK_SIZE_MB", "32"))
+    block_size = block_size_mb * 1024 * 1024
+
+    try:
+        # Use larger block sizes to reduce HTTP range request count
+        with hf_fs.open(file_path, "rb", timeout=timeout, block_size=block_size) as src_file:
+            target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
+            with target_fs.open(fsspec_file_path, "wb") as dest_file:
+                # Stream in sizable chunks (independent from fsspec block_size)
+                chunk_size_mb = int(os.environ.get("HF_CHUNK_SIZE_MB", str(max(8, block_size_mb))))
+                chunk_size = chunk_size_mb * 1024 * 1024
+                while chunk := src_file.read(chunk_size):
+                    dest_file.write(chunk)
+        logging.info(f"Streamed {file_path} to fsspec path: {fsspec_file_path}")
+    except Exception as e:
+        logging.exception(f"Error processing {file_path}: {e}")
+        raise
 
 
 def download_hf(cfg: DownloadConfig) -> None:
@@ -122,7 +126,15 @@ def download_hf(cfg: DownloadConfig) -> None:
     logger.info(f"Total number of files to process: {total_files}")
     pbar = tqdm_logging(total=total_files)
 
-    for ref in simple_backpressure(stream_file_to_fsspec, iter(task_generator), max_in_flight=16, fetch_local=True):
+    # Limit per-dataset inflight to avoid HF 429; overridable via env
+    max_in_flight = int(os.environ.get("MARIN_HF_MAX_IN_FLIGHT", "8"))
+
+    for ref in simple_backpressure(
+        stream_file_to_fsspec,
+        iter(task_generator),
+        max_in_flight=max_in_flight,
+        fetch_local=True,
+    ):
         try:
             ray.get(ref)
             pbar.update(1)
