@@ -46,9 +46,11 @@ We break the run into four phases:
 | Phase | Steps      | Tokens (T) | Key Changes                                        | Notes                                            |
 |-------|------------|------------|----------------------------------------------------|--------------------------------------------------|
 | 1     | 0 → 80,000 | 2.679      | Baseline Llama 32B                                 | Very spiky loss; attempted mitigations failed    |
-| 2     | —          | —          | Recovery attempts (necromancy, alt optimizers)     | More failed mitigations; structural instability suspected   |
+| 2     | 80,000 → ≈82,000† | ≈0.02†   | Recovery attempts (necromancy, alt optimizers)     | Diagnostic restarts; suspected structural instability   |
 | 3     | 80,000 → 160,000 | 2.684      | Switch to Qwen3 32B (QK-Norm)                      | Loss stabilized; training recovered               |
 | 4     | 160,000 → 192,000 | 1.074      | Mantis cooldown (Feistel shuffle, better math mix) | Strong results; resolved anomalies from Bison    |
+
+† Approximate; Phase 2 comprised short diagnostic bursts that were later discarded, so they are excluded from cumulative token totals.
 
 
 ## Baseline Configuration
@@ -160,11 +162,11 @@ For ~70k steps training behaved as expected though we had many more loss spikes 
 We got a lot of feedback from the community on these spikes, with some folks telling us we were doomed,
 others a bit more hedgey, and some folks telling us they looked acceptable. (Yay for open development!)
 
-![a very spiky loss curve!](32b-spiky-loss.png)
+![Training loss curve with frequent spikes during the Phase 1 baseline run](32b-spiky-loss.png)
 
 Ideally, there wouldn't be spikes of course. But many of the people we talked to (and our own experience) suggested that if the model recovered quickly and it didn't really change the trajectory, it was fine.
 
-![Comparison of eval losses for our 32B versus other runs](32b-loss-comparisons.png)
+![Evaluation loss comparison between Marin 32B and peer runs during Phase 1](32b-loss-comparisons.png)
 
 Nevertheless, we were a bit worried, so we added a bunch of instrumentation and a few interventions.
 
@@ -178,18 +180,20 @@ Therefore, at around 56.4K steps, we tightened the max grad norm to 0.2 to preve
 #### 2. Clip Update Norm
 When that didn't work, we added a "clip update norm" filter at around 72.2K steps. Like grad norm spikes, update norm spikes always preceded grad norm spikes, and we thought these would be a more direct way of preventing the model from taking too large of a step. This filter computes a rolling average and standard deviation of the optimizer update norms (i.e. after Adam's scaling is applied), and clips updates that exceed the average by a certain threshold (2 stddevs in our case). We hoped that this would reduce the impact of outlier updates that could lead to loss spikes. Ultimately, it also didn't seem to prevent loss spikes, but it may have reduced their severity. We inadvertently turned this off for a few thousand steps around 74K–80K, which may have contributed to the more significant instability we saw then.
 
-![plot showing loss spike preceded by update norm spike](32b-update-spike-precede-loss-spike.png)
+![Update-norm spikes preceding loss spikes in Phase 1 diagnostics](32b-update-spike-precede-loss-spike.png)
 
 #### 3. Skipping Bad Steps
 Based on a tip from Luca Soldaini, we [added a "skip bad steps" flag](https://github.com/stanford-crfm/levanter/blob/9fde0781a1737e088535c392cf239aba5e1143e2/src/levanter/optim/skipstep.py#L65) (modeled on [the version in OLMo](https://github.com/allenai/OLMo-core/blob/main/src/olmo_core/optim/skip_step_optimizer.py)) that skips parameter updates when the update norm exceeds a rolling average by a threshold (2 stddevs in our case).
 
 > Tokens trained: ≈2.679T tokens (80,000 steps; 4096 seq len; batch schedule 0–18,499: 8192, 18,500–21,009: 7680, 21,010–79,999: 8192).
 
+**What we learned:** Gradient clipping and step-skipping heuristics softened the spikes but never removed them; instrumentation alone could not replace an architectural fix at this scale.
+
 ### Phase 2: Recovery Without Architecture Changes
 
 Unfortunately, at 80k steps we began to see spikes that were unavoidable even with all the update clipping that we had added. This launched a bit of a fire-drill to see how and whether we could salvage this run!
 
-![plot showing the bad loss spike](32b-bad-spike.png)
+![Phase 2 restart still exhibiting a severe loss spike despite mitigation attempts](32b-bad-spike.png)
 
 We treated the 80k checkpoint as salvageable and attempted to coax the run back while keeping the Llama backbone.
 
@@ -206,16 +210,18 @@ We specifically tried [Muon](https://kellerjordan.github.io/posts/muon/), which 
 
 In [`exp1380_muon32b`](https://github.com/marin-community/marin/issues/1380), we used Muon with a higher effective LR = 2e‑3, but we retained the Adam‑style LR schedule to avoid a full retune.
 
-![muon vs baseline adam around the time of the spike](32b-muon-vs-adam.png)
+![Muon optimizer versus baseline Adam around 80k steps, showing temporary loss relief](32b-muon-vs-adam.png)
 
 Aside: The Muon run was still warming up its Adam params here so the loss was lower. The Muon run technically spiked a little later, which might be worth investigating.
 
 We actually let it keep going a little longer, but it decided to turn into gradient ascents after a while. So we abandoned it.
 We probably need more time to properly tune Muon for this setting.
 
-![Muon looking great but then repeatedly spiking, not recovering, and eventually going to space](32b-muon-can-into-space.png)
+![Muon optimizer run eventually diverging with repeated spikes and loss blow-up](32b-muon-can-into-space.png)
 
 - Tokens trained: Diagnostic restarts only (short runs of a few thousand steps); excluded from cumulative phase totals due to restart to 80k Llama checkpoint for Phase 3.
+
+**What we learned:** Restart tricks and optimizer swaps stabilized gradients briefly but not sustainably, reinforcing that the instability was rooted in the model’s attention stack rather than in optimizer state.
 
 ### Phase 3: Switch to QK-Norm (`exp1395_qwen3_32b`)
 
@@ -229,7 +235,7 @@ It is worth noting that the Llama 3 team seems to have trained much larger model
 
 The switch to QK-norm imposed a one‑time loss penalty, but the training loss recovered in about 10B tokens. What's more, the loss spikes disappeared entirely.
 
-![figure showing the qk norm warm-start's loss catching up to the non-qk model very quickly](qk-recovery.png)
+![QK-Norm warm-start loss recovers to the pre-switch trajectory within roughly 10B tokens](qk-recovery.png)
 
 Warm‑start + rewarm parameters (`exp1395_32b`):
 
@@ -241,6 +247,8 @@ Warm‑start + rewarm parameters (`exp1395_32b`):
 
 
 - Tokens trained: ≈2.684T tokens (80,000 steps from 80k → 160k at 4096 seq len, global batch 8192).
+
+**What we learned:** QK-Norm delivered the headroom we needed. Warm-starting preserved earlier progress while eliminating loss spikes after a short re-warmup.
 
 ### Phase 4: Midtraining Runs
 
@@ -328,7 +336,7 @@ Near 190k steps, training loss phase‑shifted while validation remained stable.
 This is normally observed when we change the underlying training data mix, but in this case we hadn't!
 We had separately begun to wonder whether our pseudo-random shuffle, which finds a co-prime step size across data indices, was leading to a somewhat unlucky shuffle where batches came from correlated data. This phase shift in cooldown increased our confidence this was happening!
 
-![Phase shift late in cooldown. Eval losses are unaffected](32b-shuffle-spike.png)
+![Training loss phase shift during Bison cooldown while evaluation losses remain flat](32b-shuffle-spike.png)
 
 As you can see, this "spike" ended up being a phase shift in training loss that never recovered.
 But, eval losses were unaffected.
@@ -394,15 +402,17 @@ The issue is that if our step size is very small (or very large) and the data is
 
 In Mantis, we switched to a Feistel‑network permutation, another pseudo‑random permutation (PRP) over the index domain. Conceptually, Feistel splits the bit representation into halves and applies several mixing rounds with per‑round keys, yielding a bijection with much better mixing properties than an affine map. Empirically, this resolved the phase shift effect we had seen earlier.
 
-![Improved shuffling removed the phase shift in training loss](32b-feistel-vs-lcg.png)
+![Feistel shuffle removes the cooldown phase shift versus the prior linear permutation](32b-feistel-vs-lcg.png)
 
 In addition, our validation losses looked better across the board (not just code!)
 
-![Mantis' c4_en losses are much lower than Bison's](32b-paloma-c4-en-permutation.png)
+![Mantis cooldown yields lower Paloma c4_en loss curves compared with Bison cooldown](32b-paloma-c4-en-permutation.png)
 
-![Mantis' overall paloma losses look better too!](32b-paloma-average-permutation.png)
+![Overall Paloma average losses improve under Mantis cooldown relative to Bison](32b-paloma-average-permutation.png)
 
 Needless to say, we'll be using Feistel going forward!
+
+**What we learned:** Shuffle quality matters even given perfect per-domain shuffling.
 
 ## Base Model Results
 
