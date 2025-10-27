@@ -33,8 +33,9 @@ from marin.rl.math_utils import (
     normalize_answer,
     validate_format,
 )
-from marin.rl.inference_ctx import InferenceContext
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import Rollout, RolloutGroup
+from openai.types.chat import ChatCompletion
 
 from .base import MarinEnv
 
@@ -191,7 +192,7 @@ class MathEnv(MarinEnv):
     # ------------------------------------------------------------------
     def sample(
         self,
-        inference_ctx: InferenceContext,
+        inference_ctx: BaseInferenceContext,
         n_examples: int,
         n_generations: int,
         temperature: float,
@@ -226,8 +227,16 @@ class MathEnv(MarinEnv):
         for example, completion in zip(sampled_examples, completions, strict=True):
             group_rollouts: list[Rollout] = []
 
-            for choice in completion.choices:
-                response_text = choice.message.content or ""
+            if isinstance(completion, ChatCompletion):
+                choices = completion.choices
+            else:
+                choices = completion.outputs
+
+            for choice in choices:
+                if isinstance(completion, ChatCompletion):
+                    response_text = choice.message.content or ""
+                else:
+                    response_text = choice.text
 
                 (
                     reward,
