@@ -108,8 +108,9 @@ def ray_tpu_cluster(tmp_path_factory, worker_id):
     }
     print("Starting on worker_id", worker_id, "with init_args", init_args)
     if os.getenv("START_RAY_TPU_CLUSTER") == "true":
+        print("Starting TPU Ray cluster with resources TPU:8, TPU-v6e-head:1")
         ctx = ray.init(
-            resources={"TPU": 8, "TPU-v6e-8-head": 1, "head_node": 1},
+            resources={"TPU": 8, "TPU-v6e-head": 1, "head_node": 1},
             num_cpus=120,
             **init_args,
         )
@@ -128,7 +129,8 @@ def ray_tpu_cluster(tmp_path_factory, worker_id):
 
     # update environment variable to pass Ray address to subprocesses
     os.environ["RAY_ADDRESS"] = ctx.address_info["address"]
-    os.environ["RAY_DASHBOARD_URL"] = ctx.address_info["webui_url"]
+    if ctx.address_info["webui_url"] is not None:
+        os.environ["RAY_DASHBOARD_URL"] = ctx.address_info["webui_url"]
     os.environ["RAY_API_SERVER_ADDRESS"] = ctx.address_info["gcs_address"]
     os.environ["RAY_LOCAL_CLUSTER"] = "1"
 
@@ -140,5 +142,6 @@ def ray_tpu_cluster(tmp_path_factory, worker_id):
     yield
 
     # cleanup temp directory
-    ray.shutdown()
+    # Use _exiting_interpreter=True to force shutdown even if workers are hung
+    ray.shutdown(_exiting_interpreter=True)
     shutil.rmtree(tmp_path, ignore_errors=True)
