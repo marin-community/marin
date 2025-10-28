@@ -13,9 +13,10 @@
 # limitations under the License.
 
 from .levanter import InferenceContext
-from .vllm import vLLMInferenceContext
+from .vllm import vLLMInferenceContext, vLLMInferenceContextConfig
 
 __all__ = [
     "InferenceContext",
     "vLLMInferenceContext",
+    "vLLMInferenceContextConfig",
 ]

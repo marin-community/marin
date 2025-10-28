@@ -14,12 +14,9 @@
 
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
-from openai.types.chat.chat_completion import Choice, ChatCompletion
-from vllm.outputs import RequestOutput, CompletionOutput
-import jax.numpy as jnp
-from marin.rl.types import Rollout, RolloutGroup
+from marin.rl.types import RolloutGroup
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 
 logger = logging.getLogger(__name__)
@@ -32,33 +29,33 @@ class MarinEnv(ABC):
     Subclasses must implement sample() method.
     """
 
-    @staticmethod
-    def get_choices_from_completion(completion: ChatCompletion | RequestOutput) -> list[Choice] | list[RequestOutput]:
-        if isinstance(completion, ChatCompletion):
-            return completion.choices
-        elif isinstance(completion, RequestOutput):
-            return completion.outputs
-        else:
-            raise ValueError(f"Invalid completion type: {type(completion)}")
+    # @staticmethod
+    # def get_choices_from_completion(completion: ChatCompletion | RequestOutput) -> list[Choice] | list[RequestOutput]:
+    #     if isinstance(completion, ChatCompletion):
+    #         return completion.choices
+    #     elif isinstance(completion, RequestOutput):
+    #         return completion.outputs
+    #     else:
+    #         raise ValueError(f"Invalid completion type: {type(completion)}")
 
-    @staticmethod
-    def get_response_text_from_choice(choice: Choice | CompletionOutput) -> str:
-        if isinstance(choice, Choice):
-            return choice.message.content
-        elif isinstance(choice, CompletionOutput):
-            return choice.text
-        else:
-            raise ValueError(f"Invalid choice type: {type(choice)}")
+    # @staticmethod
+    # def get_response_text_from_choice(choice: Choice | CompletionOutput) -> str:
+    #     if isinstance(choice, Choice):
+    #         return choice.message.content
+    #     elif isinstance(choice, CompletionOutput):
+    #         return choice.text
+    #     else:
+    #         raise ValueError(f"Invalid choice type: {type(choice)}")
 
-    @staticmethod
-    def maybe_edit_prompt_tokens(rollout: Rollout, completion: ChatCompletion | RequestOutput) -> Rollout:
-        is_vllm_completion = isinstance(completion, RequestOutput)
-        if is_vllm_completion:
-            rollout = replace(rollout, prompt_tokens=jnp.array(completion.prompt_token_ids, dtype=jnp.int32))
-            assert rollout.prompt_tokens.shape[0] == len(
-                completion.prompt_token_ids
-            ), f"Prompt token IDs mismatch: {rollout.prompt_tokens} != {completion.prompt_token_ids}"
-        return rollout
+    # @staticmethod
+    # def maybe_edit_prompt_tokens(rollout: Rollout, completion: ChatCompletion | RequestOutput) -> Rollout:
+    #     is_vllm_completion = isinstance(completion, RequestOutput)
+    #     if is_vllm_completion:
+    #         rollout = replace(rollout, prompt_tokens=jnp.array(completion.prompt_token_ids, dtype=jnp.int32))
+    #         assert rollout.prompt_tokens.shape[0] == len(
+    #             completion.prompt_token_ids
+    #         ), f"Prompt token IDs mismatch: {rollout.prompt_tokens} != {completion.prompt_token_ids}"
+    #     return rollout
 
     @abstractmethod
     def sample(

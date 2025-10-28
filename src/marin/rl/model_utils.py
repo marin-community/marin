@@ -92,8 +92,8 @@ def load_model_from_checkpoint(
                 axis_mapping=axis_mapping,
                 dtype=trainer_config.mp.compute_dtype,
                 # Don't resize because the rollout worker does not resize the vocab. This means that
-                # when doing weight transfer, if we resize then the embedding layer will not match
-                # between the trainer's model and the rollout worker's model.
+                # when doing weight transfer, if we resize then the embedding weight matrix's shape
+                # will not match between the trainer's model and the rollout worker's model.
                 resize_vocab_to_match_tokenizer=False,
             )
         return model

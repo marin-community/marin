@@ -26,22 +26,22 @@ from typing import Literal
 import uuid
 from dataclasses import dataclass, field
 
+from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
 import ray
-from levanter.inference.openai import InferenceServerConfig
+from levanter.inference.openai import InferenceServerConfig, InferenceEngineConfig
 from levanter.infra.ray_tpu import run_on_pod_ray
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import TrainerConfig
 from ray.runtime_env import RuntimeEnv
 from transformers import AutoTokenizer, PreTrainedTokenizer
-from vllm import SamplingParams
 
 from marin.resources import TpuPodConfig
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
-from marin.rl.rollout_worker import RolloutWorker, BaseRolloutWorkerConfig, VLLMRolloutWorkerConfig
+from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 from marin.training.training import _add_run_env_variables
@@ -108,14 +108,8 @@ class RLJobConfig:
     train_params: TrainParams
     curriculum: CurriculumConfig
     tokenizer: str | PreTrainedTokenizer
-    vllm_model_name: str
-    vllm_max_model_len: int
-    vllm_tensor_parallel_size: int
-    gpu_memory_utilization: float
-    # Sampling configuration
-    eval_sampling_params: SamplingParams
 
-    inference_type: Literal["levanter", "vllm"] = "vllm"
+    inference_type: Literal["levanter", "vllm"]
 
     seed: int = 42
 
@@ -136,7 +130,8 @@ class RLJobConfig:
     """Configuration for TPU pod deployment. If None, uses simple Ray actors."""
 
     # Inference server (auto-configured by default)
-    inference_server_config: InferenceServerConfig | None = None  # type: ignore
+    inference_config: InferenceServerConfig | vLLMInferenceContextConfig
+    """Configuration for inference context."""
 
     # Logging
     run_id: str = field(default_factory=lambda: f"rl-{uuid.uuid4().hex[:8]}")
@@ -228,7 +223,7 @@ class RLJob:
 
         return ray.get(inference_tasks + train_tasks)
 
-    def to_worker_configs(self) -> tuple[TrainWorkerConfig, BaseRolloutWorkerConfig]:
+    def to_worker_configs(self) -> tuple[TrainWorkerConfig, RolloutWorkerConfig]:
         """Export worker configurations for inspection/testing.
 
         Returns:
@@ -247,28 +242,28 @@ class RLJob:
         assert max_tokens > 0, "Max tokens must be positive across curriculum lessons."
 
         # Create inference server config if not provided
-        # if self.config.inference_server_config is None and self.config.inference_type == "levanter":
-        #     inference_server_config = InferenceServerConfig(
-        #         trainer=dataclasses.replace(
-        #             self.config.trainer,
-        #             tensor_parallel_axes=["mlp", "kv_head"],
-        #         ),
-        #         tokenizer=tokenizer,
-        #         temperature=self.config.eval_sampling_params.temperature,
-        #         service=InferenceEngineConfig(
-        #             max_seqs=max_seqs,
-        #             max_seq_len=max_tokens,
-        #             page_size=128,
-        #             hbm_utilization=0.1,
-        #             enable_logprobs=True,
-        #         ),
-        #         port=0,
-        #     )
-        #     logger.info(
-        #         "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_tokens=%d", max_seqs, max_tokens
-        #     )
-        # else:
-        #     inference_server_config = self.config.inference_server_config
+        if self.config.inference_server_config is None and self.config.inference_type == "levanter":
+            inference_config = InferenceServerConfig(
+                trainer=dataclasses.replace(
+                    self.config.trainer,
+                    tensor_parallel_axes=["mlp", "kv_head"],
+                ),
+                tokenizer=tokenizer,
+                temperature=1.0,
+                service=InferenceEngineConfig(
+                    max_seqs=max_seqs,
+                    max_seq_len=max_tokens,
+                    page_size=128,
+                    hbm_utilization=0.1,
+                    enable_logprobs=True,
+                ),
+                port=0,
+            )
+            logger.info(
+                "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_tokens=%d", max_seqs, max_tokens
+            )
+        else:
+            inference_config = self.config.inference_config
 
         # Create train worker config
         train_worker_config = TrainWorkerConfig(
@@ -287,9 +282,8 @@ class RLJob:
         )
 
         # Create rollout worker config
-        rollout_worker_config = VLLMRolloutWorkerConfig(
+        rollout_worker_config = RolloutWorkerConfig(
             trainer=self.config.trainer,
-            # inference_server_config=inference_server_config,
             model=self.config.model,
             curriculum_config=self.config.curriculum,
             tokenizer=tokenizer,
@@ -301,11 +295,7 @@ class RLJob:
             run_id=self.config.run_id,
             seed=self.config.seed + 1000,
             inference_type=self.config.inference_type,
-            vllm_model_name=self.config.vllm_model_name,
-            vllm_max_model_len=self.config.vllm_max_model_len,
-            vllm_tensor_parallel_size=self.config.vllm_tensor_parallel_size,
-            gpu_memory_utilization=self.config.gpu_memory_utilization,
-            sampling_params=self.config.eval_sampling_params,
+            inference_config=inference_config,
         )
 
         return train_worker_config, rollout_worker_config

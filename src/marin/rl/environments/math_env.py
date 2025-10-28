@@ -229,17 +229,15 @@ class MathEnv(MarinEnv):
         for example, completion in zip(sampled_examples, completions, strict=True):
             group_rollouts: list[Rollout] = []
 
-            choices = self.get_choices_from_completion(completion)
-
-            for choice in choices:
-                response_text = self.get_response_text_from_choice(choice)
-
+            for choice in completion.choices:
                 (
                     reward,
                     fmt_score,
                     correct_score,
                     token_reward,
-                ) = self._score_choice(example=example, response_text=response_text, tokenizer=inference_ctx.tokenizer)
+                ) = self._score_choice(
+                    example=example, response_text=choice.message.content, tokenizer=inference_ctx.tokenizer
+                )
 
                 rollout = inference_ctx.create_rollout_from_choice(
                     prompt=example.processed_prompt,

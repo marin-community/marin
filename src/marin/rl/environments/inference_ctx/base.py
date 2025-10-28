@@ -43,7 +43,7 @@ class BaseInferenceContext:
         """Batch completions from the inference server."""
         raise NotImplementedError
 
-    def tokenize_prompt(self, prompt: str) -> np.ndarray:
+    def tokenize_prompt(self, prompt: str, choice: Choice) -> np.ndarray:
         """Tokenize with chat template matching server behavior."""
         messages = [{"role": "user", "content": prompt}]
         try:
@@ -107,7 +107,7 @@ class BaseInferenceContext:
     ) -> Rollout:
         """Construct Rollout from a choice with validation."""
 
-        prompt_tokens = self.tokenize_prompt(prompt)
+        prompt_tokens = self.tokenize_prompt(prompt, choice)
         # print(f"prompt_tokens: {prompt_tokens}")
         # print(f"prompt token ids: {choice.prompt_token_ids}")
 

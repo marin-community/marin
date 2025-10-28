@@ -126,10 +126,6 @@ def levanter_to_nnx_state(levanter_model):
                 current[part] = {}
             current = current[part]
 
-        # Levanter sometimes resizes the embedding layer to fit the tokenizer vocab size
-        # but we don't want to do that
-        # if "embed_tokens" in split_key_without_weight:
-
         # for q, k, v projections, we need to pad the 2nd dimension to next multiple of 128
         # vLLM expects the weights to be padded to the next multiple of 128. I assume this is
         # because they want to use Pallas kernels which have this requirement.

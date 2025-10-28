@@ -326,12 +326,10 @@ class MockEnv(MarinEnv):
 
         for prompt, completion in zip(prompts, completions, strict=True):
             group = []
-            choices = self.get_choices_from_completion(completion)
 
-            for choice in choices:
+            for choice in completion.choices:
                 true_answer = sampled_examples[prompt]
-                response_text = self.get_response_text_from_choice(choice)
-                reward = self.task.compute_reward(true_answer, response_text, tokenizer=inference_ctx.tokenizer)
+                reward = self.task.compute_reward(true_answer, choice.message.content, tokenizer=inference_ctx.tokenizer)
 
                 rollout = inference_ctx.create_rollout_from_choice(
                     prompt, choice, env_name=f"mock_env:{self.task_type}", env_example_id=hash(prompt), reward=reward

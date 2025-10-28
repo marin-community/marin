@@ -40,6 +40,7 @@ from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
+from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
 from vllm import SamplingParams
 
 logger = logging.getLogger(__name__)
@@ -251,16 +252,19 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         ),
         curriculum=curriculum_config,
         tokenizer=experiment_config.tokenizer,
-        vllm_model_name=experiment_config.name,
-        vllm_max_model_len=4096,
-        vllm_tensor_parallel_size=8,
-        gpu_memory_utilization=0.90,
-        eval_sampling_params=SamplingParams(
-            temperature=1.0,
-            n=8,
-            max_tokens=1024,
-            stop=None,
-            logprobs=1,
+        inference_type="vllm",
+        inference_config=vLLMInferenceContextConfig(
+            model_name=experiment_config.name,
+            max_model_len=4096,
+            tensor_parallel_size=8,
+            gpu_memory_utilization=0.90,
+            sampling_params=SamplingParams(
+                temperature=1.0,
+                n=8,
+                max_tokens=1024,
+                stop=None,
+                logprobs=1,
+            ),
         ),
         initial_checkpoint=experiment_config.checkpoint,
         rollout_storage=rollout_storage,

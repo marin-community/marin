@@ -42,13 +42,12 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
 from transformers import PreTrainedTokenizer
 from typing import Literal
-from vllm import SamplingParams
 from haliax.partitioning import ResourceAxis
 
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
-from marin.rl.environments.inference_ctx import InferenceContext, vLLMInferenceContext
+from marin.rl.environments.inference_ctx import InferenceContext, vLLMInferenceContext, vLLMInferenceContextConfig
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.weight_utils import levanter_to_nnx_state, MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 
@@ -64,9 +63,9 @@ from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_
 logger = logging.getLogger(__name__)
 
 
-@dataclass(kw_only=True)
-class BaseRolloutWorkerConfig:
-    """Base configuration for RolloutWorker."""
+@dataclass
+class RolloutWorkerConfig:
+    """Configuration for RolloutWorker."""
 
     curriculum_config: CurriculumConfig
     rollout_storage: RolloutStorageConfig
@@ -75,6 +74,12 @@ class BaseRolloutWorkerConfig:
     run_id: str
     trainer: TrainerConfig
     model: LmConfig
+    inference_type: Literal["levanter", "vllm"]
+    """Type of inference to use."""
+
+    inference_config: InferenceServerConfig | vLLMInferenceContextConfig
+    """Configuration for inference context."""
+
     seed: int = 0
     """Random seed to use for sampling."""
     max_rollouts: int | None = None
@@ -82,37 +87,8 @@ class BaseRolloutWorkerConfig:
 
     log_freq: int = 10
 
-    inference_type: Literal["levanter", "vllm"] = "levanter"
-
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
-
-
-@dataclass
-class LevanterRolloutWorkerConfig(BaseRolloutWorkerConfig):
-    """Configuration for RolloutWorker."""
-
-    inference_server_config: InferenceServerConfig
-
-
-@dataclass
-class VLLMRolloutWorkerConfig(BaseRolloutWorkerConfig):
-    """Configuration for RolloutWorker."""
-
-    vllm_model_name: str
-    """Model name for vLLM."""
-
-    vllm_max_model_len: int
-    """Max model length for vLLM."""
-
-    vllm_tensor_parallel_size: int
-    """Tensor parallel size for vLLM."""
-
-    gpu_memory_utilization: float
-    """GPU memory utilization for vLLM."""
-
-    sampling_params: SamplingParams
-    """Sampling parameters for vLLM."""
 
 
 def find_open_port() -> int:
@@ -159,18 +135,6 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
     )
 
 
-class BaseRolloutWorker:
-    """Base class for RolloutWorker."""
-
-    _transfer_client: WeightTransferClient
-    _rollout_writer: RolloutWriter
-    _tokenizer: PreTrainedTokenizer
-    _environments: dict[str, MarinEnv]
-
-    def __init__(self, config: BaseRolloutWorkerConfig):
-        self.config = config
-
-
 class RolloutWorker:
     """Asynchronous inference & rollout worker for RL training.
 
@@ -187,7 +151,7 @@ class RolloutWorker:
     _tokenizer: PreTrainedTokenizer
     _environments: dict[str, MarinEnv]
 
-    def __init__(self, config: BaseRolloutWorkerConfig):
+    def __init__(self, config: RolloutWorkerConfig):
         config.trainer.id = f"{config.run_id}-rollout"
         levanter.initialize(config.trainer)
 
@@ -243,16 +207,12 @@ class RolloutWorker:
 
         if self.config.inference_type == "vllm":
             self._policy_ctx = vLLMInferenceContext(
-                model_name=self.config.vllm_model_name,
-                max_model_len=self.config.vllm_max_model_len,
-                tensor_parallel_size=self.config.vllm_tensor_parallel_size,
-                gpu_memory_utilization=self.config.gpu_memory_utilization,
-                sampling_params=self.config.sampling_params,
+                inference_config=self.config.inference_config,
             )
         elif self.config.inference_type == "levanter":
             with self.config.trainer.use_device_mesh(), hax.axis_mapping(self.config.trainer.compute_axis_mapping):
                 self._inference_server = InferenceServer.create(
-                    config.inference_server_config,
+                    self.config.inference_config,
                     model=self._policy_model,
                     tokenizer=self._tokenizer,
                 )
