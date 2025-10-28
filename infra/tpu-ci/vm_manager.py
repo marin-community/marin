@@ -542,11 +542,11 @@ def debug_tpu(index: int, test_path: str, pytest_args: str):
         "--command",
         f"""sudo -u github-runner bash -c 'docker run --rm \
             --device /dev/vfio:/dev/vfio \
-            --net=host \
             --shm-size=100g \
             --stop-timeout=1 \
             --cap-add=SYS_RESOURCE \
-             --ulimit memlock=68719476736:68719476736 \
+            --ulimit memlock=68719476736:68719476736 \
+            -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
             -e JAX_PLATFORMS=tpu \
             -e PJRT_DEVICE=TPU \
             -e TPU_CI=true \
@@ -559,7 +559,7 @@ def debug_tpu(index: int, test_path: str, pytest_args: str):
             --tmpfs /workspace/.pytest_cache:rw \
             -w /workspace \
             {config.DOCKER_IMAGE_FULL} \
-            timeout --kill-after=5 --signal=TERM 120 uv run pytest {test_path} {pytest_args}' || true""",
+            timeout --kill-after=5 --signal=TERM 120 uv run --frozen pytest {test_path} {pytest_args}' || true""",
     ]
 
     result = run(ssh_cmd, check=False)
