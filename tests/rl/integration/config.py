@@ -47,7 +47,7 @@ from optax import softmax_cross_entropy_with_integer_labels
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig
-from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig, find_open_port
+from marin.rl.rollout_worker import RolloutWorker, find_open_port
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 from marin.rl.weight_transfer.base import WeightTransferMode
@@ -260,32 +260,12 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
         service=InferenceEngineConfig(
             max_seqs=8,
             page_size=8,
+            max_seq_len=64,
             max_queued_tokens=8,
             enable_logprobs=True,
-            max_pages=8 * 32,
         ),
         temperature=1.0,
         port=find_open_port(),
-    )
-
-
-def create_nano_rollout_worker_config(output_dir: str, rollout_storage: RolloutStorageConfig) -> RolloutWorkerConfig:
-    """Create a minimal RolloutWorkerConfig for testing."""
-    model_config = create_nano_llama_config()
-    inference_server_config = create_test_inference_server_config(model_config, output_dir)
-
-    return RolloutWorkerConfig(
-        run_id="test-0",
-        trainer=create_nano_trainer_config(output_dir),
-        inference_server_config=inference_server_config,
-        model=model_config,
-        curriculum_config=create_test_curriculum_config(),
-        rollout_storage=rollout_storage,
-        tokenizer=DummyTokenizer(),
-        log_freq=1,
-        max_rollouts=1000,
-        weight_transfer=create_weight_transfer_config(),
-        initial_checkpoint=None,
     )
 
 

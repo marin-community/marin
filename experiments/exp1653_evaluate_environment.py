@@ -38,11 +38,11 @@ def create_eval_step():
     # Create model config directly from HF config
     hf_config = AutoConfig.from_pretrained(model_checkpoint)
     model_config = Qwen3Config.from_hf_config(hf_config)
-    
+
     # Set head_dim for Qwen3-4B if needed
-    if hasattr(hf_config, 'head_dim'):
+    if hasattr(hf_config, "head_dim"):
         model_config = dataclasses.replace(model_config, head_dim=hf_config.head_dim)
-    
+
     # Set seq_len and tokenizer
     model_config = dataclasses.replace(
         model_config,
