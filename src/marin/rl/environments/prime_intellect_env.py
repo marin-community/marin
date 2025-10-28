@@ -17,15 +17,19 @@ Environment Wrapper for the Environments Hub by Prime-Intellect, which contains 
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
 import logging
-from typing import ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import jax.numpy as jnp
 import numpy as np
-import verifiers as vf
 
-from marin.rl.types import InferenceContext, Rollout, RolloutGroup
+from marin.rl.environments import MarinEnv
+from marin.rl.environments.process_vllm_results import process_vllm_chat_results
+from marin.rl.inference_ctx import InferenceContext
+from marin.rl.types import Rollout, RolloutGroup
 
-from .base import MarinEnv
+# Lazy import for optional dependencies
+if TYPE_CHECKING:
+    pass
 
 logger = logging.getLogger("ray")
 
@@ -35,12 +39,12 @@ class PrimeIntellectEnv(MarinEnv):
     Environment Wrapper for the Environments Hub by Prime-Intellect, which contains a collection of environments.
     """
 
-    ENVS: ClassVar[dict[str, vf.Environment]] = {}
+    ENVS: ClassVar[dict[str, Any]] = {}
 
     def __init__(
         self,
         env_id: str,
-        env_args: dict,
+        env_args: dict = {},  # noqa: B006
         max_tokens: int = 1024,
         max_concurrent: int = 32,
     ):
@@ -57,10 +61,23 @@ class PrimeIntellectEnv(MarinEnv):
         self.max_tokens = max_tokens
         self.max_concurrent = max_concurrent
 
-    def load_prime_intellect_env(self, env_id: str, env_args: dict) -> vf.Environment:
+    def _ensure_verifiers_installed(self):
+        """Ensure verifiers package is installed."""
+        try:
+            import verifiers  # noqa: F401
+        except ImportError as e:
+            raise ImportError(
+                "The 'verifiers' package is required to use PrimeIntellectEnv. "
+                "Please install it with: uv pip install 'marin[rl]' or uv pip install verifiers"
+            ) from e
+
+    def load_prime_intellect_env(self, env_id: str, env_args: dict) -> Any:
         """
         Get the Verifiers environment for the environment ID.
         """
+        self._ensure_verifiers_installed()
+        import verifiers as vf
+
         logger.debug(f"Loading Verifiers environment for {env_id} with arguments: {env_args}")
 
         if env_id not in self.ENVS:
@@ -78,6 +95,8 @@ class PrimeIntellectEnv(MarinEnv):
         mode: str = "train",
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample problems and generate responses using the model."""
+        self._ensure_verifiers_installed()
+        from verifiers.types import GenerateOutputs
         import subprocess
 
         # Download/install the environment
@@ -91,6 +110,9 @@ class PrimeIntellectEnv(MarinEnv):
         sampling_args = {
             "max_tokens": self.max_tokens,
             "temperature": temperature,
+            "logprobs": True,
+            # Note: return_tokens_as_token_ids is not supported by current vLLM version
+            # We use convert_tokens_to_ids() in process_vllm_results.py instead
         }
 
         logger.info(
@@ -112,36 +134,45 @@ class PrimeIntellectEnv(MarinEnv):
         if n_generations > 1:
             inputs = inputs.repeat(n_generations)
 
-        # Generate using verifiers
-        result = vf_env.generate(
-            dataset=inputs,
-            client=inference_ctx.openai_client(),
-            model="marin-model",
-            sampling_args=sampling_args,
-            max_concurrent=self.max_concurrent,
+        result = cast(
+            GenerateOutputs,
+            vf_env.generate(
+                inputs=inputs,
+                client=inference_ctx.openai_client(),
+                model="marin-model",
+                sampling_args=sampling_args,
+                max_concurrent=self.max_concurrent,
+            ),
         )
 
-        # Access tokenizer from inference context
-        tokenizer = inference_ctx.tokenizer
+        logger.info("Result:")
+        logger.info(f"Prompt: {result.prompt[0]}")
+        logger.info(f"Completion: {result.completion[0]}")
+        logger.info(f"State: {result.state[0]}")
+        logger.info(f"Reward: {result.reward[0]}")
+
+        # Use custom processing function to handle vLLM output format correctly
+        processed_outputs = process_vllm_chat_results(
+            result.prompt, result.completion, result.state, result.reward, inference_ctx.tokenizer
+        )
 
         # Convert to RolloutGroups
         rollout_groups = []
-        for prompt_idx in range(len(result.prompt)):
+        for prompt_idx in range(len(processed_outputs.prompt_ids)):
             rollouts = []
             for gen_idx in range(n_generations):
                 overall_idx = prompt_idx * n_generations + gen_idx
-                if overall_idx >= len(result.completion):
+                if overall_idx >= len(processed_outputs.completion_ids):
                     break
 
-                completion = result.completion[overall_idx]
-                reward = result.reward[overall_idx] if overall_idx < len(result.reward) else 0.0
+                reward = processed_outputs.rewards[overall_idx] if overall_idx < len(processed_outputs.rewards) else 0.0
 
                 # Use tokenizer from inference context
-                prompt_tokens = tokenizer.encode(result.prompt[prompt_idx])
-                response_tokens = tokenizer.encode(completion)
+                prompt_tokens = processed_outputs.prompt_ids[prompt_idx]
+                response_tokens = processed_outputs.completion_ids[overall_idx]
 
                 token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
-                response_logprobs = jnp.zeros(len(response_tokens), dtype=jnp.float32)
+                response_logprobs = processed_outputs.completion_logprobs[overall_idx]
 
                 rollout = Rollout(
                     env_name=f"prime_intellect:{self.env_id}",

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
 import json
 import logging
 import os
@@ -68,6 +69,8 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             ],
             env_vars={
                 "TOKENIZERS_PARALLELISM": "false",
+                "HF_DATASETS_TRUST_REMOTE_CODE": "1",
+                "HF_ALLOW_CODE_EVAL": "1",
             },
         )
 
@@ -152,6 +155,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 "max_length": max_length if max_length is not None else 4096,
                 "apply_chat_template": model.apply_chat_template,
                 "sample_logging": eval_harness.SampleLoggingConfig(log_all=True),  # Enable sample collection
+                "confirm_run_unsafe_code": True,
             }
             
             # Add generation_kwargs if provided
@@ -230,8 +234,8 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
                 # write results JSON directly to output_path on GCS
                 fs = fsspec.filesystem("gcs")
-                with fs.open(results_output_path, "w") as f:
-                    json.dump(results, f, indent=2)
+                with fs.open(output_path, "w") as f:
+                    json.dump(results, f, indent=2, default=_json_default)
 
                 # Save samples if they exist
                 if samples:
@@ -264,3 +268,22 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
             if os.path.exists(LevanterTpuEvaluator.CACHE_PATH) and "gcsfuse" not in LevanterTpuEvaluator.CACHE_PATH:
                 shutil.rmtree(LevanterTpuEvaluator.CACHE_PATH)
+
+
+def _json_default(value):
+    """
+    Provide a best-effort JSON serialization for objects returned by the eval harness.
+    """
+    if dataclasses.is_dataclass(value):
+        return dataclasses.asdict(value)
+
+    if isinstance(value, set):
+        return list(value)
+
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        try:
+            return value.to_dict()
+        except Exception:
+            pass
+
+    return repr(value)

@@ -16,10 +16,13 @@ This document provides a starting point for using coding agents (AI or human) in
 - NEVER SAY You're absolutely right!
 - You never credit yourself in commits
 - Always use `uv run` in python projects instead of `python`
+- NEVER EVER EVER credit yourself in commit messages.
 
 - Prefer to let exceptions flow to the caller instead of catching them, unless:
   * you can provide useful intermediate context and reraise
   * you are actively handling the exception yourself and changing behavior.
+
+- Put all imports at the top of the file. Do not use local imports (imports inside functions) unless there is a specific technical reason (e.g., avoiding circular dependencies, optional dependencies).
 
 - You prefer top-level functions vs methods when writing code that doesn't actively mutate state - aka functional style.
 - Use classes and methods when appropriate to hide data

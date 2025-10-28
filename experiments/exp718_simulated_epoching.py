@@ -28,6 +28,7 @@ EXPERIMENT_TAG = ["718_simulated_epoching"]
 dolma_llama3_tokenized = lm_mixture_data_config(
     components=tokenize_dolma_steps(),
     weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
+    permutation_type="linear",
 )
 
 # Regular 20B Token Run

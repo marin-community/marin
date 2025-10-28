@@ -19,6 +19,7 @@ This worker loads model checkpoints, generates rollouts from a single environmen
 and writes the rollout data to files for training workers to consume.
 """
 
+import dataclasses
 import logging
 import os
 import socket
@@ -32,8 +33,6 @@ import haliax as hax
 import jax
 import jax.random as jrandom
 import levanter
-import ray
-import ray.exceptions
 from jax.experimental import multihost_utils
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmConfig
@@ -43,7 +42,8 @@ from transformers import PreTrainedTokenizer
 
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
-from marin.rl.environments.base import LevanterInferenceContext, load_environment_from_spec
+from marin.rl.environments.base import load_environment_from_spec
+from marin.rl.inference_ctx import InferenceContext
 from marin.rl.model_utils import load_model_from_checkpoint
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
@@ -70,6 +70,9 @@ class RolloutWorkerConfig:
     weight_transfer: WeightTransferConfig
     tokenizer: PreTrainedTokenizer
     run_id: str
+
+    seed: int = 0
+    """Random seed to use for sampling."""
 
     max_rollouts: int | None = None
     """Maximum number of rollouts to generate before stopping. Defaults to running forever."""
@@ -143,6 +146,17 @@ class RolloutWorker:
     def __init__(self, config: RolloutWorkerConfig):
         config.trainer.id = f"{config.run_id}-rollout"
         levanter.initialize(config.trainer)
+
+        # Infer model_axis_size from the actual TPU configuration now that JAX is initialized.
+        # For inference servers, we shard across all local devices on a single host.
+        config.inference_server_config = dataclasses.replace(
+            config.inference_server_config,
+            trainer=dataclasses.replace(
+                config.inference_server_config.trainer,
+                model_axis_size=jax.local_device_count(),
+            ),
+        )
+
         self.tracker = levanter.current_tracker()
         self.config = config
         self._running = True
@@ -161,13 +175,17 @@ class RolloutWorker:
 
         self._rollout_writer = config.rollout_storage.create_writer()
         self._build_models()
-        self._inference_server = InferenceServer.create(
-            config.inference_server_config,
-            model=self._policy_model,
-            tokenizer=self._tokenizer,
-        )
+        with self.config.trainer.use_device_mesh(), hax.axis_mapping(self.config.trainer.compute_axis_mapping):
+            self._inference_server = InferenceServer.create(
+                config.inference_server_config,
+                model=self._policy_model,
+                tokenizer=self._tokenizer,
+            )
         self._inference_thread = threading.Thread(target=lambda: self._inference_server.serve(), daemon=True)
         self._inference_thread.start()
+
+        # TODO(power) -- replace this with a wait_until_ready() on the levanter inference server
+        time.sleep(1.0)
 
         self._environments = {}
 
@@ -196,7 +214,7 @@ class RolloutWorker:
         stop_tokens = lesson_config.sampling_params.stop_tokens
         max_tokens = lesson_config.sampling_params.max_tokens
 
-        policy_ctx = LevanterInferenceContext(
+        policy_ctx = InferenceContext(
             tokenizer=self._tokenizer,
             inference_server=self._inference_server,
             max_tokens=max_tokens,
@@ -258,7 +276,7 @@ class RolloutWorker:
         else:
             logger.info("Building new policy model from scratch")
 
-        key = jrandom.PRNGKey(42)
+        key = jrandom.PRNGKey(self.config.seed)
         vocab_size = self._tokenizer.vocab_size
         Vocab = hax.Axis("vocab", vocab_size)
 
@@ -274,15 +292,8 @@ class RolloutWorker:
             key=key,
         )
 
-        update = self._transfer_client.receive_weights(initial_model)
-        if update:
-            logger.info("Loaded initial policy model from weight transfer")
-            self._policy_model = update.model
-            self._current_weight_step = update.weight_id
-        else:
-            logger.info("Initializing policy model from initial checkpoint")
-            self._policy_model = initial_model
-        logger.info("Loaded/built policy model")
+        logger.info("Initializing policy model from initial checkpoint")
+        self._policy_model = initial_model
 
     def stop(self):
         """Stop the inference worker loop and server."""
@@ -299,8 +310,21 @@ class RolloutWorker:
             self._inference_server.shutdown()
 
     def _sync_weights(self):
-        logger.info("Checking for new weights...")
-        update = self._transfer_client.receive_weights(self._policy_model)
+        max_wait_time = self.config.weight_transfer.max_weight_transfer_wait_time
+        start_time = time.time()
+
+        while True:
+            logger.info("Checking for new weights...")
+            update = self._transfer_client.receive_weights(self._policy_model)
+            if update:
+                break
+
+            elapsed = time.time() - start_time
+            if elapsed >= max_wait_time:
+                logger.info(f"Waited {elapsed:.1f}s for new weights, proceeding with current weights")
+                return None
+
+            time.sleep(1.0)
 
         if update:
             self._current_weight_step = update.weight_id
@@ -368,7 +392,7 @@ class RolloutWorker:
         logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, step, metrics)
         # only update curriculum for full evals
         if eval_type == "eval":
-            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
+            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
                 stats.rollout_stats, mode="eval", current_step=step
             )
         return stats
@@ -395,14 +419,13 @@ class RolloutWorker:
 
         step = 0
 
-        # compute the seed as the all-reduce across all hosts in the jax process
-        seed = abs(hash(f"{socket.gethostname()}-{os.getpid()}")) % (2**31 - 1)
+        seed = self.config.seed
         rng = jax.random.PRNGKey(seed)
         rng = multihost_utils.broadcast_one_to_all(rng)
         logger.info(f"Starting rollout worker with seed {seed}")
 
         while self._running:
-            barrier_sync()
+            self._sync_weights()
 
             if self.config.max_rollouts is not None and step >= self.config.max_rollouts:
                 logger.info(f"Reached max rollouts ({self.config.max_rollouts}), stopping")
@@ -412,13 +435,11 @@ class RolloutWorker:
             rng, seed_key = jax.random.split(rng)
             seed = int(seed_key[0])
             try:
-                lesson_id = ray.get(self._curriculum_actor.sample_lesson.remote(seed))
+                lesson_id = self._curriculum_actor.sample_lesson.call(seed)
             except Exception as e:
                 logger.warning(f"Failed to sample lesson from curriculum: {e}, will try again...")
                 time.sleep(10.0)
                 continue
-
-            self._sync_weights()
 
             # Micro-eval: feedback on current lesson
             if step > 0 and step % self.config.curriculum_config.micro_eval_frequency == 0:
@@ -440,7 +461,7 @@ class RolloutWorker:
 
             rng, input_rng = jax.random.split(rng)
             lesson_config = self.config.curriculum_config.lessons[lesson_id]
-            rollout_batch, metrics = self._sample_batch(
+            rollout_batch, env_metrics = self._sample_batch(
                 lesson_id=lesson_id,
                 n_examples=lesson_config.sampling_params.n_prompts,
                 n_generations=lesson_config.sampling_params.n_generations_per_prompt,
@@ -449,20 +470,20 @@ class RolloutWorker:
             )
             if rollout_batch is None:
                 continue
-            barrier_sync()
 
             stats = _compute_batch_stats(rollout_batch, lesson_id)
-            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
+            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
                 stats.rollout_stats, mode="training", current_step=step
             )
-            self._build_eval_metrics(prefix="inference.train", lesson_id=lesson_id, batch=rollout_batch)
+            eval_metrics = self._build_eval_metrics(prefix="rollout", lesson_id=lesson_id, batch=rollout_batch)
 
             step += 1
             self._rollout_writer.write_batch(rollout_batch)
 
             if self.config.log_freq > 0 and step % self.config.log_freq == 0:
-                log_metrics = {}
+                log_metrics = eval_metrics
                 log_metrics.update(self._transfer_client.get_metrics())
+                log_metrics.update({f"env.{k}": v for k, v in (env_metrics or {}).items()})
                 log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
                 logger.info(f"Logging metrics at step {step}... {log_metrics}")
                 self.tracker.log(log_metrics, step=step)

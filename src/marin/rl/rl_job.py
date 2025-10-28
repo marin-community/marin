@@ -21,6 +21,7 @@ and infrastructure concerns, letting users focus on the RL algorithm and hyperpa
 
 import dataclasses
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 
@@ -67,7 +68,7 @@ class RunConfig:
     max_retries_failure: int = 3
     """Maximum retries on worker failure"""
 
-    max_retries_preemption: int = 10
+    max_retries_preemption: int = 100
     """Maximum retries on preemption"""
 
     runtime_env: RuntimeEnv | None = None
@@ -106,6 +107,7 @@ class RLJobConfig:
     train_params: TrainParams
     curriculum: CurriculumConfig
     tokenizer: str | PreTrainedTokenizer
+    seed: int = 42
 
     # Model & initialization (with defaults)
     initial_checkpoint: str | None = None
@@ -124,7 +126,7 @@ class RLJobConfig:
     """Configuration for TPU pod deployment. If None, uses simple Ray actors."""
 
     # Inference server (auto-configured by default)
-    inference_server_config: "InferenceServerConfig | None" = None  # type: ignore
+    inference_server_config: InferenceServerConfig | None = None  # type: ignore
 
     # Sampling configuration
     eval_sampling_params: SamplingParams = field(default_factory=SamplingParams)
@@ -183,7 +185,16 @@ class RLJob:
         def inference_worker_task():
             with remove_tpu_lockfile_on_exit():
                 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-                worker = RolloutWorker(config=rollout_worker_config)
+                # inject a different seed for each worker
+
+                process_id = os.getpid()
+                config = dataclasses.replace(
+                    rollout_worker_config,
+                    seed=rollout_worker_config.seed + process_id,
+                    run_id=f"{rollout_worker_config.run_id}-{process_id}",
+                )
+
+                worker = RolloutWorker(config=config)
                 worker.run()
 
         train_tasks = [
@@ -232,14 +243,16 @@ class RLJob:
         if self.config.inference_server_config is None:
             inference_server_config = InferenceServerConfig(
                 trainer=dataclasses.replace(
-                    self.config.trainer, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=1
+                    self.config.trainer,
+                    tensor_parallel_axes=["mlp", "kv_head"],
                 ),
                 tokenizer=tokenizer,
                 temperature=self.config.eval_sampling_params.temperature,
                 service=InferenceEngineConfig(
                     max_seqs=max_seqs,
+                    max_seq_len=max_tokens,
                     page_size=128,
-                    max_pages_per_seq=1 + max_tokens // 128,
+                    hbm_utilization=0.5,
                     enable_logprobs=True,
                 ),
                 port=0,
@@ -263,6 +276,7 @@ class RLJob:
             initial_checkpoint=self.config.initial_checkpoint,
             run_id=self.config.run_id,
             curriculum_config=self.config.curriculum,
+            seed=self.config.seed,
         )
 
         # Create rollout worker config
@@ -278,6 +292,7 @@ class RLJob:
             weight_transfer=self.config.weight_transfer,
             rollout_storage=self.config.rollout_storage,
             run_id=self.config.run_id,
+            seed=self.config.seed + 1000,
         )
 
         return train_worker_config, rollout_worker_config

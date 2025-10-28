@@ -306,6 +306,15 @@ class MarinFlightServer(flight.FlightServerBase):
             return self._latest_weight_id
 
 
+@jax.jit
+def copy_and_flatten(model: PyTree) -> tuple[dict[str, jax.Array], dict[str, tuple[int, ...]]]:
+    """Convert `model` into a state with flattened arrays and shapes."""
+    state_dict = hsd.to_state_dict(model)
+    shape_dict = jax.tree.map(lambda y: y.shape, state_dict)
+    flat_dict = jax.tree.map(lambda y: y.reshape(-1), state_dict)
+    return flat_dict, shape_dict
+
+
 class ArrowFlightServer(WeightTransferServer):
     """Arrow Flight-based weight transfer server for Haliax/Equinox models.
 
@@ -378,9 +387,8 @@ class ArrowFlightServer(WeightTransferServer):
 
             if jax.process_index() == 0:
                 # Fetching the entire state dict to CPU allows JAX to parallelize the individual transfers
-                state_dict = hsd.to_state_dict(model)
-                shape_dict = jax.tree.map(lambda y: y.shape, state_dict)
-                flat_dict = jax.tree.map(lambda y: y.reshape(-1), state_dict)
+                flat_dict, shape_dict = copy_and_flatten(model)
+                state_dict_time = time.time()
                 flat_dict = jax.device_get(flat_dict)
                 copy_time = time.time()
 
@@ -397,15 +405,17 @@ class ArrowFlightServer(WeightTransferServer):
                 param_names = list(params_dict.keys())
                 actual_host = self.config.flight_host if self.config.flight_host != "0.0.0.0" else socket.gethostname()
                 server_locations = [(actual_host, server.port) for server in self._flight_servers]
-                ray.get(self._coordinator.update_server.remote(weight_id, param_names, server_locations))
+                self._coordinator.update_server.call(weight_id, param_names, server_locations)
                 update_time = time.time()
 
                 self.metrics.successful_transfers += 1
 
                 logger.info(
-                    "Served weights for weight_id %s, timings: copy=%.2fs, serialize=%.2fs, store=%.2fs, update=%.2fs",
+                    "Served weights for weight_id %s. "
+                    "timings: state_dict=%.2fs, copy=%.2fs, serialize=%.2fs, store=%.2fs, update=%.2fs",
                     weight_id,
-                    copy_time - start_time,
+                    state_dict_time - start_time,
+                    copy_time - state_dict_time,
                     serialize_time - copy_time,
                     store_time - serialize_time,
                     update_time - store_time,
@@ -512,7 +522,7 @@ class ArrowFlightClient(WeightTransferClient):
             start_time = time.time()
 
             # Fetch server info from coordinator
-            server_info = ray.get(self._coordinator.fetch_server.remote())
+            server_info = self._coordinator.fetch_server.call()
 
             if not server_info:
                 logger.info("No Arrow Flight server info available from coordinator.")
@@ -542,7 +552,7 @@ class ArrowFlightClient(WeightTransferClient):
             fetch_time = time.time()
 
             # Convert back to model using state_dict and move to target device
-            with self.mesh, hax.axis_mapping(self.axis_mapping):
+            with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
                 model = update_model(old_model, state_dict)
 
             decode_time = time.time()

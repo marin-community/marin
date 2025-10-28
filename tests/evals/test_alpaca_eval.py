@@ -31,6 +31,7 @@ TOP_P = 1.0
 TOP_K = -1
 
 
+@pytest.mark.gcp
 @pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
 def test_alpaca_eval(current_date_time, ray_tpu_cluster, model_config):
     config = EvaluationConfig(
@@ -39,7 +40,8 @@ def test_alpaca_eval(current_date_time, ray_tpu_cluster, model_config):
         model_path=model_config.path,
         evaluation_path=f"gs://marin-us-east5/evaluation/alpaca_eval/{model_config.name}-{current_date_time}",
         resource_config=SINGLE_TPU_V6E_8,
-        max_eval_instances=5,
+        max_eval_instances=1,
+        launch_with_ray=True,
         engine_kwargs={
             "temperature": TEMPERATURE,
             "presence_penalty": PRESENCE_PENALTY,

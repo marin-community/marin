@@ -13,73 +13,21 @@
 # limitations under the License.
 
 """
-Consolidated type definitions for RL/post-training.
+Type definitions for RL/post-training.
 
-This module contains all shared type definitions used across the RL system:
-- Inference types (InferenceChoice, InferenceResponse, InferenceContext)
+This module contains training-focused type definitions:
 - Rollout types (Rollout, RolloutGroup, RolloutBatch, etc.)
 - Training types (TrainingBatch, RolloutWithAdvantage)
+
+For inference-related types, see marin.rl.inference_ctx
 """
 
 from dataclasses import dataclass
-from typing import Protocol
 
 import equinox as eqx
 import haliax.haxtyping as ht
 import jax
-import numpy as np
 from haliax import NamedArray
-from openai import AsyncOpenAI
-from transformers import PreTrainedTokenizer
-
-
-@dataclass
-class InferenceChoice:
-    """A single choice from the inference provider."""
-
-    response_text: str
-    response_tokens: np.ndarray  # Shape: (sequence_length,)
-    logprobs: np.ndarray  # Shape: (sequence_length,)
-
-
-@dataclass
-class InferenceResponse:
-    """A single response from the inference provider."""
-
-    prompt: str
-    prompt_tokens: np.ndarray  # Shape: (prompt_length,)
-    choices: list[InferenceChoice]
-
-
-class InferenceContext(Protocol):
-    """Protocol for inference providers that generate text from prompts.
-
-    This decouples the backend (Flax vs Levanter) during our transition period.
-    """
-
-    tokenizer: PreTrainedTokenizer
-
-    def generate(self, prompts: list[str], temperature: float, n_generations: int) -> list[InferenceResponse]:
-        """Generate responses for a batch of prompts.
-
-        Args:
-            prompts: List of text prompts to generate from
-            temperature: Sampling temperature
-            n_generations: Number of generations per prompt
-
-        Returns:
-            List of InferenceResponse objects, one per input prompt.
-            Each InferenceResponse contains n_generations choices.
-        """
-        ...
-
-    def openai_client(self) -> "AsyncOpenAI":
-        """Return an OpenAI-compatible client for environments that need it.
-
-        Returns:
-            AsyncOpenAI or OpenAI client instance
-        """
-        ...
 
 
 @dataclass
@@ -158,9 +106,7 @@ class TrainingBatch(eqx.Module):
     """A batch ready for training with Haliax named arrays."""
 
     input_ids: ht.Int[NamedArray, "batch position"]
-    attention_mask: ht.Int[NamedArray, "batch position"]
     position_ids: ht.Int[NamedArray, "batch position"]
-    target_ids: ht.Int[NamedArray, "batch position"]
     loss_weights: ht.Float[NamedArray, "batch position"]
     loss_masks: ht.Int[NamedArray, "batch position"]
     policy_logprobs: ht.Float[NamedArray, "batch position"]

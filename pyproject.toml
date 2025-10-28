@@ -12,7 +12,6 @@ license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
     "braceexpand",
-    "chex==0.1.90",
     "cryptography>=45",
     "datasets",
     "deepdiff",
@@ -23,9 +22,9 @@ dependencies = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "jax>=0.6.2",
-    "haliax>=1.4.dev418",
-    "levanter[serve]@git+https://github.com/marin-community/levanter.git@safetensor_gcs",
+    "jax==0.6.2",
+    "haliax>=1.4.dev443",
+    "levanter[serve] @ git+https://github.com/marin-community/levanter.git@c30de5b9ad706da1ddb5e95cf82ed767692f7f7c",
     "lz4",
     "multiprocess==0.70.16",
     "numpy",
@@ -132,6 +131,10 @@ conflicts = [
         { extra = "tpu" },
         { extra = "cpu" },
     ],
+    [
+        { extra = "eval" },
+        { extra = "quality_dedup_consolidate" },
+    ]
 ]
 
 [tool.uv.sources]
@@ -165,45 +168,45 @@ gcp = [
     "google-cloud-compute",
 ]
 
-cuda12 = ["jax[cuda12]==0.6.2", "torch"]
+cuda12 = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
 
-tpu = ["jax[tpu]==0.6.2", "torch"]
+tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
 
-cpu = ["jax==0.6.2", "torch"]
+cpu = ["jax==0.6.2", "torch>=2.7.0"]
 
-#crawl = [
-#    "w3lib",
-#    "datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
-#    "datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
-#    "beautifulsoup4",
-#    "resiliparse",
-#    "trafilatura",
-#    "warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi",
-#    "rbloom-gcs==1.5.6",
-#    "google-cloud-bigquery",
-#    "google-cloud-storage-transfer~=1.0",
-#    "boto3==1.35.23",
-#    "readabilipy",
-#    "readability-lxml",
-#    "py7zr",
-#    "markdownify==0.12.1",
-#    "htmlmin",
-#    "datasets>=2.18.0",
-#    "py-asciimath",
-#    "scipy==1.13.1",
-#    "spacy",
-#    "cupy-cuda12x==13.3.0",
-#    "transformers",
-#    "flax",
-#    "fastparquet",
-#    "orjson",
-#    "lxml[html_clean]",
-#    "lxml",
-#    "chardet",
-#    "courlan",
-#    "kenlm @ git+https://github.com/FredHaa/kenlm@fix-build-with-cmake-4.0",
-#    "jax[tpu]",
-#]
+crawl = [
+    "w3lib",
+    "datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
+    "datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
+    "beautifulsoup4",
+    "resiliparse",
+    "trafilatura",
+    "warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi",
+    "rbloom-gcs==1.5.6",
+    "google-cloud-bigquery",
+    "google-cloud-storage-transfer~=1.0",
+    "boto3==1.35.23",
+    "readabilipy",
+    "readability-lxml",
+    "py7zr",
+    "markdownify==0.12.1",
+    "htmlmin",
+    "datasets>=2.18.0",
+    "py-asciimath",
+    "scipy==1.13.1",
+    "spacy",
+    "cupy-cuda12x==13.3.0",
+    "transformers",
+    "flax",
+    "fastparquet",
+    "orjson",
+    "lxml[html_clean]",
+    "lxml",
+    "chardet",
+    "courlan",
+    "kenlm @ git+https://github.com/FredHaa/kenlm@fix-build-with-cmake-4.0",
+    "jax[tpu]",
+]
 
 download_transform = [
     "chardet",
@@ -211,7 +214,7 @@ download_transform = [
     "fastparquet",
     "google-cloud-storage-transfer~=1.0",
     "html2text==2024.2.26",               # TODO :: Check pin?
-    #"htmlmin==0.1.12",                    # TODO :: Check usage | pin?
+    "htmlmin==0.1.12",                    # TODO :: Check usage | pin?
     "markdownify==0.12.1",                # TODO :: Check usage | pin?
     "py7zr",
     "readabilipy",
@@ -221,6 +224,7 @@ download_transform = [
     "resiliparse",
     "trafilatura>=2.0",
     "boto3==1.35.23",
+    "htmlmin",
 ]
 
 quality_dedup_consolidate = [
@@ -238,8 +242,8 @@ quality_dedup_consolidate = [
 
 tokenize_train = [
     "multiprocess==0.70.16",
-    "haliax>=1.4.dev348",
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@18b376504e98aadcb985f9235c3e58ab2bf4c5bc",
+    "haliax>=1.4.dev443",
+    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
     "tblib",
     "sentencepiece",
     "tiktoken",
@@ -248,7 +252,7 @@ tokenize_train = [
 rl = [
     "prime",
     "sympy",
-    "verifiers",
+    "verifiers==0.1.5",
 ]
 
 post_training = [
@@ -269,14 +273,8 @@ post_training = [
     "swebench ; sys_platform != 'darwin'",
 ]
 
-data_browser = ["zstandard==0.23.0"]
-
 eval = [
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@18b376504e98aadcb985f9235c3e58ab2bf4c5bc",
-]
-
-pm = [
-  "PyGithub>=2.3.0"
+    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
 
 
@@ -329,7 +327,8 @@ log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 log_cli_level = "INFO"
 markers = [
-    "slow: mark tests as slow for CI - use -m 'not slow'"
+    "slow: mark tests as slow for CI - use -m 'not slow'",
+    "gcp: mark tests that require GCP authentication or resources",
 ]
 
 # Make sure we timeout before CI kills us

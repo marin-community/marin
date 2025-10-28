@@ -61,10 +61,8 @@ def test_rollout_worker(tmp_path):
     runner.rollout_worker_config.max_rollouts = 10
 
     with runner:
-        while runner.alive() and not runner.done.is_set():
-            time.sleep(0.5)
+        runner.wait_for_result()
 
-        # Give a moment for final writes
         time.sleep(0.5)
 
         batches = queue_reader.read_all_available()

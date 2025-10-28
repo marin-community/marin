@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import Mock
-
+import jax.numpy as jnp
 import numpy as np
 import pytest
+from openai.types.chat import ChatCompletion, ChatCompletionMessage
+from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
+from openai.types.completion_usage import CompletionUsage
 
 from marin.rl.environments.mock_env import (
     AdditionTask,
@@ -24,37 +26,132 @@ from marin.rl.environments.mock_env import (
     OppositesTask,
     compute_soft_reward,
 )
-from marin.rl.types import InferenceChoice, InferenceResponse
+from marin.rl.types import Rollout, RolloutGroup
+
+
+def create_test_tokenizer():
+    """Create a simple test tokenizer that encodes chars as ord values."""
+
+    class SimpleTokenizer:
+        def encode(self, text, add_special_tokens=True):
+            return [ord(c) for c in text]
+
+        def decode(self, token_ids):
+            return "".join(chr(tid) for tid in token_ids)
+
+        def apply_chat_template(self, messages, tokenize, add_generation_prompt):
+            # Simple: just return tokens for the user message content
+            return [ord(c) for c in messages[0]["content"]]
+
+        def convert_tokens_to_ids(self, token):
+            # In our simple test tokenizer, tokens are single chars
+            return ord(token[0]) if token else 0
+
+    return SimpleTokenizer()
+
+
+def create_test_logprobs(text: str):
+    """Create logprobs content for a response text."""
+    from openai.types.chat.chat_completion_chunk import ChoiceLogprobsLogprob
+
+    logprobs_content = []
+    for c in text:
+        logprobs_content.append(
+            ChoiceLogprobsLogprob(
+                token=c,
+                logprob=-1.0,
+                bytes=[ord(c)],
+                top_logprobs=[],
+            )
+        )
+    return ChoiceLogprobs(content=logprobs_content)
+
+
+def create_test_chat_completion(prompt: str, responses: list[str]) -> ChatCompletion:
+    """Create a test ChatCompletion with multiple choices."""
+    choices = []
+    for i, response_text in enumerate(responses):
+        choice = Choice(
+            finish_reason="stop",
+            index=i,
+            message=ChatCompletionMessage(role="assistant", content=response_text),
+            logprobs=create_test_logprobs(response_text),
+        )
+        choices.append(choice)
+
+    return ChatCompletion(
+        id=f"chatcmpl-test-{hash(prompt)}",
+        choices=choices,
+        created=1234567890,
+        model="test-model",
+        object="chat.completion",
+        usage=CompletionUsage(
+            completion_tokens=sum(len(r) for r in responses), prompt_tokens=len(prompt), total_tokens=0
+        ),
+    )
+
+
+def create_test_inference_context():
+    """Create a test inference context that returns test completions."""
+
+    class TestInferenceContext:
+        def __init__(self):
+            self.tokenizer = create_test_tokenizer()
+
+        def batch_completions(self, prompts, temperature, n):
+            completions = []
+            for prompt in prompts:
+                responses = [f"mock_response_{i}" for i in range(n)]
+                completion = create_test_chat_completion(prompt, responses)
+                completions.append(completion)
+            return completions
+
+        def tokenize_prompt(self, prompt):
+            return np.array([ord(c) for c in prompt], dtype=np.int32)
+
+        def get_choice_tokens(self, choice):
+            return np.array([ord(c) for c in choice.message.content], dtype=np.int32)
+
+        def get_choice_logprobs(self, choice):
+            return np.full(len(choice.message.content), -1.0, dtype=np.float32)
+
+        def create_rollout_from_choice(self, prompt, choice, env_name, env_example_id, reward):
+            prompt_tokens = self.tokenize_prompt(prompt)
+            response_tokens = self.get_choice_tokens(choice)
+            response_logprobs = self.get_choice_logprobs(choice)
+            token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
+
+            return Rollout(
+                env_name=env_name,
+                env_example_id=env_example_id,
+                prompt_tokens=jnp.array(prompt_tokens, dtype=jnp.int32),
+                response_tokens=jnp.array(response_tokens, dtype=jnp.int32),
+                response_logprobs=jnp.array(response_logprobs, dtype=jnp.float32),
+                token_rewards=token_rewards,
+                episode_reward=float(reward),
+            )
+
+        def create_rollout_group_from_completion(self, prompt, completion, env_name, env_example_id, reward_fn):
+            rollouts = []
+            for choice in completion.choices:
+                response_text = choice.message.content
+                reward = reward_fn(response_text)
+                rollout = self.create_rollout_from_choice(prompt, choice, env_name, env_example_id, reward)
+                rollouts.append(rollout)
+
+            return RolloutGroup(rollouts=rollouts)
+
+    return TestInferenceContext()
 
 
 @pytest.fixture
-def mock_tokenizer():
-    tokenizer = Mock()
-    tokenizer.encode = Mock(side_effect=lambda text: [ord(c) for c in text])
-    return tokenizer
+def test_tokenizer():
+    return create_test_tokenizer()
 
 
 @pytest.fixture
-def mock_inference_ctx(mock_tokenizer):
-    ctx = Mock()
-    ctx.tokenizer = mock_tokenizer
-
-    def mock_generate(prompts, temperature, n_generations):
-        responses = []
-        for prompt in prompts:
-            choices = []
-            for i in range(n_generations):
-                response_text = f"mock_response_{i}"
-                response_tokens = np.array([ord(c) for c in response_text], dtype=np.int32)
-                logprobs = np.full(len(response_tokens), -1.0, dtype=np.float32)
-                choices.append(InferenceChoice(response_text, response_tokens, logprobs))
-
-            prompt_tokens = np.array([ord(c) for c in prompt], dtype=np.int32)
-            responses.append(InferenceResponse(prompt, prompt_tokens, choices))
-        return responses
-
-    ctx.generate = mock_generate
-    return ctx
+def test_inference_ctx():
+    return create_test_inference_context()
 
 
 def test_compute_soft_reward_format_loss():

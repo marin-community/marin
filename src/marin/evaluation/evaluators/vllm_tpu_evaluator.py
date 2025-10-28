@@ -162,6 +162,9 @@ class VllmTpuEvaluator(Evaluator, ABC):
             wandb_tags: list[str] | None = None,
             max_length: int | None = None,
         ) -> None:
-            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags, max_length)
+            import logging
+
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+            self.evaluate(model, evals, output_path, max_eval_instances)
 
         ray.get(launch.remote(model, evals, output_path, max_eval_instances, wandb_tags, max_length))

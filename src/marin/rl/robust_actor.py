@@ -71,7 +71,14 @@ class RobustActor:
             """Factory function that creates/recreates the actor."""
             actor = (
                 ray.remote(actor_class)
-                .options(name=actor_name, get_if_exists=True, max_restarts=-1, enable_task_events=False, **ray_options)
+                .options(
+                    name=actor_name,
+                    get_if_exists=True,
+                    max_restarts=-1,
+                    max_task_retries=-1,
+                    enable_task_events=False,
+                    **ray_options,
+                )
                 .remote(*actor_args, **actor_kwargs)
             )
             return actor
@@ -123,6 +130,36 @@ class _MethodWrapper:
                 self._method = getattr(self._handle._handle, self._method_name)
                 backoff *= 2
                 time.sleep(backoff)
+
+    def call(self, *args, **kwargs):
+        """Call method synchronously with retry on actor death.
+
+        This is equivalent to ray.get(method.remote(*args, **kwargs)) but with
+        automatic retry on actor death.
+        """
+        backoff = 1.0
+        attempts = 0
+        max_attempts = 5
+        actor_name = self._handle._actor_name
+
+        while True:
+            try:
+                ref = self._method.remote(*args, **kwargs)
+                return ray.get(ref)
+            except (ActorDiedError, ActorUnavailableError, RayActorError):
+                attempts += 1
+                if attempts >= max_attempts:
+                    logger.error(
+                        f"Actor '{actor_name}' failed after {max_attempts} attempts to call {self._method_name}"
+                    )
+                    raise
+                logger.warning(
+                    f"Actor '{actor_name}' died during call to {self._method_name}. Retrying after {backoff:.1f}s..."
+                )
+                self._handle._recreate_handle()
+                self._method = getattr(self._handle._handle, self._method_name)
+                time.sleep(backoff)
+                backoff *= 2
 
     def options(self, **kwargs):
         """Forward .options() calls to the underlying method."""

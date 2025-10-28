@@ -25,12 +25,13 @@ and determine their relative contributions to model performance.
 
 from dataclasses import dataclass
 
+
 from experiments.anneal_config import AnnealConfig
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from marin.execution.executor import ExecutorStep
-from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
+from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config, PermutationType
 from marin.resources import TpuPodConfig
 
 
@@ -52,6 +53,8 @@ class QualityAblationConfig:
     # Naming
     model_name_prefix: str = "8b-quality-eval"
 
+    permutation_type: PermutationType = "feistel"
+
     def get_dataset_config(self, candidate_tokenized: TokenizerStep):
         """Creates the dataset configuration for the ablation."""
         return lm_mixture_data_config(
@@ -65,6 +68,7 @@ class QualityAblationConfig:
                 "mcq": self.mcq_weight,
                 "candidate": self.candidate_weight,
             },
+            permutation_type=self.permutation_type,
         )
 
     def get_anneal_config(self, candidate_tokenized: TokenizerStep) -> AnnealConfig:
@@ -96,7 +100,7 @@ def default_quality_ablation(
         Annealed model on the ablation mixture
     """
     if config is None:
-        config = QualityAblationConfig()
+        config = QualityAblationConfig(permutation_type="linear")
 
     hq_anneal_config = config.get_anneal_config(candidate_tokenized)
     model_name = config.get_model_name(candidate_tokenized)

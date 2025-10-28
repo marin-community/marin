@@ -42,6 +42,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+from marin.processing.tokenize import lm_data_config
 from marin.processing.classification.bert.train_bert import (
     TrainBertClassifierConfig,
 )
@@ -239,13 +240,13 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
 
             fasttext_train_step = default_train(
                 name=f"checkpoints/quality_filtering/{config.experiment_name}/fasttext/{input_data_source}/train",
-                tokenized=fasttext_tokenize_step,
+                tokenized=lm_data_config(fasttext_tokenize_step, permutation_type="linear"),
                 model_config=llama_1_4b,
                 train_config=llama_1_4b_train_config,
             )
             bert_train_step = default_train(
                 name=f"checkpoints/quality_filtering/{config.experiment_name}/bert/{input_data_source}/train",
-                tokenized=bert_tokenize_step,
+                tokenized=lm_data_config(bert_tokenize_step, permutation_type="linear"),
                 model_config=llama_1_4b,
                 train_config=llama_1_4b_train_config,
             )

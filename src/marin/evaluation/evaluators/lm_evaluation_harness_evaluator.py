@@ -228,8 +228,8 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                     "name": model.name,
                     "tags": wandb_tags,
                 }
-
-                wandb_logger = WandbLogger(**wandb_args_dict)
+                # wandb_config_args_dict = simple_parse_args_string("")
+                wandb_logger = WandbLogger(init_args=wandb_args_dict)
 
                 # Use vLLM directly with TPU configuration that avoids deserialization issues
                 # Set environment variables to help with TPU compilation

@@ -24,14 +24,16 @@ import subprocess
 import time
 from pathlib import Path
 
+import yaml
 from ray.job_submission import JobSubmissionClient
 
 from marin.cluster.config import find_config_by_region
 from marin.cluster.ray import DashboardConfig, ray_dashboard
 from marin.run.ray_deps import build_runtime_env_for_packages
-from marin.run.vars import REMOTE_DASHBOARD_URL
 
 logger = logging.getLogger(__name__)
+
+REMOTE_DASHBOARD_URL = "http://127.0.0.1:8265"
 
 
 def parse_user_command_line(command: str) -> dict[str, str]:
@@ -209,8 +211,18 @@ def main():
         exit(1)
     full_cmd = full_cmd[2:]
 
-    # Load and merge environment variables from multiple -e options
+    # Auto-load env defaults from .marin.yaml if present, then merge -e overrides
     env_vars = {}
+    marin_yaml = Path(".marin.yaml")
+    if marin_yaml.exists():
+        try:
+            with open(marin_yaml, "r") as f:
+                marin_cfg = yaml.safe_load(f) or {}
+            if isinstance(marin_cfg.get("env"), dict):
+                for k, v in marin_cfg["env"].items():
+                    env_vars[str(k)] = "" if v is None else str(v)
+        except Exception as e:
+            logger.warning(f"Failed to parse {marin_yaml}: {e}")
 
     if args.env_vars:
         for item in args.env_vars:
@@ -251,13 +263,17 @@ def main():
         tpu_res = {f"TPU-{args.tpu}-head": 1, "TPU": chips}
         entrypoint_resources = (entrypoint_resources or {}) | tpu_res
 
-    # Resolve cluster config if specified
+    # Resolve cluster config (required)
     cluster_config = None
     if args.cluster:
         if args.cluster.endswith(".yaml") or os.path.exists(args.cluster):
             cluster_config = args.cluster
         else:
             cluster_config = find_config_by_region(args.cluster)
+
+    if not cluster_config:
+        logger.error("--cluster is required (name or path to an infra YAML).")
+        exit(1)
 
     # Submit the job and track it asynchronously
     submission_id = generate_submission_id(full_cmd)

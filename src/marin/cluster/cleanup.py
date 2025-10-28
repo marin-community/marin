@@ -12,195 +12,348 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Cleanup utilities for cluster management."""
+"""Automated cleanup utilities for cluster management.
+
+This module provides a cron-based cleanup system that periodically checks for
+and removes terminated/preempted TPU nodes.
+"""
 
 import argparse
-import asyncio
 import datetime
-import glob
+import itertools
 import json
 import logging
-import os
-import signal
 import subprocess
+import time
+from pathlib import Path
 from typing import Any
+
+import ray
+
+from .gcp import cleanup_preempted_tpus
 
 logger = logging.getLogger(__name__)
 
 
-def kill_tpu_processes(tpu_type: str = "v4-8", remote_dashboard_url: str | None = None) -> None:
-    """Kill TPU processes holding TPU resources.
+def get_tpu_worker_resources() -> dict[str, int]:
+    """Get list of unique worker resource names from Ray cluster.
 
-    This submits a Ray job that runs across all TPU workers to check for and kill
-    any processes holding TPU device files.
+    Queries the Ray GCS to find all worker nodes with TPU resources and returns
+    their unique resource identifiers.
+
+    Returns:
+        List of worker resource names like:
+        - ray-marin-us-east5-a-worker-09614199-tpu
+        - ray-marin-us-east5-a-worker-2f248a95-tpu
     """
-    # Import here to avoid circular dependencies
-    import asyncio
+    from .ray import list_nodes
 
-    logger.info(f"Submitting TPU cleanup job for TPU type: {tpu_type}")
-    asyncio.run(submit_tpu_cleanup_job(tpu_type))
-
-
-def _kill_active_tpu_processes() -> dict[str, Any]:
-    """Check and kill any processes holding TPU resources on the current node."""
-    hostname = os.uname().nodename
-    result = {
-        "hostname": hostname,
-        "devices_found": 0,
-        "killed": False,
-        "error": None,
-    }
-
-    # Find TPU devices
-    for _ in glob.glob("/sys/class/accel/accel*"):
-        result["devices_found"] += 1
-
+    worker_resources = {}
     try:
-        subprocess_result = subprocess.run(
-            ["lsof", "/sys/class/accel/accel*"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            shell=True,
+        nodes = list_nodes()
+
+        for node in nodes:
+            # Only process alive nodes
+            if node.get("state") != "ALIVE":
+                continue
+
+            resources = node.get("resources_total", {})
+            # Find worker-specific resources (format: ray-*-worker-*-tpu)
+            for resource_name in resources.keys():
+                if resource_name.startswith("ray-") and "-worker-" in resource_name and resource_name.endswith("-tpu"):
+                    worker_resources[resource_name] = resources[resource_name]
+
+        logger.info(f"Found {len(worker_resources)} TPU worker resources")
+    except Exception as e:
+        logger.error(f"Failed to get TPU worker resources: {e}")
+
+    return worker_resources
+
+
+def cleanup_tpu_processes() -> dict[str, Any]:
+    """Clean TPU lockfiles across all worker nodes."""
+
+    @ray.remote(num_cpus=0)
+    def _cleanup_worker():
+        """Remote task kill any TPU processes on a specific worker and cleanup the lockfile."""
+        subprocess.run(["sudo", "rm", "-f", "/tmp/libtpu_lockfile"], check=False)
+
+        # Find and kill any running TPU processes by traversing /proc
+        accels = []
+        for path in ["/dev/vfio/", "/dev/accel"]:
+            for chip in range(8):
+                accels.append(f"{path}{chip}")
+
+        pids = _find_pids_using_device(accels)
+        for pid in pids:
+            subprocess.run(["sudo", "--non-interactive", "kill", "-9", str(pid)], check=False)
+
+    def _find_pids_using_device(accels: list[str]) -> list[int]:
+        """Find PIDs that have the given device file open by traversing /proc.
+
+        Ignores processes we don't have permission to inspect.
+        """
+        pids = []
+        proc_dir = Path("/proc")
+
+        for pid_dir in proc_dir.iterdir():
+            if not pid_dir.name.isdigit():
+                continue
+
+            fd_dir = pid_dir / "fd"
+            if not fd_dir.exists():
+                continue
+
+            try:
+                for fd in fd_dir.iterdir():
+                    target = fd.resolve()
+                    if str(target) in accels:
+                        pids.append(int(pid_dir.name))
+                        break
+            except (OSError, PermissionError):
+                # Can't access this process's fds, skip it
+                continue
+
+        return pids
+
+    worker_resources = get_tpu_worker_resources()
+
+    if not worker_resources:
+        logger.info("No TPU workers found for cleanup")
+        return {"workers_targeted": 0, "workers_cleaned": 0, "errors": []}
+
+    logger.info(f"Cleaning TPU on {len(worker_resources)} workers")
+
+    # Schedule cleanup task on each worker using its specific resource
+    futures = {}
+    for resource_name, count in worker_resources.items():
+        # Schedule with resource requirement to target the given slice.
+        # For slices, we best-effort target one task per host.
+        for i in range(int(count)):
+            task = _cleanup_worker.options(resources={resource_name: 1}).remote()
+            futures[f"{resource_name}:{i}"] = task
+
+    results = {"workers_targeted": len(worker_resources), "workers_cleaned": 0, "errors": []}
+    ready, not_ready = ray.wait(list(futures.values()), num_returns=len(futures), timeout=60)
+
+    # Process completed tasks
+    for resource_name, future in futures.items():
+        if future in ready:
+            try:
+                ray.get(future)
+                results["workers_cleaned"] += 1
+            except Exception as e:
+                results["errors"].append(f"{resource_name}: {e}")
+        elif future in not_ready:
+            results["errors"].append(f"{resource_name}: Timed out after 60 seconds")
+
+    logger.info(f"Cleaned {results['workers_cleaned']}/{results['workers_targeted']} workers")
+
+    if results["errors"]:
+        logger.warning(f"Encountered {len(results['errors'])} errors during cleanup")
+
+    return results
+
+
+CLEANUP_JOB_PREFIX = "marin-cleanup-cron"
+
+
+def cleanup_iteration(project: str, zone: str, dry_run: bool = False) -> dict[str, Any]:
+    """Run one iteration of cleanup checks.
+
+    Performs:
+    - Removes terminated/preempted TPU nodes
+    - Terminates any processes using the TPU on idle workers
+
+    Args:
+        project: GCP project ID
+        zone: GCP zone
+        dry_run: If True, only report what would be cleaned without making changes
+
+    Returns:
+        Dict with cleanup results containing:
+        - deleted_tpus: List of deleted TPU names
+        - lockfile_cleanup: Dict with lockfile cleanup statistics
+    """
+    results = {"deleted_tpus": [], "lockfile_cleanup": {}}
+
+    # Cleanup preempted/terminated TPU nodes
+    deleted = cleanup_preempted_tpus(project, zone, dry_run=dry_run)
+    results["deleted_tpus"] = deleted
+
+    if deleted:
+        logger.info(f"Cleaned up {len(deleted)} preempted/terminated TPUs: {deleted}")
+
+    # Clean TPU lockfiles on active workers (skip during dry-run)
+    if not dry_run:
+        lockfile_results = cleanup_tpu_processes()
+        results["lockfile_cleanup"] = lockfile_results
+        logger.info(
+            f"TPU lockfile cleanup: {lockfile_results['workers_cleaned']}/{lockfile_results['workers_targeted']} workers"
         )
 
-        if subprocess_result.returncode == 0:
-            lines = subprocess_result.stdout.strip().split("\n")
-            for line in lines[1:]:  # Skip header
-                parts = line.split()
-                if len(parts) >= 2:
-                    pid = int(parts[1])
-                    logger.info(f"Found PID {pid} holding TPU resources, killing...")
-                    os.kill(pid, signal.SIGKILL)
-                    result["killed"] = True
-                    logger.info(f"Successfully killed process {pid}")
-
-        return result
-    except Exception as e:
-        result["error"] = str(e)
-        logger.error(f"Error checking/killing TPU processes: {e}")
-
-    return result
+    return results
 
 
-def _list_worker_nodes() -> list[str]:
-    """Get unique worker node IPs from Ray cluster."""
+def run_cleanup_loop(project: str, zone: str, interval: int = 600) -> None:
+    """Main cleanup cron loop - runs indefinitely checking for issues periodically.
+
+    This function runs as a Ray job and performs cleanup operations every `interval` seconds.
+    It will continue running until the job is explicitly stopped.
+
+    Args:
+        project: GCP project ID
+        zone: GCP zone
+        interval: Time between cleanup checks in seconds (default 600 = 10 minutes)
+    """
+    logger.info(f"Starting cleanup cron loop (interval={interval}s)")
+    logger.info(f"Monitoring project={project}, zone={zone}")
+
+    for iteration in itertools.count(1):
+        logger.info(f"=== Cleanup iteration {iteration} ===")
+
+        try:
+            results = cleanup_iteration(project, zone, dry_run=False)
+
+            if results["deleted_tpus"]:
+                logger.info(f"Iteration {iteration}: {len(results['deleted_tpus'])} TPUs terminated")
+
+            lockfile_stats = results.get("lockfile_cleanup", {})
+            workers_cleaned = lockfile_stats.get("workers_cleaned", 0)
+            workers_targeted = lockfile_stats.get("workers_targeted", 0)
+            logger.info(f"Iteration {iteration}: Lockfile cleanup - {workers_cleaned}/{workers_targeted} workers")
+            if lockfile_stats.get("errors"):
+                logger.warning(f"Iteration {iteration}: Lockfile cleanup errors - {lockfile_stats['errors']}")
+
+            if not results["deleted_tpus"] and not lockfile_stats:
+                logger.info(f"Iteration {iteration} complete: No cleanup needed")
+        except Exception as e:
+            logger.error(f"Cleanup iteration {iteration} failed: {e}", exc_info=True)
+            logger.info(f"Will retry in {interval}s...")
+
+        logger.info(f"Sleeping {interval}s until next check...")
+        time.sleep(interval)
+
+
+def list_jobs() -> list[dict[str, Any]]:
+    """List all Ray jobs.
+
+    Returns:
+        List of job info dicts
+    """
     result = subprocess.run(
-        ["ray", "list", "workers", "--format=json", "--limit=10000"],
+        ["ray", "job", "list", "--format=json"],
         capture_output=True,
         text=True,
-        timeout=30,
         check=True,
     )
 
-    workers = json.loads(result.stdout)
-    unique_ips = list(set(worker.get("ip") for worker in workers if worker.get("ip")))
-
-    logger.info(f"Found {len(unique_ips)} unique worker nodes")
-    return unique_ips
+    return json.loads(result.stdout)
 
 
-async def submit_tpu_cleanup_job(tpu_type: str):
-    """Submit TPU cleanup job to Ray cluster."""
-    from ray.job_submission import JobSubmissionClient
+def get_running_cleanup_job() -> dict[str, Any] | None:
+    """Check if a cleanup cron job is currently running.
 
-    from ..run.vars import REMOTE_DASHBOARD_URL
+    Returns:
+        Job info dict if found, None otherwise
+    """
+    jobs = list_jobs()
+    for job in jobs:
+        submission_id = job.get("submission_id", "")
+        if submission_id.startswith(CLEANUP_JOB_PREFIX):
+            status = job.get("status", "")
+            if status in ["RUNNING", "PENDING"]:
+                return job
 
-    client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
+    return None
 
-    # Request resources for the entire slice
-    entrypoint_resources = {f"TPU-{tpu_type}-head": 1}
 
-    runtime_dict = {
-        "working_dir": ".",
-        "config": {"setup_timeout_seconds": 60},
-    }
+def stop_cleanup_job(job_id: str) -> None:
+    """Stop a cleanup cron job.
 
-    entrypoint = f"python src/marin/cluster/cleanup.py --internal-run tpu --tpu-type {tpu_type}"
+    Args:
+        job_id: Ray job ID to stop
+    """
+    logger.info(f"Stopping cleanup job: {job_id}")
 
-    print(f"Submitting TPU cleanup job for TPU type: {tpu_type}")
-    print(f"Entrypoint: {entrypoint}")
-    print(f"Resources: {json.dumps(entrypoint_resources, indent=2)}")
+    subprocess.run(
+        ["ray", "job", "stop", job_id],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    logger.info(f"Successfully stopped cleanup job: {job_id}")
+
+
+def submit_cleanup_cron_job(project: str, zone: str, interval: int = 600) -> str:
+    """Submit the cleanup cron job to the Ray cluster.
+
+    If a cleanup job is already running, stops it first before starting a new one.
+
+    Args:
+        project: GCP project ID
+        zone: GCP zone
+        interval: Time between cleanup checks in seconds (default 600)
+
+    Returns:
+        Job ID of the submitted cleanup job
+    """
+    # Stop existing cleanup job if running
+    existing_job = get_running_cleanup_job()
+    if existing_job:
+        logger.info(f"Stopping existing cleanup job: {existing_job['job_id']}")
+        stop_cleanup_job(existing_job["job_id"])
+
+    # Build entrypoint command
+    entrypoint = f"python -m marin.cluster.cleanup " f"--project {project} " f"--zone {zone} " f"--interval {interval}"
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    submission_id = f"tpu_cleanup-{timestamp}"
+    submission_id = f"{CLEANUP_JOB_PREFIX}-{timestamp}"
 
-    client.submit_job(
-        submission_id=submission_id,
-        entrypoint=entrypoint,
-        runtime_env=runtime_dict,
-        entrypoint_resources=entrypoint_resources,
+    logger.info(f"Submitting cleanup cron job: {submission_id}")
+    logger.info(f"Entrypoint: {entrypoint}")
+
+    # Submit job using ray CLI
+    subprocess.run(
+        [
+            "ray",
+            "job",
+            "submit",
+            "--submission-id",
+            submission_id,
+            "--no-wait",
+            "--",
+            *entrypoint.split(),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     )
-    print(f"Job submitted with ID: {submission_id}")
-    print(f"Job URL: http://localhost:8265/#/jobs/{submission_id}")
 
-    # Stream logs
-    async for lines in client.tail_job_logs(submission_id):
-        print(lines, end="")
-
-    result = client.get_job_status(submission_id)
-    print(f"Job finished with status: {result}")
-
-
-def run_tpu_cleanup_on_all_workers(tpu_type: str):
-    """Run TPU cleanup on all workers in the cluster."""
-    import ray
-    from levanter.infra.ray_tpu import run_on_pod
-
-    @ray.remote(max_calls=1)
-    def _cleanup_tpu_process():
-        _kill_active_tpu_processes()
-
-    run_on_pod(
-        _cleanup_tpu_process,
-        tpu_type,
-        num_slices=1,
-        max_retries_failure=0,
-        max_retries_preemption=0,
-    )
-    ray.shutdown()
+    logger.info(f"Cleanup job submitted: {submission_id}")
+    return submission_id
 
 
 def main():
-    """Main CLI entry point with subcommands."""
-    parser = argparse.ArgumentParser(description="Cluster cleanup utilities")
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
-
-    # Temp cleanup subcommand
-    temp_parser = subparsers.add_parser("temp", help="Clean up Ray temporary files")
-    temp_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be cleaned without actually deleting",
-    )
-    temp_parser.add_argument(
-        "--internal-run",
-        action="store_true",
-        help="Internal flag to run cleanup directly on cluster",
-    )
-
-    # TPU cleanup subcommand
-    tpu_parser = subparsers.add_parser("tpu", help="Clean up TPU processes by PID")
-    tpu_parser.add_argument(
-        "--tpu-type",
-        type=str,
-        default="v4-8",
-        help="TPU type to target (default: v4-8)",
-    )
-    tpu_parser.add_argument("--no-wait", action="store_true", help="Don't wait for job to complete")
-    tpu_parser.add_argument("--internal-run", action="store_true", help="Internal flag to run cleanup directly")
+    """CLI entry point for cleanup utilities."""
+    parser = argparse.ArgumentParser(description="Automated cluster cleanup utilities")
+    parser.add_argument("--project", required=True, help="GCP project ID")
+    parser.add_argument("--zone", required=True, help="GCP zone")
+    parser.add_argument("--interval", type=int, default=600, help="Cleanup interval in seconds (default: 600)")
 
     args = parser.parse_args()
 
-    if args.command == "tpu":
-        if args.internal_run:
-            run_tpu_cleanup_on_all_workers(args.tpu_type)
-        else:
-            asyncio.run(submit_tpu_cleanup_job(args.tpu_type))
-    else:
-        parser.print_help()
+    # Run the cleanup loop
+    run_cleanup_loop(
+        project=args.project,
+        zone=args.zone,
+        interval=args.interval,
+    )
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
     main()
