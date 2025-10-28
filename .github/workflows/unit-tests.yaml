@@ -83,7 +83,10 @@ jobs:
           rm -f /tmp/libtpu_lockfile || true
           lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
 
-          timeout 900 docker run --rm --privileged \
+          # Levanter likes to log to `logs/` and crashes if it can't write there
+          # Pytest writes to the cache directory and creates noise warnings if it can't write there
+
+          docker run --rm --privileged \
             --device /dev/vfio:/dev/vfio \
             --net=host \
             --shm-size=100g \
@@ -97,6 +100,8 @@ jobs:
             -e PYTHONPATH=/workspace \
             -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \
             -v ${{ github.workspace }}:/workspace:rw \
+            --tmpfs /workspace/logs:rw \
+            --tmpfs /workspace/.pytest_cache:rw \
             -w /workspace \
             us-west4-docker.pkg.dev/hai-gcp-models/marin-ci/tpu-ci:latest \
-            uv run pytest tests/tpu/ -v --tb=short -s --log-cli-level=INFO
+            timeout --kill-after=5 --signal=TERM 900 uv run pytest tests/tpu/ -v --tb=short -s --log-cli-level=INFO

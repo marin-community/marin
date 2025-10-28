@@ -485,7 +485,7 @@ def debug_tpu(index: int, test_path: str, pytest_args: str):
         gcloud compute tpus tpu-vm ssh {vm_name} \
         --zone {config.ZONE} \
         --project {config.GCP_PROJECT_ID} \
-        --command 'sudo rm -rf {remote_dir} && mkdir -p {remote_dir} && tar xzf - -C {remote_dir} && sudo chown -R github-runner:github-runner {remote_dir}'"""  # noqa: E501
+        --command 'sudo rm -rf {remote_dir} && mkdir -p {remote_dir} && tar xzf - -C {remote_dir}'"""
 
     result = run(tar_cmd, shell=True, check=False)
     if result.returncode != 0:
@@ -528,7 +528,7 @@ def debug_tpu(index: int, test_path: str, pytest_args: str):
         "--project",
         config.GCP_PROJECT_ID,
         "--command",
-        f"""timeout 60 sudo -u github-runner bash -c 'docker run --rm \
+        f"""sudo -u github-runner bash -c 'docker run --rm \
             --device /dev/vfio:/dev/vfio \
             --net=host \
             --shm-size=100g \
@@ -546,7 +546,7 @@ def debug_tpu(index: int, test_path: str, pytest_args: str):
             --tmpfs /workspace/.pytest_cache:rw \
             -w /workspace \
             {config.DOCKER_IMAGE_FULL} \
-            uv run pytest {test_path} {pytest_args}'""",
+            timeout --kill-after=5 --signal=TERM 120 uv run pytest {test_path} {pytest_args}' || true""",
     ]
 
     result = run(ssh_cmd, check=False)
