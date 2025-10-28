@@ -41,7 +41,6 @@ dependencies = [
     "tqdm",
     "tqdm-loggable",
     "wandb",
-    "vllm-tpu==0.11.1",
 ]
 
 [dependency-groups]

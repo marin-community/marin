@@ -36,7 +36,8 @@ from tests.rl.integration.config import (
     create_test_curriculum_config,
     create_test_rollout_storage_config,
     create_vllm_inference_config,
-    create_nano_qwen_config,
+    create_qwen_config,
+    create_qwen_tokenizer,
 )
 from tests.rl.integration.tasks import create_cats_rollout_batch, validate_cats_model
 
@@ -177,7 +178,7 @@ def test_full_integration_moar_cats_vllm(ray_tpu_cluster, tmp_path):
 
     # Create RLJobConfig and get worker configs
     job_config = RLJobConfig(
-        model=create_nano_qwen_config(),
+        model=create_qwen_config(),
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
@@ -190,7 +191,7 @@ def test_full_integration_moar_cats_vllm(ray_tpu_cluster, tmp_path):
             ),
         ),
         curriculum=create_test_curriculum_config(),
-        tokenizer=DummyTokenizer(),
+        tokenizer=create_qwen_tokenizer(),
         rollout_storage=rollout_storage_config,
         inference_type="vllm",
         inference_config=create_vllm_inference_config(),
@@ -219,4 +220,4 @@ def test_full_integration_moar_cats_vllm(ray_tpu_cluster, tmp_path):
 
     assert inference_runner.weight_transfers >= 1, "Should have at least one weight transfer during long run"
 
-    validate_cats_model(training_runner.trained_model, DummyTokenizer())
+    validate_cats_model(training_runner.trained_model, create_qwen_tokenizer())

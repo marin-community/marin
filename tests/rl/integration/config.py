@@ -47,6 +47,7 @@ from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 from optax import softmax_cross_entropy_with_integer_labels
+from transformers import AutoTokenizer
 
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLOOLoss
@@ -211,7 +212,7 @@ def create_weight_transfer_config():
     )
 
 
-def create_nano_qwen_config():
+def create_qwen_config():
     return Qwen3Config(
         seq_len=4096,
         hidden_dim=1024,
@@ -222,6 +223,10 @@ def create_nano_qwen_config():
         rope=Llama3RotaryEmbeddingsConfig(),
         tie_word_embeddings=True,
     )
+
+
+def create_qwen_tokenizer():
+    return AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
 
 
 def create_vllm_inference_config():
