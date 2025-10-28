@@ -13,107 +13,31 @@
 # limitations under the License.
 
 """
-Test RolloutContext - demonstrates lightweight testing without infrastructure.
+Test RolloutContext and its utility functions.
 
-Compare this to test_rollout_worker.py which requires full infrastructure setup.
+This file contains:
+1. Unit tests for stateless utility functions (compute_batch_metrics, etc.)
+2. Mock-based tests for RolloutContext API (verifying method signatures and behavior)
+3. Integration test placeholders (full infrastructure tests in tests/rl/integration/)
+
+The RolloutContext refactor split responsibilities:
+- RolloutContext: Manages inference, curriculum, rollout generation
+- RolloutWorker: Handles I/O (weight transfer, storage, logging)
 """
 
-import numpy as np
-import jax.numpy as jnp
+import time
+from unittest.mock import MagicMock, patch, Mock
 
-from marin.rl.environments.base import MarinEnv, EnvConfig
-from marin.rl.inference_ctx import InferenceContext
+import numpy as np
+
 from marin.rl.rollout_context import (
     RolloutContext,
     compute_batch_metrics,
     build_eval_metrics,
     format_sample_for_logging,
+    compute_rollout_stats,
 )
-from marin.rl.types import Rollout, RolloutGroup
-from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
-
-
-class MockInferenceContext(InferenceContext):
-    """Mock inference context for testing - no server required!"""
-
-    def __init__(self, tokenizer):
-        self.tokenizer = tokenizer
-        self.max_tokens = 128
-        self._stop_tokens = None
-
-    def batch_completions(self, prompts, temperature, n, max_tokens=None, stop=None):
-        """Return fake completions."""
-        completions = []
-        for _ in prompts:
-            choices = []
-            for i in range(n):
-
-                class MockChoice:
-                    def __init__(self):
-                        self.message = type("obj", (), {"content": f"Response {i}", "role": "assistant"})()  # noqa: B023
-
-                        class LogprobToken:
-                            def __init__(self, token, logprob):
-                                self.token = token
-                                self.logprob = logprob
-
-                        self.logprobs = type(
-                            "obj", (), {"content": [LogprobToken(f"tok_{j}", -0.5) for j in range(5)]}
-                        )()
-
-                choices.append(MockChoice())
-
-            class MockCompletion:
-                def __init__(self):
-                    self.choices = choices  # noqa: B023
-
-            completions.append(MockCompletion())
-        return completions
-
-    def tokenize_prompt(self, prompt):
-        return np.array([1, 2, 3], dtype=np.int32)
-
-    def response_tokens_from_choice(self, choice):
-        return np.array([10, 11, 12, 13, 14], dtype=np.int32)
-
-    def logprobs_from_choice(self, choice):
-        return np.array([-0.5] * 5, dtype=np.float32)
-
-
-class SimpleTestEnv(MarinEnv):
-    """Test environment that returns controllable rewards."""
-
-    def __init__(self, success_rate: float = 0.5, env_name: str = "SimpleTestEnv"):
-        self.success_rate = success_rate
-        self.env_name = env_name
-        self._call_count = 0
-
-    def sample(self, inference_ctx, n_examples, n_generations, temperature, prng_key, mode="train"):
-        self._call_count += 1
-        prompts = [f"Test prompt {i}" for i in range(n_examples)]
-        completions = inference_ctx.batch_completions(prompts, temperature, n_generations)
-
-        groups = []
-        for i, (prompt, completion) in enumerate(zip(prompts, completions, strict=False)):
-            rollouts = []
-            for j, choice in enumerate(completion.choices):
-                # Deterministic reward based on index for testing
-                reward = 1.0 if (i + j) % int(1 / self.success_rate) == 0 else 0.0
-
-                rollout = Rollout(
-                    env_name=self.env_name,
-                    env_example_id=f"test_{i}",
-                    prompt_tokens=inference_ctx.tokenize_prompt(prompt),
-                    response_tokens=inference_ctx.response_tokens_from_choice(choice),
-                    response_logprobs=inference_ctx.logprobs_from_choice(choice),
-                    token_rewards=jnp.ones(5) * reward,
-                    episode_reward=reward,
-                )
-                rollouts.append(rollout)
-            groups.append(RolloutGroup(rollouts=rollouts))
-
-        metrics = {"test_metric": 1.0, "call_count": self._call_count}
-        return groups, metrics
+from marin.rl.types import Rollout, RolloutGroup, RolloutBatch, RolloutMetadata
 
 
 class SimpleTokenizer:
@@ -128,209 +52,428 @@ class SimpleTokenizer:
         return hash(token) % self.vocab_size
 
 
-def test_rollout_context_basic():
-    """Test basic rollout generation with RolloutContext."""
-    tokenizer = SimpleTokenizer()
-    ctx = RolloutContext(tokenizer=tokenizer, seed=42)
-
-    # Create test environment
-    env = SimpleTestEnv(success_rate=0.5)
-    inference_ctx = MockInferenceContext(tokenizer)
-
-    # Generate rollouts - no JAX setup needed!
-    batch, metrics = ctx.sample_rollouts(
-        inference_ctx=inference_ctx,
-        env_or_lesson_id=env,
-        n_examples=4,
-        n_generations=2,
-        temperature=0.7,
+def create_test_rollout(reward: float, example_id: str, n_tokens: int = 10) -> Rollout:
+    """Helper to create a test rollout."""
+    return Rollout(
+        env_name="TestEnv",
+        env_example_id=example_id,
+        prompt_tokens=np.array([1, 2, 3], dtype=np.int32),
+        response_tokens=np.array(list(range(n_tokens)), dtype=np.int32),
+        response_logprobs=np.array([0.0] * n_tokens, dtype=np.float32),
+        token_rewards=np.array([reward / n_tokens] * n_tokens, dtype=np.float32),
+        episode_reward=reward,
+        metadata=RolloutMetadata(
+            worker_id="test_worker",
+            timestamp=time.time(),
+            weight_step=100,
+        ),
     )
 
-    assert batch is not None
-    assert len(batch.groups) == 4  # n_examples
-    assert all(len(group.rollouts) == 2 for group in batch.groups)  # n_generations
 
-    # Check metrics
-    batch_metrics = compute_batch_metrics(batch, "test_env")
-    assert batch_metrics.total_count == 8  # 4 examples * 2 generations
-    assert batch_metrics.success_count == 4  # 50% success rate
-    assert batch_metrics.avg_reward == 0.5
+def test_compute_rollout_stats():
+    """Test compute_rollout_stats utility function."""
+    rollout1 = create_test_rollout(reward=1.0, example_id="ex1")
+    rollout2 = create_test_rollout(reward=0.0, example_id="ex2")
+    rollout3 = create_test_rollout(reward=0.5, example_id="ex3")
 
-    # Check environment was called
-    assert metrics["call_count"] == 1
+    batch = RolloutBatch(
+        groups=[
+            RolloutGroup(rollouts=[rollout1, rollout2]),
+            RolloutGroup(rollouts=[rollout3]),
+        ],
+        metadata=RolloutMetadata(
+            worker_id="test_worker",
+            timestamp=time.time(),
+            weight_step=100,
+        ),
+    )
+
+    stats = compute_rollout_stats(batch, "test_lesson")
+
+    assert len(stats) == 3
+    assert stats[0].lesson_id == "test_lesson"
+    assert stats[0].episode_reward == 1.0
+    assert stats[0].env_example_id == "ex1"
+    assert stats[1].episode_reward == 0.0
+    assert stats[2].episode_reward == 0.5
 
 
-def test_rollout_context_with_curriculum():
-    """Test RolloutContext with curriculum configuration."""
+def test_compute_batch_metrics():
+    """Test compute_batch_metrics utility function."""
+    rollout1 = create_test_rollout(reward=1.0, example_id="ex1")
+    rollout2 = create_test_rollout(reward=0.0, example_id="ex2")
+    rollout3 = create_test_rollout(reward=1.0, example_id="ex3")
+    rollout4 = create_test_rollout(reward=0.5, example_id="ex4")
+
+    batch = RolloutBatch(
+        groups=[
+            RolloutGroup(rollouts=[rollout1, rollout2]),
+            RolloutGroup(rollouts=[rollout3, rollout4]),
+        ],
+        metadata=RolloutMetadata(
+            worker_id="test_worker",
+            timestamp=time.time(),
+            weight_step=100,
+        ),
+    )
+
+    metrics = compute_batch_metrics(batch, "test_lesson")
+
+    assert metrics.total_count == 4
+    assert metrics.success_count == 3  # rewards > 0 (three rollouts: 1.0, 1.0, 0.5)
+    assert metrics.avg_reward == 0.625  # (1.0 + 0.0 + 1.0 + 0.5) / 4
+    assert len(metrics.rollout_stats) == 4
+
+
+def test_compute_batch_metrics_empty():
+    """Test compute_batch_metrics with empty batch."""
+    batch = RolloutBatch(
+        groups=[],
+        metadata=RolloutMetadata(
+            worker_id="test_worker",
+            timestamp=time.time(),
+            weight_step=100,
+        ),
+    )
+
+    metrics = compute_batch_metrics(batch, "test_lesson")
+
+    assert metrics.total_count == 0
+    assert metrics.success_count == 0
+    assert metrics.avg_reward == 0.0
+    assert len(metrics.rollout_stats) == 0
+
+
+def test_build_eval_metrics():
+    """Test build_eval_metrics utility function."""
+    rollout1 = create_test_rollout(reward=1.0, example_id="ex1")
+    rollout2 = create_test_rollout(reward=0.0, example_id="ex2")
+    rollout3 = create_test_rollout(reward=1.0, example_id="ex3")
+    rollout4 = create_test_rollout(reward=0.0, example_id="ex4")
+
+    batch = RolloutBatch(
+        groups=[
+            RolloutGroup(rollouts=[rollout1, rollout2]),
+            RolloutGroup(rollouts=[rollout3, rollout4]),
+        ],
+        metadata=RolloutMetadata(
+            worker_id="test_worker",
+            timestamp=time.time(),
+            weight_step=100,
+        ),
+    )
+
+    batch_metrics = compute_batch_metrics(batch, "math_lesson")
+    metrics = build_eval_metrics("inference.eval", "math_lesson", batch_metrics)
+
+    assert "inference.eval/math_lesson/success_rate" in metrics
+    assert "inference.eval/math_lesson/avg_reward" in metrics
+    assert "inference.eval/math_lesson/total_count" in metrics
+
+    assert metrics["inference.eval/math_lesson/success_rate"] == 0.5
+    assert metrics["inference.eval/math_lesson/avg_reward"] == 0.5
+    assert metrics["inference.eval/math_lesson/total_count"] == 4
+
+
+def test_build_eval_metrics_empty():
+    """Test build_eval_metrics with empty batch."""
+    batch = RolloutBatch(
+        groups=[],
+        metadata=RolloutMetadata(
+            worker_id="test_worker",
+            timestamp=time.time(),
+            weight_step=100,
+        ),
+    )
+
+    batch_metrics = compute_batch_metrics(batch, "test_lesson")
+    metrics = build_eval_metrics("rollout", "test_lesson", batch_metrics)
+
+    assert metrics == {}
+
+
+def test_format_sample_for_logging():
+    """Test format_sample_for_logging utility function."""
     tokenizer = SimpleTokenizer()
 
-    # Create curriculum config
+    rollout1 = create_test_rollout(reward=1.0, example_id="example_123", n_tokens=15)
+    rollout2 = create_test_rollout(reward=0.0, example_id="example_456", n_tokens=20)
+
+    batch = RolloutBatch(
+        groups=[
+            RolloutGroup(rollouts=[rollout1]),
+            RolloutGroup(rollouts=[rollout2]),
+        ],
+        metadata=RolloutMetadata(
+            worker_id="test_worker",
+            timestamp=time.time(),
+            weight_step=100,
+        ),
+    )
+
+    sample = format_sample_for_logging(batch, tokenizer)
+
+    assert "sample_prompt" in sample
+    assert "sample_response" in sample
+    assert "sample_example_id" in sample
+
+    assert sample["sample_example_id"] == "example_123"
+    assert "3 tokens" in sample["sample_prompt"]  # 3 prompt tokens
+    assert "15 tokens" in sample["sample_response"]  # 15 response tokens
+
+
+def test_format_sample_for_logging_empty():
+    """Test format_sample_for_logging with empty batch."""
+    tokenizer = SimpleTokenizer()
+
+    batch = RolloutBatch(
+        groups=[],
+        metadata=RolloutMetadata(
+            worker_id="test_worker",
+            timestamp=time.time(),
+            weight_step=100,
+        ),
+    )
+
+    sample = format_sample_for_logging(batch, tokenizer)
+
+    assert sample == {}
+
+
+# === RolloutContext API Tests (using mocks) ===
+
+
+@patch("marin.rl.rollout_context.InferenceServer")
+@patch("marin.rl.rollout_context.get_or_create_curriculum_actor")
+@patch("marin.rl.rollout_context.threading.Thread")
+@patch("marin.rl.rollout_context.time.sleep")
+def test_rollout_context_initialization(mock_sleep, mock_thread, mock_curriculum, mock_server):
+    """Test RolloutContext initializes with required components."""
+    from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
+    from marin.rl.environments.base import EnvConfig
+
+    # Mock the required configs
+    mock_inference_config = Mock()
+    mock_model_config = Mock()
+    mock_trainer_config = Mock()
+    mock_trainer_config.device_mesh = MagicMock()  # Support context manager
+    mock_trainer_config.device_mesh.__enter__ = Mock(return_value=None)
+    mock_trainer_config.device_mesh.__exit__ = Mock(return_value=None)
+    mock_trainer_config.compute_axis_mapping = {}
+
+    mock_tokenizer = SimpleTokenizer()
+    mock_model = Mock()
+
+    # Mock curriculum config
     curriculum_config = CurriculumConfig(
         lessons={
-            "easy": LessonConfig(
-                lesson_id="easy",
+            "test_lesson": LessonConfig(
+                lesson_id="test_lesson",
                 env_config=EnvConfig(
-                    env_class="tests.rl.test_rollout_context.SimpleTestEnv",
-                    env_args={"success_rate": 0.8, "env_name": "EasyEnv"},
+                    env_class="test.DummyEnv",
+                    env_args={},
                 ),
                 sampling_params=SamplingParams(
-                    temperature=0.5,
+                    temperature=0.7,
                     n_prompts=10,
                     n_generations_per_prompt=2,
-                    max_tokens=100,
                 ),
-            ),
-            "hard": LessonConfig(
-                lesson_id="hard",
-                env_config=EnvConfig(
-                    env_class="tests.rl.test_rollout_context.SimpleTestEnv",
-                    env_args={"success_rate": 0.2, "env_name": "HardEnv"},
-                ),
-                sampling_params=SamplingParams(
-                    temperature=1.0,
-                    n_prompts=5,
-                    n_generations_per_prompt=3,
-                    max_tokens=200,
-                ),
-            ),
+            )
         },
         eval_frequency=100,
         eval_n_examples=10,
     )
 
+    # Mock the inference server creation
+    mock_server_instance = Mock()
+    mock_server.create.return_value = mock_server_instance
+
+    # Mock curriculum actor
+    mock_curriculum_actor = Mock()
+    mock_curriculum.return_value = mock_curriculum_actor
+
+    # Create RolloutContext
     ctx = RolloutContext(
-        tokenizer=tokenizer,
+        inference_config=mock_inference_config,
+        model_config=mock_model_config,
+        trainer_config=mock_trainer_config,
         curriculum_config=curriculum_config,
-        seed=42,
+        tokenizer=mock_tokenizer,
+        initial_model=mock_model,
+        worker_id="test_worker",
     )
 
-    inference_ctx = MockInferenceContext(tokenizer)
+    # Verify initialization
+    assert ctx.tokenizer == mock_tokenizer
+    assert ctx.curriculum_config == curriculum_config
+    assert ctx.worker_id == "test_worker"
+    assert ctx._policy_model == mock_model
 
-    # Test loading environment by lesson ID
-    easy_batch, _ = ctx.sample_rollouts(
-        inference_ctx=inference_ctx,
-        env_or_lesson_id="easy",
-        n_examples=4,
-        n_generations=2,
-        temperature=0.7,  # Should be overridden by lesson config
+    # Verify inference server was created
+    mock_server.create.assert_called_once()
+
+    # Verify curriculum actor was created
+    mock_curriculum.assert_called_once_with(curriculum_config)
+    assert ctx._curriculum_actor == mock_curriculum_actor
+
+
+@patch("marin.rl.rollout_context.InferenceServer")
+@patch("marin.rl.rollout_context.get_or_create_curriculum_actor")
+@patch("marin.rl.rollout_context.threading.Thread")
+@patch("marin.rl.rollout_context.time.sleep")
+def test_rollout_context_update_model(mock_sleep, mock_thread, mock_curriculum, mock_server):
+    """Test RolloutContext.update_model() updates the model and reloads inference server."""
+    from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
+    from marin.rl.environments.base import EnvConfig
+
+    # Setup mocks
+    mock_inference_config = Mock()
+    mock_model_config = Mock()
+    mock_trainer_config = Mock()
+    mock_trainer_config.device_mesh = MagicMock()  # Support context manager
+    mock_trainer_config.device_mesh.__enter__ = Mock(return_value=None)
+    mock_trainer_config.device_mesh.__exit__ = Mock(return_value=None)
+    mock_trainer_config.compute_axis_mapping = {}
+
+    mock_tokenizer = SimpleTokenizer()
+    mock_initial_model = Mock(name="initial_model")
+    mock_new_model = Mock(name="new_model")
+
+    curriculum_config = CurriculumConfig(
+        lessons={
+            "test": LessonConfig(
+                lesson_id="test",
+                env_config=EnvConfig(env_class="test.Env", env_args={}),
+                sampling_params=SamplingParams(temperature=1.0, n_prompts=1, n_generations_per_prompt=1),
+            )
+        },
+        eval_frequency=100,
+        eval_n_examples=10,
     )
 
-    assert easy_batch is not None
-    # Check that environment was loaded correctly
-    assert easy_batch.groups[0].rollouts[0].env_name == "EasyEnv"
+    mock_server_instance = Mock()
+    mock_server.create.return_value = mock_server_instance
+    mock_curriculum.return_value = Mock()
 
-    # Test evaluate_all_lessons
-    results = ctx.evaluate_all_lessons(inference_ctx, n_examples_per_lesson=5)
-
-    assert "easy" in results
-    assert "hard" in results
-
-    easy_metrics, _ = results["easy"]
-    hard_metrics, _ = results["hard"]
-
-    # Easy env should have higher success rate
-    assert easy_metrics.avg_reward > hard_metrics.avg_reward
-
-
-def test_utility_functions():
-    """Test the stateless utility functions."""
-    tokenizer = SimpleTokenizer()
-    ctx = RolloutContext(tokenizer=tokenizer)
-
-    env = SimpleTestEnv(success_rate=0.5)
-    inference_ctx = MockInferenceContext(tokenizer)
-
-    batch, _ = ctx.sample_rollouts(
-        inference_ctx=inference_ctx,
-        env_or_lesson_id=env,
-        n_examples=2,
-        n_generations=2,
-        temperature=0.7,
+    # Create context
+    ctx = RolloutContext(
+        inference_config=mock_inference_config,
+        model_config=mock_model_config,
+        trainer_config=mock_trainer_config,
+        curriculum_config=curriculum_config,
+        tokenizer=mock_tokenizer,
+        initial_model=mock_initial_model,
     )
 
-    # Test compute_batch_metrics
-    metrics = compute_batch_metrics(batch, "test")
-    assert metrics.total_count == 4
-    assert metrics.success_count == 2
-    assert len(metrics.rollout_stats) == 4
+    # Verify initial model
+    assert ctx._policy_model == mock_initial_model
 
-    # Test build_eval_metrics
-    eval_metrics = build_eval_metrics("eval", "test", metrics)
-    assert "eval/test/success_rate" in eval_metrics
-    assert eval_metrics["eval/test/success_rate"] == 0.5
-    assert eval_metrics["eval/test/avg_reward"] == 0.5
+    # Update model
+    ctx.update_model(mock_new_model)
 
-    # Test format_sample_for_logging
-    sample_data = format_sample_for_logging(batch, tokenizer)
-    assert "sample_prompt" in sample_data
-    assert "sample_response" in sample_data
-    assert "sample_example_id" in sample_data
+    # Verify model was updated
+    assert ctx._policy_model == mock_new_model
+
+    # Verify inference server reload was called
+    mock_server_instance.reload.assert_called_once()
 
 
-def test_rollout_context_hooks_usage():
-    """Demonstrate how hooks can use RolloutContext for evaluation."""
+@patch("marin.rl.rollout_context.InferenceServer")
+@patch("marin.rl.rollout_context.get_or_create_curriculum_actor")
+@patch("marin.rl.rollout_context.threading.Thread")
+@patch("marin.rl.rollout_context.time.sleep")
+def test_rollout_context_shutdown(mock_sleep, mock_thread, mock_curriculum, mock_server):
+    """Test RolloutContext.shutdown() cleans up resources."""
+    from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
+    from marin.rl.environments.base import EnvConfig
 
-    class EvalHook:
-        """Example evaluation hook that uses RolloutContext."""
+    # Setup mocks
+    mock_inference_config = Mock()
+    mock_model_config = Mock()
+    mock_trainer_config = Mock()
+    mock_trainer_config.device_mesh = MagicMock()  # Support context manager
+    mock_trainer_config.device_mesh.__enter__ = Mock(return_value=None)
+    mock_trainer_config.device_mesh.__exit__ = Mock(return_value=None)
+    mock_trainer_config.compute_axis_mapping = {}
 
-        def __init__(self, rollout_context: RolloutContext, inference_ctx: InferenceContext):
-            self.context = rollout_context
-            self.inference_ctx = inference_ctx
+    curriculum_config = CurriculumConfig(
+        lessons={
+            "test": LessonConfig(
+                lesson_id="test",
+                env_config=EnvConfig(env_class="test.Env", env_args={}),
+                sampling_params=SamplingParams(temperature=1.0, n_prompts=1, n_generations_per_prompt=1),
+            )
+        },
+        eval_frequency=100,
+        eval_n_examples=10,
+    )
 
-        def evaluate_environments(self):
-            """Evaluate all loaded environments."""
-            results = {}
-            for env_id, env in self.context.get_loaded_environments().items():
-                batch, env_metrics = self.context.sample_rollouts(
-                    self.inference_ctx,
-                    env_or_lesson_id=env,
-                    n_examples=10,
-                    n_generations=1,
-                    temperature=1.0,
-                    mode="eval",
+    mock_server_instance = Mock()
+    mock_server.create.return_value = mock_server_instance
+    mock_curriculum.return_value = Mock()
+
+    # Create context
+    ctx = RolloutContext(
+        inference_config=mock_inference_config,
+        model_config=mock_model_config,
+        trainer_config=mock_trainer_config,
+        curriculum_config=curriculum_config,
+        tokenizer=SimpleTokenizer(),
+        initial_model=Mock(),
+    )
+
+    # Shutdown
+    ctx.shutdown()
+
+    # Verify inference server shutdown was called
+    mock_server_instance.shutdown.assert_called_once()
+
+
+def test_rollout_context_set_weight_step():
+    """Test RolloutContext.set_weight_step() updates the weight step."""
+    with (
+        patch("marin.rl.rollout_context.InferenceServer"),
+        patch("marin.rl.rollout_context.get_or_create_curriculum_actor"),
+        patch("marin.rl.rollout_context.threading.Thread"),
+        patch("marin.rl.rollout_context.time.sleep"),
+    ):
+
+        from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
+        from marin.rl.environments.base import EnvConfig
+
+        mock_trainer_config = Mock()
+        mock_trainer_config.device_mesh = MagicMock()  # Support context manager
+        mock_trainer_config.device_mesh.__enter__ = Mock(return_value=None)
+        mock_trainer_config.device_mesh.__exit__ = Mock(return_value=None)
+        mock_trainer_config.compute_axis_mapping = {}
+
+        curriculum_config = CurriculumConfig(
+            lessons={
+                "test": LessonConfig(
+                    lesson_id="test",
+                    env_config=EnvConfig(env_class="test.Env", env_args={}),
+                    sampling_params=SamplingParams(temperature=1.0, n_prompts=1, n_generations_per_prompt=1),
                 )
-                if batch:
-                    metrics = compute_batch_metrics(batch, env_id)
-                    results[env_id] = {
-                        "success_rate": metrics.success_count / metrics.total_count if metrics.total_count > 0 else 0,
-                        "avg_reward": metrics.avg_reward,
-                        "env_metrics": env_metrics,
-                    }
-            return results
+            },
+            eval_frequency=100,
+            eval_n_examples=10,
+        )
 
-    # Setup
-    tokenizer = SimpleTokenizer()
-    ctx = RolloutContext(tokenizer=tokenizer)
-    inference_ctx = MockInferenceContext(tokenizer)
+        ctx = RolloutContext(
+            inference_config=Mock(),
+            model_config=Mock(),
+            trainer_config=mock_trainer_config,
+            curriculum_config=curriculum_config,
+            tokenizer=SimpleTokenizer(),
+            initial_model=Mock(),
+        )
 
-    # Load some environments
-    env1 = SimpleTestEnv(success_rate=0.7, env_name="Env1")
-    env2 = SimpleTestEnv(success_rate=0.3, env_name="Env2")
+        # Initial weight step should be 0
+        assert ctx._current_weight_step == 0
 
-    # Sample from them to get them loaded
-    ctx.sample_rollouts(inference_ctx, env1, 1, 1, 0.7)
-    ctx.sample_rollouts(inference_ctx, env2, 1, 1, 0.7)
+        # Update weight step
+        ctx.set_weight_step(42)
+        assert ctx._current_weight_step == 42
 
-    # Create hook and evaluate
-    hook = EvalHook(ctx, inference_ctx)
-    results = hook.evaluate_environments()
-
-    # Check results
-    assert len(results) == 2  # Should have evaluated both environments
-
-    # Get results values (order might vary)
-    results_list = list(results.values())
-    # Sort by success rate to identify which is which
-    results_list.sort(key=lambda x: x["success_rate"])
-
-    # Lower success rate should be env2 (0.3), higher should be env1 (0.7)
-    assert results_list[0]["success_rate"] < 0.5  # env2
-    assert results_list[1]["success_rate"] > 0.5  # env1
-
-
-if __name__ == "__main__":
-    test_rollout_context_basic()
-    test_rollout_context_with_curriculum()
-    test_utility_functions()
-    test_rollout_context_hooks_usage()
-    print("✅ All tests passed!")
+        ctx.set_weight_step(100)
+        assert ctx._current_weight_step == 100
