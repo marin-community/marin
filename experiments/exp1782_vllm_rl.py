@@ -33,7 +33,7 @@ from marin.execution.executor import (
     OutputName,
     executor_main,
 )
-from marin.rl.curriculum import CurriculumConfig, LessonConfig
+from marin.rl.curriculum import CurriculumConfig, LessonConfig, LessonDependency
 from marin.rl.environments import EnvConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
@@ -130,43 +130,42 @@ def create_math_curriculum(run_id: str, experiment_config: ModelConfig) -> Curri
             dependencies=[],
             sampling_params=default_sampling,
         ),
-        # "addition_easy": LessonConfig(
-        #     lesson_id="addition_easy",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "addition", "difficulty": "easy", "seed": 42},
-        #     ),
-        #     dependencies=[LessonDependency(dependency_id="number_comparison", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
-        # "addition_medium": LessonConfig(
-        #     lesson_id="addition_medium",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "addition", "difficulty": "medium", "seed": 42},
-        #     ),
-        #     dependencies=[LessonDependency(dependency_id="addition_easy", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
-        # "addition_hard": LessonConfig(
-        #     lesson_id="addition_hard",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "addition", "difficulty": "hard", "seed": 42},
-        #     ),
-        #     dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
-        # "math_full": LessonConfig(
-        #     lesson_id="math_full",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.math_env.MathEnv",
-        #         env_args={"seed": 42},
-        #     ),
-        #     dependencies=[],
-        #     # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
+        "addition_easy": LessonConfig(
+            lesson_id="addition_easy",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.mock_env.MockEnv",
+                env_args={"task_type": "addition", "difficulty": "easy", "seed": 42},
+            ),
+            dependencies=[LessonDependency(dependency_id="number_comparison", reward_threshold=0.8)],
+            sampling_params=default_sampling,
+        ),
+        "addition_medium": LessonConfig(
+            lesson_id="addition_medium",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.mock_env.MockEnv",
+                env_args={"task_type": "addition", "difficulty": "medium", "seed": 42},
+            ),
+            dependencies=[LessonDependency(dependency_id="addition_easy", reward_threshold=0.8)],
+            sampling_params=default_sampling,
+        ),
+        "addition_hard": LessonConfig(
+            lesson_id="addition_hard",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.mock_env.MockEnv",
+                env_args={"task_type": "addition", "difficulty": "hard", "seed": 42},
+            ),
+            dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+            sampling_params=default_sampling,
+        ),
+        "math_full": LessonConfig(
+            lesson_id="math_full",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.math_env.MathEnv",
+                env_args={"seed": 42},
+            ),
+            dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+            sampling_params=default_sampling,
+        ),
     }
 
     return CurriculumConfig(
@@ -293,12 +292,8 @@ def main():
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
-    # datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-
     # experiment_configs = [llama1b, qwen4b, qwen3_1_7b, qwen3_0_6b]
     experiment_configs = [llama1b]
-    # experiment_configs = [qwen3_0_6b]
-    # experiment_configs = [llama_3_1_8b]
     experiments = []
     for experiment_config in experiment_configs:
         model_base_name = experiment_config.name.split("/")[-1].lower()
