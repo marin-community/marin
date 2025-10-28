@@ -127,7 +127,7 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
                 capacity=4096,
                 alpha=3.0,
                 max_samples=1,
-                max_rollout_step_delay=1,
+                max_rollout_step_delay=0,
             ),
         ),
         curriculum=create_test_curriculum_config(),
