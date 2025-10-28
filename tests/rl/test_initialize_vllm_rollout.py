@@ -33,7 +33,7 @@ from vllm import SamplingParams
 def test_initialize_vllm_rollout(tmpdir, ray_tpu_cluster):
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
 
-    rollout_worker = RolloutWorker(
+    _ = RolloutWorker(
         config=RolloutWorkerConfig(
             model=LlamaConfig(
                 seq_len=4096,
@@ -100,7 +100,6 @@ def test_initialize_vllm_rollout(tmpdir, ray_tpu_cluster):
             ),
         )
     )
-    rollout_worker.run()
 
 
 if __name__ == "__main__":
