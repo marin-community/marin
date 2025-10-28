@@ -16,13 +16,14 @@
 
 import datetime
 import logging
-import sys
+import queue
 import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -32,7 +33,6 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import jmp
 import numpy as np
-import pytest
 from levanter.checkpoint import CheckpointerConfig
 from levanter.distributed import RayConfig
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
@@ -47,12 +47,17 @@ from optax import softmax_cross_entropy_with_integer_labels
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig
-from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig, find_open_port
+from marin.rl.rollout_worker import RolloutWorker, find_open_port
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 from marin.rl.weight_transfer.base import WeightTransferMode
 
 logger = logging.getLogger(__name__)
+
+
+class WaitResult(Enum):
+    SUCCESS = "success"
+    TIMEOUT = "timeout"
 
 
 class DummyTokenizer:
@@ -260,32 +265,12 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
         service=InferenceEngineConfig(
             max_seqs=8,
             page_size=8,
+            max_seq_len=64,
             max_queued_tokens=8,
             enable_logprobs=True,
-            max_pages=8 * 32,
         ),
         temperature=1.0,
         port=find_open_port(),
-    )
-
-
-def create_nano_rollout_worker_config(output_dir: str, rollout_storage: RolloutStorageConfig) -> RolloutWorkerConfig:
-    """Create a minimal RolloutWorkerConfig for testing."""
-    model_config = create_nano_llama_config()
-    inference_server_config = create_test_inference_server_config(model_config, output_dir)
-
-    return RolloutWorkerConfig(
-        run_id="test-0",
-        trainer=create_nano_trainer_config(output_dir),
-        inference_server_config=inference_server_config,
-        model=model_config,
-        curriculum_config=create_test_curriculum_config(),
-        rollout_storage=rollout_storage,
-        tokenizer=DummyTokenizer(),
-        log_freq=1,
-        max_rollouts=1000,
-        weight_transfer=create_weight_transfer_config(),
-        initial_checkpoint=None,
     )
 
 
@@ -456,8 +441,7 @@ class ThreadedWorkerRunner(ABC):
         # State tracking
         self.worker = None
         self.thread = None
-        self.error = None
-        self.done = threading.Event()
+        self.result_queue = queue.Queue(maxsize=1)
 
     @abstractmethod
     def _create_and_run_worker(self):
@@ -468,12 +452,10 @@ class ThreadedWorkerRunner(ABC):
         """Thread target - runs the worker with error handling."""
         try:
             self._create_and_run_worker()
+            self.result_queue.put(("success", None))
         except Exception as e:
-            print(f"{self.__class__.__name__} encountered exception:", e, file=sys.stderr)
             logger.error(f"{self.__class__.__name__} failed", exc_info=True)
-            self.error = e
-        finally:
-            self.done.set()
+            self.result_queue.put(("error", e))
 
     def start(self):
         """Start worker in background thread."""
@@ -493,31 +475,34 @@ class ThreadedWorkerRunner(ABC):
         if self.thread:
             self.thread.join(timeout)
 
+    def wait_for_result(self, timeout=None):
+        """Wait for worker completion, raise an error if it failed."""
+        try:
+            status, error = self.result_queue.get(timeout=timeout)
+        except queue.Empty:
+            return WaitResult.TIMEOUT
+
+        if status == "error":
+            raise RuntimeError(f"{self.__class__.__name__} failed") from error
+
+        return WaitResult.SUCCESS
+
     def __enter__(self):
         """Context manager entry - start the worker."""
         self.start()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit - stop worker and check for errors."""
+        """Context manager exit - stop worker and wait for completion."""
         self.stop()
         self.join(timeout=5)
 
-        if self.error:
-            import traceback
-
-            print(f"{self.__class__.__name__} error: {self.error}")
-            print(
-                "Traceback:",
-                "".join(
-                    traceback.format_exception(
-                        type(self.error),
-                        self.error,
-                        self.error.__traceback__,
-                    )
-                ),
-            )
-            pytest.fail(f"{self.__class__.__name__} failed: {self.error}")
+        try:
+            status, error = self.result_queue.get_nowait()
+            if status == "error":
+                raise RuntimeError(f"{self.__class__.__name__} failed") from error
+        except queue.Empty:
+            pass
 
         return False
 
@@ -653,7 +638,7 @@ class RolloutBatchFeeder:
     def _run(self):
         """Thread target - continuously generate batches until runner completes."""
         try:
-            while not self.runner.worker and not self.runner.done.is_set():
+            while not self.runner.worker and self.runner.alive():
                 time.sleep(0.1)
 
             if not self.runner.worker:
@@ -664,7 +649,7 @@ class RolloutBatchFeeder:
             batch_size = self.runner.training_worker_config.trainer.train_batch_size
 
             # Continuously generate batches
-            while not self.runner.done.is_set() and not self.stop_flag.is_set():
+            while self.runner.alive() and not self.stop_flag.is_set():
                 # Use trained model if available, otherwise reference
                 if self.runner.trained_model:
                     model = self.runner.trained_model
