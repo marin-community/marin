@@ -148,6 +148,9 @@ class VllmTpuEvaluator(Evaluator, ABC):
             output_path: str,
             max_eval_instances: int | None = None,
         ) -> None:
+            import logging
+
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
             self.evaluate(model, evals, output_path, max_eval_instances)
 
         ray.get(launch.remote(model, evals, output_path, max_eval_instances))

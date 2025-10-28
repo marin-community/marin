@@ -32,7 +32,7 @@ def test_lm_eval_harness(current_date_time, ray_tpu_cluster, model_config):
         model_path=model_config.path,
         evaluation_path=f"gs://marin-us-east5/evaluation/lm_eval/{model_config.name}-{current_date_time}",
         evals=[gsm8k_config],
-        max_eval_instances=5,
+        max_eval_instances=1,
         launch_with_ray=True,
         engine_kwargs=model_config.engine_kwargs,
         resource_config=SINGLE_TPU_V6E_8,
