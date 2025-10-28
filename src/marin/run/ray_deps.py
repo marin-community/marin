@@ -190,8 +190,6 @@ def build_runtime_env_for_packages(
     requirements_txt.extend(torch_pkgs)
     requirements_txt = "\n".join(requirements_txt)
 
-    print(requirements_txt)
-
     # Ray expects a filename for the requirements txt
     req_hash = hashlib.sha256(requirements_txt.encode()).hexdigest()[:16]
     req_path = f"/tmp/ray_reqs_{req_hash}.txt"
