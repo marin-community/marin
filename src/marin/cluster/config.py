@@ -248,7 +248,7 @@ CONFIGS = {
         "DOCKER_TAG": "1bc975e12",
         "tpu_generation": "v4",
         "min_workers": 2,
-        "VLLM": False,
+        "VLLM": True,
     },
     "marin-us-east1-d-vllm": {
         "NAME": "marin-us-east1-d-vllm",
@@ -258,7 +258,7 @@ CONFIGS = {
         "DOCKER_TAG": "1bc975e12",
         "tpu_generation": "v6e-serve",
         "min_workers": 2,
-        "VLLM": False,
+        "VLLM": True,
     },
 }
 
