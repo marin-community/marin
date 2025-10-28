@@ -223,7 +223,7 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         # to ensure we accept an entire training batch from the rollout workers.
         train_batch_size=64,
         # microbatch to avoid OOM
-        per_device_parallelism=-1,
+        per_device_parallelism=16,
         num_train_steps=50000,
         steps_per_eval=100,
         checkpointer=CheckpointerConfig(
@@ -272,6 +272,13 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         ),
         curriculum=curriculum_config,
         tokenizer=experiment_config.tokenizer,
+        # Mock inference configuration - comment out to use vLLM
+        inference_type="mock",  # Set to "vllm" for actual inference
+        mock_min_response_tokens=1024,
+        mock_max_response_tokens=1024,
+        mock_simulate_latency=False,  # Set True to simulate inference timing
+        mock_latency_per_token_ms=1.0,
+        # vLLM parameters (still required but ignored when using mock)
         vllm_model_name=experiment_config.name,
         vllm_max_model_len=4096,
         vllm_tensor_parallel_size=4,

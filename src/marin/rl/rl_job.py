@@ -41,7 +41,7 @@ from marin.rl.curriculum import CurriculumConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
-from marin.rl.rollout_worker import RolloutWorker, BaseRolloutWorkerConfig, VLLMRolloutWorkerConfig
+from marin.rl.rollout_worker import RolloutWorker, BaseRolloutWorkerConfig, VLLMRolloutWorkerConfig, MockRolloutWorkerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 from marin.training.training import _add_run_env_variables
@@ -115,7 +115,13 @@ class RLJobConfig:
     # Sampling configuration
     eval_sampling_params: SamplingParams
 
-    inference_type: Literal["levanter", "vllm"] = "vllm"
+    inference_type: Literal["levanter", "vllm", "mock"] = "vllm"
+
+    # Mock inference parameters (only used when inference_type == "mock")
+    mock_min_response_tokens: int = 10
+    mock_max_response_tokens: int = 512
+    mock_simulate_latency: bool = False
+    mock_latency_per_token_ms: float = 1.0
 
     seed: int = 42
 
@@ -286,26 +292,46 @@ class RLJob:
             seed=self.config.seed,
         )
 
-        # Create rollout worker config
-        rollout_worker_config = VLLMRolloutWorkerConfig(
-            trainer=self.config.trainer,
-            # inference_server_config=inference_server_config,
-            model=self.config.model,
-            curriculum_config=self.config.curriculum,
-            tokenizer=tokenizer,
-            log_freq=self.config.log_freq,
-            max_rollouts=None,  # Run indefinitely by default
-            initial_checkpoint=self.config.initial_checkpoint,
-            weight_transfer=self.config.weight_transfer,
-            rollout_storage=self.config.rollout_storage,
-            run_id=self.config.run_id,
-            seed=self.config.seed + 1000,
-            inference_type=self.config.inference_type,
-            vllm_model_name=self.config.vllm_model_name,
-            vllm_max_model_len=self.config.vllm_max_model_len,
-            vllm_tensor_parallel_size=self.config.vllm_tensor_parallel_size,
-            gpu_memory_utilization=self.config.gpu_memory_utilization,
-            sampling_params=self.config.eval_sampling_params,
-        )
+        # Create rollout worker config based on inference type
+        if self.config.inference_type == "mock":
+            rollout_worker_config = MockRolloutWorkerConfig(
+                trainer=self.config.trainer,
+                model=self.config.model,
+                curriculum_config=self.config.curriculum,
+                tokenizer=tokenizer,
+                log_freq=self.config.log_freq,
+                max_rollouts=None,  # Run indefinitely by default
+                initial_checkpoint=self.config.initial_checkpoint,
+                weight_transfer=self.config.weight_transfer,
+                rollout_storage=self.config.rollout_storage,
+                run_id=self.config.run_id,
+                seed=self.config.seed + 1000,
+                inference_type="mock",
+                min_response_tokens=self.config.mock_min_response_tokens,
+                max_response_tokens=self.config.mock_max_response_tokens,
+                simulate_latency=self.config.mock_simulate_latency,
+                latency_per_token_ms=self.config.mock_latency_per_token_ms,
+            )
+        else:
+            rollout_worker_config = VLLMRolloutWorkerConfig(
+                trainer=self.config.trainer,
+                # inference_server_config=inference_server_config,
+                model=self.config.model,
+                curriculum_config=self.config.curriculum,
+                tokenizer=tokenizer,
+                log_freq=self.config.log_freq,
+                max_rollouts=None,  # Run indefinitely by default
+                initial_checkpoint=self.config.initial_checkpoint,
+                weight_transfer=self.config.weight_transfer,
+                rollout_storage=self.config.rollout_storage,
+                run_id=self.config.run_id,
+                seed=self.config.seed + 1000,
+                inference_type=self.config.inference_type,
+                vllm_model_name=self.config.vllm_model_name,
+                vllm_max_model_len=self.config.vllm_max_model_len,
+                vllm_tensor_parallel_size=self.config.vllm_tensor_parallel_size,
+                gpu_memory_utilization=self.config.gpu_memory_utilization,
+                sampling_params=self.config.eval_sampling_params,
+            )
 
         return train_worker_config, rollout_worker_config

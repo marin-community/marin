@@ -48,7 +48,7 @@ from haliax.partitioning import ResourceAxis
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
-from marin.rl.environments.inference_ctx import InferenceContext, vLLMInferenceContext
+from marin.rl.environments.inference_ctx import InferenceContext, vLLMInferenceContext, MockInferenceContext
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.weight_utils import levanter_to_nnx_state, MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 
@@ -82,7 +82,7 @@ class BaseRolloutWorkerConfig:
 
     log_freq: int = 10
 
-    inference_type: Literal["levanter", "vllm"] = "levanter"
+    inference_type: Literal["levanter", "vllm", "mock"] = "levanter"
 
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
@@ -113,6 +113,23 @@ class VLLMRolloutWorkerConfig(BaseRolloutWorkerConfig):
 
     sampling_params: SamplingParams
     """Sampling parameters for vLLM."""
+
+
+@dataclass
+class MockRolloutWorkerConfig(BaseRolloutWorkerConfig):
+    """Configuration for Mock RolloutWorker (for testing without TPU/GPU)."""
+
+    min_response_tokens: int = 10
+    """Minimum number of tokens to generate per response."""
+
+    max_response_tokens: int = 512
+    """Maximum number of tokens to generate per response."""
+
+    simulate_latency: bool = False
+    """Whether to simulate inference latency."""
+
+    latency_per_token_ms: float = 1.0
+    """Simulated latency per token in milliseconds."""
 
 
 def find_open_port() -> int:
@@ -212,7 +229,7 @@ class RolloutWorker:
         self._tokenizer = config.tokenizer
 
         logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
-        if self.config.inference_type == "vllm":
+        if self.config.inference_type in ["vllm", "mock"]:
             # this is just a cpu mesh to load the model from training worker
             self.mesh = jax.make_mesh(
                 (1, 1, 1),
@@ -248,6 +265,14 @@ class RolloutWorker:
                 tensor_parallel_size=self.config.vllm_tensor_parallel_size,
                 gpu_memory_utilization=self.config.gpu_memory_utilization,
                 sampling_params=self.config.sampling_params,
+            )
+        elif self.config.inference_type == "mock":
+            self._policy_ctx = MockInferenceContext(
+                tokenizer=self._tokenizer,
+                min_response_tokens=self.config.min_response_tokens,
+                max_response_tokens=self.config.max_response_tokens,
+                simulate_latency=self.config.simulate_latency,
+                latency_per_token_ms=self.config.latency_per_token_ms,
             )
         elif self.config.inference_type == "levanter":
             with self.config.trainer.use_device_mesh(), hax.axis_mapping(self.config.trainer.compute_axis_mapping):
@@ -305,7 +330,7 @@ class RolloutWorker:
                     max_tokens=max_tokens,
                     stop=stop_tokens,
                 )
-        elif self.config.inference_type == "vllm":  # without mesh
+        elif self.config.inference_type in ["vllm", "mock"]:  # without mesh
             rollout_groups, metrics = env.sample(
                 inference_ctx=self._policy_ctx,
                 n_examples=n_examples,
@@ -482,6 +507,9 @@ class RolloutWorker:
                 )
 
                 self._policy_ctx.llm.llm_engine.reset_prefix_cache()  # Reset prefix cache because of new weights
+            elif self.config.inference_type == "mock":
+                # Mock inference doesn't need weight updates
+                logger.info("Mock inference: skipping weight sync")
 
             return update.model
         else:

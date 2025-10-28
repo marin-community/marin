@@ -14,8 +14,10 @@
 
 from .levanter import InferenceContext
 from .vllm import vLLMInferenceContext
+from .mock import MockInferenceContext
 
 __all__ = [
     "InferenceContext",
     "vLLMInferenceContext",
+    "MockInferenceContext",
 ]
