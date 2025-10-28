@@ -335,8 +335,6 @@ class MockEnv(MarinEnv):
                     prompt, choice, env_name=f"mock_env:{self.task_type}", env_example_id=hash(prompt), reward=reward
                 )
 
-                rollout = self.maybe_edit_prompt_tokens(rollout, completion)
-
                 group.append(rollout)
             rollout_groups.append(RolloutGroup(rollouts=group))
 

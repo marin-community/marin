@@ -247,8 +247,6 @@ class MathEnv(MarinEnv):
                     reward=token_reward,
                 )
 
-                rollout = self.maybe_edit_prompt_tokens(rollout, completion)
-
                 group_rollouts.append(rollout)
 
                 total_choices += 1
