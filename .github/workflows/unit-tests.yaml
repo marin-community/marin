@@ -66,10 +66,10 @@ jobs:
           PYTHONPATH=tests:. uv run --extra=cpu pytest -n3 --durations=5 --tb=no -m 'not slow and not gcp' -vv tests/
 
   tpu-test:
-    runs-on: [tpu-ci]  # Label for TPU CI
+    runs-on: [tpu-ci]
     timeout-minutes: 10
     if: |
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-tpu-tests')) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'tpu')) ||
       (github.event_name == 'pull_request_review' && github.event.review.state == 'approved')
     steps:
       - name: Checkout code
