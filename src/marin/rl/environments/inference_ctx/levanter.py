@@ -28,7 +28,7 @@ from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
 from transformers import PreTrainedTokenizer
-from levanter.models.lm_head import LmHeadModel
+from levanter.models.lm_model import LmHeadModel
 import haliax as hax
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 

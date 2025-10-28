@@ -28,7 +28,7 @@ from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.completion_usage import CompletionUsage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob, TopLogprob
 from haliax.partitioning import ResourceAxis
-from levanter.models.lm_head import LmHeadModel
+from levanter.models.lm_model import LmHeadModel
 from marin.rl.weight_utils import levanter_to_nnx_state
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 
