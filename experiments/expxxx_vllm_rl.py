@@ -55,7 +55,7 @@ from marin.execution.executor import (
     OutputName,
     executor_main,
 )
-from marin.rl.curriculum import CurriculumConfig, LessonConfig, LessonDependency
+from marin.rl.curriculum import CurriculumConfig, LessonConfig
 from marin.rl.environments import EnvConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
@@ -94,16 +94,30 @@ llama1b = ModelConfig(
     checkpoint="meta-llama/Llama-3.2-1B-Instruct",
     config_class=LlamaConfig,
 )
-llama8b = ModelConfig(
+qwen3_1_7b = ModelConfig(
+    name="Qwen/Qwen3-1.7B",
+    type="qwen",
+    tokenizer="Qwen/Qwen3-1.7B",
+    checkpoint="Qwen/Qwen3-1.7B",
+    config_class=Qwen3Config,
+)
+qwen3_0_6b = ModelConfig(
+    name="Qwen/Qwen3-0.6B",
+    type="qwen",
+    tokenizer="Qwen/Qwen3-0.6B",
+    checkpoint="Qwen/Qwen3-0.6B",
+    config_class=Qwen3Config,
+)
+llama_3_1_8b = ModelConfig(
     name="meta-llama/Llama-3.1-8B-Instruct",
     type="llama",
     tokenizer="meta-llama/Llama-3.1-8B-Instruct",
     checkpoint="meta-llama/Llama-3.1-8B-Instruct",
     config_class=LlamaConfig,
 )
-MODEL = llama8b
+MODEL = llama1b
 WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
-MAX_TOKENS = 512
+MAX_TOKENS = 1024
 RUN_ID = f"test-{MODEL.name.split('/')[-1]}-curriculum"
 
 
@@ -113,7 +127,7 @@ def stop_tokens(tokenizer_name: str):
     return [tokenizer.eos_token_id]
 
 
-def create_math_curriculum(run_id: str) -> CurriculumConfig:
+def create_math_curriculum(run_id: str, experiment_config: ModelConfig) -> CurriculumConfig:
     """Create progressive math curriculum: comparison -> easy -> medium -> hard."""
 
     # Default sampling params for all lessons
@@ -123,8 +137,8 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
         temperature=1.0,
         n_prompts=8,
         n_generations_per_prompt=8,
-        max_tokens=MAX_TOKENS,
-        stop_tokens=stop_tokens(MODEL.tokenizer),
+        max_tokens=1024,
+        stop_tokens=None,
     )
 
     lessons = {
@@ -168,7 +182,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
             lesson_id="math_full",
             env_config=EnvConfig(
                 env_class="marin.rl.environments.math_env.MathEnv",
-                env_args={},
+                env_args={"seed": 42},
             ),
             dependencies=[],
             # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
@@ -183,12 +197,12 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
     )
 
 
-def rl_train(name: str) -> ExecutorStep:
-    hf_config = AutoConfig.from_pretrained(MODEL.name)
-    config = MODEL.config_class.from_hf_config(hf_config)
+def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
+    hf_config = AutoConfig.from_pretrained(experiment_config.name)
+    config = experiment_config.config_class.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=MODEL.tokenizer)
+    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=experiment_config.tokenizer)
 
     _ = WandbConfig
 
@@ -197,7 +211,7 @@ def rl_train(name: str) -> ExecutorStep:
         tracker=WandbConfig(
             project="rl-mockenv-testing",
             name=name,
-            tags=["rl", "math", MODEL.name.split("/")[-1]],
+            tags=["rl", "math", experiment_config.name.split("/")[-1]],
         ),
         # tracker=TensorboardConfig(
         #     logdir=OutputName("tblogs"),
@@ -224,7 +238,7 @@ def rl_train(name: str) -> ExecutorStep:
     opt_config = AdamConfig(
         learning_rate=1e-7,
         weight_decay=1e-2,
-        warmup=100,
+        warmup=0,
         lr_schedule="constant",
     )
 
@@ -237,9 +251,10 @@ def rl_train(name: str) -> ExecutorStep:
         sync_interval_steps=1,
         # We are running on-policy, so wait for new weights from the trainer after each episode.
         max_weight_transfer_wait_time=10,
+        coordinator_name=f"weight_transfer_coordinator_{name}",
     )
 
-    curriculum_config = create_math_curriculum(name)
+    curriculum_config = create_math_curriculum(name, experiment_config)
 
     # Create RLJobConfig using the new unified interface
     config = RLJobConfig(
@@ -256,28 +271,28 @@ def rl_train(name: str) -> ExecutorStep:
             ),
         ),
         curriculum=curriculum_config,
-        tokenizer=MODEL.tokenizer,
-        vllm_model_name=MODEL.name,
-        vllm_max_model_len=1024,
-        vllm_tensor_parallel_size=4,
-        gpu_memory_utilization=0.40,
+        tokenizer=experiment_config.tokenizer,
+        vllm_model_name=experiment_config.name,
+        vllm_max_model_len=4096,
+        vllm_tensor_parallel_size=8,
+        gpu_memory_utilization=0.90,
         eval_sampling_params=SamplingParams(
             temperature=1.0,
             n=8,
-            max_tokens=256,
+            max_tokens=1024,
             stop=None,
             logprobs=1,
         ),
-        initial_checkpoint=MODEL.checkpoint,
+        initial_checkpoint=experiment_config.checkpoint,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         run_id=name,
         log_freq=10,
         run_config=RunConfig(
-            train_tpu_type="v4-8",
+            train_tpu_type="v5p-8",
             num_train_slices=1,
             num_rollout_workers=1,
-            inference_tpu_type="v4-8",
+            inference_tpu_type="v5p-8",
         ),
     )
 
@@ -295,11 +310,18 @@ def main():
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
-    datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    # datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    experiments = [
-        rl_train(name=f"{MODEL.safe_name}-math-rl-test-chris-{datestamp}"),
-    ]
+    # experiment_configs = [llama1b, qwen4b, qwen3_1_7b, qwen3_0_6b]
+    # experiment_configs = [llama1b]
+    # experiment_configs = [qwen3_0_6b]
+    experiment_configs = [llama_3_1_8b]
+    experiments = []
+    for experiment_config in experiment_configs:
+        model_base_name = experiment_config.name.split("/")[-1].lower()
+        experiments.append(
+            rl_train(name=f"{model_base_name}-math-lr1e-7-bsz64-tok1024", experiment_config=experiment_config),
+        )
 
     executor_main(
         steps=experiments,

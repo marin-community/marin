@@ -25,7 +25,6 @@ from transformers import PreTrainedTokenizer
 
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import RolloutGroup
-from openai.types.chat import ChatCompletion
 
 from .base import MarinEnv
 
@@ -290,6 +289,8 @@ class MockEnv(MarinEnv):
         n_generations: int,
         temperature: float,
         prng_key,
+        max_tokens: int | None = None,
+        stop: list[str] | None = None,
         mode: str = "train",
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample examples, generate responses, and create rollouts."""
@@ -316,6 +317,8 @@ class MockEnv(MarinEnv):
             prompts=prompts,
             temperature=temperature,
             n=n_generations,
+            max_tokens=max_tokens,
+            stop=stop,
         )
 
         # Evaluate and create rollouts
@@ -323,22 +326,19 @@ class MockEnv(MarinEnv):
 
         for prompt, completion in zip(prompts, completions, strict=True):
             group = []
-            if isinstance(completion, ChatCompletion):
-                choices = completion.choices
-            else:
-                choices = completion.outputs
+            choices = self.get_choices_from_completion(completion)
 
             for choice in choices:
                 true_answer = sampled_examples[prompt]
-                if isinstance(completion, ChatCompletion):
-                    reward = self.task.compute_reward(
-                        true_answer, choice.message.content, tokenizer=inference_ctx.tokenizer
-                    )
-                else:
-                    reward = self.task.compute_reward(true_answer, choice.text, tokenizer=inference_ctx.tokenizer)
+                response_text = self.get_response_text_from_choice(choice)
+                reward = self.task.compute_reward(true_answer, response_text, tokenizer=inference_ctx.tokenizer)
+
                 rollout = inference_ctx.create_rollout_from_choice(
                     prompt, choice, env_name=f"mock_env:{self.task_type}", env_example_id=hash(prompt), reward=reward
                 )
+
+                rollout = self.maybe_edit_prompt_tokens(rollout, completion)
+
                 group.append(rollout)
             rollout_groups.append(RolloutGroup(rollouts=group))
 

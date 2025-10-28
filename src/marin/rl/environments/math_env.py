@@ -35,8 +35,6 @@ from marin.rl.math_utils import (
 )
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import Rollout, RolloutGroup
-from openai.types.chat import ChatCompletion
-
 from .base import MarinEnv
 
 logger = logging.getLogger(__name__)
@@ -198,6 +196,8 @@ class MathEnv(MarinEnv):
         temperature: float,
         prng_key,
         mode: str = "train",
+        max_tokens: int | None = None,
+        stop: list[str] | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample prompts, evaluate responses, and create rollouts."""
 
@@ -215,7 +215,9 @@ class MathEnv(MarinEnv):
         sampled_examples = [available_examples[int(idx)] for idx in indices]
 
         prompts = [example.processed_prompt for example in sampled_examples]
-        completions = inference_ctx.batch_completions(prompts=prompts, temperature=temperature, n=n_generations)
+        completions = inference_ctx.batch_completions(
+            prompts=prompts, temperature=temperature, n=n_generations, max_tokens=max_tokens, stop=stop
+        )
 
         rollout_groups: list[RolloutGroup] = []
         total_choices = 0
@@ -227,16 +229,10 @@ class MathEnv(MarinEnv):
         for example, completion in zip(sampled_examples, completions, strict=True):
             group_rollouts: list[Rollout] = []
 
-            if isinstance(completion, ChatCompletion):
-                choices = completion.choices
-            else:
-                choices = completion.outputs
+            choices = self.get_choices_from_completion(completion)
 
             for choice in choices:
-                if isinstance(completion, ChatCompletion):
-                    response_text = choice.message.content or ""
-                else:
-                    response_text = choice.text
+                response_text = self.get_response_text_from_choice(choice)
 
                 (
                     reward,
@@ -252,6 +248,9 @@ class MathEnv(MarinEnv):
                     env_example_id=example.example_id,
                     reward=token_reward,
                 )
+
+                rollout = self.maybe_edit_prompt_tokens(rollout, completion)
+
                 group_rollouts.append(rollout)
 
                 total_choices += 1
