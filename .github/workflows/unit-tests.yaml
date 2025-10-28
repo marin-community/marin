@@ -78,21 +78,35 @@ jobs:
           ref: ${{ (github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number)) || '' }}
 
       - name: Run TPU tests in Docker
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
         run: |
           # Clean up TPU resources before running tests
           rm -f /tmp/libtpu_lockfile || true
           lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
 
-          timeout 900 docker run --rm --privileged \
+          # Levanter likes to log to `logs/` and crashes if it can't write there
+          # Pytest writes to the cache directory and creates noise warnings if it can't write there
+
+          docker run --rm --privileged \
             --device /dev/vfio:/dev/vfio \
-            --shm-size=10g \
+            --net=host \
+            --shm-size=100g \
+            --stop-timeout=1 \
+            --cap-add=SYS_RESOURCE \
+             --ulimit memlock=68719476736:68719476736 \
             -e JAX_PLATFORMS=tpu \
             -e PJRT_DEVICE=TPU \
             -e TPU_CI=true \
             -e START_RAY_TPU_CLUSTER=true \
             -e PYTHONPATH=/workspace \
             -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \
-            -v ${{ github.workspace }}:/workspace:ro \
+            -e HF_TOKEN \
+            -e WANDB_API_KEY \
+            -v ${{ github.workspace }}:/workspace:rw \
+            --tmpfs /workspace/logs:rw \
+            --tmpfs /workspace/.pytest_cache:rw \
             -w /workspace \
             us-west4-docker.pkg.dev/hai-gcp-models/marin-ci/tpu-ci:latest \
-            uv run pytest tests/tpu/ -v --tb=short -s --log-cli-level=INFO
+            timeout --kill-after=5 --signal=TERM 900 uv run pytest tests/tpu/ -v --tb=short -s --log-cli-level=INFO
