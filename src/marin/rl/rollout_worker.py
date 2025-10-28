@@ -21,14 +21,12 @@ and writes the rollout data to files for training workers to consume.
 
 import dataclasses
 import logging
-import os
 import socket
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any
 
-import equinox as eqx
 import haliax as hax
 import jax
 import jax.random as jrandom
@@ -41,8 +39,6 @@ from levanter.utils.jax_utils import barrier_sync
 from transformers import PreTrainedTokenizer
 
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
-from marin.rl.environments import MarinEnv
-from marin.rl.environments.base import load_environment_from_spec
 from marin.rl.inference_ctx import InferenceContext
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.rollout_context import (
@@ -55,9 +51,6 @@ from marin.rl.rollout_context import (
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .types import (
     RolloutBatch,
-    RolloutGroup,
-    RolloutMetadata,
-    RolloutStats,
 )
 from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_weight_transfer_client
 
@@ -283,7 +276,7 @@ class RolloutWorker:
         sample_data = format_sample_for_logging(batch, self._tokenizer)
         if not sample_data:
             return
-            
+
         # Log with structured keys
         prefix = f"inference.{eval_type}/{lesson_id}"
         metrics = {f"{prefix}/{k}": v for k, v in sample_data.items()}

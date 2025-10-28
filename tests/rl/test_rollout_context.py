@@ -18,11 +18,8 @@ Test RolloutContext - demonstrates lightweight testing without infrastructure.
 Compare this to test_rollout_worker.py which requires full infrastructure setup.
 """
 
-import pytest
 import numpy as np
 import jax.numpy as jnp
-from dataclasses import dataclass
-from typing import Any
 
 from marin.rl.environments.base import MarinEnv, EnvConfig
 from marin.rl.inference_ctx import InferenceContext
@@ -38,66 +35,71 @@ from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 
 class MockInferenceContext(InferenceContext):
     """Mock inference context for testing - no server required!"""
-    
+
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
         self.max_tokens = 128
         self._stop_tokens = None
-        
+
     def batch_completions(self, prompts, temperature, n, max_tokens=None, stop=None):
         """Return fake completions."""
         completions = []
-        for prompt in prompts:
+        for _ in prompts:
             choices = []
             for i in range(n):
+
                 class MockChoice:
                     def __init__(self):
-                        self.message = type("obj", (), {"content": f"Response {i}", "role": "assistant"})()
+                        self.message = type("obj", (), {"content": f"Response {i}", "role": "assistant"})()  # noqa: B023
+
                         class LogprobToken:
                             def __init__(self, token, logprob):
                                 self.token = token
                                 self.logprob = logprob
+
                         self.logprobs = type(
                             "obj", (), {"content": [LogprobToken(f"tok_{j}", -0.5) for j in range(5)]}
                         )()
+
                 choices.append(MockChoice())
-                
+
             class MockCompletion:
                 def __init__(self):
-                    self.choices = choices
+                    self.choices = choices  # noqa: B023
+
             completions.append(MockCompletion())
         return completions
-    
+
     def tokenize_prompt(self, prompt):
         return np.array([1, 2, 3], dtype=np.int32)
-    
+
     def response_tokens_from_choice(self, choice):
         return np.array([10, 11, 12, 13, 14], dtype=np.int32)
-    
+
     def logprobs_from_choice(self, choice):
         return np.array([-0.5] * 5, dtype=np.float32)
 
 
 class SimpleTestEnv(MarinEnv):
     """Test environment that returns controllable rewards."""
-    
+
     def __init__(self, success_rate: float = 0.5, env_name: str = "SimpleTestEnv"):
         self.success_rate = success_rate
         self.env_name = env_name
         self._call_count = 0
-        
+
     def sample(self, inference_ctx, n_examples, n_generations, temperature, prng_key, mode="train"):
         self._call_count += 1
         prompts = [f"Test prompt {i}" for i in range(n_examples)]
         completions = inference_ctx.batch_completions(prompts, temperature, n_generations)
-        
+
         groups = []
-        for i, (prompt, completion) in enumerate(zip(prompts, completions)):
+        for i, (prompt, completion) in enumerate(zip(prompts, completions, strict=False)):
             rollouts = []
             for j, choice in enumerate(completion.choices):
                 # Deterministic reward based on index for testing
-                reward = 1.0 if (i + j) % int(1/self.success_rate) == 0 else 0.0
-                
+                reward = 1.0 if (i + j) % int(1 / self.success_rate) == 0 else 0.0
+
                 rollout = Rollout(
                     env_name=self.env_name,
                     env_example_id=f"test_{i}",
@@ -109,18 +111,19 @@ class SimpleTestEnv(MarinEnv):
                 )
                 rollouts.append(rollout)
             groups.append(RolloutGroup(rollouts=rollouts))
-            
+
         metrics = {"test_metric": 1.0, "call_count": self._call_count}
         return groups, metrics
 
 
 class SimpleTokenizer:
     """Minimal tokenizer for testing."""
+
     vocab_size = 50000
-    
+
     def decode(self, tokens, skip_special_tokens=True):
         return f"Decoded text with {len(tokens)} tokens"
-    
+
     def convert_tokens_to_ids(self, token):
         return hash(token) % self.vocab_size
 
@@ -129,11 +132,11 @@ def test_rollout_context_basic():
     """Test basic rollout generation with RolloutContext."""
     tokenizer = SimpleTokenizer()
     ctx = RolloutContext(tokenizer=tokenizer, seed=42)
-    
+
     # Create test environment
     env = SimpleTestEnv(success_rate=0.5)
     inference_ctx = MockInferenceContext(tokenizer)
-    
+
     # Generate rollouts - no JAX setup needed!
     batch, metrics = ctx.sample_rollouts(
         inference_ctx=inference_ctx,
@@ -142,17 +145,17 @@ def test_rollout_context_basic():
         n_generations=2,
         temperature=0.7,
     )
-    
+
     assert batch is not None
     assert len(batch.groups) == 4  # n_examples
     assert all(len(group.rollouts) == 2 for group in batch.groups)  # n_generations
-    
+
     # Check metrics
     batch_metrics = compute_batch_metrics(batch, "test_env")
     assert batch_metrics.total_count == 8  # 4 examples * 2 generations
     assert batch_metrics.success_count == 4  # 50% success rate
     assert batch_metrics.avg_reward == 0.5
-    
+
     # Check environment was called
     assert metrics["call_count"] == 1
 
@@ -160,7 +163,7 @@ def test_rollout_context_basic():
 def test_rollout_context_with_curriculum():
     """Test RolloutContext with curriculum configuration."""
     tokenizer = SimpleTokenizer()
-    
+
     # Create curriculum config
     curriculum_config = CurriculumConfig(
         lessons={
@@ -194,15 +197,15 @@ def test_rollout_context_with_curriculum():
         eval_frequency=100,
         eval_n_examples=10,
     )
-    
+
     ctx = RolloutContext(
         tokenizer=tokenizer,
         curriculum_config=curriculum_config,
         seed=42,
     )
-    
+
     inference_ctx = MockInferenceContext(tokenizer)
-    
+
     # Test loading environment by lesson ID
     easy_batch, _ = ctx.sample_rollouts(
         inference_ctx=inference_ctx,
@@ -211,20 +214,20 @@ def test_rollout_context_with_curriculum():
         n_generations=2,
         temperature=0.7,  # Should be overridden by lesson config
     )
-    
+
     assert easy_batch is not None
     # Check that environment was loaded correctly
     assert easy_batch.groups[0].rollouts[0].env_name == "EasyEnv"
-    
+
     # Test evaluate_all_lessons
     results = ctx.evaluate_all_lessons(inference_ctx, n_examples_per_lesson=5)
-    
+
     assert "easy" in results
     assert "hard" in results
-    
+
     easy_metrics, _ = results["easy"]
     hard_metrics, _ = results["hard"]
-    
+
     # Easy env should have higher success rate
     assert easy_metrics.avg_reward > hard_metrics.avg_reward
 
@@ -233,10 +236,10 @@ def test_utility_functions():
     """Test the stateless utility functions."""
     tokenizer = SimpleTokenizer()
     ctx = RolloutContext(tokenizer=tokenizer)
-    
+
     env = SimpleTestEnv(success_rate=0.5)
     inference_ctx = MockInferenceContext(tokenizer)
-    
+
     batch, _ = ctx.sample_rollouts(
         inference_ctx=inference_ctx,
         env_or_lesson_id=env,
@@ -244,19 +247,19 @@ def test_utility_functions():
         n_generations=2,
         temperature=0.7,
     )
-    
+
     # Test compute_batch_metrics
     metrics = compute_batch_metrics(batch, "test")
     assert metrics.total_count == 4
     assert metrics.success_count == 2
     assert len(metrics.rollout_stats) == 4
-    
+
     # Test build_eval_metrics
     eval_metrics = build_eval_metrics("eval", "test", metrics)
     assert "eval/test/success_rate" in eval_metrics
     assert eval_metrics["eval/test/success_rate"] == 0.5
     assert eval_metrics["eval/test/avg_reward"] == 0.5
-    
+
     # Test format_sample_for_logging
     sample_data = format_sample_for_logging(batch, tokenizer)
     assert "sample_prompt" in sample_data
@@ -266,14 +269,14 @@ def test_utility_functions():
 
 def test_rollout_context_hooks_usage():
     """Demonstrate how hooks can use RolloutContext for evaluation."""
-    
+
     class EvalHook:
         """Example evaluation hook that uses RolloutContext."""
-        
+
         def __init__(self, rollout_context: RolloutContext, inference_ctx: InferenceContext):
             self.context = rollout_context
             self.inference_ctx = inference_ctx
-            
+
         def evaluate_environments(self):
             """Evaluate all loaded environments."""
             results = {}
@@ -294,32 +297,32 @@ def test_rollout_context_hooks_usage():
                         "env_metrics": env_metrics,
                     }
             return results
-    
+
     # Setup
     tokenizer = SimpleTokenizer()
     ctx = RolloutContext(tokenizer=tokenizer)
     inference_ctx = MockInferenceContext(tokenizer)
-    
+
     # Load some environments
     env1 = SimpleTestEnv(success_rate=0.7, env_name="Env1")
     env2 = SimpleTestEnv(success_rate=0.3, env_name="Env2")
-    
+
     # Sample from them to get them loaded
     ctx.sample_rollouts(inference_ctx, env1, 1, 1, 0.7)
     ctx.sample_rollouts(inference_ctx, env2, 1, 1, 0.7)
-    
+
     # Create hook and evaluate
     hook = EvalHook(ctx, inference_ctx)
     results = hook.evaluate_environments()
-    
+
     # Check results
     assert len(results) == 2  # Should have evaluated both environments
-    
+
     # Get results values (order might vary)
     results_list = list(results.values())
     # Sort by success rate to identify which is which
     results_list.sort(key=lambda x: x["success_rate"])
-    
+
     # Lower success rate should be env2 (0.3), higher should be env1 (0.7)
     assert results_list[0]["success_rate"] < 0.5  # env2
     assert results_list[1]["success_rate"] > 0.5  # env1
