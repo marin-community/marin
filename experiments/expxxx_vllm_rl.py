@@ -94,7 +94,14 @@ llama1b = ModelConfig(
     checkpoint="meta-llama/Llama-3.2-1B-Instruct",
     config_class=LlamaConfig,
 )
-MODEL = llama1b
+llama8b = ModelConfig(
+    name="meta-llama/Llama-3.1-8B-Instruct",
+    type="llama",
+    tokenizer="meta-llama/Llama-3.1-8B-Instruct",
+    checkpoint="meta-llama/Llama-3.1-8B-Instruct",
+    config_class=LlamaConfig,
+)
+MODEL = llama8b
 WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
 MAX_TOKENS = 512
 RUN_ID = f"test-{MODEL.name.split('/')[-1]}-curriculum"
@@ -121,50 +128,50 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
     )
 
     lessons = {
-        "number_comparison": LessonConfig(
-            lesson_id="number_comparison",
-            env_config=EnvConfig(
-                env_class="marin.rl.environments.mock_env.MockEnv",
-                env_args={"task_type": "number_comparison", "seed": 42},
-            ),
-            dependencies=[],
-            sampling_params=default_sampling,
-        ),
-        "addition_easy": LessonConfig(
-            lesson_id="addition_easy",
-            env_config=EnvConfig(
-                env_class="marin.rl.environments.mock_env.MockEnv",
-                env_args={"task_type": "addition", "difficulty": "easy", "seed": 42},
-            ),
-            dependencies=[LessonDependency(dependency_id="number_comparison", reward_threshold=0.8)],
-            sampling_params=default_sampling,
-        ),
-        "addition_medium": LessonConfig(
-            lesson_id="addition_medium",
-            env_config=EnvConfig(
-                env_class="marin.rl.environments.mock_env.MockEnv",
-                env_args={"task_type": "addition", "difficulty": "medium", "seed": 42},
-            ),
-            dependencies=[LessonDependency(dependency_id="addition_easy", reward_threshold=0.8)],
-            sampling_params=default_sampling,
-        ),
-        "addition_hard": LessonConfig(
-            lesson_id="addition_hard",
-            env_config=EnvConfig(
-                env_class="marin.rl.environments.mock_env.MockEnv",
-                env_args={"task_type": "addition", "difficulty": "hard", "seed": 42},
-            ),
-            dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-            sampling_params=default_sampling,
-        ),
+        # "number_comparison": LessonConfig(
+        #     lesson_id="number_comparison",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.mock_env.MockEnv",
+        #         env_args={"task_type": "number_comparison", "seed": 42},
+        #     ),
+        #     dependencies=[],
+        #     sampling_params=default_sampling,
+        # ),
+        # "addition_easy": LessonConfig(
+        #     lesson_id="addition_easy",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.mock_env.MockEnv",
+        #         env_args={"task_type": "addition", "difficulty": "easy", "seed": 42},
+        #     ),
+        #     dependencies=[LessonDependency(dependency_id="number_comparison", reward_threshold=0.8)],
+        #     sampling_params=default_sampling,
+        # ),
+        # "addition_medium": LessonConfig(
+        #     lesson_id="addition_medium",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.mock_env.MockEnv",
+        #         env_args={"task_type": "addition", "difficulty": "medium", "seed": 42},
+        #     ),
+        #     dependencies=[LessonDependency(dependency_id="addition_easy", reward_threshold=0.8)],
+        #     sampling_params=default_sampling,
+        # ),
+        # "addition_hard": LessonConfig(
+        #     lesson_id="addition_hard",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.mock_env.MockEnv",
+        #         env_args={"task_type": "addition", "difficulty": "hard", "seed": 42},
+        #     ),
+        #     dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+        #     sampling_params=default_sampling,
+        # ),
         "math_full": LessonConfig(
             lesson_id="math_full",
             env_config=EnvConfig(
                 env_class="marin.rl.environments.math_env.MathEnv",
                 env_args={},
             ),
-            # dependencies=[],
-            dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+            dependencies=[],
+            # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
             sampling_params=default_sampling,
         ),
     }
@@ -200,16 +207,15 @@ def rl_train(name: str) -> ExecutorStep:
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         # Set the train batch size to num_rollout_workers * n_generations * n_prompts
         # to ensure we accept an entire training batch from the rollout workers.
-        train_batch_size=64 * 4,
+        train_batch_size=64,
         # microbatch to avoid OOM
-        per_device_parallelism=16,
+        per_device_parallelism=-1,
         num_train_steps=50000,
         steps_per_eval=100,
         checkpointer=CheckpointerConfig(
             base_path=OutputName("checkpoints"),
             save_interval=datetime.timedelta(seconds=600),
         ),
-        tensor_parallel_axes=["mlp", "heads"],
         fsdp_axis="embed",
         batch_axis="batch",
         ray=RayConfig(auto_start_cluster=False),
@@ -251,10 +257,10 @@ def rl_train(name: str) -> ExecutorStep:
         ),
         curriculum=curriculum_config,
         tokenizer=MODEL.tokenizer,
-        vllm_model_name="meta-llama/Llama-3.2-1B-Instruct",
+        vllm_model_name=MODEL.name,
         vllm_max_model_len=1024,
-        vllm_tensor_parallel_size=1,
-        gpu_memory_utilization=0.60,
+        vllm_tensor_parallel_size=4,
+        gpu_memory_utilization=0.40,
         eval_sampling_params=SamplingParams(
             temperature=1.0,
             n=8,
