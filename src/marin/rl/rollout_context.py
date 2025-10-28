@@ -22,17 +22,23 @@ and infrastructure concerns (JAX setup, weight transfer, etc.).
 import logging
 import os
 import socket
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
 
 import equinox as eqx
+import haliax as hax
 import jax.random as jrandom
+import ray
+from levanter.inference.openai import InferenceServer, InferenceServerConfig
+from levanter.models.lm_model import LmConfig
+from levanter.trainer import TrainerConfig
 from transformers import PreTrainedTokenizer
 
-from marin.rl.curriculum import CurriculumConfig
+from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
-from marin.rl.environments.base import EnvConfig, load_environment_from_spec
+from marin.rl.environments.base import load_environment_from_spec
 from marin.rl.inference_ctx import InferenceContext
 from marin.rl.types import (
     RolloutBatch,
@@ -159,80 +165,86 @@ def format_sample_for_logging(
 
 
 class RolloutContext:
-    """Context for managing environments and generating rollouts.
+    """Manages inference server, rollout generation, and curriculum.
 
-    This class encapsulates the core rollout generation logic without
-    infrastructure dependencies like JAX device mesh, weight transfer,
-    or rollout storage.
+    Handles all curriculum-related activities:
+    - Inference server lifecycle
+    - Model state management
+    - Environment loading/caching
+    - Rollout generation
+    - Curriculum evaluation
+    - Curriculum stats updates
 
-    Attributes:
-        tokenizer: Tokenizer instance
-        curriculum_config: Configuration for curriculum (optional)
-        seed: Random seed for reproducibility
-        worker_id: Unique identifier for this context
+    Returns data structures for the worker to log.
+    Worker has NO curriculum responsibilities.
     """
 
     def __init__(
         self,
+        inference_config: InferenceServerConfig,
+        model_config: LmConfig,
+        trainer_config: TrainerConfig,
+        curriculum_config: CurriculumConfig,
         tokenizer: PreTrainedTokenizer,
-        curriculum_config: CurriculumConfig | None = None,
-        seed: int = 42,
+        initial_model: Any,
         worker_id: str | None = None,
     ):
         """Initialize the rollout context.
 
         Args:
+            inference_config: Configuration for inference server
+            model_config: Model configuration
+            trainer_config: Trainer configuration
+            curriculum_config: Curriculum configuration
             tokenizer: Tokenizer for the model
-            curriculum_config: Optional curriculum configuration
-            seed: Random seed
+            initial_model: Initial policy model
             worker_id: Worker identifier (auto-generated if not provided)
         """
-        self.tokenizer = tokenizer
+        self.inference_config = inference_config
+        self.model_config = model_config
+        self.trainer_config = trainer_config
         self.curriculum_config = curriculum_config
-        self.seed = seed
+        self.tokenizer = tokenizer
         self.worker_id = worker_id or f"{socket.gethostname()}_{os.getpid()}"
 
+        self._policy_model = initial_model
         self._environments: dict[str, MarinEnv] = {}
-        self._rng = jrandom.PRNGKey(seed)
+        self._rng = jrandom.PRNGKey(42)  # Will be set properly by worker
         self._current_weight_step = 0
 
-    def load_environment(self, env_config: EnvConfig | str) -> MarinEnv:
-        """Load an environment from configuration or lesson ID.
+        # Start inference server
+        with trainer_config.device_mesh, hax.axis_mapping(trainer_config.compute_axis_mapping):
+            self._inference_server = InferenceServer.create(
+                inference_config,
+                model=self._policy_model,
+                tokenizer=self.tokenizer,
+            )
+        self._inference_thread = threading.Thread(
+            target=lambda: self._inference_server.serve(),
+            daemon=True,
+        )
+        self._inference_thread.start()
+        time.sleep(1.0)  # TODO: replace with wait_until_ready()
+
+        # Create curriculum actor
+        self._curriculum_actor = get_or_create_curriculum_actor(curriculum_config)
+
+    def _load_environment(self, lesson_id: str) -> MarinEnv:
+        """Load and cache environment for lesson.
 
         Args:
-            env_config: Either an EnvConfig or a lesson ID string
+            lesson_id: ID of the lesson
 
         Returns:
             Loaded environment instance
-
-        Raises:
-            ValueError: If lesson ID is provided but no curriculum config exists
         """
-        if isinstance(env_config, str):
-            # It's a lesson ID
-            lesson_id = env_config
-            if lesson_id in self._environments:
-                return self._environments[lesson_id]
+        if lesson_id in self._environments:
+            return self._environments[lesson_id]
 
-            if not self.curriculum_config:
-                raise ValueError(f"Cannot load lesson '{lesson_id}' without curriculum config")
-
-            lesson_config = self.curriculum_config.lessons.get(lesson_id)
-            if not lesson_config:
-                raise ValueError(f"Unknown lesson: {lesson_id}")
-
-            env = load_environment_from_spec(lesson_config.env_config)
-            self._environments[lesson_id] = env
-            return env
-        else:
-            # Direct env config
-            env_key = f"{env_config.env_class}_{id(env_config)}"
-            if env_key in self._environments:
-                return self._environments[env_key]
-
-            env = load_environment_from_spec(env_config)
-            self._environments[env_key] = env
-            return env
+        lesson_config = self.curriculum_config.lessons[lesson_id]
+        env = load_environment_from_spec(lesson_config.env_config)
+        self._environments[lesson_id] = env
+        return env
 
     def get_loaded_environments(self) -> dict[str, MarinEnv]:
         """Get all currently loaded environments.
@@ -242,79 +254,63 @@ class RolloutContext:
         """
         return dict(self._environments)
 
-    def sample_rollouts(
+    def sample_batch(
         self,
-        inference_ctx: InferenceContext,
-        env_or_lesson_id: MarinEnv | EnvConfig | str,
+        lesson_id: str,
         n_examples: int,
         n_generations: int,
-        temperature: float,
-        mode: str = "train",
-        weight_step: int | None = None,
-        stop_tokens: list[int] | None = None,
-        max_tokens: int | None = None,
+        mode: str,
+        rng,
+        weight_step: int,
+        worker_id: str,
     ) -> tuple[RolloutBatch | None, dict[str, Any] | None]:
-        """Sample rollouts from an environment.
+        """Generate a batch of rollouts.
 
         Args:
-            inference_ctx: Inference context for generation
-            env_or_lesson_id: Environment instance, config, or lesson ID
-            n_examples: Number of examples to sample
-            n_generations: Number of generations per example
-            temperature: Sampling temperature
-            mode: "train" or "eval"
-            weight_step: Optional weight step for metadata
-            stop_tokens: Optional stop tokens (from lesson config if using curriculum)
-            max_tokens: Optional max tokens (from lesson config if using curriculum)
+            lesson_id: Lesson to sample from
+            n_examples: Number of examples to generate
+            n_generations: Generations per example
+            mode: 'train' or 'eval'
+            rng: JAX PRNG key
+            weight_step: Current weight step for metadata
+            worker_id: Worker identifier for metadata
 
         Returns:
-            Tuple of (rollout_batch, metrics) or (None, None) if no rollouts
+            (RolloutBatch with metadata attached, env metrics dict)
         """
-        # Get environment
-        if isinstance(env_or_lesson_id, MarinEnv):
-            env = env_or_lesson_id
-            env_name = env.__class__.__name__
-            # Store direct environment instances so they can be accessed later
-            env_key = f"{env_name}_{id(env)}"
-            self._environments[env_key] = env
-        else:
-            env = self.load_environment(env_or_lesson_id)
-            env_name = env_or_lesson_id if isinstance(env_or_lesson_id, str) else env.__class__.__name__
+        env = self._load_environment(lesson_id)
+        lesson_config = self.curriculum_config.lessons[lesson_id]
 
-        # Get sampling params from lesson config if available
-        if isinstance(env_or_lesson_id, str) and self.curriculum_config:
-            lesson_config = self.curriculum_config.lessons[env_or_lesson_id]
-            if stop_tokens is None:
-                stop_tokens = lesson_config.sampling_params.stop_tokens
-            if max_tokens is None:
-                max_tokens = lesson_config.sampling_params.max_tokens
+        # Get sampling params
+        temperature = lesson_config.sampling_params.temperature
+        stop_tokens = lesson_config.sampling_params.stop_tokens
+        max_tokens = lesson_config.sampling_params.max_tokens
 
-        # Update inference context if needed
-        if stop_tokens is not None and hasattr(inference_ctx, "_stop_tokens"):
-            inference_ctx._stop_tokens = stop_tokens
-        if max_tokens is not None:
-            inference_ctx.max_tokens = max_tokens
-
-        # Split RNG
-        self._rng, sample_rng = jrandom.split(self._rng)
-
-        # Sample from environment
-        rollout_groups, metrics = env.sample(
-            inference_ctx=inference_ctx,
-            n_examples=n_examples,
-            n_generations=n_generations,
-            temperature=temperature,
-            prng_key=sample_rng,
-            mode=mode,
+        # Create inference context
+        policy_ctx = InferenceContext(
+            tokenizer=self.tokenizer,
+            inference_server=self._inference_server,
+            max_tokens=max_tokens,
+            stop_tokens=stop_tokens,
         )
 
-        if not rollout_groups:
-            logger.warning(f"No valid rollouts generated from {env_name}")
-            return None, None
+        # Sample from environment
+        with (
+            self.trainer_config.device_mesh,
+            hax.axis_mapping(self.trainer_config.compute_axis_mapping),
+        ):
+            rollout_groups, metrics = env.sample(
+                inference_ctx=policy_ctx,
+                n_examples=n_examples,
+                n_generations=n_generations,
+                temperature=temperature,
+                prng_key=rng,
+                mode=mode,
+            )
 
-        # Use provided weight_step or internal counter
-        if weight_step is None:
-            weight_step = self._current_weight_step
+        if len(rollout_groups) == 0:
+            logger.warning("No valid rollouts generated")
+            return None, None
 
         # Create metadata
         batch_metadata = RolloutMetadata(
@@ -337,67 +333,128 @@ class RolloutContext:
             metadata=batch_metadata,
         )
 
-        logger.info(f"Generated {len(rollout_groups)} rollout groups from {env_name} " f"at weight step {weight_step}")
+        logger.info(
+            "Generated %d rollout groups from lesson %s at step %d",
+            len(rollout_groups),
+            lesson_id,
+            weight_step,
+        )
 
         return rollout_batch, metrics
 
     def evaluate_lesson(
         self,
-        inference_ctx: InferenceContext,
         lesson_id: str,
         n_examples: int,
-    ) -> tuple[BatchMetrics, dict[str, Any]]:
-        """Evaluate a single lesson and compute metrics.
+        eval_type: str,
+        rng,
+        step: int,
+        weight_step: int,
+        worker_id: str,
+    ) -> tuple[BatchMetrics, RolloutBatch]:
+        """Evaluate a single lesson and update curriculum.
 
         Args:
-            inference_ctx: Inference context for generation
             lesson_id: ID of the lesson to evaluate
             n_examples: Number of examples to evaluate
+            eval_type: 'eval' or 'micro_eval' - only 'eval' updates curriculum
+            rng: JAX PRNG key
+            step: Current training step
+            weight_step: Current weight step
+            worker_id: Worker identifier
 
         Returns:
-            Tuple of (batch_metrics, env_metrics)
+            (batch_metrics, batch) for worker to log
         """
-        batch, env_metrics = self.sample_rollouts(
-            inference_ctx=inference_ctx,
-            env_or_lesson_id=lesson_id,
+        batch, _ = self.sample_batch(
+            lesson_id=lesson_id,
             n_examples=n_examples,
             n_generations=1,
-            temperature=1.0,  # Standard eval temperature
             mode="eval",
+            rng=rng,
+            weight_step=weight_step,
+            worker_id=worker_id,
         )
 
         if batch is None:
-            return BatchMetrics(total_count=0, success_count=0, avg_reward=0.0, rollout_stats=[]), {}
+            empty_metrics = BatchMetrics(total_count=0, success_count=0, avg_reward=0.0, rollout_stats=[])
+            return empty_metrics, RolloutBatch(
+                groups=[], metadata=RolloutMetadata(worker_id=worker_id, timestamp=time.time(), weight_step=weight_step)
+            )
 
-        return compute_batch_metrics(batch, lesson_id), env_metrics or {}
+        metrics = compute_batch_metrics(batch, lesson_id)
 
-    def evaluate_all_lessons(
+        # Manager handles curriculum updates
+        if eval_type == "eval":
+            ray.get(
+                self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
+                    metrics.rollout_stats, mode="eval", current_step=step
+                )
+            )
+
+        return metrics, batch
+
+    def evaluate_curriculum(
         self,
-        inference_ctx: InferenceContext,
-        n_examples_per_lesson: int,
-    ) -> dict[str, tuple[BatchMetrics, dict[str, Any]]]:
-        """Evaluate all lessons in the curriculum.
+        eval_n_examples: int,
+        rng,
+        step: int,
+        weight_step: int,
+        worker_id: str,
+    ) -> dict[str, tuple[BatchMetrics, RolloutBatch]]:
+        """Evaluate all lessons and update curriculum.
 
         Args:
-            inference_ctx: Inference context for generation
-            n_examples_per_lesson: Number of examples per lesson
+            eval_n_examples: Number of examples per lesson
+            rng: JAX PRNG key
+            step: Current training step
+            weight_step: Current weight step
+            worker_id: Worker identifier
 
         Returns:
-            Dictionary mapping lesson IDs to (batch_metrics, env_metrics) tuples
-
-        Raises:
-            ValueError: If no curriculum config is available
+            {lesson_id: (batch_metrics, batch)} for worker to log
         """
-        if not self.curriculum_config:
-            raise ValueError("Cannot evaluate curriculum without curriculum config")
+        lesson_names = list(self.curriculum_config.lessons.keys())
+        if not lesson_names:
+            logger.info("No lessons to evaluate")
+            return {}
+
+        logger.info(f"Evaluating {len(lesson_names)} lessons")
 
         results = {}
-        for lesson_id in self.curriculum_config.lessons:
-            logger.info(f"Evaluating lesson: {lesson_id}")
-            batch_metrics, env_metrics = self.evaluate_lesson(inference_ctx, lesson_id, n_examples_per_lesson)
-            results[lesson_id] = (batch_metrics, env_metrics)
+        for lesson_id in lesson_names:
+            metrics, batch = self.evaluate_lesson(
+                lesson_id=lesson_id,
+                n_examples=eval_n_examples,
+                eval_type="eval",  # Full eval updates curriculum
+                rng=rng,
+                step=step,
+                weight_step=weight_step,
+                worker_id=worker_id,
+            )
+            results[lesson_id] = (metrics, batch)
 
         return results
+
+    def update_training_stats(
+        self,
+        lesson_id: str,
+        batch: RolloutBatch,
+        step: int,
+    ) -> None:
+        """Update curriculum with training rollout stats.
+
+        Args:
+            lesson_id: Lesson that generated the batch
+            batch: Rollout batch from training
+            step: Current training step
+        """
+        metrics = compute_batch_metrics(batch, lesson_id)
+        ray.get(
+            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
+                metrics.rollout_stats, mode="training", current_step=step
+            )
+        )
 
     def set_weight_step(self, step: int):
         """Update the current weight step.
@@ -406,3 +463,19 @@ class RolloutContext:
             step: New weight step value
         """
         self._current_weight_step = step
+
+    def update_model(self, model: Any) -> None:
+        """Update the policy model and reload inference server.
+
+        Args:
+            model: New policy model
+        """
+        self._policy_model = model
+        self._inference_server.reload(lambda m: self._policy_model)
+        logger.info("Model updated in inference server")
+
+    def shutdown(self) -> None:
+        """Shutdown inference server and cleanup resources."""
+        if self._inference_server:
+            self._inference_server.shutdown()
+            logger.info("Inference server shut down")
