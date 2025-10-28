@@ -86,6 +86,13 @@ qwen3_0_6b = ModelConfig(
     checkpoint="Qwen/Qwen3-0.6B",
     config_class=Qwen3Config,
 )
+llama_3_1_8b = ModelConfig(
+    name="meta-llama/Llama-3.1-8B-Instruct",
+    type="llama",
+    tokenizer="meta-llama/Llama-3.1-8B-Instruct",
+    checkpoint="meta-llama/Llama-3.1-8B-Instruct",
+    config_class=LlamaConfig,
+)
 MODEL = llama1b
 WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
 MAX_TOKENS = 1024
@@ -108,8 +115,8 @@ def create_math_curriculum(run_id: str, experiment_config: ModelConfig) -> Curri
         temperature=1.0,
         n_prompts=8,
         n_generations_per_prompt=8,
-        max_tokens=MAX_TOKENS,
-        stop_tokens=stop_tokens(experiment_config.tokenizer),
+        max_tokens=1024,
+        stop_tokens=None,
     )
 
     lessons = {
@@ -192,7 +199,7 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         # Set the train batch size to num_rollout_workers * n_generations * n_prompts
         # to ensure we accept an entire training batch from the rollout workers.
-        train_batch_size=64 * 4,
+        train_batch_size=64,
         # microbatch to avoid OOM
         per_device_parallelism=16,
         num_train_steps=50000,
@@ -246,8 +253,8 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         tokenizer=experiment_config.tokenizer,
         vllm_model_name=experiment_config.name,
         vllm_max_model_len=4096,
-        vllm_tensor_parallel_size=1,
-        gpu_memory_utilization=0.70,
+        vllm_tensor_parallel_size=8,
+        gpu_memory_utilization=0.90,
         eval_sampling_params=SamplingParams(
             temperature=1.0,
             n=8,
@@ -261,10 +268,10 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         run_id=name,
         log_freq=10,
         run_config=RunConfig(
-            train_tpu_type="v6e-8",
+            train_tpu_type="v5p-8",
             num_train_slices=1,
             num_rollout_workers=1,
-            inference_tpu_type="v6e-8",
+            inference_tpu_type="v5p-8",
         ),
     )
 
@@ -286,12 +293,13 @@ def main():
 
     # experiment_configs = [llama1b, qwen4b, qwen3_1_7b, qwen3_0_6b]
     # experiment_configs = [llama1b]
-    experiment_configs = [qwen3_0_6b]
+    # experiment_configs = [qwen3_0_6b]
+    experiment_configs = [llama_3_1_8b]
     experiments = []
     for experiment_config in experiment_configs:
         model_base_name = experiment_config.name.split("/")[-1].lower()
         experiments.append(
-            rl_train(name=f"{model_base_name}-math-lr1e-7-bsz256-tok1024", experiment_config=experiment_config),
+            rl_train(name=f"{model_base_name}-math-lr1e-7-bsz64-tok1024", experiment_config=experiment_config),
         )
 
     executor_main(

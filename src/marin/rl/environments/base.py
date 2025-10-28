@@ -14,12 +14,11 @@
 
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from openai.types.chat.chat_completion import Choice, ChatCompletion
-from vllm.outputs import RequestOutput
+from vllm.outputs import RequestOutput, CompletionOutput
 import jax.numpy as jnp
-from jax import replace
 from marin.rl.types import Rollout, RolloutGroup
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 
@@ -43,10 +42,10 @@ class MarinEnv(ABC):
             raise ValueError(f"Invalid completion type: {type(completion)}")
 
     @staticmethod
-    def get_response_text_from_choice(choice: Choice | RequestOutput) -> str:
+    def get_response_text_from_choice(choice: Choice | CompletionOutput) -> str:
         if isinstance(choice, Choice):
             return choice.message.content
-        elif isinstance(choice, RequestOutput):
+        elif isinstance(choice, CompletionOutput):
             return choice.text
         else:
             raise ValueError(f"Invalid choice type: {type(choice)}")

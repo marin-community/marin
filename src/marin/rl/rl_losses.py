@@ -54,6 +54,7 @@ def compute_metadata_metrics(
     loss_masks_array: jax.Array,
 ) -> dict[str, jax.Array]:
     """Compute metadata metrics for the loss function."""
+    batch_size, _ = policy_logprobs_array.shape
     return {
         "max_ratio_difference": jnp.max((current_logprobs - policy_logprobs_array) * loss_masks_array),
         "mean_ratio_difference": (
@@ -61,6 +62,11 @@ def compute_metadata_metrics(
         ),
         "max_advantages": jnp.max(loss_weights_array),
         "mean_advantages": jnp.mean(loss_weights_array),
+        "policy_entropy": (
+            -jnp.sum(jnp.exp(policy_logprobs_array) * policy_logprobs_array * loss_masks_array)
+            / jnp.sum(loss_masks_array)
+        ),
+        "response_tokens_length": jnp.sum(loss_masks_array) / batch_size,
     }
 
 

@@ -18,7 +18,7 @@ import jax.numpy as jnp
 
 def levanter_llama_to_vllm_mapping():
     return {
-        "model.lm_head": ("model.lm_head", (None, "model")),
+        "lm_head": ("model.lm_head", (None, "model")),
         "model.embed_tokens": (
             "model.embed.embedding",
             ("model", None),
@@ -90,6 +90,7 @@ MODEL_MAPPINGS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
     "meta-llama/Llama-3.2-3B-Instruct": levanter_llama_to_vllm_mapping(),
     "Qwen/Qwen3-0.6B": levanter_qwen_to_vllm_mapping(),
     "Qwen/Qwen3-1.7B": levanter_qwen_to_vllm_mapping(),
+    "meta-llama/Llama-3.1-8B-Instruct": levanter_llama_to_vllm_mapping(),
 }
 
 MODEL_TRANSPOSE_KEYS: dict[str, tuple[int, ...]] = {
@@ -97,6 +98,7 @@ MODEL_TRANSPOSE_KEYS: dict[str, tuple[int, ...]] = {
     "meta-llama/Llama-3.2-3B-Instruct": llama_transpose_keys,
     "Qwen/Qwen3-0.6B": llama_transpose_keys,
     "Qwen/Qwen3-1.7B": llama_transpose_keys,
+    "meta-llama/Llama-3.1-8B-Instruct": llama_transpose_keys,
 }
 
 
