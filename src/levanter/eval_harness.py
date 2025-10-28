@@ -81,8 +81,8 @@ from levanter.data.loader import stack_batches
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, use_cpu_device
-from levanter.utils.tree_utils import inference_mode
 from levanter.utils.py_utils import FailSafeJSONEncoder
+from levanter.utils.tree_utils import inference_mode
 
 logger = logging.getLogger(__name__)
 
@@ -792,7 +792,6 @@ class LevanterHarnessLM(TemplateLM):
                     request_id=i,
                     decode_params=seq_params,
                     n_generations=int(n_generations),
-                    enable_logprobs=False,
                 )
             )
 
