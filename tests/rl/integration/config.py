@@ -479,18 +479,7 @@ class ThreadedWorkerRunner(ABC):
             self.thread.join(timeout)
 
     def wait_for_result(self, timeout=None):
-        """Wait for worker completion, raising immediately on error.
-
-        Args:
-            timeout: Maximum time to wait in seconds (None = infinite)
-
-        Returns:
-            WaitResult.SUCCESS if completed successfully
-            WaitResult.TIMEOUT if timeout expires before completion
-
-        Raises:
-            RuntimeError: If worker failed
-        """
+        """Wait for worker completion, raise an error if it failed."""
         try:
             status, error = self.result_queue.get(timeout=timeout)
         except queue.Empty:

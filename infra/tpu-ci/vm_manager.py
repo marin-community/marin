@@ -32,6 +32,8 @@ Continuously monitors and ensures the desired number of VMs are running:
 
 import json
 import logging
+import os
+import shlex
 import subprocess
 import sys
 import time
@@ -514,6 +516,16 @@ def debug_tpu(index: int, test_path: str, pytest_args: str):
     if result.returncode != 0:
         logging.warning("TPU cleanup had non-zero exit (may be normal if no processes to kill)")
 
+    # Build environment variable flags for Docker
+    env_flags = []
+    for var in ["HF_TOKEN", "WANDB_API_KEY"]:
+        value = os.getenv(var)
+        if value:
+            env_flags.append(f"-e {var}={shlex.quote(value)}")
+            logging.info(f"Forwarding {var} to Docker container")
+
+    env_flags_str = " ".join(env_flags)
+
     # Run pytest in Docker container as github-runner user
     logging.info(f"Running pytest on {vm_name}...")
     ssh_cmd = [
@@ -541,6 +553,7 @@ def debug_tpu(index: int, test_path: str, pytest_args: str):
             -e START_RAY_TPU_CLUSTER=true \
             -e PYTHONPATH=/workspace \
             -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \
+            {env_flags_str} \
             -v {remote_dir}:/workspace:rw \
             --tmpfs /workspace/logs:rw \
             --tmpfs /workspace/.pytest_cache:rw \

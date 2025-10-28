@@ -78,6 +78,9 @@ jobs:
           ref: ${{ (github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number)) || '' }}
 
       - name: Run TPU tests in Docker
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
         run: |
           # Clean up TPU resources before running tests
           rm -f /tmp/libtpu_lockfile || true
@@ -99,6 +102,8 @@ jobs:
             -e START_RAY_TPU_CLUSTER=true \
             -e PYTHONPATH=/workspace \
             -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \
+            -e HF_TOKEN \
+            -e WANDB_API_KEY \
             -v ${{ github.workspace }}:/workspace:rw \
             --tmpfs /workspace/logs:rw \
             --tmpfs /workspace/.pytest_cache:rw \
