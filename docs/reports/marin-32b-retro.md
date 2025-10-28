@@ -1,10 +1,5 @@
 # Marin 32B Retrospective
 
-> Total tokens trained in final artifact: ≈6.437T
-> Phase 1: 2.679T
-> Phase 3/QK‑Norm: 2.684T
-> Phase 4/Mantis cooldown: 1.074T; excludes diagnostic restarts and the abandoned Bison cooldown attempt.
-
 <!--
 
 - [Introduction](#introduction)
@@ -28,7 +23,7 @@
 ## Introduction
 
 This is a retrospective on Marin 32B, which is largely a scale-up of the [8B recipe](./marin-8b-retro.md). As with the 8B,
-we followed the “Tootsie Roll” playbook: start training, instrument heavily, and make evidence-driven changes mid-flight.
+we followed the "Tootsie Roll" playbook: start training, instrument heavily, and make evidence-driven changes mid-flight.
 The intent here is to document what worked, what failed, and the mechanics of why and how we made changes so that others can learn from our process beyond the final result.
 You can download the base checkpoint on Hugging Face at [marin-community/marin-32b-base](https://huggingface.co/marin-community/marin-32b-base).
 
@@ -61,6 +56,10 @@ This report covers the following experiments/phases:
 - Phase 4a \- Bison Cooldown: [#1529](https://github.com/marin-community/marin/issues/1529) [`exp1529_32b_bison_cooldown`](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp1529_32b_bison_cooldown.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_bison_cooldown-48ddfe.json)
 - Phase 4b \- Mantis Cooldown: [#1581](https://github.com/marin-community/marin/issues/1681) [`exp1529_32b_mantis_cooldown`](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp1529_32b_mantis_cooldown.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_mantis_cooldown-c6f4b0.json)
 
+- Total tokens trained in final artifact: ≈6.437T
+- Phase 1: 2.679T
+- Phase 3/QK‑Norm: 2.684T
+- Phase 4b/Mantis cooldown: 1.074T; excludes diagnostic restarts and the abandoned Bison cooldown attempt.
 
 ## Baseline Configuration
 
@@ -493,13 +492,13 @@ While we believe Marin 32B is a strong open source base model, it has some limit
 - It has not undergone long context extension training, which may limit its performance on long context tasks.
 - As stated, our model is only trained on English text (as well as programming languages), limiting its performance on other languages.
 
-We welcome community contributions to address these and other limitations!
+We welcome community contributions ([Github](github.com/marin-community/marin/issues), [Discord](https://discord.gg/J9CTk7pqcM)) to address these and other limitations!
 
 ## Lessons Learned
 
 - **Pride goeth before a fall.** Our initial hubris in thinking we could scale our recipe to 32B without QK‑Norm cost us time and compute. We should have tested QK‑Norm earlier.
 - **Midflight changes can work.** The Tootsie Roll process of starting training early and making evidence‑driven changes mid‑flight worked well here, as it did in 8B. While we aspire to a clean run, we anticipate that our first release at each scale will often involve changes mid-run.
-- **Data shuffling matters.** The phase shift we observed during Bison cooldown highlighted the importance of good shuffling, as others (including OLMo) have noted. The Feistel shuffle we adopted in Mantis seems to have resolved this.
+- **Data shuffling quality matters more than we thought.** The phase shift we observed during Bison cooldown highlighted the importance of good shuffling, as others (including OLMo) have noted. The Feistel shuffle we adopted in Mantis seems to have resolved this.
 - **Double check your configs.** We should have caught the GSM8k contamination earlier. While we did eventually identify and fix it, this underscores the importance of verifying dataset contents and preprocessing steps, especially when using cached data. We now have checks in place to prevent similar issues in future runs.
 - **Instrument heavily.** Our ability to diagnose and address issues mid-flight was greatly aided by extensive logging and monitoring. We recommend others invest in good instrumentation from the start.
 
