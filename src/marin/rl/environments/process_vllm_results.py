@@ -18,6 +18,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from openai.types.chat import ChatCompletion
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +40,7 @@ class ProcessedVLLMOutputs:
     """Reward for each generation."""
 
 
-def parse_chat_completion_tokens_from_bytes(chat_completion: Any, tokenizer: Any) -> list[int]:
+def parse_chat_completion_tokens_from_bytes(chat_completion: ChatCompletion, tokenizer: Any) -> list[int]:
     """
     Parse token IDs from chat completion.
 
@@ -52,14 +54,11 @@ def parse_chat_completion_tokens_from_bytes(chat_completion: Any, tokenizer: Any
     Returns:
         List of token IDs
     """
-    if len(chat_completion.choices) != 1:
-        raise ValueError("Response should always have one choice")
-
-    if chat_completion.choices[0].logprobs is None:
-        raise ValueError("Logprobs should not be None")
-
-    if chat_completion.choices[0].logprobs.content is None:
-        raise ValueError("Logprob content should not be None")
+    assert len(chat_completion.choices) == 1, f"Expected 1 choice, got {len(chat_completion.choices)}: {chat_completion}"
+    assert chat_completion.choices[0].logprobs is not None, f"Logprobs should not be None: {chat_completion}"
+    assert (
+        chat_completion.choices[0].logprobs.content is not None
+    ), f"Logprob content should not be None: {chat_completion}"
 
     tokens = []
     logprob_content = chat_completion.choices[0].logprobs.content
@@ -93,7 +92,7 @@ def parse_chat_completion_tokens_from_bytes(chat_completion: Any, tokenizer: Any
     return tokens
 
 
-def parse_chat_completion_logprobs(chat_completion: Any) -> list[float]:
+def parse_chat_completion_logprobs(chat_completion: ChatCompletion) -> list[float]:
     """
     Parse log probabilities from chat completion.
 
@@ -103,14 +102,9 @@ def parse_chat_completion_logprobs(chat_completion: Any) -> list[float]:
     Returns:
         List of log probabilities
     """
-    if len(chat_completion.choices) != 1:
-        raise ValueError("Response should always have one choice")
-
-    if chat_completion.choices[0].logprobs is None:
-        raise ValueError("Logprobs should not be None")
-
-    if chat_completion.choices[0].logprobs.content is None:
-        raise ValueError("Logprob content should not be None")
+    assert len(chat_completion.choices) == 1, "Response should always have one choice"
+    assert chat_completion.choices[0].logprobs is not None, "Logprobs should not be None"
+    assert chat_completion.choices[0].logprobs.content is not None, "Logprob content should not be None"
 
     logprobs = [logprob.logprob for logprob in chat_completion.choices[0].logprobs.content]
     return logprobs
@@ -158,54 +152,28 @@ def process_vllm_chat_results(
 
             response_idx = 0
             for msg_idx, message in enumerate(completion):
-                if message["role"] == "assistant":
-                    # This is a model-generated response
-                    if response_idx < len(responses):
-                        response = responses[response_idx]
+                # This is a model-generated response
+                if response_idx < len(responses):
+                    response = responses[response_idx]
 
-                        # Parse tokens and logprobs from the response
-                        try:
-                            tokens = parse_chat_completion_tokens_from_bytes(response, tokenizer)
-                            logprobs = parse_chat_completion_logprobs(response)
+                    # Parse tokens and logprobs from the response
+                    tokens = parse_chat_completion_tokens_from_bytes(response, tokenizer)
+                    logprobs = parse_chat_completion_logprobs(response)
 
-                            if len(tokens) != len(logprobs):
-                                logger.warning(
-                                    f"Example {idx}, message {msg_idx}: Token count ({len(tokens)}) "
-                                    f"doesn't match logprob count ({len(logprobs)})"
-                                )
-                                # Truncate to shorter length
-                                min_len = min(len(tokens), len(logprobs))
-                                tokens = tokens[:min_len]
-                                logprobs = logprobs[:min_len]
+                    completion_ids.extend(tokens)
+                    completion_logprobs.extend(logprobs)
+                    logger.debug(f"Example {idx}, message {msg_idx}: Parsed {len(tokens)} tokens")
 
-                            completion_ids.extend(tokens)
-                            completion_logprobs.extend(logprobs)
-                            logger.debug(f"Example {idx}, message {msg_idx}: Parsed {len(tokens)} tokens")
-                        except Exception as e:
-                            # If parsing fails, fall back to tokenizing the message content
-                            logger.warning(f"Example {idx}, message {msg_idx}: Failed to parse response tokens: {e}")
-                            content = message.get("content", "")
-                            fallback_tokens = tokenizer.encode(content, add_special_tokens=False)
-                            completion_ids.extend(fallback_tokens)
-                            # Use zero logprobs as fallback
-                            completion_logprobs.extend([0.0] * len(fallback_tokens))
-
-                        response_idx += 1
-                    else:
-                        # No response available, tokenize the message content
-                        logger.warning(
-                            f"Example {idx}, message {msg_idx}: No response available, using fallback tokenization"
-                        )
-                        content = message.get("content", "")
-                        tokens = tokenizer.encode(content, add_special_tokens=False)
-                        completion_ids.extend(tokens)
-                        completion_logprobs.extend([0.0] * len(tokens))
+                    response_idx += 1
                 else:
-                    # Non-assistant messages (user/tool) - these shouldn't typically appear in completion
-                    # but if they do, we can handle them
-                    logger.debug(
-                        f"Example {idx}, message {msg_idx}: Skipping non-assistant message with role {message['role']}"
+                    # No response available, tokenize the message content
+                    logger.warning(
+                        f"Example {idx}, message {msg_idx}: No response available, using fallback tokenization"
                     )
+                    content = message.get("content", "")
+                    tokens = tokenizer.encode(content, add_special_tokens=False)
+                    completion_ids.extend(tokens)
+                    completion_logprobs.extend([0.0] * len(tokens))
 
             all_prompt_ids.append(prompt_ids)
             all_completion_ids.append(completion_ids)
@@ -225,25 +193,3 @@ def process_vllm_chat_results(
         completion_logprobs=all_completion_logprobs,
         rewards=all_rewards,
     )
-
-
-def extract_completion_text_from_state(state: dict[str, Any]) -> str:
-    """
-    Extract the completion text from a state dict.
-
-    Args:
-        state: State dict containing responses
-
-    Returns:
-        Concatenated completion text
-    """
-    responses = state.get("responses", [])
-    texts = []
-
-    for response in responses:
-        if hasattr(response, "choices") and len(response.choices) > 0:
-            content = response.choices[0].message.content
-            if content:
-                texts.append(content)
-
-    return "".join(texts)

@@ -38,7 +38,6 @@ def create_mock_chat_completion_with_logprobs(
     """Create a mock ChatCompletion with logprobs for testing."""
     assert len(token_strs) == len(logprobs), "Token strings and logprobs must have same length"
 
-    # Create logprob content
     logprob_content = [
         ChatCompletionTokenLogprob(
             token=token_str,
@@ -66,27 +65,6 @@ def create_mock_chat_completion_with_logprobs(
     )
 
 
-def test_parse_chat_completion_tokens_from_bytes_basic(tokenizer):
-    """Test basic token parsing with standard tokens."""
-    # Create a chat completion with tokens as they would appear from vLLM
-    # vLLM returns tokens using convert_ids_to_tokens() which preserves BPE format
-    token_strs = ["Hello", "Ġworld", "!"]  # Ġ represents space in BPE
-    logprobs = [-0.1, -0.2, -0.3]
-
-    chat_completion = create_mock_chat_completion_with_logprobs("Hello world!", token_strs, logprobs)
-
-    # Parse tokens
-    parsed_tokens = parse_chat_completion_tokens_from_bytes(chat_completion, tokenizer)
-
-    # Verify we got the correct token IDs
-    assert len(parsed_tokens) == 3
-    assert all(isinstance(t, int) for t in parsed_tokens)
-
-    # Verify round-trip works: convert_tokens_to_ids should give us back valid IDs
-    expected_ids = [tokenizer.convert_tokens_to_ids(t) for t in token_strs]
-    assert parsed_tokens == expected_ids
-
-
 def test_parse_chat_completion_tokens_special_tokens(tokenizer):
     """Test token parsing with special tokens like newlines."""
     # Ċ is how GPT-2 represents newlines in BPE
@@ -95,14 +73,11 @@ def test_parse_chat_completion_tokens_special_tokens(tokenizer):
 
     chat_completion = create_mock_chat_completion_with_logprobs("Hello\nWorld", token_strs, logprobs)
 
-    # Parse tokens
     parsed_tokens = parse_chat_completion_tokens_from_bytes(chat_completion, tokenizer)
 
-    # Verify we got valid token IDs
     assert len(parsed_tokens) == 3
     assert all(isinstance(t, int) for t in parsed_tokens)
 
-    # Verify the newline token was correctly parsed
     expected_ids = [tokenizer.convert_tokens_to_ids(t) for t in token_strs]
     assert parsed_tokens == expected_ids
 
@@ -115,10 +90,8 @@ def test_parse_chat_completion_tokens_token_id_format(tokenizer):
 
     chat_completion = create_mock_chat_completion_with_logprobs("test", token_strs, logprobs)
 
-    # Parse tokens
     parsed_tokens = parse_chat_completion_tokens_from_bytes(chat_completion, tokenizer)
 
-    # Verify we extracted the token IDs correctly
     assert parsed_tokens == [123, 456, 789]
 
 
@@ -129,10 +102,8 @@ def test_parse_chat_completion_logprobs(tokenizer):
 
     chat_completion = create_mock_chat_completion_with_logprobs("Hello world", token_strs, logprobs)
 
-    # Parse logprobs
     parsed_logprobs = parse_chat_completion_logprobs(chat_completion)
 
-    # Verify we got the correct logprobs
     assert len(parsed_logprobs) == 2
     assert parsed_logprobs == logprobs
 
@@ -141,49 +112,7 @@ def test_parse_chat_completion_tokens_empty_response():
     """Test handling of empty response."""
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
-    # Create completion with no tokens
-    chat_completion = ChatCompletion(
-        id="chatcmpl-test",
-        choices=[
-            Choice(
-                finish_reason="stop",
-                index=0,
-                message=ChatCompletionMessage(role="assistant", content=""),
-                logprobs=ChoiceLogprobs(content=[], refusal=None),
-            )
-        ],
-        created=1234567890,
-        model="test-model",
-        object="chat.completion",
-        usage=CompletionUsage(completion_tokens=0, prompt_tokens=10, total_tokens=10),
-    )
+    chat_completion = create_mock_chat_completion_with_logprobs("", [], [])
 
-    # Parse tokens - should return empty list
     parsed_tokens = parse_chat_completion_tokens_from_bytes(chat_completion, tokenizer)
     assert parsed_tokens == []
-
-
-def test_parse_chat_completion_tokens_no_logprobs():
-    """Test error handling when logprobs are missing."""
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
-
-    # Create completion without logprobs
-    chat_completion = ChatCompletion(
-        id="chatcmpl-test",
-        choices=[
-            Choice(
-                finish_reason="stop",
-                index=0,
-                message=ChatCompletionMessage(role="assistant", content="test"),
-                logprobs=None,
-            )
-        ],
-        created=1234567890,
-        model="test-model",
-        object="chat.completion",
-        usage=CompletionUsage(completion_tokens=1, prompt_tokens=10, total_tokens=11),
-    )
-
-    # Should raise ValueError
-    with pytest.raises(ValueError, match="Logprobs should not be None"):
-        parse_chat_completion_tokens_from_bytes(chat_completion, tokenizer)

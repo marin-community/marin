@@ -20,12 +20,14 @@ import ray
 import logging
 import levanter
 import haliax as hax
+import jax
 import jax.random as jrandom
 import fsspec
 import json
+import numpy
 
 from typing import Any
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from levanter.trainer import TrainerConfig
 from levanter.models.lm_model import LmConfig
 from ray.runtime_env import RuntimeEnv
@@ -40,7 +42,7 @@ from marin.execution import ExecutorStep
 from marin.rl.environments.base import MarinEnv, EnvConfig, load_environment_from_spec
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.rollout_worker import InferenceContext
-from marin.rl.types import Rollout, RolloutGroup
+from marin.rl.types import RolloutGroup
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger("ray")
@@ -57,23 +59,15 @@ def _to_list(arr) -> list:
         return list(arr)
 
 
-def rollout_to_dict(rollout: "Rollout") -> dict[str, Any]:
-    """Convert a Rollout to a JSON-serializable dictionary."""
-    return {
-        "env_name": rollout.env_name,
-        "env_example_id": rollout.env_example_id,
-        "prompt_tokens": _to_list(rollout.prompt_tokens),
-        "response_tokens": _to_list(rollout.response_tokens),
-        "response_logprobs": _to_list(rollout.response_logprobs),
-        "token_rewards": _to_list(rollout.token_rewards),
-        "episode_reward": float(rollout.episode_reward),
-        "metadata": asdict(rollout.metadata),
-    }
-
-
 def rollout_group_to_dict(group: "RolloutGroup") -> dict[str, Any]:
-    """Convert a RolloutGroup to a JSON-serializable dictionary."""
-    return {"rollouts": [rollout_to_dict(r) for r in group.rollouts]}
+    """Convert a RolloutGroup to a JSON-serializable dictionary.
+
+    Uses tree mapping to automatically handle all fields including arrays,
+    making it robust to schema changes.
+    """
+    return dataclasses.asdict(
+        jax.tree.map(lambda v: _to_list(v) if isinstance(v, list | jax.Array | numpy.ndarray) else v, group)
+    )
 
 
 @dataclass
@@ -81,37 +75,20 @@ class EnvironmentEvalConfig:
     """Configuration for environment evaluation."""
 
     model_config: LmConfig
-    """Model configuration."""
-
     env_config: EnvConfig
-    """Environment configuration."""
-
+    temperature: float = 0.0
+    max_input_length: int = 2048
+    max_output_length: int = 8192
+    stop_tokens: list[str] | None = None
+    seed: int = 42
+    tpu_type: str = "v5litepod-128"
     output_path: str | None = None
-    """Path to save evaluation results (local or GCS)."""
 
     n_examples: int = 100
     """Number of examples to evaluate."""
 
     n_generations: int = 1
     """Number of generations per prompt."""
-
-    temperature: float = 0.0
-    """Sampling temperature."""
-
-    max_input_length: int = 2048
-    """Maximum input sequence length."""
-
-    max_output_length: int = 8192
-    """Maximum output sequence length."""
-
-    stop_tokens: list[str] | None = None
-    """Stop tokens for generation."""
-
-    seed: int = 42
-    """Random seed for evaluation."""
-
-    tpu_type: str = "v5litepod-128"
-    """TPU type to use for evaluation."""
 
 
 def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
@@ -219,7 +196,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
 
             # Enter mesh context for sampling, like RolloutWorker does in _sample_batch
             with (
-                trainer_config.device_mesh,
+                trainer_config.use_device_mesh(),
                 hax.axis_mapping(trainer_config.compute_axis_mapping),
             ):
                 inference_server = InferenceServer.create(
