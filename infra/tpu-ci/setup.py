@@ -56,7 +56,6 @@ def store_github_token_in_secret_manager(token: str):
     """Store GitHub token in Secret Manager."""
     logging.info("Storing GitHub token in Secret Manager...")
 
-    # Check if secret exists
     result = run(
         [
             "gcloud",
@@ -74,7 +73,6 @@ def store_github_token_in_secret_manager(token: str):
         logging.info("✓ Secret already exists")
         return
 
-    # Create secret
     run(
         [
             "gcloud",
@@ -211,7 +209,6 @@ def create_controller_vm():
     """Create controller VM for running TPU VM manager."""
     logging.info("Creating controller VM...")
 
-    # Get current branch to clone on the controller
     result = run(["git", "branch", "--show-current"], capture_output=True, text=True, check=False)
     branch = result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else config.GITHUB_BRANCH
     logging.info(f"Controller will use branch: {branch}")
@@ -222,16 +219,13 @@ set -e
 apt-get update
 apt-get install -y git curl
 
-# Install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="/root/.local/bin:$PATH"
 
-# Clone repo to get monitor code
 cd /opt
 git clone --branch {branch} https://github.com/{config.GITHUB_ORG}/{config.GITHUB_REPO}.git
 cd marin/infra/tpu-ci
 
-# Create systemd service
 cat > /etc/systemd/system/tpu-monitor.service <<'EOF'
 [Unit]
 Description=TPU VM Manager
@@ -286,7 +280,6 @@ def delete_all_tpu_vms():
     """Delete all TPU VMs with tpu-ci labels."""
     logging.info("Deleting TPU VMs...")
 
-    # List all TPU VMs with our label
     result = run(
         [
             "gcloud",

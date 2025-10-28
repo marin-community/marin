@@ -18,7 +18,6 @@ Central configuration for TPU CI infrastructure.
 All configuration values are hardcoded here to ensure consistent deployments.
 """
 
-# GCP Project Configuration
 GCP_PROJECT_ID = "hai-gcp-models"
 REGION = "us-west4"
 ZONE = "us-west4-a"
@@ -28,22 +27,18 @@ CONTROLLER_NAME = "tpu-ci-monitor-controller"
 CONTROLLER_MACHINE_TYPE = "e2-micro"
 CONTROLLER_DISK_SIZE_GB = 10
 
-# TPU Configuration
 TPU_VM_PREFIX = "tpu-ci"
 TPU_VM_COUNT = 2
 TPU_ACCELERATOR_TYPE = "v5litepod-4"
 TPU_VERSION = "tpu-ubuntu2204-base"
 
-# GitHub Configuration
 GITHUB_ORG = "marin-community"
 GITHUB_REPO = "marin"
 GITHUB_BRANCH = "main"  # Can be overridden via environment variable
 GITHUB_CONFIG_URL = f"https://github.com/{GITHUB_ORG}/{GITHUB_REPO}"
 
-# GitHub Actions Runner Configuration
 RUNNER_LABELS = ["tpu", "self-hosted", "tpu-ci"]
 
-# Docker Configuration
 DOCKER_REGISTRY = f"{REGION}-docker.pkg.dev"
 ARTIFACT_REGISTRY_REPO_NAME = "marin-ci"
 DOCKER_REPOSITORY = f"{GCP_PROJECT_ID}/{ARTIFACT_REGISTRY_REPO_NAME}"
@@ -62,6 +57,5 @@ DOCKER_RUN_TEMPLATE = (
     f"{DOCKER_IMAGE_FULL}"
 )
 
-# Paths
 INFRA_DIR = "infra/tpu-ci"
 DOCKERFILE_TPU_CI_PATH = "docker/marin/Dockerfile.tpu-ci"

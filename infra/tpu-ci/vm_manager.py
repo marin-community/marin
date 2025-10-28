@@ -32,6 +32,8 @@ Continuously monitors and ensures the desired number of VMs are running:
 
 import json
 import logging
+import os
+import shlex
 import subprocess
 import sys
 import time
@@ -60,7 +62,6 @@ set -e
 
 echo "=== TPU VM Setup Starting ==="
 
-# Read configuration from VM metadata
 PROJECT_ID=$(curl -sSf -H "Metadata-Flavor: Google" \\
   http://metadata.google.internal/computeMetadata/v1/project/project-id)
 ZONE=$(curl -sSf -H "Metadata-Flavor: Google" \\
@@ -80,7 +81,6 @@ killall -9 apt apt-get || true
 # Wait briefly for locks to be released
 sleep 2
 
-# Install Docker if not already present
 if ! command -v docker &> /dev/null; then
     echo "Installing Docker..."
     apt-get update
@@ -89,35 +89,28 @@ if ! command -v docker &> /dev/null; then
     systemctl start docker
 else
     echo "Docker already installed, skipping..."
-    # Ensure jq and curl are installed
     apt-get update
     apt-get install -y jq curl
 fi
 
-# Ensure Docker is running
 systemctl enable docker
 systemctl start docker
 
-# Configure Docker authentication for Artifact Registry
 echo "Configuring Docker authentication..."
 gcloud auth configure-docker {config.DOCKER_REGISTRY} --quiet
 
-# Pull TPU CI image to speed up first test run
 echo "Pre-pulling TPU CI Docker image..."
 docker pull {config.DOCKER_IMAGE_FULL} || true
 
-# Install GitHub Actions runner
 echo "Installing GitHub Actions runner..."
 RUNNER_VERSION="2.311.0"
 RUNNER_USER="github-runner"
 
-# Create runner user if it doesn't exist
 if ! id -u $RUNNER_USER > /dev/null 2>&1; then
     useradd -m -s /bin/bash $RUNNER_USER
 fi
 usermod -aG docker $RUNNER_USER
 
-# Download and extract runner if not already present
 cd /home/$RUNNER_USER
 if [ ! -f config.sh ]; then
     curl -o actions-runner-linux-x64-$RUNNER_VERSION.tar.gz -L \\
@@ -127,24 +120,20 @@ if [ ! -f config.sh ]; then
 fi
 chown -R $RUNNER_USER:$RUNNER_USER /home/$RUNNER_USER
 
-# Get GitHub registration token from Secret Manager
 echo "Fetching GitHub token from Secret Manager..."
 GITHUB_TOKEN=$(gcloud secrets versions access latest \\
   --secret="tpu-ci-github-token" \\
   --project="$PROJECT_ID")
 
-# Get runner registration token
 REGISTRATION_TOKEN=$(curl -s -X POST \\
   -H "Accept: application/vnd.github+json" \\
   -H "Authorization: Bearer $GITHUB_TOKEN" \\
   https://api.github.com/repos/{config.GITHUB_ORG}/{config.GITHUB_REPO}/actions/runners/registration-token \\
   | jq -r .token)
 
-# Configure runner (ephemeral mode)
 echo "Configuring GitHub Actions runner..."
 cd /home/$RUNNER_USER
 
-# Remove existing runner configuration if present
 if [ -f .runner ]; then
     echo "Removing existing runner configuration..."
     ./svc.sh stop || true
@@ -160,10 +149,9 @@ sudo -u $RUNNER_USER ./config.sh \\
   --work _work \\
   --unattended
 
-# Install and start runner as systemd service
 echo "Installing runner service..."
 cd /home/$RUNNER_USER
-# Uninstall existing service if present to avoid "already exists" error
+# Avoid "already exists" error
 ./svc.sh uninstall || true
 ./svc.sh install $RUNNER_USER
 ./svc.sh start
@@ -178,11 +166,10 @@ def create_tpu_vm(index: int) -> None:
 
     logging.info(f"Creating TPU VM: {vm_name}")
 
-    # Write startup script to temp file
     startup_script_path = Path("/tmp/tpu-startup-script.sh")
     startup_script_path.write_text(get_startup_script())
 
-    # Create TPU VM with labels for automatic cleanup
+    # Labels enable automatic cleanup
     cmd = [
         "gcloud",
         "compute",
@@ -301,7 +288,6 @@ def ensure_tpu_vms(tpu_client: tpu_v2.TpuClient):
 
     logging.info(f"Found {len(vms)} TPU VMs")
 
-    # Delete preempted/failed VMs
     bad_states = ["PREEMPTED", "TERMINATED", "FAILED"]
     for vm in vms:
         if vm["state"] in bad_states:
@@ -312,13 +298,11 @@ def ensure_tpu_vms(tpu_client: tpu_v2.TpuClient):
             except Exception as e:
                 logging.error(f"Failed to delete {vm['name']}: {e}")
 
-    # Count healthy VMs (READY or CREATING)
     healthy_states = ["READY", "CREATING"]
     healthy_count = sum(1 for vm in vms if vm["state"] in healthy_states)
 
     logging.info(f"Healthy TPU VMs: {healthy_count}/{config.TPU_VM_COUNT}")
 
-    # Create missing VMs
     needed = config.TPU_VM_COUNT - healthy_count
     if needed > 0:
         logging.info(f"Creating {needed} new TPU VMs...")
@@ -493,13 +477,9 @@ def debug_tpu(index: int, test_path: str, pytest_args: str):
 
     logging.info(f"Running TPU tests on: {vm_name}")
 
-    # Get project root directory (parent of infra/tpu-ci)
     project_root = Path(__file__).parent.parent.parent
     remote_dir = "/tmp/marin-test"
 
-    # Sync project directory to VM using git-tracked files only
-    # This automatically excludes resource forks, build artifacts, etc.
-    # COPYFILE_DISABLE=1 prevents macOS from including extended attributes/resource forks
     logging.info(f"Syncing project directory to {vm_name}...")
 
     tar_cmd = f"""cd {project_root} && \
@@ -507,7 +487,7 @@ def debug_tpu(index: int, test_path: str, pytest_args: str):
         gcloud compute tpus tpu-vm ssh {vm_name} \
         --zone {config.ZONE} \
         --project {config.GCP_PROJECT_ID} \
-        --command 'rm -rf {remote_dir} && mkdir -p {remote_dir} && tar xzf - -C {remote_dir}'"""
+        --command 'sudo rm -rf {remote_dir} && mkdir -p {remote_dir} && tar xzf - -C {remote_dir}'"""
 
     result = run(tar_cmd, shell=True, check=False)
     if result.returncode != 0:
@@ -536,6 +516,16 @@ def debug_tpu(index: int, test_path: str, pytest_args: str):
     if result.returncode != 0:
         logging.warning("TPU cleanup had non-zero exit (may be normal if no processes to kill)")
 
+    # Build environment variable flags for Docker
+    env_flags = []
+    for var in ["HF_TOKEN", "WANDB_API_KEY"]:
+        value = os.getenv(var)
+        if value:
+            env_flags.append(f"-e {var}={shlex.quote(value)}")
+            logging.info(f"Forwarding {var} to Docker container")
+
+    env_flags_str = " ".join(env_flags)
+
     # Run pytest in Docker container as github-runner user
     logging.info(f"Running pytest on {vm_name}...")
     ssh_cmd = [
@@ -550,19 +540,26 @@ def debug_tpu(index: int, test_path: str, pytest_args: str):
         "--project",
         config.GCP_PROJECT_ID,
         "--command",
-        f"""timeout 60 sudo -u github-runner bash -c 'docker run --rm --privileged \
+        f"""sudo -u github-runner bash -c 'docker run --rm \
             --device /dev/vfio:/dev/vfio \
-            --shm-size=10g \
+            --net=host \
+            --shm-size=100g \
+            --stop-timeout=1 \
+            --cap-add=SYS_RESOURCE \
+             --ulimit memlock=68719476736:68719476736 \
             -e JAX_PLATFORMS=tpu \
             -e PJRT_DEVICE=TPU \
             -e TPU_CI=true \
             -e START_RAY_TPU_CLUSTER=true \
             -e PYTHONPATH=/workspace \
             -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \
-            -v {remote_dir}:/workspace:ro \
+            {env_flags_str} \
+            -v {remote_dir}:/workspace:rw \
+            --tmpfs /workspace/logs:rw \
+            --tmpfs /workspace/.pytest_cache:rw \
             -w /workspace \
             {config.DOCKER_IMAGE_FULL} \
-            uv run pytest {test_path} {pytest_args}'""",
+            timeout --kill-after=5 --signal=TERM 120 uv run pytest {test_path} {pytest_args}' || true""",
     ]
 
     result = run(ssh_cmd, check=False)
