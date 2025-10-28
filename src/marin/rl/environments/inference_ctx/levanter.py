@@ -20,30 +20,48 @@ as well as methods for tokenization and logprob extraction from an OpenAI ChatCo
 """
 
 import asyncio
+from dataclasses import dataclass
 import logging
-from levanter.inference.openai import InferenceServer
+import threading
+from jax.sharding import Mesh
+from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
 from transformers import PreTrainedTokenizer
+from levanter.models.lm_head import LmHeadModel
+import haliax as hax
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 
 logger = logging.getLogger(__name__)
 
 
-class InferenceContext(BaseInferenceContext):
+@dataclass
+class LevanterInferenceContextConfig:
+    inference_server_config: InferenceServerConfig
+    tokenizer: PreTrainedTokenizer
+    mesh: Mesh
+    axis_mapping: dict[str, str]
+    stop_tokens: list[int] | None = None
+    max_tokens: int = 16
+
+
+class LevanterInferenceContext(BaseInferenceContext):
     """Concrete implementation using Levanter inference server."""
+
+    _inference_server: InferenceServer
+    _inference_thread: threading.Thread
 
     def __init__(
         self,
-        tokenizer: PreTrainedTokenizer,
-        stop_tokens: list[int] | None,
-        inference_server: InferenceServer,
-        max_tokens: int,
+        inference_config: LevanterInferenceContextConfig,
     ):
-        self._inference_server = inference_server
-        self.tokenizer = tokenizer
-        self._stop_tokens = stop_tokens
-        self.max_tokens = max_tokens
+        self.inference_server_config = inference_config.inference_server_config
+        self.model = inference_config.model
+        self.tokenizer = inference_config.tokenizer
+        self._stop_tokens = inference_config.stop_tokens
+        self.max_tokens = inference_config.max_tokens
+        self.mesh = inference_config.mesh
+        self.axis_mapping = inference_config.axis_mapping
 
     def openai_client(self) -> AsyncOpenAI:
         return AsyncOpenAI(
@@ -53,6 +71,19 @@ class InferenceContext(BaseInferenceContext):
 
     def openai_address(self) -> str:
         return f"http://{self._inference_server.address()}/v1"
+
+    def reload_model(self, model: LmHeadModel) -> None:
+        self._inference_server.reload(lambda model: model)
+
+    def start_server(self, model: LmHeadModel) -> None:
+        with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
+            self._inference_server = InferenceServer.create(
+                self.inference_server_config,
+                model=model,
+                tokenizer=self.tokenizer,
+            )
+        self._inference_thread = threading.Thread(target=lambda: self._inference_server.serve(), daemon=True)
+        self._inference_thread.start()
 
     # TODO: add support for ChatCompletion style [ { role, content} ] messages
     def batch_completions(

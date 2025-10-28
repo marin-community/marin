@@ -34,26 +34,23 @@ import jax
 import jax.random as jrandom
 import levanter
 from jax.experimental import multihost_utils
-from levanter.inference.openai import InferenceServer, InferenceServerConfig
+from levanter.inference.openai import InferenceServer
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
 from transformers import PreTrainedTokenizer
 from typing import Literal
-from haliax.partitioning import ResourceAxis
 
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
 from marin.rl.environments.inference_ctx import (
-    InferenceContext,
-    vLLMInferenceContext,
+    LevanterInferenceContext,
+    LevanterInferenceContextConfig,
     vLLMInferenceContextConfig,
-    MODEL_MAPPINGS,
-    MODEL_TRANSPOSE_KEYS,
+    vLLMInferenceContext,
 )
 from marin.rl.model_utils import load_model_from_checkpoint
-from marin.rl.weight_utils import levanter_to_nnx_state
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .types import (
@@ -81,7 +78,7 @@ class RolloutWorkerConfig:
     inference_type: Literal["levanter", "vllm"]
     """Type of inference to use."""
 
-    inference_config: InferenceServerConfig | vLLMInferenceContextConfig
+    inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig
     """Configuration for inference context."""
 
     seed: int = 0
@@ -180,26 +177,27 @@ class RolloutWorker:
         self._tokenizer = config.tokenizer
 
         logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
-        if self.config.inference_type == "vllm":
-            # this is just a cpu mesh to load the model from training worker
-            self.mesh = jax.make_mesh(
-                (1, 1, 1),
-                (ResourceAxis.DATA, ResourceAxis.REPLICA, ResourceAxis.MODEL),
-                devices=jax.local_devices(backend="cpu")[:1],
+
+        self._rollout_writer = config.rollout_storage.create_writer()
+
+        if self.config.inference_type == "levanter":
+            self._policy_ctx = LevanterInferenceContext(
+                inference_config=self.config.inference_config,
             )
-            self.axis_mapping = {}
-        else:
-            self.mesh = self.config.trainer.device_mesh
-            self.axis_mapping = self.config.trainer.compute_axis_mapping
+        elif self.config.inference_type == "vllm":
+            self._policy_ctx = vLLMInferenceContext(
+                inference_config=self.config.inference_config,
+            )
+
+        # Need to build the policy model and then use that to start the inference server
+        self._build_models()
+        self._policy_ctx.start_server(self._policy_model)
 
         self._transfer_client = create_weight_transfer_client(
             config.weight_transfer,
-            mesh=self.mesh,
-            axis_mapping=self.axis_mapping,
+            mesh=self._policy_ctx.mesh,
+            axis_mapping=self._policy_ctx.axis_mapping,
         )
-
-        self._rollout_writer = config.rollout_storage.create_writer()
-        self._build_models()
 
         # TODO(power) -- replace this with a wait_until_ready() on the levanter inference server
         time.sleep(1.0)
@@ -208,20 +206,6 @@ class RolloutWorker:
 
         # Create curriculum actor (no checkpoint path for rollout workers)
         self._curriculum_actor = get_or_create_curriculum_actor(self.config.curriculum_config)
-
-        if self.config.inference_type == "vllm":
-            self._policy_ctx = vLLMInferenceContext(
-                inference_config=self.config.inference_config,
-            )
-        elif self.config.inference_type == "levanter":
-            with self.config.trainer.use_device_mesh(), hax.axis_mapping(self.config.trainer.compute_axis_mapping):
-                self._inference_server = InferenceServer.create(
-                    self.config.inference_config,
-                    model=self._policy_model,
-                    tokenizer=self._tokenizer,
-                )
-            self._inference_thread = threading.Thread(target=lambda: self._inference_server.serve(), daemon=True)
-            self._inference_thread.start()
 
     def _load_environment(self, lesson_id: str) -> MarinEnv:
         """Load environment from lesson ID."""
@@ -245,41 +229,16 @@ class RolloutWorker:
         stop_tokens = lesson_config.sampling_params.stop_tokens
         max_tokens = lesson_config.sampling_params.max_tokens
 
-        if self.config.inference_type == "levanter":
-            self._policy_ctx = InferenceContext(
-                tokenizer=self._tokenizer,
-                inference_server=self._inference_server,
-                max_tokens=max_tokens,
-                stop_tokens=stop_tokens,
-            )
-
-        if self.config.inference_type == "levanter":
-            with (
-                self.config.trainer.device_mesh,
-                hax.axis_mapping(self.config.trainer.compute_axis_mapping),
-            ):
-                # Sample examples, generate responses, and create rollouts from selected lesson
-                rollout_groups, metrics = env.sample(
-                    inference_ctx=self._policy_ctx,
-                    n_examples=n_examples,
-                    n_generations=n_generations,
-                    temperature=temperature,
-                    prng_key=rng,
-                    mode=mode,
-                    max_tokens=max_tokens,
-                    stop=stop_tokens,
-                )
-        elif self.config.inference_type == "vllm":  # without mesh
-            rollout_groups, metrics = env.sample(
-                inference_ctx=self._policy_ctx,
-                n_examples=n_examples,
-                n_generations=n_generations,
-                temperature=temperature,
-                prng_key=rng,
-                mode=mode,
-                max_tokens=max_tokens,
-                stop=stop_tokens,
-            )
+        rollout_groups, metrics = env.sample(
+            inference_ctx=self._policy_ctx,
+            n_examples=n_examples,
+            n_generations=n_generations,
+            temperature=temperature,
+            prng_key=rng,
+            mode=mode,
+            max_tokens=max_tokens,
+            stop=stop_tokens,
+        )
 
         if len(rollout_groups) == 0:
             logger.warning("No valid rollouts generated in this batch...")
@@ -331,9 +290,9 @@ class RolloutWorker:
             model_config=self.config.model,
             trainer_config=self.config.trainer,
             vocab_axis=Vocab,
-            mesh=self.mesh,
+            mesh=self._policy_ctx.mesh,
             # use the compute axis mapping for inference
-            axis_mapping=self.axis_mapping,
+            axis_mapping=self._policy_ctx.axis_mapping,
             tokenizer=self._tokenizer,
             key=key,
         )
@@ -376,20 +335,7 @@ class RolloutWorker:
             self._current_weight_step = update.weight_id
             logger.info(f"Received new weights from step {update.weight_id}")
             self._policy_model = update.model
-
-            if self.config.inference_type == "levanter":
-                self._inference_server.reload(lambda model: self._policy_model)
-            elif self.config.inference_type == "vllm":
-                nnx_state = levanter_to_nnx_state(self._policy_model)
-                self._policy_ctx.llm.llm_engine.model_executor.driver_worker.sync_weights(
-                    nnx_state,
-                    mappings=MODEL_MAPPINGS[self.config.inference_config.model_name],
-                    transpose_keys=MODEL_TRANSPOSE_KEYS[self.config.inference_config.model_name],
-                    reshard_fn=None,
-                )
-
-                self._policy_ctx.llm.llm_engine.reset_prefix_cache()  # Reset prefix cache because of new weights
-
+            self._policy_ctx.reload_model(self._policy_model)
             return update.model
         else:
             logger.info("No new weights available")

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .levanter import InferenceContext
+from .levanter import InferenceContext, LevanterInferenceContextConfig
 from .vllm import vLLMInferenceContext, vLLMInferenceContextConfig, MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 
 __all__ = [

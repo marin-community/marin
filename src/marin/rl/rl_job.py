@@ -26,7 +26,7 @@ from typing import Literal
 import uuid
 from dataclasses import dataclass, field
 
-from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
+from marin.rl.environments.inference_ctx import LevanterInferenceContextConfig, vLLMInferenceContextConfig
 import ray
 from levanter.inference.openai import InferenceServerConfig, InferenceEngineConfig
 from levanter.infra.ray_tpu import run_on_pod_ray
@@ -243,7 +243,7 @@ class RLJob:
 
         # Create inference server config if not provided
         if self.config.inference_config is None and self.config.inference_type == "levanter":
-            inference_config = InferenceServerConfig(
+            inference_server_config = InferenceServerConfig(
                 trainer=dataclasses.replace(
                     self.config.trainer,
                     tensor_parallel_axes=["mlp", "kv_head"],
@@ -261,6 +261,12 @@ class RLJob:
             )
             logger.info(
                 "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_tokens=%d", max_seqs, max_tokens
+            )
+            inference_config = LevanterInferenceContextConfig(
+                inference_server_config=inference_server_config,
+                tokenizer=tokenizer,
+                mesh=self.config.trainer.device_mesh,
+                axis_mapping=self.config.trainer.compute_axis_mapping,
             )
         else:
             assert self.config.inference_config is not None, "Inference config must be provided for vllm inference"

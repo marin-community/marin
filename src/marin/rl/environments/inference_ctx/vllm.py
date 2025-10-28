@@ -27,6 +27,9 @@ from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.completion_usage import CompletionUsage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob, TopLogprob
+from haliax.partitioning import ResourceAxis
+from levanter.models.lm_head import LmHeadModel
+from marin.rl.weight_utils import levanter_to_nnx_state
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 
 logger = logging.getLogger(__name__)
@@ -148,6 +151,14 @@ class vLLMInferenceContext(BaseInferenceContext):
             tensor_parallel_size=inference_config.tensor_parallel_size,
             gpu_memory_utilization=inference_config.gpu_memory_utilization,
         )
+        # Mesh for the weight transfer client should be on the CPU and then
+        # in sync_weights function, we will reshard to the TPU
+        self.mesh = jax.make_mesh(
+            (1, 1, 1),
+            (ResourceAxis.DATA, ResourceAxis.REPLICA, ResourceAxis.MODEL),
+            devices=jax.local_devices(backend="cpu")[:1],
+        )
+        self.axis_mapping = {}
         self.tokenizer = self.llm.get_tokenizer()
         self.model_name = inference_config.model_name
         self.sampling_params = inference_config.sampling_params
@@ -281,6 +292,20 @@ class vLLMInferenceContext(BaseInferenceContext):
             object="chat.completion",
             usage=usage,
         )
+
+    def reload_model(self, model: LmHeadModel) -> None:
+        nnx_state = levanter_to_nnx_state(model)
+        self.llm.llm_engine.model_executor.driver_worker.sync_weights(
+            nnx_state,
+            mappings=MODEL_MAPPINGS[self.model_name],
+            transpose_keys=MODEL_TRANSPOSE_KEYS[self.model_name],
+            reshard_fn=None,
+        )
+
+        self.llm.llm_engine.reset_prefix_cache()  # Reset prefix cache because of new weights
+
+    def start_server(self, model: LmHeadModel) -> None:
+        pass
 
     def batch_completions(
         self,
