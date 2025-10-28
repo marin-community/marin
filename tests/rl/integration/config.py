@@ -17,7 +17,6 @@
 import datetime
 import logging
 import queue
-import sys
 import threading
 import time
 import uuid
@@ -34,7 +33,6 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import jmp
 import numpy as np
-import pytest
 from levanter.checkpoint import CheckpointerConfig
 from levanter.distributed import RayConfig
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
@@ -456,7 +454,6 @@ class ThreadedWorkerRunner(ABC):
             self._create_and_run_worker()
             self.result_queue.put(("success", None))
         except Exception as e:
-            print(f"{self.__class__.__name__} encountered exception:", e, file=sys.stderr)
             logger.error(f"{self.__class__.__name__} failed", exc_info=True)
             self.result_queue.put(("error", e))
 
@@ -503,20 +500,7 @@ class ThreadedWorkerRunner(ABC):
         try:
             status, error = self.result_queue.get_nowait()
             if status == "error":
-                import traceback
-
-                print(f"{self.__class__.__name__} error: {error}")
-                print(
-                    "Traceback:",
-                    "".join(
-                        traceback.format_exception(
-                            type(error),
-                            error,
-                            error.__traceback__,
-                        )
-                    ),
-                )
-                pytest.fail(f"{self.__class__.__name__} failed: {error}")
+                raise RuntimeError(f"{self.__class__.__name__} failed") from error
         except queue.Empty:
             pass
 
