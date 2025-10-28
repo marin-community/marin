@@ -262,7 +262,7 @@ tokenize_train = [
 rl = [
     "prime",
     "sympy",
-    "verifiers",
+    "verifiers==0.1.5",
 ]
 
 post_training = [

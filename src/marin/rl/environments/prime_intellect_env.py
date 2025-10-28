@@ -23,6 +23,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from marin.rl.environments import MarinEnv
+from marin.rl.environments.process_vllm_results import process_vllm_chat_results
 from marin.rl.inference_ctx import InferenceContext
 from marin.rl.types import Rollout, RolloutGroup
 
@@ -43,7 +44,7 @@ class PrimeIntellectEnv(MarinEnv):
     def __init__(
         self,
         env_id: str,
-        env_args: dict,
+        env_args: dict = {},  # noqa: B006
         max_tokens: int = 1024,
         max_concurrent: int = 32,
     ):
@@ -109,6 +110,9 @@ class PrimeIntellectEnv(MarinEnv):
         sampling_args = {
             "max_tokens": self.max_tokens,
             "temperature": temperature,
+            "logprobs": True,
+            # Note: return_tokens_as_token_ids is not supported by current vLLM version
+            # We use convert_tokens_to_ids() in process_vllm_results.py instead
         }
 
         logger.info(
@@ -141,8 +145,15 @@ class PrimeIntellectEnv(MarinEnv):
             ),
         )
 
-        processed_outputs = vf_env.process_env_results_vllm(
-            result.prompt, result.completion, result.state, inference_ctx.tokenizer
+        logger.info("Result:")
+        logger.info(f"Prompt: {result.prompt[0]}")
+        logger.info(f"Completion: {result.completion[0]}")
+        logger.info(f"State: {result.state[0]}")
+        logger.info(f"Reward: {result.reward[0]}")
+
+        # Use custom processing function to handle vLLM output format correctly
+        processed_outputs = process_vllm_chat_results(
+            result.prompt, result.completion, result.state, result.reward, inference_ctx.tokenizer
         )
 
         # Convert to RolloutGroups

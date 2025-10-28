@@ -23,16 +23,17 @@ import shlex
 import subprocess
 import time
 from pathlib import Path
-import yaml
 
+import yaml
 from ray.job_submission import JobSubmissionClient
 
 from marin.cluster.config import find_config_by_region
 from marin.cluster.ray import DashboardConfig, ray_dashboard
 from marin.run.ray_deps import build_runtime_env_for_packages, accelerator_type_from_extra, AcceleratorType
-from marin.run.vars import REMOTE_DASHBOARD_URL
 
 logger = logging.getLogger(__name__)
+
+REMOTE_DASHBOARD_URL = "http://127.0.0.1:8265"
 
 
 def parse_user_command_line(command: str) -> dict[str, str]:

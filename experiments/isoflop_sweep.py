@@ -340,7 +340,10 @@ def generate_isoflop_sweep(
 
 MARIN_SCALING_SUITES = {
     "nemotron": generate_isoflop_sweep(nemotron_mix, experiment_name="nemo-wider-depth-adapt"),
-    "common_pile": generate_isoflop_sweep(comma_main_mixture(), experiment_name="comma-mix"),
+    "common_pile": generate_isoflop_sweep(comma_main_mixture(permutation_type="linear"), experiment_name="comma-mix"),
+    "common_pile_feistel": generate_isoflop_sweep(
+        comma_main_mixture(permutation_type="feistel"), experiment_name="comma-mix-feistel"
+    ),
 }
 
 if __name__ == "__main__":
