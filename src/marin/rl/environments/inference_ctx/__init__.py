@@ -13,9 +13,11 @@
 # limitations under the License.
 
 from .levanter import InferenceContext
-from .vllm import vLLMInferenceContext, vLLMInferenceContextConfig
+from .vllm import vLLMInferenceContext, vLLMInferenceContextConfig, MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 
 __all__ = [
+    "MODEL_MAPPINGS",
+    "MODEL_TRANSPOSE_KEYS",
     "InferenceContext",
     "vLLMInferenceContext",
     "vLLMInferenceContextConfig",

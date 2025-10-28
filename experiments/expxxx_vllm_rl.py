@@ -121,15 +121,15 @@ def create_math_curriculum(run_id: str, experiment_config: ModelConfig) -> Curri
     )
 
     lessons = {
-        # "number_comparison": LessonConfig(
-        #     lesson_id="number_comparison",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "number_comparison", "seed": 42},
-        #     ),
-        #     dependencies=[],
-        #     sampling_params=default_sampling,
-        # ),
+        "number_comparison": LessonConfig(
+            lesson_id="number_comparison",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.mock_env.MockEnv",
+                env_args={"task_type": "number_comparison", "seed": 42},
+            ),
+            dependencies=[],
+            sampling_params=default_sampling,
+        ),
         # "addition_easy": LessonConfig(
         #     lesson_id="addition_easy",
         #     env_config=EnvConfig(
@@ -157,16 +157,16 @@ def create_math_curriculum(run_id: str, experiment_config: ModelConfig) -> Curri
         #     dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
         #     sampling_params=default_sampling,
         # ),
-        "math_full": LessonConfig(
-            lesson_id="math_full",
-            env_config=EnvConfig(
-                env_class="marin.rl.environments.math_env.MathEnv",
-                env_args={"seed": 42},
-            ),
-            dependencies=[],
-            # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-            sampling_params=default_sampling,
-        ),
+        # "math_full": LessonConfig(
+        #     lesson_id="math_full",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.math_env.MathEnv",
+        #         env_args={"seed": 42},
+        #     ),
+        #     dependencies=[],
+        #     # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+        #     sampling_params=default_sampling,
+        # ),
     }
 
     return CurriculumConfig(
@@ -200,7 +200,7 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         # Set the train batch size to num_rollout_workers * n_generations * n_prompts
         # to ensure we accept an entire training batch from the rollout workers.
-        train_batch_size=64,
+        train_batch_size=256,
         # microbatch to avoid OOM
         per_device_parallelism=16,
         num_train_steps=50000,
@@ -272,10 +272,10 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         run_id=name,
         log_freq=10,
         run_config=RunConfig(
-            train_tpu_type="v5p-8",
+            train_tpu_type="v6e-8",
             num_train_slices=1,
             num_rollout_workers=1,
-            inference_tpu_type="v5p-8",
+            inference_tpu_type="v6e-8",
         ),
     )
 
@@ -296,9 +296,9 @@ def main():
     # datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     # experiment_configs = [llama1b, qwen4b, qwen3_1_7b, qwen3_0_6b]
-    # experiment_configs = [llama1b]
+    experiment_configs = [llama1b]
     # experiment_configs = [qwen3_0_6b]
-    experiment_configs = [llama_3_1_8b]
+    # experiment_configs = [llama_3_1_8b]
     experiments = []
     for experiment_config in experiment_configs:
         model_base_name = experiment_config.name.split("/")[-1].lower()

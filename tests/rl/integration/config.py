@@ -39,6 +39,10 @@ from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Re
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.llama import LlamaConfig
+from levanter.models.qwen import Qwen3Config
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
+from vllm import SamplingParams
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
@@ -204,6 +208,35 @@ def create_weight_transfer_config():
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
         max_weight_transfer_wait_time=10.0,
+    )
+
+
+def create_nano_qwen_config():
+    return Qwen3Config(
+        seq_len=4096,
+        hidden_dim=1024,
+        intermediate_dim=3072,
+        num_heads=16,
+        num_kv_heads=8,
+        num_layers=28,
+        rope=Llama3RotaryEmbeddingsConfig(),
+        tie_word_embeddings=True,
+    )
+
+
+def create_vllm_inference_config():
+    return vLLMInferenceContextConfig(
+        model_name="Qwen/Qwen3-0.6B",
+        max_model_len=1024,
+        tensor_parallel_size=1,
+        gpu_memory_utilization=0.90,
+        sampling_params=SamplingParams(
+            temperature=1.0,
+            n=4,
+            max_tokens=16,
+            logprobs=1,
+            stop=None,
+        ),
     )
 
 

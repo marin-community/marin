@@ -35,6 +35,8 @@ from tests.rl.integration.config import (
     create_nano_trainer_config,
     create_test_curriculum_config,
     create_test_rollout_storage_config,
+    create_vllm_inference_config,
+    create_nano_qwen_config,
 )
 from tests.rl.integration.tasks import create_cats_rollout_batch, validate_cats_model
 
@@ -75,6 +77,7 @@ def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path):
         curriculum=create_test_curriculum_config(),
         tokenizer=tokenizer,
         rollout_storage=rollout_storage_config,
+        inference_type="levanter",
     )
 
     job = RLJob(job_config)
@@ -133,6 +136,64 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
         curriculum=create_test_curriculum_config(),
         tokenizer=DummyTokenizer(),
         rollout_storage=rollout_storage_config,
+        inference_type="levanter",
+    )
+
+    job = RLJob(job_config)
+
+    training_runner = TrainWorkerRunner.from_job(job)
+    inference_runner = RolloutWorkerRunner.from_job(job)
+
+    # Apply test-specific overrides
+    inference_runner.rollout_worker_config.weight_transfer.sync_interval_steps = 1
+
+    with training_runner:
+        while training_runner.reference_model is None:
+            time.sleep(0.1)
+        with inference_runner:
+            training_runner.done.wait()
+
+    assert (
+        inference_runner.rollouts_generated >= 5
+    ), f"Expected at least 5 rollouts, got {inference_runner.rollouts_generated}"
+    assert (
+        training_runner.steps_completed >= 2
+    ), f"Expected at least 2 training steps, got {training_runner.steps_completed}"
+
+    assert inference_runner.weight_transfers >= 1, "Should have at least one weight transfer during long run"
+
+    validate_cats_model(training_runner.trained_model, DummyTokenizer())
+
+
+@pytest.mark.slow("Long-running integration test.")
+def test_full_integration_moar_cats_vllm(ray_tpu_cluster, tmp_path):
+    """Long-running test to validate environment objective improves over time."""
+    rollout_storage_config = create_test_rollout_storage_config()
+    target_steps = 20
+
+    # Create trainer config with target steps
+    trainer_config = create_nano_trainer_config(tmp_path)
+    trainer_config.num_train_steps = target_steps
+
+    # Create RLJobConfig and get worker configs
+    job_config = RLJobConfig(
+        model=create_nano_qwen_config(),
+        trainer=trainer_config,
+        train_params=TrainParams(
+            optimizer=create_nano_optimizer_config(),
+            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon=0.2),
+            replay_buffer=ReplayBufferConfig(
+                capacity=4096,
+                alpha=3.0,
+                max_samples=1,
+                max_rollout_step_delay=1,
+            ),
+        ),
+        curriculum=create_test_curriculum_config(),
+        tokenizer=DummyTokenizer(),
+        rollout_storage=rollout_storage_config,
+        inference_type="vllm",
+        inference_config=create_vllm_inference_config(),
     )
 
     job = RLJob(job_config)

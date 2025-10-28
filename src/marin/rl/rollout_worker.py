@@ -22,7 +22,6 @@ and writes the rollout data to files for training workers to consume.
 import dataclasses
 import logging
 import os
-import re
 import socket
 import threading
 import time
@@ -32,7 +31,6 @@ from typing import Any
 import equinox as eqx
 import haliax as hax
 import jax
-import jax.numpy as jnp
 import jax.random as jrandom
 import levanter
 from jax.experimental import multihost_utils
@@ -47,9 +45,15 @@ from haliax.partitioning import ResourceAxis
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
-from marin.rl.environments.inference_ctx import InferenceContext, vLLMInferenceContext, vLLMInferenceContextConfig
+from marin.rl.environments.inference_ctx import (
+    InferenceContext,
+    vLLMInferenceContext,
+    vLLMInferenceContextConfig,
+    MODEL_MAPPINGS,
+    MODEL_TRANSPOSE_KEYS,
+)
 from marin.rl.model_utils import load_model_from_checkpoint
-from marin.rl.weight_utils import levanter_to_nnx_state, MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
+from marin.rl.weight_utils import levanter_to_nnx_state
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .types import (
@@ -351,63 +355,6 @@ class RolloutWorker:
         if self._inference_server:
             self._inference_server.shutdown()
 
-    def _convert_vllm_state_dict_to_trainer_keys(
-        self, state_dict_trainer: dict, state_dict_vllm: dict, mapping: dict
-    ) -> dict:
-        state_dict_vllm_with_trainer_keys = {}
-        for src_path, _ in state_dict_trainer.items():
-            src_key = ".".join(str(p) for p in src_path)
-
-            # Try to find a matching pattern
-            matched = False
-            for src_pattern, (dst_pattern, _) in mapping.items():
-                # breakpoint()
-                # if "layers.*.self_attn.k_proj" in src_pattern and "k_proj" in src_key:
-                #     breakpoint()
-
-                if not re.match(src_pattern, src_key):
-                    # print(f"Warning: No match found for {src_key} and pattern: {src_pattern}")
-                    continue
-
-                match_layer_number = re.match(r".*layers\.(\d+).*", src_key)
-                if match_layer_number:
-                    layer_number = int(match_layer_number.group(1))
-                    dst_path = []
-                    for part in dst_pattern.split("."):
-                        if part == "*":
-                            dst_path.append(layer_number)
-                        else:
-                            dst_path.append(part)
-                    dst_path = tuple(dst_path)
-                    if dst_path in state_dict_vllm:
-                        state_dict_vllm_with_trainer_keys[src_path] = state_dict_vllm[dst_path]
-                        matched = True
-                        break
-                else:
-                    dst_path = tuple(dst_pattern.split("."))
-                    if dst_path in state_dict_vllm:
-                        state_dict_vllm_with_trainer_keys[src_path] = state_dict_vllm[dst_path]
-                        matched = True
-                        break
-
-            if not matched:
-                print(f"Warning: No mapping found for {src_key}")
-
-        return state_dict_vllm_with_trainer_keys
-
-    def _check_weight_differences(self, state_dict: dict, state_dict_other: dict):
-        for key in state_dict:
-            if key in state_dict_other:
-                assert (
-                    state_dict[key].shape == state_dict_other[key].shape
-                ), f"Shape mismatch for key {key}: {state_dict[key].shape} != {state_dict_other[key].shape}"
-                weight = jax.device_get(state_dict[key]).astype(jnp.bfloat16)
-                weight_other = jax.device_get(state_dict_other[key]).astype(jnp.bfloat16)
-                print(
-                    f"Weight {key}, max diff: {jnp.max(jnp.abs(weight - weight_other))}, \
-                    mean diff: {jnp.mean(jnp.abs(weight - weight_other))}"
-                )
-
     def _sync_weights(self):
         max_wait_time = self.config.weight_transfer.max_weight_transfer_wait_time
         start_time = time.time()
@@ -436,8 +383,8 @@ class RolloutWorker:
                 nnx_state = levanter_to_nnx_state(self._policy_model)
                 self._policy_ctx.llm.llm_engine.model_executor.driver_worker.sync_weights(
                     nnx_state,
-                    mappings=MODEL_MAPPINGS[self.config.vllm_model_name],
-                    transpose_keys=MODEL_TRANSPOSE_KEYS[self.config.vllm_model_name],
+                    mappings=MODEL_MAPPINGS[self.config.inference_config.model_name],
+                    transpose_keys=MODEL_TRANSPOSE_KEYS[self.config.inference_config.model_name],
                     reshard_fn=None,
                 )
 

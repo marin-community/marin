@@ -130,7 +130,7 @@ class RLJobConfig:
     """Configuration for TPU pod deployment. If None, uses simple Ray actors."""
 
     # Inference server (auto-configured by default)
-    inference_config: InferenceServerConfig | vLLMInferenceContextConfig
+    inference_config: InferenceServerConfig | vLLMInferenceContextConfig | None = None
     """Configuration for inference context."""
 
     # Logging
@@ -242,7 +242,7 @@ class RLJob:
         assert max_tokens > 0, "Max tokens must be positive across curriculum lessons."
 
         # Create inference server config if not provided
-        if self.config.inference_server_config is None and self.config.inference_type == "levanter":
+        if self.config.inference_config is None and self.config.inference_type == "levanter":
             inference_config = InferenceServerConfig(
                 trainer=dataclasses.replace(
                     self.config.trainer,
@@ -263,6 +263,7 @@ class RLJob:
                 "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_tokens=%d", max_seqs, max_tokens
             )
         else:
+            assert self.config.inference_config is not None, "Inference config must be provided for vllm inference"
             inference_config = self.config.inference_config
 
         # Create train worker config

@@ -168,6 +168,7 @@ def test_full_integration_sequential_digits(ray_tpu_cluster, tmp_path):
         curriculum=curriculum_config,
         tokenizer=DummyTokenizer(),
         rollout_storage=rollout_storage_config,
+        inference_type="levanter",
     )
 
     job = RLJob(job_config)

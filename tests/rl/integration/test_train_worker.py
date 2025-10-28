@@ -54,6 +54,7 @@ def test_train_worker(ray_tpu_cluster, tmp_path):
         curriculum=create_test_curriculum_config(),
         tokenizer=DummyTokenizer(),
         rollout_storage=rollout_storage_config,
+        inference_type="levanter",
     )
 
     job = RLJob(job_config)

@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import datetime
-from marin.rl.rollout_worker import RolloutWorker, VLLMRolloutWorkerConfig, RolloutStorageConfig
+from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig, RolloutStorageConfig
+from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, EnvConfig
 from transformers import AutoTokenizer
 import uuid
@@ -30,47 +31,10 @@ from vllm import SamplingParams
 
 
 def test_initialize_vllm_rollout(tmpdir, ray_tpu_cluster):
-    # weight_transfer_config = WeightTransferConfig(
-    #         mode=WeightTransferMode.ARROW_FLIGHT,
-    #         sync_interval_steps=1,
-    #         checkpoint_dir=tempfile.mkdtemp(),
-    #         coordinator_name=f"test_coordinator_{uuid.uuid4().hex[:8]}",
-    #     )
-
-    # server = create_weight_transfer_server(
-    #     config=weight_transfer_config,
-    #     mesh=mesh,
-    #     axis_mapping=axis_mapping,
-    # )
-
-    # client = create_weight_transfer_client(
-    #     config=weight_transfer_config,
-    #     mesh=mesh,
-    #     axis_mapping=axis_mapping,
-    # )
-
-    # os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
-    # os.environ["SKIP_JAX_PRECOMPILE"] = "1"
-    # vllm_inference_ctx = vLLMInferenceContext(
-    #     model_name="meta-llama/Llama-3.2-1B-Instruct",
-    #     max_model_len=1024,
-    #     tensor_parallel_size=1,
-    #     gpu_memory_utilization=0.60,
-    # )
-    # print(vllm_inference_ctx.llm.llm_engine.model_executor.driver_worker.model_runner.state)
-    # completions = vllm_inference_ctx.batch_completions(
-    #     prompts=["Hello, how are you?"],
-    #     temperature=1.0,
-    #     n=1,
-    #     max_tokens=16,
-    #     stop=None,
-    # )
-    # print(completions)
-
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
 
     rollout_worker = RolloutWorker(
-        config=VLLMRolloutWorkerConfig(
+        config=RolloutWorkerConfig(
             model=LlamaConfig(
                 seq_len=4096,
                 hidden_dim=2048,
@@ -80,32 +44,24 @@ def test_initialize_vllm_rollout(tmpdir, ray_tpu_cluster):
                 num_layers=16,
             ),
             inference_type="vllm",
-            vllm_model_name="meta-llama/Llama-3.2-1B-Instruct",
-            vllm_max_model_len=1024,
-            vllm_tensor_parallel_size=1,
-            gpu_memory_utilization=0.60,
-            sampling_params=SamplingParams(
-                temperature=1.0,
-                n=4,
-                max_tokens=16,
-                stop=None,
-                logprobs=1,
-            ),
             tokenizer=tokenizer,
             run_id=f"test_rollout_worker_vllm_{uuid.uuid4().hex[:8]}",
             log_freq=10,
             max_rollouts=10,
+            inference_config=vLLMInferenceContextConfig(
+                model_name="meta-llama/Llama-3.2-1B-Instruct",
+                max_model_len=1024,
+                tensor_parallel_size=1,
+                gpu_memory_utilization=0.60,
+                sampling_params=SamplingParams(
+                    temperature=1.0,
+                    n=4,
+                    max_tokens=16,
+                    stop=None,
+                    logprobs=1,
+                ),
+            ),
             trainer=TrainerConfig(
-                # model=LlamaConfig(
-                #     seq_len=4096,
-                #     hidden_dim=2048,
-                #     intermediate_dim=8192,
-                #     num_heads=32,
-                #     num_kv_heads=8,
-                #     num_layers=16,
-                #     rope=Llama3RotaryEmbeddingsConfig(),
-                #     tie_word_embeddings=True,
-                # ),
                 tracker=JsonLoggerConfig(),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 train_batch_size=16,
@@ -144,8 +100,7 @@ def test_initialize_vllm_rollout(tmpdir, ray_tpu_cluster):
             ),
         )
     )
-    # rollout_worker.run()
-    rollout_worker._build_models()
+    rollout_worker.run()
 
 
 if __name__ == "__main__":

@@ -160,6 +160,7 @@ def test_llama_math_integration(ray_tpu_cluster, tmp_path):
         weight_transfer=weight_transfer,
         run_id="llama-test-integration",
         log_freq=1,
+        inference_type="levanter",
     )
 
     job = RLJob(job_config)
