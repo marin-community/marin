@@ -16,7 +16,6 @@
 
 import logging
 import os
-import time
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +29,7 @@ from tests.rl.integration.config import (
     RolloutBatchFeeder,
     RolloutWorkerRunner,
     TrainWorkerRunner,
+    WaitResult,
     create_nano_llama_config,
     create_nano_optimizer_config,
     create_nano_trainer_config,
@@ -88,7 +88,7 @@ def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path):
             queue_writer=queue_writer,
             tokenizer=tokenizer,
         ):
-            runner.done.wait()
+            runner.wait_for_result()
 
         assert all(not np.isnan(loss) for loss in runner.losses), "Loss should not be NaN"
         assert all(loss < 10.0 for loss in runner.losses), f"Loss should be reasonable, got {runner.losses}"
@@ -145,9 +145,12 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
 
     with training_runner:
         while training_runner.reference_model is None:
-            time.sleep(0.1)
+            result = training_runner.wait_for_result(timeout=1.0)
+            if result == WaitResult.SUCCESS:
+                break
+
         with inference_runner:
-            training_runner.done.wait()
+            training_runner.wait_for_result()
 
     assert (
         inference_runner.rollouts_generated >= 5

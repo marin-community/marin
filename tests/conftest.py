@@ -88,6 +88,9 @@ def ray_tpu_cluster(tmp_path_factory, worker_id):
     executor that this is a test cluster. This allows us to skip things like dependency collection
     that are unnecessary in a test environment.
     """
+    # make ray less noisy
+    os.environ["RAY_USAGE_STATS_ENABLED"] = "0"
+    os.environ["RAY_SCHEDULER_EVENTS"] = "0"
     if not worker_id or worker_id == "master":
         worker_id = 0
     else:

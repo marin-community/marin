@@ -14,6 +14,7 @@
 
 """Utility functions for evaluating RL environments."""
 
+import time
 import jmp
 import dataclasses
 import ray
@@ -209,9 +210,6 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
                 import threading
 
                 threading.Thread(target=inference_server.serve, daemon=True).start()
-
-                # Wait a moment for server to start
-                import time
 
                 time.sleep(2)
 
