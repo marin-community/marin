@@ -12,15 +12,15 @@ from haliax import haxtyping as ht
 from haliax.jax_utils import ensure_scalar
 from jax import numpy as jnp
 
-from levanter.inference.page_table import PageTable, PageBatchInfo
+from levanter.inference.page_table import PageBatchInfo, PageTable
 from levanter.inference.utils import (
     INVALID,
     get_unique_in_order,
+    is_invalid,
     is_stop_signal,
     is_valid,
     masked_set,
     purge,
-    is_invalid,
 )
 
 
@@ -590,7 +590,6 @@ class DecodeState(eqx.Module):
         max_stop_seqs: int = 0,
         max_stop_tokens: int = 16,
         max_queued_tokens: int = 0,
-        enable_logprobs: bool = False,
     ) -> "DecodeState":
         """
         Initialize a DecodeState with empty buffers.
@@ -607,11 +606,7 @@ class DecodeState(eqx.Module):
             page_size=page_size,
             page_table=page_table,
             tokens=hax.full({"seq": max_seqs, "position": max_seq_len}, pad_token_id, dtype=jnp.int32),
-            logprobs=(
-                None
-                if not enable_logprobs
-                else hax.full({"seq": max_seqs, "position": max_seq_len}, jnp.nan, dtype=jnp.float32)
-            ),
+            logprobs=hax.full({"seq": max_seqs, "position": max_seq_len}, jnp.nan, dtype=jnp.float32),
             max_num_tokens=hax.full({"seq": max_seqs}, 0, dtype=jnp.int32),
             stop_tokens=(
                 hax.full(
