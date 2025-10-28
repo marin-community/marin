@@ -91,7 +91,6 @@ jobs:
 
           docker run --rm --privileged \
             --device /dev/vfio:/dev/vfio \
-            --net=host \
             --shm-size=100g \
             --stop-timeout=1 \
             --cap-add=SYS_RESOURCE \
@@ -99,6 +98,7 @@ jobs:
             -e JAX_PLATFORMS=tpu \
             -e PJRT_DEVICE=TPU \
             -e TPU_CI=true \
+            -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
             -e START_RAY_TPU_CLUSTER=true \
             -e PYTHONPATH=/workspace \
             -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \
@@ -109,4 +109,4 @@ jobs:
             --tmpfs /workspace/.pytest_cache:rw \
             -w /workspace \
             us-west4-docker.pkg.dev/hai-gcp-models/marin-ci/tpu-ci:latest \
-            timeout --kill-after=5 --signal=TERM 900 uv run pytest tests/tpu/ -v --tb=short -s --log-cli-level=INFO
+            timeout --kill-after=5 --signal=TERM 900 uv run --frozen pytest tests/tpu/ -v --tb=short -s --log-cli-level=INFO
