@@ -25,10 +25,9 @@ import logging
 import os
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import draccus
-import numpy as np
 import ray
 
 from marin.core.runtime import cached_or_construct_output
@@ -37,7 +36,14 @@ from marin.utils import (
     fsspec_glob,
     rebase_file_path,
 )
-from marin.processing.classification.dataset_utils import read_dataset, write_dataset
+from marin.processing.classification.dataset_utils import (
+    read_dataset,
+    read_dataset_streaming,
+    write_dataset,
+)
+
+if TYPE_CHECKING:
+    from ddsketch import DDSketch
 
 FILTER_TYPE_CLASSIFY = "classify"
 FILTER_TYPE_REMOVE_SPANS = "remove_spans"
@@ -295,13 +301,24 @@ def process_file(
     logger.info(f"Kept {total_kept}/{total_examples} from {input_path}")
 
 
+def get_scores(attribute_filename: str, attribute_name: str, label: str) -> "DDSketch":
+    from ddsketch import DDSketch
+
+    shard_sketch = DDSketch()
+    corpus_type = get_corpus_type(attribute_filename)
+    id_column_name = get_id_column_name(corpus_type)
+    rows = read_dataset_streaming(attribute_filename, columns=[id_column_name, "attributes"])
+
+    for row in rows:
+        # Streaming mode yields nested identifiers; we only need the attributes payload.
+        attributes = row["attributes"]
+        shard_sketch.add(attributes[attribute_name][label])
+    return shard_sketch
+
+
 @ray.remote
-def get_scores(attribute_filename: str, attribute_name: str, label: str) -> np.ndarray:
-    scores = np.array([])
-    attributes = read_attributes_as_dict(attribute_filename)
-    for _, attr in attributes.items():
-        scores = np.append(scores, attr[attribute_name][label])
-    return scores
+def get_scores_ray(attribute_filename: str, attribute_name: str, label: str) -> "DDSketch":
+    return get_scores(attribute_filename, attribute_name, label)
 
 
 def calculate_percentile_threshold(
@@ -311,25 +328,29 @@ def calculate_percentile_threshold(
     attribute_name: str,
     label: str,
     keep_fraction: float,
+    use_ray: bool = True,
 ) -> float:
     from ddsketch import DDSketch
 
     attribute_paths = [rebase_file_path(base_input_path, input_path, attribute_path) for input_path in input_paths]
-    scores_refs = [get_scores.remote(attribute_path, attribute_name, label) for attribute_path in attribute_paths]
+    combined_sketch = DDSketch()
+    if use_ray:
+        sketch_refs = [
+            get_scores_ray.remote(attribute_path, attribute_name, label) for attribute_path in attribute_paths
+        ]
+        for shard_sketch in ray.get(sketch_refs):
+            combined_sketch.merge(shard_sketch)
+    else:
+        for attribute_path in attribute_paths:
+            shard_sketch = get_scores(attribute_path, attribute_name, label)
+            combined_sketch.merge(shard_sketch)
 
-    sketch = DDSketch()
-    for scores_ref in scores_refs:
-        scores = ray.get(scores_ref)
-        for score in scores:
-            sketch.add(score)
-
-    threshold = sketch.get_quantile_value(1 - keep_fraction)
+    threshold = combined_sketch.get_quantile_value(1 - keep_fraction)
     logger.info(f"Calculated the threshold {threshold} to keep {keep_fraction} of the documents")
 
     return threshold
 
 
-@ray.remote
 def consolidate(config: ConsolidateConfig):
     input_paths = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
     logger.info(f"Consolidating {len(input_paths)} documents")
@@ -377,15 +398,12 @@ def consolidate(config: ConsolidateConfig):
         )
         tasks.append(task)
 
-    try:
-        ray.get(tasks)
-    except Exception as e:
-        print(f"Error processing: {e}")
+    ray.get(tasks)
 
 
 @draccus.wrap()
 def main(cfg: ConsolidateConfig):
-    ray.get(consolidate.remote(cfg))
+    consolidate(cfg)
 
 
 if __name__ == "__main__":
