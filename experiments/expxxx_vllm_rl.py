@@ -274,8 +274,8 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         tokenizer=experiment_config.tokenizer,
         vllm_model_name=experiment_config.name,
         vllm_max_model_len=4096,
-        vllm_tensor_parallel_size=8,
-        gpu_memory_utilization=0.90,
+        vllm_tensor_parallel_size=4,
+        gpu_memory_utilization=0.2,
         eval_sampling_params=SamplingParams(
             temperature=1.0,
             n=8,
@@ -289,10 +289,10 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         run_id=name,
         log_freq=10,
         run_config=RunConfig(
-            train_tpu_type="v5p-8",
+            train_tpu_type="v4-8",
             num_train_slices=1,
             num_rollout_workers=1,
-            inference_tpu_type="v5p-8",
+            inference_tpu_type="v4-8",
         ),
     )
 
@@ -309,8 +309,8 @@ def main():
     if os.getenv("CI", None) is not None:
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
-
-    # datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    
+    datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     # experiment_configs = [llama1b, qwen4b, qwen3_1_7b, qwen3_0_6b]
     # experiment_configs = [llama1b]
@@ -320,7 +320,7 @@ def main():
     for experiment_config in experiment_configs:
         model_base_name = experiment_config.name.split("/")[-1].lower()
         experiments.append(
-            rl_train(name=f"{model_base_name}-math-lr1e-7-bsz64-tok1024", experiment_config=experiment_config),
+            rl_train(name=f"{model_base_name}-math-lr1e-7-bsz64-tok1024-{datestamp}", experiment_config=experiment_config),
         )
 
     executor_main(

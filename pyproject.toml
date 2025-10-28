@@ -41,7 +41,6 @@ dependencies = [
     "tqdm",
     "tqdm-loggable",
     "wandb",
-    "vllm-tpu==0.11.1",
 ]
 
 [dependency-groups]
@@ -180,7 +179,7 @@ gcp = [
 
 cuda12 = ["jax[cuda12]==0.7.2", "torch>=2.7.0"]
 
-tpu = ["jax[tpu]==0.7.2", "torch>=2.7.0"]
+tpu = ["jax[tpu]==0.7.2", "torch>=2.7.0", "vllm-tpu==0.11.1"]
 
 cpu = ["jax==0.7.2", "torch>=2.7.0"]
 
