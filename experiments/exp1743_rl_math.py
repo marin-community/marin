@@ -38,7 +38,6 @@ from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
-from vllm import SamplingParams
 
 logger = logging.getLogger(__name__)
 
@@ -53,31 +52,31 @@ class ModelConfig:
     model_checkpoint: str
 
 
-experiment_configs = [
+model_configs = [
     ModelConfig(
         model_name="meta-llama/Llama-3.2-1B-Instruct",
         model_type="llama",
         model_tokenizer="meta-llama/Llama-3.2-1B-Instruct",
         model_checkpoint="meta-llama/Llama-3.2-1B-Instruct",
     ),
-    # ModelConfig(
-    #     model_name="meta-llama/Llama-3.1-8B-Instruct",
-    #     model_type="llama",
-    #     model_tokenizer="meta-llama/Llama-3.1-8B-Instruct",
-    #     model_checkpoint="meta-llama/Llama-3.1-8B-Instruct",
-    # ),
-    # ModelConfig(
-    #     model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-    #     model_type="qwen",
-    #     model_tokenizer="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-    #     model_checkpoint="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-    # ),
-    # ModelConfig(
-    #     model_name="Qwen/Qwen3-4B-Instruct-2507",
-    #     model_type="qwen",
-    #     model_tokenizer="Qwen/Qwen3-4B-Instruct-2507",
-    #     model_checkpoint="Qwen/Qwen3-4B-Instruct-2507",
-    # ),
+    ModelConfig(
+        model_name="meta-llama/Llama-3.1-8B-Instruct",
+        model_type="llama",
+        model_tokenizer="meta-llama/Llama-3.1-8B-Instruct",
+        model_checkpoint="meta-llama/Llama-3.1-8B-Instruct",
+    ),
+    ModelConfig(
+        model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+        model_type="qwen",
+        model_tokenizer="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+        model_checkpoint="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+    ),
+    ModelConfig(
+        model_name="Qwen/Qwen3-4B-Instruct-2507",
+        model_type="qwen",
+        model_tokenizer="Qwen/Qwen3-4B-Instruct-2507",
+        model_checkpoint="Qwen/Qwen3-4B-Instruct-2507",
+    ),
 ]
 
 
@@ -92,7 +91,7 @@ def create_math_curriculum(run_id: str, model_name: str) -> CurriculumConfig:
 
     # Default sampling params for all lessons
     default_sampling = SamplingParams(
-        temperature=0.7,
+        temperature=1.0,
         n_prompts=8,
         n_generations_per_prompt=8,
         max_tokens=MAX_TOKENS,
@@ -118,12 +117,12 @@ def create_math_curriculum(run_id: str, model_name: str) -> CurriculumConfig:
     )
 
 
-def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
-    hf_config = AutoConfig.from_pretrained(experiment_config.model_name)
+def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
+    hf_config = AutoConfig.from_pretrained(model_config.model_name)
     config = LlamaConfig.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=experiment_config.model_tokenizer)
+    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=model_config.model_tokenizer)
 
     _ = WandbConfig
 
@@ -132,7 +131,7 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         tracker=WandbConfig(
             project="marin",
             name=name,
-            tags=["rl", "math", experiment_config.model_name.split("/")[-1]],
+            tags=["rl", "math", model_config.model_name.split("/")[-1]],
         ),
         # tracker=TensorboardConfig(
         #     logdir=OutputName("tblogs"),
@@ -175,7 +174,7 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         max_weight_transfer_wait_time=10,
     )
 
-    curriculum_config = create_math_curriculum(name, experiment_config.model_name)
+    curriculum_config = create_math_curriculum(name, model_config.model_name)
 
     # Create RLJobConfig using the new unified interface
     config = RLJobConfig(
@@ -191,20 +190,9 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
                 max_rollout_step_delay=1,
             ),
         ),
-        vllm_model_name=experiment_config.model_name,
-        vllm_max_model_len=MAX_TOKENS,
-        vllm_tensor_parallel_size=1,
-        gpu_memory_utilization=0.60,
-        eval_sampling_params=SamplingParams(
-            temperature=0.7,
-            n=8,
-            max_tokens=16,
-            stop=None,
-            logprobs=1,
-        ),
         curriculum=curriculum_config,
-        tokenizer=experiment_config.model_tokenizer,
-        initial_checkpoint=experiment_config.model_checkpoint,
+        tokenizer=model_config.model_tokenizer,
+        initial_checkpoint=model_config.model_checkpoint,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         run_id=name,
@@ -222,7 +210,7 @@ def rl_train(name: str, experiment_config: ModelConfig) -> ExecutorStep:
         description=f"Async RL training: {name}",
         fn=RLJob.make_step_fn(),
         config=config,
-        pip_dependency_groups=["post_training", "vllm"],
+        pip_dependency_groups=["post_training"],
     )
 
 
@@ -234,10 +222,10 @@ def main():
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     experiments = []
-    for experiment_config in experiment_configs:
-        model_base_name = experiment_config.model_name.split("/")[-1].lower()
+    for model_config in model_configs:
+        model_base_name = model_config.model_name.split("/")[-1].lower()
         experiments.append(
-            rl_train(name=f"{model_base_name}-math-rl-test-chris-{datestamp}", experiment_config=experiment_config),
+            rl_train(name=f"{model_base_name}-math-rl-test-chris-{datestamp}", model_config=model_config),
         )
 
     executor_main(
