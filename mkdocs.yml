@@ -79,6 +79,7 @@ nav:
     - Report Index: reports/index.md
     - Auto-Generated Summary: reports/summary.md
     - Marin 8B Retro: reports/marin-8b-retro.md
+    - Marin 32B Retro: reports/marin-32b-retro.md
     - Markdownified Datasets: reports/markdownified-datasets.md
   - Developer Guide:
     - Contributing: dev-guide/contributing.md
