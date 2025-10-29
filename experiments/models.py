@@ -192,6 +192,12 @@ marin_32b_base = download_model_step(
     )
 )
 
+# Remote checkpoint lives directly in GCS rather than on Hugging Face.
+# Keep the explicit URI so evaluators can sync from the bucket when needed.
+tootsie_32b_cooldown_mantis_adamc_v2 = (
+    "gs://marin-us-central1/gcsfuse_mount/models/tootsie-32b-cooldown-mantis-adamc-v2-190000"
+)
+
 llama_3_2_1b = download_model_step(
     ModelConfig(
         hf_repo_id="meta-llama/Llama-3.2-1B",

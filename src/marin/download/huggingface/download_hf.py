@@ -82,15 +82,24 @@ def download_hf(cfg: DownloadConfig) -> None:
     fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
 
     # Look for the model in local path
-    if '32' in cfg.hf_dataset_id or '27' in cfg.hf_dataset_id:
-        directory_friendly_name = get_directory_friendly_name(cfg.hf_dataset_id + "/" + cfg.revision)
-        model_path = os.path.join("/opt/gcsfuse_mount/models", directory_friendly_name)
-        if os.path.exists(model_path):
-            logger.info(f"Model already exists in {model_path}")
-            upload_to_gcs(model_path, cfg.gcs_output_path)
-            (model_path, cfg.gcs_output_path)
-            logger.info(f"Copied model to {cfg.gcs_output_path}")
-            return
+    # if '32' in cfg.hf_dataset_id or '27' in cfg.hf_dataset_id:
+    #     directory_friendly_name = get_directory_friendly_name(cfg.hf_dataset_id + "/" + cfg.revision)
+    #     model_path = os.path.join("/opt/gcsfuse_mount/models", directory_friendly_name)
+    #     if os.path.exists(model_path):
+    #         logger.info(f"Model already exists in {model_path}")
+    #         upload_to_gcs(model_path, cfg.gcs_output_path)
+    #         (model_path, cfg.gcs_output_path)
+    #         logger.info(f"Copied model to {cfg.gcs_output_path}")
+    #         return
+    #     else:
+    #         directory_friendly_name = directory_friendly_name.replace("--", "-")
+    #         model_path = os.path.join("/opt/gcsfuse_mount/models", directory_friendly_name)
+    #         if os.path.exists(model_path):
+    #             logger.info(f"Model already exists in {model_path}")
+    #             upload_to_gcs(model_path, cfg.gcs_output_path)
+    #             (model_path, cfg.gcs_output_path)
+    #             logger.info(f"Copied model to {cfg.gcs_output_path}")
+    #             return
 
     # TODO: Our earlier version of download_hf used this piece of code for calculating the versioned_output_path
     # versioned_output_path = os.path.join(cfg.gcs_output_path, cfg.revision)

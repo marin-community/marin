@@ -228,7 +228,7 @@ KNOWLEDGE_TASKS = (
     EvalTaskConfig("agieval", 0, task_alias="agieval_0shot"),
     EvalTaskConfig("cmmlu", 0, task_alias="cmmlu_0shot"),
     EvalTaskConfig("kmmlu", 0, task_alias="kmmlu_0shot"),
-    EvalTaskConfig("mmlu_pro", 5, task_alias="mmlu_pro_5shot"),
+    # EvalTaskConfig("mmlu_pro", 5, task_alias="mmlu_pro_5shot"),
 )
 
 # Emotional Intelligence and Ethics Tasks

@@ -14,11 +14,10 @@
 
 """Scaling law comparison between Stack v2 datasets and StarCoderData."""
 
-from experiments.common_pile.tokenize_common_pile import stackv2
+from experiments.common_pile.tokenize_common_pile import stackv2, stackv2_edu_filtered
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
-from levanter.store.cache import CacheOptions
 
 from marin.execution.executor import executor_main
 from marin.scaling_laws.create_ladder_suite import scaling_law_suite
@@ -29,6 +28,7 @@ TPU_TYPE = "v5p-8"
 TAG = ["exp1752_stackv2_vs_starcoder"]
 
 STACK_V2_SWEEP_NAME = "exp1752-stack-v2"
+STACK_V2_EDU_SWEEP_NAME = "exp1752-stack-v2-edu"
 STARCODER_SWEEP_NAME = "exp1752-starcoderdata"
 
 training_config = SimpleTrainConfig(
@@ -53,10 +53,24 @@ stackv2_tokenized = default_tokenize(
     tokenizer=llama3_tokenizer,
 )
 
+stackv2_edu_tokenized = default_tokenize(
+    name="common_pile_stackv2_edu",
+    dataset=stackv2_edu_filtered,
+    tokenizer=llama3_tokenizer,
+)
+
 stackv2_suite = scaling_law_suite(
     sweep_name=STACK_V2_SWEEP_NAME,
     tokenized=stackv2_tokenized,
     tags=[*TAG, "stackv2"],
+    intermediate_scale=4,
+    training_config=training_config,
+)
+
+stackv2_edu_suite = scaling_law_suite(
+    sweep_name=STACK_V2_EDU_SWEEP_NAME,
+    tokenized=stackv2_edu_tokenized,
+    tags=[*TAG, "stackv2_edu"],
     intermediate_scale=4,
     training_config=training_config,
 )
@@ -72,8 +86,8 @@ starcoder_suite = scaling_law_suite(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            # stackv2_tokenized,
-            *stackv2_suite,
+            # *stackv2_suite,
+            *stackv2_edu_suite,
             *starcoder_suite,
         ],
         description="Scaling law sweeps comparing Stack v2 with StarCoderData.",

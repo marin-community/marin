@@ -20,6 +20,7 @@ import dataclasses
 import os
 import shutil
 from dataclasses import dataclass
+from typing import Any
 
 import ray
 from levanter.data.text import LMMixtureDatasetConfig
@@ -180,5 +181,46 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
         log_entropy=config.log_entropy,
     )
     ray.get(
-        do_eval_lm.options(resources={"TPU": 4, f"{config.resource_config.tpu_type}-head": 1}).remote(levanter_config)
+        do_eval_lm.options(**_ray_remote_options_for_eval(config.resource_config)).remote(levanter_config)
     )
+
+
+def _ray_remote_options_for_eval(resource_config: Any) -> dict[str, Any]:
+    """
+    Construct Ray remote options for log-prob evaluation based on the supplied resource configuration.
+
+    Supports both legacy TPU resource configs defined in `experiments.evals.resource_configs`
+    as well as the modern `GpuConfig` and `TpuPodConfig` classes used elsewhere in Marin.
+    """
+    if resource_config is None:
+        return {}
+
+    # Start with the resource config's own Ray kwargs when available.
+    if hasattr(resource_config, "as_remote_kwargs"):
+        remote_kwargs = dict(resource_config.as_remote_kwargs())
+    elif hasattr(resource_config, "as_ray_resources"):
+        remote_kwargs = dict(resource_config.as_ray_resources().to_kwargs())
+    else:
+        remote_kwargs = {}
+
+    resources = dict(remote_kwargs.pop("resources", {}) or {})
+
+    # Legacy TPU configs from experiments/evals/resource_configs.
+    if hasattr(resource_config, "tpu_type") and hasattr(resource_config, "num_tpu"):
+        resources.setdefault("TPU", getattr(resource_config, "num_tpu", 1))
+        resources.setdefault(f"{resource_config.tpu_type}-head", 1)
+    # Modern TPU pod configs.
+    elif hasattr(resource_config, "tpu_type"):
+        slice_count = getattr(resource_config, "slice_count", 1)
+        resources.setdefault("TPU", slice_count if isinstance(slice_count, int) else max(slice_count))
+        resources.setdefault(f"{resource_config.tpu_type}-head", 1)
+    # GPU configs.
+    elif hasattr(resource_config, "gpu_count"):
+        remote_kwargs.setdefault("num_gpus", getattr(resource_config, "gpu_count", 1))
+        if getattr(resource_config, "accelerator_type", None):
+            remote_kwargs["accelerator_type"] = resource_config.accelerator_type
+
+    if resources:
+        remote_kwargs["resources"] = resources
+
+    return remote_kwargs
