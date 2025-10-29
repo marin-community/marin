@@ -132,7 +132,7 @@ def train_only_benchmark(name: str, experiment_config: ModelConfig) -> ExecutorS
         # Set the train batch size to match the full RL setup for fair comparison
         train_batch_size=64,
         # Microbatch to avoid OOM
-        per_device_parallelism=-1,
+        per_device_parallelism=16,
         num_train_steps=50000,
         steps_per_eval=100,
         checkpointer=CheckpointerConfig(
