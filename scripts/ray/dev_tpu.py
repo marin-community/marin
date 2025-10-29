@@ -319,10 +319,11 @@ def add_ssh_host_config(
         logger.warning(f"Error when running gcloud compute tpu-vm ssh: {e.stdout}, error: {e.stderr}")
         logger.warning("gcloud compute tpu-vm ssh failed to set up SSH keys")
 
-    # Determine IdentityFile to use
+    # Determine IdentityFile to use and any additional Host aliases
     identity_file = None
+    additional_aliases = []
 
-    # First, check if there's an existing config for this TPU with an IdentityFile
+    # First, check if there's an existing config for this TPU
     existing_config = ""
     if config_path.exists():
         existing_config = config_path.read_text()
@@ -333,11 +334,22 @@ def add_ssh_host_config(
             match = re.search(pattern, existing_config, flags=re.DOTALL)
             if match:
                 block = match.group(1)
+
                 # Look for IdentityFile line
                 identity_match = re.search(r'^\s*IdentityFile\s+(.+)$', block, re.MULTILINE)
                 if identity_match:
                     identity_file = identity_match.group(1).strip()
                     logger.info(f"Preserving existing IdentityFile: {identity_file}")
+
+                # Look for Host line and extract additional aliases
+                host_match = re.search(r'^Host\s+(.+)$', block, re.MULTILINE)
+                if host_match:
+                    host_aliases = host_match.group(1).strip().split()
+                    # Filter out the default alias, keep any additional ones
+                    default_alias = f"dev-tpu-{tpu_name}"
+                    additional_aliases = [alias for alias in host_aliases if alias != default_alias]
+                    if additional_aliases:
+                        logger.info(f"Preserving additional Host aliases: {' '.join(additional_aliases)}")
 
     # Second, check for DEV_TPU_IDENTITY_FILE env var
     if not identity_file:
@@ -360,10 +372,14 @@ def add_ssh_host_config(
 
     host_alias = f"dev-tpu-{tpu_name}"
 
+    # Build Host line with default alias and any additional aliases
+    all_aliases = [host_alias] + additional_aliases
+    host_line = f"Host {' '.join(all_aliases)}"
+
     # Build SSH config entry with optional IdentityFile
     identity_line = f"    IdentityFile {identity_file}\n" if identity_file else ""
     ssh_config_entry = f"""# BEGIN_DEV_TPU_{tpu_name.upper()}
-Host {host_alias}
+{host_line}
     HostName {ip_address}
     HostKeyAlias compute.{hostname}
     StrictHostKeyChecking no
