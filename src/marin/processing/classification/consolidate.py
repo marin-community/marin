@@ -71,7 +71,7 @@ class FilterConfig:
     label: str | None = None
     """The label under the attribute name."""
 
-    threshold: float | None = None
+    lower_threshold: float | None = None
     """Keep documents where the value is above this."""
 
     keep_fraction: float | None = None
@@ -159,17 +159,16 @@ def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attr
         if isinstance(attribute_value, dict) and doc_filter.label in attribute_value:
             value = attribute_value[doc_filter.label]
         else:
-            logger.warning(
+            raise ValueError(
                 f"Label {doc_filter.label} not found in attribute {doc_filter.name} for document {input_data['id']}"
             )
-            accepted = False
     else:
         # If no label specified, use the attribute value directly
         # This handles cases like compression_ratio where the value is a scalar
         value = attribute_value
 
     # Check both lower and upper bounds if specified
-    if doc_filter.threshold is not None and value < doc_filter.threshold:
+    if doc_filter.lower_threshold is not None and value < doc_filter.lower_threshold:
         accepted = False
     if doc_filter.upper_threshold is not None and value > doc_filter.upper_threshold:
         accepted = False
@@ -286,7 +285,9 @@ def process_file(
     total_examples = len(dataset)
 
     for doc_filter, id_to_attributes in zip(filters, attribute_files, strict=True):
-        print(f"Applying filter {doc_filter.name} with label {doc_filter.label} with dataset length {len(dataset)}")
+        logger.info(
+            f"Applying filter {doc_filter.name} with label {doc_filter.label} with dataset length {len(dataset)}"
+        )
         if id_to_attributes is None:
             continue
 
@@ -364,9 +365,10 @@ def consolidate(config: ConsolidateConfig):
     logger.info(f"Consolidating {len(input_paths)} documents")
 
     updated_filters = []
+    # If we are dealing with percentiles, we have to first calculate the thresholds by doing a pass over the data
     for doc_filter in config.filters:
         assert (
-            doc_filter.keep_fraction is None or doc_filter.threshold is None
+            doc_filter.keep_fraction is None or doc_filter.lower_threshold is None
         ), "Cannot specify both percentile threshold and threshold. Please specify only one."
 
         if doc_filter.keep_fraction is not None:
@@ -382,7 +384,7 @@ def consolidate(config: ConsolidateConfig):
                 doc_filter.label,
                 doc_filter.keep_fraction,
             )
-            updated_filters.append(replace(doc_filter, threshold=threshold, keep_fraction=None))
+            updated_filters.append(replace(doc_filter, lower_threshold=threshold, keep_fraction=None))
         else:
             updated_filters.append(doc_filter)
 
