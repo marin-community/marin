@@ -219,13 +219,15 @@ class TrainOnlyWorker:
                 "train.step_duration_sec": step_duration,
             }
 
-            # Calculate throughput if we have token counts
-            if hasattr(info, "ntokens") and info.ntokens > 0:
-                self._total_tokens_trained += info.ntokens
-                if step_duration > 0:
-                    tokens_per_sec = info.ntokens / step_duration
-                    metrics["train.tokens_per_second"] = tokens_per_sec
-                metrics["train.total_tokens_trained"] = self._total_tokens_trained
+            # Calculate tokens processed in this step
+            ntokens = self.config.sequence_length * self.config.trainer.train_batch_size
+            self._total_tokens_trained += ntokens
+            
+            if step_duration > 0:
+                tokens_per_sec = ntokens / step_duration
+                metrics["train.tokens_per_second"] = tokens_per_sec
+            
+            metrics["train.total_tokens_trained"] = self._total_tokens_trained
 
             trainer.tracker.log(metrics, step=info.step)
             logger.info(f"Step {info.step}: {metrics.get('train.tokens_per_second', 0):.2f} tokens/sec")
