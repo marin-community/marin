@@ -566,6 +566,8 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
 class TrainWorkerRunner(ThreadedWorkerRunner):
     """Manages running a training worker in a separate thread with metric tracking."""
 
+    worker: TrainWorker
+
     def __init__(self, training_worker_config):
         super().__init__(training_worker_config)
         self.training_worker_config = training_worker_config
@@ -654,7 +656,12 @@ class RolloutBatchFeeder:
                 if self.runner.trained_model:
                     model = self.runner.trained_model
 
-                batch = self.batch_generator(policy_model=model, batch_size=batch_size, tokenizer=self.tokenizer)
+                batch = self.batch_generator(
+                    policy_model=model,
+                    batch_size=batch_size,
+                    tokenizer=self.tokenizer,
+                    step=self.runner.steps_completed,
+                )
                 self.queue_writer.write_batch(batch)
         except Exception:
             logger.error("RolloutBatchFeeder failed", exc_info=True)

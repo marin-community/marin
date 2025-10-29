@@ -69,8 +69,11 @@ jobs:
     runs-on: [tpu-ci]
     timeout-minutes: 10
     if: |
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'tpu')) ||
-      (github.event_name == 'pull_request_review' && github.event.review.state == 'approved')
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (
+        (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'tpu')) ||
+        (github.event_name == 'pull_request_review' && github.event.review.state == 'approved')
+      )
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
