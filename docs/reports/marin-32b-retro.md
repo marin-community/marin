@@ -56,7 +56,8 @@ This report covers the following experiments/phases:
 - Phase 4a \- Bison Cooldown: [#1529](https://github.com/marin-community/marin/issues/1529) [`exp1529_32b_bison_cooldown`](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp1529_32b_bison_cooldown.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_bison_cooldown-48ddfe.json)
 - Phase 4b \- Mantis Cooldown: [#1581](https://github.com/marin-community/marin/issues/1681) [`exp1529_32b_mantis_cooldown`](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp1529_32b_mantis_cooldown.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_mantis_cooldown-c6f4b0.json)
 
-- Total tokens trained in final artifact: ≈6.437T
+Total tokens trained in final artifact: ≈6.437T
+
 - Phase 1: 2.679T
 - Phase 3/QK‑Norm: 2.684T
 - Phase 4b/Mantis cooldown: 1.074T; excludes diagnostic restarts and the abandoned Bison cooldown attempt.
