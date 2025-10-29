@@ -69,7 +69,7 @@ def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path):
                 capacity=2048,
                 alpha=3.0,
                 max_samples=4,
-                max_rollout_step_delay=1,
+                max_rollout_step_delay=0,
             ),
         ),
         curriculum=create_test_curriculum_config(),
@@ -127,7 +127,7 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
                 capacity=4096,
                 alpha=3.0,
                 max_samples=1,
-                max_rollout_step_delay=1,
+                max_rollout_step_delay=0,
             ),
         ),
         curriculum=create_test_curriculum_config(),
@@ -139,9 +139,6 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
 
     training_runner = TrainWorkerRunner.from_job(job)
     inference_runner = RolloutWorkerRunner.from_job(job)
-
-    # Apply test-specific overrides
-    inference_runner.rollout_worker_config.weight_transfer.sync_interval_steps = 1
 
     with training_runner:
         while training_runner.reference_model is None:

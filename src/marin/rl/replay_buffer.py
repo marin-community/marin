@@ -20,6 +20,7 @@ with balanced sampling across environments and configurable prioritization.
 """
 
 import dataclasses
+import datetime
 import logging
 import threading
 import time
@@ -134,7 +135,10 @@ class ReplayBuffer:
         min_time = time.time() - self.max_rollout_timestamp_delay
         min_step = step - self.max_rollout_step_delay
         logger.info(
-            "Discarding rollouts older than step %d or timestamp %.0f (current step %d)", min_step, min_time, step
+            "Discarding rollouts older than step %d or time %s -- current step %d",
+            min_step,
+            datetime.datetime.strftime(datetime.datetime.fromtimestamp(min_time), "%Y-%m-%d %H:%M:%S"),
+            step,
         )
 
         with self._lock:
