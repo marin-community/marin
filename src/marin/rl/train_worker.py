@@ -127,6 +127,13 @@ class TrainWorker:
     """Training worker that reads rollout data from a queue and trains the model using Levanter."""
 
     config: TrainWorkerConfig
+    state: levanter.trainer.TrainerState
+    trainer: Trainer
+    replay_buffer: ReplayBuffer
+    replay_loader: ReplayDataLoader
+    transfer_server: weight_transfer.WeightTransferServer
+    tokenizer: PreTrainedTokenizer
+    loss_module: RLLossModule
 
     def __init__(
         self,
@@ -208,37 +215,38 @@ class TrainWorker:
 
         self.reference_model = _load_model()
 
-        # Always transfer initial weights to rollout workers
-        self.transfer_server.serve_weights(0, self.reference_model)
-
-    def train(self):
-        """Main training method using Levanter's standard train_lm infrastructure."""
-        logger.info("Starting RLOO training with Levanter...")
-
-        config = self.config
+        # setup trainer with optimizer and loss function, and load initial checkpoint
         optimizer = config.optimizer.build(config.trainer.num_train_steps)
-
         loss_fn = self.loss_module.create_loss_fn(self.reference_model, None)
 
         @jax.jit
         def _loss_function(model, batch, key):
             return loss_fn(model, batch, key)
 
+        self.trainer = Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function)
+
+        with self.trainer:
+            _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
+            self.state = self.trainer.initial_state(training_key, model=self.reference_model)
+            # Always transfer initial weights to rollout workers
+            self.transfer_server.serve_weights(self.state.step, self.state.model)
+
+        # the trainer donates our reference model params, so reload it
+        self.reference_model = _load_model()
+
+    def train(self):
+        """Main training method using Levanter's standard train_lm infrastructure."""
+        logger.info("Starting RLOO training with Levanter...")
+
         with (
-            config.trainer.device_mesh,
-            hax.axis_mapping(config.trainer.compute_axis_mapping),
-            Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer,
+            self.trainer,
             self.replay_loader,
         ):
-            seed = config.trainer.seed
-            _, training_key = jrandom.split(jrandom.PRNGKey(seed), 2)
-
-            state = trainer.initial_state(training_key, model=self.reference_model)
-
-            self._configure_training_hooks(trainer)
+            self._configure_training_hooks(self.trainer)
 
             try:
-                trainer.train(state, self.data_loader)
+                info = self.trainer.train(self.state, self.data_loader)
+                self.state = info.state
             except StopTrainerException:
                 pass
 

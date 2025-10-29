@@ -142,13 +142,13 @@ class GCSCheckpointClient(WeightTransferClient):
                 return None
 
             logger.info(f"Loading checkpoint from {latest_checkpoint}")
-            self.weight_step = weight_step
             params = levanter_checkpoint.load_checkpoint(
                 tree=old_model,
                 checkpoint_path=latest_checkpoint,
                 axis_mapping=self.axis_mapping,
                 mesh=self.mesh,
             )
+            self.weight_step = weight_step
         except Exception as e:
             # might get stuck if checkpoint is being written
             self.metrics.failed_receives += 1
