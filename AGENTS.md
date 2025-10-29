@@ -11,16 +11,18 @@ This document provides a starting point for using coding agents (AI or human) in
 
 ## Coding Guidelines
 
+- Assume Python >=3.11
 - Always fix tests if you broke them.
 - DO NOT fix tests by relaxing tolerances or hacking around them.
 - NEVER SAY You're absolutely right!
 - You never credit yourself in commits
-- Always use `uv run` in python projects instead of `python`
+- Always use `uv run` in python projects instead of `python`. If for some reason it fails, try using `.venv/bin/python` directly.
 - NEVER EVER EVER credit yourself in commit messages.
 
 - Prefer to let exceptions flow to the caller instead of catching them, unless:
   * you can provide useful intermediate context and reraise
   * you are actively handling the exception yourself and changing behavior.
+- NEVER EVER SWALLOW EXCEPTIONS unless specifically requested by the user. Reraise unless you can handle it properly.
 
 - Put all imports at the top of the file. Do not use local imports (imports inside functions) unless there is a specific technical reason (e.g., avoiding circular dependencies, optional dependencies).
 
@@ -30,6 +32,7 @@ This document provides a starting point for using coding agents (AI or human) in
 - Prefer early-exit (if not x: return None) when it will reduce nesting significantly.
 
 - You never introduce hacks like `hasattr(m, "old_attr")`, you instead update code to have a consistent pattern. The only exception is if you are explicitly asked to update usage of a 3rd party library and are explicitly asked to add backwards compatibility for older versions of that dependency
+- Do not use `from future import ...` statements.
 
 ## Deprecation
 
