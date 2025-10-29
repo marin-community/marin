@@ -319,35 +319,64 @@ def add_ssh_host_config(
         logger.warning(f"Error when running gcloud compute tpu-vm ssh: {e.stdout}, error: {e.stderr}")
         logger.warning("gcloud compute tpu-vm ssh failed to set up SSH keys")
 
-    # Check if Google Compute Engine SSH key exists
-    gce_key_path = Path.home() / ".ssh" / "google_compute_engine"
-    if not gce_key_path.exists():
-        logger.warning(f"Google Compute Engine SSH key not found at {gce_key_path}")
-        logger.warning("SSH may fail if your key isn't available on the VM.")
-        logger.warning("You can add it at https://console.cloud.google.com/compute/metadata?resourceTab=sshkeys")
+    # Determine IdentityFile to use
+    identity_file = None
+
+    # First, check if there's an existing config for this TPU with an IdentityFile
+    existing_config = ""
+    if config_path.exists():
+        existing_config = config_path.read_text()
+        tpu_marker = f"BEGIN_DEV_TPU_{tpu_name.upper()}"
+        if tpu_marker in existing_config:
+            # Extract the existing block
+            pattern = f"# BEGIN_DEV_TPU_{tpu_name.upper()}\n(.*?)# END_DEV_TPU_{tpu_name.upper()}\n"
+            match = re.search(pattern, existing_config, flags=re.DOTALL)
+            if match:
+                block = match.group(1)
+                # Look for IdentityFile line
+                identity_match = re.search(r'^\s*IdentityFile\s+(.+)$', block, re.MULTILINE)
+                if identity_match:
+                    identity_file = identity_match.group(1).strip()
+                    logger.info(f"Preserving existing IdentityFile: {identity_file}")
+
+    # Second, check for DEV_TPU_IDENTITY_FILE env var
+    if not identity_file:
+        env_identity = os.environ.get("DEV_TPU_IDENTITY_FILE")
+        if env_identity:
+            identity_file = env_identity
+            logger.info(f"Using IdentityFile from DEV_TPU_IDENTITY_FILE: {identity_file}")
+
+    # Third, use default google_compute_engine if it exists
+    if not identity_file:
+        gce_key_path = Path.home() / ".ssh" / "google_compute_engine"
+        if gce_key_path.exists():
+            identity_file = str(gce_key_path)
+            logger.info(f"Using default Google Compute Engine key: {identity_file}")
+        else:
+            logger.warning(f"Google Compute Engine SSH key not found at {gce_key_path}")
+            logger.warning("SSH may fail if your key isn't available on the VM.")
+            logger.warning("You can add it at https://console.cloud.google.com/compute/metadata?resourceTab=sshkeys")
+            logger.warning("Or set DEV_TPU_IDENTITY_FILE env var to specify a key")
 
     host_alias = f"dev-tpu-{tpu_name}"
 
-    ssh_config_entry = f"""
-# BEGIN_DEV_TPU_{tpu_name.upper()}
+    # Build SSH config entry with optional IdentityFile
+    identity_line = f"    IdentityFile {identity_file}\n" if identity_file else ""
+    ssh_config_entry = f"""# BEGIN_DEV_TPU_{tpu_name.upper()}
 Host {host_alias}
     HostName {ip_address}
     HostKeyAlias compute.{hostname}
     StrictHostKeyChecking no
-    CheckHostIP no
+{identity_line}    CheckHostIP no
     User {username}
 # END_DEV_TPU_{tpu_name.upper()}
 """
-
-    existing_config = ""
-    if config_path.exists():
-        existing_config = config_path.read_text()
 
     # Backup the existing config and update it with our new entry
     with open(f"{config_path}.bak", "w") as f:
         f.write(existing_config)
 
-    # Check if this specific TPU config already exists and remove it
+    # Remove existing TPU config if present
     tpu_marker = f"BEGIN_DEV_TPU_{tpu_name.upper()}"
     if tpu_marker in existing_config:
         pattern = f"# BEGIN_DEV_TPU_{tpu_name.upper()}\n(.*?\n)*?# END_DEV_TPU_{tpu_name.upper()}\n"
