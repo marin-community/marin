@@ -83,10 +83,6 @@ class FilterConfig:
     reverse: bool = False
     """Reverse the filter."""
 
-    def __post_init__(self):
-        # Allow configs to specify the enum by name or value.
-        object.__setattr__(self, "type", FilterType(self.type))
-
 
 @dataclass(frozen=True)
 class ConsolidateConfig:
