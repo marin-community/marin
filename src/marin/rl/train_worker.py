@@ -127,8 +127,6 @@ class TrainWorker:
     """Training worker that reads rollout data from a queue and trains the model using Levanter."""
 
     config: TrainWorkerConfig
-    state: levanter.trainer.TrainerState
-    trainer: Trainer
     replay_buffer: ReplayBuffer
     replay_loader: ReplayDataLoader
     transfer_server: weight_transfer.WeightTransferServer
@@ -215,7 +213,11 @@ class TrainWorker:
 
         self.reference_model = _load_model()
 
-        # setup trainer with optimizer and loss function, and load initial checkpoint
+    def train(self):
+        """Main training method using Levanter's standard train_lm infrastructure."""
+        logger.info("Starting RLOO training with Levanter...")
+
+        config = self.config
         optimizer = config.optimizer.build(config.trainer.num_train_steps)
         loss_fn = self.loss_module.create_loss_fn(self.reference_model, None)
 
@@ -223,30 +225,20 @@ class TrainWorker:
         def _loss_function(model, batch, key):
             return loss_fn(model, batch, key)
 
-        self.trainer = Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function)
-
-        with self.trainer:
-            _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
-            self.state = self.trainer.initial_state(training_key, model=self.reference_model)
-            # Always transfer initial weights to rollout workers
-            self.transfer_server.serve_weights(self.state.step, self.state.model)
-
-        # the trainer donates our reference model params, so reload it
-        self.reference_model = _load_model()
-
-    def train(self):
-        """Main training method using Levanter's standard train_lm infrastructure."""
-        logger.info("Starting RLOO training with Levanter...")
-
         with (
-            self.trainer,
+            Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer,
             self.replay_loader,
         ):
-            self._configure_training_hooks(self.trainer)
+            _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
+            state = trainer.initial_state(training_key, model=self.reference_model)
+
+            # Always transfer initial weights to rollout workers before we attempt to start training
+            self.transfer_server.serve_weights(state.int_step, state.model)
+
+            self._configure_training_hooks(trainer)
 
             try:
-                info = self.trainer.train(self.state, self.data_loader)
-                self.state = info.state
+                trainer.train(state, self.data_loader)
             except StopTrainerException:
                 pass
 
