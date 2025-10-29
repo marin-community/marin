@@ -351,26 +351,39 @@ def test_replay_buffer_weight_step_filtering():
         )
         replay_buffer.add_batches([batch])
 
-    assert replay_buffer.size() == 12
+    # All batches rejected at ingestion since current_step=0, acceptable range [-30, 30]
+    assert replay_buffer.size() == 0
 
-    # Set current step to 100, min_step=70, should filter out weight_step=50
+    # Set current step to 100, acceptable range [70, 130]
+    # Add batches again - only weight_step=100 should be accepted at ingestion
     replay_buffer.set_current_step(100)
-    assert replay_buffer.size() == 8
+    for weight_step in [50, 100, 150]:
+        batch = create_test_batch(
+            weight_step, batch_size=4, max_seq_len=16, env_name="test_env", weight_step=weight_step
+        )
+        replay_buffer.add_batches([batch])
 
-    # Set current step to 150, min_step=120, should filter out 50 and 100
-    replay_buffer.set_current_step(150)
-    assert replay_buffer.size() == 4
+    assert replay_buffer.size() == 4  # Only weight_step=100
 
-    # Add new batch with weight_step=180
-    new_batch = create_test_batch(180, batch_size=3, max_seq_len=16, env_name="test_env", weight_step=180)
-    replay_buffer.add_batches([new_batch])
-
-    # Should now have 7 total (4 from weight_step=150 + 3 from weight_step=180)
+    # Add batch with weight_step=130 (within range)
+    batch_130 = create_test_batch(130, batch_size=3, max_seq_len=16, env_name="test_env", weight_step=130)
+    replay_buffer.add_batches([batch_130])
     assert replay_buffer.size() == 7
 
-    # Set current step to 190, min_step=160, should filter out weight_step=150
-    replay_buffer.set_current_step(190)
+    # Set current step to 150, acceptable range [120, 180]
+    # Should filter out weight_step=100 (too old), keep weight_step=130
+    replay_buffer.set_current_step(150)
     assert replay_buffer.size() == 3
+
+    # Add new batch with weight_step=180 (at upper bound)
+    new_batch = create_test_batch(180, batch_size=2, max_seq_len=16, env_name="test_env", weight_step=180)
+    replay_buffer.add_batches([new_batch])
+    assert replay_buffer.size() == 5
+
+    # Set current step to 190, acceptable range [160, 220]
+    # Should filter out weight_step=130 (too old), keep weight_step=180
+    replay_buffer.set_current_step(190)
+    assert replay_buffer.size() == 2
 
 
 def test_replay_buffer_rollout_delay_progressive():
@@ -416,3 +429,35 @@ def test_replay_buffer_rollout_delay_progressive():
     sample = replay_buffer.sample_rollouts()
     assert sample is not None
     assert len(sample) == 2
+
+
+def test_is_rollout_fresh():
+    """Test the _is_rollout_fresh helper method handles all filtering conditions."""
+    replay_buffer = ReplayBuffer(
+        capacity=100,
+        local_batch_size=4,
+        alpha=2.0,
+        total_processes=1,
+        max_samples=-1,
+        max_rollout_step_delay=10,
+        max_rollout_timestamp_delay=100.0,
+        loss_module=RLOOLoss(),
+        seed=42,
+    )
+
+    current_step = 100
+    current_time = time.time()
+
+    # Fresh rollout: within step window and timestamp limits
+    assert replay_buffer._is_rollout_fresh(95, current_time - 50, current_step, current_time)
+    assert replay_buffer._is_rollout_fresh(100, current_time - 50, current_step, current_time)
+    assert replay_buffer._is_rollout_fresh(105, current_time - 50, current_step, current_time)
+
+    # Too old: weight_step < min_step
+    assert not replay_buffer._is_rollout_fresh(89, current_time - 50, current_step, current_time)
+
+    # Too new: weight_step > max_step (bug fix verification)
+    assert not replay_buffer._is_rollout_fresh(111, current_time - 50, current_step, current_time)
+
+    # Stale timestamp
+    assert not replay_buffer._is_rollout_fresh(95, current_time - 200, current_step, current_time)

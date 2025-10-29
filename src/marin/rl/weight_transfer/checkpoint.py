@@ -137,7 +137,7 @@ class GCSCheckpointClient(WeightTransferClient):
         latest_checkpoint, weight_step = result
 
         try:
-            if weight_step <= self.weight_step:
+            if weight_step != self.weight_step:
                 logger.info("No new checkpoint found.")
                 return None
 
