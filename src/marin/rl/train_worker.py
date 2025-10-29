@@ -209,7 +209,7 @@ class TrainWorker:
         self.reference_model = _load_model()
 
         # Always transfer initial weights to rollout workers
-        self.transfer_server.serve_weights(-1, self.reference_model)
+        self.transfer_server.serve_weights(0, self.reference_model)
 
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""

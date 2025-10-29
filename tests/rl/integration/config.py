@@ -251,7 +251,7 @@ def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, outpu
             capacity=2048,
             alpha=3.0,
             max_samples=1,
-            max_rollout_step_delay=2,
+            max_rollout_step_delay=0,
         ),
         loss=RLOOLoss(kl_coef=0.0, clip_epsilon=5.0),
         initial_checkpoint=None,
