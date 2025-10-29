@@ -50,7 +50,12 @@ def _get_fineweb2_split_paths(split):
 
 
 def tokenize_fineweb2hq_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) -> dict[str, TokenizerStep]:
-    steps = []
+    """Return a mapping from dataset key to tokenization step for Fineweb2-HQ.
+
+    Keys follow the pattern "fineweb2_hq/<split>", aligning with mixture naming conventions
+    in other datasets (e.g., "dolma/...", "nemotron_cc/...").
+    """
+    steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for split in FINEWEB2_DATASETS.keys():
         fineweb2_split_output_path = os.path.join(base_path, "fineweb2_hq", split)
         fineweb2_split_paths = _get_fineweb2_split_paths(split)
@@ -64,11 +69,10 @@ def tokenize_fineweb2hq_steps(*, base_path="tokenized/", tokenizer=llama3_tokeni
                 tokenizer=versioned(tokenizer),
                 cache_options=CacheOptions(num_shard_groups=256),
             ),
-            pip_dependency_groups=["sentencepiece"],
         )
-        steps.append(step)
+        steps[os.path.join("fineweb2_hq", split)] = step
     return steps
 
 
 if __name__ == "__main__":
-    executor_main(steps=tokenize_fineweb2hq_steps(), description="Tokenize Fineweb2-HQ dataset")
+    executor_main(steps=list(tokenize_fineweb2hq_steps().values()), description="Tokenize Fineweb2-HQ dataset")
