@@ -78,6 +78,7 @@ def rloo_loss_with_importance_sampling(
     key: jax.Array | None,
     kl_coef: float,
     clip_epsilon: float,
+    divide_by_entire_length: bool = False,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Compute RLOO (Reward Leave-One-Out) loss with importance sampling for off-policy data.
 
@@ -162,7 +163,11 @@ def rloo_loss_with_importance_sampling(
     # RLOO loss with importance sampling
     # batch["loss_weights"] contains RLOO advantages: r_i - mean(r_j for j≠i)
     weighted_loss = -clipped_ratio * loss_weights_array * loss_masks_array
-    reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)
+
+    if divide_by_entire_length:
+        reinforce_loss = jnp.sum(weighted_loss) / seq_len
+    else:
+        reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)
 
     # KL regularization
     log_ratio = (current_logprobs - reference_logprobs_array) * loss_masks_array
@@ -196,6 +201,22 @@ def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     advantages = rewards - leave_one_out_baselines
     return advantages
 
+def compute_grpo_advantages(rollouts: list[Rollout], divide_by_std: bool = True) -> np.ndarray:
+    """Compute GRPO (Gradient Reinforcement) advantages for a group of rollouts."""
+    rewards = np.array([r.episode_reward for r in rollouts])
+
+    n = len(rewards)
+    if n <= 1:
+        return np.zeros_like(rewards)
+
+    advantages = rewards - rewards.mean()
+
+    # clamp the advantages to avoid numerical instability
+    if divide_by_std:
+        advantages *= 1 / max(rewards.std(), 1e-4)
+
+    return advantages
+
 
 @dataclass
 class RLOOLoss:
@@ -218,6 +239,27 @@ class RLOOLoss:
         def loss_fn(model, batch, key):
             return rloo_loss_with_importance_sampling(
                 model, reference_model, batch, key=key, kl_coef=self.kl_coef, clip_epsilon=self.clip_epsilon
+            )
+
+        return loss_fn
+
+@dataclass
+class GRPOLoss(RLOOLoss):
+    """GRPO loss."""
+
+    divide_by_entire_length: bool = False
+    divide_by_std: bool = True
+
+    def compute_advantages(self, rollout_group: list[Rollout]) -> list[float]:
+        """Compute advantages for a group of rollouts."""
+        return compute_grpo_advantages(rollout_group, divide_by_std=self.divide_by_std)
+
+    def create_loss_fn(self, reference_model: eqx.Module, train_model: eqx.Module) -> Callable:
+        """Create the loss function for training."""
+
+        def loss_fn(model, batch, key):
+            return rloo_loss_with_importance_sampling(
+                model, reference_model, batch, key=key, kl_coef=self.kl_coef, clip_epsilon=self.clip_epsilon, divide_by_entire_length=self.divide_by_entire_length
             )
 
         return loss_fn

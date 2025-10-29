@@ -458,7 +458,8 @@ class RolloutWorker:
                 )
 
             # Full eval: comprehensive check on all lessons
-            if step > 0 and step % self.config.curriculum_config.eval_frequency == 0:
+            # Evaluate based on the train worker step
+            if step % self.config.curriculum_config.eval_frequency == 0:
                 rng, eval_rng = jrandom.split(rng)
                 self._evaluate_curriculum(eval_rng, step)
 
