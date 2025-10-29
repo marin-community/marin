@@ -463,11 +463,11 @@ see marked improvements.
 In terms of mean rank, Marin fares quite well among other open weights base models:
 
 | Model                                | Mean Rank | Mean Reciprocal Rank |
-| :----------------------------------- | ---------:|---------------------:|
+| :----------------------------------- |----------:|---------------------:|
 | **Marin 32B (Bison)**                |      3.68 |                 0.39 |
-| **Marin 32B (Mantis)**               |      3.05 |                 0.44 |
+| **Marin 32B (Mantis)**               |  **3.05** |                 0.44 |
 | **OLMo 2 32B Base**                  |      3.89 |                 0.34 |
-| **Qwen 2.5 32B Base**                |      3.16 |                 0.54 |
+| **Qwen 2.5 32B Base**                |      3.16 |             **0.54** |
 | **Gemma 3 27B PT**                   |      3.37 |                 0.39 |
 | **NVIDIA Nemotron Nano 12B v2 Base** |      3.68 |                 0.38 |
 
