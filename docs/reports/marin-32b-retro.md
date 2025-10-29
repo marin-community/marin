@@ -74,7 +74,7 @@ reliably available (21,010 steps). It remained on the v4-2048 slice for the rest
 - Initial backbone: Llama 32B (Llama‑3–style settings)
 - Gradient checkpointing: offload carries to fit large global batches on a v4‑2048 slice
 
-#### Llama-3-style 32B (Phase 1–2) parameters:
+#### Llama-3-style 32B (Phase 1–2) parameters
 
 | **Parameter**          | **Value** |
 |------------------------|-------|
@@ -88,7 +88,7 @@ reliably available (21,010 steps). It remained on the v4-2048 slice for the rest
 
 These dimensions were selected to be the same as those used in OLMo 2 32B.
 
-#### Qwen3-style 32B (Phase 3+) parameters:
+#### Qwen3-style 32B (Phase 3+) parameters
 
 (These are the same except for the addition of QK-Norm in attention.)
 
@@ -147,8 +147,7 @@ Pretraining mixture (normalized share):
 | starcoderdata              | 2.27%      |
 | proofpile_2                | 0.50%      |
 
-## Batch schedule
-
+#### Batch schedule
 
 | Start step | Global batch size | Tokens per batch |
 |------------|-------------------|------------------|
@@ -165,6 +164,10 @@ As with the 8b run, we used a sequence length of 4096 tokens.
 ## Training Phases
 
 ### Phase 1: Scaling up our existing recipe
+
+- Issue: [#1295](https://github.com/marin-community/marin/issues/1295)
+- Experiment: [`exp1295_32b`](https://github.com/marin-community/marin/blob/5e88b5253975ffd13e63a5db0b946883c8660e1b/experiments/tootsie/exp1295_32b.py)
+- [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp859_big_tootsies-e9092f.json)
 
 For ~70k steps training behaved as expected though we had many more loss spikes than we had seen at 8b (and in 70b trials).
 We got a lot of feedback from the community on these spikes, with some folks telling us we were doomed,
@@ -199,6 +202,10 @@ Based on a tip from Luca Soldaini, we [added a "skip bad steps" flag](https://gi
 
 ### Phase 2: Recovery Without Architecture Changes
 
+- Issues: [#1390](https://github.com/marin-community/marin/issues/1390), [#1380](https://github.com/marin-community/marin/issues/1380)
+- Experiments: [`exp1390_32b_necro`](https://github.com/marin-community/marin/blob/fe373c233ee7288cbf8e7600765c3fc6fb6fa3ac/experiments/tootsie/exp1390_32b_necro.py), [`exp1380_muon32b`](https://github.com/marin-community/marin/blob/fe373c233ee7288cbf8e7600765c3fc6fb6fa3ac/experiments/tootsie/exp1380_muon32b.py)
+- Data browser: [necro](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1380_32b_necro-51ba55.json), [muon](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1380_muon32b-898f42.json)
+
 Unfortunately, at 80k steps we began to see spikes that were unavoidable even with all the update clipping that we had added. This launched a bit of a fire-drill to see how and whether we could salvage this run!
 
 ![Phase 2 restart still exhibiting a severe loss spike despite mitigation attempts](32b-bad-spike.png)
@@ -227,11 +234,15 @@ We probably need more time to properly tune Muon for this setting.
 
 ![Muon optimizer run eventually diverging with repeated spikes and loss blow-up](32b-muon-can-into-space.png)
 
-- Tokens trained: Diagnostic restarts only (short runs of a few thousand steps); excluded from cumulative phase totals due to restart to 80k Llama checkpoint for Phase 3.
+**Tokens trained:** Diagnostic restarts only (short runs of a few thousand steps); excluded from cumulative phase totals due to restart to 80k Llama checkpoint for Phase 3.
 
 **What we learned:** Restart tricks and optimizer swaps stabilized gradients briefly but not sustainably, reinforcing that the instability was rooted in the model’s attention stack rather than in optimizer state.
 
-### Phase 3: Switch to QK-Norm (`exp1395_qwen3_32b`)
+### Phase 3: Switch to QK-Norm
+
+- Issue: [#1395](https://github.com/marin-community/marin/issues/1395)
+- Experiment: [`exp1395_qwen3_32b`](https://github.com/marin-community/marin/blob/fe373c233ee7288cbf8e7600765c3fc6fb6fa3ac/experiments/tootsie/exp1395_qwen3_32b.py)
+- [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1395_qwen3_32b-de6f47.json)
 
 Github Issue: [#1395](https://github.com/marin-community/marin/issues/1395)
 
@@ -254,11 +265,15 @@ Warm‑start + rewarm parameters (`exp1395_32b`):
 | Re‑warmup              | 1,000 steps             |
 
 
-- Tokens trained: ≈2.684T tokens (80,000 steps from 80k → 160k at 4096 seq len, global batch 8192).
+**Tokens trained:** ≈2.684T tokens (80,000 steps from 80k → 160k at 4096 seq len, global batch 8192).
 
 **What we learned:** QK-Norm delivered the headroom we needed. Warm-starting preserved earlier progress while eliminating loss spikes after a short re-warmup.
 
 ### Phase 4: Midtraining Runs
+
+- Issues: [#1529](https://github.com/marin-community/marin/issues/1529), [#1681](https://github.com/marin-community/marin/issues/1681)
+- Experiments: [`exp1529_32b_bison_cooldown`](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp1529_32b_bison_cooldown.py), [`exp1529_32b_mantis_cooldown`](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp1529_32b_mantis_cooldown.py)
+- Data browser: [bison](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_bison_cooldown-48ddfe.json), [mantis](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_mantis_cooldown-c6f4b0.json)
 
 With stability restored, we trained until we completed 1 epoch over the Nemotron data and then resumed the 8B playbook.
 The first attempt (*Bison*) mirrored our [Starling](./marin-8b-retro.md#phase-5-starling-second-cooldown)-style cooldown and exposed two issues; the second (*Mantis*) fixed them.
@@ -266,12 +281,13 @@ The first attempt (*Bison*) mirrored our [Starling](./marin-8b-retro.md#phase-5-
 #### Attempt 1 — Bison Cooldown
 
 - Issue: [#1529](https://github.com/marin-community/marin/issues/1529)
-- Experiment File: [`exp1529_32b_bison_cooldown`](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp1529_32b_bison_cooldown.py)
+- Experiment: [`exp1529_32b_bison_cooldown`](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp1529_32b_bison_cooldown.py)
+- [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_bison_cooldown-48ddfe.json)
 
 Based on the success of our Starling cooldown at 8B, we attempted a similar cooldown at 32B.
 Starting from the 160k qk-norm-enabled checkpoint, we ran a 32k-step cooldown with a 70/30 Nemotron/Starling mixture.
 
-### Cooldown mixture (normalized share):
+##### Cooldown mixture (normalized share):
 
 In detail, the cooldown used the same Nemotron-CC mixture as before, supplemented with a mix drawn from Dolmino, Finemath-3-Plus, Arxiv Markdownified, StackExchange Custom, and others.
 
@@ -300,7 +316,7 @@ In detail, the cooldown used the same Nemotron-CC mixture as before, supplemente
 Within the 70/30 split, each data source was weighted approximately equal to its token size, but we upsampled FLAN (10x)
 and the math from Dolmino (2x). Again, this is the same as the starling cooldown at 8B.
 
-### Training Parameters
+##### Training Parameters
 
 We used the following optimizer schedule:
 
@@ -318,9 +334,9 @@ We used the following optimizer schedule:
 We used the adjusted weight‑decay formulation only in decay phases to reduce gradient growth without retuning the entire schedule.
 
 
-### Outcome
+#### Outcome
 
-#### Contamination anomaly — GSM8k.
+##### Contamination anomaly — GSM8k
 
 The run was broadly strong versus OLMo 2 32B, with one extreme exception: GSM8k.
 Under the standard LM Eval Harness prompt, the model was ~22 points worse than the weakest baseline.
@@ -338,7 +354,7 @@ This high surprisal seemed to cause our model to perform much worse than it did 
 That said, our MATH performance was also quite poor, and we have no reason to believe it was contaminated.
 So, our generally poor performance on math may have other causes.
 
-#### Shuffling anomaly
+##### Shuffling anomaly
 
 Near 190k steps, training loss phase‑shifted while validation remained stable.
 This is normally observed when we change the underlying training data mix, but in this case we hadn't!
@@ -354,9 +370,13 @@ Why did we use such a bad shuffle? Because it is cheap and stateless! We can com
 In addition, our training stack Levanter samples from each mixture component directly, meaning that we always have a stable proportion of tokens from each dataset.
 This has historically mitigated the risk of poor shuffles, but in this case it seems to have failed us.
 
-- Tokens trained: ≈1.074T tokens (32,000 steps from 160k → 192k at 4096 seq len, global batch 8192).
+**Tokens trained:** ≈1.074T tokens (32,000 steps from 160k → 192k at 4096 seq len, global batch 8192).
 
-#### Attempt 2 — Mantis Cooldown (`exp1529_32b_mantis_cooldown`)
+#### Attempt 2 — Mantis Cooldown
+
+- Issue: [#1581](https://github.com/marin-community/marin/issues/1681)
+- Experiment: [`exp1529_32b_mantis_cooldown`](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp1529_32b_mantis_cooldown.py)
+- [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_mantis_cooldown-c6f4b0.json)
 
 We restarted from 160k with two major changes:
 
@@ -397,9 +417,9 @@ Notes:
 
 We kept the optimizer schedule identical to Bison. With better shuffling and clean math, both failure modes disappeared.
 
-- Tokens trained: ≈1.074T tokens (32,000 steps from 160k → 192k at 4096 seq len, global batch 8192).
+**Tokens trained:** ≈1.074T tokens (32,000 steps from 160k → 192k at 4096 seq len, global batch 8192).
 
-#### Shuffling: Linear vs. Feistel
+##### Shuffling: Linear vs. Feistel
 
 Within each batch, we want examples that are as i.i.d. as possible from the full training distribution.
 This reduces within‑batch correlation and avoids long, correlated stretches that can bias updates or create non‑stationary “phases” in the loss curve. This also reduces gradient variance from batch to batch, which recent [NanoGPT speedruns](https://www.lesswrong.com/posts/j3gp8tebQiFJqzBgg/how-the-nanogpt-speedrun-wr-dropped-by-20-in-3-months) have found beneficial.
@@ -472,7 +492,6 @@ the line is blurred as Marin, OLMo, and Nemotron Nano include instruction, reaso
 (We don't know the details of Qwen or Gemma's pretraining mixtures!)
 We have not yet produced or evaluated instruction tuned or RLHF versions of Marin 32B. This is planned.
 
-
 ### Caveats
 
 As ever, several caveats are in order:
@@ -492,7 +511,7 @@ While we believe Marin 32B is a strong open source base model, it has some limit
 - It has not undergone long context extension training, which may limit its performance on long context tasks.
 - As stated, our model is only trained on English text (as well as programming languages), limiting its performance on other languages.
 
-We welcome community contributions ([Github](github.com/marin-community/marin/issues), [Discord](https://discord.gg/J9CTk7pqcM)) to address these and other limitations!
+We welcome community contributions ([Github](https:/github.com/marin-community/marin/issues), [Discord](https://discord.gg/J9CTk7pqcM)) to address these and other limitations!
 
 ## Lessons Learned
 
