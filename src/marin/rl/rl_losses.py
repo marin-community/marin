@@ -201,6 +201,7 @@ def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     advantages = rewards - leave_one_out_baselines
     return advantages
 
+
 def compute_grpo_advantages(rollouts: list[Rollout], divide_by_std: bool = True) -> np.ndarray:
     """Compute GRPO (Gradient Reinforcement) advantages for a group of rollouts."""
     rewards = np.array([r.episode_reward for r in rollouts])
@@ -243,6 +244,7 @@ class RLOOLoss:
 
         return loss_fn
 
+
 @dataclass
 class GRPOLoss(RLOOLoss):
     """GRPO loss."""
@@ -259,7 +261,13 @@ class GRPOLoss(RLOOLoss):
 
         def loss_fn(model, batch, key):
             return rloo_loss_with_importance_sampling(
-                model, reference_model, batch, key=key, kl_coef=self.kl_coef, clip_epsilon=self.clip_epsilon, divide_by_entire_length=self.divide_by_entire_length
+                model,
+                reference_model,
+                batch,
+                key=key,
+                kl_coef=self.kl_coef,
+                clip_epsilon=self.clip_epsilon,
+                divide_by_entire_length=self.divide_by_entire_length,
             )
 
         return loss_fn

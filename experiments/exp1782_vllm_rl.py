@@ -95,11 +95,13 @@ llama_3_1_8b = ModelConfig(
     config_class=LlamaConfig,
 )
 
+
 @dataclasses.dataclass
 class ExperimentConfig:
     model_config: ModelConfig
     rl_loss: RLOOLoss | GRPOLoss
     experiment_name_suffix: str
+
 
 MODEL = llama1b
 WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
@@ -180,7 +182,7 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
         lessons=lessons,
         eval_frequency=100,
         actor_name=f"curriculum-{run_id}",
-        eval_n_examples=500, # for math500
+        eval_n_examples=500,  # for math500
     )
 
 
@@ -304,15 +306,28 @@ def main():
     # experiment_configs = [llama1b, qwen4b, qwen3_1_7b, qwen3_0_6b]
     experiment_configs = [
         # ExperimentConfig(model_config=llama_3_1_8b, rl_loss=RLOOLoss(kl_coef=0.01, clip_epsilon=0.2), experiment_name_suffix="rloo"),
-        ExperimentConfig(model_config=llama_3_1_8b, rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2), experiment_name_suffix="grpo"),
-        ExperimentConfig(model_config=llama_3_1_8b, rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2, divide_by_entire_length=True), experiment_name_suffix="grpo-unbias"),
-        ExperimentConfig(model_config=llama_3_1_8b, rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2, divide_by_std=False), experiment_name_suffix="grpo-div-std"),
+        ExperimentConfig(
+            model_config=llama_3_1_8b, rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2), experiment_name_suffix="grpo"
+        ),
+        ExperimentConfig(
+            model_config=llama_3_1_8b,
+            rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2, divide_by_entire_length=True),
+            experiment_name_suffix="grpo-unbias",
+        ),
+        ExperimentConfig(
+            model_config=llama_3_1_8b,
+            rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2, divide_by_std=False),
+            experiment_name_suffix="grpo-div-std",
+        ),
     ]
     experiments = []
     for experiment_config in experiment_configs:
         model_base_name = experiment_config.model_config.name.split("/")[-1].lower()
         experiments.append(
-            rl_train(name=f"{model_base_name}-math-lr1e-7-bsz256-tok1024-sync-{experiment_config.experiment_name_suffix}", experiment_config=experiment_config),
+            rl_train(
+                name=f"{model_base_name}-math-lr1e-7-bsz256-tok1024-sync-{experiment_config.experiment_name_suffix}",
+                experiment_config=experiment_config,
+            ),
         )
 
     executor_main(
