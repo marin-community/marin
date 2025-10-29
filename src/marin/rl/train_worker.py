@@ -127,6 +127,11 @@ class TrainWorker:
     """Training worker that reads rollout data from a queue and trains the model using Levanter."""
 
     config: TrainWorkerConfig
+    replay_buffer: ReplayBuffer
+    replay_loader: ReplayDataLoader
+    transfer_server: weight_transfer.WeightTransferServer
+    tokenizer: PreTrainedTokenizer
+    loss_module: RLLossModule
 
     def __init__(
         self,
@@ -208,16 +213,12 @@ class TrainWorker:
 
         self.reference_model = _load_model()
 
-        # Always transfer initial weights to rollout workers
-        self.transfer_server.serve_weights(0, self.reference_model)
-
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
         logger.info("Starting RLOO training with Levanter...")
 
         config = self.config
         optimizer = config.optimizer.build(config.trainer.num_train_steps)
-
         loss_fn = self.loss_module.create_loss_fn(self.reference_model, None)
 
         @jax.jit
@@ -225,15 +226,14 @@ class TrainWorker:
             return loss_fn(model, batch, key)
 
         with (
-            config.trainer.device_mesh,
-            hax.axis_mapping(config.trainer.compute_axis_mapping),
             Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer,
             self.replay_loader,
         ):
-            seed = config.trainer.seed
-            _, training_key = jrandom.split(jrandom.PRNGKey(seed), 2)
-
+            _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
             state = trainer.initial_state(training_key, model=self.reference_model)
+
+            # Always transfer initial weights to rollout workers before we attempt to start training
+            self.transfer_server.serve_weights(state.int_step, state.model)
 
             self._configure_training_hooks(trainer)
 

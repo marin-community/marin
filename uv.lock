@@ -348,8 +348,8 @@ name = "beautifulsoup4"
 version = "4.14.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "soupsieve" },
-    { name = "typing-extensions" },
+    { name = "soupsieve", marker = "(sys_platform != 'darwin' and extra == 'extra-5-marin-post-training') or (sys_platform == 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'group-5-marin-dev') or (sys_platform == 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'group-5-marin-transform-test-deps') or (sys_platform == 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-eval' and extra == 'extra-5-marin-quality-dedup-consolidate') or extra == 'extra-5-marin-crawl' or extra == 'extra-5-marin-download-transform' or (extra == 'extra-5-marin-cuda12' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-cuda12' and extra == 'group-5-marin-transform-test-deps') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-post-training') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-post-training' and extra == 'group-5-marin-dev') or (extra != 'extra-5-marin-post-training' and extra == 'group-5-marin-transform-test-deps') or (extra == 'extra-5-marin-cpu' and extra != 'extra-5-marin-post-training' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-eval' and extra == 'extra-5-marin-quality-dedup-consolidate') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-eval' and extra == 'extra-5-marin-quality-dedup-consolidate') or (extra == 'extra-5-marin-eval' and extra != 'extra-5-marin-post-training' and extra == 'extra-5-marin-quality-dedup-consolidate') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu' and extra == 'group-5-marin-dev') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu' and extra == 'group-5-marin-transform-test-deps') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-post-training' and extra != 'extra-5-marin-tpu')" },
+    { name = "typing-extensions", marker = "(sys_platform != 'darwin' and extra == 'extra-5-marin-post-training') or (sys_platform == 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'group-5-marin-dev') or (sys_platform == 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'group-5-marin-transform-test-deps') or (sys_platform == 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-eval' and extra == 'extra-5-marin-quality-dedup-consolidate') or extra == 'extra-5-marin-crawl' or extra == 'extra-5-marin-download-transform' or (extra == 'extra-5-marin-cuda12' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-cuda12' and extra == 'group-5-marin-transform-test-deps') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-post-training') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-post-training' and extra == 'group-5-marin-dev') or (extra != 'extra-5-marin-post-training' and extra == 'group-5-marin-transform-test-deps') or (extra == 'extra-5-marin-cpu' and extra != 'extra-5-marin-post-training' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-eval' and extra == 'extra-5-marin-quality-dedup-consolidate') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-eval' and extra == 'extra-5-marin-quality-dedup-consolidate') or (extra == 'extra-5-marin-eval' and extra != 'extra-5-marin-post-training' and extra == 'extra-5-marin-quality-dedup-consolidate') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu' and extra == 'group-5-marin-dev') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu' and extra == 'group-5-marin-transform-test-deps') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-post-training' and extra != 'extra-5-marin-tpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/77/e9/df2358efd7659577435e2177bfa69cba6c33216681af51a707193dec162a/beautifulsoup4-4.14.2.tar.gz", hash = "sha256:2a98ab9f944a11acee9cc848508ec28d9228abfd522ef0fad6a02a72e0ded69e", size = 625822 }
 wheels = [
@@ -1527,6 +1527,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a9/30/064144f0df1749e7bb5faaa7f52b007d7c2d08ec08fed8411aba87207f68/dateparser-1.2.2.tar.gz", hash = "sha256:986316f17cb8cdc23ea8ce563027c5ef12fc725b6fb1d137c14ca08777c5ecf7", size = 329840 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/87/22/f020c047ae1346613db9322638186468238bcfa8849b4668a22b97faad65/dateparser-1.2.2-py3-none-any.whl", hash = "sha256:5a5d7211a09013499867547023a2a0c91d5a27d15dd4dbcea676ea9fe66f2482", size = 315453 },
+]
+
+[[package]]
+name = "ddsketch"
+version = "3.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six", marker = "extra == 'extra-5-marin-quality-dedup-consolidate' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-crawl' and extra == 'extra-5-marin-download-transform') or (extra == 'extra-5-marin-crawl' and extra == 'extra-5-marin-post-training') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'group-5-marin-dev') or (extra != 'extra-5-marin-tpu' and extra == 'group-5-marin-transform-test-deps') or (extra == 'extra-5-marin-cpu' and extra != 'extra-5-marin-crawl' and extra != 'extra-5-marin-quality-dedup-consolidate' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-crawl' and extra != 'extra-5-marin-cuda12' and extra == 'group-5-marin-dev') or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-crawl' and extra != 'extra-5-marin-cuda12' and extra == 'group-5-marin-transform-test-deps') or (extra == 'extra-5-marin-cpu' and extra != 'extra-5-marin-download-transform' and extra != 'extra-5-marin-post-training' and extra != 'extra-5-marin-quality-dedup-consolidate' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-cuda12' and extra != 'extra-5-marin-download-transform' and extra != 'extra-5-marin-post-training' and extra == 'group-5-marin-dev') or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-cuda12' and extra != 'extra-5-marin-download-transform' and extra != 'extra-5-marin-post-training' and extra == 'group-5-marin-transform-test-deps')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b8/c7/25f300ba359c7e723180ce962a30e1f820c3990e3f3e8bbed16ae9387cab/ddsketch-3.0.1.tar.gz", hash = "sha256:aa8f20b2965e61731ca4fee2ca9c209f397f5bbb23f9d192ec8bd7a2f5bd9824", size = 30010, upload-time = "2024-04-01T13:11:39.734Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ac/da/c821e4958c8df43ded1a92aaca678d89ec8b7a4df5bb561ef25354be1912/ddsketch-3.0.1-py3-none-any.whl", hash = "sha256:6d047b455fe2837c43d366ff1ae6ba0c3166e15499de8688437a75cea914224e", size = 19113, upload-time = "2024-04-01T13:11:38.159Z" },
 ]
 
 [[package]]
@@ -4018,6 +4030,7 @@ vllm = [
 [package.dev-dependencies]
 dev = [
     { name = "black" },
+    { name = "ddsketch" },
     { name = "markdownify" },
     { name = "mkdocs" },
     { name = "mkdocs-git-authors-plugin" },
@@ -4088,6 +4101,7 @@ test = [
     { name = "pytest-xdist" },
 ]
 transform-test-deps = [
+    { name = "ddsketch" },
     { name = "markdownify" },
     { name = "readabilipy" },
     { name = "readability-lxml" },
@@ -4116,6 +4130,7 @@ requires-dist = [
     { name = "datasets", marker = "extra == 'quality-dedup-consolidate'" },
     { name = "datatrove", extras = ["io"], marker = "extra == 'crawl'", git = "https://github.com/nelson-liu/datatrove?rev=ray_executor_dedup_logging" },
     { name = "datatrove", extras = ["processing"], marker = "extra == 'crawl'", git = "https://github.com/nelson-liu/datatrove?rev=ray_executor_dedup_logging" },
+    { name = "ddsketch", marker = "extra == 'quality-dedup-consolidate'" },
     { name = "deepdiff" },
     { name = "draccus", specifier = ">=0.11.5" },
     { name = "einops", marker = "extra == 'post-training'" },
@@ -4228,6 +4243,7 @@ provides-extras = ["gcp", "cuda12", "tpu", "cpu", "vllm", "crawl", "download-tra
 [package.metadata.requires-dev]
 dev = [
     { name = "black", specifier = ">=24.8.0" },
+    { name = "ddsketch" },
     { name = "markdownify", specifier = "==0.12.1" },
     { name = "mkdocs", specifier = ">=1.5.0" },
     { name = "mkdocs-git-authors-plugin", specifier = ">=0.9.0" },
@@ -4296,6 +4312,7 @@ test = [
     { name = "pytest-xdist" },
 ]
 transform-test-deps = [
+    { name = "ddsketch" },
     { name = "markdownify", specifier = "==0.12.1" },
     { name = "readabilipy" },
     { name = "readability-lxml" },

@@ -41,6 +41,7 @@ def compute_cats_reward(response: str) -> float:
 def create_cats_rollout_batch(
     policy_model,
     batch_size: int,
+    step: int,
     tokenizer=None,
     max_input_length: int = 16,
     max_output_length: int = 16,
@@ -125,7 +126,7 @@ def create_cats_rollout_batch(
             metadata=RolloutMetadata(
                 worker_id=worker_id,
                 timestamp=time.time(),
-                weight_step=10000,
+                weight_step=step,
             ),
         )
         rollouts.append(rollout)
@@ -232,6 +233,7 @@ def compute_sequential_digits_reward(response: str) -> float:
 def create_sequential_digits_rollout_batch(
     policy_model,
     batch_size: int,
+    step: int,
     tokenizer=None,
     max_input_length: int = 16,
     max_output_length: int = 16,
@@ -314,7 +316,7 @@ def create_sequential_digits_rollout_batch(
             metadata=RolloutMetadata(
                 worker_id=worker_id,
                 timestamp=time.time(),
-                weight_step=10000,
+                weight_step=step,
             ),
         )
         rollouts.append(rollout)
