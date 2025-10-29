@@ -112,7 +112,7 @@ def main(args):
                 args.ground_truth_attribute_name,
                 args.prediction_attribute_name,
                 args.label_name,
-                args.threshold,
+                args.lower_threshold,
             )
         )
 

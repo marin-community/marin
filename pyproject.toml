@@ -89,6 +89,7 @@ transform_test_deps = [
     "warcio",
     "markdownify==0.12.1",
     "resiliparse",
+    "ddsketch",
 ]
 
 dev = [
@@ -237,6 +238,7 @@ quality_dedup_consolidate = [
     "nltk>=3.8.1",
     "cattrs==24.1.3",
     "fsspec>=2025.3.0",
+    "ddsketch",
     "dolma @ git+https://github.com/marin-community/dolma",
 ]
 
@@ -252,7 +254,7 @@ tokenize_train = [
 rl = [
     "prime",
     "sympy",
-    "verifiers",
+    "verifiers==0.1.5",
 ]
 
 post_training = [

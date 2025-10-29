@@ -86,7 +86,7 @@ class TrainParams:
             capacity=4096,
             alpha=3.0,
             max_samples=1,
-            max_rollout_step_delay=1,
+            max_rollout_step_delay=0,
             max_rollout_timestamp_delay=3600.0,
         )
     )
@@ -252,7 +252,7 @@ class RLJob:
                     max_seqs=max_seqs,
                     max_seq_len=max_tokens,
                     page_size=128,
-                    hbm_utilization=0.1,
+                    hbm_utilization=0.5,
                     enable_logprobs=True,
                 ),
                 port=0,

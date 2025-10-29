@@ -35,6 +35,7 @@ This page includes only experiments that have at least one run or report.
     - [GitHub Issue #1295](https://github.com/marin-community/marin/issues/1295)
     - [WandB Run: Marin 32B run1](https://wandb.ai/marin-community/marin/runs/llama-32b-tootsie-2?nw=nwuserdlwh)
     - [Data Browser](https://marin.community/data-browser/experiment?path=gs%3A//marin-us-central2/experiments/exp859_big_tootsies-e9092f.json)
+    - [Marin 32B Retrospective](./marin-32b-retro.md)
 
 ## Big Runs
 
