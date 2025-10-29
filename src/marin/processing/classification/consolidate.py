@@ -269,8 +269,7 @@ def process_file(
         if fsspec_exists(doc_filter.attribute_path):
             attribute_files.append(read_attributes_as_dict(doc_filter.attribute_path))
         else:
-            logger.warning(f"Attribute file not found: {doc_filter.attribute_path}")
-            attribute_files.append(None)
+            raise FileNotFoundError(f"Attribute file not found: {doc_filter.attribute_path}")
 
     dataset = read_dataset(input_path)
     dataset = dataset.map(lambda row: get_nested_id_object(row, get_corpus_type(input_path)))
@@ -301,7 +300,7 @@ def process_file(
     logger.info(f"Kept {total_kept}/{total_examples} from {input_path}")
 
 
-def get_scores(attribute_filename: str, attribute_name: str, label: str) -> "DDSketch":
+def get_quantiles_for_attribute(attribute_filename: str, attribute_name: str, label: str) -> "DDSketch":
     from ddsketch import DDSketch
 
     shard_sketch = DDSketch()
@@ -318,7 +317,7 @@ def get_scores(attribute_filename: str, attribute_name: str, label: str) -> "DDS
 
 @ray.remote
 def get_scores_ray(attribute_filename: str, attribute_name: str, label: str) -> "DDSketch":
-    return get_scores(attribute_filename, attribute_name, label)
+    return get_quantiles_for_attribute(attribute_filename, attribute_name, label)
 
 
 def calculate_percentile_threshold(
@@ -342,7 +341,7 @@ def calculate_percentile_threshold(
             combined_sketch.merge(shard_sketch)
     else:
         for attribute_path in attribute_paths:
-            shard_sketch = get_scores(attribute_path, attribute_name, label)
+            shard_sketch = get_quantiles_for_attribute(attribute_path, attribute_name, label)
             combined_sketch.merge(shard_sketch)
 
     threshold = combined_sketch.get_quantile_value(1 - keep_fraction)
