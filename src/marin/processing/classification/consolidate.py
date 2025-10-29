@@ -24,6 +24,7 @@ the attributes.  Handles two cases:
 import logging
 import os
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from functools import partial
 from typing import Any, TYPE_CHECKING
 
@@ -45,8 +46,11 @@ from marin.processing.classification.dataset_utils import (
 if TYPE_CHECKING:
     from ddsketch import DDSketch
 
-FILTER_TYPE_CLASSIFY = "classify"
-FILTER_TYPE_REMOVE_SPANS = "remove_spans"
+
+class FilterType(StrEnum):
+    CLASSIFY = "classify"
+    REMOVE_SPANS = "remove_spans"
+
 
 logger = logging.getLogger("ray")
 
@@ -55,7 +59,7 @@ logger = logging.getLogger("ray")
 class FilterConfig:
     """Config for filtering operation on Marin data"""
 
-    type: str
+    type: FilterType
     """The type of filter to apply."""
 
     attribute_path: str
@@ -78,6 +82,10 @@ class FilterConfig:
 
     reverse: bool = False
     """Reverse the filter."""
+
+    def __post_init__(self):
+        # Allow configs to specify the enum by name or value.
+        object.__setattr__(self, "type", FilterType(self.type))
 
 
 @dataclass(frozen=True)
@@ -269,7 +277,8 @@ def process_file(
         if fsspec_exists(doc_filter.attribute_path):
             attribute_files.append(read_attributes_as_dict(doc_filter.attribute_path))
         else:
-            raise FileNotFoundError(f"Attribute file not found: {doc_filter.attribute_path}")
+            logger.warning(f"Attribute file not found: {doc_filter.attribute_path}")
+            attribute_files.append(None)
 
     dataset = read_dataset(input_path)
     dataset = dataset.map(lambda row: get_nested_id_object(row, get_corpus_type(input_path)))
@@ -281,11 +290,11 @@ def process_file(
         if id_to_attributes is None:
             continue
 
-        if doc_filter.type == FILTER_TYPE_CLASSIFY:
+        if doc_filter.type == FilterType.CLASSIFY:
             dataset = dataset.filter(
                 partial(apply_filter_classify, doc_filter=doc_filter, id_to_attributes=id_to_attributes)
             )
-        elif doc_filter.type == FILTER_TYPE_REMOVE_SPANS:
+        elif doc_filter.type == FilterType.REMOVE_SPANS:
             dataset = dataset.map(
                 partial(apply_filter_remove_spans, doc_filter=doc_filter, id_to_attributes=id_to_attributes)
             )
@@ -300,7 +309,7 @@ def process_file(
     logger.info(f"Kept {total_kept}/{total_examples} from {input_path}")
 
 
-def get_quantiles_for_attribute(attribute_filename: str, attribute_name: str, label: str) -> "DDSketch":
+def get_scores(attribute_filename: str, attribute_name: str, label: str) -> "DDSketch":
     from ddsketch import DDSketch
 
     shard_sketch = DDSketch()
@@ -317,7 +326,7 @@ def get_quantiles_for_attribute(attribute_filename: str, attribute_name: str, la
 
 @ray.remote
 def get_scores_ray(attribute_filename: str, attribute_name: str, label: str) -> "DDSketch":
-    return get_quantiles_for_attribute(attribute_filename, attribute_name, label)
+    return get_scores(attribute_filename, attribute_name, label)
 
 
 def calculate_percentile_threshold(
@@ -341,7 +350,7 @@ def calculate_percentile_threshold(
             combined_sketch.merge(shard_sketch)
     else:
         for attribute_path in attribute_paths:
-            shard_sketch = get_quantiles_for_attribute(attribute_path, attribute_name, label)
+            shard_sketch = get_scores(attribute_path, attribute_name, label)
             combined_sketch.merge(shard_sketch)
 
     threshold = combined_sketch.get_quantile_value(1 - keep_fraction)
@@ -364,7 +373,7 @@ def consolidate(config: ConsolidateConfig):
             assert doc_filter.keep_fraction > 0 and doc_filter.keep_fraction < 1, "Keep fraction must be between 0 and 1"
 
         # Calculate the minimum threshold required to keep `keep_fraction` of the documents
-        if doc_filter.keep_fraction is not None and doc_filter.type == FILTER_TYPE_CLASSIFY:
+        if doc_filter.keep_fraction is not None and doc_filter.type == FilterType.CLASSIFY:
             threshold = calculate_percentile_threshold(
                 config.input_path,
                 input_paths,
