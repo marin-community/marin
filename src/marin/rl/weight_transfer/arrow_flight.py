@@ -459,7 +459,7 @@ class ArrowFlightClient(WeightTransferClient):
         self.mesh = mesh
         self.axis_mapping = axis_mapping
 
-        self._last_weight_id = None
+        self._last_weight_id = -1
         self._flight_clients = []
         self._server_locations = []
 
@@ -528,7 +528,7 @@ class ArrowFlightClient(WeightTransferClient):
                 logger.info("No Arrow Flight server info available from coordinator.")
                 return None
 
-            if server_info.weight_id is None or server_info.weight_id == self._last_weight_id:
+            if server_info.weight_id is None or server_info.weight_id <= self._last_weight_id:
                 logger.info("No new weights available from Arrow Flight server.")
                 return None
 

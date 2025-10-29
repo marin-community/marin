@@ -122,7 +122,7 @@ class GCSCheckpointClient(WeightTransferClient):
         self.config = config
         self.axis_mapping = axis_mapping
         self.mesh = mesh
-        self.latest_checkpoint_path = None
+        self.weight_step = -1
         self.metrics = WeightTransferClientMetrics()
 
     def receive_weights(self, old_model: PyTree) -> WeightUpdate | None:
@@ -137,11 +137,12 @@ class GCSCheckpointClient(WeightTransferClient):
         latest_checkpoint, weight_step = result
 
         try:
-            if latest_checkpoint == self.latest_checkpoint_path:
+            if weight_step <= self.weight_step:
                 logger.info("No new checkpoint found.")
                 return None
 
             logger.info(f"Loading checkpoint from {latest_checkpoint}")
+            self.weight_step = weight_step
             params = levanter_checkpoint.load_checkpoint(
                 tree=old_model,
                 checkpoint_path=latest_checkpoint,
@@ -154,7 +155,6 @@ class GCSCheckpointClient(WeightTransferClient):
             logger.warning(f"Failed to load checkpoint {latest_checkpoint}: {e}")
             return None
 
-        self.latest_checkpoint_path = latest_checkpoint
         self.metrics.successful_receives += 1
 
         return WeightUpdate(model=params, weight_id=weight_step)
