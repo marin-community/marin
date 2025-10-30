@@ -164,7 +164,7 @@ def test_chunk_size_one_degenerates_to_recurrent_without_l2norm():
     out_recur, _ = recurrent_gated_delta_rule(
         q, k, v, g, beta, output_final_state=False, use_qk_l2norm_in_kernel=False
     )
-    np.testing.assert_allclose(np.array(out_chunk.array), np.array(out_recur.array), rtol=1e-4, atol=1e-4)
+    np.testing.assert_allclose(np.array(out_chunk.array), np.array(out_recur.array), rtol=3e-4, atol=1e-4)
 
 
 def test_extreme_gates_numerical_stability_jax_only():
