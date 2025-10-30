@@ -23,7 +23,7 @@ from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
 from transformers import AutoTokenizer
 
-from marin.rl.inference_ctx import LevanterInferenceContext
+from marin.rl.environments.inference_ctx import LevanterInferenceContext
 
 
 @dataclass
