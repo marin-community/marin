@@ -50,7 +50,7 @@ def _get_fineweb2_split_paths(split):
 
 
 def tokenize_fineweb2hq_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) -> dict[str, TokenizerStep]:
-    steps = {}
+    steps = []
     for split in FINEWEB2_DATASETS.keys():
         fineweb2_split_output_path = os.path.join(base_path, "fineweb2_hq", split)
         fineweb2_split_paths = _get_fineweb2_split_paths(split)
@@ -66,9 +66,9 @@ def tokenize_fineweb2hq_steps(*, base_path="tokenized/", tokenizer=llama3_tokeni
             ),
             pip_dependency_groups=["sentencepiece"],
         )
-        steps[split] = step
+        steps.append(step)
     return steps
 
 
 if __name__ == "__main__":
-    executor_main(steps=tokenize_fineweb2hq_steps().items(), description="Tokenize Fineweb2-HQ dataset")
+    executor_main(steps=tokenize_fineweb2hq_steps(), description="Tokenize Fineweb2-HQ dataset")
