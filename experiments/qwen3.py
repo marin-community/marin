@@ -19,6 +19,15 @@ Specifies a sequence of Llama 3 models from small to large.
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config, QwenConfig
 
+qwen3_30m = Qwen3Config(
+    seq_len=1024,
+    hidden_dim=128,
+    intermediate_dim=448,
+    num_heads=2,
+    num_kv_heads=2,
+    num_layers=4,
+)
+
 qwen3_0_6b = Qwen3Config(
     seq_len=4096,
     hidden_dim=1024,
