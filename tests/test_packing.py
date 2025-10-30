@@ -25,6 +25,8 @@ from levanter.store.jagged_array import JaggedArrayStore
 
 
 def test_per_segment_loss():
+    import jax
+
     Pos = hax.Axis("pos", size=10)
     packer = SequencePacker(Pos=Pos, max_pack_size=10, pad_token=0)
 
@@ -32,8 +34,12 @@ def test_per_segment_loss():
     packer.add_example(ids=[1, 2, 3], loss_mask=[1, 1, 1], segment_id=None)
     packer.add_example(ids=[4, 5], loss_mask=[1, 1], segment_id=None)
 
-    # Pack into LmExample
+    # Pack into LmExample (creates arrays on CPU via local_cpu_mesh)
     packed = packer.pack()
+
+    # Transfer packed to default device (TPU) to avoid device mismatch
+    # when per_segment_loss creates internal jit contexts
+    packed = jax.tree_util.tree_map(lambda x: jax.device_put(x) if isinstance(x, jax.Array) else x, packed)
 
     losses = hax.named(jnp.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0]), Pos)
 

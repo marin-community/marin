@@ -120,3 +120,9 @@ echo "Checking out branch $BRANCH"
 # install levanter
 uv venv
 uv sync --extra tpu
+
+# Pin JAX version if JAX_VERSION is set (for testing specific versions)
+if [ -n "$JAX_VERSION" ]; then
+  echo "Pinning JAX to version $JAX_VERSION"
+  uv pip install "jax[tpu]==$JAX_VERSION" --upgrade
+fi

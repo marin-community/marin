@@ -199,9 +199,10 @@ def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2
 def test_hf_save_to_fs_spec():
     config = Gpt2Config(hidden_dim=32, num_heads=2, num_layers=2)
     converter = HFCheckpointConverter(Gpt2Config, "gpt2", HfGpt2Config, ignore_prefix="transformer")
-    simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
 
     with use_test_mesh():
+        simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
+
         converter.save_pretrained(simple_model, "memory://model")
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -226,7 +227,6 @@ def test_hf_save_to_gcs_roundtrip():
 
     config = Gpt2Config(hidden_dim=32, num_heads=2, num_layers=2)
     converter = HFCheckpointConverter(Gpt2Config, "gpt2", HfGpt2Config, ignore_prefix="transformer")
-    simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
 
     prefix = "gs://levanter-data/unit-test-data/models"
     unique_path = f"{prefix.rstrip('/')}/roundtrip-{uuid.uuid4().hex}"
@@ -243,6 +243,8 @@ def test_hf_save_to_gcs_roundtrip():
 
     try:
         with use_test_mesh():
+            simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
+
             from gcsfs.retry import HttpError
 
             try:

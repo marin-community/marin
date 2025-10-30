@@ -312,13 +312,13 @@ def test_tpu_splash_attention():
     QPos = hax.Axis("QPos", BLOCK_SIZE * 2)
     KPos = hax.Axis("KPos", BLOCK_SIZE * 2)
 
-    q = hax.random.normal(jrandom.PRNGKey(0), (QPos, Head, Key)) * 0.02
-    k = hax.random.normal(jrandom.PRNGKey(1), (KPos, Head, Key)) * 0.02
-    v = hax.random.normal(jrandom.PRNGKey(2), (KPos, Head, Key)) * 0.02
-
     mask = AttentionMask.causal()
 
     with use_test_mesh():
+        q = hax.random.normal(jrandom.PRNGKey(0), (QPos, Head, Key)) * 0.02
+        k = hax.random.normal(jrandom.PRNGKey(1), (KPos, Head, Key)) * 0.02
+        v = hax.random.normal(jrandom.PRNGKey(2), (KPos, Head, Key)) * 0.02
+
         flash_out = _tpu_splash_attention(
             QPos,
             KPos,
@@ -347,13 +347,13 @@ def test_tpu_splash_attention_sliding_window():
     QPos = hax.Axis("QPos", BLOCK_SIZE * 2)
     KPos = hax.Axis("KPos", BLOCK_SIZE * 2)
 
-    q = hax.random.normal(jrandom.PRNGKey(0), (QPos, Head, Key)) * 0.02
-    k = hax.random.normal(jrandom.PRNGKey(1), (KPos, Head, Key)) * 0.02
-    v = hax.random.normal(jrandom.PRNGKey(2), (KPos, Head, Key)) * 0.02
-
     mask = AttentionMask.causal(sliding_window=BLOCK_SIZE)
 
     with use_test_mesh():
+        q = hax.random.normal(jrandom.PRNGKey(0), (QPos, Head, Key)) * 0.02
+        k = hax.random.normal(jrandom.PRNGKey(1), (KPos, Head, Key)) * 0.02
+        v = hax.random.normal(jrandom.PRNGKey(2), (KPos, Head, Key)) * 0.02
+
         flash_out = _tpu_splash_attention(
             QPos,
             KPos,
@@ -380,19 +380,19 @@ def test_segment_ids_are_respected(impl):
     Pos = Axis("Pos", L)
     Head = Axis("Head", D)
 
-    keys = np.zeros((L, D), dtype=np.float32)
-    keys[0, 0] = 100.0  # really want to attend to this
-    values = np.zeros((L, D), dtype=np.float32)
-    values[0, 1] = 300.0  # check if we did attend
+    keys_np = np.zeros((L, D), dtype=np.float32)
+    keys_np[0, 0] = 100.0  # really want to attend to this
+    values_np = np.zeros((L, D), dtype=np.float32)
+    values_np[0, 1] = 300.0  # check if we did attend
     KPos = Pos.alias("KPos")
 
-    query = np.ones((L, D), dtype=np.float32)
-
-    query = hax.named(query, (Pos, Head))
-    keys = hax.named(keys, (KPos, Head))
-    values = hax.named(values, (KPos, Head))
+    query_np = np.ones((L, D), dtype=np.float32)
 
     with use_test_mesh() as dp_mesh:
+        query = hax.named(query_np, (Pos, Head))
+        keys = hax.named(keys_np, (KPos, Head))
+        values = hax.named(values_np, (KPos, Head))
+
         query, keys, values = jax.device_put(
             [query, keys, values],
             NamedSharding(dp_mesh, PartitionSpec(ResourceAxis.DATA, None)),
@@ -415,10 +415,10 @@ def test_segment_ids_are_respected(impl):
             flash_block_size=128,
         )
 
-    # the first 3 positions should all have a value of 300.0
-    assert_trees_all_close(result.array[0:3, 1], 300.0, atol=1e-3, rtol=1e-3)
-    # the rest should be 0
-    assert_trees_all_close(result.array[3:, 1], 0.0, atol=1e-3, rtol=1e-3)
+        # the first 3 positions should all have a value of 300.0
+        assert_trees_all_close(result.array[0:3, 1], 300.0, atol=1e-3, rtol=1e-3)
+        # the rest should be 0
+        assert_trees_all_close(result.array[3:, 1], 0.0, atol=1e-3, rtol=1e-3)
 
 
 # TODO: fix flash attention for offsets

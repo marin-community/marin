@@ -1,13 +1,44 @@
 name: CI with GCP TPU
 
-on: [pull_request]
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tpu_type:
+        description: 'TPU type'
+        required: false
+        default: 'v5p-8'
+        type: choice
+        options:
+          - v5p-8
+          - v5litepod-8
+          - v4-8
+      tpu_zone:
+        description: 'GCP zone for TPU'
+        required: false
+        default: 'us-east5-a'
+        type: choice
+        options:
+          - us-east5-a
+          - us-east5-b
+          - us-east1-d
+          - us-central2-b
+          - us-central1-a
+          - us-west4-a
+          - europe-west4-a
+          - europe-west4-b
 
 jobs:
   test:
-    if: (github.event.pull_request.head.repo.full_name == github.repository)
+    if: (github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        jax_version: ["0.6.2", "0.7.2"]
     env:
-      TPU_ZONE: "us-central2-b"
+      TPU_ZONE: ${{ inputs.tpu_zone || 'us-east5-a' }}
+      TPU_TYPE: ${{ inputs.tpu_type || 'v5p-8' }}
 
     steps:
       - name: Checkout code
@@ -29,17 +60,21 @@ jobs:
 
       - name: Create VM
         run: |
-          export TPU_NAME=ci-run-${{ github.run_id }}
+          export TPU_NAME=ci-run-jax-${{ matrix.jax_version }}-${{ github.run_id }}
+          export JAX_VERSION=${{ matrix.jax_version }}
           eval "$(ssh-agent -s)"
-          TRUE_SHA=${{ github.event.pull_request.head.sha }}
-          bash infra/spin-up-vm.sh $TPU_NAME -z ${TPU_ZONE} -t v4-8 --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${TRUE_SHA} --retries 1
+          TRUE_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          export GIT_BRANCH=${TRUE_SHA}
+          bash infra/spin-up-vm.sh $TPU_NAME -z ${TPU_ZONE} -t ${TPU_TYPE} --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${TRUE_SHA} --retries 1
 #          infra/babysit-tpu-vm.sh $TPU_NAME -z ${{ TPU_ZONE }} -t v4-8 --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${{ github.sha }} --retries 1 -- \
 #            PYTHONPATH=$PYTHONPATH:levanter/tests bash levanter/infra/run.sh pytest levanter/tests -m "not entry"
 
       - name: Run most tests
         run: |
-          export TPU_NAME=ci-run-${{ github.run_id }}
-          gcloud compute tpus tpu-vm ssh $TPU_NAME --zone ${TPU_ZONE} --command "JAX_TRACEBACK_FILTERING=off PYTHONPATH=$PYTHONPATH:levanter/tests CI=1 bash levanter/infra/run.sh pytest levanter/tests -m 'not entry and not ray' --durations=20"
+          export TPU_NAME=ci-run-jax-${{ matrix.jax_version }}-${{ github.run_id }}
+          # JAX_PLATFORMS='' tells JAX to automatically detect/choose an available backend
+          # instead of defaulting to TPU which can fail with "Failed to get global TPU topology"
+          gcloud compute tpus tpu-vm ssh $TPU_NAME --zone ${TPU_ZONE} --command "JAX_PLATFORMS='' JAX_TRACEBACK_FILTERING=off PYTHONPATH=$PYTHONPATH:levanter/tests CI=1 bash levanter/infra/run.sh pytest levanter/tests -m 'not entry and not ray' -vv --durations=20"
 # Something's wrong with these
 #
 #      - name: Run forked tests
@@ -50,6 +85,5 @@ jobs:
       - name: Cleanup
         if: ${{ always() }}
         run: |
-          export TPU_NAME=ci-run-${{ github.run_id }}
-          echo gcloud compute tpus tpu-vm delete $TPU_NAME --zone ${TPU_ZONE} --quiet
+          export TPU_NAME=ci-run-jax-${{ matrix.jax_version }}-${{ github.run_id }}
           gcloud compute tpus tpu-vm delete $TPU_NAME --zone ${TPU_ZONE} --quiet
