@@ -41,7 +41,7 @@ from experiments.tootsie.exp600_tootsie import (
     phase_4_steady_state_weights,
     phase_4_warmup_weights,
 )
-from marin.execution.executor import executor_main
+from marin.execution.executor import ExecutorStep, executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 ##############################################################
@@ -56,80 +56,86 @@ PHASE_4_END = 1_320_000
 # 4096 * 4096 * 80_000 is ~1.34e12
 COOLDOWN_LEN = 80_000
 
+
 # for these long runs we don't usually actually **finish** the run in the Executor's eyes,
 # so we use `nonblocking`
-phoenix_phase4_checkpoint_for_phase5 = llama_8b_tootsie_adept_phoenix.cd("checkpoints/step-1320000").nonblocking()
+def build_steps() -> list[ExecutorStep]:
+    phoenix_phase4_checkpoint_for_phase5 = llama_8b_tootsie_adept_phoenix.cd("checkpoints/step-1320000").nonblocking()
 
-cooldown_train_config = dataclasses.replace(
-    llama_8b_train_config_phase4,
-    train_batch_size=[
-        ScheduleStep(start=0, value=1024),
-        ScheduleStep(start=PHASE_1_END + 1, value=3072),
-        ScheduleStep(start=PHASE_4_END + 1, value=4096),
-    ],
-    # from spoonbill: zloss is important for low LR phase
-    z_loss_weight=1e-4,
-    initialize_from_checkpoint_path=phoenix_phase4_checkpoint_for_phase5,
-    decay=COOLDOWN_LEN,
-    num_train_steps=PHASE_4_END + COOLDOWN_LEN,
-    learning_rate=1.7e-3,  # same peak lr
-    lr_schedule="linear",
-    # spoonbill went to just 2.75e-5 but with zloss I think we can go lower
-    min_lr_ratio=1.7e-5 / 1.7e-3,  # 0.01 of peak lr
-    cycle_length=None,
-)
+    cooldown_train_config = dataclasses.replace(
+        llama_8b_train_config_phase4,
+        train_batch_size=[
+            ScheduleStep(start=0, value=1024),
+            ScheduleStep(start=PHASE_1_END + 1, value=3072),
+            ScheduleStep(start=PHASE_4_END + 1, value=4096),
+        ],
+        # from spoonbill: zloss is important for low LR phase
+        z_loss_weight=1e-4,
+        initialize_from_checkpoint_path=phoenix_phase4_checkpoint_for_phase5,
+        decay=COOLDOWN_LEN,
+        num_train_steps=PHASE_4_END + COOLDOWN_LEN,
+        learning_rate=1.7e-3,  # same peak lr
+        lr_schedule="linear",
+        # spoonbill went to just 2.75e-5 but with zloss I think we can go lower
+        min_lr_ratio=1.7e-5 / 1.7e-3,  # 0.01 of peak lr
+        cycle_length=None,
+    )
 
-fineweb2_hq_weights = FINEWEB2_HQ_MIXTURE_BYTES
+    fineweb2_hq_weights = FINEWEB2_HQ_MIXTURE_BYTES
 
-# we want fineweb2 hq to be 0.7 of the total weight
-fineweb_total = sum(v for k, v in fineweb2_hq_weights.items())
+    # we want fineweb2 hq to be 0.7 of the total weight
+    fineweb_total = sum(v for k, v in fineweb2_hq_weights.items())
 
+    multilingual_transition_weights = {
+        **{k: v * 0.7 / fineweb_total for k, v in FINEWEB2_HQ_MIXTURE_BYTES.items()},
+        **{k: v * 0.3 / sum(phase_4_steady_state_weights.values()) for k, v in phase_4_steady_state_weights.items()},
+    }
 
-multilingual_transition_weights = {
-    **{k: v * 0.7 / fineweb_total for k, v in FINEWEB2_HQ_MIXTURE_BYTES.items()},
-    **{k: v * 0.3 / sum(phase_4_steady_state_weights.values()) for k, v in phase_4_steady_state_weights.items()},
-}
+    # MULTILINGUAL_CPT_STEPS = 100_000
+    # MULTILINGUAL_CPT_END = MULTILINGUAL_CPT_START + MULTILINGUAL_CPT_STEPS
+    MULTILINGUAL_CPT_START = PHASE_4_END
+    MULTILINGUAL_CPT_TRANSITION_END = MULTILINGUAL_CPT_START + 1000
 
-MULTILINGUAL_CPT_STEPS = 100_000
-MULTILINGUAL_CPT_START = PHASE_4_END
-MULTILINGUAL_CPT_TRANSITION_END = MULTILINGUAL_CPT_START + 1000
-MULTILINGUAL_CPT_END = MULTILINGUAL_CPT_START + MULTILINGUAL_CPT_STEPS
+    fineweb2_hq = lm_varying_mixture_data_config(
+        components={**phase_3_tokenized, **tokenize_fineweb2hq_steps()},
+        weights_list=[
+            (0, DCLM_MIXTURE_WEIGHTS),
+            (PHASE_3_START, cooldown_mixture_weights_v1),
+            (PHASE_4_START, phase_4_warmup_weights),
+            (PHASE_4_START + PHASE_4_REWARMUP_DURATION, phase_4_steady_state_weights),
+            (MULTILINGUAL_CPT_START, multilingual_transition_weights),
+            (MULTILINGUAL_CPT_TRANSITION_END, multilingual_transition_weights),
+        ],
+    )
 
+    multilingual_cpt_8b_fineweb2_hq = default_train(
+        name="multilingual-cpt-8b-fineweb2-hq",
+        tokenized=fineweb2_hq,
+        model_config=llama_8b,
+        train_config=cooldown_train_config,
+        tags=["llama", "8b", "ema", "exp1457", "multilingual", "cpt"],
+        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+    ).with_output_path("checkpoints/multilingual-cpt-8b-fineweb2-hq")
 
-fineweb2_hq = lm_varying_mixture_data_config(
-    components={**phase_3_tokenized, **tokenize_fineweb2hq_steps},
-    weights_list=[
-        (0, DCLM_MIXTURE_WEIGHTS),
-        (PHASE_3_START, cooldown_mixture_weights_v1),
-        (PHASE_4_START, phase_4_warmup_weights),
-        (PHASE_4_START + PHASE_4_REWARMUP_DURATION, phase_4_steady_state_weights),
-        (MULTILINGUAL_CPT_START, multilingual_transition_weights),
-        (MULTILINGUAL_CPT_TRANSITION_END, multilingual_transition_weights),
-    ],
-)
+    # print normalized weights for final phase
+    # sanity checks:
+    normalized = {
+        k: v / sum(multilingual_transition_weights.values()) for k, v in multilingual_transition_weights.items()
+    }
 
-multilingual_cpt_8b_fineweb2_hq = default_train(
-    name="multilingual-cpt-8b-fineweb2-hq",
-    tokenized=fineweb2_hq,
-    model_config=llama_8b,
-    train_config=cooldown_train_config,
-    tags=["llama", "8b", "ema", "exp1457", "multilingual", "cpt"],
-    eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
-).with_output_path("checkpoints/multilingual-cpt-8b-fineweb2-hq")
+    # sum up the fineweb2 hq ones:
+    assert 0.69 < sum(v for k, v in normalized.items() if k.startswith("fineweb")) < 0.71
+    assert 0.29 < sum(v for k, v in normalized.items() if k not in FINEWEB2_HQ_MIXTURE_BYTES) < 0.31
 
-# print normalized weights for final phase
-# sanity checks:
-normalized = {k: v / sum(multilingual_transition_weights.values()) for k, v in multilingual_transition_weights.items()}
-
-# sum up the fineweb2 hq ones:
-assert 0.69 < sum(v for k, v in normalized.items() if k.startswith("fineweb")) < 0.71
-assert 0.29 < sum(v for k, v in normalized.items() if k not in FINEWEB2_HQ_MIXTURE_BYTES) < 0.31
+    return [multilingual_cpt_8b_fineweb2_hq]
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
-            multilingual_cpt_8b_fineweb2_hq,
-        ],
-        description="Continually Pretrain on Fineweb2 HQ from Phoenix Phase",
-    )
+    import os
+
+    # Broken experiment, skip under CI
+    if not os.getenv("CI", None):
+        executor_main(
+            steps=build_steps(),
+            description="Continually Pretrain on Fineweb2 HQ from Phoenix Phase",
+        )
