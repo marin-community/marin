@@ -22,7 +22,7 @@ import ray
 
 # Check if Monarch is available
 try:
-    from fray.backend.monarch import MONARCH_AVAILABLE
+    from fray.backend.monarch.monarch_helpers import MONARCH_AVAILABLE
 except ImportError:
     MONARCH_AVAILABLE = False
 

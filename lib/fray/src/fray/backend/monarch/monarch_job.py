@@ -16,72 +16,75 @@
 
 from __future__ import annotations
 
-import contextvars
 import time
 from collections.abc import Callable
 from typing import Any
 
+from monarch.actor import Actor, ActorError, ProcMesh, endpoint, this_proc
+
+from fray.context import set_job_context
 from fray.job import JobContext
 from fray.types import ActorOptions, TaskOptions
 
-from .monarch_helpers import (
-    MONARCH_AVAILABLE,
+from .monarch_object import (
     MonarchActorHandle,
     MonarchObjectRef,
     ObjectStoreActor,
     generate_object_id,
 )
 
-if MONARCH_AVAILABLE:
-    from monarch._src.actor.host_mesh import create_local_host_mesh
-    from monarch.actor import Actor, ProcMesh, endpoint
-else:
-    # Stubs for type checking
-    Actor = object
-    ProcMesh = object
-    create_local_host_mesh = None
 
-    def endpoint(fn):
-        return fn
+class _TaskWrapper:
+    """Ephemeral wrapper that executes a single task."""
 
+    def __init__(self, fn: Callable, args: tuple, kwargs: dict):
+        self._fn = fn
+        self._args = args
+        self._kwargs = kwargs
 
-# Context variable for propagating JobContext to nested tasks/actors
-_job_context: contextvars.ContextVar[MonarchJobContext] = contextvars.ContextVar("job_context")
+    def run(self):
+        return self._fn(*self._args, **self._kwargs)
 
 
-# Task actor class defined at module level to avoid closure captures
-if MONARCH_AVAILABLE:
+def _create_monarch_actor_class(
+    actor_class: type,
+    object_store: ObjectStoreActor,
+    resource_config: dict[str, Any],
+    args: tuple,
+    kwargs: dict,
+) -> type:
+    """Factory function to create a Monarch actor class at runtime with endpoint methods."""
 
-    class _TaskActor(Actor):
-        """Ephemeral actor that executes a single task."""
+    def __init__(self):
+        super(_MonarchActor, self).__init__()
+        self._job_context = MonarchJobContext(
+            resource_config=resource_config, procs=this_proc(), object_store=object_store
+        )
+        set_job_context(self._job_context)
+        self._user_actor = actor_class(*args, **kwargs)
 
-        def __init__(self, procs: ProcMesh, object_store: Any, fn: Callable, args: tuple, kwargs: dict):
-            super().__init__()
-            self._procs = procs
-            self._object_store = object_store
-            self._fn = fn
-            self._args = args
-            self._kwargs = kwargs
+    # Build dict of methods to add to the class
+    class_dict = {"__init__": __init__}
 
-        @endpoint
-        def run(self):
-            # Reconstruct context in actor for nested operations
-            ctx = MonarchJobContext.__new__(MonarchJobContext)
-            ctx._procs = self._procs
-            ctx._object_store = self._object_store
-            ctx._resource_config = {}
-            ctx._object_counter = 0
-            ctx._task_counter = 0
-            ctx._actor_counter = 0
+    # Inspect the actor_class directly to find methods
+    for attr_name in dir(actor_class):
+        if attr_name.startswith("_"):
+            continue
+        attr = getattr(actor_class, attr_name)
+        if callable(attr):
 
-            # Set as current context for nested calls
-            _job_context.set(ctx)
+            def make_method(method_name):
+                @endpoint
+                def endpoint_method(self, *args, **kwargs):
+                    set_job_context(self._job_context)
+                    return getattr(self._user_actor, method_name)(*args, **kwargs)
 
-            # Execute user function
-            return self._fn(*self._args, **self._kwargs)
+                return endpoint_method
 
-else:
-    _TaskActor = None
+            class_dict[attr_name] = make_method(attr_name)
+
+    _MonarchActor = type("_MonarchActor", (Actor,), class_dict)
+    return _MonarchActor
 
 
 class MonarchJobContext(JobContext):
@@ -97,42 +100,44 @@ class MonarchJobContext(JobContext):
     5. Context propagation uses contextvars to maintain JobContext across actors
     """
 
-    def __init__(self, resource_config: dict[str, Any] | None = None, procs: ProcMesh | None = None):
+    _procs: ProcMesh
+    _resource_config: dict[str, Any]
+    _object_store: ObjectStoreActor
+
+    def __init__(
+        self,
+        resource_config: dict[str, Any] | None = None,
+        procs: ProcMesh | None = None,
+        object_store: ObjectStoreActor | None = None,
+    ):
         """
         Initialize MonarchJobContext.
 
         Args:
             resource_config: Dict specifying resources like {"gpus": 8}.
-                           Used to spawn worker processes automatically via create_local_host_mesh().
+                            Used to spawn worker processes automatically via create_local_host_mesh().
             procs: Pre-spawned Monarch ProcMesh object. If provided, resource_config is ignored.
 
         Raises:
             ImportError: If Monarch is not available
         """
-        if not MONARCH_AVAILABLE:
-            raise ImportError("Monarch is not available. Install torchmonarch-nightly on a supported platform.")
-
-        # Auto-spawn processes if not provided
-        if procs is None:
-            if resource_config is None:
-                # Default: spawn with minimal resources (1 CPU process)
-                resource_config = {}
-
-            # Create local host mesh first (correct pattern for initialization from regular Python)
-            host = create_local_host_mesh()
-            # Spawn processes on the host
-            procs = host.spawn_procs(name="_fray_workers", per_host=resource_config)
-
-        self._procs = procs
         self._resource_config = resource_config or {}
 
-        # Initialize object store actor for put/get functionality
-        self._object_store = self._procs.spawn("_fray_object_store", ObjectStoreActor)
+        if procs is None:
+            host = this_proc().host_mesh
+            procs = host.spawn_procs(name="_fray_workers", per_host=self._resource_config)
+        self._procs = procs
 
-        # Counters for generating unique names
-        self._object_counter = 0
+        if object_store is not None:
+            self._object_store = object_store
+        else:
+            self._object_store = self._procs.spawn("_fray_object_store", ObjectStoreActor)
+
         self._task_counter = 0
         self._actor_counter = 0
+
+        # Named actor registry for get_if_exists support
+        self._named_actors: dict[str, MonarchActorHandle] = {}
 
     def create_task(
         self,
@@ -159,19 +164,11 @@ class MonarchJobContext(JobContext):
         if kwargs is None:
             kwargs = {}
 
-        # Generate unique task ID
-        task_id = self._task_counter
-        self._task_counter += 1
+        # Create a task wrapper and use create_actor to spawn it
+        task_actor = self.create_actor(_TaskWrapper, args=(fn, args, kwargs))
 
-        # Spawn task actor with function and arguments
-        actor_name = f"_fray_task_{task_id}"
-        task_actor = self._procs.spawn(actor_name, _TaskActor, self._procs, self._object_store, fn, args, kwargs)
-
-        # Call the run endpoint
-        future = task_actor.run.call()
-
-        # Return ref that extracts result
-        return MonarchObjectRef(future, take_first=False)
+        # Call the run method
+        return task_actor.run()
 
     def create_actor(
         self,
@@ -199,52 +196,37 @@ class MonarchJobContext(JobContext):
         if kwargs is None:
             kwargs = {}
 
-        # Capture picklable parts of context
-        procs = self._procs
-        object_store = self._object_store
+        # Check if named actor already exists and get_if_exists is True
+        if options and options.name and options.get_if_exists:
+            existing_actor = self._named_actors.get(options.name)
+            if existing_actor is not None:
+                return existing_actor
 
-        # Wrap actor class to inject Fray context
-        class ContextualActor(klass):
-            def __init__(self, *init_args, **init_kwargs):
-                super().__init__(*init_args, **init_kwargs)
-                # Store picklable references for context reconstruction
-                self._fray_procs = procs
-                self._fray_object_store = object_store
+        actor_id = self._actor_counter
+        self._actor_counter += 1
+        actor_name = f"{klass.__name__}_{actor_id}"
 
-                # Reconstruct context for nested operations
-                ctx = MonarchJobContext.__new__(MonarchJobContext)
-                ctx._procs = self._fray_procs
-                ctx._object_store = self._fray_object_store
-                ctx._resource_config = {}
-                ctx._object_counter = 0
-                ctx._task_counter = 0
-                ctx._actor_counter = 0
+        # Create the actor class dynamically
+        actor_class = _create_monarch_actor_class(
+            actor_class=klass,
+            object_store=self._object_store,
+            resource_config=self._resource_config,
+            args=args,
+            kwargs=kwargs,
+        )
 
-                # Set as current context
-                _job_context.set(ctx)
-
-        # Determine actor name
-        actor_name = None
-        if options and options.name:
-            actor_name = options.name
-            # Check if we should reuse existing actor
-            if options.get_if_exists:
-                # TODO: Implement actor lookup by name
-                # For now, we'll create a new actor
-                pass
-        else:
-            # Generate unique actor name
-            actor_id = self._actor_counter
-            self._actor_counter += 1
-            actor_name = f"{klass.__name__}_{actor_id}"
-
-        # Spawn actor instance
-        actor = self._procs.spawn(actor_name, ContextualActor, args=args, kwargs=kwargs)
+        actor = self._procs.spawn(actor_name, actor_class)
 
         # Wrap actor to provide Fray-compatible API
-        return MonarchActorHandle(actor)
+        handle = MonarchActorHandle(actor)
 
-    def get(self, ref: Any) -> Any:
+        # Register named actor for future get_if_exists calls
+        if options and options.name:
+            self._named_actors[options.name] = handle
+
+        return handle
+
+    def get(self, ref: Any, timeout: float | None = None) -> Any:
         """
         Block and retrieve result from object reference.
 
@@ -271,14 +253,40 @@ class MonarchJobContext(JobContext):
         if ref._is_object_store_ref:
             # Retrieve from object store
             future = self._object_store.get.call(ref._obj_id)
-            results = future.get()
-            # Object store is a single-instance actor, return first result
-            if isinstance(results, list) and len(results) > 0:
-                return results[0]
+            try:
+                results = future.get(timeout=timeout)
+            except ActorError as e:
+                # Unwrap and re-raise the original exception
+                if e.__cause__:
+                    raise e.__cause__ from None
+                raise
+
+            # Object store returns ValueMesh results like task/actor calls
+            # Need to unwrap the mesh structure
+            if hasattr(results, "__iter__") and not isinstance(results, (str | bytes)):
+                # Try to extract from mesh results
+                results_list = list(results)
+                if len(results_list) > 0:
+                    # Each element is (mesh_coords, value)
+                    if isinstance(results_list[0], tuple) and len(results_list[0]) == 2:
+                        # Extract just the values, ignoring mesh coordinates
+                        values = [item[1] for item in results_list]
+                        # For single-value results, return the value directly
+                        if len(values) == 1:
+                            return values[0]
+                        return values
+
+            # Fallback for non-mesh results
             return results
 
         # Handle task/actor future references
-        results = ref._future.get()
+        try:
+            results = ref._future.get(timeout=timeout)
+        except ActorError as e:
+            # Unwrap and re-raise the original exception
+            if e.__cause__:
+                raise e.__cause__ from None
+            raise
 
         # Monarch returns a ValueMesh - need to extract actual values
         # ValueMesh typically looks like: (({}, value),) for single-process meshes
@@ -321,35 +329,18 @@ class MonarchJobContext(JobContext):
         """
         ready = []
         not_ready = list(refs)
-        start_time = time.time()
+        deadline = time.time() + timeout if timeout is not None else None
 
-        while len(ready) < num_returns and len(not_ready) > 0:
-            # Check timeout
-            if timeout is not None and (time.time() - start_time) > timeout:
-                break
-
-            # Poll futures by attempting to get with very short operations
-            # Note: Monarch Future.get() blocks, so we can't truly poll
-            # This is a limitation - we'll check them in order
+        while len(ready) < num_returns and len(not_ready) > 0 and time.time() < (deadline or float("inf")):
             for ref in not_ready[:]:
+                if len(ready) >= num_returns:
+                    break
                 try:
-                    # For now, we'll use a blocking approach
-                    # TODO: Implement actual polling if Monarch supports it
-                    if len(ready) >= num_returns:
-                        break
-
-                    # Try to get the result (this will block until ready)
-                    # This is not ideal but matches Monarch's API
-                    _ = self.get(ref)
+                    _ = self.get(ref, timeout=max(0.001, deadline - time.time()) if deadline else None)
                     ready.append(ref)
                     not_ready.remove(ref)
-                except Exception:
-                    # Future not ready or error occurred
-                    continue
-
-            # Small sleep to avoid busy waiting
-            if len(ready) < num_returns and len(not_ready) > 0:
-                time.sleep(0.1)
+                except TimeoutError:
+                    pass
 
         return ready, not_ready
 
@@ -377,26 +368,3 @@ class MonarchJobContext(JobContext):
 
         # Return reference with object ID
         return MonarchObjectRef(obj_id=obj_id)
-
-
-def get_job_context() -> MonarchJobContext:
-    """
-    Get the current JobContext from context variable.
-
-    Returns:
-        The current MonarchJobContext
-
-    Raises:
-        LookupError: If no context is set
-    """
-    return _job_context.get()
-
-
-def set_job_context(ctx: MonarchJobContext) -> None:
-    """
-    Set the current JobContext in context variable.
-
-    Args:
-        ctx: MonarchJobContext to set as current
-    """
-    _job_context.set(ctx)

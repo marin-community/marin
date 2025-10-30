@@ -12,16 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Monarch backend for Fray distributed execution framework."""
+"""Monarch backend for Fray distributed execution framework.
 
-from .monarch_cluster import MonarchClusterContext
-from .monarch_helpers import MONARCH_AVAILABLE
-from .monarch_job import MonarchJobContext, get_job_context, set_job_context
-
-__all__ = [
-    "MONARCH_AVAILABLE",
-    "MonarchClusterContext",
-    "MonarchJobContext",
-    "get_job_context",
-    "set_job_context",
-]
+Import directly from submodules to avoid circular dependency issues:
+- from fray.backend.monarch.monarch_cluster import MonarchClusterContext
+- from fray.backend.monarch.monarch_job import MonarchJobContext
+- from fray.backend.monarch.monarch_helpers import MONARCH_AVAILABLE
+"""

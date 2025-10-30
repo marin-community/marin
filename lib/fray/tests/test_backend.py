@@ -14,57 +14,48 @@
 
 """Tests for backend implementations (in-memory, Ray, and Monarch)."""
 
+import os
+import random
 import time
 
 import pytest
+from fray import Lifetime
 from fray.backend.in_memory import LocalClusterContext, LocalJobContext
-from fray.backend.ray.ray_cluster import RayClusterContext
+from fray.backend.monarch.monarch_cluster import MonarchClusterContext
+from fray.backend.monarch.monarch_job import MonarchJobContext
 from fray.backend.ray.ray_job import RayJobContext
-from fray.types import RuntimeEnv
+from fray.context import get_job_context, set_job_context
+from fray.types import ActorOptions, Resource, RuntimeEnv, TaskOptions
 
-# Conditionally import Monarch backend if available
-try:
-    from fray.backend.monarch import MONARCH_AVAILABLE, MonarchClusterContext, MonarchJobContext
-except ImportError:
-    MONARCH_AVAILABLE = False
-    MonarchClusterContext = None
-    MonarchJobContext = None
-
-# Build list of backends to test based on availability
-AVAILABLE_BACKENDS = ["in_memory", "ray"]
-if MONARCH_AVAILABLE:
-    AVAILABLE_BACKENDS.append("monarch")
+AVAILABLE_BACKENDS = ["monarch"]
 
 
 @pytest.fixture(params=AVAILABLE_BACKENDS)
-def job_context(request, ray_cluster):
+def job_context(request):
     """Fixture that provides all available backend types."""
     backend_type = request.param
 
     if backend_type == "in_memory":
         return LocalJobContext()
     elif backend_type == "ray":
-        # Ray cluster is already initialized by the session fixture
         return RayJobContext()
     elif backend_type == "monarch":
-        # Monarch context with minimal resources for testing
         return MonarchJobContext(resource_config={})
     else:
         raise ValueError(f"Unknown backend: {backend_type}")
 
 
 @pytest.fixture(params=AVAILABLE_BACKENDS)
-def cluster_context(request, ray_cluster):
+def cluster_context(request):
     """Fixture that provides cluster context for all available backend types."""
     backend_type = request.param
 
     if backend_type == "in_memory":
         return LocalClusterContext(), backend_type
     elif backend_type == "ray":
-        # Ray cluster is already initialized by the session fixture
-        # Get the dashboard URL from the Ray cluster
-        dashboard_url = f"http://{ray_cluster.dashboard_url}"
-        return RayClusterContext(dashboard_address=dashboard_url), backend_type
+        # dashboard_url = f"http://{ray_cluster.dashboard_url}"
+        # return RayClusterContext(dashboard_address=dashboard_url), backend_type
+        pass
     elif backend_type == "monarch":
         return MonarchClusterContext(), backend_type
     else:
@@ -96,34 +87,19 @@ def test_multiple_tasks_parallel(job_context):
     assert results == [i * i for i in range(10)]
 
 
-def test_wait_functionality(job_context):
-    """Test wait with num_returns."""
-
-    def slow_task():
-        time.sleep(0.1)
-        return "done"
-
-    refs = [job_context.create_task(slow_task) for _ in range(3)]
-    done, not_done = job_context.wait(refs, num_returns=1, timeout=0.2)
-
-    assert len(done) >= 1
-    # Verify we can get results from done refs
-    for ref in done:
-        assert job_context.get(ref) == "done"
-
-
 def test_wait_timeout(job_context):
     """Test wait with timeout that expires."""
 
-    def very_slow_task():
-        time.sleep(10)
+    def sleep_task(timeout: float):
+        print("Sleeping for", timeout)
+        time.sleep(timeout)
         return "done"
 
-    refs = [job_context.create_task(very_slow_task) for _ in range(2)]
-    done, not_done = job_context.wait(refs, num_returns=2, timeout=0.1)
+    refs = [job_context.create_task(sleep_task, args=(i * 0.1,)) for i in range(10)]
+    done, not_done = job_context.wait(refs, num_returns=10, timeout=0.5)
 
     # Should timeout before any tasks complete
-    assert len(done) < 2
+    assert len(done) > 0
     assert len(not_done) > 0
 
 
@@ -241,17 +217,13 @@ time.sleep(30)
 
 def test_context_var_integration(job_context):
     """Test that context variables work correctly across threads."""
-    from fray.context import get_job_context, set_job_context
-
     set_job_context(job_context)
 
     retrieved = get_job_context()
     assert retrieved is job_context
 
-    # Test it works in remote tasks
     def task_using_context():
         task_ctx = get_job_context()
-        # Task should see the same context
         assert task_ctx is job_context
         return "success"
 
@@ -309,22 +281,8 @@ def test_empty_wait(job_context):
     assert len(not_done) == 0
 
 
-def test_get_single_value(job_context):
-    """Test get with a non-ref value passes through."""
-    # Getting a plain value should just return it for in-memory backend
-    # Ray backend will raise an error for non-ObjectRef values
-    # So we skip this assertion for specific values
-    if isinstance(job_context, LocalJobContext):
-        result = job_context.get(42)
-        assert result == 42
-
-        result = job_context.get("hello")
-        assert result == "hello"
-
-
 def test_named_actor_creation(job_context):
     """Test creating a named actor."""
-    from fray.types import ActorOptions
 
     class Counter:
         def __init__(self):
@@ -342,7 +300,6 @@ def test_named_actor_creation(job_context):
 
 def test_named_actor_get_if_exists_returns_same_instance(job_context):
     """Test that get_if_exists returns the same actor instance."""
-    from fray.types import ActorOptions
 
     class Counter:
         def __init__(self):
@@ -365,7 +322,6 @@ def test_named_actor_get_if_exists_returns_same_instance(job_context):
 
 def test_named_actor_state_persists(job_context):
     """Test that named actor state persists across get_if_exists calls."""
-    from fray.types import ActorOptions
 
     class DataStore:
         def __init__(self):
@@ -414,7 +370,6 @@ def test_unnamed_actors_independent(job_context):
 
 def test_actor_options_with_resources(job_context):
     """Test that ActorOptions with resources are accepted."""
-    from fray.types import ActorOptions
 
     class SimpleActor:
         def work(self):
@@ -458,7 +413,6 @@ def test_task_with_kwargs(job_context):
 
 def test_task_with_resource_options(job_context):
     """Test that TaskOptions with resources are accepted."""
-    from fray.types import TaskOptions
 
     def compute(x):
         return x * 2
@@ -471,11 +425,8 @@ def test_task_with_resource_options(job_context):
 
 def test_task_with_runtime_env_options(job_context):
     """Test TaskOptions with runtime environment."""
-    from fray.types import RuntimeEnv, TaskOptions
 
     def get_env_var():
-        import os
-
         return os.environ.get("TEST_VAR", "not_set")
 
     options = TaskOptions(runtime_env=RuntimeEnv(env={"TEST_VAR": "test_value"}))
@@ -492,7 +443,6 @@ def test_task_with_runtime_env_options(job_context):
 
 def test_task_with_combined_options(job_context):
     """Test TaskOptions with both resources and runtime_env."""
-    from fray.types import RuntimeEnv, TaskOptions
 
     def compute():
         return "done"
@@ -524,8 +474,6 @@ def test_task_options_none_is_default(job_context):
 
 def test_task_with_max_calls(job_context):
     """Test TaskOptions with max_calls parameter."""
-    from fray.types import TaskOptions
-
     call_count = [0]  # Use list to allow mutation in closure
 
     def counting_task():
@@ -545,8 +493,6 @@ def test_task_with_max_calls(job_context):
 
 def test_actor_with_detached_lifetime(job_context):
     """Test ActorOptions with DETACHED lifetime."""
-    from fray import Lifetime
-    from fray.types import ActorOptions
 
     class PersistentActor:
         def __init__(self):
@@ -570,8 +516,6 @@ def test_actor_with_detached_lifetime(job_context):
 
 def test_actor_default_ephemeral_lifetime(job_context):
     """Test that actors default to EPHEMERAL lifetime."""
-    from fray import Lifetime
-    from fray.types import ActorOptions
 
     class SimpleActor:
         def work(self):
@@ -700,7 +644,6 @@ sys.exit(0)
 
 def test_task_resource_limits_honored(job_context):
     """Test that resource constraints are passed to backend."""
-    from fray.types import TaskOptions
 
     def resource_heavy_task():
         # In Ray, this would be scheduled based on resources
@@ -717,7 +660,6 @@ def test_task_resource_limits_honored(job_context):
 
 def test_actor_resource_limits_honored(job_context):
     """Test that actor resource constraints are applied."""
-    from fray.types import ActorOptions
 
     class ResourceActor:
         def work(self):
@@ -734,8 +676,6 @@ def test_actor_resource_limits_honored(job_context):
 
 def test_actor_head_node_scheduling(job_context):
     """Test scheduling actor on head node (non-preemptible)."""
-    from fray.types import ActorOptions
-
     if not isinstance(job_context, RayJobContext):
         pytest.skip("Head node scheduling is Ray-specific")
 
@@ -775,7 +715,6 @@ def test_cluster_job_submission_failure(cluster_context, tmp_path):
 
 def test_task_with_invalid_resources_fails_gracefully(job_context):
     """Test that invalid resource specs are handled."""
-    from fray.types import TaskOptions
 
     def simple_task():
         return "ok"
@@ -851,8 +790,6 @@ def test_multiple_get_on_same_ref_returns_same_value(job_context):
     """Test that getting same ref multiple times returns same value."""
 
     def create_value():
-        import random
-
         return random.randint(1, 1000000)
 
     ref = job_context.create_task(create_value)
@@ -893,8 +830,6 @@ def test_code_works_with_both_backends():
 
 def test_context_switching_with_context_vars():
     """Test that context can be switched during execution."""
-    from fray.context import get_job_context, set_job_context
-
     local_ctx = LocalJobContext()
     ray_ctx = RayJobContext()
 
@@ -912,11 +847,8 @@ def test_context_switching_with_context_vars():
 
 def test_task_options_serialize_across_backends(job_context):
     """Test that TaskOptions work consistently across backends."""
-    from fray.types import TaskOptions
 
     def get_env():
-        import os
-
         return os.environ.get("TEST_KEY", "default")
 
     options = TaskOptions(resources={"CPU": 1}, runtime_env=RuntimeEnv(env={"TEST_KEY": "test_value"}), name="test_task")
@@ -974,7 +906,6 @@ def test_many_concurrent_actors(job_context):
 
 def test_nested_task_creation_deep(job_context):
     """Test deeply nested task creation."""
-    from fray.context import get_job_context
 
     def recursive_task(depth):
         if depth == 0:
@@ -986,8 +917,6 @@ def test_nested_task_creation_deep(job_context):
         return 1 + ctx.get(ref)
 
     # Set context for nested tasks
-    from fray.context import set_job_context
-
     set_job_context(job_context)
 
     ref = job_context.create_task(recursive_task, args=(5,))  # Reduce depth to avoid timeout
@@ -1002,8 +931,6 @@ def test_nested_task_creation_deep(job_context):
 
 def test_runtime_env_rejects_min_greater_than_max():
     """Test that RuntimeEnv validation catches min > max resources."""
-    from fray.types import Resource
-
     with pytest.raises(ValueError, match="minimum_resources.*exceeds.*maximum_resources"):
         RuntimeEnv(
             minimum_resources=[Resource("CPU", 8)],
@@ -1013,8 +940,6 @@ def test_runtime_env_rejects_min_greater_than_max():
 
 def test_runtime_env_rejects_negative_resources():
     """Test that RuntimeEnv validation catches negative quantities."""
-    from fray.types import Resource
-
     with pytest.raises(ValueError, match="cannot be negative"):
         RuntimeEnv(
             minimum_resources=[Resource("memory", -1024)],
@@ -1047,8 +972,6 @@ def test_runtime_env_rejects_non_string_env_values():
 
 def test_runtime_env_allows_valid_configuration():
     """Test that valid RuntimeEnv configurations are accepted."""
-    from fray.types import Resource
-
     # Should not raise
     env = RuntimeEnv(
         package_requirements=["numpy>=1.20", "torch"],

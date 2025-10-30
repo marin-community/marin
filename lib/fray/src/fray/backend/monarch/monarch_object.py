@@ -19,20 +19,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-try:
-    from monarch.actor import Actor, Future, ProcMesh, endpoint
-
-    MONARCH_AVAILABLE = True
-except ImportError:
-    MONARCH_AVAILABLE = False
-    # Create stub types for type checking when Monarch is not available
-    Actor = object
-    Future = object
-    ProcMesh = object
-
-    def endpoint(fn):
-        """Stub endpoint decorator."""
-        return fn
+from monarch.actor import Actor, Future, endpoint
 
 
 class MonarchObjectRef:
@@ -78,9 +65,7 @@ class MonarchActorHandle:
         def method_wrapper(*args, **kwargs):
             # Get the endpoint from the actor
             endpoint = getattr(self._actor, name)
-            # Call the endpoint and get future
-            result = endpoint(*args, **kwargs)
-            # Wrap in MonarchObjectRef
+            result = endpoint.call(*args, **kwargs)
             return MonarchObjectRef(result, take_first=False)
 
         return method_wrapper

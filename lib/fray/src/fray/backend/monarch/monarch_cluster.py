@@ -21,14 +21,13 @@ import subprocess
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 from fray.cluster import ClusterContext, EntryPoint, JobInfo, RuntimeEnv, TpuRunConfig
-
-from .monarch_job import MonarchJobContext
+from fray.job import JobContext
 
 
 @dataclass
@@ -103,13 +102,14 @@ class MonarchClusterContext(ClusterContext):
         stdout_log = self._log_dir / f"{job_id}.stdout"
         stderr_log = self._log_dir / f"{job_id}.stderr"
 
-        # Handle package requirements (install before launching job)
-        if env.package_requirements:
-            # Create a wrapper script that installs packages then runs entrypoint
-            install_cmd = f"pip install {' '.join(env.package_requirements)}"
-            wrapped_entrypoint = f"{install_cmd} && {entrypoint}"
-        else:
-            wrapped_entrypoint = entrypoint
+        wrapped_entrypoint = entrypoint
+
+        # if env.package_requirements:
+        #     # Create a wrapper script that installs packages then runs entrypoint
+        #     install_cmd = f"pip install {' '.join(env.package_requirements)}"
+        #     wrapped_entrypoint = f"{install_cmd} && {entrypoint}"
+        # else:
+        #     wrapped_entrypoint = entrypoint
 
         submission_time = time.time()
 
@@ -232,7 +232,7 @@ class MonarchClusterContext(ClusterContext):
 
     def run_on_tpu(
         self,
-        fn: Callable[[MonarchJobContext], Any],
+        fn: Callable[[JobContext], Any],
         config: TpuRunConfig,
         runtime_env: RuntimeEnv | None = None,
     ) -> list[Any]:
