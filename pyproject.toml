@@ -22,7 +22,7 @@ dependencies = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "jax==0.7.2",
+    "jax==0.6.2",
     "haliax>=1.4.dev443",
     "levanter[serve] @ git+https://github.com/marin-community/levanter.git@c30de5b9ad706da1ddb5e95cf82ed767692f7f7c",
     "lz4",
@@ -133,14 +133,6 @@ conflicts = [
         { extra = "cpu" },
     ],
     [
-        { extra = "vllm" },
-        { extra = "tpu" },
-    ],
-    [
-        { extra = "vllm" },
-        { extra = "cpu" },
-    ],
-    [
         { extra = "eval" },
         { extra = "quality_dedup_consolidate" },
     ]
@@ -153,7 +145,6 @@ torch = [
     { index = "pytorch-cpu", extra="tpu" },
     # CUDA12 index only when --extra cuda12
     { index = "pytorch-cu128", extra = "cuda12" },
-    { index = "pytorch-cu128", extra = "vllm" },
 ]
 
 
@@ -178,13 +169,11 @@ gcp = [
     "google-cloud-compute",
 ]
 
-cuda12 = ["jax[cuda12]==0.7.2", "torch>=2.7.0"]
+cuda12 = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
 
-tpu = ["jax[tpu]==0.7.2", "torch>=2.7.0"]
+tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
 
-cpu = ["jax==0.7.2", "torch>=2.7.0"]
-
-vllm = ["vllm-tpu==0.11.1", "torch==2.8.0"]
+cpu = ["jax==0.6.2", "torch>=2.7.0"]
 
 crawl = [
     "w3lib",
@@ -250,6 +239,7 @@ quality_dedup_consolidate = [
     "cattrs==24.1.3",
     "fsspec>=2025.3.0",
     "ddsketch",
+    "dolma @ git+https://github.com/marin-community/dolma",
 ]
 
 tokenize_train = [
@@ -270,7 +260,7 @@ rl = [
 post_training = [
     "gcsfs",
     "transformers",
-    "flax==0.11.1",
+    "flax==0.10.0",
     "jaxtyping",
     "tyro==0.8.11",
     "tqdm",
