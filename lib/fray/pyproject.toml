@@ -12,6 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 ray = ["ray==2.45"]
+monarch = ["torchmonarch-nightly"]
 
 [dependency-groups]
 test = ["pytest>=8.3.2", "pytest-asyncio", "pytest-timeout"]

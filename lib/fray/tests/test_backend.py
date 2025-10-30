@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for backend implementations (in-memory and Ray)."""
+"""Tests for backend implementations (in-memory, Ray, and Monarch)."""
 
 import time
 
@@ -22,10 +22,23 @@ from fray.backend.ray.ray_cluster import RayClusterContext
 from fray.backend.ray.ray_job import RayJobContext
 from fray.types import RuntimeEnv
 
+# Conditionally import Monarch backend if available
+try:
+    from fray.backend.monarch import MONARCH_AVAILABLE, MonarchClusterContext, MonarchJobContext
+except ImportError:
+    MONARCH_AVAILABLE = False
+    MonarchClusterContext = None
+    MonarchJobContext = None
 
-@pytest.fixture(params=["in_memory", "ray"])
+# Build list of backends to test based on availability
+AVAILABLE_BACKENDS = ["in_memory", "ray"]
+if MONARCH_AVAILABLE:
+    AVAILABLE_BACKENDS.append("monarch")
+
+
+@pytest.fixture(params=AVAILABLE_BACKENDS)
 def job_context(request, ray_cluster):
-    """Fixture that provides both backend types."""
+    """Fixture that provides all available backend types."""
     backend_type = request.param
 
     if backend_type == "in_memory":
@@ -33,13 +46,16 @@ def job_context(request, ray_cluster):
     elif backend_type == "ray":
         # Ray cluster is already initialized by the session fixture
         return RayJobContext()
+    elif backend_type == "monarch":
+        # Monarch context with minimal resources for testing
+        return MonarchJobContext(resource_config={"num_procs": 2})
     else:
         raise ValueError(f"Unknown backend: {backend_type}")
 
 
-@pytest.fixture(params=["in_memory", "ray"])
+@pytest.fixture(params=AVAILABLE_BACKENDS)
 def cluster_context(request, ray_cluster):
-    """Fixture that provides cluster context for both backend types."""
+    """Fixture that provides cluster context for all available backend types."""
     backend_type = request.param
 
     if backend_type == "in_memory":
@@ -49,6 +65,8 @@ def cluster_context(request, ray_cluster):
         # Get the dashboard URL from the Ray cluster
         dashboard_url = f"http://{ray_cluster.dashboard_url}"
         return RayClusterContext(dashboard_address=dashboard_url), backend_type
+    elif backend_type == "monarch":
+        return MonarchClusterContext(), backend_type
     else:
         raise ValueError(f"Unknown backend: {backend_type}")
 

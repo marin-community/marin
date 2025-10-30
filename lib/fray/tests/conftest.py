@@ -20,6 +20,12 @@ import shutil
 import pytest
 import ray
 
+# Check if Monarch is available
+try:
+    from fray.backend.monarch import MONARCH_AVAILABLE
+except ImportError:
+    MONARCH_AVAILABLE = False
+
 
 @pytest.fixture(scope="session")
 def ray_cluster(tmp_path_factory):
