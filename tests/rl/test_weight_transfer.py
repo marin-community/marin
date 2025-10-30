@@ -36,7 +36,7 @@ from marin.rl.weight_transfer import (
     create_weight_transfer_client,
     create_weight_transfer_server,
 )
-from marin.rl.weight_utils import levanter_to_nnx_state, MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
+from marin.rl.environments.inference_ctx import levanter_to_nnx_state, MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 
 TRANSFER_TYPES = [
     WeightTransferMode.GCS_CHECKPOINT,

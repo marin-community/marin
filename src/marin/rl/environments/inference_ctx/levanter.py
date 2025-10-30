@@ -56,7 +56,6 @@ class LevanterInferenceContext(BaseInferenceContext):
         inference_config: LevanterInferenceContextConfig,
     ):
         self.inference_server_config = inference_config.inference_server_config
-        self.model = inference_config.model
         self.tokenizer = inference_config.tokenizer
         self._stop_tokens = inference_config.stop_tokens
         self.max_tokens = inference_config.max_tokens
