@@ -67,7 +67,7 @@ def maybe_fused_next_token_loss(
     target_y = hax.roll(true_ids, -1, Pos)
 
     # Create a mask that excludes the last token
-    not_last_loss_mask = 1 - hax.nn.one_hot(-1, Pos, dtype=jnp.float32)  # type: ignore
+    not_last_loss_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))  # type: ignore
     if loss_mask is not None:
         loss_mask = loss_mask * not_last_loss_mask
     else:
@@ -122,9 +122,9 @@ def next_token_loss(
     target_y_full = hax.nn.one_hot(target_y, Vocab, dtype=logits.dtype)
 
     # Create a mask that excludes the last token
-    not_last_loss_mask = 1 - hax.nn.one_hot(-1, Pos, dtype=jnp.float32)  # type: ignore
+    not_last_loss_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
     if loss_mask is not None:
-        loss_mask = loss_mask * not_last_loss_mask
+        loss_mask = hax.logical_and(loss_mask, not_last_loss_mask)
     else:
         loss_mask = not_last_loss_mask
 

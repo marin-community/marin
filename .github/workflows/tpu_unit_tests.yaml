@@ -11,8 +11,10 @@ on:
         type: choice
         options:
           - v5p-8
+          - v5litepod-4
           - v5litepod-8
           - v4-8
+          - v6e-8
       tpu_zone:
         description: 'GCP zone for TPU'
         required: false
@@ -35,10 +37,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        jax_version: ["0.6.2", "0.7.2"]
+        jax_version: ["0.6.2", "0.7.2", "0.8.0"]
+        tpu_config:
+          - zone: us-central1-a
+            type: v5p-8
+          - zone: us-central2-b
+            type: v4-8
+          - zone: europe-west4-b
+            type: v5litepod-4
+          - zone: europe-west4-a
+            type: v6e-8
     env:
-      TPU_ZONE: ${{ inputs.tpu_zone || 'us-east5-a' }}
-      TPU_TYPE: ${{ inputs.tpu_type || 'v5p-8' }}
+      TPU_ZONE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tpu_zone || matrix.tpu_config.zone }}
+      TPU_TYPE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tpu_type || matrix.tpu_config.type }}
 
     steps:
       - name: Checkout code
@@ -60,7 +71,7 @@ jobs:
 
       - name: Create VM
         run: |
-          export TPU_NAME=ci-run-jax-${{ matrix.jax_version }}-${{ github.run_id }}
+          export TPU_NAME=ci-run-jax-${{ matrix.jax_version }}-${{ matrix.tpu_config.type }}-${{ matrix.tpu_config.zone }}-${{ github.run_id }}
           export JAX_VERSION=${{ matrix.jax_version }}
           eval "$(ssh-agent -s)"
           TRUE_SHA=${{ github.event.pull_request.head.sha || github.sha }}
@@ -71,7 +82,7 @@ jobs:
 
       - name: Run most tests
         run: |
-          export TPU_NAME=ci-run-jax-${{ matrix.jax_version }}-${{ github.run_id }}
+          export TPU_NAME=ci-run-jax-${{ matrix.jax_version }}-${{ matrix.tpu_config.type }}-${{ matrix.tpu_config.zone }}-${{ github.run_id }}
           # JAX_PLATFORMS='' tells JAX to automatically detect/choose an available backend
           # instead of defaulting to TPU which can fail with "Failed to get global TPU topology"
           gcloud compute tpus tpu-vm ssh $TPU_NAME --zone ${TPU_ZONE} --command "JAX_PLATFORMS='' JAX_TRACEBACK_FILTERING=off PYTHONPATH=$PYTHONPATH:levanter/tests CI=1 bash levanter/infra/run.sh pytest levanter/tests -m 'not entry and not ray' -vv --durations=20"
@@ -85,5 +96,5 @@ jobs:
       - name: Cleanup
         if: ${{ always() }}
         run: |
-          export TPU_NAME=ci-run-jax-${{ matrix.jax_version }}-${{ github.run_id }}
+          export TPU_NAME=ci-run-jax-${{ matrix.jax_version }}-${{ matrix.tpu_config.type }}-${{ matrix.tpu_config.zone }}-${{ github.run_id }}
           gcloud compute tpus tpu-vm delete $TPU_NAME --zone ${TPU_ZONE} --quiet
