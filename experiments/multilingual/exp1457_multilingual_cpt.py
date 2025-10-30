@@ -97,7 +97,7 @@ MULTILINGUAL_CPT_END = MULTILINGUAL_CPT_START + MULTILINGUAL_CPT_STEPS
 
 
 fineweb2_hq = lm_varying_mixture_data_config(
-    components={**phase_3_tokenized, **tokenize_fineweb2hq_steps},
+    components={**phase_3_tokenized, **tokenize_fineweb2hq_steps()},
     weights_list=[
         (0, DCLM_MIXTURE_WEIGHTS),
         (PHASE_3_START, cooldown_mixture_weights_v1),

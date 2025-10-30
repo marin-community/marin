@@ -25,12 +25,16 @@ import numpy as np
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice
 from marin.rl.types import Rollout
+from levanter.models.lm_model import LmHeadModel
 
 logger = logging.getLogger(__name__)
 
 
 class BaseInferenceContext:
     """Base class for inference contexts."""
+
+    def reload_model(self, model: LmHeadModel) -> None:
+        raise NotImplementedError
 
     def batch_completions(
         self,
@@ -43,7 +47,7 @@ class BaseInferenceContext:
         """Batch completions from the inference server."""
         raise NotImplementedError
 
-    def tokenize_prompt(self, prompt: str) -> np.ndarray:
+    def tokenize_prompt(self, prompt: str, choice: Choice | None = None) -> np.ndarray:
         """Tokenize with chat template matching server behavior."""
         messages = [{"role": "user", "content": prompt}]
         try:
@@ -107,9 +111,19 @@ class BaseInferenceContext:
     ) -> Rollout:
         """Construct Rollout from a choice with validation."""
 
-        prompt_tokens = self.tokenize_prompt(prompt)
+        prompt_tokens = self.tokenize_prompt(prompt, choice)
+        # print(f"prompt_tokens: {prompt_tokens}")
+        # print(f"prompt token ids: {choice.prompt_token_ids}")
+
+        # assert choice.prompt_token_ids == prompt_tokens,
+        # f"Prompt token IDs mismatch: {choice.prompt_token_ids} != {prompt_tokens}"
         response_tokens = self.response_tokens_from_choice(choice)
         response_logprobs = self.logprobs_from_choice(choice)
+
+        assert len(response_tokens) == len(
+            response_logprobs
+        ), f"Length mismatch between response_tokens ({len(response_tokens)}) \
+            and response_logprobs ({len(response_logprobs)})"
 
         if len(prompt_tokens) == 0:
             logger.error(f"Prompt tokenization failed for {env_example_id}")
