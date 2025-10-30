@@ -149,7 +149,14 @@ def test_tokenize_prompt_adds_special_tokens(inference_ctx, mistral_tokenizer):
 def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
     """Test fallback when tokenizer has no chat template."""
     ctx = LevanterInferenceContext(
-        tokenizer=gpt2_tokenizer, stop_tokens=None, inference_server=dummy_server, max_tokens=100
+        LevanterInferenceContextConfig(
+            inference_server_config=None,
+            tokenizer=gpt2_tokenizer,
+            stop_tokens=None,
+            max_tokens=100,
+            mesh=None,
+            axis_mapping={},
+        )
     )
 
     prompt = "Test prompt"

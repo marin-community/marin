@@ -47,7 +47,7 @@ class BaseInferenceContext:
         """Batch completions from the inference server."""
         raise NotImplementedError
 
-    def tokenize_prompt(self, prompt: str, choice: Choice) -> np.ndarray:
+    def tokenize_prompt(self, prompt: str, choice: Choice | None = None) -> np.ndarray:
         """Tokenize with chat template matching server behavior."""
         messages = [{"role": "user", "content": prompt}]
         try:
