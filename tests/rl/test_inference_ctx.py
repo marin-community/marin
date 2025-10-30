@@ -23,7 +23,7 @@ from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
 from transformers import AutoTokenizer
 
-from marin.rl.environments.inference_ctx import LevanterInferenceContext
+from marin.rl.environments.inference_ctx import LevanterInferenceContext, LevanterInferenceContextConfig
 
 
 @dataclass
@@ -65,7 +65,14 @@ def dummy_server():
 @pytest.fixture
 def inference_ctx(mistral_tokenizer, dummy_server):
     return LevanterInferenceContext(
-        tokenizer=mistral_tokenizer, stop_tokens=None, inference_server=dummy_server, max_tokens=100
+        LevanterInferenceContextConfig(
+            inference_server_config=None,
+            tokenizer=mistral_tokenizer,
+            stop_tokens=None,
+            max_tokens=100,
+            mesh=None,
+            axis_mapping={},
+        )
     )
 
 

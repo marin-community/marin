@@ -28,11 +28,12 @@ import jmp
 from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
 import ray
-from vllm import SamplingParams
 
 
 @pytest.mark.skip("Requires vLLM to be installed")
 def test_initialize_vllm_rollout(tmpdir, ray_tpu_cluster):
+    from vllm import SamplingParams
+
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
 
     _ = RolloutWorker(
