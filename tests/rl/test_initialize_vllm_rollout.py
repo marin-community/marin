@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import datetime
+import pytest
 from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig, RolloutStorageConfig
 from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, EnvConfig
@@ -30,6 +31,7 @@ import ray
 from vllm import SamplingParams
 
 
+@pytest.mark.skip("Requires vLLM to be installed")
 def test_initialize_vllm_rollout(tmpdir, ray_tpu_cluster):
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
 

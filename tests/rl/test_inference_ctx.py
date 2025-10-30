@@ -23,7 +23,7 @@ from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
 from transformers import AutoTokenizer
 
-from marin.rl.inference_ctx import InferenceContext
+from marin.rl.inference_ctx import LevanterInferenceContext
 
 
 @dataclass
@@ -64,7 +64,9 @@ def dummy_server():
 
 @pytest.fixture
 def inference_ctx(mistral_tokenizer, dummy_server):
-    return InferenceContext(tokenizer=mistral_tokenizer, stop_tokens=None, inference_server=dummy_server, max_tokens=100)
+    return LevanterInferenceContext(
+        tokenizer=mistral_tokenizer, stop_tokens=None, inference_server=dummy_server, max_tokens=100
+    )
 
 
 def create_choice_with_logprobs(tokenizer, response_text: str, logprobs_values: list[float] | None = None) -> Choice:
@@ -139,7 +141,9 @@ def test_tokenize_prompt_adds_special_tokens(inference_ctx, mistral_tokenizer):
 
 def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
     """Test fallback when tokenizer has no chat template."""
-    ctx = InferenceContext(tokenizer=gpt2_tokenizer, stop_tokens=None, inference_server=dummy_server, max_tokens=100)
+    ctx = LevanterInferenceContext(
+        tokenizer=gpt2_tokenizer, stop_tokens=None, inference_server=dummy_server, max_tokens=100
+    )
 
     prompt = "Test prompt"
     tokens = ctx.tokenize_prompt(prompt)

@@ -288,6 +288,7 @@ def benchmark_arrow_flight_with_llama(ray_tpu_cluster):
         client.cleanup()
 
 
+@pytest.mark.skip("Manual benchmark test")
 @pytest.mark.slow("Uses real Llama model, requires HuggingFace access.")
 def test_arrow_flight_transfer_to_vllm(ray_tpu_cluster):
     """Test Arrow Flight weight transfer to vLLM."""

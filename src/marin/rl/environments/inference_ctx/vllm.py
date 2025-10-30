@@ -20,8 +20,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from dataclasses import dataclass
-from vllm import LLM, SamplingParams
-from vllm.outputs import RequestOutput
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
@@ -33,6 +31,15 @@ from marin.rl.weight_utils import levanter_to_nnx_state
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 
 logger = logging.getLogger(__name__)
+
+try:
+    from vllm import LLM, SamplingParams
+    from vllm.outputs import RequestOutput
+except ImportError:
+    logger.warning("vLLM is not installed, so we will not be able to use vLLM inference context.")
+    LLM = None
+    SamplingParams = None
+    RequestOutput = None
 
 # Disable multiprocessing to have direct access to the model weights
 os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
