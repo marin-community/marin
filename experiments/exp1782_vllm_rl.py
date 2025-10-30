@@ -38,7 +38,7 @@ from marin.rl.curriculum import CurriculumConfig, LessonConfig
 from marin.rl.environments import EnvConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
-from marin.rl.rl_losses import RLOOLoss, GRPOLoss, RLLossModule
+from marin.rl.rl_losses import RLOOLoss, GRPOLoss, RLLossModule, CISPOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
@@ -312,15 +312,20 @@ def main():
         ExperimentConfig(
             model_config=llama_3_1_8b, rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2), experiment_name_suffix="grpo"
         ),
+        # ExperimentConfig(
+        #     model_config=llama_3_1_8b,
+        #     rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2, divide_by_entire_length=True),
+        #     experiment_name_suffix="grpo-div-len",
+        # ),
+        # ExperimentConfig(
+        #     model_config=llama_3_1_8b,
+        #     rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2, divide_by_std=False),
+        #     experiment_name_suffix="grpo-div-std",
+        # ),
         ExperimentConfig(
             model_config=llama_3_1_8b,
-            rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2, divide_by_entire_length=True),
-            experiment_name_suffix="grpo-div-len",
-        ),
-        ExperimentConfig(
-            model_config=llama_3_1_8b,
-            rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2, divide_by_std=False),
-            experiment_name_suffix="grpo-div-std",
+            rl_loss=CISPOLoss(epsilon_low=0.2, epsilon_high=0.2),
+            experiment_name_suffix="cispo",
         ),
     ]
     experiments = []
@@ -328,7 +333,7 @@ def main():
         model_base_name = experiment_config.model_config.name.split("/")[-1].lower()
         experiments.append(
             rl_train(
-                name=f"{model_base_name}-math-lr1e-7-bsz256-tok1024-sync-{experiment_config.experiment_name_suffix}-2",
+                name=f"{model_base_name}-math-lr1e-7-bsz256-tok1024-sync-{experiment_config.experiment_name_suffix}-3",
                 experiment_config=experiment_config,
             ),
         )

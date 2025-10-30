@@ -22,6 +22,8 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+import haliax.haxtyping as ht
+from haliax import NamedArray
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmHeadModel
 
@@ -70,6 +72,88 @@ def compute_metadata_metrics(
     }
 
 
+def compute_logprobs(
+    model: LmHeadModel,
+    input_ids: ht.Int[NamedArray, "batch position"],
+    position_ids: ht.Int[NamedArray, "batch position"],
+    key: jax.Array | None,
+):
+    batch_size, seq_len = input_ids.array.shape
+
+    model_output = model(
+        input_ids=input_ids,
+        attn_mask=AttentionMask.causal(),
+        pos_ids=position_ids,
+        key=key,
+    )
+
+    # logits[i] predicts token at position i+1
+    # We want logprob[j] = P(token[j] | tokens[0:j])
+    # This comes from logits[j-1] indexed by token[j]
+    logits_array = model_output.array.astype(jnp.float32)[:, :-1, :]  # Drop last position [batch, seq_len-1, vocab]
+    target_ids_array = input_ids.array[:, 1:]  # Drop first position [batch, seq_len-1]
+    log_probs = jax.nn.log_softmax(logits_array, axis=-1)
+    batch_idx = jnp.arange(batch_size)[:, None]
+    pos_idx = jnp.arange(seq_len - 1)
+
+    # Extract logprobs for the actual tokens
+    logprobs_shifted = log_probs[batch_idx, pos_idx, target_ids_array]  # [batch, seq_len-1]
+    logprobs = jnp.concatenate([jnp.zeros((batch_size, 1)), logprobs_shifted], axis=1)
+
+    return logprobs
+
+
+def cispo_loss_with_importance_sampling(
+    model: LmHeadModel,
+    reference_model: LmHeadModel,
+    batch: TrainingBatch,
+    *,
+    key: jax.Array | None,
+    epsilon_low: float,
+    epsilon_high: float,
+):
+    policy_logprobs_array = batch.policy_logprobs.array
+    loss_weights_array = batch.loss_weights.array
+    loss_masks_array = batch.loss_masks.array
+
+    batch_size, seq_len = batch.input_ids.array.shape
+
+    current_logprobs = compute_logprobs(model, batch.input_ids, batch.position_ids, key)
+    reference_logprobs = compute_logprobs(reference_model, batch.input_ids, batch.position_ids, key)
+
+    # importance sampling since we're using off-policy data
+    # ratio = π_current(a|s) / π_old(a|s) = log(π_current) - log(π_old)
+    # mask the input tokens to ignore them in the loss
+    current_logprobs = current_logprobs * loss_masks_array
+    reference_logprobs = reference_logprobs * loss_masks_array
+
+    log_ratio = jnp.subtract(current_logprobs, policy_logprobs_array)
+    ratio = jnp.exp(log_ratio)
+
+    # N.B. This should be enabled, but we seem to be training far enough
+    # off of policy that we're not learning anything when we clip.
+    clipped_ratio = jnp.clip(ratio, min=1.0 - epsilon_low, max=1.0 + epsilon_high)
+
+    # Compute fraction of ratios that were clipped
+    is_clipped = jnp.logical_or(ratio > 1.0 + epsilon_high, ratio < 1.0 - epsilon_low)
+    clip_fraction = jnp.sum(is_clipped * loss_masks_array) / jnp.sum(loss_masks_array)
+
+    # RLOO loss with importance sampling
+    # batch["loss_weights"] contains RLOO advantages: r_i - mean(r_j for j≠i)
+    weighted_loss = -clipped_ratio * loss_weights_array * loss_masks_array
+    reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)  # sum of all tokens
+
+    loss = reinforce_loss
+
+    return loss, {
+        "ratio_mean": jnp.mean(ratio),
+        "clipped_ratio_mean": jnp.mean(clipped_ratio),
+        "clip_fraction": clip_fraction,
+        "reinforce_loss": reinforce_loss,
+        **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
+    }
+
+
 def rloo_loss_with_importance_sampling(
     model: LmHeadModel,
     reference_model: LmHeadModel,
@@ -97,57 +181,9 @@ def rloo_loss_with_importance_sampling(
     loss_masks_array = batch.loss_masks.array
 
     batch_size, seq_len = batch.input_ids.array.shape
-
     # Get logits from current policy
-    model_output = model(
-        input_ids=batch.input_ids,
-        attn_mask=AttentionMask.causal(),
-        pos_ids=batch.position_ids,
-        key=key,
-    )
-
-    reference_output = reference_model(
-        input_ids=batch.input_ids,
-        attn_mask=AttentionMask.causal(),
-        pos_ids=batch.position_ids,
-        key=key,
-    )
-
-    # logits[i] predicts token at position i+1
-    # We want logprob[j] = P(token[j] | tokens[0:j])
-    # This comes from logits[j-1] indexed by token[j]
-    logits_array = model_output.array.astype(jnp.float32)[:, :-1, :]  # Drop last position [batch, seq_len-1, vocab]
-    reference_logits_array = reference_output.array.astype(jnp.float32)[:, :-1, :]  # Drop last position
-
-    target_ids_array = batch.input_ids.array[:, 1:]  # Drop first position [batch, seq_len-1]
-
-    # Compute log probabilities
-    log_probs = jax.nn.log_softmax(logits_array, axis=-1)
-    reference_log_probs = jax.nn.log_softmax(reference_logits_array, axis=-1)
-
-    batch_idx = jnp.arange(batch_size)[:, None]
-    pos_idx = jnp.arange(seq_len - 1)
-
-    # Extract logprobs for the actual tokens
-    current_logprobs_shifted = log_probs[batch_idx, pos_idx, target_ids_array]  # [batch, seq_len-1]
-    reference_logprobs_shifted = reference_log_probs[batch_idx, pos_idx, target_ids_array]  # [batch, seq_len-1]
-
-    # Prepend zeros for position 0 (no context to predict from)
-    current_logprobs = jnp.concatenate([jnp.zeros((batch_size, 1)), current_logprobs_shifted], axis=1)
-    reference_logprobs_array = jnp.concatenate([jnp.zeros((batch_size, 1)), reference_logprobs_shifted], axis=1)
-
-    # jax.debug.print("advantages sum: {loss_weights_array_sum}", loss_weights_array_sum=loss_weights_array.sum())
-    # jax.debug.print("predicted_logprobs_array {current_logprobs}", current_logprobs=current_logprobs)
-    # jax.debug.print(
-    #     "reference_logprobs_array {reference_logprobs_array}", reference_logprobs_array=reference_logprobs_array
-    # )
-    # jax.debug.print("policy_logprobs_array {policy_logprobs_array}", policy_logprobs_array=policy_logprobs_array)
-
-    # importance sampling since we're using off-policy data
-    # ratio = π_current(a|s) / π_old(a|s) = log(π_current) - log(π_old)
-    # mask the input tokens to ignore them in the loss
+    current_logprobs = compute_logprobs(model, batch.input_ids, batch.position_ids, key)
     current_logprobs = current_logprobs * loss_masks_array
-    reference_logprobs_array = reference_logprobs_array * loss_masks_array
 
     log_ratio = jnp.subtract(current_logprobs, policy_logprobs_array)
     ratio = jnp.exp(log_ratio)
@@ -160,20 +196,36 @@ def rloo_loss_with_importance_sampling(
     is_clipped = jnp.logical_or(ratio > 1.0 + clip_epsilon, ratio < 1.0 - clip_epsilon)
     clip_fraction = jnp.sum(is_clipped * loss_masks_array) / jnp.sum(loss_masks_array)
 
+    non_clipped_loss = -ratio * loss_weights_array * loss_masks_array
+    clipped_loss = -clipped_ratio * loss_weights_array * loss_masks_array
+
+    weighted_loss = jnp.minimum(non_clipped_loss, clipped_loss)
+
     # RLOO loss with importance sampling
     # batch["loss_weights"] contains RLOO advantages: r_i - mean(r_j for j≠i)
-    weighted_loss = -clipped_ratio * loss_weights_array * loss_masks_array
+    # weighted_loss = -clipped_ratio * loss_weights_array * loss_masks_array
 
     if divide_by_entire_length:
-        reinforce_loss = jnp.sum(weighted_loss) / seq_len
+        reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)  # sum of all tokens
     else:
-        reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)
+        reinforce_loss = jnp.mean(
+            jnp.sum(weighted_loss, axis=1) / jnp.sum(loss_masks_array, axis=1)
+        )  # sum of all tokens per batch item
 
     # KL regularization
-    log_ratio = (current_logprobs - reference_logprobs_array) * loss_masks_array
-    # https://github.com/openai/lm-human-preferences/blob/cbfd210bb8b08f6bc5c26878c10984b90f516c66/lm_human_preferences/train_policy.py#L151
-    kl_penalty = log_ratio**2
-    kl_loss = kl_coef * jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
+
+    if kl_coef > 0:
+        reference_logprobs = compute_logprobs(reference_model, batch.input_ids, batch.position_ids, key)
+        reference_logprobs = reference_logprobs * loss_masks_array
+        # log_ratio = (current_logprobs - reference_logprobs_array) * loss_masks_array
+        deepseek_kl_penalty = (
+            jnp.exp(reference_logprobs - current_logprobs) - (reference_logprobs - current_logprobs) - 1
+        )
+        # https://github.com/openai/lm-human-preferences/blob/cbfd210bb8b08f6bc5c26878c10984b90f516c66/lm_human_preferences/train_policy.py#L151
+        # kl_penalty = jnp.abs(log_ratio)
+        kl_loss = kl_coef * jnp.sum(deepseek_kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
+    else:
+        kl_loss = 0
 
     loss = reinforce_loss + kl_loss
 
@@ -183,7 +235,7 @@ def rloo_loss_with_importance_sampling(
         "clip_fraction": clip_fraction,
         "reinforce_loss": reinforce_loss,
         "kl_loss": kl_loss,
-        "kl_penalty": jnp.mean(kl_penalty),
+        "kl_penalty": jnp.mean(deepseek_kl_penalty),
         **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
     }
 
@@ -220,7 +272,7 @@ def compute_grpo_advantages(rollouts: list[Rollout], divide_by_std: bool = True)
 
 
 @dataclass
-class RLOOLoss:
+class RLOOLoss(RLLossModule):
     """RLOO loss with importance sampling."""
 
     kl_coef: float = 0.1
@@ -268,6 +320,38 @@ class GRPOLoss(RLOOLoss):
                 kl_coef=self.kl_coef,
                 clip_epsilon=self.clip_epsilon,
                 divide_by_entire_length=self.divide_by_entire_length,
+            )
+
+        return loss_fn
+
+
+@dataclass
+class CISPOLoss(RLLossModule):
+    """CISPO loss."""
+
+    epsilon_low: float = 0.2
+    epsilon_high: float = 0.2
+
+    def build(self, reference_model: eqx.Module) -> eqx.Module:
+        """Initialize any learned components (e.g., value heads)."""
+        return self  # No learned parameters
+
+    def compute_advantages(self, rollout_group: list[Rollout]) -> list[float]:
+        """Compute advantages for a group of rollouts."""
+        return compute_grpo_advantages(rollout_group, divide_by_std=True)
+
+    def create_loss_fn(self, reference_model: eqx.Module, train_model: eqx.Module) -> Callable:
+        """Create the loss function for training."""
+
+        def loss_fn(model, batch, key):
+            return cispo_loss_with_importance_sampling(
+                model,
+                reference_model,
+                batch,
+                key=key,
+                kl_coef=self.kl_coef,
+                epsilon_low=self.epsilon_low,
+                epsilon_high=self.epsilon_high,
             )
 
         return loss_fn
