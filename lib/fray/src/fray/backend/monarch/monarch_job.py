@@ -33,8 +33,8 @@ from .monarch_helpers import (
 )
 
 if MONARCH_AVAILABLE:
-    from monarch.actor import Actor, ProcMesh, endpoint
     from monarch._src.actor.host_mesh import create_local_host_mesh
+    from monarch.actor import Actor, ProcMesh, endpoint
 else:
     # Stubs for type checking
     Actor = object
@@ -249,17 +249,21 @@ class MonarchJobContext(JobContext):
         Block and retrieve result from object reference.
 
         Handles both task/actor results (MonarchObjectRef wrapping Futures) and
-        object store references.
+        object store references. Can also handle lists of refs.
 
         Args:
-            ref: MonarchObjectRef to resolve
+            ref: MonarchObjectRef to resolve, or list of MonarchObjectRef
 
         Returns:
-            The result value
+            The result value, or list of results if ref was a list
 
         Raises:
-            TypeError: If ref is not a MonarchObjectRef
+            TypeError: If ref is not a MonarchObjectRef or list of MonarchObjectRef
         """
+        # Handle list of refs
+        if isinstance(ref, list):
+            return [self.get(r) for r in ref]
+
         if not isinstance(ref, MonarchObjectRef):
             raise TypeError(f"Expected MonarchObjectRef, got {type(ref)}")
 
@@ -276,13 +280,23 @@ class MonarchJobContext(JobContext):
         # Handle task/actor future references
         results = ref._future.get()
 
-        # If this is a single-task reference, return first result
-        if ref._take_first:
-            if isinstance(results, list) and len(results) > 0:
-                return results[0]
-            return results
+        # Monarch returns a ValueMesh - need to extract actual values
+        # ValueMesh typically looks like: (({}, value),) for single-process meshes
+        # or a list of (coords, value) tuples for multi-process meshes
+        if hasattr(results, "__iter__") and not isinstance(results, (str | bytes)):
+            # Try to extract from mesh results
+            results_list = list(results)
+            if len(results_list) > 0:
+                # Each element is (mesh_coords, value)
+                if isinstance(results_list[0], tuple) and len(results_list[0]) == 2:
+                    # Extract just the values, ignoring mesh coordinates
+                    values = [item[1] for item in results_list]
+                    # For single-value results, return the value directly
+                    if len(values) == 1:
+                        return values[0]
+                    return values
 
-        # Otherwise return all results (mesh semantics)
+        # Fallback for non-mesh results
         return results
 
     def wait(
