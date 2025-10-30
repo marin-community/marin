@@ -528,7 +528,7 @@ class SlicePoolManager(ResourcePoolManager[SliceInfo]):
 
         # Want to scale to the next largest desired size that is bigger than the current size.
         sorted_valid_sizes = sorted(num_slices)
-        current_size = current_size = len(self._actor_pool)
+        current_size = len(self._actor_pool)
         larger_sizes = [size for size in sorted_valid_sizes if size > current_size]
         if not larger_sizes:
             return False
