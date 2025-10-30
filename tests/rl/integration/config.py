@@ -42,7 +42,6 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
-from vllm import SamplingParams
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
@@ -58,6 +57,12 @@ from marin.rl.weight_transfer import WeightTransferConfig
 from marin.rl.weight_transfer.base import WeightTransferMode
 
 logger = logging.getLogger(__name__)
+
+try:
+    from vllm import SamplingParams
+except ImportError:
+    logger.warning("vLLM is not installed, so we will not be able to use vLLM inference context.")
+    SamplingParams = None
 
 
 class WaitResult(Enum):

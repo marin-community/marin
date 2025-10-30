@@ -24,7 +24,7 @@ import numpy as np
 
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.process_vllm_results import process_vllm_chat_results
-from marin.rl.inference_ctx import InferenceContext
+from marin.rl.environments.inference_ctx import LevanterInferenceContext
 from marin.rl.types import Rollout, RolloutGroup
 
 # Lazy import for optional dependencies
@@ -87,7 +87,7 @@ class PrimeIntellectEnv(MarinEnv):
 
     def sample(
         self,
-        inference_ctx: InferenceContext,
+        inference_ctx: LevanterInferenceContext,
         n_examples: int,
         n_generations: int,
         temperature: float,
