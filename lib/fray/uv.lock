@@ -356,7 +356,7 @@ source = { editable = "." }
 
 [package.optional-dependencies]
 monarch = [
-    { name = "torchmonarch-nightly" },
+    { name = "monarch" },
 ]
 ray = [
     { name = "ray" },
@@ -371,8 +371,8 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "monarch", marker = "extra == 'monarch'", url = "https://github.com/rjpower/monarch/releases/download/v0.0.1-no-tensor-engine/monarch-0.0.1-cp311-cp311-macosx_11_0_arm64.whl" },
     { name = "ray", marker = "extra == 'ray'", specifier = "==2.45" },
-    { name = "torchmonarch-nightly", marker = "extra == 'monarch'" },
 ]
 provides-extras = ["ray", "monarch"]
 
@@ -697,6 +697,47 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/27/0d/9c5d4c2317feb31d819e38c9f947c942f42ebd4eb935fc6fd3518a11eaa7/matplotlib-3.10.7-pp311-pypy311_pp73-macosx_11_0_arm64.whl", hash = "sha256:d2a959c640cdeecdd2ec3136e8ea0441da59bcaf58d67e9c590740addba2cb68", size = 8116733, upload-time = "2025-10-09T00:27:56.406Z" },
     { url = "https://files.pythonhosted.org/packages/9a/cc/3fe688ff1355010937713164caacf9ed443675ac48a997bab6ed23b3f7c0/matplotlib-3.10.7-pp311-pypy311_pp73-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:3886e47f64611046bc1db523a09dd0a0a6bed6081e6f90e13806dd1d1d1b5e91", size = 8693919, upload-time = "2025-10-09T00:27:58.41Z" },
 ]
+
+[[package]]
+name = "monarch"
+version = "0.0.1"
+source = { url = "https://github.com/rjpower/monarch/releases/download/v0.0.1-no-tensor-engine/monarch-0.0.1-cp311-cp311-macosx_11_0_arm64.whl" }
+dependencies = [
+    { name = "cloudpickle" },
+    { name = "lark" },
+    { name = "numpy" },
+    { name = "opentelemetry-api" },
+    { name = "pyre-extensions" },
+    { name = "pyzmq" },
+    { name = "requests" },
+    { name = "tabulate" },
+    { name = "torch" },
+    { name = "torchshow" },
+    { name = "torchx-nightly" },
+    { name = "typing-extensions" },
+]
+wheels = [
+    { url = "https://github.com/rjpower/monarch/releases/download/v0.0.1-no-tensor-engine/monarch-0.0.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:2c688f082d158da9e22525e8499a9d5cdaead09113dff093ba1257566ae3a698" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bs4", marker = "extra == 'examples'" },
+    { name = "cloudpickle" },
+    { name = "ipython", marker = "extra == 'examples'" },
+    { name = "lark" },
+    { name = "numpy" },
+    { name = "opentelemetry-api" },
+    { name = "pyre-extensions" },
+    { name = "pyzmq" },
+    { name = "requests" },
+    { name = "tabulate" },
+    { name = "torch" },
+    { name = "torchshow" },
+    { name = "torchx-nightly" },
+    { name = "typing-extensions", specifier = ">=4.12" },
+]
+provides-extras = ["examples"]
 
 [[package]]
 name = "mpmath"
@@ -1611,30 +1652,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/62/51/dc3b4e2f9ba98ae27238f0153ca098bf9340b2dafcc67fde645d496dfc2a/torch-2.9.0-cp314-cp314t-manylinux_2_28_aarch64.whl", hash = "sha256:c08fb654d783899e204a32cca758a7ce8a45b2d78eeb89517cc937088316f78e", size = 104140340, upload-time = "2025-10-15T15:50:19.67Z" },
     { url = "https://files.pythonhosted.org/packages/c0/8d/b00657f8141ac16af7bb6cda2e67de18499a3263b78d516b9a93fcbc98e3/torch-2.9.0-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:ec8feb0099b2daa5728fbc7abb0b05730fd97e0f359ff8bda09865aaa7bd7d4b", size = 899731750, upload-time = "2025-10-15T15:49:36.673Z" },
     { url = "https://files.pythonhosted.org/packages/fc/29/bd361e0cbb2c79ce6450f42643aaf6919956f89923a50571b0ebfe92d142/torch-2.9.0-cp314-cp314t-win_amd64.whl", hash = "sha256:695ba920f234ad4170c9c50e28d56c848432f8f530e6bc7f88fcb15ddf338e75", size = 109503850, upload-time = "2025-10-15T15:50:24.118Z" },
-]
-
-[[package]]
-name = "torchmonarch-nightly"
-version = "2025.10.29"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cloudpickle" },
-    { name = "lark" },
-    { name = "numpy" },
-    { name = "opentelemetry-api" },
-    { name = "pyre-extensions" },
-    { name = "pyzmq" },
-    { name = "requests" },
-    { name = "tabulate" },
-    { name = "torch" },
-    { name = "torchshow" },
-    { name = "torchx-nightly" },
-    { name = "typing-extensions" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c4/35/e20fc860eb48f79327637dd0a47014cc293f3f7f3374ff2f88b176c5fc6f/torchmonarch_nightly-2025.10.29-cp311-cp311-manylinux2014_x86_64.whl", hash = "sha256:c4b4db90c184fca8d835b3797c172c2673286280a67368173db6df65e929742d", size = 48244392, upload-time = "2025-10-29T00:48:46.541Z" },
-    { url = "https://files.pythonhosted.org/packages/9d/34/682f586d8c7d0200c1342df914ed1d606b9efa216c581d2e90860682a078/torchmonarch_nightly-2025.10.29-cp312-cp312-manylinux2014_x86_64.whl", hash = "sha256:fd7c47c8710b79c255b46c31e0c67056f6641541568ab75a66318644ba69f203", size = 48244962, upload-time = "2025-10-29T00:48:49.492Z" },
-    { url = "https://files.pythonhosted.org/packages/3a/cf/4ecd0e18c00b122e50e8bc40bc4c6d757a4186031e42c1ef59a9dd73044b/torchmonarch_nightly-2025.10.29-cp313-cp313-manylinux2014_x86_64.whl", hash = "sha256:188e426162f07212e867a6015c85b821a46daabc788d7e6c58b37f1abbf99e0a", size = 48245573, upload-time = "2025-10-29T00:48:52.719Z" },
 ]
 
 [[package]]

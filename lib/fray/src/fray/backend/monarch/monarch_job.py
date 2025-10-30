@@ -33,12 +33,13 @@ from .monarch_helpers import (
 )
 
 if MONARCH_AVAILABLE:
-    from monarch.actor import Actor, Procs, endpoint, this_host
+    from monarch.actor import Actor, ProcMesh, endpoint
+    from monarch._src.actor.host_mesh import create_local_host_mesh
 else:
     # Stubs for type checking
     Actor = object
-    Procs = object
-    this_host = None
+    ProcMesh = object
+    create_local_host_mesh = None
 
     def endpoint(fn):
         return fn
@@ -46,6 +47,41 @@ else:
 
 # Context variable for propagating JobContext to nested tasks/actors
 _job_context: contextvars.ContextVar[MonarchJobContext] = contextvars.ContextVar("job_context")
+
+
+# Task actor class defined at module level to avoid closure captures
+if MONARCH_AVAILABLE:
+
+    class _TaskActor(Actor):
+        """Ephemeral actor that executes a single task."""
+
+        def __init__(self, procs: ProcMesh, object_store: Any, fn: Callable, args: tuple, kwargs: dict):
+            super().__init__()
+            self._procs = procs
+            self._object_store = object_store
+            self._fn = fn
+            self._args = args
+            self._kwargs = kwargs
+
+        @endpoint
+        def run(self):
+            # Reconstruct context in actor for nested operations
+            ctx = MonarchJobContext.__new__(MonarchJobContext)
+            ctx._procs = self._procs
+            ctx._object_store = self._object_store
+            ctx._resource_config = {}
+            ctx._object_counter = 0
+            ctx._task_counter = 0
+            ctx._actor_counter = 0
+
+            # Set as current context for nested calls
+            _job_context.set(ctx)
+
+            # Execute user function
+            return self._fn(*self._args, **self._kwargs)
+
+else:
+    _TaskActor = None
 
 
 class MonarchJobContext(JobContext):
@@ -61,31 +97,31 @@ class MonarchJobContext(JobContext):
     5. Context propagation uses contextvars to maintain JobContext across actors
     """
 
-    def __init__(self, resource_config: dict[str, Any] | None = None, procs: Procs | None = None):
+    def __init__(self, resource_config: dict[str, Any] | None = None, procs: ProcMesh | None = None):
         """
         Initialize MonarchJobContext.
 
         Args:
-            resource_config: Dict specifying resources like {"gpus": 8, "cpus": 64}.
-                           Used to spawn worker processes automatically.
-            procs: Pre-spawned Monarch Procs object. If provided, resource_config is ignored.
+            resource_config: Dict specifying resources like {"gpus": 8}.
+                           Used to spawn worker processes automatically via create_local_host_mesh().
+            procs: Pre-spawned Monarch ProcMesh object. If provided, resource_config is ignored.
 
         Raises:
             ImportError: If Monarch is not available
-            ValueError: If neither procs nor resource_config is provided
         """
         if not MONARCH_AVAILABLE:
-            raise ImportError(
-                "Monarch is not available. Install torchmonarch-nightly on a supported platform (Linux x86_64)."
-            )
+            raise ImportError("Monarch is not available. Install torchmonarch-nightly on a supported platform.")
 
         # Auto-spawn processes if not provided
         if procs is None:
             if resource_config is None:
                 # Default: spawn with minimal resources (1 CPU process)
-                resource_config = {"num_procs": 1}
+                resource_config = {}
 
-            procs = this_host().spawn_procs(resource_config)
+            # Create local host mesh first (correct pattern for initialization from regular Python)
+            host = create_local_host_mesh()
+            # Spawn processes on the host
+            procs = host.spawn_procs(name="_fray_workers", per_host=resource_config)
 
         self._procs = procs
         self._resource_config = resource_config or {}
@@ -108,7 +144,7 @@ class MonarchJobContext(JobContext):
         """
         Create a task by wrapping function in a single-use actor.
 
-        Since Monarch uses actors instead of tasks, we create a dynamic actor class
+        Since Monarch uses actors instead of tasks, we create a task actor
         that wraps the user's function in an @endpoint method.
 
         Args:
@@ -123,36 +159,19 @@ class MonarchJobContext(JobContext):
         if kwargs is None:
             kwargs = {}
 
-        # Capture current context for propagation
-        current_ctx = self
-
         # Generate unique task ID
         task_id = self._task_counter
         self._task_counter += 1
 
-        # Create dynamic actor class for this task
-        class TaskActor(Actor):
-            def __init__(self):
-                super().__init__()
-                # Store context for nested operations
-                self._fray_ctx = current_ctx
-
-            @endpoint
-            def run(self):
-                # Restore Fray context in actor
-                _job_context.set(self._fray_ctx)
-                # Execute user function
-                return fn(*args, **kwargs)
-
-        # Spawn actor on processes (creates mesh with one instance per process)
+        # Spawn task actor with function and arguments
         actor_name = f"_fray_task_{task_id}"
-        mesh = self._procs.spawn(actor_name, TaskActor)
+        task_actor = self._procs.spawn(actor_name, _TaskActor, self._procs, self._object_store, fn, args, kwargs)
 
         # Call the run endpoint
-        future = mesh.run.call()
+        future = task_actor.run.call()
 
-        # Return ref that extracts first result (single-task semantics)
-        return MonarchObjectRef(future, take_first=True)
+        # Return ref that extracts result
+        return MonarchObjectRef(future, take_first=False)
 
     def create_actor(
         self,
@@ -180,16 +199,29 @@ class MonarchJobContext(JobContext):
         if kwargs is None:
             kwargs = {}
 
-        # Capture current context
-        current_ctx = self
+        # Capture picklable parts of context
+        procs = self._procs
+        object_store = self._object_store
 
         # Wrap actor class to inject Fray context
         class ContextualActor(klass):
             def __init__(self, *init_args, **init_kwargs):
                 super().__init__(*init_args, **init_kwargs)
-                # Store and restore context
-                self._fray_ctx = current_ctx
-                _job_context.set(current_ctx)
+                # Store picklable references for context reconstruction
+                self._fray_procs = procs
+                self._fray_object_store = object_store
+
+                # Reconstruct context for nested operations
+                ctx = MonarchJobContext.__new__(MonarchJobContext)
+                ctx._procs = self._fray_procs
+                ctx._object_store = self._fray_object_store
+                ctx._resource_config = {}
+                ctx._object_counter = 0
+                ctx._task_counter = 0
+                ctx._actor_counter = 0
+
+                # Set as current context
+                _job_context.set(ctx)
 
         # Determine actor name
         actor_name = None
@@ -206,11 +238,11 @@ class MonarchJobContext(JobContext):
             self._actor_counter += 1
             actor_name = f"{klass.__name__}_{actor_id}"
 
-        # Spawn actor mesh
-        mesh = self._procs.spawn(actor_name, ContextualActor, args=args, kwargs=kwargs)
+        # Spawn actor instance
+        actor = self._procs.spawn(actor_name, ContextualActor, args=args, kwargs=kwargs)
 
-        # Wrap mesh to provide single-actor semantics
-        return MonarchActorHandle(mesh, actor_index=0)
+        # Wrap actor to provide Fray-compatible API
+        return MonarchActorHandle(actor)
 
     def get(self, ref: Any) -> Any:
         """

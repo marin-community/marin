@@ -12,10 +12,13 @@ dependencies = []
 
 [project.optional-dependencies]
 ray = ["ray==2.45"]
-monarch = ["torchmonarch-nightly"]
+monarch = ["monarch @ https://github.com/rjpower/monarch/releases/download/v0.0.1-no-tensor-engine/monarch-0.0.1-cp311-cp311-macosx_11_0_arm64.whl"]
 
 [dependency-groups]
 test = ["pytest>=8.3.2", "pytest-asyncio", "pytest-timeout"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fray"]

@@ -48,7 +48,7 @@ def job_context(request, ray_cluster):
         return RayJobContext()
     elif backend_type == "monarch":
         # Monarch context with minimal resources for testing
-        return MonarchJobContext(resource_config={"num_procs": 2})
+        return MonarchJobContext(resource_config={})
     else:
         raise ValueError(f"Unknown backend: {backend_type}")
 

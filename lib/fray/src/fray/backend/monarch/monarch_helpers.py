@@ -20,7 +20,7 @@ import uuid
 from typing import Any
 
 try:
-    from monarch.actor import Actor, Future, Mesh, endpoint
+    from monarch.actor import Actor, Future, ProcMesh, endpoint
 
     MONARCH_AVAILABLE = True
 except ImportError:
@@ -28,7 +28,7 @@ except ImportError:
     # Create stub types for type checking when Monarch is not available
     Actor = object
     Future = object
-    Mesh = object
+    ProcMesh = object
 
     def endpoint(fn):
         """Stub endpoint decorator."""
@@ -59,31 +59,29 @@ class MonarchObjectRef:
 
 
 class MonarchActorHandle:
-    """Wraps Monarch actor mesh to provide single-actor semantics."""
+    """Wraps Monarch actor to provide Fray-compatible handle."""
 
-    def __init__(self, mesh: Mesh, actor_index: int = 0):
+    def __init__(self, actor: Any):
         """
         Initialize MonarchActorHandle.
 
         Args:
-            mesh: Monarch Mesh object (collection of actor instances)
-            actor_index: Index of actor to target (for single-actor API)
+            actor: Monarch actor instance returned from ProcMesh.spawn()
         """
-        self._mesh = mesh
-        self._actor_index = actor_index
+        self._actor = actor
 
     def __getattr__(self, name: str):
-        """Intercept method calls to create actor method handles."""
+        """Intercept method calls to wrap results in MonarchObjectRef."""
         if name.startswith("_"):
             raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
 
         def method_wrapper(*args, **kwargs):
-            # Get the endpoint from the mesh
-            endpoint_call = getattr(self._mesh, name)
+            # Get the endpoint from the actor
+            endpoint = getattr(self._actor, name)
             # Call the endpoint and get future
-            future = endpoint_call.call(*args, **kwargs)
-            # Return reference that extracts single result
-            return MonarchObjectRef(future, take_first=True)
+            result = endpoint(*args, **kwargs)
+            # Wrap in MonarchObjectRef
+            return MonarchObjectRef(result, take_first=False)
 
         return method_wrapper
 
