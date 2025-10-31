@@ -277,57 +277,62 @@ systemctl start tpu-monitor
     wait_for_controller_service()
 
 
-def delete_tpu_vms_in_zone(zone: str) -> int:
-    """Delete all TPU VMs with tpu-ci labels in a specific zone.
+def delete_all_tpu_vms():
+    """Delete all TPU VMs with tpu-ci labels across all zones in parallel."""
+    logging.info("Discovering TPU VMs across all zones...")
 
-    Returns the number of VMs deleted.
-    """
-    result = run_sh(
-        f"gcloud compute tpus tpu-vm list --zone {zone} --project {config.GCP_PROJECT_ID} "
-        f"--filter labels.tpu-ci-managed=true --format value(name)",
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    zones = list(config.TPU_ZONES_CONFIG.keys())
 
-    if result.returncode != 0 or not result.stdout.strip():
-        return 0
+    def list_vms_in_zone(zone: str) -> list[tuple[str, str]]:
+        """List all TPU VMs in a zone. Returns list of (zone, vm_name) tuples."""
+        result = run_sh(
+            f"gcloud compute tpus tpu-vm list --zone {zone} --project {config.GCP_PROJECT_ID} "
+            f"--filter labels.tpu-ci-managed=true --format value(name)",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
-    vm_names = result.stdout.strip().split("\n")
-    vm_names = [name.strip() for name in vm_names if name.strip()]
-    logging.info(f"Found {len(vm_names)} TPU VMs in {zone}")
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
 
-    deleted_count = 0
-    for vm_name in vm_names:
-        logging.info(f"Deleting TPU VM: {vm_name} in {zone}")
+        vm_names = [name.strip() for name in result.stdout.strip().split("\n") if name.strip()]
+        return [(zone, vm_name) for vm_name in vm_names]
+
+    def delete_vm(zone: str, vm_name: str):
+        """Delete a single TPU VM."""
+        logging.info(f"Deleting {vm_name} in {zone}")
         run_sh(
             f"gcloud compute tpus tpu-vm delete {vm_name} --zone {zone} --project {config.GCP_PROJECT_ID} --quiet",
             check=False,
         )
-        deleted_count += 1
 
-    return deleted_count
-
-
-def delete_all_tpu_vms():
-    """Delete all TPU VMs with tpu-ci labels across all zones in parallel."""
-    logging.info("Deleting TPU VMs across all zones...")
-
-    zones = list(config.TPU_ZONES_CONFIG.keys())
-    total_deleted = 0
-
+    # Fetch all VM names in parallel
+    all_vms = []
     with ThreadPoolExecutor(max_workers=32) as executor:
-        futures = {executor.submit(delete_tpu_vms_in_zone, zone): zone for zone in zones}
-
+        futures = [executor.submit(list_vms_in_zone, zone) for zone in zones]
         for future in as_completed(futures):
-            zone = futures[future]
             try:
-                deleted_count = future.result()
-                total_deleted += deleted_count
+                all_vms.extend(future.result())
             except Exception as e:
-                logging.error(f"Error deleting TPU VMs in {zone}: {e}")
+                logging.error(f"Error listing TPU VMs: {e}")
 
-    logging.info(f"✓ Deleted {total_deleted} TPU VMs")
+    if not all_vms:
+        logging.info("✓ No TPU VMs to delete")
+        return
+
+    logging.info(f"Found {len(all_vms)} TPU VMs, deleting in parallel...")
+
+    # Delete all VMs in parallel
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        futures = [executor.submit(delete_vm, zone, vm_name) for zone, vm_name in all_vms]
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                logging.error(f"Error deleting TPU VM: {e}")
+
+    logging.info(f"✓ Deleted {len(all_vms)} TPU VMs across all zones")
 
 
 @click.group()
