@@ -189,6 +189,7 @@ ferry_model_1b = default_train(
     tokenized=varying_mixture_1b,
     model_config=qwen3_1_7b,
     train_config=train_config_1b,
+    eval_harness_tasks=[],
 )
 
 ferry_model_8b = default_train(
@@ -196,6 +197,7 @@ ferry_model_8b = default_train(
     tokenized=varying_mixture_8b,
     model_config=qwen3_8b,
     train_config=train_config_8b,
+    eval_harness_tasks=[],
 )
 
 # Main execution block
