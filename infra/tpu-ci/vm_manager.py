@@ -415,7 +415,7 @@ def monitor_loop(tpu_client: tpu_v2.TpuClient):
         except Exception as e:
             logging.error(f"Error: {e}", exc_info=True)
 
-        time.sleep(60)
+        time.sleep(600)  # Check every 10 minutes to allow time for TPU startup
 
 
 app = FastAPI(title="TPU CI Dashboard")
@@ -548,6 +548,79 @@ def ensure():
         ensure_tpu_vms(tpu_client, zone, count)
 
 
+def get_diagnostic_script(lines: int) -> str:
+    """
+    Generate comprehensive diagnostic script for TPU VM debugging.
+
+    Organized into two phases:
+    - Setup Phase: Startup script execution, Docker setup, network connectivity
+    - Runtime Phase: GitHub Actions runner status, logs, and processes
+    """
+    return f"""
+set -e
+
+echo "=========================================="
+echo "===       SETUP PHASE DIAGNOSTICS     ==="
+echo "=========================================="
+
+echo ""
+echo "=== Startup Script Logs (last {lines} lines) ==="
+sudo journalctl -u google-startup-scripts.service -n {lines} --no-pager || echo "No startup script logs found"
+
+echo ""
+echo "=== Startup Script Completion Status ==="
+grep "startup-script exit status" /var/log/syslog | tail -5 || echo "No completion marker found in syslog"
+
+echo ""
+echo "=== Docker Authentication ==="
+if [ -f ~/.docker/config.json ]; then
+    echo "Docker config exists"
+    cat ~/.docker/config.json | jq -r '.auths | keys[]' 2>/dev/null || echo "Unable to parse Docker auth config"
+else
+    echo "No Docker config found"
+fi
+
+echo ""
+echo "=== Metadata Server Access ==="
+curl -sSf -H "Metadata-Flavor: Google" \
+    http://metadata.google.internal/computeMetadata/v1/project/project-id \
+    && echo " - OK" || echo " - FAILED"
+
+echo ""
+echo "=========================================="
+echo "===      RUNTIME PHASE DIAGNOSTICS    ==="
+echo "=========================================="
+
+echo ""
+echo "=== Runner Service Status ==="
+sudo systemctl status actions.runner.* --no-pager || true
+
+echo ""
+echo "=== Recent Service Logs (last {lines} lines) ==="
+sudo journalctl -u actions.runner.* -n {lines} --no-pager || true
+
+echo ""
+echo "=== Runner Directory ==="
+ls -la /home/github-runner/ || true
+
+echo ""
+echo "=== Recent Runner Logs ==="
+if [ -d /home/github-runner/_diag ]; then
+    echo "Diagnostic logs:"
+    sudo find /home/github-runner/_diag -name "*.log" -type f \
+        -exec echo "{{}} ---" \\; -exec tail -n 50 {{}} \\; 2>/dev/null || true
+fi
+
+echo ""
+echo "=== Runner Process ==="
+ps aux | grep -E "(Runner.Listener|Runner.Worker)" | grep -v grep || echo "No runner processes found"
+
+echo ""
+echo "=== Docker Status ==="
+sudo docker ps -a || true
+"""
+
+
 @cli.command()
 @click.argument("name", type=str)
 @click.option("--lines", "-n", default=100, help="Number of log lines to show (default: 100)")
@@ -582,34 +655,7 @@ def check_logs(name: str, lines: int, follow: bool):
             raise RuntimeError(f"Failed to fetch logs from {name}")
     else:
         # For static mode, get comprehensive diagnostics
-        diag_cmd = f"""
-set -e
-echo "=== Runner Service Status ==="
-sudo systemctl status actions.runner.* --no-pager || true
-
-echo ""
-echo "=== Recent Service Logs (last {lines} lines) ==="
-sudo journalctl -u actions.runner.* -n {lines} --no-pager || true
-
-echo ""
-echo "=== Runner Directory ==="
-ls -la /home/github-runner/ || true
-
-echo ""
-echo "=== Recent Runner Logs ==="
-if [ -d /home/github-runner/_diag ]; then
-    echo "Diagnostic logs:"
-    sudo find /home/github-runner/_diag -name "*.log" -type f -exec echo "{{}} ---" \\; -exec tail -n 50 {{}} \\; 2>/dev/null || true
-fi
-
-echo ""
-echo "=== Runner Process ==="
-ps aux | grep -E "(Runner.Listener|Runner.Worker)" | grep -v grep || echo "No runner processes found"
-
-echo ""
-echo "=== Docker Status ==="
-sudo docker ps -a || true
-"""  # noqa: E501
+        diag_cmd = get_diagnostic_script(lines)
         result = run(
             [
                 "gcloud",
