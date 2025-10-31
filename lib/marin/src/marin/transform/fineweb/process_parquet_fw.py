@@ -24,18 +24,17 @@ from datetime import datetime
 import draccus
 import fsspec
 import pandas as pd
-import ray
 from warcio import ArchiveIterator
+from zephyr import Dataset, flow_backend
 
 from marin.core.runtime import cached_or_construct_output
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
 from marin.web.convert import convert_page
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
-@ray.remote(memory=1.5 * 1024 * 1024 * 1024, max_retries=5)  # 1.5 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
 def process_one_warc_file(
     input_path: str,
@@ -195,7 +194,6 @@ def process_one_warc_file(
     return True
 
 
-@ray.remote(memory=10 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, max_retries=5)  # 10 GB
 def process_fw_parquet(
     input_path: str,
     output_path: str,
@@ -230,10 +228,11 @@ def process_fw_parquet(
         logger.exception(f"Error reading the parquet file: {e}")
         raise e
 
-    ray_waitable = []
-    file_path = []
+    # Process each group sequentially within this parquet file
     # file_path is s3 url
     grouped = df.groupby("file_path")
+
+    was_successful = True
 
     for index, (_file_url, group_df) in enumerate(grouped):
         filename = os.path.join(output_path, f"{index}.parquet")
@@ -246,44 +245,23 @@ def process_fw_parquet(
         group_df.to_parquet(filename)
         logger.info(f"Processing the group: {filename}, into {output_file_name}")
 
+        # Note: custom resiliparse variant handling removed - ensure correct package is installed in environment
         if isinstance(config, ResiliparseConfig) and config.use_custom_variant:
-            logger.info("Using custom variant of resiliparse")
-            ray_waitable.append(
-                process_one_warc_file.options(
-                    runtime_env={
-                        "pip": [
-                            "resiliparse_dom @ git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c#egg=resiliparse_dom&subdirectory=resiliparse_dom"
-                        ]
-                    }
-                ).remote(
-                    filename,
-                    output_file_name,
-                    extract_method,
-                    config,
-                    md_output_path,
-                    text_output_path,
-                    html_output_path,
-                )
+            logger.warning(
+                "Custom resiliparse variant requested - ensure resiliparse_dom is installed from "
+                "git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c"
             )
-        else:
-            ray_waitable.append(
-                process_one_warc_file.remote(
-                    filename,
-                    output_file_name,
-                    extract_method,
-                    config,
-                    md_output_path,
-                    text_output_path,
-                    html_output_path,
-                )
-            )
-        file_path.append(filename)
 
-    was_successful = True
-
-    for waitable, filename in zip(ray_waitable, file_path, strict=False):
         try:
-            ray.get(waitable)
+            process_one_warc_file(
+                filename,
+                output_file_name,
+                extract_method,
+                config,
+                md_output_path,
+                text_output_path,
+                html_output_path,
+            )
         except Exception as e:
             logger.exception(f"Error processing {filename = }, Error: {e}")
             was_successful = False
@@ -322,31 +300,20 @@ class ParquetFWConfig:
 
 @draccus.wrap()
 def process_fw_dump(cfg: ParquetFWConfig):
-    num_files = 0
-    end_processing = False
+    backend = flow_backend()
 
+    # Glob all parquet files across all CC dumps upfront
     cc_dumps = cfg.cc_dumps or fsspec_glob(f"{cfg.input_path}/*")
 
+    all_files = []
     for cc_dump in cc_dumps:
         files = fsspec_glob(os.path.join(cfg.input_path, cc_dump, "*.parquet"))
-        MAX_NUM_PENDING_TASKS = 15  # Max number of parquet files we want to process in pending state
 
         if not files:
             logger.info(f"No files found in {cc_dump}, Skipping")
             continue
 
-        result_refs = []
         for file in files:
-            if len(result_refs) > MAX_NUM_PENDING_TASKS:
-                # update result_refs to only
-                # track the remaining tasks.
-                ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
-                try:
-                    ray.get(ready_refs)
-                except Exception as e:
-                    logger.exception(f"Error processing the group: {e}")
-                    continue
-
             # Get the input file name
             # Example of file = gs://marin-us-central2/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
             # input_file_name = 000_00000.parquet
@@ -366,26 +333,44 @@ def process_fw_dump(cfg: ParquetFWConfig):
                 input_file_name.replace(".parquet", ""),
             )  # gs://marin-us-central2/processed/CC-MAIN-2024-10/000_00000
 
-            logger.info(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path}")
-            result_refs.append(
-                process_fw_parquet.remote(
-                    file, output_path, cfg.extract_method, cfg.config, md_output_path, text_output_path, html_output_path
-                )
+            all_files.append(
+                {
+                    "input_path": file,
+                    "output_path": output_path,
+                    "extract_method": cfg.extract_method,
+                    "config": cfg.config,
+                    "md_output_path": md_output_path,
+                    "text_output_path": text_output_path,
+                    "html_output_path": html_output_path,
+                }
             )
 
-            num_files += 1
-
-            if cfg.max_files and num_files >= cfg.max_files:
-                end_processing = True
+            if cfg.max_files and len(all_files) >= cfg.max_files:
                 break
-        # Wait for all the tasks to finish
-        try:
-            ray.get(result_refs)
-        except Exception as e:
-            raise e
 
-        if end_processing:
+        if cfg.max_files and len(all_files) >= cfg.max_files:
             break
+
+    logger.info(f"Total parquet files to process: {len(all_files)}")
+
+    # Single-level parallelism over all parquet files
+    pipeline = (
+        Dataset.from_list(all_files)
+        .map(
+            lambda f: process_fw_parquet(
+                f["input_path"],
+                f["output_path"],
+                f["extract_method"],
+                f["config"],
+                f["md_output_path"],
+                f["text_output_path"],
+                f["html_output_path"],
+            )
+        )
+        .filter(lambda result: result is True)
+    )
+
+    list(backend.execute(pipeline))
 
 
 if __name__ == "__main__":

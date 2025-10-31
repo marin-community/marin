@@ -12,6 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Download DCLM HQ HTML data by fetching HTML content from Common Crawl.
+
+Processes DCLM HQ JSONL files and enriches them with HTML content fetched from Common Crawl
+via a custom index server. Uses zephyr for parallel processing with flattened parallelism.
+
+Example Usage:
+uv run zephyr --backend=ray --max-parallelism=800 --memory=2GB \
+    lib/marin/src/marin/download/dclm_hq/download_dclm_hq_html.py \
+    --input_path gs://marin-us-central2/raw/dclm-baseline-1.0-parquet/global/ \
+    --output_path gs://marin-data/processed/dclm-hq-html/
+"""
+
 import io
 import json
 import logging
@@ -21,10 +34,10 @@ from dataclasses import dataclass
 
 import draccus
 import fsspec
-import ray
 import requests
 import warcio
 from tqdm import tqdm
+from zephyr import Dataset, flow_backend
 
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_glob
@@ -37,6 +50,14 @@ logger = logging.getLogger("ray")
 class DCLMHQDownloadConfig:
     input_path: str
     output_path: str
+
+
+@dataclass
+class FileTask:
+    """Represents a single file processing task."""
+
+    input_file_path: str
+    output_file_path: str
 
 
 def fetch_warc_from_cc(s3_warc_path: str, length: int, offset: int) -> str:
@@ -65,6 +86,8 @@ def fetch_warc_from_cc(s3_warc_path: str, length: int, offset: int) -> str:
         for record in warcio.ArchiveIterator(stream):
             content = record.content_stream().read()
             return content.decode(errors="ignore")
+
+    raise ValueError(f"No WARC records found in response from {s3_warc_path}")
 
 
 def find_html_in_cc(split_id: str, target_uri: str) -> str | None:
@@ -99,19 +122,20 @@ def find_html_in_cc(split_id: str, target_uri: str) -> str | None:
     return html_content
 
 
-@ray.remote(memory=2 * 1024 * 1024 * 1024, max_retries=5)
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file(
-    input_file_path: str,
-    output_file_path: str,
-) -> None:
-    logger.info(f"Starting processing of file {input_file_path}")
-    logger.info(f"Source: {input_file_path}")
-    logger.info(f"Destination: {output_file_path}")
+def process_file(task: FileTask) -> None:
+    """Process a single DCLM file, fetching HTML from Common Crawl.
+
+    Args:
+        task: FileTask containing input and output file paths
+    """
+    logger.info(f"Starting processing of file {task.input_file_path}")
+    logger.info(f"Source: {task.input_file_path}")
+    logger.info(f"Destination: {task.output_file_path}")
     try:
         with (
-            fsspec.open(input_file_path, compression="zstd") as source,
-            fsspec.open(output_file_path, "wt", compression="gzip") as output,
+            fsspec.open(task.input_file_path, compression="zstd") as source,
+            fsspec.open(task.output_file_path, "wt", compression="gzip") as output,
         ):
             text_wrapper = io.TextIOWrapper(source, encoding="utf-8")
 
@@ -153,72 +177,47 @@ def process_file(
                     continue
 
         logger.info("\nProcessing completed successfully!")
-        logger.info(f"File available at: {output_file_path}")
+        logger.info(f"File available at: {task.output_file_path}")
 
     except Exception as e:
         logger.error(f"Error during processing: {e}")
         raise
 
 
-@ray.remote(memory=2 * 1024 * 1024 * 1024, max_retries=5)
-def process_dclm_shard(
-    input_path: str,
-    output_path: str,
-) -> None:
-    logger.info(f"Processing DCLM shard {input_path}")
-    logger.info(f"Output path: {output_path}")
-
-    result_refs = []
-    MAX_CONCURRENT_WORKERS = 16
-
-    shard_paths = [i.split("/")[-1] for i in fsspec_glob(os.path.join(input_path, "*.json.zst"))]
-
-    for shard_path in shard_paths:
-        if len(result_refs) > MAX_CONCURRENT_WORKERS:
-            ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
-            try:
-                ray.get(ready_refs)
-            except Exception as e:
-                logger.exception(f"Error processing the group: {e}")
-                continue
-
-        input_file_path = os.path.join(input_path, shard_path)
-        output_file_path = os.path.join(output_path, shard_path).replace(".json.zst", ".jsonl.gz")
-        result_refs.append(process_file.remote(input_file_path, output_file_path))
-
-    try:
-        ray.get(result_refs)
-    except Exception as e:
-        logger.exception(f"Error processing the group: {e}")
-
-
 # TODO: add executor step for this in the experiments
 @draccus.wrap()
 def extract_dclm_hq_dump(cfg: DCLMHQDownloadConfig) -> None:
-    """
-    Process the DCLM HQ dump in the input path and save the results to the output path.
+    """Process the DCLM HQ dump in the input path and save the results to the output path.
+
+    Flattens the nested directory structure (shards → files) into a single list of files
+    and processes them in parallel using zephyr.
     """
     logger.info(f"Starting processing of DCLM HQ dump in {cfg.input_path}")
 
-    result_refs = []
-    MAX_CONCURRENT_WORKERS = 50
-
+    # Flatten nested structure: discover all files upfront
+    all_files = []
     paths = [i.split("/")[-1] for i in fsspec_glob(os.path.join(cfg.input_path, "*"))]
 
-    for path in paths:
-        if len(result_refs) > MAX_CONCURRENT_WORKERS:
-            ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
-            try:
-                ray.get(ready_refs)
-            except Exception as e:
-                logger.exception(f"Error processing the group: {e}")
-                continue
+    logger.info(f"Found {len(paths)} shards to process")
 
-        # input_path = "gs://marin-us-central2/raw/dolmino-mix-1124-157960/bb54cab/data/dclm/0000"
+    for path in paths:
         input_path = os.path.join(cfg.input_path, path)
-        output_path = os.path.join(cfg.output_path, path)
-        result_refs.append(process_dclm_shard.remote(input_path, output_path))
-    try:
-        ray.get(result_refs)
-    except Exception as e:
-        logger.exception(f"Error processing the group: {e}")
+        shard_paths = fsspec_glob(os.path.join(input_path, "*.json.zst"))
+
+        for shard_path in shard_paths:
+            input_file_path = shard_path
+            output_file_path = os.path.join(cfg.output_path, path, os.path.basename(shard_path)).replace(
+                ".json.zst", ".jsonl.gz"
+            )
+
+            all_files.append(FileTask(input_file_path=input_file_path, output_file_path=output_file_path))
+
+    logger.info(f"Found {len(all_files)} files to process")
+
+    # Single-level parallelism over all files
+    backend = flow_backend()
+    pipeline = Dataset.from_list(all_files).map(process_file)
+
+    list(backend.execute(pipeline))
+
+    logger.info("Processing completed successfully!")
