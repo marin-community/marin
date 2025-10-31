@@ -56,7 +56,8 @@ This report covers the following experiments/phases:
 - Phase 4a \- Bison Cooldown: [#1529](https://github.com/marin-community/marin/issues/1529) [`exp1529_32b_bison_cooldown`](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp1529_32b_bison_cooldown.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_bison_cooldown-48ddfe.json)
 - Phase 4b \- Mantis Cooldown: [#1581](https://github.com/marin-community/marin/issues/1681) [`exp1529_32b_mantis_cooldown`](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp1529_32b_mantis_cooldown.py) [Data Browser Link](https://marin.community/data-browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp1529_32b_mantis_cooldown-c6f4b0.json)
 
-- Total tokens trained in final artifact: ≈6.437T
+Total tokens trained in final artifact: ≈6.437T
+
 - Phase 1: 2.679T
 - Phase 3/QK‑Norm: 2.684T
 - Phase 4b/Mantis cooldown: 1.074T; excludes diagnostic restarts and the abandoned Bison cooldown attempt.
@@ -462,11 +463,11 @@ see marked improvements.
 In terms of mean rank, Marin fares quite well among other open weights base models:
 
 | Model                                | Mean Rank | Mean Reciprocal Rank |
-| :----------------------------------- | ---------:|---------------------:|
+| :----------------------------------- |----------:|---------------------:|
 | **Marin 32B (Bison)**                |      3.68 |                 0.39 |
-| **Marin 32B (Mantis)**               |      3.05 |                 0.44 |
+| **Marin 32B (Mantis)**               |  **3.05** |                 0.44 |
 | **OLMo 2 32B Base**                  |      3.89 |                 0.34 |
-| **Qwen 2.5 32B Base**                |      3.16 |                 0.54 |
+| **Qwen 2.5 32B Base**                |      3.16 |             **0.54** |
 | **Gemma 3 27B PT**                   |      3.37 |                 0.39 |
 | **NVIDIA Nemotron Nano 12B v2 Base** |      3.68 |                 0.38 |
 
