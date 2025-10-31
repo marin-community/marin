@@ -39,7 +39,7 @@ LR_CHOICES = np.logspace(-13, -5, num=15, base=2)
 INDEPENDENT_WD_CHOICES = np.logspace(-14, -5, num=10, base=2)
 
 BASE_BATCH_SIZE = 128
-BASE_NUM_TOKS = 100_000_000
+BASE_NUM_TOKS = 1_000_000_000
 BASE_WEIGHT_DECAY = 0.1
 TPU_TYPE = "v5p-8"
 WATCH_TARGETS = ["grads", "params", "updates", "opt_state"]
@@ -94,9 +94,9 @@ def _lr_sweep(
     scaled_config = _scale_llama_config(base_model, hidden_dim)
     model_type = "-qwen3" if isinstance(base_model, Qwen3Config) else ""
     sweep_kind = f"mup{model_type}" if use_mup else f"baseline{model_type}"
-    base_name = f"exp1570_hidden{hidden_dim}-{sweep_kind}-wsd-0min"
+    base_name = f"exp1570_hidden{hidden_dim}-{sweep_kind}-wsd-0min-1B"
     stable_sweep_kind = f"mup-stable{model_type}"
-    stable_base_name = f"exp1570_hidden{hidden_dim}-{stable_sweep_kind}-wsd-0min"
+    stable_base_name = f"exp1570_hidden{hidden_dim}-{stable_sweep_kind}-wsd-0min-1B"
 
     steps = []
     for lr in learning_rates:
@@ -164,7 +164,7 @@ def _lr_sweep_muonh(
     scaled_config = _scale_llama_config(base_model, hidden_dim)
     model_type = "-qwen3" if isinstance(base_model, Qwen3Config) else ""
     sweep_kind = f"muonh{model_type}"
-    base_name = f"exp1570_hidden{hidden_dim}-{sweep_kind}-wsd-0min"
+    base_name = f"exp1570_hidden{hidden_dim}-{sweep_kind}-wsd-0min-1B"
 
     steps: list[ExecutorStep[TrainLmOnPodConfig]] = []
     for lr in learning_rates:
@@ -207,7 +207,7 @@ def _lr_sweep_adamh(
     scaled_config = _scale_llama_config(base_model, hidden_dim)
     model_type = "-qwen3" if isinstance(base_model, Qwen3Config) else ""
     sweep_kind = f"adamh{model_type}"
-    base_name = f"exp1570_hidden{hidden_dim}-{sweep_kind}-wsd-0min"
+    base_name = f"exp1570_hidden{hidden_dim}-{sweep_kind}-wsd-0min-1B"
 
     steps: list[ExecutorStep[TrainLmOnPodConfig]] = []
     for lr in learning_rates:
@@ -274,8 +274,8 @@ def build_wd_sweep(base_model=llama_30m) -> list[ExecutorStep[TrainLmOnPodConfig
     model_type = "-qwen3" if isinstance(base_model, Qwen3Config) else ""
     decoupled_kind = f"decoupled{model_type}"
     coupled_kind = f"coupled{model_type}"
-    decoupled_base_name = f"exp1570_hidden{hidden_dim}-{decoupled_kind}-wsd-0min"
-    coupled_base_name = f"exp1570_hidden{hidden_dim}-{coupled_kind}-wsd-0min"
+    decoupled_base_name = f"exp1570_hidden{hidden_dim}-{decoupled_kind}-wsd-0min-1B"
+    coupled_base_name = f"exp1570_hidden{hidden_dim}-{coupled_kind}-wsd-0min-1B"
 
     steps: list[ExecutorStep[TrainLmOnPodConfig]] = []
     for fixed_lr in (0.006, 0.001):
@@ -339,5 +339,4 @@ def build_wd_sweep(base_model=llama_30m) -> list[ExecutorStep[TrainLmOnPodConfig
 
 
 if __name__ == "__main__":
-    # executor_main(steps=build_steps(4))
-    executor_main(steps=build_steps(4, base_model=qwen3_30m) + build_wd_sweep(base_model=qwen3_30m))
+    executor_main(steps=build_steps(4, base_model=qwen3_30m))
