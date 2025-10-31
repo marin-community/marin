@@ -34,7 +34,6 @@ Continuously monitors and ensures the desired number of VMs are running:
 
 import json
 import logging
-import os
 import shlex
 import subprocess
 import sys
@@ -391,21 +390,21 @@ def ensure_tpu_vms(tpu_client: tpu_v2.TpuClient, zone: str, count: int):
     healthy_states = ["READY", "CREATING"]
     healthy_count = len([vm for vm in vms if vm["state"] in healthy_states])
 
+    bad_vms = [vm for vm in vms if vm["state"] in bad_states]
+
     # Verify runner service health for READY VMs
-    ready_vms = [vm for vm in vms if vm["state"] == "READY"]
-    unhealthy_runners = []
-    for vm in ready_vms:
-        if not check_runner_service(vm["name"], zone):
-            unhealthy_runners.append(vm)
-            healthy_count -= 1  # Reduce healthy count
+    # SSH doesn't work on the controller, skip for now.
+    # ready_vms = [vm for vm in vms if vm["state"] == "READY"]
+    # unhealthy_runners = []
+    # for vm in ready_vms:
+    #     if not check_runner_service(vm["name"], zone):
+    #         unhealthy_runners.append(vm)
+    #         healthy_count -= 1  # Reduce healthy count
+    # if unhealthy_runners:
+    #     logging.info(f"[{zone}] Found {len(unhealthy_runners)} VMs with unhealthy runner services")
+    # bad_vms.extend(unhealthy_runners)
 
     logging.info(f"[{zone}] Healthy TPU VMs: {healthy_count}/{count}")
-    if unhealthy_runners:
-        logging.info(f"[{zone}] Found {len(unhealthy_runners)} VMs with unhealthy runner services")
-
-    # Delete VMs in bad states or with unhealthy runners
-    bad_vms = [vm for vm in vms if vm["state"] in bad_states]
-    bad_vms.extend(unhealthy_runners)
 
     if bad_vms:
         logging.info(f"[{zone}] Deleting {len(bad_vms)} bad/unhealthy TPU VMs...")
@@ -728,30 +727,22 @@ def debug_tpu(name: str, test_path: str, pytest_args: str, timeout: int):
 
     logging.info("✓ Project synced")
 
-    # Build environment variable flags for Docker
-    env_flags = []
-    for var in ["HF_TOKEN", "WANDB_API_KEY"]:
-        value = os.getenv(var)
-        if value:
-            env_flags.append(f"-e {var}")
-            logging.info(f"Forwarding {var} to Docker container")
-
-    env_flags_str = " ".join(env_flags)
-
     logging.info(f"Running pytest on {name}...")
 
     # Use the same script structure as GitHub Actions workflow
     test_script = f"""
-rm -f /tmp/libtpu_lockfile || true
-lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
+sudo rm -f /tmp/libtpu_lockfile || true
+sudo lsof -t /dev/vfio/* 2>/dev/null | xargs -r sudo kill -9 || true
 
 # Detect the regional Docker image by parsing region from zone
-ZONE=$(curl -sSf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/zone | cut -d/ -f4)
+METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/zone"
+ZONE=$(curl -sSf -H "Metadata-Flavor: Google" $METADATA_URL | cut -d/ -f4)
 REGION=$(echo $ZONE | rev | cut -d- -f2- | rev)
-DOCKER_IMAGE="$REGION-docker.pkg.dev/{config.DOCKER_REPOSITORY}/{config.DOCKER_IMAGE_NAME}:{config.DOCKER_IMAGE_TAG}"
+IMAGE="{config.DOCKER_REPOSITORY}/{config.DOCKER_IMAGE_NAME}:{config.DOCKER_IMAGE_TAG}"
+DOCKER_IMAGE="$REGION-docker.pkg.dev/$IMAGE"
 echo "Using Docker image: $DOCKER_IMAGE (zone: $ZONE, region: $REGION)"
 
-docker run --rm \\
+sudo docker run --rm \\
   --device /dev/vfio:/dev/vfio \\
   --shm-size=100g \\
   --stop-timeout=1 \\
@@ -764,7 +755,6 @@ docker run --rm \\
   -e START_RAY_TPU_CLUSTER=true \\
   -e PYTHONPATH=/workspace \\
   -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \\
-  {env_flags_str} \\
   -v {remote_dir}:/workspace:rw \\
   --tmpfs /workspace/logs:rw \\
   --tmpfs /workspace/.pytest_cache:rw \\
