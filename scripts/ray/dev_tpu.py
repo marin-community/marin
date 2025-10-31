@@ -300,7 +300,7 @@ class TPUAllocationActor:
 def add_ssh_host_config(
     hostname: str, ip_address: str, username: str, tpu_name: str, gcloud_tpu_name: str, gcloud_zone: str
 ) -> None:
-    """Add SSH host configuration."""
+    """Add or update SSH host configuration, preserving IP history as comments."""
     config_path = Path.home() / ".ssh" / "config"
     config_path.parent.mkdir(exist_ok=True)
 
@@ -319,48 +319,92 @@ def add_ssh_host_config(
         logger.warning(f"Error when running gcloud compute tpu-vm ssh: {e.stdout}, error: {e.stderr}")
         logger.warning("gcloud compute tpu-vm ssh failed to set up SSH keys")
 
-    # Check if Google Compute Engine SSH key exists
-    gce_key_path = Path.home() / ".ssh" / "google_compute_engine"
-    if not gce_key_path.exists():
-        logger.warning(f"Google Compute Engine SSH key not found at {gce_key_path}")
-        logger.warning("SSH may fail if your key isn't available on the VM.")
-        logger.warning("You can add it at https://console.cloud.google.com/compute/metadata?resourceTab=sshkeys")
-
-    host_alias = f"dev-tpu-{tpu_name}"
-
-    ssh_config_entry = f"""
-# BEGIN_DEV_TPU_{tpu_name.upper()}
-Host {host_alias}
-    HostName {ip_address}
-    HostKeyAlias compute.{hostname}
-    StrictHostKeyChecking no
-    CheckHostIP no
-    User {username}
-# END_DEV_TPU_{tpu_name.upper()}
-"""
-
+    # Read existing config
     existing_config = ""
     if config_path.exists():
         existing_config = config_path.read_text()
 
-    # Backup the existing config and update it with our new entry
+    # Check if block already exists and extract commented HostName history
+    tpu_marker = f"BEGIN_DEV_TPU_{tpu_name.upper()}"
+    block_exists = tpu_marker in existing_config
+    hostname_history = []
+
+    if block_exists:
+        pattern = f"# BEGIN_DEV_TPU_{tpu_name.upper()}\n(.*?)# END_DEV_TPU_{tpu_name.upper()}\n"
+        match = re.search(pattern, existing_config, flags=re.DOTALL)
+        if match:
+            block = match.group(1)
+            # Preserve commented HostName history
+            for line in block.split('\n'):
+                stripped = line.strip()
+                # Comment out current active HostName to preserve as history
+                if stripped.startswith('HostName ') and not stripped.startswith('# '):
+                    hostname_history.append(f"    # {stripped}  # Previous allocation")
+                # Keep already-commented HostNames
+                elif stripped.startswith('# HostName '):
+                    hostname_history.append(line)
+
+    # Get IdentityFile from env var or use default
+    identity_file = None
+    env_identity = os.environ.get("DEV_TPU_IDENTITY_FILE")
+    if env_identity:
+        identity_file = env_identity
+        logger.info(f"Using IdentityFile from DEV_TPU_IDENTITY_FILE: {identity_file}")
+    else:
+        gce_key_path = Path.home() / ".ssh" / "google_compute_engine"
+        if gce_key_path.exists():
+            identity_file = str(gce_key_path)
+            logger.info(f"Using default Google Compute Engine key: {identity_file}")
+
+    # Get additional aliases from env var (space-separated)
+    host_alias = f"dev-tpu-{tpu_name}"
+    additional_aliases = []
+    env_aliases = os.environ.get("DEV_TPU_ALIASES", "").strip()
+    if env_aliases:
+        additional_aliases = env_aliases.split()
+        logger.info(f"Adding aliases from DEV_TPU_ALIASES: {' '.join(additional_aliases)}")
+
+    all_aliases = [host_alias] + additional_aliases
+    host_line = f"Host {' '.join(all_aliases)}"
+
+    # Build config block
+    config_lines = [
+        f"# BEGIN_DEV_TPU_{tpu_name.upper()}",
+        host_line,
+        f"    HostName {ip_address}",
+    ]
+
+    # Add hostname history
+    config_lines.extend(hostname_history)
+
+    # Add standard settings
+    config_lines.append(f"    HostKeyAlias compute.{hostname}")
+    config_lines.append("    StrictHostKeyChecking no")
+    if identity_file:
+        config_lines.append(f"    IdentityFile {identity_file}")
+    config_lines.append("    CheckHostIP no")
+    config_lines.append(f"    User {username}")
+    config_lines.append(f"# END_DEV_TPU_{tpu_name.upper()}")
+
+    ssh_config_entry = '\n'.join(config_lines) + '\n'
+
+    # Backup existing config
     with open(f"{config_path}.bak", "w") as f:
         f.write(existing_config)
 
-    # Check if this specific TPU config already exists and remove it
-    tpu_marker = f"BEGIN_DEV_TPU_{tpu_name.upper()}"
-    if tpu_marker in existing_config:
-        pattern = f"# BEGIN_DEV_TPU_{tpu_name.upper()}\n(.*?\n)*?# END_DEV_TPU_{tpu_name.upper()}\n"
-        existing_config = re.sub(pattern, "", existing_config, flags=re.DOTALL)
+    # Update config: replace existing block or append new one
+    if block_exists:
+        pattern = f"# BEGIN_DEV_TPU_{tpu_name.upper()}\n.*?# END_DEV_TPU_{tpu_name.upper()}\n"
+        updated_config = re.sub(pattern, ssh_config_entry, existing_config, flags=re.DOTALL)
+    else:
+        updated_config = existing_config + ('\n' if existing_config and not existing_config.endswith('\n') else '') + ssh_config_entry
 
-    with open(config_path, "w") as f:
-        f.write(existing_config + ssh_config_entry)
-
-    logger.info(f"Added SSH configuration for {host_alias}")
+    config_path.write_text(updated_config)
+    logger.info(f"Updated SSH configuration for {host_alias}")
 
 
 def remove_ssh_host_config(tpu_name: str) -> None:
-    """Remove SSH host configuration for specific TPU."""
+    """Deactivate SSH host configuration by commenting out HostName."""
     config_path = Path.home() / ".ssh" / "config"
     if not config_path.exists():
         return
@@ -368,12 +412,35 @@ def remove_ssh_host_config(tpu_name: str) -> None:
     existing_config = config_path.read_text()
 
     tpu_marker = f"BEGIN_DEV_TPU_{tpu_name.upper()}"
-    if tpu_marker in existing_config:
-        pattern = f"# BEGIN_DEV_TPU_{tpu_name.upper()}\n(.*?\n)*?# END_DEV_TPU_{tpu_name.upper()}\n"
-        updated_config = re.sub(pattern, "", existing_config, flags=re.DOTALL)
-        updated_config = updated_config.strip() + "\n"
-        config_path.write_text(updated_config)
-        logger.info(f"Removed SSH configuration for dev-tpu-{tpu_name}")
+    if tpu_marker not in existing_config:
+        return
+
+    # Extract the block
+    pattern = f"# BEGIN_DEV_TPU_{tpu_name.upper()}\n(.*?)# END_DEV_TPU_{tpu_name.upper()}\n"
+    match = re.search(pattern, existing_config, flags=re.DOTALL)
+    if not match:
+        return
+
+    block = match.group(1)
+    updated_lines = []
+
+    # Comment out active HostName, preserve everything else
+    for line in block.split('\n'):
+        stripped = line.strip()
+        if stripped.startswith('HostName ') and not stripped.startswith('# '):
+            # Comment out the active HostName
+            updated_lines.append(f"    # {stripped}  # Deallocated")
+        else:
+            updated_lines.append(line)
+
+    # Rebuild the block
+    new_block = '\n'.join(updated_lines)
+    new_entry = f"# BEGIN_DEV_TPU_{tpu_name.upper()}\n{new_block}\n# END_DEV_TPU_{tpu_name.upper()}\n"
+
+    # Replace in config
+    updated_config = re.sub(pattern, new_entry, existing_config, flags=re.DOTALL)
+    config_path.write_text(updated_config)
+    logger.info(f"Deactivated SSH configuration for dev-tpu-{tpu_name} (HostName commented out)")
 
 
 def list_tracked_files(local_path: Path) -> list[str]:
