@@ -234,6 +234,7 @@ class TrainWorker:
 
             # Always transfer initial weights to rollout workers before we attempt to start training
             self.transfer_server.serve_weights(state.int_step, state.model)
+            self.replay_buffer.set_current_step(state.int_step)
 
             self._configure_training_hooks(trainer)
 
