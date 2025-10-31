@@ -64,5 +64,6 @@ You don't generate comments with obviously reflect the code, e.g.
 ## Testing
 - You always run the appropriate tests for your changes in e.g. the tests/ directory
 - You use pytest features like fixtures & parameterization to avoid duplication and write clean code
+- You never write tests for obvious behavior, like whether a dataclass has an attribute, or a default is a certain value.
 
 > This file will be expanded as agent workflows and best practices evolve.

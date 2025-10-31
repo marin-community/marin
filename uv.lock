@@ -2005,6 +2005,25 @@ wheels = [
 ]
 
 [[package]]
+name = "fray"
+version = "0.1.0"
+source = { editable = "lib/fray" }
+
+[package.metadata]
+requires-dist = [
+    { name = "monarch", marker = "extra == 'monarch'", url = "https://github.com/rjpower/monarch/releases/download/v0.0.1-no-tensor-engine/monarch-0.0.1-cp311-cp311-macosx_11_0_arm64.whl" },
+    { name = "ray", marker = "extra == 'ray'", specifier = "==2.45" },
+]
+provides-extras = ["ray", "monarch"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+]
+
+[[package]]
 name = "frozenlist"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3742,6 +3761,7 @@ dependencies = [
     { name = "draccus" },
     { name = "fasteners" },
     { name = "flask" },
+    { name = "fray" },
     { name = "gcsfs" },
     { name = "google-api-python-client" },
     { name = "google-cloud-storage" },
@@ -4002,6 +4022,7 @@ requires-dist = [
     { name = "flask" },
     { name = "flax", marker = "extra == 'crawl'" },
     { name = "flax", marker = "extra == 'post-training'", specifier = "==0.10.0" },
+    { name = "fray", editable = "lib/fray" },
     { name = "fsspec", marker = "extra == 'quality-dedup-consolidate'", specifier = ">=2025.3.0" },
     { name = "gcsfs" },
     { name = "gcsfs", marker = "extra == 'post-training'" },
