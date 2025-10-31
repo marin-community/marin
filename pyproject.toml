@@ -102,20 +102,9 @@ dev = [
 ]
 
 [tool.uv]
+override-dependencies = ["omegaconf>=2.4.0.dev4"]
 
 conflicts = [
-    [
-        { extra = "crawl" },
-        { extra = "post-training" },
-    ],
-    [
-        { extra = "crawl" },
-        { extra = "download-transform" },
-    ],
-    [
-        { extra = "crawl" },
-        { group = "transform-test-deps" },
-    ],
     [
         { extra = "crawl" },
         { group = "dev" },
@@ -128,14 +117,6 @@ conflicts = [
         { extra = "cuda12" },
         { extra = "cpu" },
     ],
-    [
-        { extra = "tpu" },
-        { extra = "cpu" },
-    ],
-    [
-        { extra = "eval" },
-        { extra = "quality_dedup_consolidate" },
-    ]
 ]
 
 [tool.uv.sources]
@@ -177,13 +158,13 @@ cpu = ["jax==0.6.2", "torch>=2.7.0"]
 
 crawl = [
     "w3lib",
-    "datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
-    "datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
+    "datatrove[io,processing]",
     "beautifulsoup4",
     "resiliparse",
     "trafilatura",
-    "warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi",
-    "rbloom-gcs==1.5.6",
+    # adds brotlicffi dependency instead of brotlipy
+    "warcio[all] @ git+https://github.com/marin-community/warcio@077ea9359d5b439d152081a9a9c4aafb25046f79",
+    "rbloom-gcs>=1.5.6",
     "google-cloud-bigquery",
     "google-cloud-storage-transfer~=1.0",
     "boto3==1.35.23",
@@ -196,16 +177,14 @@ crawl = [
     "py-asciimath",
     "scipy==1.13.1",
     "spacy",
-    "cupy-cuda12x==13.3.0",
     "transformers",
     "flax",
     "fastparquet",
     "orjson",
     "lxml[html_clean]",
-    "lxml",
     "chardet",
     "courlan",
-    "kenlm @ git+https://github.com/FredHaa/kenlm@fix-build-with-cmake-4.0",
+    "kenlm @ git+https://github.com/kpu/kenlm@4cb443e60b7bf2c0ddf3c745378f76cb59e254e5",
     "jax[tpu]",
 ]
 
@@ -239,7 +218,7 @@ quality_dedup_consolidate = [
     "cattrs==24.1.3",
     "fsspec>=2025.3.0",
     "ddsketch",
-    "dolma @ git+https://github.com/marin-community/dolma",
+    "dolma @ git+https://github.com/marin-community/dolma@8b5577fbfb89afc89ea52d20f92e4bc901c5587a",
 ]
 
 tokenize_train = [
