@@ -45,7 +45,11 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             extra=["eval"],
             pip_packages=["pandas", "langdetect", "immutabledict"],
             env_vars={
-                "HF_ALLOW_CODE_EVAL": "1"
+                "HF_ALLOW_CODE_EVAL": "1",
+                # Reduce noisy service teardown behavior in short-lived Ray workers
+                "WANDB_SERVICE_WAIT": "0",
+                # Keep logs minimal from wandb in worker processes
+                "WANDB_SILENT": "true",
             },  # Human eval tests code from the model which requires permission to run
         )
 

@@ -63,7 +63,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 "langdetect",
                 "ray==2.45",
                 "statsmodels==0.14.4",
-                "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@18b376504e98aadcb985f9235c3e58ab2bf4c5bc",
+                "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
                 "math-verify",  # Required by lm-eval[math]
                 "sympy>=1.12",  # Required by lm-eval[math]
             ],
@@ -71,6 +71,10 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 "TOKENIZERS_PARALLELISM": "false",
                 "HF_DATASETS_TRUST_REMOTE_CODE": "1",
                 "HF_ALLOW_CODE_EVAL": "1",
+                # Reduce noisy service teardown behavior in short-lived Ray workers
+                "WANDB_SERVICE_WAIT": "0",
+                # Keep logs minimal from wandb in worker processes
+                "WANDB_SILENT": "true",
             },
         )
 
@@ -124,7 +128,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             # Current config is customized for our 8B model on v6e-8.
             #
             trainer_config = TrainerConfig(
-                tracker=WandbConfig(project="marin", tags=wandb_tags, name=name),
+                tracker=WandbConfig(project="marin", tags=wandb_tags, name=name, save_code=False),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 per_device_eval_parallelism=1,
                 ray=RayConfig(auto_start_cluster=False),
@@ -234,7 +238,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
                 # write results JSON directly to output_path on GCS
                 fs = fsspec.filesystem("gcs")
-                with fs.open(output_path, "w") as f:
+                with fs.open(results_output_path, "w") as f:
                     json.dump(results, f, indent=2, default=_json_default)
 
                 # Save samples if they exist

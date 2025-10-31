@@ -172,7 +172,7 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
         model=config.model,
         data=config.datasets,
         trainer=TrainerConfig(
-            tracker=WandbConfig(project="marin", tags=["eval_lm", *config.wandb_tags], name=name),
+            tracker=WandbConfig(project="marin", tags=["eval_lm", *config.wandb_tags], name=name, save_code=False),
             ray=RayConfig(auto_start_cluster=False),
             per_device_eval_parallelism=config.per_device_batch_size,
             max_eval_batches=max_eval_batches,
