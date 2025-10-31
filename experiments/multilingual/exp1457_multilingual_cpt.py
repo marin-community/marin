@@ -25,7 +25,6 @@ from levanter.schedule import ScheduleStep
 
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_train
-from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import llama_8b
 from experiments.multilingual_fineweb2_hq.constants import FINEWEB2_HQ_MIXTURE_BYTES
 from experiments.multilingual_fineweb2_hq.download_and_tokenize_fineweb2_hq import tokenize_fineweb2hq_steps
@@ -85,6 +84,7 @@ fineweb2_hq_weights = FINEWEB2_HQ_MIXTURE_BYTES
 # Build the full component set first so we can filter weight dicts to valid keys.
 components = {**phase_3_tokenized, **tokenize_fineweb2hq_steps()}
 
+
 def _filter_weights_to_components(weights: dict[str, float]) -> dict[str, float]:
     """Return a copy of weights keeping only keys present in components.
 
@@ -93,6 +93,7 @@ def _filter_weights_to_components(weights: dict[str, float]) -> dict[str, float]
     """
     allowed = set(components.keys())
     return {k: v for k, v in weights.items() if k in allowed}
+
 
 # We want fineweb2 hq to be 0.7 of the total weight. Normalize per-language by bytes.
 fineweb_total = sum(v for v in fineweb2_hq_weights.values())
@@ -124,7 +125,6 @@ fineweb2_hq = lm_varying_mixture_data_config(
         (PHASE_4_START, _filter_weights_to_components(phase_4_warmup_weights)),
         (PHASE_4_START + PHASE_4_REWARMUP_DURATION, _filter_weights_to_components(phase_4_steady_state_weights)),
         (MULTILINGUAL_CPT_START, _filter_weights_to_components(multilingual_transition_weights)),
-        (MULTILINGUAL_CPT_TRANSITION_END, _filter_weights_to_components(multilingual_transition_weights)),
     ],
 )
 
@@ -134,7 +134,7 @@ multilingual_cpt_8b_fineweb2_hq = default_train(
     model_config=llama_8b,
     train_config=cooldown_train_config,
     tags=["llama", "8b", "ema", "exp1457", "multilingual", "cpt"],
-    eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+    eval_harness_tasks=[],
 ).with_output_path("checkpoints/multilingual-cpt-8b-fineweb2-hq")
 
 # print normalized weights for final phase

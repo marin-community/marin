@@ -70,7 +70,7 @@ def tokenize_fineweb2hq_steps(*, base_path="tokenized/", tokenizer=llama3_tokeni
                 cache_options=CacheOptions(num_shard_groups=256),
             ),
         )
-        steps[os.path.join("fineweb2_hq", split)] = step
+        steps[f"fineweb2_hq/{split}"] = step
     return steps
 
 
