@@ -38,6 +38,7 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -242,10 +243,16 @@ def list_tpu_vms(zone: str) -> list[dict]:
 
 
 def get_next_available_index(existing_vms: list[dict], count: int) -> int:
-    """Find the lowest available index for a new VM."""
+    """
+    Find the lowest available index for a new VM.
+
+    VM names follow the pattern: {prefix}-{zone}-{index}
+    For example: tpu-ci-us-west4-a-0, tpu-ci-us-central1-a-10
+    """
     existing_indices = set()
     for vm in existing_vms:
-        parts = vm["name"].rsplit("-", 1)
+        # Split from the right to get the last component (index)
+        parts = vm["name"].rsplit("-", maxsplit=1)
         if len(parts) == 2 and parts[1].isdigit():
             existing_indices.add(int(parts[1]))
 
@@ -254,6 +261,19 @@ def get_next_available_index(existing_vms: list[dict], count: int) -> int:
             return i
 
     return count
+
+
+def _try_delete_vm(vm: dict, zone: str) -> bool:
+    """
+    Try to delete a VM. Returns True if deletion was successful.
+    """
+    logging.warning(f"[{zone}] TPU {vm['name']} is in state {vm['state']}, deleting...")
+    try:
+        delete_tpu_vm(vm["name"], zone)
+        return True
+    except Exception as e:
+        logging.error(f"[{zone}] Failed to delete {vm['name']}: {e}")
+        return False
 
 
 def ensure_tpu_vms(tpu_client: tpu_v2.TpuClient, zone: str, count: int):
@@ -267,19 +287,15 @@ def ensure_tpu_vms(tpu_client: tpu_v2.TpuClient, zone: str, count: int):
     logging.info(f"[{zone}] Found {len(vms)} TPU VMs")
 
     bad_states = ["PREEMPTED", "TERMINATED", "FAILED"]
-    for vm in vms[:]:
-        if vm["state"] in bad_states:
-            logging.warning(f"[{zone}] TPU {vm['name']} is in state {vm['state']}, deleting...")
-            try:
-                delete_tpu_vm(vm["name"], zone)
-                vms.remove(vm)
-            except Exception as e:
-                logging.error(f"[{zone}] Failed to delete {vm['name']}: {e}")
-
     healthy_states = ["READY", "CREATING"]
     healthy_count = sum(1 for vm in vms if vm["state"] in healthy_states)
 
     logging.info(f"[{zone}] Healthy TPU VMs: {healthy_count}/{count}")
+
+    bad_vms = [vm for vm in vms if vm["state"] in bad_states]
+    logging.info(f"[{zone}] Deleting {len(bad_vms)} bad TPU VMs...")
+    for vm in bad_vms:
+        _try_delete_vm(vm, zone)
 
     needed = count - healthy_count
     if needed > 0:
@@ -350,13 +366,16 @@ def cli():
     )
 
 
+def _run_dashboard(host: str, port: int):
+    """Run the FastAPI dashboard server."""
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
 @cli.command()
 @click.option("--dashboard-host", default="127.0.0.1", help="Dashboard host")
 @click.option("--dashboard-port", default=8000, help="Dashboard port")
 def monitor(dashboard_host: str, dashboard_port: int):
     """Run the monitoring daemon (continuously ensures desired TPU count)."""
-    import threading
-
     logging.info("Starting TPU VM Manager")
     total_vms = sum(config.TPU_ZONES_CONFIG.values())
     logging.info(f"Target: {total_vms} TPU VMs across {len(config.TPU_ZONES_CONFIG)} zones")
@@ -366,7 +385,8 @@ def monitor(dashboard_host: str, dashboard_port: int):
     # Start dashboard in background thread
     logging.info(f"Starting dashboard on {dashboard_host}:{dashboard_port}")
     dashboard_thread = threading.Thread(
-        target=lambda: uvicorn.run(app, host=dashboard_host, port=dashboard_port, log_level="info"),
+        target=_run_dashboard,
+        args=(dashboard_host, dashboard_port),
         daemon=True,
     )
     dashboard_thread.start()
@@ -436,9 +456,21 @@ def check_logs(index: int, zone: str, lines: int, follow: bool):
 
     if follow:
         journalctl_cmd = f"sudo journalctl -u actions.runner.* -n {lines} -f"
-        result = run_sh(
-            f"gcloud compute tpus tpu-vm ssh {name} --zone {zone} "
-            f"--project {config.GCP_PROJECT_ID} --command '{journalctl_cmd}'",
+        result = run(
+            [
+                "gcloud",
+                "compute",
+                "tpus",
+                "tpu-vm",
+                "ssh",
+                name,
+                "--zone",
+                zone,
+                "--project",
+                config.GCP_PROJECT_ID,
+                "--command",
+                journalctl_cmd,
+            ],
             check=False,
         )
         if result.returncode != 0:
@@ -530,9 +562,21 @@ def debug_tpu(index: int, zone: str, test_path: str, pytest_args: str):
     cleanup_cmd = (
         "sudo rm -f /tmp/libtpu_lockfile && sudo lsof -t /dev/vfio/* 2>/dev/null | xargs -r sudo kill -9 || true"
     )
-    result = run_sh(
-        f"gcloud compute tpus tpu-vm ssh {name} --zone {zone} "
-        f"--project {config.GCP_PROJECT_ID} --command '{cleanup_cmd}'",
+    result = run(
+        [
+            "gcloud",
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "ssh",
+            name,
+            "--zone",
+            zone,
+            "--project",
+            config.GCP_PROJECT_ID,
+            "--command",
+            cleanup_cmd,
+        ],
         check=False,
     )
     if result.returncode != 0:

@@ -30,12 +30,8 @@ CONTROLLER_DISK_SIZE_GB = 10
 # Multi-zone TPU configuration: maps zone -> desired instance count
 TPU_ZONES_CONFIG = {
     "us-west4-a": 2,
-    "us-west4-b": 2,
-    "us-central1-a": 2,
     "us-east1-c": 2,
-    "europe-west4-a": 2,
     "europe-west4-b": 2,
-    "europe-west1-b": 2,
 }
 
 TPU_VM_PREFIX = "tpu-ci"

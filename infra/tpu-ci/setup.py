@@ -150,7 +150,6 @@ def delete_controller_vm():
 
 
 def wait_for_controller_service():
-    """Wait for the controller service dashboard to become accessible."""
     logging.info("Waiting for controller service to start (timeout: 10 minutes)...")
     start_time = time.time()
     timeout_seconds = 600
