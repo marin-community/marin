@@ -44,9 +44,9 @@ from pathlib import Path
 
 import click
 import config
+import uvicorn
 from fastapi import FastAPI
 from google.cloud import tpu_v2
-import uvicorn
 
 
 def run(cmd: list, **kwargs) -> subprocess.CompletedProcess:
@@ -351,22 +351,25 @@ def cli():
 
 
 @cli.command()
-@click.option("--host", default="0.0.0.0", help="Host to bind to")
-@click.option("--port", default=8000, help="Port to bind to")
-def dashboard(host: str, port: int):
-    """Run the dashboard server (JSON status endpoint)."""
-    logging.info(f"Starting TPU CI Dashboard on {host}:{port}")
-    uvicorn.run(app, host=host, port=port, log_level="info")
-
-
-@cli.command()
-def monitor():
+@click.option("--dashboard-host", default="127.0.0.1", help="Dashboard host")
+@click.option("--dashboard-port", default=8000, help="Dashboard port")
+def monitor(dashboard_host: str, dashboard_port: int):
     """Run the monitoring daemon (continuously ensures desired TPU count)."""
+    import threading
+
     logging.info("Starting TPU VM Manager")
     total_vms = sum(config.TPU_ZONES_CONFIG.values())
     logging.info(f"Target: {total_vms} TPU VMs across {len(config.TPU_ZONES_CONFIG)} zones")
     for zone, count in config.TPU_ZONES_CONFIG.items():
         logging.info(f"  {zone}: {count} VMs")
+
+    # Start dashboard in background thread
+    logging.info(f"Starting dashboard on {dashboard_host}:{dashboard_port}")
+    dashboard_thread = threading.Thread(
+        target=lambda: uvicorn.run(app, host=dashboard_host, port=dashboard_port, log_level="info"),
+        daemon=True,
+    )
+    dashboard_thread.start()
 
     tpu_client = tpu_v2.TpuClient()
 

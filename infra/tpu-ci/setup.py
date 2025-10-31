@@ -29,6 +29,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -148,6 +149,36 @@ def delete_controller_vm():
     logging.info("✓ Controller VM deleted")
 
 
+def wait_for_controller_service():
+    """Wait for the controller service dashboard to become accessible."""
+    logging.info("Waiting for controller service to start (timeout: 10 minutes)...")
+    start_time = time.time()
+    timeout_seconds = 600
+    retry_interval = 10
+
+    while True:
+        elapsed = time.time() - start_time
+        if elapsed > timeout_seconds:
+            logging.error("Controller service failed to start within 10 minutes")
+            sys.exit(1)
+
+        result = run_sh(
+            f"gcloud compute ssh {config.CONTROLLER_NAME} --zone {config.CONTROLLER_ZONE} "
+            f"--project {config.GCP_PROJECT_ID} --command 'curl -sf http://localhost:8000/'",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode == 0:
+            logging.info("Controller service is active and responding")
+            return
+
+        remaining = timeout_seconds - elapsed
+        logging.info(f"Service not ready yet, retrying in {retry_interval}s (time remaining: {int(remaining)}s)...")
+        time.sleep(retry_interval)
+
+
 def create_controller_vm():
     """Create controller VM for running TPU VM manager."""
     logging.info("Creating controller VM...")
@@ -220,6 +251,7 @@ systemctl start tpu-monitor
     )
 
     logging.info("✓ Controller VM created")
+    wait_for_controller_service()
 
 
 def delete_all_tpu_vms():
