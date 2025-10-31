@@ -94,9 +94,9 @@ def _lr_sweep(
     scaled_config = _scale_llama_config(base_model, hidden_dim)
     model_type = "-qwen3" if isinstance(base_model, Qwen3Config) else ""
     sweep_kind = f"mup{model_type}" if use_mup else f"baseline{model_type}"
-    base_name = f"exp1570_hidden{hidden_dim}-{sweep_kind}-wsd"
+    base_name = f"exp1570_hidden{hidden_dim}-{sweep_kind}-wsd-0min"
     stable_sweep_kind = f"mup-stable{model_type}"
-    stable_base_name = f"exp1570_hidden{hidden_dim}-{stable_sweep_kind}-wsd"
+    stable_base_name = f"exp1570_hidden{hidden_dim}-{stable_sweep_kind}-wsd-0min"
 
     steps = []
     for lr in learning_rates:
@@ -107,6 +107,7 @@ def _lr_sweep(
             warmup=0.1,
             decay=0.1,
             lr_schedule="linear",
+            min_lr_ratio=0.0,
         )
 
         train_config = _make_train_config(
@@ -163,7 +164,7 @@ def _lr_sweep_muonh(
     scaled_config = _scale_llama_config(base_model, hidden_dim)
     model_type = "-qwen3" if isinstance(base_model, Qwen3Config) else ""
     sweep_kind = f"muonh{model_type}"
-    base_name = f"exp1570_hidden{hidden_dim}-{sweep_kind}-wsd"
+    base_name = f"exp1570_hidden{hidden_dim}-{sweep_kind}-wsd-0min"
 
     steps: list[ExecutorStep[TrainLmOnPodConfig]] = []
     for lr in learning_rates:
@@ -172,6 +173,7 @@ def _lr_sweep_muonh(
             weight_decay=BASE_WEIGHT_DECAY,
             warmup=0.1,
             decay=0.1,
+            min_lr_ratio=0.0,
             lr_schedule="linear",
         )
 
@@ -205,7 +207,7 @@ def _lr_sweep_adamh(
     scaled_config = _scale_llama_config(base_model, hidden_dim)
     model_type = "-qwen3" if isinstance(base_model, Qwen3Config) else ""
     sweep_kind = f"adamh{model_type}"
-    base_name = f"exp1570_hidden{hidden_dim}-{sweep_kind}-wsd"
+    base_name = f"exp1570_hidden{hidden_dim}-{sweep_kind}-wsd-0min"
 
     steps: list[ExecutorStep[TrainLmOnPodConfig]] = []
     for lr in learning_rates:
@@ -215,6 +217,7 @@ def _lr_sweep_adamh(
             warmup=0.1,
             decay=0.1,
             lr_schedule="linear",
+            min_lr_ratio=0.0,
         )
 
         train_config = _make_train_config(
@@ -271,8 +274,8 @@ def build_wd_sweep(base_model=llama_30m) -> list[ExecutorStep[TrainLmOnPodConfig
     model_type = "-qwen3" if isinstance(base_model, Qwen3Config) else ""
     decoupled_kind = f"decoupled{model_type}"
     coupled_kind = f"coupled{model_type}"
-    decoupled_base_name = f"exp1570_hidden{hidden_dim}-{decoupled_kind}-wsd"
-    coupled_base_name = f"exp1570_hidden{hidden_dim}-{coupled_kind}-wsd"
+    decoupled_base_name = f"exp1570_hidden{hidden_dim}-{decoupled_kind}-wsd-0min"
+    coupled_base_name = f"exp1570_hidden{hidden_dim}-{coupled_kind}-wsd-0min"
 
     steps: list[ExecutorStep[TrainLmOnPodConfig]] = []
     for fixed_lr in (0.006, 0.001):
