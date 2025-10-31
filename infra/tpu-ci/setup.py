@@ -220,7 +220,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="/root/.local/bin:$PATH"
 
 cd /opt
-git clone --branch {branch} {config.MARIN_GITHUB_URL}
+git clone --branch {branch} {config.GITHUB_URL}
 cd marin/infra/tpu-ci
 
 cat > /etc/systemd/system/tpu-monitor.service <<'EOF'

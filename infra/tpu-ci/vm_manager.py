@@ -343,7 +343,6 @@ def check_runner_service(vm_name: str, zone: str) -> bool:
     Check if GitHub Actions runner service is active on a VM.
 
     Returns True if service is running, False otherwise.
-    Assumes runner is dead if check doesn't complete within 10 seconds.
     """
     try:
         result = run_sh(
@@ -353,7 +352,7 @@ def check_runner_service(vm_name: str, zone: str) -> bool:
             capture_output=True,
             text=True,
             check=False,
-            timeout=10,
+            timeout=30,
         )
 
         is_active = result.returncode == 0 and result.stdout.strip() == "active"
@@ -702,8 +701,9 @@ def check_logs(name: str, lines: int, follow: bool):
 @cli.command()
 @click.argument("name", type=str)
 @click.option("--test-path", default="tests/tpu/")
-@click.option("--pytest-args", default="-vs -o log_cli_level=INFO")
-def debug_tpu(name: str, test_path: str, pytest_args: str):
+@click.option("--pytest-args", default="-v --tb=short -s --log-cli-level=INFO")
+@click.option("--timeout", default=900, help="Timeout in seconds for pytest execution")
+def debug_tpu(name: str, test_path: str, pytest_args: str, timeout: int):
     """Rsync marin directory to VM and run pytest in Docker container."""
     zone = extract_zone_from_name(name)
 
@@ -728,42 +728,51 @@ def debug_tpu(name: str, test_path: str, pytest_args: str):
 
     logging.info("✓ Project synced")
 
-    logging.info(f"Cleaning up TPU resources on {name}...")
-    cleanup_cmd = (
-        "sudo rm -f /tmp/libtpu_lockfile && sudo lsof -t /dev/vfio/* 2>/dev/null | xargs -r sudo kill -9 || true"
-    )
-    result = run(
-        [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "ssh",
-            name,
-            "--zone",
-            zone,
-            "--project",
-            config.GCP_PROJECT_ID,
-            "--command",
-            cleanup_cmd,
-        ],
-        check=False,
-    )
-    if result.returncode != 0:
-        logging.warning("TPU cleanup had non-zero exit (may be normal if no processes to kill)")
-
     # Build environment variable flags for Docker
     env_flags = []
     for var in ["HF_TOKEN", "WANDB_API_KEY"]:
         value = os.getenv(var)
         if value:
-            env_flags.append(f"-e {var}={shlex.quote(value)}")
+            env_flags.append(f"-e {var}")
             logging.info(f"Forwarding {var} to Docker container")
 
     env_flags_str = " ".join(env_flags)
 
     logging.info(f"Running pytest on {name}...")
-    docker_image = config.get_docker_image_for_zone(zone)
+
+    # Use the same script structure as GitHub Actions workflow
+    test_script = f"""
+rm -f /tmp/libtpu_lockfile || true
+lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
+
+# Detect the regional Docker image by parsing region from zone
+ZONE=$(curl -sSf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/zone | cut -d/ -f4)
+REGION=$(echo $ZONE | rev | cut -d- -f2- | rev)
+DOCKER_IMAGE="$REGION-docker.pkg.dev/{config.DOCKER_REPOSITORY}/{config.DOCKER_IMAGE_NAME}:{config.DOCKER_IMAGE_TAG}"
+echo "Using Docker image: $DOCKER_IMAGE (zone: $ZONE, region: $REGION)"
+
+docker run --rm \\
+  --device /dev/vfio:/dev/vfio \\
+  --shm-size=100g \\
+  --stop-timeout=1 \\
+  --cap-add=SYS_RESOURCE \\
+  --ulimit memlock=68719476736:68719476736 \\
+  -e JAX_PLATFORMS=tpu \\
+  -e PJRT_DEVICE=TPU \\
+  -e TPU_CI=true \\
+  -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \\
+  -e START_RAY_TPU_CLUSTER=true \\
+  -e PYTHONPATH=/workspace \\
+  -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \\
+  {env_flags_str} \\
+  -v {remote_dir}:/workspace:rw \\
+  --tmpfs /workspace/logs:rw \\
+  --tmpfs /workspace/.pytest_cache:rw \\
+  -w /workspace \\
+  $DOCKER_IMAGE \\
+  timeout --kill-after=5 --signal=TERM {timeout} uv run --frozen pytest {test_path} {pytest_args}
+"""
+
     ssh_cmd = [
         "gcloud",
         "compute",
@@ -776,26 +785,7 @@ def debug_tpu(name: str, test_path: str, pytest_args: str):
         "--project",
         config.GCP_PROJECT_ID,
         "--command",
-        f"""sudo -u github-runner bash -c 'docker run --rm \
-            --device /dev/vfio:/dev/vfio \
-            --shm-size=100g \
-            --stop-timeout=1 \
-            --cap-add=SYS_RESOURCE \
-            --ulimit memlock=68719476736:68719476736 \
-            -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
-            -e JAX_PLATFORMS=tpu \
-            -e PJRT_DEVICE=TPU \
-            -e TPU_CI=true \
-            -e START_RAY_TPU_CLUSTER=true \
-            -e PYTHONPATH=/workspace \
-            -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \
-            {env_flags_str} \
-            -v {remote_dir}:/workspace:rw \
-            --tmpfs /workspace/logs:rw \
-            --tmpfs /workspace/.pytest_cache:rw \
-            -w /workspace \
-            {docker_image} \
-            timeout --kill-after=5 --signal=TERM 120 uv run --frozen pytest {test_path} {pytest_args}' || true""",
+        test_script,
     ]
 
     result = run(ssh_cmd, check=False)
