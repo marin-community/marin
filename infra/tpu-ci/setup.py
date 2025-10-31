@@ -27,9 +27,11 @@ Manages preemptible TPU VMs with GitHub Actions runners.
 
 import logging
 import os
+import shlex
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import click
@@ -44,8 +46,6 @@ def run(cmd: list, **kwargs) -> subprocess.CompletedProcess:
 
 def run_sh(cmd: str, **kwargs) -> subprocess.CompletedProcess:
     """Run command from string with logging."""
-    import shlex
-
     return run(shlex.split(cmd), **kwargs)
 
 
@@ -86,43 +86,67 @@ def store_github_token_in_secret_manager(token: str):
 
 
 def ensure_artifact_registry():
-    """Ensure Artifact Registry repository exists."""
-    logging.info("Checking Artifact Registry...")
+    """Ensure Artifact Registry repositories exist in all regions."""
+    regions = config.get_all_regions()
+    logging.info(f"Checking Artifact Registries in {len(regions)} regions: {', '.join(regions)}")
 
-    result = run_sh(
-        f"gcloud artifacts repositories describe {config.ARTIFACT_REGISTRY_REPO_NAME} "
-        f"--location {config.REGION} --project {config.GCP_PROJECT_ID}",
-        capture_output=True,
-        check=False,
-    )
+    for region in regions:
+        result = run_sh(
+            f"gcloud artifacts repositories describe {config.ARTIFACT_REGISTRY_REPO_NAME} "
+            f"--location {region} --project {config.GCP_PROJECT_ID}",
+            capture_output=True,
+            check=False,
+        )
 
-    if result.returncode == 0:
-        logging.info("✓ Artifact Registry exists")
-        return
+        if result.returncode == 0:
+            logging.info(f"✓ Artifact Registry exists in {region}")
+            continue
 
-    logging.info("Creating Artifact Registry...")
-    run_sh(
-        f"gcloud artifacts repositories create {config.ARTIFACT_REGISTRY_REPO_NAME} "
-        f"--repository-format=docker --location {config.REGION} --project {config.GCP_PROJECT_ID}",
-        check=True,
-    )
+        logging.info(f"Creating Artifact Registry in {region}...")
+        run_sh(
+            f"gcloud artifacts repositories create {config.ARTIFACT_REGISTRY_REPO_NAME} "
+            f"--repository-format=docker --location {region} --project {config.GCP_PROJECT_ID}",
+            check=True,
+        )
+        logging.info(f"✓ Artifact Registry created in {region}")
 
-    logging.info("✓ Artifact Registry created")
+    logging.info("✓ All Artifact Registries ready")
 
 
 def build_and_push_docker_image():
-    """Build and push TPU CI Docker image."""
-    logging.info("Building TPU CI Docker image...")
+    """Build and push TPU CI Docker image to all regional registries."""
+    regions = config.get_all_regions()
+    logging.info(f"Building and pushing Docker image to {len(regions)} regions: {', '.join(regions)}")
 
-    run_sh(f"gcloud auth configure-docker {config.DOCKER_REGISTRY} -q", check=True)
+    # Configure docker auth for all regional registries
+    for region in regions:
+        registry = f"{region}-docker.pkg.dev"
+        run_sh(f"gcloud auth configure-docker {registry} -q", check=True)
 
-    run_sh(
-        f"docker buildx build --platform linux/amd64 --push -t {config.DOCKER_IMAGE_FULL} "
-        f"-f {config.DOCKERFILE_TPU_CI_PATH} .",
+    # Build image tags for all regions
+    tags = []
+    for region in regions:
+        registry = f"{region}-docker.pkg.dev"
+        image_url = f"{registry}/{config.DOCKER_REPOSITORY}/{config.DOCKER_IMAGE_NAME}:{config.DOCKER_IMAGE_TAG}"
+        tags.extend(["-t", image_url])
+
+    run(
+        [
+            "docker",
+            "buildx",
+            "build",
+            "--platform",
+            "linux/amd64",
+            "--push",
+            *tags,
+            "-f",
+            config.DOCKERFILE_TPU_CI_PATH,
+            ".",
+        ],
         check=True,
     )
 
-    logging.info("✓ Docker image built and pushed")
+    logging.info(f"✓ Docker image built and pushed to all {len(regions)} regions")
 
 
 def delete_controller_vm():
@@ -253,40 +277,57 @@ systemctl start tpu-monitor
     wait_for_controller_service()
 
 
-def delete_all_tpu_vms():
-    """Delete all TPU VMs with tpu-ci labels across all zones."""
-    logging.info("Deleting TPU VMs...")
+def delete_tpu_vms_in_zone(zone: str) -> int:
+    """Delete all TPU VMs with tpu-ci labels in a specific zone.
 
-    total_deleted = 0
-    for zone in config.TPU_ZONES_CONFIG.keys():
-        result = run_sh(
-            f"gcloud compute tpus tpu-vm list --zone {zone} --project {config.GCP_PROJECT_ID} "
-            f"--filter labels.tpu-ci-managed=true --format value(name)",
-            capture_output=True,
-            text=True,
+    Returns the number of VMs deleted.
+    """
+    result = run_sh(
+        f"gcloud compute tpus tpu-vm list --zone {zone} --project {config.GCP_PROJECT_ID} "
+        f"--filter labels.tpu-ci-managed=true --format value(name)",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if result.returncode != 0 or not result.stdout.strip():
+        return 0
+
+    vm_names = result.stdout.strip().split("\n")
+    vm_names = [name.strip() for name in vm_names if name.strip()]
+    logging.info(f"Found {len(vm_names)} TPU VMs in {zone}")
+
+    deleted_count = 0
+    for vm_name in vm_names:
+        logging.info(f"Deleting TPU VM: {vm_name} in {zone}")
+        run_sh(
+            f"gcloud compute tpus tpu-vm delete {vm_name} --zone {zone} --project {config.GCP_PROJECT_ID} --quiet",
             check=False,
         )
+        deleted_count += 1
 
-        if result.returncode != 0 or not result.stdout.strip():
-            continue
+    return deleted_count
 
-        vm_names = result.stdout.strip().split("\n")
-        logging.info(f"Found {len(vm_names)} TPU VMs in {zone}")
 
-        for vm_name in vm_names:
-            if vm_name:
-                logging.info(f"Deleting TPU VM: {vm_name} in {zone}")
-                run_sh(
-                    f"gcloud compute tpus tpu-vm delete {vm_name} "
-                    f"--zone {zone} --project {config.GCP_PROJECT_ID} --quiet",
-                    check=False,
-                )
-                total_deleted += 1
+def delete_all_tpu_vms():
+    """Delete all TPU VMs with tpu-ci labels across all zones in parallel."""
+    logging.info("Deleting TPU VMs across all zones...")
 
-    if total_deleted == 0:
-        logging.info("✓ No TPU VMs to delete")
-    else:
-        logging.info(f"✓ Deleted {total_deleted} TPU VMs")
+    zones = list(config.TPU_ZONES_CONFIG.keys())
+    total_deleted = 0
+
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        futures = {executor.submit(delete_tpu_vms_in_zone, zone): zone for zone in zones}
+
+        for future in as_completed(futures):
+            zone = futures[future]
+            try:
+                deleted_count = future.result()
+                total_deleted += deleted_count
+            except Exception as e:
+                logging.error(f"Error deleting TPU VMs in {zone}: {e}")
+
+    logging.info(f"✓ Deleted {total_deleted} TPU VMs")
 
 
 @click.group()
@@ -332,8 +373,8 @@ def setup_controller():
 @cli.command()
 def teardown():
     """Destroy all TPU CI infrastructure."""
-    delete_all_tpu_vms()
     delete_controller_vm()
+    delete_all_tpu_vms()
 
 
 @cli.command("build-image")

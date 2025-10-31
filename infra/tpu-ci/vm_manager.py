@@ -49,6 +49,80 @@ import uvicorn
 from fastapi import FastAPI
 from google.cloud import tpu_v2
 
+# Word lists for generating fun VM names
+VERBS = [
+    "running",
+    "flying",
+    "swimming",
+    "jumping",
+    "dancing",
+    "singing",
+    "climbing",
+    "racing",
+    "soaring",
+    "dashing",
+    "spinning",
+    "bouncing",
+]
+
+NOUNS = [
+    "tiger",
+    "eagle",
+    "dolphin",
+    "mountain",
+    "river",
+    "forest",
+    "cloud",
+    "thunder",
+    "phoenix",
+    "dragon",
+    "falcon",
+    "canyon",
+]
+
+
+def generate_random_id() -> str:
+    """Generate a short random ID (4 alphanumeric characters)."""
+    import random
+    import string
+
+    chars = string.ascii_lowercase + string.digits
+    return "".join(random.choices(chars, k=4))
+
+
+def generate_fun_name(zone: str) -> str:
+    """
+    Generate a fun VM name in wandb style.
+
+    Format: {verb}-{noun}-{zone}-{random_id}
+    Example: running-tiger-us-west4-a-7x3k
+    """
+    import random
+
+    verb = random.choice(VERBS)
+    noun = random.choice(NOUNS)
+    random_id = generate_random_id()
+    return f"{verb}-{noun}-{zone}-{random_id}"
+
+
+def extract_zone_from_name(vm_name: str) -> str:
+    """
+    Extract zone from VM name.
+
+    Expected format: {prefix}-{verb}-{noun}-{zone}-{random_id}
+    For zone like 'us-west4-a', this returns the zone portion.
+    """
+    # Remove the prefix (tpu-ci-)
+    parts = vm_name.split("-")
+    # Format is: [prefix, verb, noun, region, subregion, zoneletter, randomid]
+    # e.g., tpu-ci-running-tiger-us-west4-a-7x3k
+    # parts: ['tpu', 'ci', 'running', 'tiger', 'us', 'west4', 'a', '7x3k']
+    # Zone is the last 3 parts before the random ID
+    if len(parts) >= 6:
+        # Join the zone parts (e.g., 'us', 'west4', 'a')
+        return f"{parts[-4]}-{parts[-3]}-{parts[-2]}"
+    raise ValueError(f"Invalid VM name format: {vm_name}")
+
 
 def run(cmd: list, **kwargs) -> subprocess.CompletedProcess:
     """Run command with logging."""
@@ -61,9 +135,9 @@ def run_sh(cmd: str, **kwargs) -> subprocess.CompletedProcess:
     return run(shlex.split(cmd), **kwargs)
 
 
-def vm_name(zone: str, index: int) -> str:
-    """Generate VM name from zone and index."""
-    return f"{config.TPU_VM_PREFIX}-{zone}-{index}"
+def vm_name(zone: str) -> str:
+    """Generate VM name from zone using fun naming."""
+    return f"{config.TPU_VM_PREFIX}-{generate_fun_name(zone)}"
 
 
 def get_startup_script() -> str:
@@ -86,6 +160,14 @@ INSTANCE_NAME=$(curl -sSf -H "Metadata-Flavor: Google" \\
   http://metadata.google.internal/computeMetadata/v1/instance/name)
 
 echo "Instance: $INSTANCE_NAME in $ZONE"
+
+# Compute regional Docker image URL by parsing region from zone
+# Zone format: us-west4-a -> Region: us-west4
+REGION=$(echo $ZONE | rev | cut -d- -f2- | rev)
+DOCKER_REGISTRY="$REGION-docker.pkg.dev"
+DOCKER_IMAGE="$DOCKER_REGISTRY/{config.DOCKER_REPOSITORY}/{config.DOCKER_IMAGE_NAME}:{config.DOCKER_IMAGE_TAG}"
+
+echo "Using Docker image: $DOCKER_IMAGE (region: $REGION)"
 
 # Kill unattended-upgrades to avoid apt lock conflicts
 echo "Stopping unattended-upgrades..."
@@ -113,10 +195,10 @@ systemctl enable docker
 systemctl start docker
 
 echo "Configuring Docker authentication..."
-gcloud auth configure-docker {config.DOCKER_REGISTRY} --quiet
+gcloud auth configure-docker $DOCKER_REGISTRY --quiet
 
 echo "Pre-pulling TPU CI Docker image..."
-docker pull {config.DOCKER_IMAGE_FULL} || true
+docker pull $DOCKER_IMAGE || true
 
 echo "Installing GitHub Actions runner..."
 RUNNER_VERSION="2.311.0"
@@ -176,9 +258,9 @@ echo "=== TPU VM Setup Complete ==="
 """
 
 
-def create_tpu_vm(index: int, zone: str) -> None:
-    """Create a single preemptible TPU VM with GitHub Actions runner."""
-    name = vm_name(zone, index)
+def create_tpu_vm(zone: str) -> str:
+    """Create a single preemptible TPU VM with GitHub Actions runner. Returns the VM name."""
+    name = vm_name(zone)
 
     logging.info(f"Creating TPU VM: {name} in {zone}")
 
@@ -205,6 +287,8 @@ def create_tpu_vm(index: int, zone: str) -> None:
             raise RuntimeError(f"Failed to create TPU VM {name}")
     else:
         logging.info(f"✓ Created TPU VM: {name}")
+
+    return name
 
 
 def delete_tpu_vm(vm_name: str, zone: str) -> None:
@@ -242,25 +326,25 @@ def list_tpu_vms(zone: str) -> list[dict]:
     return [{"name": vm["name"], "state": vm.get("state", "UNKNOWN"), "zone": zone} for vm in vms]
 
 
-def get_next_available_index(existing_vms: list[dict], count: int) -> int:
+def check_runner_service(vm_name: str, zone: str) -> bool:
     """
-    Find the lowest available index for a new VM.
+    Check if GitHub Actions runner service is active on a VM.
 
-    VM names follow the pattern: {prefix}-{zone}-{index}
-    For example: tpu-ci-us-west4-a-0, tpu-ci-us-central1-a-10
+    Returns True if service is running, False otherwise.
     """
-    existing_indices = set()
-    for vm in existing_vms:
-        # Split from the right to get the last component (index)
-        parts = vm["name"].rsplit("-", maxsplit=1)
-        if len(parts) == 2 and parts[1].isdigit():
-            existing_indices.add(int(parts[1]))
+    result = run_sh(
+        f"gcloud compute tpus tpu-vm ssh {vm_name} --zone {zone} "
+        f"--project {config.GCP_PROJECT_ID} "
+        f"--command 'systemctl is-active actions.runner.*'",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
-    for i in range(count):
-        if i not in existing_indices:
-            return i
-
-    return count
+    is_active = result.returncode == 0 and result.stdout.strip() == "active"
+    if not is_active:
+        logging.warning(f"[{zone}] Runner service not active on {vm_name}: {result.stdout.strip()}")
+    return is_active
 
 
 def _try_delete_vm(vm: dict, zone: str) -> bool:
@@ -290,21 +374,34 @@ def ensure_tpu_vms(tpu_client: tpu_v2.TpuClient, zone: str, count: int):
     healthy_states = ["READY", "CREATING"]
     healthy_count = sum(1 for vm in vms if vm["state"] in healthy_states)
 
-    logging.info(f"[{zone}] Healthy TPU VMs: {healthy_count}/{count}")
+    # Verify runner service health for READY VMs
+    ready_vms = [vm for vm in vms if vm["state"] == "READY"]
+    unhealthy_runners = []
+    for vm in ready_vms:
+        if not check_runner_service(vm["name"], zone):
+            unhealthy_runners.append(vm)
+            healthy_count -= 1  # Reduce healthy count
 
+    logging.info(f"[{zone}] Healthy TPU VMs: {healthy_count}/{count}")
+    if unhealthy_runners:
+        logging.info(f"[{zone}] Found {len(unhealthy_runners)} VMs with unhealthy runner services")
+
+    # Delete VMs in bad states or with unhealthy runners
     bad_vms = [vm for vm in vms if vm["state"] in bad_states]
-    logging.info(f"[{zone}] Deleting {len(bad_vms)} bad TPU VMs...")
-    for vm in bad_vms:
-        _try_delete_vm(vm, zone)
+    bad_vms.extend(unhealthy_runners)
+
+    if bad_vms:
+        logging.info(f"[{zone}] Deleting {len(bad_vms)} bad/unhealthy TPU VMs...")
+        for vm in bad_vms:
+            _try_delete_vm(vm, zone)
 
     needed = count - healthy_count
     if needed > 0:
         logging.info(f"[{zone}] Creating {needed} new TPU VMs...")
         for _ in range(needed):
-            index = get_next_available_index(vms, count)
             try:
-                create_tpu_vm(index, zone)
-                vms.append({"name": vm_name(zone, index), "state": "CREATING", "zone": zone})
+                name = create_tpu_vm(zone)
+                vms.append({"name": name, "state": "CREATING", "zone": zone})
             except Exception as e:
                 logging.error(f"[{zone}] Failed to create TPU VM: {e}")
 
@@ -404,7 +501,7 @@ def monitor(dashboard_host: str, dashboard_port: int):
 
 @cli.command()
 def list_vms():
-    """List all TPU VMs across all zones."""
+    """List all TPU VMs across all zones with runner status."""
     all_vms = []
     for zone in config.TPU_ZONES_CONFIG.keys():
         vms = list_tpu_vms(zone)
@@ -416,15 +513,23 @@ def list_vms():
 
     click.echo(f"Found {len(all_vms)} TPU VMs:")
     for vm in all_vms:
-        click.echo(f"  {vm['name']} ({vm['zone']}): {vm['state']}")
+        vm_state = vm["state"]
+        runner_status = ""
+
+        # Check runner service status for READY VMs
+        if vm_state == "READY":
+            is_healthy = check_runner_service(vm["name"], vm["zone"])
+            runner_status = " [runner: active]" if is_healthy else " [runner: inactive]"
+
+        click.echo(f"  {vm['name']} ({vm['zone']}): {vm_state}{runner_status}")
 
 
 @cli.command()
-@click.argument("index", type=int)
 @click.argument("zone", type=str)
-def create(index: int, zone: str):
-    """Create a TPU VM with the given index in the specified zone."""
-    create_tpu_vm(index, zone)
+def create(zone: str):
+    """Create a TPU VM with a random fun name in the specified zone."""
+    name = create_tpu_vm(zone)
+    click.echo(f"Created TPU VM: {name}")
 
 
 @cli.command()
@@ -444,13 +549,12 @@ def ensure():
 
 
 @cli.command()
-@click.argument("index", type=int)
-@click.argument("zone", type=str)
+@click.argument("name", type=str)
 @click.option("--lines", "-n", default=100, help="Number of log lines to show (default: 100)")
 @click.option("--follow", "-f", is_flag=True, help="Follow log output in real-time")
-def check_logs(index: int, zone: str, lines: int, follow: bool):
+def check_logs(name: str, lines: int, follow: bool):
     """Show GitHub Actions runner logs and diagnostics for a TPU VM."""
-    name = vm_name(zone, index)
+    zone = extract_zone_from_name(name)
 
     logging.info(f"Fetching logs from TPU VM: {name} in {zone}")
 
@@ -529,13 +633,12 @@ sudo docker ps -a || true
 
 
 @cli.command()
-@click.argument("index", type=int)
-@click.argument("zone", type=str)
+@click.argument("name", type=str)
 @click.option("--test-path", default="tests/tpu/")
 @click.option("--pytest-args", default="-vs -o log_cli_level=INFO")
-def debug_tpu(index: int, zone: str, test_path: str, pytest_args: str):
+def debug_tpu(name: str, test_path: str, pytest_args: str):
     """Rsync marin directory to VM and run pytest in Docker container."""
-    name = vm_name(zone, index)
+    zone = extract_zone_from_name(name)
 
     logging.info(f"Running TPU tests on: {name} in {zone}")
 
@@ -593,6 +696,7 @@ def debug_tpu(index: int, zone: str, test_path: str, pytest_args: str):
     env_flags_str = " ".join(env_flags)
 
     logging.info(f"Running pytest on {name}...")
+    docker_image = config.get_docker_image_for_zone(zone)
     ssh_cmd = [
         "gcloud",
         "compute",
@@ -623,7 +727,7 @@ def debug_tpu(index: int, zone: str, test_path: str, pytest_args: str):
             --tmpfs /workspace/logs:rw \
             --tmpfs /workspace/.pytest_cache:rw \
             -w /workspace \
-            {config.DOCKER_IMAGE_FULL} \
+            {docker_image} \
             timeout --kill-after=5 --signal=TERM 120 uv run --frozen pytest {test_path} {pytest_args}' || true""",
     ]
 
@@ -634,11 +738,10 @@ def debug_tpu(index: int, zone: str, test_path: str, pytest_args: str):
 
 
 @cli.command()
-@click.argument("index", type=int)
-@click.argument("zone", type=str)
-def debug_setup(index: int, zone: str):
+@click.argument("name", type=str)
+def debug_setup(name: str):
     """Re-run startup script on an existing TPU VM for debugging."""
-    name = vm_name(zone, index)
+    zone = extract_zone_from_name(name)
 
     logging.info(f"Re-running startup script on TPU VM: {name} in {zone}")
 
