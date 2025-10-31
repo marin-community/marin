@@ -31,7 +31,6 @@ from experiments.ferries.initial_ferry import (
     _build_varying_mixture_for_steps as _base_build_varying_mixture_for_steps,
 )
 
-
 muonh_cfg_1b = MuonHConfig(
     learning_rate=0.01,
     adam_lr=0.0015,
