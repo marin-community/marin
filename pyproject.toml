@@ -1,7 +1,6 @@
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-requires-python = ">=3.11,<3.13"
 
 [project]
 name = "marin"
@@ -9,21 +8,21 @@ version = "0.1.0"
 readme = "README.md"
 license = { file = "LICENSE" }
 
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.12"
 dependencies = [
     "braceexpand",
-    "cryptography>=45",
+    "cryptography==46.0.3",
     "datasets",
     "deepdiff",
-    "draccus>=0.11.5",
-    "fasteners>=0.19",
+    "draccus==0.11.5",
+    "fasteners==0.20",
     "flask",
     "gcsfs",
-    "google-api-python-client>=2.175.0",
-    "google-cloud-storage",
+    "google-api-python-client==2.186.0",
+    "google-cloud-storage==3.4.1",
     "google-cloud-storage-transfer",
     "jax==0.6.2",
-    "haliax>=1.4.dev443",
+    "haliax==1.4.dev450",
     "levanter[serve] @ git+https://github.com/marin-community/levanter.git@c30de5b9ad706da1ddb5e95cf82ed767692f7f7c",
     "lz4",
     "multiprocess==0.70.16",
@@ -37,7 +36,7 @@ dependencies = [
     "s3fs>=2024",
     "sentencepiece",
     "toml",
-    "torch>=2.7.0",
+    "torch==2.9.0",
     "tqdm",
     "tqdm-loggable",
     "wandb",
@@ -102,43 +101,33 @@ dev = [
 ]
 
 [tool.uv]
+workspace = { members = ["lib/ml-flow"] }
+override-dependencies = [
+    "google-cloud-storage>=3.3.1",
+    # Pin split-causing packages for faster resolution
+    "grpcio==1.76.0",
+    "py-spy==0.4.1",
+    "protobuf==5.29.3",
+    "proto-plus==1.25.0",
+]
 
 conflicts = [
     [
-        { extra = "crawl" },
-        { extra = "post-training" },
-    ],
-    [
-        { extra = "crawl" },
-        { extra = "download-transform" },
-    ],
-    [
-        { extra = "crawl" },
-        { group = "transform-test-deps" },
-    ],
-    [
-        { extra = "crawl" },
-        { group = "dev" },
-    ],
-    [
         { extra = "tpu" },
         { extra = "cuda12" },
     ],
     [
         { extra = "cuda12" },
-        { extra = "cpu" },
-    ],
-    [
-        { extra = "tpu" },
         { extra = "cpu" },
     ],
     [
         { extra = "eval" },
         { extra = "quality_dedup_consolidate" },
-    ]
+    ],
 ]
 
 [tool.uv.sources]
+ml-flow = { workspace = true }
 torch = [
     # Default to the CPU index for TPU/CPU builds
     { index = "pytorch-cpu", extra="cpu" },
@@ -162,27 +151,31 @@ explicit = true
 [project.optional-dependencies]
 
 gcp = [
-    "google-api-python-client>=2.175.0", # ray GCP workaround
-    "cryptography>=45",
-    "google-cloud-storage>=3.3.1",
+    "google-api-python-client==2.186.0", # ray GCP workaround
+    "cryptography==46.0.3",
+    "google-cloud-storage==3.4.1",
     "google-cloud-storage-transfer",
     "google-cloud-compute",
 ]
 
-cuda12 = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
+cuda12 = ["jax[cuda12]==0.6.2", "torch==2.9.0"]
 
-tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
+tpu = ["jax[tpu]==0.6.2", "torch==2.9.0"]
 
-cpu = ["jax==0.6.2", "torch>=2.7.0"]
+cpu = ["jax==0.6.2", "torch==2.9.0"]
+
+ml-flow = [
+    "ml-flow",
+]
 
 crawl = [
     "w3lib",
-    "datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
-    "datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
+    "datatrove[io]",
+    "datatrove[processing]",
     "beautifulsoup4",
     "resiliparse",
     "trafilatura",
-    "warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi",
+    "warcio[all] @ git+https://github.com/nelson-liu/warcio@04f78f47def4ee4539cd3112956513a763d41612",
     "rbloom-gcs==1.5.6",
     "google-cloud-bigquery",
     "google-cloud-storage-transfer~=1.0",
@@ -194,7 +187,7 @@ crawl = [
     "htmlmin",
     "datasets>=2.18.0",
     "py-asciimath",
-    "scipy==1.13.1",
+    "scipy==1.16.3",
     "spacy",
     "cupy-cuda12x==13.3.0",
     "transformers",
@@ -205,7 +198,7 @@ crawl = [
     "lxml",
     "chardet",
     "courlan",
-    "kenlm @ git+https://github.com/FredHaa/kenlm@fix-build-with-cmake-4.0",
+    "kenlm @ git+https://github.com/FredHaa/kenlm@78f664fb3dafe1468d868d71faf19534530698d5",
     "jax[tpu]",
 ]
 
@@ -239,13 +232,13 @@ quality_dedup_consolidate = [
     "cattrs==24.1.3",
     "fsspec>=2025.3.0",
     "ddsketch",
-    "dolma @ git+https://github.com/marin-community/dolma",
+    "dolma @ git+https://github.com/marin-community/dolma@6b9b6d066a886066e4ea7fcb44027d60a5ca175a",
 ]
 
 tokenize_train = [
     "multiprocess==0.70.16",
     "haliax>=1.4.dev443",
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
+    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
     "tblib",
     "sentencepiece",
     "tiktoken",
@@ -271,12 +264,12 @@ post_training = [
     "pylatexenc",
     "ipython",
     "datasets",
-    "scalax@git+https://github.com/Sea-Snell/scalax.git",
+    "scalax@git+https://github.com/Sea-Snell/scalax.git@8cf9ceabe30d4c4274df3c09aae2f66b59fbce3c",
     "swebench ; sys_platform != 'darwin'",
 ]
 
 eval = [
-    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
+    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
 ]
 
 

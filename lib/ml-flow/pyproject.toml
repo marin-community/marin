@@ -1,0 +1,25 @@
+[project]
+name = "ml-flow"
+version = "0.1.0"
+description = "Apache Beam wrapper library for Marin data pipelines"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "apache-beam[gcp]>=2.69.0rc1",
+    "fsspec>=2024.10.0",
+    "gcsfs>=2024.10.0",
+    "s3fs>=2024.10.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.3.2",
+    "pytest-timeout>=2.3.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ml_flow"]
