@@ -86,7 +86,7 @@ class TrainParams:
             capacity=4096,
             alpha=3.0,
             max_samples=1,
-            max_rollout_step_delay=1,
+            max_rollout_step_delay=0,
             max_rollout_timestamp_delay=3600.0,
         )
     )
