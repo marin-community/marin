@@ -169,15 +169,27 @@ DOCKER_IMAGE="$DOCKER_REGISTRY/{config.DOCKER_REPOSITORY}/{config.DOCKER_IMAGE_N
 
 echo "Using Docker image: $DOCKER_IMAGE (region: $REGION)"
 
-# Kill unattended-upgrades to avoid apt lock conflicts
-echo "Stopping unattended-upgrades..."
+# Completely disable unattended-upgrades to avoid apt lock conflicts
+echo "Disabling unattended-upgrades..."
 systemctl stop unattended-upgrades.service || true
 systemctl disable unattended-upgrades.service || true
-killall -9 unattended-upgrade || true
+systemctl mask unattended-upgrades.service || true
+pkill -9 -f unattended-upgrade || true
 killall -9 apt apt-get || true
 
-# Wait briefly for locks to be released
-sleep 2
+# Remove auto-upgrade configs
+echo 'APT::Periodic::Update-Package-Lists "0";' > /etc/apt/apt.conf.d/20auto-upgrades
+echo 'APT::Periodic::Unattended-Upgrade "0";' >> /etc/apt/apt.conf.d/20auto-upgrades
+
+# Wait for locks to be released
+for i in {{1..30}}; do
+    if ! fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
+        echo "dpkg lock released"
+        break
+    fi
+    echo "Waiting for dpkg lock... ($i/30)"
+    sleep 2
+done
 
 if ! command -v docker &> /dev/null; then
     echo "Installing Docker..."
@@ -226,7 +238,7 @@ GITHUB_TOKEN=$(gcloud secrets versions access latest \\
 REGISTRATION_TOKEN=$(curl -s -X POST \\
   -H "Accept: application/vnd.github+json" \\
   -H "Authorization: Bearer $GITHUB_TOKEN" \\
-  https://api.github.com/repos/{config.GITHUB_ORG}/{config.GITHUB_REPO}/actions/runners/registration-token \\
+  https://api.github.com/repos/marin-community/marin/actions/runners/registration-token \\
   | jq -r .token)
 
 echo "Configuring GitHub Actions runner..."
@@ -240,7 +252,7 @@ if [ -f .runner ]; then
 fi
 
 sudo -u $RUNNER_USER ./config.sh \\
-  --url https://github.com/{config.GITHUB_ORG}/{config.GITHUB_REPO} \\
+  --url https://github.com/marin-community/marin \\
   --token $REGISTRATION_TOKEN \\
   --name "tpu-$INSTANCE_NAME" \\
   --labels {",".join(config.RUNNER_LABELS)} \\
@@ -331,20 +343,26 @@ def check_runner_service(vm_name: str, zone: str) -> bool:
     Check if GitHub Actions runner service is active on a VM.
 
     Returns True if service is running, False otherwise.
+    Assumes runner is dead if check doesn't complete within 10 seconds.
     """
-    result = run_sh(
-        f"gcloud compute tpus tpu-vm ssh {vm_name} --zone {zone} "
-        f"--project {config.GCP_PROJECT_ID} "
-        f"--command 'systemctl is-active actions.runner.*'",
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = run_sh(
+            f"gcloud compute tpus tpu-vm ssh {vm_name} --zone {zone} "
+            f"--project {config.GCP_PROJECT_ID} "
+            f"--command 'systemctl is-active actions.runner.*'",
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
 
-    is_active = result.returncode == 0 and result.stdout.strip() == "active"
-    if not is_active:
-        logging.warning(f"[{zone}] Runner service not active on {vm_name}: {result.stdout.strip()}")
-    return is_active
+        is_active = result.returncode == 0 and result.stdout.strip() == "active"
+        if not is_active:
+            logging.warning(f"[{zone}] Runner service not active on {vm_name}: {result.stdout.strip()}")
+        return is_active
+    except subprocess.TimeoutExpired:
+        logging.warning(f"[{zone}] Runner service check timed out on {vm_name}, assuming dead")
+        return False
 
 
 def _try_delete_vm(vm: dict, zone: str) -> bool:
@@ -372,7 +390,7 @@ def ensure_tpu_vms(tpu_client: tpu_v2.TpuClient, zone: str, count: int):
 
     bad_states = ["PREEMPTED", "TERMINATED", "FAILED"]
     healthy_states = ["READY", "CREATING"]
-    healthy_count = sum(1 for vm in vms if vm["state"] in healthy_states)
+    healthy_count = len([vm for vm in vms if vm["state"] in healthy_states])
 
     # Verify runner service health for READY VMs
     ready_vms = [vm for vm in vms if vm["state"] == "READY"]
@@ -514,14 +532,17 @@ def list_vms():
     click.echo(f"Found {len(all_vms)} TPU VMs:")
     for vm in all_vms:
         vm_state = vm["state"]
-        runner_status = ""
-
-        # Check runner service status for READY VMs
         if vm_state == "READY":
             is_healthy = check_runner_service(vm["name"], vm["zone"])
             runner_status = " [runner: active]" if is_healthy else " [runner: inactive]"
+            vm["runner"] = "active" if is_healthy else "inactive"
+        else:
+            vm["runner"] = "N/A"
 
-        click.echo(f"  {vm['name']} ({vm['zone']}): {vm_state}{runner_status}")
+    for vm in all_vms:
+        vm_state = vm["state"]
+        runner_status = f" [runner: {vm['runner']}]"
+        click.echo(f" - {vm['name']} ({vm_state}){runner_status}")
 
 
 @cli.command()

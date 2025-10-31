@@ -21,7 +21,6 @@ All configuration values are hardcoded here to ensure consistent deployments.
 GCP_PROJECT_ID = "hai-gcp-models"
 
 # Controller VM configuration (runs preemption monitor only)
-# Single VM that manages TPU VMs across multiple zones
 CONTROLLER_NAME = "tpu-ci-monitor-controller"
 CONTROLLER_ZONE = "us-west4-a"
 CONTROLLER_MACHINE_TYPE = "e2-micro"
@@ -38,16 +37,13 @@ TPU_VM_PREFIX = "tpu-ci"
 TPU_ACCELERATOR_TYPE = "v5litepod-4"
 TPU_VERSION = "tpu-ubuntu2204-base"
 
-GITHUB_ORG = "marin-community"
-GITHUB_REPO = "marin"
-GITHUB_BRANCH = "main"  # Can be overridden via environment variable
-GITHUB_CONFIG_URL = f"https://github.com/{GITHUB_ORG}/{GITHUB_REPO}"
+GITHUB_BRANCH = "main"  # branch to use for the controller
+GITHUB_URL = "https://github.com/marin-community/marin.git"
 
 RUNNER_LABELS = ["tpu", "self-hosted", "tpu-ci"]
 
 # Docker image configuration
-# Images are pushed to multiple regional Artifact Registries for faster pulls
-# Each TPU VM pulls from its local regional registry
+# Images are pushed to the Artifact Registry in each region
 ARTIFACT_REGISTRY_REPO_NAME = "marin-ci"
 DOCKER_REPOSITORY = f"{GCP_PROJECT_ID}/{ARTIFACT_REGISTRY_REPO_NAME}"
 DOCKER_IMAGE_NAME = "tpu-ci"
@@ -55,14 +51,7 @@ DOCKER_IMAGE_TAG = "latest"
 
 
 def get_all_regions() -> list[str]:
-    """
-    Extract unique regions from TPU_ZONES_CONFIG.
-
-    Returns list of regions where Artifact Registries should be created
-    and Docker images should be pushed.
-
-    Example: ["europe-west4", "us-east1", "us-west4"]
-    """
+    """Extract unique regions from TPU_ZONES_CONFIG."""
     regions = set()
     for zone in TPU_ZONES_CONFIG.keys():
         # Zone format: us-west4-a -> region: us-west4
@@ -73,13 +62,8 @@ def get_all_regions() -> list[str]:
 
 def get_docker_image_for_zone(zone: str) -> str:
     """
-    Get the regional Docker image URL for a specific zone.
-
-    Returns the full image URL pointing to the zone's regional registry.
-    This ensures VMs pull from the closest registry for faster downloads.
-
-    Example: get_docker_image_for_zone("us-west4-a")
-    Returns: "us-west4-docker.pkg.dev/hai-gcp-models/marin-ci/tpu-ci:latest"
+    Get the regional Docker image URL for a specific zone,
+    e.g. "us-west4-docker.pkg.dev/hai-gcp-models/marin-ci/tpu-ci:latest"
     """
     region = zone.rsplit("-", 1)[0]
     registry = f"{region}-docker.pkg.dev"
