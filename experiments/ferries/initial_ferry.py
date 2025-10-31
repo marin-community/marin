@@ -57,7 +57,7 @@ train_config_1b = SimpleTrainConfig(
 )
 
 train_config_8b = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v5p-64"),
+    resources=TpuPodConfig(tpu_type="v5p-128"),
     train_batch_size=BATCH_SIZE_8B,
     num_train_steps=NUM_8B_TRAIN_STEPS,
     learning_rate=2e-3,
