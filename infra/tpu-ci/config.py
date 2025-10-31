@@ -20,15 +20,25 @@ All configuration values are hardcoded here to ensure consistent deployments.
 
 GCP_PROJECT_ID = "hai-gcp-models"
 REGION = "us-west4"
-ZONE = "us-west4-a"
 
 # Monitor Controller VM (runs preemption monitor only)
 CONTROLLER_NAME = "tpu-ci-monitor-controller"
+CONTROLLER_ZONE = "us-west4-a"
 CONTROLLER_MACHINE_TYPE = "e2-micro"
 CONTROLLER_DISK_SIZE_GB = 10
 
+# Multi-zone TPU configuration: maps zone -> desired instance count
+TPU_ZONES_CONFIG = {
+    "us-west4-a": 2,
+    "us-west4-b": 2,
+    "us-central1-a": 2,
+    "us-east1-c": 2,
+    "europe-west4-a": 2,
+    "europe-west4-b": 2,
+    "europe-west1-b": 2,
+}
+
 TPU_VM_PREFIX = "tpu-ci"
-TPU_VM_COUNT = 2
 TPU_ACCELERATOR_TYPE = "v5litepod-4"
 TPU_VERSION = "tpu-ubuntu2204-base"
 

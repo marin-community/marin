@@ -17,6 +17,8 @@
 # dependencies = [
 #   "click",
 #   "google-cloud-tpu",
+#   "fastapi",
+#   "uvicorn",
 # ]
 # ///
 
@@ -37,17 +39,30 @@ import shlex
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import click
 import config
+from fastapi import FastAPI
 from google.cloud import tpu_v2
+import uvicorn
 
 
 def run(cmd: list, **kwargs) -> subprocess.CompletedProcess:
     """Run command with logging."""
     logging.info(f"Running: {' '.join(cmd)}")
     return subprocess.run(cmd, **kwargs)
+
+
+def run_sh(cmd: str, **kwargs) -> subprocess.CompletedProcess:
+    """Run command from string with logging."""
+    return run(shlex.split(cmd), **kwargs)
+
+
+def vm_name(zone: str, index: int) -> str:
+    """Generate VM name from zone and index."""
+    return f"{config.TPU_VM_PREFIX}-{zone}-{index}"
 
 
 def get_startup_script() -> str:
@@ -160,72 +175,47 @@ echo "=== TPU VM Setup Complete ==="
 """
 
 
-def create_tpu_vm(index: int) -> None:
+def create_tpu_vm(index: int, zone: str) -> None:
     """Create a single preemptible TPU VM with GitHub Actions runner."""
-    vm_name = f"{config.TPU_VM_PREFIX}-{index}"
+    name = vm_name(zone, index)
 
-    logging.info(f"Creating TPU VM: {vm_name}")
+    logging.info(f"Creating TPU VM: {name} in {zone}")
 
     startup_script_path = Path("/tmp/tpu-startup-script.sh")
     startup_script_path.write_text(get_startup_script())
 
-    # Labels enable automatic cleanup
-    cmd = [
-        "gcloud",
-        "compute",
-        "tpus",
-        "tpu-vm",
-        "create",
-        vm_name,
-        "--zone",
-        config.ZONE,
-        "--project",
-        config.GCP_PROJECT_ID,
-        "--accelerator-type",
-        config.TPU_ACCELERATOR_TYPE,
-        "--version",
-        config.TPU_VERSION,
-        "--preemptible",
-        "--metadata-from-file",
-        f"startup-script={startup_script_path}",
-        "--scopes",
-        "https://www.googleapis.com/auth/cloud-platform",
-        "--labels",
-        "tpu-ci-component=runner,tpu-ci-managed=true",
-    ]
-
-    result = run(cmd, capture_output=True, text=True, check=False)
+    result = run_sh(
+        f"gcloud compute tpus tpu-vm create {name} "
+        f"--zone {zone} --project {config.GCP_PROJECT_ID} "
+        f"--accelerator-type {config.TPU_ACCELERATOR_TYPE} --version {config.TPU_VERSION} "
+        f"--preemptible --metadata-from-file startup-script={startup_script_path} "
+        f"--scopes https://www.googleapis.com/auth/cloud-platform "
+        f"--labels tpu-ci-component=runner,tpu-ci-managed=true",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
     if result.returncode != 0:
-        # VM might already exist
         if "already exists" in result.stderr:
-            logging.info(f"TPU VM {vm_name} already exists")
+            logging.info(f"TPU VM {name} already exists")
         else:
-            logging.error(f"Failed to create TPU VM {vm_name}: {result.stderr}")
-            raise RuntimeError(f"Failed to create TPU VM {vm_name}")
+            logging.error(f"Failed to create TPU VM {name}: {result.stderr}")
+            raise RuntimeError(f"Failed to create TPU VM {name}")
     else:
-        logging.info(f"✓ Created TPU VM: {vm_name}")
+        logging.info(f"✓ Created TPU VM: {name}")
 
 
-def delete_tpu_vm(vm_name: str) -> None:
+def delete_tpu_vm(vm_name: str, zone: str) -> None:
     """Delete a single TPU VM."""
-    logging.info(f"Deleting TPU VM: {vm_name}")
+    logging.info(f"Deleting TPU VM: {vm_name} in {zone}")
 
-    cmd = [
-        "gcloud",
-        "compute",
-        "tpus",
-        "tpu-vm",
-        "delete",
-        vm_name,
-        "--zone",
-        config.ZONE,
-        "--project",
-        config.GCP_PROJECT_ID,
-        "--quiet",
-    ]
-
-    result = run(cmd, capture_output=True, text=True, check=False)
+    result = run_sh(
+        f"gcloud compute tpus tpu-vm delete {vm_name} --zone {zone} --project {config.GCP_PROJECT_ID} --quiet",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
     if result.returncode != 0 and "not found" not in result.stderr:
         logging.error(f"Failed to delete TPU VM {vm_name}: {result.stderr}")
@@ -234,34 +224,24 @@ def delete_tpu_vm(vm_name: str) -> None:
     logging.info(f"✓ Deleted TPU VM: {vm_name}")
 
 
-def list_tpu_vms() -> list[dict]:
-    """List all TPU VMs with our labels, returning name and state."""
-    cmd = [
-        "gcloud",
-        "compute",
-        "tpus",
-        "tpu-vm",
-        "list",
-        "--zone",
-        config.ZONE,
-        "--project",
-        config.GCP_PROJECT_ID,
-        "--format",
-        "json",
-        "--filter",
-        "labels.tpu-ci-managed=true",
-    ]
-
-    result = run(cmd, capture_output=True, text=True, check=True)
+def list_tpu_vms(zone: str) -> list[dict]:
+    """List all TPU VMs with our labels in the specified zone, returning name and state."""
+    result = run_sh(
+        f"gcloud compute tpus tpu-vm list --zone {zone} --project {config.GCP_PROJECT_ID} "
+        f"--format json --filter labels.tpu-ci-managed=true",
+        capture_output=True,
+        text=True,
+        check=True,
+    )
 
     if not result.stdout.strip():
         return []
 
     vms = json.loads(result.stdout)
-    return [{"name": vm["name"], "state": vm.get("state", "UNKNOWN")} for vm in vms]
+    return [{"name": vm["name"], "state": vm.get("state", "UNKNOWN"), "zone": zone} for vm in vms]
 
 
-def get_next_available_index(existing_vms: list[dict]) -> int:
+def get_next_available_index(existing_vms: list[dict], count: int) -> int:
     """Find the lowest available index for a new VM."""
     existing_indices = set()
     for vm in existing_vms:
@@ -269,61 +249,96 @@ def get_next_available_index(existing_vms: list[dict]) -> int:
         if len(parts) == 2 and parts[1].isdigit():
             existing_indices.add(int(parts[1]))
 
-    # Find first missing index from 0 to TPU_VM_COUNT-1
-    for i in range(config.TPU_VM_COUNT):
+    for i in range(count):
         if i not in existing_indices:
             return i
 
-    # All slots filled, return next number
-    return config.TPU_VM_COUNT
+    return count
 
 
-def ensure_tpu_vms(tpu_client: tpu_v2.TpuClient):
+def ensure_tpu_vms(tpu_client: tpu_v2.TpuClient, zone: str, count: int):
     """
-    Ensure desired number of TPU VMs are running.
+    Ensure desired number of TPU VMs are running in the specified zone.
     - Delete any preempted/failed VMs
     - Create new VMs if count is below desired
     """
-    vms = list_tpu_vms()
+    vms = list_tpu_vms(zone)
 
-    logging.info(f"Found {len(vms)} TPU VMs")
+    logging.info(f"[{zone}] Found {len(vms)} TPU VMs")
 
     bad_states = ["PREEMPTED", "TERMINATED", "FAILED"]
-    for vm in vms:
+    for vm in vms[:]:
         if vm["state"] in bad_states:
-            logging.warning(f"TPU {vm['name']} is in state {vm['state']}, deleting...")
+            logging.warning(f"[{zone}] TPU {vm['name']} is in state {vm['state']}, deleting...")
             try:
-                delete_tpu_vm(vm["name"])
+                delete_tpu_vm(vm["name"], zone)
                 vms.remove(vm)
             except Exception as e:
-                logging.error(f"Failed to delete {vm['name']}: {e}")
+                logging.error(f"[{zone}] Failed to delete {vm['name']}: {e}")
 
     healthy_states = ["READY", "CREATING"]
     healthy_count = sum(1 for vm in vms if vm["state"] in healthy_states)
 
-    logging.info(f"Healthy TPU VMs: {healthy_count}/{config.TPU_VM_COUNT}")
+    logging.info(f"[{zone}] Healthy TPU VMs: {healthy_count}/{count}")
 
-    needed = config.TPU_VM_COUNT - healthy_count
+    needed = count - healthy_count
     if needed > 0:
-        logging.info(f"Creating {needed} new TPU VMs...")
+        logging.info(f"[{zone}] Creating {needed} new TPU VMs...")
         for _ in range(needed):
-            index = get_next_available_index(vms)
+            index = get_next_available_index(vms, count)
             try:
-                create_tpu_vm(index)
-                vms.append({"name": f"{config.TPU_VM_PREFIX}-{index}", "state": "CREATING"})
+                create_tpu_vm(index, zone)
+                vms.append({"name": vm_name(zone, index), "state": "CREATING", "zone": zone})
             except Exception as e:
-                logging.error(f"Failed to create TPU VM: {e}")
+                logging.error(f"[{zone}] Failed to create TPU VM: {e}")
 
 
 def monitor_loop(tpu_client: tpu_v2.TpuClient):
     """Main monitoring loop - runs indefinitely."""
     while True:
         try:
-            ensure_tpu_vms(tpu_client)
+            for zone, count in config.TPU_ZONES_CONFIG.items():
+                ensure_tpu_vms(tpu_client, zone, count)
         except Exception as e:
             logging.error(f"Error: {e}", exc_info=True)
 
         time.sleep(60)
+
+
+app = FastAPI(title="TPU CI Dashboard")
+
+
+@app.get("/")
+def status():
+    """Get cluster status as JSON."""
+    all_vms = []
+    for zone in config.TPU_ZONES_CONFIG.keys():
+        try:
+            vms = list_tpu_vms(zone)
+            all_vms.extend(vms)
+        except Exception as e:
+            logging.error(f"Failed to list VMs in {zone}: {e}")
+
+    total_desired = sum(config.TPU_ZONES_CONFIG.values())
+    healthy_states = ["READY", "CREATING"]
+    healthy_count = sum(1 for vm in all_vms if vm["state"] in healthy_states)
+
+    zone_status = {}
+    for zone, desired_count in config.TPU_ZONES_CONFIG.items():
+        zone_vms = [vm for vm in all_vms if vm["zone"] == zone]
+        zone_healthy = sum(1 for vm in zone_vms if vm["state"] in healthy_states)
+        zone_status[zone] = {
+            "desired": desired_count,
+            "healthy": zone_healthy,
+            "vms": zone_vms,
+        }
+
+    return {
+        "total_desired": total_desired,
+        "total_healthy": healthy_count,
+        "zones": zone_status,
+        "timestamp": datetime.now().isoformat(),
+    }
 
 
 @click.group()
@@ -336,10 +351,22 @@ def cli():
 
 
 @cli.command()
+@click.option("--host", default="0.0.0.0", help="Host to bind to")
+@click.option("--port", default=8000, help="Port to bind to")
+def dashboard(host: str, port: int):
+    """Run the dashboard server (JSON status endpoint)."""
+    logging.info(f"Starting TPU CI Dashboard on {host}:{port}")
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
+@cli.command()
 def monitor():
     """Run the monitoring daemon (continuously ensures desired TPU count)."""
     logging.info("Starting TPU VM Manager")
-    logging.info(f"Target: {config.TPU_VM_COUNT} TPU VMs in {config.ZONE}")
+    total_vms = sum(config.TPU_ZONES_CONFIG.values())
+    logging.info(f"Target: {total_vms} TPU VMs across {len(config.TPU_ZONES_CONFIG)} zones")
+    for zone, count in config.TPU_ZONES_CONFIG.items():
+        logging.info(f"  {zone}: {count} VMs")
 
     tpu_client = tpu_v2.TpuClient()
 
@@ -354,69 +381,66 @@ def monitor():
 
 @cli.command()
 def list_vms():
-    """List all TPU VMs."""
-    vms = list_tpu_vms()
-    if not vms:
+    """List all TPU VMs across all zones."""
+    all_vms = []
+    for zone in config.TPU_ZONES_CONFIG.keys():
+        vms = list_tpu_vms(zone)
+        all_vms.extend(vms)
+
+    if not all_vms:
         click.echo("No TPU VMs found")
         return
 
-    click.echo(f"Found {len(vms)} TPU VMs:")
-    for vm in vms:
-        click.echo(f"  {vm['name']}: {vm['state']}")
+    click.echo(f"Found {len(all_vms)} TPU VMs:")
+    for vm in all_vms:
+        click.echo(f"  {vm['name']} ({vm['zone']}): {vm['state']}")
 
 
 @cli.command()
 @click.argument("index", type=int)
-def create(index: int):
-    """Create a TPU VM with the given index."""
-    create_tpu_vm(index)
+@click.argument("zone", type=str)
+def create(index: int, zone: str):
+    """Create a TPU VM with the given index in the specified zone."""
+    create_tpu_vm(index, zone)
 
 
 @cli.command()
 @click.argument("name")
-def delete(name: str):
-    """Delete a TPU VM by name."""
-    delete_tpu_vm(name)
+@click.argument("zone", type=str)
+def delete(name: str, zone: str):
+    """Delete a TPU VM by name in the specified zone."""
+    delete_tpu_vm(name, zone)
 
 
 @cli.command()
 def ensure():
-    """One-time check to ensure desired number of TPU VMs are running."""
+    """One-time check to ensure desired number of TPU VMs are running across all zones."""
     tpu_client = tpu_v2.TpuClient()
-    ensure_tpu_vms(tpu_client)
+    for zone, count in config.TPU_ZONES_CONFIG.items():
+        ensure_tpu_vms(tpu_client, zone, count)
 
 
 @cli.command()
 @click.argument("index", type=int)
+@click.argument("zone", type=str)
 @click.option("--lines", "-n", default=100, help="Number of log lines to show (default: 100)")
 @click.option("--follow", "-f", is_flag=True, help="Follow log output in real-time")
-def check_logs(index: int, lines: int, follow: bool):
+def check_logs(index: int, zone: str, lines: int, follow: bool):
     """Show GitHub Actions runner logs and diagnostics for a TPU VM."""
-    vm_name = f"{config.TPU_VM_PREFIX}-{index}"
+    name = vm_name(zone, index)
 
-    logging.info(f"Fetching logs from TPU VM: {vm_name}")
+    logging.info(f"Fetching logs from TPU VM: {name} in {zone}")
 
     if follow:
-        # For follow mode, just tail the service logs
         journalctl_cmd = f"sudo journalctl -u actions.runner.* -n {lines} -f"
-        ssh_cmd = [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "ssh",
-            vm_name,
-            "--zone",
-            config.ZONE,
-            "--project",
-            config.GCP_PROJECT_ID,
-            "--command",
-            journalctl_cmd,
-        ]
-        result = run(ssh_cmd, check=False)
+        result = run_sh(
+            f"gcloud compute tpus tpu-vm ssh {name} --zone {zone} "
+            f"--project {config.GCP_PROJECT_ID} --command '{journalctl_cmd}'",
+            check=False,
+        )
         if result.returncode != 0:
-            logging.error(f"Failed to fetch logs from {vm_name}")
-            raise RuntimeError(f"Failed to fetch logs from {vm_name}")
+            logging.error(f"Failed to fetch logs from {name}")
+            raise RuntimeError(f"Failed to fetch logs from {name}")
     else:
         # For static mode, get comprehensive diagnostics
         diag_cmd = f"""
@@ -447,72 +471,67 @@ echo ""
 echo "=== Docker Status ==="
 sudo docker ps -a || true
 """  # noqa: E501
-        ssh_cmd = [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "ssh",
-            vm_name,
-            "--zone",
-            config.ZONE,
-            "--project",
-            config.GCP_PROJECT_ID,
-            "--command",
-            diag_cmd,
-        ]
-        result = run(ssh_cmd, check=False)
+        result = run(
+            [
+                "gcloud",
+                "compute",
+                "tpus",
+                "tpu-vm",
+                "ssh",
+                name,
+                "--zone",
+                zone,
+                "--project",
+                config.GCP_PROJECT_ID,
+                "--command",
+                diag_cmd,
+            ],
+            check=False,
+        )
         if result.returncode != 0:
-            logging.error(f"Failed to fetch diagnostics from {vm_name}")
-            raise RuntimeError(f"Failed to fetch diagnostics from {vm_name}")
+            logging.error(f"Failed to fetch diagnostics from {name}")
+            raise RuntimeError(f"Failed to fetch diagnostics from {name}")
 
 
 @cli.command()
 @click.argument("index", type=int)
+@click.argument("zone", type=str)
 @click.option("--test-path", default="tests/tpu/")
 @click.option("--pytest-args", default="-vs -o log_cli_level=INFO")
-def debug_tpu(index: int, test_path: str, pytest_args: str):
+def debug_tpu(index: int, zone: str, test_path: str, pytest_args: str):
     """Rsync marin directory to VM and run pytest in Docker container."""
-    vm_name = f"{config.TPU_VM_PREFIX}-{index}"
+    name = vm_name(zone, index)
 
-    logging.info(f"Running TPU tests on: {vm_name}")
+    logging.info(f"Running TPU tests on: {name} in {zone}")
 
     project_root = Path(__file__).parent.parent.parent
     remote_dir = "/tmp/marin-test"
 
-    logging.info(f"Syncing project directory to {vm_name}...")
+    logging.info(f"Syncing project directory to {name}...")
 
     tar_cmd = f"""cd {project_root} && \
         COPYFILE_DISABLE=1 git ls-files | COPYFILE_DISABLE=1 tar czf - --no-xattrs -T - | \
-        gcloud compute tpus tpu-vm ssh {vm_name} \
-        --zone {config.ZONE} \
+        gcloud compute tpus tpu-vm ssh {name} \
+        --zone {zone} \
         --project {config.GCP_PROJECT_ID} \
         --command 'sudo rm -rf {remote_dir} && mkdir -p {remote_dir} && tar xzf - -C {remote_dir}'"""
 
     result = run(tar_cmd, shell=True, check=False)
     if result.returncode != 0:
         logging.error("Failed to sync directory")
-        raise RuntimeError(f"Failed to sync project to {vm_name}")
+        raise RuntimeError(f"Failed to sync project to {name}")
 
     logging.info("✓ Project synced")
 
-    # Clean up TPU resources before running tests
-    logging.info(f"Cleaning up TPU resources on {vm_name}...")
-    cleanup_cmd = [
-        "gcloud",
-        "compute",
-        "tpus",
-        "tpu-vm",
-        "ssh",
-        vm_name,
-        "--zone",
-        config.ZONE,
-        "--project",
-        config.GCP_PROJECT_ID,
-        "--command",
-        "sudo rm -f /tmp/libtpu_lockfile && sudo lsof -t /dev/vfio/* 2>/dev/null | xargs -r sudo kill -9 || true",
-    ]
-    result = run(cleanup_cmd, check=False)
+    logging.info(f"Cleaning up TPU resources on {name}...")
+    cleanup_cmd = (
+        "sudo rm -f /tmp/libtpu_lockfile && sudo lsof -t /dev/vfio/* 2>/dev/null | xargs -r sudo kill -9 || true"
+    )
+    result = run_sh(
+        f"gcloud compute tpus tpu-vm ssh {name} --zone {zone} "
+        f"--project {config.GCP_PROJECT_ID} --command '{cleanup_cmd}'",
+        check=False,
+    )
     if result.returncode != 0:
         logging.warning("TPU cleanup had non-zero exit (may be normal if no processes to kill)")
 
@@ -526,17 +545,16 @@ def debug_tpu(index: int, test_path: str, pytest_args: str):
 
     env_flags_str = " ".join(env_flags)
 
-    # Run pytest in Docker container as github-runner user
-    logging.info(f"Running pytest on {vm_name}...")
+    logging.info(f"Running pytest on {name}...")
     ssh_cmd = [
         "gcloud",
         "compute",
         "tpus",
         "tpu-vm",
         "ssh",
-        vm_name,
+        name,
         "--zone",
-        config.ZONE,
+        zone,
         "--project",
         config.GCP_PROJECT_ID,
         "--command",
@@ -570,64 +588,42 @@ def debug_tpu(index: int, test_path: str, pytest_args: str):
 
 @cli.command()
 @click.argument("index", type=int)
-def debug_setup(index: int):
+@click.argument("zone", type=str)
+def debug_setup(index: int, zone: str):
     """Re-run startup script on an existing TPU VM for debugging."""
-    vm_name = f"{config.TPU_VM_PREFIX}-{index}"
+    name = vm_name(zone, index)
 
-    logging.info(f"Re-running startup script on TPU VM: {vm_name}")
+    logging.info(f"Re-running startup script on TPU VM: {name} in {zone}")
 
-    # Generate and save startup script locally
     startup_script = get_startup_script()
     local_script_path = Path("/tmp/tpu-debug-startup.sh")
     local_script_path.write_text(startup_script)
     remote_script_path = "/tmp/tpu-debug-startup.sh"
 
-    # Copy script to VM
-    logging.info(f"Uploading startup script to {vm_name}...")
-    scp_cmd = [
-        "gcloud",
-        "compute",
-        "tpus",
-        "tpu-vm",
-        "scp",
-        str(local_script_path),
-        f"{vm_name}:{remote_script_path}",
-        "--zone",
-        config.ZONE,
-        "--project",
-        config.GCP_PROJECT_ID,
-    ]
-
-    result = run(scp_cmd, capture_output=True, text=True, check=False)
+    logging.info(f"Uploading startup script to {name}...")
+    result = run_sh(
+        f"gcloud compute tpus tpu-vm scp {local_script_path} {name}:{remote_script_path} "
+        f"--zone {zone} --project {config.GCP_PROJECT_ID}",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     if result.returncode != 0:
         logging.error(f"Failed to upload script: {result.stderr}")
-        raise RuntimeError(f"Failed to upload startup script to {vm_name}")
+        raise RuntimeError(f"Failed to upload startup script to {name}")
 
     logging.info("✓ Script uploaded")
 
-    # Execute script remotely
-    logging.info(f"Executing startup script on {vm_name}...")
-    ssh_cmd = [
-        "gcloud",
-        "compute",
-        "tpus",
-        "tpu-vm",
-        "ssh",
-        vm_name,
-        "--zone",
-        config.ZONE,
-        "--project",
-        config.GCP_PROJECT_ID,
-        "--command",
-        f"sudo bash {remote_script_path}",
-    ]
-
-    # Run with output streaming to console
-    result = run(ssh_cmd, check=False)
+    logging.info(f"Executing startup script on {name}...")
+    result = run_sh(
+        f"gcloud compute tpus tpu-vm ssh {name} --zone {zone} "
+        f"--project {config.GCP_PROJECT_ID} --command 'sudo bash {remote_script_path}'",
+        check=False,
+    )
 
     if result.returncode != 0:
         logging.error(f"Startup script execution failed with exit code {result.returncode}")
-        raise RuntimeError(f"Failed to execute startup script on {vm_name}")
+        raise RuntimeError(f"Failed to execute startup script on {name}")
 
     logging.info("✓ Startup script execution complete")
 
