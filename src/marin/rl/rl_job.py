@@ -253,7 +253,6 @@ class RLJob:
                     max_seq_len=max_tokens,
                     page_size=128,
                     hbm_utilization=0.5,
-                    enable_logprobs=True,
                 ),
                 port=0,
             )
