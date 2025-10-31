@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+import os
 import runpy
 import sys
 import tempfile
@@ -29,8 +30,10 @@ logger = logging.getLogger(__name__)
 marin_root = Path(__file__).parent.parent
 experiments_dir = marin_root / "experiments"
 
+os.environ["RAY_LOCAL_CLUSTER"] = "1"
 
-@parameterize_with_configs(pattern="**/*.py", config_path=str(experiments_dir))
+
+@parameterize_with_configs(pattern="*.py", config_path=str(experiments_dir))
 def test_run_dry_runs(config_file, monkeypatch):
     """Test the dry runs of experiment scripts"""
     script = config_file

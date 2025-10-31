@@ -106,9 +106,8 @@ def test_train_worker_with_sequential_digits(ray_tpu_cluster, tmp_path):
             queue_writer=queue_writer,
             tokenizer=tokenizer,
         ):
-            runner.done.wait()
+            runner.wait_for_result()
 
-    # Validate training completed successfully
     assert all(not np.isnan(loss) for loss in runner.losses), "Loss should not be NaN"
     assert all(loss < 10.0 for loss in runner.losses), f"Loss should be reasonable, got {runner.losses}"
 
@@ -180,8 +179,7 @@ def test_full_integration_sequential_digits(ray_tpu_cluster, tmp_path):
     inference_runner.rollout_worker_config.max_rollouts = 2000
 
     with training_runner, inference_runner:
-        while not training_runner.done.is_set():
-            training_runner.done.wait(timeout=1)
+        training_runner.wait_for_result()
 
     assert inference_runner.rollouts_generated >= 5, (
         f"Expected at least 5 rollouts, got {inference_runner.rollouts_generated}"

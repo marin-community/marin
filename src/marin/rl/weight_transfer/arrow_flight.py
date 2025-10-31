@@ -459,7 +459,7 @@ class ArrowFlightClient(WeightTransferClient):
         self.mesh = mesh
         self.axis_mapping = axis_mapping
 
-        self._last_weight_id = None
+        self._last_weight_id = -1
         self._flight_clients = []
         self._server_locations = []
 
@@ -528,6 +528,9 @@ class ArrowFlightClient(WeightTransferClient):
                 logger.info("No Arrow Flight server info available from coordinator.")
                 return None
 
+            # N.B. - we _always_ accept the weight id from the training worker, even if it's
+            # lower than our current weight. If the training worker crashes and restores from
+            # an earlier checkpoint, we may need to start producing rollouts from those earlier weights.
             if server_info.weight_id is None or server_info.weight_id == self._last_weight_id:
                 logger.info("No new weights available from Arrow Flight server.")
                 return None

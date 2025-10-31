@@ -14,24 +14,28 @@
 
 """Utility functions for evaluating RL environments."""
 
+import time
 import jmp
 import dataclasses
 import ray
 import logging
 import levanter
 import haliax as hax
+import jax
 import jax.random as jrandom
 import fsspec
 import json
+import numpy
 
 from typing import Any
 from dataclasses import dataclass
 from levanter.trainer import TrainerConfig
-from levanter.models.llama import LlamaConfig
+from levanter.models.lm_model import LmConfig
 from ray.runtime_env import RuntimeEnv
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoTokenizer
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.inference.engine import InferenceEngineConfig
+from levanter.infra.ray_tpu import run_on_pod_ray
 
 from marin.resources import TpuPodConfig
 from marin.training.training import _add_run_env_variables
@@ -39,23 +43,47 @@ from marin.execution import ExecutorStep
 from marin.rl.environments.base import MarinEnv, EnvConfig, load_environment_from_spec
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.rollout_worker import InferenceContext
+from marin.rl.types import RolloutGroup
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger("ray")
+
+
+def _to_list(arr) -> list:
+    """Convert array-like object to list, handling both JAX arrays and Python lists."""
+    if isinstance(arr, list):
+        return arr
+    elif hasattr(arr, "tolist"):
+        return arr.tolist()
+    else:
+        # Fallback for other array types
+        return list(arr)
+
+
+def rollout_group_to_dict(group: "RolloutGroup") -> dict[str, Any]:
+    """Convert a RolloutGroup to a JSON-serializable dictionary.
+
+    Uses tree mapping to automatically handle all fields including arrays,
+    making it robust to schema changes.
+    """
+    return dataclasses.asdict(
+        jax.tree.map(lambda v: _to_list(v) if isinstance(v, list | jax.Array | numpy.ndarray) else v, group)
+    )
 
 
 @dataclass
 class EnvironmentEvalConfig:
     """Configuration for environment evaluation."""
 
-    model_checkpoint: str
-    """Path to model checkpoint to evaluate."""
-
+    model_config: LmConfig
     env_config: EnvConfig
-    """Environment configuration."""
-
+    temperature: float = 0.0
+    max_input_length: int = 2048
+    max_output_length: int = 8192
+    stop_tokens: list[str] | None = None
+    seed: int = 42
+    tpu_type: str = "v5litepod-128"
     output_path: str | None = None
-    """Path to save evaluation results (local or GCS)."""
 
     n_examples: int = 100
     """Number of examples to evaluate."""
@@ -63,26 +91,7 @@ class EnvironmentEvalConfig:
     n_generations: int = 1
     """Number of generations per prompt."""
 
-    temperature: float = 0.0
-    """Sampling temperature."""
 
-    max_input_length: int = 2048
-    """Maximum input sequence length."""
-
-    max_output_length: int = 2048
-    """Maximum output sequence length."""
-
-    stop_tokens: list[str] | None = None
-    """Stop tokens for generation."""
-
-    seed: int = 42
-    """Random seed for evaluation."""
-
-    tpu_type: str = "v5litepod-128"
-    """TPU type to use for evaluation."""
-
-
-@ray.remote(max_retries=3)
 def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     """Run environment evaluation."""
 
@@ -123,57 +132,61 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
         resources={"TPU": num_devices, f"{config.tpu_type}-head": 1},
     )
 
+    # Get tokenizer path from model config
+    tokenizer_path = config.model_config.tokenizer
+    if tokenizer_path is None:
+        raise ValueError("Model config must have tokenizer specified")
+
     inference_server_config = InferenceServerConfig(
         # Turn on tensor parallelism for inference
         trainer=dataclasses.replace(
             trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=model_axis_size
         ),
-        tokenizer=config.model_checkpoint,
+        tokenizer=tokenizer_path,
         temperature=1.0,
         service=InferenceEngineConfig(
             max_seqs=16,
             max_seq_len=config.max_input_length + config.max_output_length,
             page_size=32,
-            max_pages=16 * 32,
             max_seqs_in_prefill=16,
+            hbm_utilization=0.3,  # Reduced from default 0.9 to prevent OOM on v4-8
         ),
     )
 
     # Load tokenizer
     logger.info("Loading tokenizer for evaluation")
-    tokenizer = AutoTokenizer.from_pretrained(config.model_checkpoint)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 
     @ray.remote(**rollout_kwargs)
-    def inference_worker_task():
+    def inference_worker_task_inner():
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
 
-            # Initialize Levanter
+            # Initialize Levanter - this creates the concrete mesh from the abstract one
             env_name = config.env_config.env_class.split(".")[-1]
             trainer_config.id = f"eval-rollout-{env_name}"
             levanter.initialize(trainer_config)
 
-            hf_config = AutoConfig.from_pretrained(config.model_checkpoint)
-            model_config = LlamaConfig.from_hf_config(hf_config)
-            logger.info(f"Model config: {model_config}")
-
-            # Adjust the max sequence length of the model to reduce memory usage.
+            # Use provided model config and ensure seq_len is set appropriately
             model_config = dataclasses.replace(
-                model_config,
+                config.model_config,
                 seq_len=config.max_input_length + config.max_output_length,
-                tokenizer=config.model_checkpoint,
             )
+            logger.info(f"Model config: {model_config}")
 
             key = jrandom.PRNGKey(42)
             vocab_size = tokenizer.vocab_size
             Vocab = hax.Axis("vocab", vocab_size)
             logger.info(f"Vocab size: {vocab_size}")
 
+            # Get checkpoint path from model config's tokenizer field
+            checkpoint_path = model_config.tokenizer
+
             policy_model = load_model_from_checkpoint(
-                checkpoint=config.model_checkpoint,
+                checkpoint=checkpoint_path,
                 model_config=model_config,
                 trainer_config=trainer_config,
-                mesh=trainer_config.device_mesh,
+                mesh=trainer_config.device_mesh,  # Now this is concrete after levanter.initialize
                 # use the compute axis mapping for inference
                 axis_mapping=trainer_config.compute_axis_mapping,
                 vocab_axis=Vocab,
@@ -182,27 +195,34 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             )
             logger.info(f"Policy model: {policy_model}")
 
-            with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
+            # Enter mesh context for sampling, like RolloutWorker does in _sample_batch
+            with (
+                trainer_config.use_device_mesh(),
+                hax.axis_mapping(trainer_config.compute_axis_mapping),
+            ):
                 inference_server = InferenceServer.create(
                     inference_server_config,
                     model=policy_model,
                     tokenizer=tokenizer,
                 )
 
-            env = load_environment_from_spec(config.env_config)
-            logger.info(f"Loaded environment: {env}")
+                # Start the server in a background thread
+                import threading
 
-            policy_ctx = InferenceContext(
-                tokenizer=tokenizer,
-                inference_server=inference_server,
-                max_tokens=config.max_input_length + config.max_output_length,
-                stop_tokens=config.stop_tokens,
-            )
+                threading.Thread(target=inference_server.serve, daemon=True).start()
 
-            with (
-                trainer_config.device_mesh,
-                hax.axis_mapping(trainer_config.compute_axis_mapping),
-            ):
+                time.sleep(2)
+
+                env = load_environment_from_spec(config.env_config)
+                logger.info(f"Loaded environment: {env}")
+
+                policy_ctx = InferenceContext(
+                    tokenizer=tokenizer,
+                    inference_server=inference_server,
+                    max_tokens=config.max_input_length + config.max_output_length,
+                    stop_tokens=config.stop_tokens,
+                )
+
                 # Sample examples, generate responses, and create rollouts from selected lesson
                 rollout_groups, metrics = env.sample(
                     inference_ctx=policy_ctx,
@@ -224,7 +244,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             # Save rollout groups as JSON
             rollout_file = f"{config.output_path}/rollout_groups.json"
             with fsspec.open(rollout_file, "w") as f:
-                json.dump([g.model_dump() for g in rollout_groups], f, indent=2)
+                json.dump([rollout_group_to_dict(g) for g in rollout_groups], f, indent=2)
             logger.info(f"Saved rollout groups to {rollout_file}")
 
             # Save metrics as JSON
@@ -235,13 +255,21 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
 
             return metrics
 
-    inference_task = inference_worker_task.remote()
+    # Use run_on_pod_ray like RLJob does to handle TPU allocation properly
+    # Note: Use num_slices=1 for evaluation (single model inference, not distributed training)
+    inference_task = run_on_pod_ray.remote(
+        inference_worker_task_inner,
+        config.tpu_type,
+        num_slices=1,
+        max_retries_failure=3,
+        max_retries_preemption=10,
+    )
     # Wait for the task to complete and return the actual results
     return ray.get(inference_task)
 
 
 def evaluate_environment(
-    model: str,
+    model_config: LmConfig,
     env_config: EnvConfig | None = None,
     env: MarinEnv | None = None,
     name: str | None = None,
@@ -251,7 +279,7 @@ def evaluate_environment(
     """Create an executor step for evaluating a model on an environment.
 
     Args:
-        model: Path to model checkpoint or ExecutorStep producing a model
+        model_config: Model configuration (must have tokenizer field set to checkpoint path)
         env_config: Environment configuration (use this or env, not both)
         env: MarinEnv instance for backward compatibility (will be converted to config)
         name: Name of the evaluation
@@ -282,15 +310,20 @@ def evaluate_environment(
         env_name = env_config.env_class.split(".")[-1]
         env_id = env_config.env_args.get("env_id", "unknown")
 
+    # Get model identifier from config for naming
+    model_identifier = model_config.tokenizer or "model"
+    if "/" in model_identifier:
+        model_identifier = model_identifier.split("/")[-1]
+
     config = EnvironmentEvalConfig(
-        model_checkpoint=model,
+        model_config=model_config,
         env_config=env_config,
         output_path=output_path,
         tpu_type=tpu_type,
     )
 
     return ExecutorStep(
-        name=name or f"evaluate-{env_name}-{model}-{env_id}",
+        name=name or f"evaluate-{env_name}-{model_identifier}-{env_id}",
         fn=_run_evaluation,
         config=config,
         description=f"Evaluate model on {env_name}",

@@ -128,14 +128,32 @@ class ReplayBuffer:
             seed=seed,
         )
 
+    def _is_rollout_fresh(
+        self,
+        rollout_step: int,
+        rollout_timestamp: float,
+        current_step: int,
+        current_time: float,
+    ) -> bool:
+        # we can receive "future" rollouts if the training worker crashed and restarted.
+        # these can introduce unexpected non-determinism into our process, so we explicitly
+        # disallow them.
+        min_step = current_step - self.max_rollout_step_delay
+        max_step = current_step
+        if rollout_step < min_step or rollout_step > max_step:
+            return False
+
+        # Check timestamp
+        min_time = current_time - self.max_rollout_timestamp_delay
+        if rollout_timestamp <= min_time:
+            return False
+
+        return True
+
     def set_current_step(self, step: int) -> None:
         """Set current training step and filter stale rollouts."""
         self._current_step = step
-        min_time = time.time() - self.max_rollout_timestamp_delay
-        min_step = step - self.max_rollout_step_delay
-        logger.info(
-            "Discarding rollouts older than step %d or timestamp %.0f (current step %d)", min_step, min_time, step
-        )
+        current_time = time.time()
 
         with self._lock:
             total_removed = 0
@@ -145,18 +163,16 @@ class ReplayBuffer:
                 self.rollout_storage[env_name] = [
                     r
                     for r in rollouts
-                    if (r.rollout.metadata.weight_step >= min_step and r.rollout.metadata.timestamp > min_time)
+                    if self._is_rollout_fresh(
+                        r.rollout.metadata.weight_step, r.rollout.metadata.timestamp, step, current_time
+                    )
                 ]
                 total_removed += before - len(self.rollout_storage[env_name])
 
             total_remaining = sum(len(rollouts) for rollouts in self.rollout_storage.values())
 
             if total_removed > 0:
-                logger.info(
-                    f"Filtered {total_removed} stale rollouts "
-                    f"(min_step={min_step}, min_time={min_time:.0f}), "
-                    f"{total_remaining} remaining"
-                )
+                logger.info(f"Filtered {total_removed} stale rollouts {total_remaining} remaining")
 
     def _retire_overused_rollouts(self):
         """Remove rollouts that exceeded max_samples usage."""
@@ -175,17 +191,20 @@ class ReplayBuffer:
         with their precomputed advantages and usage tracking.
         """
         env_examples: dict[str, list[RolloutWithCount]] = defaultdict(list)
+        current_time = time.time()
+
         for batch in new_batches:
             if not batch.groups or not batch.groups[0].rollouts:
                 continue
 
             # Read weight_step from first rollout's metadata
             first_rollout = batch.groups[0].rollouts[0]
-            weight_step = first_rollout.metadata.weight_step
+            rollout_step = first_rollout.metadata.weight_step
+            rollout_timestamp = first_rollout.metadata.timestamp
 
-            if weight_step < self._current_step - self.max_rollout_step_delay:
+            if not self._is_rollout_fresh(rollout_step, rollout_timestamp, self._current_step, current_time):
                 logger.info(
-                    f"Skipping stale rollout batch (weight_step={weight_step}, current_step={self._current_step})"
+                    f"Skipping stale rollout batch (rollout_step={rollout_step}, current_step={self._current_step})"
                 )
                 continue
 
@@ -196,7 +215,7 @@ class ReplayBuffer:
                 advantages = self.loss_module.compute_advantages(group.rollouts)
                 for rollout, advantage in zip(group.rollouts, advantages, strict=True):
                     individual = RolloutWithCount(
-                        rollout=rollout, advantage=advantage, usage_count=0, weight_step=weight_step
+                        rollout=rollout, advantage=advantage, usage_count=0, weight_step=rollout_step
                     )
                     env_examples[rollout.env_name].append(individual)
 
