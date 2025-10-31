@@ -12,12 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import math
+import dataclasses
 
 from levanter.optim import MuonHConfig
 
 from experiments.defaults import SimpleTrainConfig, default_train
-from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 from experiments.qwen3 import qwen3_1_7b, qwen3_8b
@@ -27,17 +26,9 @@ from experiments.ferries.initial_ferry import (
     BATCH_SIZE_8B,
     NUM_1B_TRAIN_STEPS,
     NUM_8B_TRAIN_STEPS,
-    NEMOTRON_PT_MIX_WEIGHTS,
-    nemotron_steps,
-    proofpile_2_step,
-    starcoder_step,
-    phase_3_tokenized,
-    pt_vs_hq_components,
-    megamath_tokenized,
-    starling_components,
-    STACKV2_EDU_PYTHON_KEY,
-    stackv2_edu_filtered_python_tokenized,
-    mantis_cooldown_weights_with_stackv2_python,
+)
+from experiments.ferries.initial_ferry import (
+    _build_varying_mixture_for_steps as _base_build_varying_mixture_for_steps,
 )
 
 
@@ -86,53 +77,15 @@ train_config_8b = SimpleTrainConfig(
     optimizer_config=muonh_cfg_8b,
 )
 
-
-def _build_varying_mixture_for_steps(
-    num_train_steps: int,
-    *,
-    train_batch_size: int,
-    mixture_block_size: int = 2048,
-):
-    """
-    Build the varying data mixture with phase cutovers proportional to the
-    Tootsie schedules (160k/192k and 174k/192k) for a given training horizon.
-
-    Uses Feistel shuffle for sequence sampling to avoid linear-permutation artifacts.
-    """
-    # Allocate 20% of steps to the cooldown (midtraining) phase
-    requested_cooldown_start_step = max(1, int(num_train_steps * 0.8))
-
-    step_multiple = mixture_block_size // math.gcd(mixture_block_size, train_batch_size)
-    cooldown_start_step = (requested_cooldown_start_step // step_multiple) * step_multiple
-    if cooldown_start_step == 0:
-        cooldown_start_step = step_multiple
-
-    return lm_varying_mixture_data_config(
-        components={
-            **nemotron_steps,
-            "starcoderdata": starcoder_step,
-            "proofpile_2": proofpile_2_step,
-            **phase_3_tokenized,
-            **{k: v for k, v in pt_vs_hq_components.items() if k != "all_math"},
-            **megamath_tokenized,
-            **starling_components,
-            STACKV2_EDU_PYTHON_KEY: stackv2_edu_filtered_python_tokenized,
-        },
-        weights_list=[
-            (0, NEMOTRON_PT_MIX_WEIGHTS),  # Pretraining
-            (cooldown_start_step, mantis_cooldown_weights_with_stackv2_python),  # Midtraining
-        ],
-        permutation_type="feistel",
-        mixture_block_size=mixture_block_size,
-    )
-
-
-varying_mixture_1b = _build_varying_mixture_for_steps(
+base_mixture_1b = _base_build_varying_mixture_for_steps(
     NUM_1B_TRAIN_STEPS, train_batch_size=BATCH_SIZE_1B, mixture_block_size=2048
 )
-varying_mixture_8b = _build_varying_mixture_for_steps(
+varying_mixture_1b = dataclasses.replace(base_mixture_1b, permutation_type="feistel")
+
+base_mixture_8b = _base_build_varying_mixture_for_steps(
     NUM_8B_TRAIN_STEPS, train_batch_size=BATCH_SIZE_8B, mixture_block_size=2048
 )
+varying_mixture_8b = dataclasses.replace(base_mixture_8b, permutation_type="feistel")
 
 ferry_model_1b = default_train(
     name="ferry_muonh_qwen3_1_7b_feistel",
