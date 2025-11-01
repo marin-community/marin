@@ -19,22 +19,59 @@ import os
 import pytest
 import ray
 
+from marin.evaluation.evaluators.evaluator import ModelConfig
+
 try:
-    from tests.vllm.utils import run_vllm_inference
+    from vllm import LLM, SamplingParams
 except ImportError:
     pytest.skip("vLLM is not installed", allow_module_level=True)
 
 
-@ray.remote(resources={"TPU-v6e-8-head": 1})
-def _test_llm_func(model_config):
+@pytest.fixture
+def model_config():
+    config = ModelConfig(
+        name="test-llama-200m",
+        path="gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",
+        engine_kwargs={"enforce_eager": True, "max_model_len": 1024},
+        generation_params={"max_tokens": 16},
+    )
+    yield config
+    config.destroy()
+
+
+def run_vllm_inference(model_path, **model_init_kwargs):
+    llm = LLM(model=model_path, **model_init_kwargs)
+
+    sampling_params = SamplingParams(
+        max_tokens=100,
+        temperature=0.7,
+    )
+
+    generated_texts = llm.generate(
+        "Hello, how are you?",
+        sampling_params=sampling_params,
+    )
+
+    return generated_texts
+
+
+@ray.remote()
+def _small_model_func(model_config):
     model_path = model_config.ensure_downloaded("/tmp/test-llama-eval")
 
     run_vllm_inference(model_path, **model_config.engine_kwargs)
 
-    model_config.destroy()
 
-
-@pytest.mark.gcp
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
+@pytest.mark.tpu_ci
 def test_local_llm_inference(ray_tpu_cluster, model_config):
-    ray.get(_test_llm_func.remote(model_config))
+    ray.get(_small_model_func.remote(model_config))
+
+
+@ray.remote()
+def _large_model_func(model_path):
+    return run_vllm_inference(model_path, max_model_len=1024, tensor_parallel_size=8)
+
+
+@pytest.mark.tpu_ci
+def test_large_model_inference(gcsfuse_mount_llama_70b_model_path):
+    ray.get(_small_model_func.remote(gcsfuse_mount_llama_70b_model_path))

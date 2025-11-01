@@ -19,13 +19,11 @@ import ray
 
 from marin.generation.inference import OverwriteOutputFiletypeFilenameProvider
 from marin.generation.pipeline import vLLMTextGeneration
-from tests.conftest import default_engine_kwargs, default_generation_params
 
 TEST_OUTPUT_PATH = "gs://marin-us-east5/documents/ray-data-test-llama-200m"
 
 
-@pytest.mark.gcp
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
+@pytest.mark.tpu_ci
 def test_ray_data(gcsfuse_mount_model_path, test_file_path):
     ds = ray.data.read_json(test_file_path, arrow_open_stream_args={"compression": "gzip"})
 
@@ -37,8 +35,8 @@ def test_ray_data(gcsfuse_mount_model_path, test_file_path):
         batch_size=16,
         fn_constructor_kwargs={
             "model_name": gcsfuse_mount_model_path,
-            "engine_kwargs": default_engine_kwargs,
-            "generation_kwargs": default_generation_params,
+            "engine_kwargs": {"enforce_eager": True, "max_model_len": 1024},
+            "generation_kwargs": {"max_tokens": 16},
             "template": "What is this text about? {example}",
             "prompt_column": "text",
             "save_templated_prompt": False,

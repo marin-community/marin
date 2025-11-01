@@ -27,8 +27,7 @@ def increment(x):
     return x + 1
 
 
-@pytest.mark.gcp
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
+@pytest.mark.tpu_ci
 @pytest.mark.timeout(10)
 def test_scheduling_on_tpu(ray_tpu_cluster):
     result = ray.get(increment.remote(1))

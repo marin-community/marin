@@ -70,6 +70,6 @@ def _test_modernbert_flash_attn():
     assert all_close, f"Max diff: {torch.max(torch.abs(ref_model_output - patched_model_output))}"
 
 
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
+@pytest.mark.tpu_ci
 def test_modernbert_flash_attn(ray_tpu_cluster):
     ray.get(_test_modernbert_flash_attn.remote())

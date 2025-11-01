@@ -22,12 +22,6 @@ from pydantic import BaseModel
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 
-default_engine_kwargs = {"enforce_eager": True, "max_model_len": 1024}
-
-large_model_engine_kwargs = {"max_model_len": 1024, "tensor_parallel_size": 8}
-
-default_generation_params = {"max_tokens": 16}
-
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 
@@ -35,18 +29,6 @@ DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 class WorkerConfig(BaseModel):
     worker_count: int = 0
     cluster_address: str | None = None
-
-
-@pytest.fixture(scope="module")
-def model_config():
-    config = ModelConfig(
-        name="test-llama-200m",
-        path="gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",
-        engine_kwargs=default_engine_kwargs,
-        generation_params=default_generation_params,
-    )
-    yield config
-    config.destroy()
 
 
 @pytest.fixture
@@ -111,9 +93,15 @@ def ray_tpu_cluster(tmp_path_factory, worker_id):
     }
     print("Starting on worker_id", worker_id, "with init_args", init_args)
     if os.getenv("START_RAY_TPU_CLUSTER") == "true":
-        print("Starting TPU Ray cluster with resources TPU:8, TPU-v6e-8-head:1")
+        # Determine TPU type and chip count from environment
+        tpu_type = os.getenv("TEST_TPU_TYPE", "v5litepod-4")
+        # Extract chip count from TPU type (e.g., "v5litepod-4" -> 4, "v6e-8" -> 8)
+        chip_count = int(tpu_type.split("-")[-1])
+        tpu_resource_name = f"TPU-{tpu_type}-head"
+
+        print(f"Starting TPU Ray cluster with resources TPU:{chip_count}, {tpu_resource_name}:1")
         ctx = ray.init(
-            resources={"TPU": 8, "TPU-v6e-8-head": 1, "head_node": 1},
+            resources={"TPU": chip_count, tpu_resource_name: 1, "head_node": 1},
             num_cpus=120,
             **init_args,
         )
