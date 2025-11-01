@@ -113,13 +113,47 @@ configure_gcp_registry_all:
 
 
 # stuff for setting up locally
+install_uv:
+	@if ! command -v uv > /dev/null 2>&1; then \
+		echo "Installing uv..."; \
+		curl -LsSf https://astral.sh/uv/install.sh | sh; \
+		echo "uv installed. Please restart your shell or run: source ~/.cargo/env"; \
+	else \
+		echo "uv is already installed."; \
+	fi
+
+install_gcloud:
+	@if ! command -v gcloud > /dev/null 2>&1; then \
+		echo "Installing gcloud CLI..."; \
+		mkdir -p ~/.local; \
+		if [ "$$(uname)" = "Darwin" ]; then \
+			if [ "$$(uname -m)" = "arm64" ]; then \
+				GCLOUD_ARCHIVE="google-cloud-cli-darwin-arm.tar.gz"; \
+			else \
+				GCLOUD_ARCHIVE="google-cloud-cli-darwin-x86_64.tar.gz"; \
+			fi; \
+		else \
+			GCLOUD_ARCHIVE="google-cloud-cli-linux-x86_64.tar.gz"; \
+		fi; \
+		cd ~/.local && \
+		curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/$$GCLOUD_ARCHIVE && \
+		tar -xzf $$GCLOUD_ARCHIVE && \
+		rm $$GCLOUD_ARCHIVE && \
+		./google-cloud-sdk/install.sh --quiet --usage-reporting=false --path-update=true --command-completion=true && \
+		echo "gcloud installed. Please restart your shell or run: source ~/.zshrc (or ~/.bashrc)"; \
+	else \
+		echo "gcloud is already installed."; \
+	fi
+
+	gcloud config set project hai-gcp-models
+
 
 # get secret ssh key from gcp secrets
-get_secret_key:
+get_secret_key: install_gcloud
 	gcloud secrets versions access latest --secret=RAY_CLUSTER_PRIVATE_KEY > ~/.ssh/marin_ray_cluster.pem && \
 	chmod 600 ~/.ssh/marin_ray_cluster.pem
 	gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
 
-dev_setup: get_secret_key
+dev_setup: install_uv install_gcloud get_secret_key
 	echo "Dev setup complete."

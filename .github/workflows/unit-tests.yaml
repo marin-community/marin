@@ -63,7 +63,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           CI: true
         run: |
-          PYTHONPATH=tests:. uv run --extra=cpu pytest -n3 --durations=5 --tb=short -m 'not slow and not gcp' -v tests/
+          PYTHONPATH=tests:. uv run --extra=cpu pytest -n3 --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
 
   tpu-test:
     runs-on: [tpu-ci]
@@ -107,9 +107,10 @@ jobs:
             -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \
             -e HF_TOKEN \
             -e WANDB_API_KEY \
+            -e WANDB_MODE=offline \
             -v ${{ github.workspace }}:/workspace:rw \
             --tmpfs /workspace/logs:rw \
             --tmpfs /workspace/.pytest_cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            timeout --kill-after=5 --signal=TERM 900 uv run --frozen pytest tests/tpu/ -v --tb=short -s --log-cli-level=INFO
+            timeout --kill-after=5 --signal=TERM 900 uv run --frozen pytest tests/tpu -m tpu_ci -v --tb=short -s --log-cli-level=INFO

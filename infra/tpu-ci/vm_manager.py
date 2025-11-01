@@ -702,7 +702,8 @@ def check_logs(name: str, lines: int, follow: bool):
 @click.option("--test-path", default="tests/tpu/")
 @click.option("--pytest-args", default="-v --tb=short -s --log-cli-level=INFO")
 @click.option("--timeout", default=900, help="Timeout in seconds for pytest execution")
-def debug_tpu(name: str, test_path: str, pytest_args: str, timeout: int):
+@click.option("--env-vars", multiple=True, help="Environment variables to pass to Docker")
+def debug_tpu(name: str, test_path: str, pytest_args: str, timeout: int, env_vars: tuple[str, ...]):
     """Rsync marin directory to VM and run pytest in Docker container."""
     zone = extract_zone_from_name(name)
 
@@ -728,6 +729,11 @@ def debug_tpu(name: str, test_path: str, pytest_args: str, timeout: int):
     logging.info("✓ Project synced")
 
     logging.info(f"Running pytest on {name}...")
+
+    # Build env var flags for Docker
+    env_var_flags = ""
+    for env_var in env_vars:
+        env_var_flags += f"  -e {env_var} \\\n"
 
     # Use the same script structure as GitHub Actions workflow
     test_script = f"""
@@ -755,12 +761,12 @@ sudo docker run --rm \\
   -e START_RAY_TPU_CLUSTER=true \\
   -e PYTHONPATH=/workspace \\
   -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \\
-  -v {remote_dir}:/workspace:rw \\
+{env_var_flags}  -v {remote_dir}:/workspace:rw \\
   --tmpfs /workspace/logs:rw \\
   --tmpfs /workspace/.pytest_cache:rw \\
   -w /workspace \\
   $DOCKER_IMAGE \\
-  timeout --kill-after=5 --signal=TERM {timeout} uv run --frozen pytest {test_path} {pytest_args}
+  timeout --kill-after=5 --signal=TERM {timeout} uv run pytest {test_path} {pytest_args}
 """
 
     ssh_cmd = [
