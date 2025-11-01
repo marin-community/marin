@@ -16,7 +16,6 @@
 
 
 import pytest
-import ray
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 
@@ -54,23 +53,14 @@ def run_vllm_inference(model_path, **model_init_kwargs):
     return generated_texts
 
 
-@ray.remote()
-def _small_model_func(model_config):
+@pytest.mark.tpu_ci
+def test_local_llm_inference(ray_tpu_cluster, model_config):
     model_path = model_config.ensure_downloaded("/tmp/test-llama-eval")
 
     run_vllm_inference(model_path, **model_config.engine_kwargs)
 
 
 @pytest.mark.tpu_ci
-def test_local_llm_inference(ray_tpu_cluster, model_config):
-    ray.get(_small_model_func.remote(model_config))
-
-
-@ray.remote()
-def _large_model_func(model_path):
-    return run_vllm_inference(model_path, max_model_len=1024, tensor_parallel_size=8)
-
-
-@pytest.mark.tpu_ci
-def test_large_model_inference(gcsfuse_mount_llama_70b_model_path):
-    ray.get(_small_model_func.remote(gcsfuse_mount_llama_70b_model_path))
+def test_large_model_inference():
+    gcsfuse_mount_llama_70b_model_path = "/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct"
+    return run_vllm_inference(gcsfuse_mount_llama_70b_model_path, max_model_len=1024, tensor_parallel_size=8)

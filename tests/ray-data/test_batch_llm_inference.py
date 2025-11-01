@@ -23,8 +23,9 @@ TEST_OUTPUT_PATH = "gs://marin-us-east5/documents/ray-data-test-llama-200m"
 
 
 @pytest.mark.tpu_ci
-def test_ray_data(gcsfuse_mount_model_path, test_file_path):
-    ds = ray.data.read_json(test_file_path, arrow_open_stream_args={"compression": "gzip"})
+def test_ray_data(test_crawl_file_path):
+    gcsfuse_mount_model_path = "/opt/gcsfuse_mount/perplexity-models/llama-200m"
+    ds = ray.data.read_json(test_crawl_file_path, arrow_open_stream_args={"compression": "gzip"})
 
     ds = ds.map_batches(  # Apply batch inference for all input data.
         vLLMTextGeneration,
