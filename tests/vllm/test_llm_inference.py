@@ -14,7 +14,6 @@
 
 """Test whether vLLM can generate simple completions"""
 
-import os
 
 import pytest
 import ray

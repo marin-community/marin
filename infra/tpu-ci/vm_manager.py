@@ -702,7 +702,7 @@ def check_logs(name: str, lines: int, follow: bool):
 @click.option("--test-path", default="tests/tpu/")
 @click.option("--pytest-args", default="-v --tb=short -s --log-cli-level=INFO")
 @click.option("--timeout", default=900, help="Timeout in seconds for pytest execution")
-@click.option("--env-vars", multiple=True, help="Environment variables to pass to Docker (e.g., --env-vars WANDB_MODE=offline)")
+@click.option("--env-vars", multiple=True, help="Environment variables to pass to Docker")
 def debug_tpu(name: str, test_path: str, pytest_args: str, timeout: int, env_vars: tuple[str, ...]):
     """Rsync marin directory to VM and run pytest in Docker container."""
     zone = extract_zone_from_name(name)

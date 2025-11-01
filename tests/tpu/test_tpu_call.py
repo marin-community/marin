@@ -16,7 +16,6 @@
 a TPU works.
 """
 
-import os
 
 import pytest
 import ray

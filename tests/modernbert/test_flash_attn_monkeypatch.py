@@ -14,7 +14,6 @@
 
 # Requires transformers>=4.48.0
 
-import os
 import types
 
 import pytest

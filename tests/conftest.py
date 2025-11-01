@@ -20,8 +20,6 @@ import pytest
 import ray
 from pydantic import BaseModel
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
-
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 
