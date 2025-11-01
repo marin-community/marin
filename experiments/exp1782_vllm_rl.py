@@ -259,8 +259,12 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
             replay_buffer=ReplayBufferConfig(
                 capacity=4096,
                 alpha=3,
-                max_samples=1,
-                max_rollout_step_delay=0,
+                # max_samples=1,
+                # max_rollout_step_delay=0,
+                # Go completely off-policy to disentangle any dependency between rollout and training
+                max_rollout_step_delay=999999999999999,
+                max_samples=999999999999999,
+                max_rollout_timestamp_delay=86400,
             ),
         ),
         curriculum=curriculum_config,
