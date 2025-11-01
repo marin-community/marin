@@ -15,6 +15,8 @@
 """Test whether vLLM can generate simple completions"""
 
 
+import shutil
+
 import pytest
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
@@ -23,18 +25,6 @@ try:
     from vllm import LLM, SamplingParams
 except ImportError:
     pytest.skip("vLLM is not installed", allow_module_level=True)
-
-
-@pytest.fixture
-def model_config():
-    config = ModelConfig(
-        name="test-llama-200m",
-        path="gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",
-        engine_kwargs={"enforce_eager": True, "max_model_len": 1024},
-        generation_params={"max_tokens": 16},
-    )
-    yield config
-    config.destroy()
 
 
 def run_vllm_inference(model_path, **model_init_kwargs):
@@ -54,10 +44,16 @@ def run_vllm_inference(model_path, **model_init_kwargs):
 
 
 @pytest.mark.tpu_ci
-def test_local_llm_inference(ray_tpu_cluster, model_config):
-    model_path = model_config.ensure_downloaded("/tmp/test-llama-eval")
-
-    run_vllm_inference(model_path, **model_config.engine_kwargs)
+def test_local_llm_inference(ray_tpu_cluster):
+    config = ModelConfig(
+        name="test-llama-200m",
+        path="gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",
+        engine_kwargs={"enforce_eager": True, "max_model_len": 1024},
+        generation_params={"max_tokens": 16},
+    )
+    model_path = config.ensure_downloaded("/tmp/test-llama-eval")
+    run_vllm_inference(model_path, **config.engine_kwargs)
+    shutil.rmtree("/tmp/test-llama-eval")
 
 
 @pytest.mark.tpu_ci
