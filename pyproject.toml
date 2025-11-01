@@ -312,5 +312,5 @@ markers = [
     "tpu_ci: mark tests that require a TPU",
 ]
 
-# Make sure we timeout before CI kills us
-addopts = "--session-timeout=500 --dist=worksteal"
+# Make sure we timeout before CI kills us, and don't run TPU tests by default
+addopts = "--session-timeout=500 --dist=worksteal -m 'not tpu_ci'"
