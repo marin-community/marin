@@ -35,8 +35,7 @@ class TPUActor:
         return self.tpu_id
 
 
-@pytest.mark.gcp
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
+@pytest.mark.tpu_ci
 @pytest.mark.timeout(30)
 def test_not_conflicting_devices(ray_tpu_cluster):
     num_total_devices = 4

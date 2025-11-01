@@ -50,10 +50,10 @@ def _convert_lingoly_to_dolma(config: ConvertLingolyToDolmaConfig) -> None:
             zip_ref.extractall(temp_dir)
 
         # Find and open the test.jsonl file
-        test_file_path = os.path.join(temp_dir, "test.jsonl")
+        test_crawl_file_path = os.path.join(temp_dir, "test.jsonl")
 
-        if not os.path.exists(test_file_path):
-            raise FileNotFoundError(f"test.jsonl not found in the extracted zip file at {test_file_path}")
+        if not os.path.exists(test_crawl_file_path):
+            raise FileNotFoundError(f"test.jsonl not found in the extracted zip file at {test_crawl_file_path}")
 
         output_path = os.path.join(config.output_path, "lingoly_preamble_context_questions_joined")
         fsspec_mkdirs(output_path)
@@ -62,7 +62,7 @@ def _convert_lingoly_to_dolma(config: ConvertLingolyToDolmaConfig) -> None:
         max_doc_length = 7000
         output_doc_file_path = os.path.join(output_path, f"{shard_number:05d}.jsonl")
 
-        with open(test_file_path, "r") as f:
+        with open(test_crawl_file_path, "r") as f:
             # Process each line as JSON
 
             text_so_far = ""

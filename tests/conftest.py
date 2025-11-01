@@ -20,14 +20,6 @@ import pytest
 import ray
 from pydantic import BaseModel
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
-
-default_engine_kwargs = {"enforce_eager": True, "max_model_len": 1024}
-
-large_model_engine_kwargs = {"max_model_len": 1024, "tensor_parallel_size": 8}
-
-default_generation_params = {"max_tokens": 16}
-
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 
@@ -37,35 +29,8 @@ class WorkerConfig(BaseModel):
     cluster_address: str | None = None
 
 
-@pytest.fixture(scope="module")
-def model_config():
-    config = ModelConfig(
-        name="test-llama-200m",
-        path="gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",
-        engine_kwargs=default_engine_kwargs,
-        generation_params=default_generation_params,
-    )
-    yield config
-    config.destroy()
-
-
 @pytest.fixture
-def gcsfuse_mount_model_path():
-    return "/opt/gcsfuse_mount/perplexity-models/llama-200m"
-
-
-@pytest.fixture
-def gcsfuse_mount_llama_70b_model_path():
-    return "/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct"
-
-
-@pytest.fixture
-def gcsfuse_mount_llama_8b_model_path():
-    return "/opt/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct"
-
-
-@pytest.fixture
-def test_file_path():
+def test_crawl_file_path():
     return "gs://marin-us-east5/documents/chris-test/test_50.jsonl.gz"
 
 
@@ -111,9 +76,12 @@ def ray_tpu_cluster(tmp_path_factory, worker_id):
     }
     print("Starting on worker_id", worker_id, "with init_args", init_args)
     if os.getenv("START_RAY_TPU_CLUSTER") == "true":
-        print("Starting TPU Ray cluster with resources TPU:8, TPU-v6e-8-head:1")
+        tpu_resource_name = "TPU-v5litepod-4-head"
+        chip_count = 4
+
+        print(f"Starting TPU Ray cluster with resources TPU:{chip_count}, {tpu_resource_name}:1")
         ctx = ray.init(
-            resources={"TPU": 8, "TPU-v6e-8-head": 1, "head_node": 1},
+            resources={"TPU": chip_count, tpu_resource_name: 1, "head_node": 1},
             num_cpus=120,
             **init_args,
         )

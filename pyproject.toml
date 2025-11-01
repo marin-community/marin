@@ -309,8 +309,8 @@ log_date_format = "%Y-%m-%d %H:%M:%S"
 log_cli_level = "INFO"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
-    "gcp: mark tests that require GCP authentication or resources",
+    "tpu_ci: mark tests that require a TPU",
 ]
 
-# Make sure we timeout before CI kills us
-addopts = "--session-timeout=500 --dist=worksteal"
+# Make sure we timeout before CI kills us, and don't run TPU tests by default
+addopts = "--session-timeout=500 --dist=worksteal -m 'not tpu_ci'"
