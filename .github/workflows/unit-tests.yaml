@@ -108,7 +108,6 @@ jobs:
             -e HF_TOKEN \
             -e WANDB_API_KEY \
             -e WANDB_MODE=offline \
-            -e TEST_TPU_TYPE=v5litepod-4 \
             -v ${{ github.workspace }}:/workspace:rw \
             --tmpfs /workspace/logs:rw \
             --tmpfs /workspace/.pytest_cache:rw \

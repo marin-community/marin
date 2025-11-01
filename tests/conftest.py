@@ -91,11 +91,8 @@ def ray_tpu_cluster(tmp_path_factory, worker_id):
     }
     print("Starting on worker_id", worker_id, "with init_args", init_args)
     if os.getenv("START_RAY_TPU_CLUSTER") == "true":
-        # Determine TPU type and chip count from environment
-        tpu_type = os.getenv("TEST_TPU_TYPE", "v5litepod-4")
-        # Extract chip count from TPU type (e.g., "v5litepod-4" -> 4, "v6e-8" -> 8)
-        chip_count = int(tpu_type.split("-")[-1])
-        tpu_resource_name = f"TPU-{tpu_type}-head"
+        tpu_resource_name = "TPU-v5litepod-4-head"
+        chip_count = 4
 
         print(f"Starting TPU Ray cluster with resources TPU:{chip_count}, {tpu_resource_name}:1")
         ctx = ray.init(
