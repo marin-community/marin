@@ -267,7 +267,6 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
             page_size=8,
             max_seq_len=64,
             max_queued_tokens=8,
-            enable_logprobs=True,
         ),
         temperature=1.0,
         port=find_open_port(),
@@ -362,7 +361,6 @@ def run_inference_with_engine(
     tokenizer=None,
     max_tokens: int = 64,
     temperature: float = 1.0,
-    enable_logprobs: bool = False,
 ) -> tuple[list[list[int]], list[str]]:
     """Run inference on prompts using InferenceEngine directly."""
     if tokenizer is None:
@@ -374,7 +372,6 @@ def run_inference_with_engine(
         page_size=32,
         max_pages=8 * len(prompts) * max(1, max_tokens // 32),
         compute_dtype=jnp.bfloat16,
-        enable_logprobs=enable_logprobs,
     )
 
     print("Creating inference engine with config:", config)
@@ -402,7 +399,6 @@ def run_inference_with_engine(
             request_id=i,
             decode_params=decode_params,
             n_generations=1,
-            enable_logprobs=enable_logprobs,
         )
         requests.append(request)
 
