@@ -1,0 +1,5 @@
+train_urls:
+  - "gs://pubmed-mosaic/pubmed-sharded/pubmedRandomized_train.{1..128}-of-128.jsonl.gz"
+validation_urls:
+  - "gs://pubmed-mosaic/pubmed-sharded/pubmedRandomized_val.{1..8}-of-8.jsonl.gz"
+cache_dir: "gs://pubmed-mosaic/tokenized/pubmed-sharded/"
