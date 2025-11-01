@@ -113,6 +113,15 @@ configure_gcp_registry_all:
 
 
 # stuff for setting up locally
+install_uv:
+	@if ! command -v uv > /dev/null 2>&1; then \
+		echo "Installing uv..."; \
+		curl -LsSf https://astral.sh/uv/install.sh | sh; \
+		echo "uv installed. Please restart your shell or run: source ~/.cargo/env"; \
+	else \
+		echo "uv is already installed."; \
+	fi
+
 install_gcloud:
 	@if ! command -v gcloud > /dev/null 2>&1; then \
 		echo "Installing gcloud CLI..."; \
@@ -146,5 +155,5 @@ get_secret_key: install_gcloud
 	gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
 
-dev_setup: install_gcloud get_secret_key
+dev_setup: install_uv install_gcloud get_secret_key
 	echo "Dev setup complete."
