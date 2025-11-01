@@ -70,9 +70,9 @@ cluster_docker_build:
 
 cluster_tag:
 	@if [ "$$(uname)" = "Darwin" ]; then \
-		sed -i '' -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" src/marin/cluster/config.py; \
+		sed -i '' -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" lib/marin/src/marin/cluster/config.py; \
 	else \
-		sed -i -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" src/marin/cluster/config.py; \
+		sed -i -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" lib/marin/src/marin/cluster/config.py; \
 	fi
 
 # Target to push the tagged Docker images to their respective Artifact Registries
