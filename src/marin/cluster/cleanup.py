@@ -229,11 +229,7 @@ def run_cleanup_loop(gcp_project: str, zone: str, interval: int = 600) -> None:
 
 
 def running_cleanup_jobs() -> Sequence[dict[str, Any]]:
-    """Check if a cleanup cron job is currently running.
-
-    Returns:
-        Job info dict if found, None otherwise
-    """
+    """Return a list of job dicts for any currently running or pending cleanup jobs."""
     from .ray import list_jobs
 
     running_jobs = list_jobs(filters=["status=RUNNING"])
@@ -244,17 +240,9 @@ def running_cleanup_jobs() -> Sequence[dict[str, Any]]:
     for job in running_jobs + pending_jobs:
         submission_id = job.get("submission_id") or ""
         if submission_id.startswith(CLEANUP_JOB_PREFIX):
-            status = job.get("status", "")
-            if status in ["RUNNING", "PENDING"]:
-                active_jobs[submission_id] = job
+            active_jobs[submission_id] = job
 
     return active_jobs.values()
-
-
-def stop_cleanup_job(job_id: str) -> None:
-    logger.info(f"Stopping cleanup job: {job_id}")
-
-    logger.info(f"Successfully stopped cleanup job: {job_id}")
 
 
 def submit_cleanup_cron_job(project: str, cluster: str, zone: str, interval: int = 600) -> str:
