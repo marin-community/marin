@@ -1,0 +1,16 @@
+eval_harness:
+ task_spec: ["gsm8k"]
+ max_length: 2048
+#  max_examples: 1
+tokenizer: meta-llama/Meta-Llama-3-8B
+model:
+  type: llama
+checkpoint_path: meta-llama/Meta-Llama-3-8B
+checkpoint_is_hf: true
+trainer:
+  mp: p=bfloat16,c=bfloat16
+  ray:
+    auto_start_cluster: false
+  mp: p=bfloat16,c=bfloat16
+  tensor_parallel_axes: ["mlp", "heads", "kv_head", "vocab"]
+  model_axis_size: 4
