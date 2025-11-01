@@ -110,7 +110,7 @@ test = [
   "chex>=0.1.86",
   "httpx>=0.28.1",
   "pytest-profiling>=1.8.1",
-  "trackio",
+  "trackio>=0.5.0",
 ]
 
 docs = [
