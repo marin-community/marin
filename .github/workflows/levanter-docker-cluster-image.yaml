@@ -1,8 +1,8 @@
-name: Build and Push Docker TPU Images
+name: Levanter - Build and Push Cluster Docker Image
 
 on:
   workflow_run:
-    workflows: ["Run Tests"]
+    workflows: ["Build and Push Docker TPU Images"]
     types:
       - completed
     branches: [main]
@@ -15,6 +15,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lib/levanter
 
     steps:
       - name: Checkout code
@@ -42,10 +45,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Push Docker image
+      - name: Build and Push Cluster Docker image
         run: |
-          docker buildx build --file docker/tpu/Dockerfile.base --tag ghcr.io/${{ github.repository }}-base:latest --tag ghcr.io/${{ github.repository }}-base:${{ env.DATE }} --push .
-
-      - name: Build and Push Incremental Docker image
-        run: |
-          docker buildx build --file docker/tpu/Dockerfile.incremental --tag ghcr.io/${{ github.repository }}-tpu:latest --tag ghcr.io/${{ github.repository }}-tpu:${{ env.DATE }} --push .
+          docker buildx build --file docker/tpu/Dockerfile.cluster --tag ghcr.io/${{ github.repository }}-cluster:latest --tag ghcr.io/${{ github.repository }}-cluster:${{ env.DATE }} --push .
