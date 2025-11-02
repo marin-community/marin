@@ -14,10 +14,12 @@
 
 """
 Inference-only experiment to test vLLM throughput in isolation.
+This experiment runs vLLM inference to measure pure inference throughput
+without RL training overhead.
 
-This experiment runs vLLM inference with random input tokens (length 128)
-and generates 1024 tokens with ignore_eos=True to measure pure inference
-throughput without RL training overhead.
+Supports two modes:
+1. Synthetic: Random input tokens with fixed output length (ignore_eos=True)
+2. Realistic: Sample prompts from a HuggingFace dataset with natural generation
 """
 
 import logging
@@ -38,31 +40,55 @@ def main():
         logger.info("Initializing Ray...")
         ray.init(address="auto", ignore_reinit_error=True)
 
+    # Option 1: Synthetic benchmark with random tokens (default)
+    # config = InferenceOnlyConfig(
+    #     # Model configuration
+    #     model_name="meta-llama/Llama-3.2-1B-Instruct",
+    #     max_model_len=4096,
+    #     # v4-8 configuration (8-way tensor parallelism)
+    #     tensor_parallel_size=8,
+    #     gpu_memory_utilization=0.90,
+    #     # Benchmark configuration
+    #     input_length=128,  # Random input tokens
+    #     output_length=1024,  # Always generate 1024 tokens (ignore_eos=True)
+    #     batch_size=64,  # Number of prompts per batch
+    #     n_generations_per_prompt=8,  # Match RL experiment sampling
+    #     num_batches=100,  # Total batches to run
+    #     log_freq=1,
+    #     # WandB configuration
+    #     wandb_project="vllm-inference-benchmark",
+    #     wandb_run_name="llama-3.2-1b-v4-8",
+    #     wandb_tags=["vllm", "inference", "benchmark", "llama-3.2-1b", "v4-8"],
+    # )
+    
+    # Option 2: Realistic benchmark with dataset prompts
     config = InferenceOnlyConfig(
-        # Model configuration
         model_name="meta-llama/Llama-3.2-1B-Instruct",
         max_model_len=4096,
-        # v4-8 configuration (8-way tensor parallelism)
         tensor_parallel_size=8,
         gpu_memory_utilization=0.90,
-        # Benchmark configuration
-        input_length=128,  # Random input tokens
-        output_length=1024,  # Always generate 1024 tokens (ignore_eos=True)
-        batch_size=64,  # Number of prompts per batch
-        n_generations_per_prompt=8,  # Match RL experiment sampling
-        num_batches=100,  # Total batches to run
+        batch_size=64,
+        n_generations_per_prompt=8,
+        num_batches=100,
         log_freq=1,
-        # WandB configuration
+        # Dataset configuration (input_length/output_length ignored when dataset is set)
+        dataset="di-zhang-fdu/MATH12000",  # or "HuggingFaceH4/MATH-500"
+        dataset_split="train",
+        dataset_prompt_field="problem",
+        max_dataset_examples=10000,  # Optional limit
         wandb_project="vllm-inference-benchmark",
-        wandb_run_name="llama-3.2-1b-v4-8",
-        wandb_tags=["vllm", "inference", "benchmark", "llama-3.2-1b", "v4-8"],
+        wandb_run_name="llama-3.2-1b-v4-8-realistic",
+        wandb_tags=["vllm", "inference", "benchmark", "llama-3.2-1b", "v4-8", "realistic"],
     )
 
     logger.info("Starting vLLM inference-only benchmark on v4-8")
     logger.info(f"Model: {config.model_name}")
     logger.info(f"Tensor parallel size: {config.tensor_parallel_size}")
-    logger.info(f"Input length: {config.input_length}")
-    logger.info(f"Output length: {config.output_length}")
+    if config.dataset:
+        logger.info(f"Dataset: {config.dataset}")
+    else:
+        logger.info(f"Input length: {config.input_length}")
+        logger.info(f"Output length: {config.output_length}")
     logger.info(f"Batch size: {config.batch_size}")
 
     # Define the worker task to run on TPU
