@@ -188,7 +188,7 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
     )
 
 
-def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
+def rl_train(name: str, experiment_config: ExperimentConfig, use_mock_trainer: bool = False) -> ExecutorStep:
     hf_config = AutoConfig.from_pretrained(experiment_config.model_config.name)
     config = experiment_config.model_config.config_class.from_hf_config(hf_config)
 
@@ -294,6 +294,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
             num_rollout_workers=1,
             inference_tpu_type="v4-8",
         ),
+        use_mock_trainer=use_mock_trainer,
     )
 
     return ExecutorStep(
@@ -340,6 +341,8 @@ def main():
             rl_train(
                 name=f"{model_base_name}-math-lr1e-7-bsz256-tok1024-sync-{experiment_config.experiment_name_suffix}-{exp_time}",
                 experiment_config=experiment_config,
+                # Set use_mock_trainer=True to benchmark inference throughput without actual training
+                use_mock_trainer=False,
             ),
         )
 

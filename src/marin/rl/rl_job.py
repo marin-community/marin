@@ -43,6 +43,7 @@ from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
+from marin.rl.mock_train_worker import MockTrainWorker
 from marin.rl.weight_transfer import WeightTransferConfig
 from marin.training.training import _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
@@ -137,6 +138,10 @@ class RLJobConfig:
     run_id: str = field(default_factory=lambda: f"rl-{uuid.uuid4().hex[:8]}")
     log_freq: int = 10
 
+    # Benchmarking
+    use_mock_trainer: bool = False
+    """Use mock trainer for benchmarking inference throughput (no actual training or TPU allocation)."""
+
 
 class RLJob:
     """High-level interface for RL training jobs.
@@ -180,7 +185,10 @@ class RLJob:
         def train_worker_task():
             with remove_tpu_lockfile_on_exit():
                 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-                worker = TrainWorker(config=train_worker_config)
+                if self.config.use_mock_trainer:
+                    worker = MockTrainWorker(config=train_worker_config)
+                else:
+                    worker = TrainWorker(config=train_worker_config)
                 worker.train()
 
         @ray.remote(**rollout_kwargs)
