@@ -135,6 +135,38 @@ class RLJobConfig:
     run_id: str = field(default_factory=lambda: f"rl-{uuid.uuid4().hex[:8]}")
     log_freq: int = 10
 
+    def with_on_policy_training(self) -> "RLJobConfig":
+        """Configure for on-policy training.
+
+        Returns a new RLJob configured to run the inference and training workers
+        in lockstep for on-policy training.
+        Returns:
+            New RLJobConfig configured for synchronous training mode.
+        """
+        # Update replay buffer to only accept fresh rollouts
+        updated_replay_buffer = dataclasses.replace(
+            self.train_params.replay_buffer,
+            max_rollout_step_delay=0,
+            max_samples=1,
+        )
+        updated_train_params = dataclasses.replace(
+            self.train_params,
+            replay_buffer=updated_replay_buffer,
+        )
+
+        # Update weight transfer to sync every step and wait for new weights
+        updated_weight_transfer = dataclasses.replace(
+            self.weight_transfer,
+            sync_interval_steps=1,
+            max_weight_transfer_wait_time=600,
+        )
+
+        return dataclasses.replace(
+            self,
+            train_params=updated_train_params,
+            weight_transfer=updated_weight_transfer,
+        )
+
 
 class RLJob:
     """High-level interface for RL training jobs.
