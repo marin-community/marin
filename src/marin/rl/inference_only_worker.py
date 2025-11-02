@@ -213,6 +213,8 @@ class InferenceOnlyWorker:
             # Time the batch generation
             start_time = time.time()
             outputs = self.llm.generate(prompts, sampling_params)
+            # Reset prefix cache to simulate syncing weights
+            self.llm.llm_engine.reset_prefix_cache()
             batch_time = time.time() - start_time
 
             # Calculate tokens generated in this batch (sum across all outputs for all prompts)
