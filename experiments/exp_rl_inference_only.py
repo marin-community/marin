@@ -67,7 +67,7 @@ def main():
         max_model_len=4096,
         tensor_parallel_size=8,
         gpu_memory_utilization=0.90,
-        batch_size=64,
+        batch_size=32,
         n_generations_per_prompt=8,
         num_batches=100,
         log_freq=1,
