@@ -193,11 +193,11 @@ class RolloutWorker:
         self._build_models()
         self._policy_ctx.start_server(self._policy_model)
 
-        self._transfer_client = create_weight_transfer_client(
-            config.weight_transfer,
-            mesh=self._policy_ctx.mesh,
-            axis_mapping=self._policy_ctx.axis_mapping,
-        )
+        # self._transfer_client = create_weight_transfer_client(
+        #     config.weight_transfer,
+        #     mesh=self._policy_ctx.mesh,
+        #     axis_mapping=self._policy_ctx.axis_mapping,
+        # )
 
         # TODO(power) -- replace this with a wait_until_ready() on the levanter inference server
         time.sleep(1.0)
@@ -304,7 +304,7 @@ class RolloutWorker:
         """Stop the inference worker loop and server."""
         with self._shutdown_condition:
             self._running = False
-            self._transfer_client.cleanup()
+            # self._transfer_client.cleanup()
             self._shutdown_condition.notify()
 
         # Wait for the main loop to finish
@@ -430,7 +430,7 @@ class RolloutWorker:
         logger.info(f"Starting rollout worker with seed {seed}")
 
         while self._running:
-            self._sync_weights()
+            # self._sync_weights()
 
             if self.config.max_rollouts is not None and step >= self.config.max_rollouts:
                 logger.info(f"Reached max rollouts ({self.config.max_rollouts}), stopping")
@@ -447,21 +447,21 @@ class RolloutWorker:
                 continue
 
             # Micro-eval: feedback on current lesson
-            if step > 0 and step % self.config.curriculum_config.micro_eval_frequency == 0:
-                rng, micro_eval_rng = jrandom.split(rng)
-                self._evaluate_lesson(
-                    lesson_id,
-                    self.config.curriculum_config.micro_eval_n_examples,
-                    eval_type="micro_eval",
-                    rng=micro_eval_rng,
-                    step=step,
-                )
+            # if step > 0 and step % self.config.curriculum_config.micro_eval_frequency == 0:
+            #     rng, micro_eval_rng = jrandom.split(rng)
+            #     self._evaluate_lesson(
+            #         lesson_id,
+            #         self.config.curriculum_config.micro_eval_n_examples,
+            #         eval_type="micro_eval",
+            #         rng=micro_eval_rng,
+            #         step=step,
+            #     )
 
             # Full eval: comprehensive check on all lessons
             # Evaluate based on the train worker step
-            if step % self.config.curriculum_config.eval_frequency == 0:
-                rng, eval_rng = jrandom.split(rng)
-                self._evaluate_curriculum(eval_rng, step)
+            # if step % self.config.curriculum_config.eval_frequency == 0:
+            #     rng, eval_rng = jrandom.split(rng)
+            #     self._evaluate_curriculum(eval_rng, step)
 
             logger.info(f"Sampled lesson '{lesson_id}' from curriculum")
 
@@ -489,7 +489,7 @@ class RolloutWorker:
 
             if self.config.log_freq > 0 and step % self.config.log_freq == 0:
                 log_metrics = eval_metrics
-                log_metrics.update(self._transfer_client.get_metrics())
+                # log_metrics.update(self._transfer_client.get_metrics())
                 log_metrics.update({f"env.{k}": v for k, v in (env_metrics or {}).items()})
                 log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
                 logger.info(f"Logging metrics at step {step}... {log_metrics}")
