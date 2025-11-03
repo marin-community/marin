@@ -272,6 +272,12 @@ class GenState(eqx.Module):
     cache: PageCache
     decode_state: DecodeState
 
+    def reset(self):
+        return GenState(
+            cache=self.cache.reset(),
+            decode_state=self.decode_state.reset(),
+        )
+
     def clone_sequence(
         self, parent_local_id: int, child_local_id: int | None = None, seq_params: SeqDecodingParams | None = None
     ) -> tuple["GenState", int]:
@@ -797,22 +803,6 @@ class InferenceEngine:
         # Results by request id -> choice -> DecodeResult
         self.results: dict[int, dict[int, DecodeResult]] = {}
 
-    def _verify_free_slot_view(self, *, context: str) -> None:
-        """Ensure host free-list matches the device page-table used mask."""
-
-        used_mask = np.asarray(jax.device_get(self.gen_state.decode_state.sequences.used_mask.array)).astype(bool)
-        free_set = set(self.free_slots)
-
-        for slot_id, is_used in enumerate(used_mask):
-            if is_used and slot_id in free_set:
-                raise RuntimeError(
-                    f"[free slot invariant] slot {slot_id} marked used but present in free list during {context}"
-                )
-            if not is_used and slot_id not in free_set:
-                raise RuntimeError(
-                    f"[free slot invariant] slot {slot_id} free in page table but missing from free list during {context}"
-                )
-
     @classmethod
     def from_model_with_config(
         cls,
@@ -853,25 +843,11 @@ class InferenceEngine:
 
         Keeps the KV cache memory allocated. Reuses current `PageTable` object with pages freed.
         """
-        decode_state = self.gen_state.decode_state
-        page_table = decode_state.page_table
-        sequences = decode_state.sequences
-        for slot_id in range(page_table.max_seqs):
-            sequences, page_table = sequences.free_pages(page_table, slot_id)
-
-        new_decode_state = DecodeState.init(
-            page_table,
-            max_stop_seqs=self.config.max_stop_seqs,
-            max_stop_tokens=self.config.max_stop_tokens,
-            max_queued_tokens=self.config.max_queued_tokens,
-        )
-        self.gen_state = dataclasses.replace(self.gen_state, decode_state=new_decode_state)
-        self.free_slots = list(range(int(page_table.max_seqs)))
+        self.gen_state = self.gen_state.reset()
+        self.free_slots = list(range(int(self.gen_state.decode_state.max_seqs)))
         self.local_map.clear()
         self.sequences.clear()
         self.results = {}
-
-        self._verify_free_slot_view(context="reset")
 
     def _prefill_batch(self, batch: Sequence[Request]) -> _DecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.

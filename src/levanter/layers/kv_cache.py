@@ -5,16 +5,15 @@
 
 import dataclasses
 import functools
-from typing import Generic, Iterable, Iterator, TypeVar, Self
+from typing import Generic, Iterable, Iterator, Self, TypeVar
 
 import equinox as eqx
+import haliax as hax
 import jax
 import jax.numpy as jnp
-from jax import lax
-
-import haliax as hax
 from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call
+from jax import lax
 
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 
@@ -24,6 +23,10 @@ class PageCache(eqx.Module):
 
     def copy_page(self, src_page: int, dst_page: int) -> Self:
         """Return a copy of this cache with ``src_page`` cloned into ``dst_page``."""
+        raise NotImplementedError
+
+    def reset(self) -> Self:
+        """Return a reset version of this cache."""
         raise NotImplementedError
 
 
@@ -53,6 +56,11 @@ class KvPageCache(PageCache):
             dtype=dtype,
         )
         return KvPageCache(kv_pages)
+
+    def reset(self) -> "KvPageCache":
+        """Return a reset version of this cache."""
+        reset_pages = jnp.zeros_like(self.kv_pages.array)
+        return dataclasses.replace(self, kv_pages=NamedArray(reset_pages, self.kv_pages.axes))
 
     @named_call
     def update(
@@ -102,6 +110,9 @@ class ListCache(PageCache, Generic[PageCacheT]):
 
     def __post_init__(self):
         object.__setattr__(self, "caches", tuple(self.caches))
+
+    def reset(self) -> "ListCache[PageCacheT]":
+        return ListCache(tuple(cache.reset() for cache in self.caches))
 
     @staticmethod
     def from_iterable(caches: Iterable[PageCacheT]) -> "ListCache[PageCacheT]":
