@@ -19,6 +19,7 @@ import re
 import jax
 import jax.numpy as jnp
 import numpy as np
+import wandb
 from dataclasses import dataclass
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
@@ -339,7 +340,34 @@ class vLLMInferenceContext(BaseInferenceContext):
             for prompt in prompts
         ]
 
+        # Time the batch generation
+        start_time = time.time()
         outputs = self.llm.generate(prompts_with_templates, sampling_params)
+        batch_time = time.time() - start_time
+
+        # Calculate tokens generated in this batch (sum across all outputs for all prompts)
+        tokens_in_batch = sum(len(out.token_ids) for output in outputs for out in output.outputs)
+        batch_throughput = tokens_in_batch / batch_time if batch_time > 0 else 0
+
+        logger.info(
+            f"batch_completions: batch_size={len(prompts)}, n={n}, "
+            f"batch_time={batch_time:.2f}s, tokens={tokens_in_batch}, "
+            f"batch_throughput={batch_throughput:.0f} tok/s"
+        )
+
+        # Log to wandb if available
+        try:
+            wandb.log(
+                {
+                    "inference/batch_time": batch_time,
+                    "inference/batch_throughput": batch_throughput,
+                    "inference/tokens_in_batch": tokens_in_batch,
+                    "inference/batch_size": len(prompts),
+                    "inference/n_generations": n,
+                }
+            )
+        except Exception as e:
+            logger.debug(f"Failed to log to wandb: {e}")
 
         # Convert vLLM outputs to OpenAI ChatCompletion format
         return [self._convert_vllm_to_openai(output) for output in outputs]
