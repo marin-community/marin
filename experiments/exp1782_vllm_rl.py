@@ -124,7 +124,7 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
 
     default_sampling = SamplingParams(
         temperature=1.0,
-        n_prompts=64,
+        n_prompts=32,
         n_generations_per_prompt=8,
         max_tokens=1024,
         stop_tokens=None,
