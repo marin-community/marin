@@ -6,6 +6,7 @@ repos:
     rev: v0.11.10
     hooks:
       - id: ruff
+        files: ^lib/levanter/
         args: [ --fix, --exit-non-zero-on-fix ]
 
   - repo: https://github.com/Lucas-C/pre-commit-hooks
@@ -22,6 +23,7 @@ repos:
     rev: 25.1.0
     hooks:
       - id: black
+        files: ^lib/levanter/
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -40,6 +42,7 @@ repos:
     rev: v1.4.1
     hooks:
       - id: mypy
+        files: ^lib/levanter/
         args: [--ignore-missing-imports]
         exclude: ^tests/
         additional_dependencies: [wandb==0.17.8, types-PyYAML]
