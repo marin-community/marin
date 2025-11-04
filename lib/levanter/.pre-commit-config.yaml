@@ -12,10 +12,10 @@ repos:
     rev: v1.5.5
     hooks:
       - id: insert-license
-        files: \.py$
+        files: ^lib/levanter/.*\.py$
         args:
           - --license-filepath
-          - etc/license_header.txt
+          - lib/levanter/etc/license_header.txt
           - --use-current-year
 
   - repo: https://github.com/psf/black
@@ -41,4 +41,5 @@ repos:
     hooks:
       - id: mypy
         args: [--ignore-missing-imports]
+        exclude: ^tests/
         additional_dependencies: [wandb==0.17.8, types-PyYAML]
