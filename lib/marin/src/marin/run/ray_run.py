@@ -199,6 +199,12 @@ def main():
         default=None,
         help="Cluster name or config file path to submit job to",
     )
+    parser.add_argument(
+        "--submission-id",
+        type=str,
+        default=None,
+        help="Custom submission ID for the job. If not provided, a default ID will be generated.",
+    )
     parser.add_argument("--auto-stop", action="store_true", help="Automatically stop the cluster on shutdown.")
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
 
@@ -276,7 +282,10 @@ def main():
         exit(1)
 
     # Submit the job and track it asynchronously
-    submission_id = generate_submission_id(full_cmd)
+    if args.submission_id:
+        submission_id = args.submission_id
+    else:
+        submission_id = generate_submission_id(full_cmd)
 
     async def run_job():
         try:

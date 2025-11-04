@@ -73,6 +73,9 @@ def find_config_by_region(region: str) -> str:
     if os.path.exists(config_path):
         return config_path
 
+    if region.startswith("marin-"):
+        region = region[len("marin-") :]
+
     # Try with common region variations
     variations = [
         f"infra/marin-{region}.yaml",
