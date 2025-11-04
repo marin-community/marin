@@ -171,7 +171,10 @@ conflicts = [[
 ]]
 
 [manifest]
-overrides = [{ name = "omegaconf", specifier = ">=2.4.0.dev4" }]
+members = [
+    "marin",
+    "marin-root",
+]
 
 [[package]]
 name = "absl-py"
@@ -1604,7 +1607,7 @@ wheels = [
 [[package]]
 name = "dolma"
 version = "1.2.1"
-source = { git = "https://github.com/marin-community/dolma?rev=fd431d014d9d049b01e5f28bb1d1217a63919691#fd431d014d9d049b01e5f28bb1d1217a63919691" }
+source = { git = "https://github.com/marin-community/dolma?rev=79ce49d9535cfc64f4d96781b03ecd0e2c20cf4e#79ce49d9535cfc64f4d96781b03ecd0e2c20cf4e" }
 dependencies = [
     { name = "anyascii" },
     { name = "blingfire" },
@@ -3515,7 +3518,7 @@ wheels = [
 [[package]]
 name = "levanter"
 version = "1.2"
-source = { git = "https://github.com/marin-community/levanter.git?rev=63a3b1cada45ffb15b741ed5555fb0bc75a56e3f#63a3b1cada45ffb15b741ed5555fb0bc75a56e3f" }
+source = { git = "https://github.com/marin-community/levanter.git?rev=6cd783c82168919b365c1b2266e4a0bde22ba658#6cd783c82168919b365c1b2266e4a0bde22ba658" }
 dependencies = [
     { name = "async-lru" },
     { name = "braceexpand" },
@@ -3733,7 +3736,7 @@ wheels = [
 [[package]]
 name = "marin"
 version = "0.1.0"
-source = { editable = "." }
+source = { editable = "lib/marin" }
 dependencies = [
     { name = "braceexpand" },
     { name = "cryptography" },
@@ -3992,7 +3995,7 @@ requires-dist = [
     { name = "datatrove", extras = ["io", "processing"], marker = "extra == 'crawl'" },
     { name = "ddsketch", marker = "extra == 'quality-dedup-consolidate'" },
     { name = "deepdiff" },
-    { name = "dolma", marker = "extra == 'quality-dedup-consolidate'", git = "https://github.com/marin-community/dolma?rev=fd431d014d9d049b01e5f28bb1d1217a63919691" },
+    { name = "dolma", marker = "extra == 'quality-dedup-consolidate'", git = "https://github.com/marin-community/dolma?rev=79ce49d9535cfc64f4d96781b03ecd0e2c20cf4e" },
     { name = "draccus", specifier = ">=0.11.5" },
     { name = "einops", marker = "extra == 'post-training'" },
     { name = "fasteners", specifier = ">=0.19" },
@@ -4031,7 +4034,7 @@ requires-dist = [
     { name = "jax", extras = ["tpu"], marker = "extra == 'tpu'", specifier = "==0.6.2" },
     { name = "jaxtyping", marker = "extra == 'post-training'" },
     { name = "kenlm", marker = "extra == 'crawl'", git = "https://github.com/kpu/kenlm?rev=4cb443e60b7bf2c0ddf3c745378f76cb59e254e5" },
-    { name = "levanter", extras = ["serve"], git = "https://github.com/marin-community/levanter.git?rev=63a3b1cada45ffb15b741ed5555fb0bc75a56e3f" },
+    { name = "levanter", extras = ["serve"], git = "https://github.com/marin-community/levanter.git?rev=6cd783c82168919b365c1b2266e4a0bde22ba658" },
     { name = "lm-eval", marker = "extra == 'tokenize-train'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lm-eval", extras = ["math"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lxml", extras = ["html-clean"], marker = "extra == 'crawl'" },
@@ -4178,6 +4181,17 @@ transform-test-deps = [
     { name = "trafilatura", specifier = ">=2.0" },
     { name = "warcio" },
 ]
+
+[[package]]
+name = "marin-root"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "marin" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "marin", editable = "lib/marin" }]
 
 [[package]]
 name = "marisa-trie"
