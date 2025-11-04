@@ -164,6 +164,7 @@ jobs:
             -e TPU_STDERR_LOG_LEVEL=3 \
             -e TPU_MIN_LOG_LEVEL=3 \
             -e PYTHONPATH=/workspace \
+            -e PATH=/home/github-runner/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             -e HF_TOKEN \
             -e WANDB_API_KEY \
             -e WANDB_MODE=offline \
