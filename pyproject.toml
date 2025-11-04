@@ -9,12 +9,15 @@ version = "0.1.0"
 description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
-dependencies = ["marin"]
+dependencies = ["marin", "levanter"]
 
 [tool.uv.workspace]
-members = ["lib/marin"]
+members = ["lib/marin", "lib/levanter"]
 
 [tool.uv.sources.marin]
+workspace = true
+
+[tool.uv.sources.levanter]
 workspace = true
 
 [tool.black]
