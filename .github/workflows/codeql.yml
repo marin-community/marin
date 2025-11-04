@@ -33,9 +33,10 @@ jobs:
         build-mode: ${{ matrix.build-mode }}
         config: |
           paths:
-            - src
+            - lib/marin/src
           paths-ignore:
             - tests/**
+
     - name: Run manual build steps
       if: matrix.build-mode == 'manual'
       shell: bash

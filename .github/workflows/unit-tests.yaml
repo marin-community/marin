@@ -56,14 +56,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install "uv>=0.7.19" toml
           npm install -g pandiff
-          uv sync --dev --extra=cpu
+          uv sync
+          uv sync --package marin --extra cpu --group test
 
       - name: Test with pytest
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           CI: true
         run: |
-          PYTHONPATH=tests:. uv run --extra=cpu pytest -n3 --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
+          PYTHONPATH=tests:. uv run pytest -n3 --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
 
   tpu-test:
     runs-on: [tpu-ci]

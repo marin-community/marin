@@ -55,7 +55,7 @@ extra:
 
 watch:
   - docs/
-  - src/
+  - lib/marin/src/
 
 
 nav:
@@ -133,7 +133,7 @@ plugins:
       default_handler: python
       handlers:
         python:
-          paths: [".", "src"]
+          paths: [".", "lib/marin/src"]
           inventories:
             - https://docs.python.org/3/objects.inv
             - https://jax.readthedocs.io/en/latest/objects.inv
