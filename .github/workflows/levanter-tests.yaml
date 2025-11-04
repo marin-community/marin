@@ -148,8 +148,8 @@ jobs:
           echo "Using Docker image: $DOCKER_IMAGE"
 
           # Create UV cache directory
-          mkdir -p ${{ github.workspace }}/.uv-cache
-          chmod 777 ${{ github.workspace }}/.uv-cache
+          mkdir -p /tmp/uv-cache
+          chmod 777 /tmp/uv-cache
 
           # Run Levanter tests with specific JAX version
           docker run --rm \
@@ -164,12 +164,14 @@ jobs:
             -e TPU_STDERR_LOG_LEVEL=3 \
             -e TPU_MIN_LOG_LEVEL=3 \
             -e PYTHONPATH=/workspace \
+            -e JAX_PLATFORMS=tpu,cpu \
+            -e PJRT_DEVICE=TPU \
             -e HF_TOKEN \
             -e WANDB_API_KEY \
             -e WANDB_MODE=offline \
             -e UV_CACHE_DIR=/tmp/uv-cache \
             -v ${{ github.workspace }}:/workspace-src:ro \
-            -v ${{ github.workspace }}/.uv-cache:/tmp/uv-cache:rw \
+            -v /tmp/uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
             bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 1800 uv run --package levanter --frozen --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short -s --log-cli-level=INFO --durations=20"
