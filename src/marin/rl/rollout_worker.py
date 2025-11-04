@@ -471,6 +471,8 @@ class RolloutWorker:
             if rollout_batch is None:
                 continue
 
+            self._rollout_writer.write_batch(rollout_batch)
+
             stats = _compute_batch_stats(rollout_batch, lesson_id)
             self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
                 stats.rollout_stats, mode="training", current_step=step
@@ -478,7 +480,6 @@ class RolloutWorker:
             eval_metrics = self._build_eval_metrics(prefix="rollout", lesson_id=lesson_id, batch=rollout_batch)
 
             step += 1
-            self._rollout_writer.write_batch(rollout_batch)
 
             if self.config.log_freq > 0 and step % self.config.log_freq == 0:
                 log_metrics = eval_metrics

@@ -119,10 +119,10 @@ def create_math_curriculum(run_id: str, model_name: str) -> CurriculumConfig:
 
 def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
     hf_config = AutoConfig.from_pretrained(model_config.model_name)
-    config = LlamaConfig.from_hf_config(hf_config)
+    lev_config = LlamaConfig.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=model_config.model_tokenizer)
+    lev_config = dataclasses.replace(lev_config, seq_len=MAX_TOKENS, tokenizer=model_config.model_tokenizer)
 
     _ = WandbConfig
 
@@ -177,8 +177,8 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
     curriculum_config = create_math_curriculum(name, model_config.model_name)
 
     # Create RLJobConfig using the new unified interface
-    config = RLJobConfig(
-        model=model_config,
+    lev_config = RLJobConfig(
+        model=lev_config,
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=opt_config,
@@ -209,7 +209,7 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
         name=f"rl_testing/{name}",
         description=f"Async RL training: {name}",
         fn=RLJob.make_step_fn(),
-        config=config,
+        config=lev_config,
         pip_dependency_groups=["post_training"],
     )
 

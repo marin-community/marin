@@ -24,23 +24,33 @@ the attributes.  Handles two cases:
 import logging
 import os
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from functools import partial
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import draccus
-import numpy as np
 import ray
 
 from marin.core.runtime import cached_or_construct_output
-from marin.processing.classification.inference import read_dataset, write_dataset
 from marin.utils import (
     fsspec_exists,
     fsspec_glob,
     rebase_file_path,
 )
+from marin.processing.classification.dataset_utils import (
+    read_dataset,
+    read_dataset_streaming,
+    write_dataset,
+)
 
-FILTER_TYPE_CLASSIFY = "classify"
-FILTER_TYPE_REMOVE_SPANS = "remove_spans"
+if TYPE_CHECKING:
+    from ddsketch import DDSketch
+
+
+class FilterType(StrEnum):
+    CLASSIFY = "classify"
+    REMOVE_SPANS = "remove_spans"
+
 
 logger = logging.getLogger("ray")
 
@@ -49,7 +59,7 @@ logger = logging.getLogger("ray")
 class FilterConfig:
     """Config for filtering operation on Marin data"""
 
-    type: str
+    type: FilterType
     """The type of filter to apply."""
 
     attribute_path: str
@@ -61,7 +71,7 @@ class FilterConfig:
     label: str | None = None
     """The label under the attribute name."""
 
-    threshold: float | None = None
+    lower_threshold: float | None = None
     """Keep documents where the value is above this."""
 
     keep_fraction: float | None = None
@@ -69,6 +79,9 @@ class FilterConfig:
 
     upper_threshold: float | None = None
     """Keep documents where the value is below this."""
+
+    reverse: bool = False
+    """Reverse the filter."""
 
 
 @dataclass(frozen=True)
@@ -137,27 +150,29 @@ def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attr
     attribute_value = attributes[doc_filter.name]
 
     # Handle nested attributes structure if a label is specified
+    accepted = True
     if doc_filter.label is not None:
         if isinstance(attribute_value, dict) and doc_filter.label in attribute_value:
             value = attribute_value[doc_filter.label]
         else:
-            logger.warning(
+            raise ValueError(
                 f"Label {doc_filter.label} not found in attribute {doc_filter.name} for document {input_data['id']}"
             )
-            return False
     else:
         # If no label specified, use the attribute value directly
         # This handles cases like compression_ratio where the value is a scalar
         value = attribute_value
 
     # Check both lower and upper bounds if specified
-    if doc_filter.threshold is not None and value < doc_filter.threshold:
-        return False
-
+    if doc_filter.lower_threshold is not None and value < doc_filter.lower_threshold:
+        accepted = False
     if doc_filter.upper_threshold is not None and value > doc_filter.upper_threshold:
-        return False
+        accepted = False
 
-    return True
+    if doc_filter.reverse:
+        accepted = not accepted
+
+    return accepted
 
 
 def get_corpus_type(filename: str) -> str:
@@ -266,15 +281,17 @@ def process_file(
     total_examples = len(dataset)
 
     for doc_filter, id_to_attributes in zip(filters, attribute_files, strict=True):
-        print(f"Applying filter {doc_filter.name} with label {doc_filter.label} with dataset length {len(dataset)}")
+        logger.info(
+            f"Applying filter {doc_filter.name} with label {doc_filter.label} with dataset length {len(dataset)}"
+        )
         if id_to_attributes is None:
             continue
 
-        if doc_filter.type == FILTER_TYPE_CLASSIFY:
+        if doc_filter.type == FilterType.CLASSIFY:
             dataset = dataset.filter(
                 partial(apply_filter_classify, doc_filter=doc_filter, id_to_attributes=id_to_attributes)
             )
-        elif doc_filter.type == FILTER_TYPE_REMOVE_SPANS:
+        elif doc_filter.type == FilterType.REMOVE_SPANS:
             dataset = dataset.map(
                 partial(apply_filter_remove_spans, doc_filter=doc_filter, id_to_attributes=id_to_attributes)
             )
@@ -289,13 +306,24 @@ def process_file(
     logger.info(f"Kept {total_kept}/{total_examples} from {input_path}")
 
 
+def get_scores(attribute_filename: str, attribute_name: str, label: str) -> "DDSketch":
+    from ddsketch import DDSketch
+
+    shard_sketch = DDSketch()
+    corpus_type = get_corpus_type(attribute_filename)
+    id_column_name = get_id_column_name(corpus_type)
+    rows = read_dataset_streaming(attribute_filename, columns=[id_column_name, "attributes"])
+
+    for row in rows:
+        # Streaming mode yields nested identifiers; we only need the attributes payload.
+        attributes = row["attributes"]
+        shard_sketch.add(attributes[attribute_name][label])
+    return shard_sketch
+
+
 @ray.remote
-def get_scores(attribute_filename: str, attribute_name: str, label: str) -> np.ndarray:
-    scores = np.array([])
-    attributes = read_attributes_as_dict(attribute_filename)
-    for _, attr in attributes.items():
-        scores = np.append(scores, attr[attribute_name][label])
-    return scores
+def get_scores_ray(attribute_filename: str, attribute_name: str, label: str) -> "DDSketch":
+    return get_scores(attribute_filename, attribute_name, label)
 
 
 def calculate_percentile_threshold(
@@ -305,40 +333,45 @@ def calculate_percentile_threshold(
     attribute_name: str,
     label: str,
     keep_fraction: float,
+    use_ray: bool = True,
 ) -> float:
     from ddsketch import DDSketch
 
     attribute_paths = [rebase_file_path(base_input_path, input_path, attribute_path) for input_path in input_paths]
-    scores_refs = [get_scores.remote(attribute_path, attribute_name, label) for attribute_path in attribute_paths]
+    combined_sketch = DDSketch()
+    if use_ray:
+        sketch_refs = [
+            get_scores_ray.remote(attribute_path, attribute_name, label) for attribute_path in attribute_paths
+        ]
+        for shard_sketch in ray.get(sketch_refs):
+            combined_sketch.merge(shard_sketch)
+    else:
+        for attribute_path in attribute_paths:
+            shard_sketch = get_scores(attribute_path, attribute_name, label)
+            combined_sketch.merge(shard_sketch)
 
-    sketch = DDSketch()
-    for scores_ref in scores_refs:
-        scores = ray.get(scores_ref)
-        for score in scores:
-            sketch.add(score)
-
-    threshold = sketch.get_quantile_value(1 - keep_fraction)
+    threshold = combined_sketch.get_quantile_value(1 - keep_fraction)
     logger.info(f"Calculated the threshold {threshold} to keep {keep_fraction} of the documents")
 
     return threshold
 
 
-@ray.remote
 def consolidate(config: ConsolidateConfig):
     input_paths = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
     logger.info(f"Consolidating {len(input_paths)} documents")
 
     updated_filters = []
+    # If we are dealing with percentiles, we have to first calculate the thresholds by doing a pass over the data
     for doc_filter in config.filters:
         assert (
-            doc_filter.keep_fraction is None or doc_filter.threshold is None
+            doc_filter.keep_fraction is None or doc_filter.lower_threshold is None
         ), "Cannot specify both percentile threshold and threshold. Please specify only one."
 
         if doc_filter.keep_fraction is not None:
             assert doc_filter.keep_fraction > 0 and doc_filter.keep_fraction < 1, "Keep fraction must be between 0 and 1"
 
         # Calculate the minimum threshold required to keep `keep_fraction` of the documents
-        if doc_filter.keep_fraction is not None and doc_filter.type == FILTER_TYPE_CLASSIFY:
+        if doc_filter.keep_fraction is not None and doc_filter.type == FilterType.CLASSIFY:
             threshold = calculate_percentile_threshold(
                 config.input_path,
                 input_paths,
@@ -347,7 +380,7 @@ def consolidate(config: ConsolidateConfig):
                 doc_filter.label,
                 doc_filter.keep_fraction,
             )
-            updated_filters.append(replace(doc_filter, threshold=threshold, keep_fraction=None))
+            updated_filters.append(replace(doc_filter, lower_threshold=threshold, keep_fraction=None))
         else:
             updated_filters.append(doc_filter)
 
@@ -371,15 +404,12 @@ def consolidate(config: ConsolidateConfig):
         )
         tasks.append(task)
 
-    try:
-        ray.get(tasks)
-    except Exception as e:
-        print(f"Error processing: {e}")
+    ray.get(tasks)
 
 
 @draccus.wrap()
 def main(cfg: ConsolidateConfig):
-    ray.get(consolidate.remote(cfg))
+    consolidate(cfg)
 
 
 if __name__ == "__main__":

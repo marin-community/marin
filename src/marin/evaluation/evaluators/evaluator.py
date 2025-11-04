@@ -16,6 +16,7 @@ import os
 import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any
 
 from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -47,7 +48,7 @@ class ModelConfig:
     The path to the model checkpoint. Can be a local path or a path on GCS.
     """
 
-    engine_kwargs: dict | None = None
+    engine_kwargs: dict[str, Any]
     """
     Additional keyword arguments to pass to the vLLM engine.
     """
