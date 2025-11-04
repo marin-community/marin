@@ -422,42 +422,7 @@ def run_cleanup(ctx, dry_run):
     with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file, ray_init=True)):
         print("Running cleanup iteration...")
         results = cleanup_iteration(config_obj.project_id, config_obj.zone, dry_run=dry_run)
-
-        # Display TPU cleanup results
-        if results.deleted_tpus:
-            action = "Would delete" if dry_run else "Deleted"
-            print(f"{action} {len(results.deleted_tpus)} preempted TPUs: {results.deleted_tpus}")
-        else:
-            print("No preempted TPUs found")
-
-        # Display lockfile cleanup results
-        if not dry_run:
-            stats = results.tpu_cleanup
-            print(f"\nTPU Lockfile Cleanup:")
-            print(f"  Workers targeted: {stats.workers_targeted}")
-            print(f"  Workers cleaned: {stats.workers_cleaned}")
-            if stats.errors:
-                print(f"  Errors: {len(stats.errors)}")
-                for error in stats.errors[:5]:  # Show first 5 errors
-                    print(f"    - {error}")
-
-            # Display disk usage results
-            if results.disk_usage_check:
-                disk_stats = results.disk_usage_check
-                print(f"\nDisk Usage Check:")
-                print(f"  Workers checked: {disk_stats.workers_checked}")
-                print(f"  Workers with low disk: {disk_stats.workers_with_low_disk}")
-                if disk_stats.low_disk_workers:
-                    print(f"  Low disk workers:")
-                    for worker in disk_stats.low_disk_workers[:5]:  # Show first 5
-                        print(f"    - {worker.node_ip}: {worker.disk_free_pct:.2f}% free")
-                if disk_stats.errors:
-                    print(f"  Errors: {len(disk_stats.errors)}")
-
-            # Display terminated workers
-            if results.low_disk_terminated:
-                print(f"\nTerminated Workers (low disk):")
-                print(f"  {len(results.low_disk_terminated)} TPUs terminated: {results.low_disk_terminated}")
+        print(f"Result: {results}")
 
 
 # Top-level commands
