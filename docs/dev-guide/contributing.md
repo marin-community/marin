@@ -12,7 +12,7 @@ git clone https://github.com/marin-community/marin.git
 cd marin
 uv venv --python 3.11
 source .venv/bin/activate
-uv sync --group dev --directory lib/marin
+uv sync --package marin --group dev
 pre-commit install
 ```
 
