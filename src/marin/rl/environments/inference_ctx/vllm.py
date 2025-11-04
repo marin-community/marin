@@ -340,6 +340,10 @@ class vLLMInferenceContext(BaseInferenceContext):
             for prompt in prompts
         ]
 
+        # Calculate average prompt length
+        prompt_lengths = [len(self.tokenizer.encode(prompt)) for prompt in prompts_with_templates]
+        avg_prompt_len = sum(prompt_lengths) / len(prompt_lengths) if prompt_lengths else 0
+
         # Time the batch generation
         start_time = time.time()
         outputs = self.llm.generate(prompts_with_templates, sampling_params)
@@ -352,7 +356,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         logger.info(
             f"batch_completions: batch_size={len(prompts)}, n={n}, "
             f"batch_time={batch_time:.2f}s, tokens={tokens_in_batch}, "
-            f"batch_throughput={batch_throughput:.0f} tok/s"
+            f"batch_throughput={batch_throughput:.0f} tok/s, avg_prompt_len={avg_prompt_len:.1f}"
         )
 
         # Log to wandb if available
@@ -364,6 +368,7 @@ class vLLMInferenceContext(BaseInferenceContext):
                     "inference/tokens_in_batch": tokens_in_batch,
                     "inference/batch_size": len(prompts),
                     "inference/n_generations": n,
+                    "inference/avg_prompt_len": avg_prompt_len,
                 }
             )
         except Exception as e:
