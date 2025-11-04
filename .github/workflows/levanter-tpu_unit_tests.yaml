@@ -1,13 +1,16 @@
-name: CI with GCP TPU
+name: Levanter - CI with GCP TPU
 
 on:
   pull_request:
+    paths:
+      - lib/levanter/**
+      - .github/workflows/levanter-tpu_unit_tests.yaml
   workflow_dispatch:
     inputs:
       tpu_type:
-        description: 'TPU type'
+        description: TPU type
         required: false
-        default: 'v5p-8'
+        default: v5p-8
         type: choice
         options:
           - v5p-8
@@ -16,9 +19,9 @@ on:
           - v4-8
           - v6e-8
       tpu_zone:
-        description: 'GCP zone for TPU'
+        description: GCP zone for TPU
         required: false
-        default: 'us-east5-a'
+        default: us-east5-a
         type: choice
         options:
           - us-east5-a
@@ -76,7 +79,8 @@ jobs:
           eval "$(ssh-agent -s)"
           TRUE_SHA=${{ github.event.pull_request.head.sha || github.sha }}
           export GIT_BRANCH=${TRUE_SHA}
-          bash infra/spin-up-vm.sh $TPU_NAME -z ${TPU_ZONE} -t ${TPU_TYPE} --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${TRUE_SHA} --retries 1
+          bash lib/levanter/infra/spin-up-vm.sh $TPU_NAME -z ${TPU_ZONE} -t ${TPU_TYPE} --preemptible -s lib/levanter/infra/helpers/setup-tpu-vm-tests.sh -b ${TRUE_SHA} --retries 1
+
 #          infra/babysit-tpu-vm.sh $TPU_NAME -z ${{ TPU_ZONE }} -t v4-8 --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${{ github.sha }} --retries 1 -- \
 #            PYTHONPATH=$PYTHONPATH:levanter/tests bash levanter/infra/run.sh pytest levanter/tests -m "not entry"
 
@@ -85,7 +89,8 @@ jobs:
           export TPU_NAME=ci-run-jax-${{ matrix.jax_version }}-${{ matrix.tpu_config.type }}-${{ matrix.tpu_config.zone }}-${{ github.run_id }}
           # JAX_PLATFORMS='' tells JAX to automatically detect/choose an available backend
           # instead of defaulting to TPU which can fail with "Failed to get global TPU topology"
-          gcloud compute tpus tpu-vm ssh $TPU_NAME --zone ${TPU_ZONE} --command "JAX_PLATFORMS='' JAX_TRACEBACK_FILTERING=off PYTHONPATH=$PYTHONPATH:levanter/tests CI=1 bash levanter/infra/run.sh pytest levanter/tests -m 'not entry and not ray' -vv --durations=20"
+          gcloud compute tpus tpu-vm ssh $TPU_NAME --zone ${TPU_ZONE} --command "JAX_PLATFORMS='' JAX_TRACEBACK_FILTERING=off PYTHONPATH=$PYTHONPATH:marin/lib/levanter/tests CI=1 bash marin/lib/levanter/infra/run.sh pytest marin/lib/levanter/tests -m 'not entry and not ray' -vv --durations=20"
+
 # Something's wrong with these
 #
 #      - name: Run forked tests

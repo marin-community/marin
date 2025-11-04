@@ -125,7 +125,12 @@ def build_python_path(submodules_dir: str = "submodules") -> list[str]:
     reason, at install time, the py_modules are not yet in a usable state. So instead
     we have to just manually guess what our PYTHONPATH should be.
     """
-    paths = ["lib/marin/src", "experiments"]
+    # Workspace member src directories + experiments directory
+    paths = [
+        "lib/marin/src",
+        "lib/levanter/src",
+        "experiments",
+    ]
 
     if not os.path.exists(submodules_dir):
         return paths
