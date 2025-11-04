@@ -362,7 +362,9 @@ def terminate_workers_by_ip(worker_ips: list[str], project: str, zone: str) -> l
 CLEANUP_JOB_PREFIX = "marin-cleanup-cron"
 
 
-def cleanup_iteration(project: str, zone: str, dry_run: bool = False, disk_threshold_pct: float = 1.0) -> CleanupIterationResult:
+def cleanup_iteration(
+    project: str, zone: str, dry_run: bool = False, disk_threshold_pct: float = 1.0
+) -> CleanupIterationResult:
     """Run one iteration of cleanup checks.
 
     Performs:
@@ -395,9 +397,7 @@ def cleanup_iteration(project: str, zone: str, dry_run: bool = False, disk_thres
         # Check disk usage and terminate workers with low disk
         disk_usage_check = check_worker_disk_usage(disk_threshold_pct)
         if disk_usage_check.workers_with_low_disk > 0:
-            logger.warning(
-                f"Found {disk_usage_check.workers_with_low_disk} workers with <{disk_threshold_pct}% free"
-            )
+            logger.warning(f"Found {disk_usage_check.workers_with_low_disk} workers with <{disk_threshold_pct}% free")
             worker_ips = [w.node_ip for w in disk_usage_check.low_disk_workers]
             low_disk_terminated = terminate_workers_by_ip(worker_ips, project, zone)
             if low_disk_terminated:
@@ -468,7 +468,9 @@ def running_cleanup_jobs() -> Sequence[dict[str, Any]]:
     return active_jobs.values()
 
 
-def submit_cleanup_cron_job(project: str, cluster: str, zone: str, interval: int = 600, disk_threshold_pct: float = 1.0) -> str:
+def submit_cleanup_cron_job(
+    project: str, cluster: str, zone: str, interval: int = 600, disk_threshold_pct: float = 1.0
+) -> str:
     """Submit the cleanup cron job to the Ray cluster.
 
     If a cleanup job is already running, stops it first before starting a new one.
@@ -490,9 +492,7 @@ def submit_cleanup_cron_job(project: str, cluster: str, zone: str, interval: int
             check=True,
         )
 
-    entrypoint = (
-        f"PYTHONPATH=src/ python ./scripts/ray/cleanup_tpus.py --project {project} --zone {zone} --interval {interval} --disk-threshold {disk_threshold_pct}"
-    )
+    entrypoint = f"PYTHONPATH=src/ python ./scripts/ray/cleanup_tpus.py --project {project} --zone {zone} --interval {interval} --disk-threshold {disk_threshold_pct}"
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     submission_id = f"{CLEANUP_JOB_PREFIX}-{timestamp}"
