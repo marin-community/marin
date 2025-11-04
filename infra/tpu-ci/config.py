@@ -47,6 +47,7 @@ RUNNER_LABELS = ["tpu", "self-hosted", "tpu-ci"]
 GITHUB_REPOSITORY = "marin-community/marin"
 DOCKER_IMAGE_NAME = "tpu-ci"
 DOCKER_IMAGE_TAG = "latest"
+DOCKER_IMAGE = f"ghcr.io/{GITHUB_REPOSITORY}/{DOCKER_IMAGE_NAME}:{DOCKER_IMAGE_TAG}"
 
 
 def get_all_regions() -> list[str]:
@@ -57,17 +58,6 @@ def get_all_regions() -> list[str]:
         region = zone.rsplit("-", 1)[0]
         regions.add(region)
     return sorted(regions)
-
-
-def get_docker_image_for_zone(zone: str) -> str:
-    """
-    Get the Docker image URL from GitHub Container Registry.
-    Returns: "ghcr.io/marin-community/marin/tpu-ci:latest"
-
-    Note: zone parameter is kept for backwards compatibility but is not used
-    since ghcr.io is not region-specific.
-    """
-    return f"ghcr.io/{GITHUB_REPOSITORY}/{DOCKER_IMAGE_NAME}:{DOCKER_IMAGE_TAG}"
 
 
 INFRA_DIR = "infra/tpu-ci"
