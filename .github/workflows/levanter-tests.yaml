@@ -1,0 +1,174 @@
+name: Levanter - Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - lib/levanter/**
+      - uv.lock
+      - .github/workflows/levanter-tests.yaml
+  pull_request:
+    paths:
+      - lib/levanter/**
+      - uv.lock
+      - .github/workflows/levanter-tests.yaml
+
+jobs:
+  lockfile-check:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+    defaults:
+      run:
+        working-directory: lib/levanter
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          working-directory: lib/levanter
+      - name: Set up Python
+        run: uv python install
+      - name: Verify lockfile
+        run: uv lock --check
+
+  cpu-unit-tests:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+        jax-version: ["0.6.2", "0.7.2", "0.8.0"]
+    defaults:
+      run:
+        working-directory: lib/levanter
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          working-directory: lib/levanter
+      - name: Set up Python
+        run: uv python install
+      - name: Install dependencies
+        run: uv sync --package levanter --dev --frozen
+      - name: Test with pytest
+        run: |
+          # Test with specific JAX version, excluding TPU tests
+          PYTHONPATH=tests:src:. uv run --package levanter --frozen --with "jax[cpu]==${{ matrix.jax-version }}" pytest tests -m "not entry and not slow and not ray and not tpu" --durations=20
+
+  cpu-ray-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+    defaults:
+      run:
+        working-directory: lib/levanter
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          working-directory: lib/levanter
+      - name: Set up Python
+        run: uv python install
+      - name: Install dependencies
+        run: uv sync --package levanter --dev --frozen
+      - name: Test with pytest
+        run: |
+          PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "ray" --durations=20
+
+  cpu-entry-tests:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+    defaults:
+      run:
+        working-directory: lib/levanter
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          working-directory: lib/levanter
+      - name: Set up Python
+        run: uv python install
+      - name: Install dependencies
+        run: uv sync --package levanter --dev --frozen
+      - name: Test with pytest
+        run: |
+          PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "entry" --durations=20
+
+  tpu-tests:
+    runs-on: [tpu-ci]
+    timeout-minutes: 30
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        jax_version: ["0.6.2", "0.7.2", "0.8.0"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ (github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number)) || '' }}
+
+      - name: Run Levanter TPU tests in Docker
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          JAX_VERSION: ${{ matrix.jax_version }}
+        run: |
+          rm -f /tmp/libtpu_lockfile || true
+          lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
+
+          # Detect the regional Docker image by parsing region from zone
+          ZONE=$(curl -sSf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/zone | cut -d/ -f4)
+          REGION=$(echo $ZONE | rev | cut -d- -f2- | rev)
+          DOCKER_IMAGE="$REGION-docker.pkg.dev/hai-gcp-models/marin-ci/tpu-ci:latest"
+          echo "Using Docker image: $DOCKER_IMAGE (zone: $ZONE, region: $REGION)"
+
+          # Run Levanter tests with specific JAX version
+          docker run --rm \
+            --device /dev/vfio:/dev/vfio \
+            --shm-size=100g \
+            --stop-timeout=1 \
+            --cap-add=SYS_RESOURCE \
+            --ulimit memlock=68719476736:68719476736 \
+            -e JAX_PLATFORMS=tpu \
+            -e PJRT_DEVICE=TPU \
+            -e TPU_CI=true \
+            -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
+            -e START_RAY_TPU_CLUSTER=true \
+            -e PYTHONPATH=/workspace \
+            -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \
+            -e HF_TOKEN \
+            -e WANDB_API_KEY \
+            -e WANDB_MODE=offline \
+            -v ${{ github.workspace }}:/workspace:rw \
+            --tmpfs /workspace/logs:rw \
+            --tmpfs /workspace/.pytest_cache:rw \
+            -w /workspace \
+            $DOCKER_IMAGE \
+            timeout --kill-after=5 --signal=TERM 1800 uv run --frozen --with "jax[tpu]==$JAX_VERSION" pytest lib/levanter/tests -m "not entry and not ray and not slow" -v --tb=short -s --log-cli-level=INFO --durations=20

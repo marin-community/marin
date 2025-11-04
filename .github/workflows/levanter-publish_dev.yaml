@@ -2,7 +2,7 @@ name: Levanter - Publish Dev Build
 
 on:
   workflow_run:
-    workflows: ["Run Tests"]
+    workflows: ["Levanter - Tests"]
     types:
       - completed
     branches: [main]

@@ -1,5 +1,5 @@
 # TPU CI Docker Image
-# Sets up the initial dependencies in UV and all required packages to run Marin TPU tests.
+# Sets up the initial dependencies in UV and all required packages to run Marin and Levanter TPU tests.
 
 FROM ubuntu:22.04
 
@@ -46,8 +46,10 @@ ENV PATH="/home/${RUNNER_USER}/.local/bin:${PATH}"
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 COPY --chown=${RUNNER_USER}:${RUNNER_USER} pyproject.toml uv.lock LICENSE README.md /opt/marin/
+COPY --chown=${RUNNER_USER}:${RUNNER_USER} lib/levanter /opt/marin/lib/levanter
 WORKDIR /opt/marin
 
-RUN uv sync --frozen --extra tpu --extra gcp
+# Install both Marin and Levanter with TPU dependencies for comprehensive testing
+RUN uv sync --frozen --extra tpu --extra gcp --package marin --package levanter
 
 # The entrypoint will be set by the Github runner
