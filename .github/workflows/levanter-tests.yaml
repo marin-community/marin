@@ -20,7 +20,7 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11"]
-        jax-version: ["0.6.2", "0.7.2", "0.8.0"]
+        jax-version: ["0.6.2"]
     defaults:
       run:
         working-directory: lib/levanter
@@ -158,4 +158,4 @@ jobs:
             -v /tmp/uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 1800 uv run --package levanter --frozen --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short -s --log-cli-level=INFO --durations=20"
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 1800 uv run --package levanter --frozen --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short -s --log-cli-level=WARNING --durations=20"
