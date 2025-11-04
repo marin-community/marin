@@ -50,6 +50,13 @@ DOCKER_IMAGE_TAG = "latest"
 DOCKER_IMAGE = f"ghcr.io/{GITHUB_REPOSITORY}/{DOCKER_IMAGE_NAME}:{DOCKER_IMAGE_TAG}"
 
 
+def get_date_tag() -> str:
+    """Get current date tag in YYYY-MM-DD format."""
+    from datetime import datetime
+
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+
 def get_all_regions() -> list[str]:
     """Extract unique regions from TPU_ZONES_CONFIG."""
     regions = set()

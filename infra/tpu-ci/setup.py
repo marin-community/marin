@@ -123,10 +123,15 @@ def build_and_push_docker_image():
     """Build and push TPU CI Docker image to GitHub Container Registry."""
     logging.info("Building and pushing Docker image to ghcr.io...")
 
-    # Build the full image URL
-    image_url = f"ghcr.io/{config.GITHUB_REPOSITORY}/{config.DOCKER_IMAGE_NAME}:{config.DOCKER_IMAGE_TAG}"
+    # Build the full image URLs (both latest and date-tagged)
+    base_url = f"ghcr.io/{config.GITHUB_REPOSITORY}/{config.DOCKER_IMAGE_NAME}"
+    latest_image = f"{base_url}:{config.DOCKER_IMAGE_TAG}"
+    date_tag = config.get_date_tag()
+    date_image = f"{base_url}:{date_tag}"
 
-    logging.info(f"Target image: {image_url}")
+    logging.info(f"Target images:")
+    logging.info(f"  - {latest_image}")
+    logging.info(f"  - {date_image}")
 
     # Check if user is authenticated to ghcr.io
     if not check_ghcr_authentication():
@@ -154,7 +159,9 @@ def build_and_push_docker_image():
             "linux/amd64",
             "--push",
             "-t",
-            image_url,
+            latest_image,
+            "-t",
+            date_image,
             "-f",
             config.DOCKERFILE_TPU_CI_PATH,
             ".",
@@ -162,7 +169,9 @@ def build_and_push_docker_image():
         check=True,
     )
 
-    logging.info(f"✓ Docker image built and pushed to ghcr.io")
+    logging.info(f"✓ Docker images built and pushed to ghcr.io")
+    logging.info(f"  - {latest_image}")
+    logging.info(f"  - {date_image}")
 
 
 def delete_controller_vm():

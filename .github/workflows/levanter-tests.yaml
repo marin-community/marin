@@ -143,8 +143,8 @@ jobs:
           rm -f /tmp/libtpu_lockfile || true
           lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
 
-          # Use GitHub Container Registry image
-          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
+          # Use GitHub Container Registry image (date-tagged for stability)
+          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:2025-01-15"
           echo "Using Docker image: $DOCKER_IMAGE"
 
           # Create UV cache directory
@@ -152,6 +152,7 @@ jobs:
 
           # Run Levanter tests with specific JAX version
           docker run --rm \
+            --user $(id -u):$(id -g) \
             --device /dev/vfio:/dev/vfio \
             --shm-size=100g \
             --stop-timeout=1 \

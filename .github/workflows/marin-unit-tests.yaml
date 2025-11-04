@@ -84,14 +84,18 @@ jobs:
           rm -f /tmp/libtpu_lockfile || true
           lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
 
-          # Use GitHub Container Registry image
-          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
+          # Use GitHub Container Registry image (date-tagged for stability)
+          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:2025-01-15"
           echo "Using Docker image: $DOCKER_IMAGE"
+
+          # Create UV cache directory
+          mkdir -p ${{ github.workspace }}/.uv-cache
 
           # Levanter likes to log to `logs/` and crashes if it can't write there
           # Pytest writes to the cache directory and creates noise warnings if it can't write there
 
           docker run --rm \
+            --user $(id -u):$(id -g) \
             --device /dev/vfio:/dev/vfio \
             --shm-size=100g \
             --stop-timeout=1 \
@@ -103,10 +107,10 @@ jobs:
             -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
             -e START_RAY_TPU_CLUSTER=true \
             -e PYTHONPATH=/workspace \
-            -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \
             -e HF_TOKEN \
             -e WANDB_API_KEY \
             -e WANDB_MODE=offline \
+            -e UV_CACHE_DIR=/workspace/.uv-cache \
             -v ${{ github.workspace }}:/workspace:rw \
             --tmpfs /workspace/logs:rw \
             --tmpfs /workspace/.pytest_cache:rw \
