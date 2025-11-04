@@ -92,9 +92,6 @@ jobs:
           mkdir -p /tmp/uv-cache
           chmod 777 /tmp/uv-cache
 
-          # Levanter likes to log to `logs/` and crashes if it can't write there
-          # Pytest writes to the cache directory and creates noise warnings if it can't write there
-
           docker run --rm \
             --device /dev/vfio:/dev/vfio \
             --shm-size=100g \
@@ -111,10 +108,8 @@ jobs:
             -e WANDB_API_KEY \
             -e WANDB_MODE=offline \
             -e UV_CACHE_DIR=/tmp/uv-cache \
-            -v ${{ github.workspace }}:/workspace:rw \
+            -v ${{ github.workspace }}:/workspace-src:ro \
             -v /tmp/uv-cache:/tmp/uv-cache:rw \
-            --tmpfs /workspace/logs:rw \
-            --tmpfs /workspace/.pytest_cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            timeout --kill-after=5 --signal=TERM 900 uv run --frozen pytest tests/tpu -m tpu_ci -v --tb=short -s --log-cli-level=INFO
+            bash -c "cp -a /workspace-src/. /workspace/ && timeout --kill-after=5 --signal=TERM 900 uv run --frozen pytest tests/tpu -m tpu_ci -v --tb=short -s --log-cli-level=INFO"
