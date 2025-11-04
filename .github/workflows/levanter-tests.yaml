@@ -166,8 +166,8 @@ jobs:
             -e HF_TOKEN \
             -e WANDB_API_KEY \
             -e WANDB_MODE=offline \
-            -e UV_CACHE_DIR=/opt/uv-cache \
             -e UV_CACHE_DIR=/tmp/uv-cache \
+            -v ${{ github.workspace }}:/workspace-src:ro \
             -v ${{ github.workspace }}/.uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
