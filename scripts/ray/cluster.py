@@ -412,25 +412,8 @@ def run_cleanup(ctx, dry_run):
 
     with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file, ray_init=True)):
         print("Running cleanup iteration...")
-        results = cleanup_iteration(config_obj.project_id, config_obj.zone, dry_run=dry_run)
-
-        # Display TPU cleanup results
-        if results["deleted_tpus"]:
-            action = "Would delete" if dry_run else "Deleted"
-            print(f"{action} {len(results['deleted_tpus'])} preempted TPUs: {results['deleted_tpus']}")
-        else:
-            print("No preempted TPUs found")
-
-        # Display lockfile cleanup results
-        if not dry_run and results.get("lockfile_cleanup"):
-            stats = results["lockfile_cleanup"]
-            print(f"\nTPU Lockfile Cleanup:")
-            print(f"  Workers targeted: {stats.get('workers_targeted', 0)}")
-            print(f"  Workers cleaned: {stats.get('workers_cleaned', 0)}")
-            if stats.get("errors"):
-                print(f"  Errors: {len(stats['errors'])}")
-                for error in stats["errors"][:5]:  # Show first 5 errors
-                    print(f"    - {error}")
+        result = cleanup_iteration(config_obj.project_id, config_obj.zone, dry_run=dry_run)
+        print(f"Result: {result}")
 
 
 @cli.command("clean-preempted-tpus")
