@@ -33,6 +33,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -126,10 +127,11 @@ def build_and_push_docker_image():
     # Build the full image URLs (both latest and date-tagged)
     base_url = f"ghcr.io/{config.GITHUB_REPOSITORY}/{config.DOCKER_IMAGE_NAME}"
     latest_image = f"{base_url}:{config.DOCKER_IMAGE_TAG}"
-    date_tag = config.get_date_tag()
+
+    date_tag = datetime.utcnow().strftime("%Y-%m-%d-%H%M")
     date_image = f"{base_url}:{date_tag}"
 
-    logging.info(f"Target images:")
+    logging.info("Target images:")
     logging.info(f"  - {latest_image}")
     logging.info(f"  - {date_image}")
 

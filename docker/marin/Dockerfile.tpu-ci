@@ -6,8 +6,8 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
   
 ARG RUNNER_USER=github-runner
-ARG RUNNER_UID=1001
-ARG RUNNER_GID=1001
+ARG RUNNER_UID=1000
+ARG RUNNER_GID=1000
 
 RUN groupadd -g ${RUNNER_GID} ${RUNNER_USER} \
     && useradd -m -u ${RUNNER_UID} -g ${RUNNER_GID} -s /bin/bash ${RUNNER_USER}
