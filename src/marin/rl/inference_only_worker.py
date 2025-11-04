@@ -214,15 +214,23 @@ class InferenceOnlyWorker:
             # Time the batch generation
             start_time = time.time()
             outputs = self.llm.generate(prompts, sampling_params)
-            # Reset prefix cache to simulate syncing weights
-            self.llm.llm_engine.reset_prefix_cache()
             batch_time = time.time() - start_time
+
+            # start_time = time.time()
+            # # Reset prefix cache to simulate syncing weights
+            # self.llm.llm_engine.reset_prefix_cache()
+            # reset_prefix_cache_time = time.time() - start_time
 
             # Calculate tokens generated in this batch (sum across all outputs for all prompts)
             tokens_in_batch = sum(len(out.token_ids) for output in outputs for out in output.outputs)
             total_tokens_generated += tokens_in_batch
             total_time += batch_time
             batch_times.append(batch_time)
+
+            prompt_lengths = [len(self.tokenizer.encode(prompt)) for prompt in prompts]
+            avg_prompt_len = sum(prompt_lengths) / len(prompt_lengths) if prompt_lengths else 0
+
+            avg_output_len = tokens_in_batch / len(prompt_lengths)
 
             # Log periodically
             if (batch_idx + 1) % self.config.log_freq == 0:
@@ -232,7 +240,11 @@ class InferenceOnlyWorker:
                     f"Batch {batch_idx + 1}/{self.config.num_batches}: "
                     f"batch_time={batch_time:.2f}s, "
                     f"batch_throughput={batch_throughput:.0f} tok/s, "
-                    f"avg_throughput={avg_throughput:.0f} tok/s"
+                    f"avg_throughput={avg_throughput:.0f} tok/s, "
+                    f"avg_prompt_len={avg_prompt_len:.1f}, "
+                    f"avg_output_len={avg_output_len:.1f}, "
+                    f"sample_output={outputs[0].outputs[0].text}"
+                    # f"reset_prefix_cache_time={reset_prefix_cache_time:.2f}s, "
                 )
 
                 # Log to wandb if enabled
@@ -246,6 +258,9 @@ class InferenceOnlyWorker:
                                 "avg_throughput": avg_throughput,
                                 "tokens_in_batch": tokens_in_batch,
                                 "total_tokens_generated": total_tokens_generated,
+                                "avg_prompt_len": avg_prompt_len,
+                                "avg_output_len": avg_output_len,
+                                # "reset_prefix_cache_time": reset_prefix_cache_time,
                             },
                             step=batch_idx + 1,
                         )
