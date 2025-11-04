@@ -9,7 +9,7 @@ on:
   pull_request_review:
     types: [submitted]
 jobs:
-  test:
+  cpu-unit-test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -89,13 +89,13 @@ jobs:
           echo "Using Docker image: $DOCKER_IMAGE"
 
           # Create UV cache directory
-          mkdir -p ${{ github.workspace }}/.uv-cache
+          mkdir -p /tmp/uv-cache
+          chmod 777 /tmp/uv-cache
 
           # Levanter likes to log to `logs/` and crashes if it can't write there
           # Pytest writes to the cache directory and creates noise warnings if it can't write there
 
           docker run --rm \
-            --user $(id -u):$(id -g) \
             --device /dev/vfio:/dev/vfio \
             --shm-size=100g \
             --stop-timeout=1 \
@@ -107,12 +107,12 @@ jobs:
             -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
             -e START_RAY_TPU_CLUSTER=true \
             -e PYTHONPATH=/workspace \
-            -e PATH=/home/github-runner/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             -e HF_TOKEN \
             -e WANDB_API_KEY \
             -e WANDB_MODE=offline \
-            -e UV_CACHE_DIR=/workspace/.uv-cache \
+            -e UV_CACHE_DIR=/tmp/uv-cache \
             -v ${{ github.workspace }}:/workspace:rw \
+            -v /tmp/uv-cache:/tmp/uv-cache:rw \
             --tmpfs /workspace/logs:rw \
             --tmpfs /workspace/.pytest_cache:rw \
             -w /workspace \
