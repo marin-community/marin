@@ -114,4 +114,4 @@ jobs:
             -v /tmp/uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            bash -c "cp -a /workspace-src/. /workspace/ && timeout --kill-after=5 --signal=TERM 900 uv run --frozen pytest tests/tpu -m tpu_ci -v --tb=short -s --log-cli-level=INFO"
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 900 uv run --package marin --extra tpu --group test --frozen pytest tests/tpu -m tpu_ci -v --tb=short -s --log-cli-level=INFO"
