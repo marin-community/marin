@@ -564,6 +564,8 @@ class DecodeState(eqx.Module):
     # Page table for KV page allocation and per-sequence lengths/usage
     page_table: PageTable
 
+    pad_token_id: int
+
     # Per sequence sampling parameters
     max_num_tokens: ht.i32[NamedArray, "seq"]
     """
@@ -582,6 +584,15 @@ class DecodeState(eqx.Module):
 
     # Cached finished flags per sequence (updated when tokens are enqueued)
     finished: ht.bool_[NamedArray, "seq"]
+
+    def reset(self):
+        return DecodeState.init(
+            page_table=self.page_table.reset(),
+            pad_token_id=self.pad_token_id,
+            max_stop_seqs=self.stop_tokens.shape["stop_seq"] if self.stop_tokens is not None else 0,
+            max_stop_tokens=self.stop_tokens.shape["position"] if self.stop_tokens is not None else 0,
+            max_queued_tokens=self.tqueue.max_queued_tokens,
+        )
 
     @staticmethod
     def init(
@@ -605,6 +616,7 @@ class DecodeState(eqx.Module):
             sequences=sequence_table,
             page_size=page_size,
             page_table=page_table,
+            pad_token_id=pad_token_id,
             tokens=hax.full({"seq": max_seqs, "position": max_seq_len}, pad_token_id, dtype=jnp.int32),
             logprobs=hax.full({"seq": max_seqs, "position": max_seq_len}, jnp.nan, dtype=jnp.float32),
             max_num_tokens=hax.full({"seq": max_seqs}, 0, dtype=jnp.int32),
