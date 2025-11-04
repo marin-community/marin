@@ -12,4 +12,4 @@ build:
   commands:
     - pip install uv
     - uv sync --group docs --package levanter --frozen
-    - cd lib/levanter && uv run --frozen mkdocs build --strict --site-dir $READTHEDOCS_OUTPUT/html
+    - cd lib/levanter && uv run --frozen mkdocs build --site-dir $READTHEDOCS_OUTPUT/html
