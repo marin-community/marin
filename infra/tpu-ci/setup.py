@@ -25,6 +25,7 @@ TPU CI Infrastructure Management
 Manages preemptible TPU VMs with GitHub Actions runners.
 """
 
+import json
 import logging
 import os
 import shlex
@@ -85,6 +86,39 @@ def store_github_token_in_secret_manager(token: str):
     logging.info("✓ GitHub token stored")
 
 
+def check_ghcr_authentication() -> bool:
+    """Check if user is already authenticated to ghcr.io."""
+    docker_config_path = Path.home() / ".docker" / "config.json"
+
+    if not docker_config_path.exists():
+        return False
+
+    try:
+        with docker_config_path.open() as f:
+            config_data = json.load(f)
+
+        # Check for ghcr.io in auths
+        auths = config_data.get("auths", {})
+        if "ghcr.io" in auths:
+            return True
+
+        # Check for ghcr.io in credHelpers (credential store)
+        cred_helpers = config_data.get("credHelpers", {})
+        if "ghcr.io" in cred_helpers:
+            return True
+
+        # Check for global credential helper
+        if config_data.get("credsStore"):
+            # If there's a global credential store, assume it works for ghcr.io
+            return True
+
+    except (json.JSONDecodeError, OSError) as e:
+        logging.warning(f"Could not read Docker config: {e}")
+        return False
+
+    return False
+
+
 def build_and_push_docker_image():
     """Build and push TPU CI Docker image to GitHub Container Registry."""
     logging.info("Building and pushing Docker image to ghcr.io...")
@@ -93,7 +127,23 @@ def build_and_push_docker_image():
     image_url = f"ghcr.io/{config.GITHUB_REPOSITORY}/{config.DOCKER_IMAGE_NAME}:{config.DOCKER_IMAGE_TAG}"
 
     logging.info(f"Target image: {image_url}")
-    logging.info("Note: You must be logged in to ghcr.io (docker login ghcr.io)")
+
+    # Check if user is authenticated to ghcr.io
+    if not check_ghcr_authentication():
+        logging.error("Not authenticated to ghcr.io")
+        logging.error("")
+        logging.error("To authenticate, run:")
+        logging.error("")
+        logging.error("  echo $GITHUB_PAT | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin")
+        logging.error("")
+        logging.error("Where:")
+        logging.error("  - GITHUB_PAT is a Personal Access Token with 'write:packages' scope")
+        logging.error("  - Create a token at: https://github.com/settings/tokens/new")
+        logging.error("  - YOUR_GITHUB_USERNAME is your GitHub username")
+        logging.error("")
+        sys.exit(1)
+
+    logging.info("✓ Authenticated to ghcr.io")
 
     run(
         [
