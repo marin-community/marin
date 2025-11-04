@@ -250,25 +250,45 @@ REGISTRATION_TOKEN=$(curl -s -X POST \\
 echo "Configuring GitHub Actions runner..."
 cd /home/$RUNNER_USER
 
-if [ -f .runner ]; then
-    echo "Removing existing runner configuration..."
-    ./svc.sh stop || true
-    ./svc.sh uninstall || true
-    sudo -u $RUNNER_USER ./config.sh remove --token $REGISTRATION_TOKEN || true
+# Get instance name from metadata
+INSTANCE_NAME=$(curl -sSf -H "Metadata-Flavor: Google" \\
+  http://metadata.google.internal/computeMetadata/v1/instance/name)
+
+# Check if runner is configured by looking for config files OR .runner file
+if [ -f .runner ] || [ -f .credentials ] || [ -f .path ]; then
+    echo "Runner already configured, removing..."
+
+    # Stop service first if it exists
+    if [ -f ./svc.sh ]; then
+        ./svc.sh stop || true
+        ./svc.sh uninstall || true
+    fi
+
+    # Try to cleanly remove configuration if config.sh exists
+    if [ -f ./config.sh ]; then
+        sudo -u $RUNNER_USER ./config.sh remove --token $REGISTRATION_TOKEN || true
+    fi
+
+    # Force cleanup of ALL state files and workspace to ensure clean slate
+    rm -f .runner .credentials .path
+    rm -rf _work
+
+    echo "Existing runner configuration removed"
 fi
 
+# Now configure (works for both new and re-configured runners)
+# Use --replace flag to replace any existing runner with the same name on GitHub
 sudo -u $RUNNER_USER ./config.sh \\
   --url https://github.com/marin-community/marin \\
   --token $REGISTRATION_TOKEN \\
   --name "tpu-$INSTANCE_NAME" \\
   --labels {",".join(config.RUNNER_LABELS)} \\
   --work _work \\
-  --unattended
+  --unattended \\
+  --replace
 
 echo "Installing runner service..."
 cd /home/$RUNNER_USER
-# Avoid "already exists" error
-./svc.sh uninstall || true
 ./svc.sh install $RUNNER_USER
 ./svc.sh start
 
