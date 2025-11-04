@@ -1015,6 +1015,7 @@ class LmEvalHarnessConfig:
                     this_tasks.update(tasks.get_task_dict(task, manager))
                 else:
                     our_name = task.get("task_alias", task["task"]) if isinstance(task, dict) else task
+                    assert isinstance(our_name, str)
                     our_name = our_name.replace(" ", "_")
                     tasks_for_this_task_spec = self._get_task_and_rename(manager, our_name, task)
                     for k, v in tasks_for_this_task_spec.items():

@@ -33,6 +33,10 @@ on:
           - europe-west4-a
           - europe-west4-b
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     if: (github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'workflow_dispatch'

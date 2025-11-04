@@ -156,6 +156,7 @@ def main(config: TrainLmConfig):
             # TODO: I don't love that we init the model twice, but it's not a big deal i think?
             if config.initialize_from_hf:
                 # initialize from an hf pretrained model
+                assert converter is not None
                 logger.info(
                     "No training checkpoint found. Initializing model from HF checkpoint"
                     f" '{converter.reference_checkpoint}'"
@@ -203,6 +204,7 @@ def main(config: TrainLmConfig):
 
         if config.hf_save_path is not None and config.hf_save_steps is not None:
             # bit gross to reach this far into the config, but it's fine
+            assert converter is not None, "converter must be set when saving HF checkpoints"
             if config.trainer.checkpointer.append_run_id_to_base_path:
                 full_save_path = os.path.join(config.hf_save_path, trainer.run_id)
             else:
