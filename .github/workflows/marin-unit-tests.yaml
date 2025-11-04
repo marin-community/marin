@@ -85,7 +85,7 @@ jobs:
           lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
 
           # Use GitHub Container Registry image (date-tagged for stability)
-          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:2025-11-04"
+          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:2025-11-04-2135"
           echo "Using Docker image: $DOCKER_IMAGE"
 
           # Create UV cache directory
@@ -97,13 +97,15 @@ jobs:
             --shm-size=100g \
             --stop-timeout=1 \
             --cap-add=SYS_RESOURCE \
-             --ulimit memlock=68719476736:68719476736 \
-            -e JAX_PLATFORMS=tpu \
-            -e PJRT_DEVICE=TPU \
+            --ulimit memlock=68719476736:68719476736 \
             -e TPU_CI=true \
             -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
             -e START_RAY_TPU_CLUSTER=true \
+            -e TPU_STDERR_LOG_LEVEL=3 \
+            -e TPU_MIN_LOG_LEVEL=3 \
             -e PYTHONPATH=/workspace \
+            -e JAX_PLATFORMS=tpu,cpu \
+            -e PJRT_DEVICE=TPU \
             -e HF_TOKEN \
             -e WANDB_API_KEY \
             -e WANDB_MODE=offline \
