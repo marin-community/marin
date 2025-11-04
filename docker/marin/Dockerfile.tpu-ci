@@ -35,3 +35,6 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/home/${RUNNER_USER}/.uv/bin:/home/${RUNNER_USER}/.local/bin/:${PATH}"
 
 WORKDIR /workspace
+
+# Pre-create directories for tmpfs mounts (needed when workspace is mounted read-only)
+RUN mkdir -p /workspace/.venv /workspace/logs /workspace/.pytest_cache

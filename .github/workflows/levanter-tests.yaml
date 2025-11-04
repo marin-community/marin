@@ -144,7 +144,7 @@ jobs:
           lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
 
           # Use GitHub Container Registry image (date-tagged for stability)
-          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:2025-11-04-2131"
+          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:2025-11-04-2135"
           echo "Using Docker image: $DOCKER_IMAGE"
 
           # Create UV cache directory
