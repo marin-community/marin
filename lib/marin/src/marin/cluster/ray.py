@@ -569,15 +569,17 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
                 os.environ[key] = value
 
 
-def list_jobs() -> list[dict]:
-    """Fetch the list of jobs using the Ray CLI.
+def list_jobs(filters: list[str] | None = None) -> list[dict]:
+    """Fetch the list of jobs using the Ray CLI."""
+    cmd = ["ray", "list", "jobs", "--detail", "--format=json", "--limit=10000"]
+    for f in filters or []:
+        cmd.extend(["--filter", f])
 
-    Note: This requires RAY_ADDRESS to be set, typically via ray_dashboard context manager.
-    """
-    result = run_ray_command(["ray", "list", "jobs", "--detail", "--format=json", "--limit=10000"])
+    result = run_ray_command(cmd)
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError:
+        logger.warning(f"Failed to parse JSON output from ray list jobs: {result.stdout} -- {result.stderr}")
         return []
 
 
