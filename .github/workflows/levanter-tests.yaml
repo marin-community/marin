@@ -149,6 +149,7 @@ jobs:
 
           # Create UV cache directory
           mkdir -p ${{ github.workspace }}/.uv-cache
+          chmod 777 ${{ github.workspace }}/.uv-cache
 
           # Run Levanter tests with specific JAX version
           docker run --rm \
