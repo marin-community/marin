@@ -255,7 +255,6 @@ class RLJob:
                     max_seq_len=max_tokens,
                     page_size=128,
                     hbm_utilization=0.5,
-                    enable_logprobs=True,
                 ),
                 port=0,
             )
@@ -265,7 +264,6 @@ class RLJob:
             inference_config = LevanterInferenceContextConfig(
                 inference_server_config=inference_server_config,
                 tokenizer=tokenizer,
-                mesh=self.config.trainer.device_mesh,
                 axis_mapping=self.config.trainer.compute_axis_mapping,
             )
         else:

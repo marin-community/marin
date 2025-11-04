@@ -225,7 +225,10 @@ class MathEnv(MarinEnv):
         format_sum = 0.0
         correct_sum = 0.0
         response_token_count = 0
+        truncated_count = 0
 
+        print(f"Length of sampled examples: {len(sampled_examples)}")
+        print(f"Length of completions: {len(completions)}")
         for example, completion in zip(sampled_examples, completions, strict=True):
             group_rollouts: list[Rollout] = []
 
@@ -245,6 +248,7 @@ class MathEnv(MarinEnv):
                     env_name="math",
                     env_example_id=example.example_id,
                     reward=token_reward,
+                    correctness_reward=correct_score,
                 )
 
                 group_rollouts.append(rollout)
@@ -254,6 +258,9 @@ class MathEnv(MarinEnv):
                 format_sum += fmt_score
                 correct_sum += correct_score
                 response_token_count += rollout.response_tokens.size
+
+                if choice.finish_reason == "length":
+                    truncated_count += 1
 
             if group_rollouts:
                 rollout_groups.append(RolloutGroup(rollouts=group_rollouts))
@@ -269,6 +276,7 @@ class MathEnv(MarinEnv):
             f"{prefix}_mean_response_tokens": response_token_count / total_choices,
             f"{prefix}_total_responses": float(total_choices),
             f"{prefix}_sampled_examples": float(len(sampled_examples)),
+            f"{prefix}_truncated_percentage": float(truncated_count) / total_choices,
         }
 
         return rollout_groups, metrics

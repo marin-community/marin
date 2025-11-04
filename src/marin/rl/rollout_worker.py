@@ -105,6 +105,8 @@ class RolloutBatchStats:
     success_count: int
     rollout_stats: list[RolloutStats]
     avg_reward: float
+    pass_at_one: float | None = None
+    pass_at_k: float | None = None
 
 
 def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
@@ -112,8 +114,11 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
     total_count = 0
     success_count = 0
     reward_sum = 0.0
+    pass_at_k = 0.0
+    pass_at_one = 0.0
 
     for group in batch.groups:
+        pass_at_k_for_current_group = 0.0
         for rollout in group.rollouts:
             rollout_stats_list.append(
                 RolloutStats(
@@ -123,16 +128,25 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
                 )
             )
 
+            if rollout.correctness_reward is not None:
+                pass_at_k_for_current_group = max(pass_at_k_for_current_group, rollout.correctness_reward)
+
             total_count += 1
             if rollout.episode_reward > 0:
                 success_count += 1
             reward_sum += rollout.episode_reward
+
+        pass_at_k += pass_at_k_for_current_group
+        if group.rollouts[0].correctness_reward is not None:
+            pass_at_one += group.rollouts[0].correctness_reward
 
     return RolloutBatchStats(
         total_count=total_count,
         success_count=success_count,
         rollout_stats=rollout_stats_list,
         avg_reward=(reward_sum / total_count) if total_count > 0 else 0.0,
+        pass_at_one=(pass_at_one / len(batch.groups)) if len(batch.groups) > 0 else 0.0,
+        pass_at_k=(pass_at_k / len(batch.groups)) if len(batch.groups) > 0 else 0.0,
     )
 
 
@@ -159,10 +173,10 @@ class RolloutWorker:
         # Infer model_axis_size from the actual TPU configuration now that JAX is initialized.
         # For inference servers, we shard across all local devices on a single host.
         if config.inference_type == "levanter":
-            config.inference_server_config = dataclasses.replace(
-                config.inference_server_config,
+            config.inference_config.inference_server_config = dataclasses.replace(
+                config.inference_config.inference_server_config,
                 trainer=dataclasses.replace(
-                    config.inference_server_config.trainer,
+                    config.inference_config.inference_server_config.trainer,
                     model_axis_size=jax.local_device_count(),
                 ),
             )
@@ -184,6 +198,8 @@ class RolloutWorker:
             self._policy_ctx = LevanterInferenceContext(
                 inference_config=self.config.inference_config,
             )
+            # We set the mesh here because the Mesh is not serializable by Ray.
+            self._policy_ctx.mesh = self.config.trainer.device_mesh
         elif self.config.inference_type == "vllm":
             self._policy_ctx = vLLMInferenceContext(
                 inference_config=self.config.inference_config,
@@ -379,6 +395,8 @@ class RolloutWorker:
         metrics[f"{prefix}/{lesson_id}/success_rate"] = success_rate
         metrics[f"{prefix}/{lesson_id}/avg_reward"] = stats.avg_reward
         metrics[f"{prefix}/{lesson_id}/total_count"] = stats.total_count
+        metrics[f"{prefix}/{lesson_id}/pass_at_one"] = stats.pass_at_one
+        metrics[f"{prefix}/{lesson_id}/pass_at_k"] = stats.pass_at_k
         return metrics
 
     def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> dict:

@@ -108,6 +108,7 @@ class BaseInferenceContext:
         env_name: str,
         env_example_id: str,
         reward: float,
+        correctness_reward: float | None = None,
     ) -> Rollout:
         """Construct Rollout from a choice with validation."""
 
@@ -138,4 +139,5 @@ class BaseInferenceContext:
             response_logprobs=jnp.array(response_logprobs, dtype=jnp.float32),
             token_rewards=token_rewards,
             episode_reward=float(reward),
+            correctness_reward=correctness_reward,
         )

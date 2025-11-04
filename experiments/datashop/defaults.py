@@ -462,4 +462,5 @@ def default_synthetic_data_generation(
             resource_config=resource_config,
             batch_size=512,
         ),
+        pip_dependency_groups=["vllm"],
     )

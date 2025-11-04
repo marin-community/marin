@@ -80,6 +80,9 @@ class Rollout(eqx.Module):
     metadata: RolloutMetadata = RolloutMetadata()
     """Metadata about when/where this rollout was generated."""
 
+    correctness_reward: float | None = None
+    """The reward for the correctness of the response."""
+
 
 class RolloutGroup(eqx.Module):
     """Multiple rollouts for the same prompt (e.g., n_generations samples)."""

@@ -349,7 +349,6 @@ class CISPOLoss(RLLossModule):
                 reference_model,
                 batch,
                 key=key,
-                kl_coef=self.kl_coef,
                 epsilon_low=self.epsilon_low,
                 epsilon_high=self.epsilon_high,
             )

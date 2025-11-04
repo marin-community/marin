@@ -324,6 +324,8 @@ class MockEnv(MarinEnv):
         # Evaluate and create rollouts
         rollout_groups = []
 
+        print(f"Length of prompts: {len(prompts)}")
+        print(f"Length of completions: {len(completions)}")
         for prompt, completion in zip(prompts, completions, strict=True):
             group = []
 

@@ -266,7 +266,7 @@ class vLLMInferenceContext(BaseInferenceContext):
                 )
 
             choice = Choice(
-                finish_reason=output.finish_reason or "stop",
+                finish_reason=output.finish_reason,
                 index=output_idx,
                 logprobs=ChoiceLogprobs(content=logprobs_content),
                 message=ChatCompletionMessage(

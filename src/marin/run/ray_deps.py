@@ -183,7 +183,7 @@ def build_runtime_env_for_packages(
     # Force the correct PyTorch wheel index for the requested accelerator type
     accel_type = accelerator_type_from_extra(extra)
     if accel_type in {AcceleratorType.CPU, AcceleratorType.TPU, AcceleratorType.NONE}:
-        requirements_txt.append("--find-links https://download.pytorch.org/whl/cpu")
+        requirements_txt.append("--extra-index-url https://download.pytorch.org/whl/cpu")
     elif accel_type == AcceleratorType.GPU:
         requirements_txt.append("--extra-index-url https://download.pytorch.org/whl/cu128")
 

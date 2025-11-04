@@ -23,7 +23,6 @@ import asyncio
 from dataclasses import dataclass
 import logging
 import threading
-from jax.sharding import Mesh
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
@@ -39,7 +38,6 @@ logger = logging.getLogger(__name__)
 class LevanterInferenceContextConfig:
     inference_server_config: InferenceServerConfig
     tokenizer: PreTrainedTokenizer
-    mesh: Mesh
     axis_mapping: dict[str, str]
     stop_tokens: list[int] | None = None
     max_tokens: int = 16
@@ -59,7 +57,6 @@ class LevanterInferenceContext(BaseInferenceContext):
         self.tokenizer = inference_config.tokenizer
         self._stop_tokens = inference_config.stop_tokens
         self.max_tokens = inference_config.max_tokens
-        self.mesh = inference_config.mesh
         self.axis_mapping = inference_config.axis_mapping
 
     def openai_client(self) -> AsyncOpenAI:
@@ -72,7 +69,7 @@ class LevanterInferenceContext(BaseInferenceContext):
         return f"http://{self._inference_server.address()}/v1"
 
     def reload_model(self, model: LmHeadModel) -> None:
-        self._inference_server.reload(lambda model: model)
+        self._inference_server.reload(lambda _: model)
 
     def start_server(self, model: LmHeadModel) -> None:
         with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
@@ -98,7 +95,7 @@ class LevanterInferenceContext(BaseInferenceContext):
         if max_tokens is None:
             max_tokens = self.max_tokens
 
-        if stop is None and self._stop_tokens:
+        if stop is None and self._stop_tokens is not None:
             stop = [self.tokenizer.decode([tok]) for tok in self._stop_tokens]
 
         # Async batch processing

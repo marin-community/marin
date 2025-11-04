@@ -69,6 +69,7 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
         # must override because it because if we don't then it will end in a hash
         # if it ends in a hash, then we cannot determine the local path
         override_output_path=f"{GCS_FUSE_MOUNT_PATH}/{model_name}--{model_revision}",
+        pip_dependency_groups=["vllm"],
     )
 
     return download_step

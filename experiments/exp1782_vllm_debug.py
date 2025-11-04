@@ -41,7 +41,6 @@ from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss, RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
-from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
 
 try:
     from vllm import SamplingParams
@@ -111,8 +110,8 @@ class ExperimentConfig:
 MODEL = llama1b
 WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
 # MAX_TOKENS = 1024
-MAX_MODEL_LEN = 4096
-MAX_OUTPUT_TOKENS = 2048
+MAX_MODEL_LEN = 1024
+MAX_OUTPUT_TOKENS = 256
 RUN_ID = f"test-{MODEL.name.split('/')[-1]}-curriculum"
 
 
@@ -133,20 +132,19 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
         n_prompts=32,
         n_generations_per_prompt=8,
         max_tokens=MAX_OUTPUT_TOKENS,
-        # stop_tokens=stop_tokens(experiment_config.model_config.tokenizer),
-        stop_tokens=None,
+        stop_tokens=stop_tokens(experiment_config.model_config.tokenizer),
     )
 
     lessons = {
-        # "number_comparison": LessonConfig(
-        #     lesson_id="number_comparison",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "number_comparison", "seed": 42},
-        #     ),
-        #     dependencies=[],
-        #     sampling_params=default_sampling,
-        # ),
+        "number_comparison": LessonConfig(
+            lesson_id="number_comparison",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.mock_env.MockEnv",
+                env_args={"task_type": "number_comparison", "seed": 42},
+            ),
+            dependencies=[],
+            sampling_params=default_sampling,
+        ),
         # "addition_easy": LessonConfig(
         #     lesson_id="addition_easy",
         #     env_config=EnvConfig(
@@ -174,16 +172,16 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
         #     dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
         #     sampling_params=default_sampling,
         # ),
-        "math_full": LessonConfig(
-            lesson_id="math_full",
-            env_config=EnvConfig(
-                env_class="marin.rl.environments.math_env.MathEnv",
-                env_args={"seed": 42},
-            ),
-            dependencies=[],
-            # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-            sampling_params=default_sampling,
-        ),
+        # "math_full": LessonConfig(
+        #     lesson_id="math_full",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.math_env.MathEnv",
+        #         env_args={"seed": 42},
+        #     ),
+        #     dependencies=[],
+        #     # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+        #     sampling_params=default_sampling,
+        # ),
     }
 
     return CurriculumConfig(
@@ -270,22 +268,22 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         ),
         curriculum=curriculum_config,
         tokenizer=experiment_config.model_config.tokenizer,
-        inference_type="vllm",
-        # inference_type="levanter",
-        inference_config=vLLMInferenceContextConfig(
-            model_name=experiment_config.model_config.name,
-            max_model_len=4096,
-            tensor_parallel_size=8,
-            gpu_memory_utilization=0.90,
-            sampling_params=SamplingParams(
-                temperature=1.0,
-                n=8,
-                max_tokens=MAX_OUTPUT_TOKENS,
-                # stop=["</answer>"],
-                # include_stop_str_in_output=True,
-                logprobs=1,
-            ),
-        ),
+        # inference_type="vllm",
+        inference_type="levanter",
+        # inference_config=vLLMInferenceContextConfig(
+        #     model_name=experiment_config.model_config.name,
+        #     max_model_len=4096,
+        #     tensor_parallel_size=8,
+        #     gpu_memory_utilization=0.90,
+        #     sampling_params=SamplingParams(
+        #         temperature=1.0,
+        #         n=8,
+        #         max_tokens=MAX_OUTPUT_TOKENS,
+        #         # stop=["</answer>"],
+        #         # include_stop_str_in_output=True,
+        #         logprobs=1,
+        #     ),
+        # ),
         initial_checkpoint=experiment_config.model_config.checkpoint,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
@@ -316,7 +314,7 @@ def main():
     # experiment_configs = [llama1b, qwen4b, qwen3_1_7b, qwen3_0_6b]
     experiment_configs = [
         ExperimentConfig(
-            model_config=llama_3_1_8b, rl_loss=RLOOLoss(kl_coef=0.01, clip_epsilon=0.2), experiment_name_suffix="rloo"
+            model_config=llama1b, rl_loss=RLOOLoss(kl_coef=0.01, clip_epsilon=0.2), experiment_name_suffix="rloo"
         ),
         # ExperimentConfig(
         #     model_config=llama_3_1_8b, rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2), experiment_name_suffix="grpo"
