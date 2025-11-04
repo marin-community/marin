@@ -171,4 +171,4 @@ jobs:
             --tmpfs /workspace/.pytest_cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            timeout --kill-after=5 --signal=TERM 1800 uv run --frozen --with "jax[tpu]==$JAX_VERSION" pytest lib/levanter/tests -m "not entry and not ray and not slow" -v --tb=short -s --log-cli-level=INFO --durations=20
+            bash -c "cd /workspace && uv sync --frozen --package levanter --dev && timeout --kill-after=5 --signal=TERM 1800 uv run --frozen --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short -s --log-cli-level=INFO --durations=20"
