@@ -163,8 +163,6 @@ echo "Instance: $INSTANCE_NAME in $ZONE"
 # Use GitHub Container Registry image
 DOCKER_IMAGE="ghcr.io/{config.GITHUB_REPOSITORY}/{config.DOCKER_IMAGE_NAME}:{config.DOCKER_IMAGE_TAG}"
 
-echo "Using Docker image: $DOCKER_IMAGE"
-
 # Completely disable unattended-upgrades to avoid apt lock conflicts
 echo "Disabling unattended-upgrades..."
 systemctl stop unattended-upgrades.service || true
@@ -201,8 +199,6 @@ fi
 
 systemctl enable docker
 systemctl start docker
-
-echo "Docker ready, no authentication needed for ghcr.io (public registry)"
 
 echo "Pre-pulling TPU CI Docker image..."
 docker pull $DOCKER_IMAGE || true
@@ -736,11 +732,8 @@ def debug_tpu(name: str, test_path: str, pytest_args: str, timeout: int, env_var
 sudo rm -f /tmp/libtpu_lockfile || true
 sudo lsof -t /dev/vfio/* 2>/dev/null | xargs -r sudo kill -9 || true
 
-# Get zone information and use GitHub Container Registry image
-METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/zone"
-ZONE=$(curl -sSf -H "Metadata-Flavor: Google" $METADATA_URL | cut -d/ -f4)
+# Use GitHub Container Registry image
 DOCKER_IMAGE="ghcr.io/{config.GITHUB_REPOSITORY}/{config.DOCKER_IMAGE_NAME}:{config.DOCKER_IMAGE_TAG}"
-echo "Using Docker image: $DOCKER_IMAGE (zone: $ZONE)"
 
 sudo docker run --rm \\
   --device /dev/vfio:/dev/vfio \\

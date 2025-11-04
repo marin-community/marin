@@ -46,10 +46,10 @@ ENV PATH="/home/${RUNNER_USER}/.local/bin:${PATH}"
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 COPY --chown=${RUNNER_USER}:${RUNNER_USER} pyproject.toml uv.lock LICENSE README.md /opt/marin/
-COPY --chown=${RUNNER_USER}:${RUNNER_USER} lib/levanter /opt/marin/lib/levanter
+COPY --chown=${RUNNER_USER}:${RUNNER_USER} lib /opt/marin/lib
 WORKDIR /opt/marin
 
 # Install both Marin and Levanter with TPU dependencies for comprehensive testing
-RUN uv sync --frozen --extra tpu --extra gcp --package marin --package levanter
+RUN uv sync --frozen --extra tpu --extra gcp
 
 # The entrypoint will be set by the Github runner
