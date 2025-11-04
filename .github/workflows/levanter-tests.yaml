@@ -156,11 +156,13 @@ jobs:
             --stop-timeout=1 \
             --cap-add=SYS_RESOURCE \
             --ulimit memlock=68719476736:68719476736 \
-            -e JAX_PLATFORMS=tpu \
+            -e JAX_PLATFORMS=cpu,tpu \
             -e PJRT_DEVICE=TPU \
             -e TPU_CI=true \
             -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
             -e START_RAY_TPU_CLUSTER=true \
+            -e TPU_STDERR_LOG_LEVEL=3 \
+            -e TPU_MIN_LOG_LEVEL=3 \
             -e PYTHONPATH=/workspace \
             -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \
             -e HF_TOKEN \
