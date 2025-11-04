@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 
-ENV JAX_PLATFORMS=tpu
+ENV JAX_PLATFORMS=tpu,cpu
 ENV PJRT_DEVICE=TPU
 
 USER ${RUNNER_USER}

@@ -166,11 +166,9 @@ jobs:
             -e HF_TOKEN \
             -e WANDB_API_KEY \
             -e WANDB_MODE=offline \
-            -e UV_CACHE_DIR=/workspace/.uv-cache \
-            -v ${{ github.workspace }}:/workspace:ro \
-            --tmpfs /workspace/logs:rw \
-            --tmpfs /workspace/.pytest_cache:rw \
-            --tmpfs /workspace/.venv:rw \
+            -e UV_CACHE_DIR=/opt/uv-cache \
+            -v ${{ github.workspace }}:/workspace-src:ro \
+            -v ${{ github.workspace }}/.uv-cache:/opt/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            bash -c "cd /workspace && timeout --kill-after=5 --signal=TERM 1800 uv run --package levanter --frozen --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short -s --log-cli-level=INFO --durations=20"
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 1800 uv run --package levanter --frozen --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short -s --log-cli-level=INFO --durations=20"
