@@ -1,7 +1,7 @@
 name: Build Docker Images
 
 on:
-  # Manual trigger for on-demand builds
+  # enable manual trigger 
   workflow_dispatch:
   # Scheduled builds
   # Do not trigger too often because it can cause images that are still in use
@@ -9,12 +9,6 @@ on:
   schedule:
     - cron: '0 2 * * 0'  # Weekly: Sundays at 2 AM UTC for cluster images and Levanter
     - cron: '0 3 * * *'  # Daily: 3 AM UTC for TPU CI images
-  # Trigger on Docker file changes to main
-  push:
-    branches: [main]
-    paths:
-      - docker/**
-      - uv.lock
 
 permissions:
   contents: write
@@ -22,7 +16,6 @@ permissions:
   packages: write
 
 jobs:
-  # Marin Cluster Images - Multi-region deployment images
   marin-cluster-images:
     # Run on: manual trigger OR weekly schedule (02:00 UTC on Sundays)
     if: |

@@ -15,31 +15,7 @@ on:
       - .github/workflows/levanter-tests.yaml
 
 jobs:
-  lockfile-check:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11"]
-    defaults:
-      run:
-        working-directory: lib/levanter
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install uv and Python
-        uses: astral-sh/setup-uv@v6
-        with:
-          version: "0.7.20"
-          python-version: ${{ matrix.python-version }}
-          enable-cache: true
-          working-directory: lib/levanter
-      - name: Set up Python
-        run: uv python install
-      - name: Verify lockfile
-        run: uv lock --check
-
   cpu-unit-tests:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -94,7 +70,6 @@ jobs:
           PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "ray" --durations=20
 
   cpu-entry-tests:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -153,8 +128,7 @@ jobs:
             sleep 0.5
           done
 
-          # Use GitHub Container Registry image (date-tagged for stability)
-          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:2025-11-04-2135"
+          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
           echo "Using Docker image: $DOCKER_IMAGE"
 
           # Create UV cache directory

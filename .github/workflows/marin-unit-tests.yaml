@@ -56,15 +56,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install "uv>=0.7.19" toml
           npm install -g pandiff
-          uv sync
-          uv sync --package marin --extra cpu --group test
+          uv sync --package marin --extra cpu --group test --frozen
 
       - name: Test with pytest
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           CI: true
         run: |
-          PYTHONPATH=tests:. uv run pytest -n3 --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
+          PYTHONPATH=tests:. uv run --frozen pytest -n3 --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
 
   tpu-test:
     runs-on: [tpu-ci]
@@ -94,8 +93,7 @@ jobs:
             sleep 0.5
           done
 
-          # Use GitHub Container Registry image (date-tagged for stability)
-          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:2025-11-04-2135"
+          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
           echo "Using Docker image: $DOCKER_IMAGE"
 
           # Create UV cache directory
