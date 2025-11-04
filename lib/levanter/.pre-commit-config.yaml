@@ -6,22 +6,24 @@ repos:
     rev: v0.11.10
     hooks:
       - id: ruff
+        files: ^lib/levanter/
         args: [ --fix, --exit-non-zero-on-fix ]
 
   - repo: https://github.com/Lucas-C/pre-commit-hooks
     rev: v1.5.5
     hooks:
       - id: insert-license
-        files: \.py$
+        files: ^lib/levanter/.*\.py$
         args:
           - --license-filepath
-          - etc/license_header.txt
+          - lib/levanter/etc/license_header.txt
           - --use-current-year
 
   - repo: https://github.com/psf/black
     rev: 25.1.0
     hooks:
       - id: black
+        files: ^lib/levanter/
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -37,8 +39,10 @@ repos:
       - id: trailing-whitespace
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.4.1
+    rev: v1.18.2
     hooks:
       - id: mypy
-        args: [--ignore-missing-imports]
+        files: ^lib/levanter/
+        args: [--ignore-missing-imports, --python-version=3.11]
+        exclude: ^tests/
         additional_dependencies: [wandb==0.17.8, types-PyYAML]

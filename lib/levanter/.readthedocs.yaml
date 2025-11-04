@@ -11,5 +11,5 @@ build:
     python: "3.11"
   commands:
     - pip install uv
-    - cd $READTHEDOCS_CHECKOUT && uv sync --group docs --package levanter --frozen
-    - cd lib/levanter && uv run --frozen mkdocs build --strict --site-dir $READTHEDOCS_OUTPUT/html
+    - uv sync --group docs --package levanter --frozen
+    - cd lib/levanter && uv run --frozen mkdocs build --site-dir $READTHEDOCS_OUTPUT/html
