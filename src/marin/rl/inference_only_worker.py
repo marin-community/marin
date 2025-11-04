@@ -188,6 +188,7 @@ class InferenceOnlyWorker:
             sampling_params = SamplingParams(
                 temperature=1.0,
                 n=self.config.n_generations_per_prompt,
+                max_tokens=1024,
                 logprobs=1,  # Request logprobs for more realistic scenario
             )
             logger.info("Using dataset prompts with realistic generation (ignore_eos=False)")
