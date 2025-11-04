@@ -3,13 +3,13 @@ name: Build Docker Images
 on:
   # Manual trigger for on-demand builds
   workflow_dispatch:
-  # Auto-trigger on successful test runs from main
-  workflow_run:
-    workflows: ["Levanter - Tests", "Marin - Run unit tests"]
-    types:
-      - completed
-    branches: [main]
-  # Trigger on Docker file changes
+  # Scheduled builds
+  # Do not trigger too often because it can cause images that are still in use
+  # to get evicted due to the "last N most recent images" retention policy.
+  schedule:
+    - cron: '0 2 * * 0'  # Weekly: Sundays at 2 AM UTC for cluster images
+    - cron: '0 3 * * *'  # Daily: 3 AM UTC for TPU CI images
+  # Trigger on Docker file changes to main
   push:
     branches: [main]
     paths:
@@ -24,6 +24,8 @@ permissions:
 jobs:
   # Marin Cluster Images - Multi-region deployment images
   marin-cluster-images:
+    # Only run weekly (schedule) or manually (workflow_dispatch)
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 0'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -137,6 +139,8 @@ jobs:
 
   # Marin TPU CI Images - For self-hosted TPU CI runners
   marin-tpu-ci-images:
+    # Run daily (schedule), manually (workflow_dispatch), or on push
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 3 * * *' || github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -151,20 +155,12 @@ jobs:
           echo "DATE_TAG=`date -u +"%Y%m%d"`" >> "$GITHUB_OUTPUT"
           echo "HASH_TAG=`git rev-parse --short HEAD`" >> "$GITHUB_OUTPUT"
 
-      - name: Authenticate to Google Cloud
-        id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          token_format: access_token
-          credentials_json: ${{ secrets.GCP_ARTIFACT_REPOSITORY_SA_KEY }}
-          service_account: github-artifact-repository@hai-gcp-models.iam.gserviceaccount.com
-
-      - name: Login to Google Artifact Registry in us-central1
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          registry: us-central1-docker.pkg.dev
-          username: oauth2accesstoken
-          password: ${{ steps.auth.outputs.access_token }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push TPU CI image
         uses: docker/build-push-action@v6
@@ -172,9 +168,9 @@ jobs:
           push: true
           file: docker/marin/Dockerfile.tpu-ci
           tags: |
-            us-central1-docker.pkg.dev/hai-gcp-models/marin-ci/tpu-ci:latest
-            us-central1-docker.pkg.dev/hai-gcp-models/marin-ci/tpu-ci:${{ steps.set-tags.outputs.DATE_TAG }}
-            us-central1-docker.pkg.dev/hai-gcp-models/marin-ci/tpu-ci:${{ steps.set-tags.outputs.HASH_TAG }}
+            ghcr.io/marin-community/marin/tpu-ci:latest
+            ghcr.io/marin-community/marin/tpu-ci:${{ steps.set-tags.outputs.DATE_TAG }}
+            ghcr.io/marin-community/marin/tpu-ci:${{ steps.set-tags.outputs.HASH_TAG }}
 
   # Levanter TPU Base Image - Foundation for TPU deployments
   levanter-base-image:

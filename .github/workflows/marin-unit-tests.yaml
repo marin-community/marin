@@ -84,11 +84,9 @@ jobs:
           rm -f /tmp/libtpu_lockfile || true
           lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
 
-          # Detect the regional Docker image by parsing region from zone
-          ZONE=$(curl -sSf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/zone | cut -d/ -f4)
-          REGION=$(echo $ZONE | rev | cut -d- -f2- | rev)
-          DOCKER_IMAGE="$REGION-docker.pkg.dev/hai-gcp-models/marin-ci/tpu-ci:latest"
-          echo "Using Docker image: $DOCKER_IMAGE (zone: $ZONE, region: $REGION)"
+          # Use GitHub Container Registry image
+          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
+          echo "Using Docker image: $DOCKER_IMAGE"
 
           # Levanter likes to log to `logs/` and crashes if it can't write there
           # Pytest writes to the cache directory and creates noise warnings if it can't write there
