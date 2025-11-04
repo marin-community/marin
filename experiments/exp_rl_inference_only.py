@@ -27,6 +27,7 @@ import logging
 import ray
 from levanter.infra.ray_tpu import run_on_pod_ray
 
+from marin.rl.environments.math_env import MathEnv
 from marin.rl.inference_only_worker import InferenceOnlyConfig, InferenceOnlyWorker
 from marin.utils import remove_tpu_lockfile_on_exit
 
@@ -61,7 +62,14 @@ def main():
     #     wandb_tags=["vllm", "inference", "benchmark", "llama-3.2-1b", "v4-8"],
     # )
     
-    # Option 2: Realistic benchmark with dataset prompts
+    # Option 2: Realistic benchmark with env prompts
+    # Create MathEnv with train dataset
+    math_env = MathEnv(
+        train_source="di-zhang-fdu/MATH12000",  # or "HuggingFaceH4/MATH-500"
+        max_train_examples=10000,  # Optional limit
+        seed=42,
+    )
+    
     config = InferenceOnlyConfig(
         model_name="meta-llama/Llama-3.2-1B-Instruct",
         max_model_len=4096,
@@ -71,11 +79,9 @@ def main():
         n_generations_per_prompt=8,
         num_batches=100,
         log_freq=1,
-        # Dataset configuration (input_length/output_length ignored when dataset is set)
-        dataset="di-zhang-fdu/MATH12000",  # or "HuggingFaceH4/MATH-500"
-        dataset_split="train",
-        dataset_prompt_field="problem",
-        max_dataset_examples=10000,  # Optional limit
+        # Env configuration (input_length/output_length ignored when env is set)
+        env=math_env,
+        env_mode="train",  # Use 'train' or 'eval' mode
         wandb_project="vllm-inference-benchmark",
         wandb_run_name="llama-3.2-1b-v4-8-realistic",
         wandb_tags=["vllm", "inference", "benchmark", "llama-3.2-1b", "v4-8", "realistic"],
@@ -84,8 +90,9 @@ def main():
     logger.info("Starting vLLM inference-only benchmark on v4-8")
     logger.info(f"Model: {config.model_name}")
     logger.info(f"Tensor parallel size: {config.tensor_parallel_size}")
-    if config.dataset:
-        logger.info(f"Dataset: {config.dataset}")
+    if config.env:
+        logger.info(f"Env type: {type(config.env).__name__}")
+        logger.info(f"Env mode: {config.env_mode}")
     else:
         logger.info(f"Input length: {config.input_length}")
         logger.info(f"Output length: {config.output_length}")

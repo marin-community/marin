@@ -23,11 +23,12 @@ import logging
 import time
 from dataclasses import dataclass
 
-import datasets
 import numpy as np
 import wandb
 from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
+
+from marin.rl.environments.base import MarinEnv
 
 logger = logging.getLogger(__name__)
 
@@ -66,17 +67,11 @@ class InferenceOnlyConfig:
     log_freq: int = 10
     """Log metrics every N batches."""
 
-    dataset: str | None = None
-    """HuggingFace dataset path for realistic prompt sampling. If specified, input_length/output_length are ignored and ignore_eos is disabled."""
+    env: MarinEnv | None = None
+    """MarinEnv instance for realistic prompt sampling. If specified, input_length/output_length are ignored and ignore_eos is disabled."""
 
-    dataset_split: str = "train"
-    """Dataset split to use (e.g., 'train', 'test')."""
-
-    dataset_prompt_field: str = "problem"
-    """Field name in dataset containing the prompt text."""
-
-    max_dataset_examples: int | None = None
-    """Optional limit on number of examples to load from dataset."""
+    env_mode: str = "train"
+    """Mode to use when sampling from env ('train' or 'eval')."""
 
     wandb_project: str | None = None
     """WandB project name for logging. If None, wandb logging is disabled."""
@@ -95,27 +90,18 @@ class InferenceOnlyWorker:
         self.config = config
         logger.info(f"Initializing vLLM with model: {config.model_name}")
 
-        # Load dataset if specified
-        self.dataset_prompts = None
-        if config.dataset:
-            logger.info(f"Loading dataset: {config.dataset}")
-            dataset = datasets.load_dataset(config.dataset, trust_remote_code=True)
-            if isinstance(dataset, dict):
-                dataset_split = dataset.get(config.dataset_split) or dataset.get("train")
-            else:
-                dataset_split = dataset
+        # Load prompts from env if specified
+        self.env_prompts = None
+        if config.env:
+            logger.info(f"Loading prompts from MarinEnv (mode: {config.env_mode})")
+            examples = config.env.train_examples if config.env_mode == "train" else config.env.eval_examples
+            if not examples:
+                raise ValueError(f"No examples available for mode '{config.env_mode}'")
             
-            # Extract prompts from dataset
-            prompts = []
-            for idx, item in enumerate(dataset_split):
-                if config.dataset_prompt_field not in item:
-                    raise ValueError(f"Field '{config.dataset_prompt_field}' not found in dataset")
-                prompts.append(item[config.dataset_prompt_field])
-                if config.max_dataset_examples is not None and len(prompts) >= config.max_dataset_examples:
-                    break
-            
-            self.dataset_prompts = prompts
-            logger.info(f"Loaded {len(self.dataset_prompts)} prompts from dataset")
+            # Extract preprocessed prompts from env examples
+            # These prompts already have instructions added via env.add_instruction()
+            self.env_prompts = [example.processed_prompt for example in examples]
+            logger.info(f"Loaded {len(self.env_prompts)} preprocessed prompts from env")
 
         # Initialize wandb if configured
         if config.wandb_project:
@@ -129,9 +115,9 @@ class InferenceOnlyWorker:
                     "n_generations_per_prompt": config.n_generations_per_prompt,
                     "num_batches": config.num_batches,
                 }
-                if config.dataset:
-                    wandb_config["dataset"] = config.dataset
-                    wandb_config["dataset_split"] = config.dataset_split
+                if config.env:
+                    wandb_config["env_mode"] = config.env_mode
+                    wandb_config["env_type"] = type(config.env).__name__
                 else:
                     wandb_config["input_length"] = config.input_length
                     wandb_config["output_length"] = config.output_length
@@ -160,11 +146,19 @@ class InferenceOnlyWorker:
         logger.info("vLLM initialization complete")
 
     def _generate_prompts(self, batch_size: int) -> list[str]:
-        """Generate prompts either from dataset or random tokens."""
-        if self.dataset_prompts:
-            # Sample from dataset
-            indices = np.random.choice(len(self.dataset_prompts), size=batch_size, replace=True)
-            return [self.dataset_prompts[int(idx)] for idx in indices]
+        """Generate prompts either from env or random tokens."""
+        if self.env_prompts:
+            # Sample from env's preprocessed prompts
+            indices = np.random.choice(len(self.env_prompts), size=batch_size, replace=True)
+            prompts = [self.env_prompts[int(idx)] for idx in indices]
+            # Apply chat template to preprocessed prompts from env
+            prompts_with_templates = [
+                self.tokenizer.apply_chat_template(
+                    [{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True
+                )
+                for prompt in prompts
+            ]
+            return prompts_with_templates
         else:
             # Generate random token sequences
             prompts = []
@@ -182,8 +176,8 @@ class InferenceOnlyWorker:
         """Run inference-only benchmark."""
         logger.info("Starting inference-only benchmark...")
 
-        # Create sampling params - adjust based on dataset usage
-        if self.dataset_prompts:
+        # Create sampling params - adjust based on env usage
+        if self.env_prompts:
             # Realistic generation: let model stop at EOS
             sampling_params = SamplingParams(
                 temperature=1.0,
@@ -191,7 +185,7 @@ class InferenceOnlyWorker:
                 max_tokens=1024,
                 logprobs=1,  # Request logprobs for more realistic scenario
             )
-            logger.info("Using dataset prompts with realistic generation (ignore_eos=False)")
+            logger.info("Using env prompts with realistic generation (ignore_eos=False)")
         else:
             # Synthetic benchmark: always generate output_length tokens
             sampling_params = SamplingParams(
@@ -227,10 +221,13 @@ class InferenceOnlyWorker:
             total_time += batch_time
             batch_times.append(batch_time)
 
-            prompt_lengths = [len(self.tokenizer.encode(prompt)) for prompt in prompts]
-            avg_prompt_len = sum(prompt_lengths) / len(prompt_lengths) if prompt_lengths else 0
+            num_inputs = len(prompts) * self.config.n_generations_per_prompt
+            assert num_inputs == sum(len(output.outputs) for output in outputs)
 
-            avg_output_len = tokens_in_batch / len(prompt_lengths)
+            prompt_lengths = [len(self.tokenizer.encode(prompt)) for prompt in prompts]
+            avg_prompt_len = sum(prompt_lengths) / num_inputs
+
+            avg_output_len = tokens_in_batch / num_inputs
 
             # Log periodically
             if (batch_idx + 1) % self.config.log_freq == 0:
@@ -274,9 +271,10 @@ class InferenceOnlyWorker:
         logger.info("\n" + "=" * 80)
         logger.info("Inference Benchmark Results:")
         logger.info(f"  Model: {self.config.model_name}")
-        if self.dataset_prompts:
-            logger.info(f"  Dataset: {self.config.dataset}")
-            logger.info(f"  Dataset size: {len(self.dataset_prompts)}")
+        if self.env_prompts:
+            logger.info(f"  Env type: {type(self.config.env).__name__}")
+            logger.info(f"  Env mode: {self.config.env_mode}")
+            logger.info(f"  Env prompts: {len(self.env_prompts)}")
         else:
             logger.info(f"  Input length: {self.config.input_length}")
             logger.info(f"  Output length: {self.config.output_length}")
@@ -313,9 +311,10 @@ class InferenceOnlyWorker:
             "avg_throughput": avg_throughput,
             "avg_batch_time": avg_batch_time,
         }
-        if self.dataset_prompts:
-            results["dataset"] = self.config.dataset
-            results["dataset_size"] = len(self.dataset_prompts)
+        if self.env_prompts:
+            results["env_type"] = type(self.config.env).__name__
+            results["env_mode"] = self.config.env_mode
+            results["env_prompts"] = len(self.env_prompts)
         else:
             results["input_length"] = self.config.input_length
             results["output_length"] = self.config.output_length

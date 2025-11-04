@@ -46,7 +46,7 @@ except ImportError:
 os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 # Init vLLM model with random weights to speed up bootstrap time, because
 # model weights are synced from trainer later on
-os.environ["JAX_RANDOM_WEIGHTS"] = "True"
+# os.environ["JAX_RANDOM_WEIGHTS"] = "True"
 
 
 @dataclass
