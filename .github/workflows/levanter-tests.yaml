@@ -147,6 +147,9 @@ jobs:
           DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
           echo "Using Docker image: $DOCKER_IMAGE"
 
+          # Create persistent uv cache directory on host
+          mkdir -p /var/cache/uv
+
           # Run Levanter tests with specific JAX version
           docker run --rm \
             --device /dev/vfio:/dev/vfio \
@@ -163,10 +166,12 @@ jobs:
             -e TPU_MIN_LOG_LEVEL=3 \
             -e PYTHONPATH=/workspace \
             -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \
+            -e UV_CACHE_DIR=/opt/uv-cache \
             -e HF_TOKEN \
             -e WANDB_API_KEY \
             -e WANDB_MODE=offline \
             -v ${{ github.workspace }}:/workspace:rw \
+            -v /var/cache/uv:/opt/uv-cache:rw \
             --tmpfs /workspace/logs:rw \
             --tmpfs /workspace/.pytest_cache:rw \
             -w /workspace \
