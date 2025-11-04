@@ -1,4 +1,4 @@
-name: Launch Llama 2 Small Fast
+name: Levanter - Launch Llama 2 Small Fast
 
 on:
   workflow_run:
@@ -16,6 +16,9 @@ jobs:
     env:
       TPU_ZONE: "us-central2-b"
       TPU_TYPE: "v4-32"
+    defaults:
+      run:
+        working-directory: lib/levanter
 
     steps:
       - name: Checkout code

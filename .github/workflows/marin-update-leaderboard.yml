@@ -1,4 +1,4 @@
-name: Update speedrun leaderboard
+name: Marin - Update speedrun leaderboard
 
 on:
   workflow_dispatch:

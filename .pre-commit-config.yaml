@@ -15,6 +15,7 @@ repos:
     hooks:
       - id: insert-license  # Insert a short license disclaimer as a header comment in source files
         files: \.py$
+        exclude: ^lib/levanter/
         args:
           - --license-filepath
           - etc/license_header.txt
@@ -24,6 +25,11 @@ repos:
     rev: 25.1.0
     hooks:
       - id: black
+        exclude: ^lib/levanter/
+      - id: black
+        name: black (levanter)
+        files: ^lib/levanter/
+        args: ["--config", "lib/levanter/pyproject.toml"]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0

@@ -1,4 +1,4 @@
-name: Compute metrics
+name: Marin - Compute metrics
 
 on:
   schedule:

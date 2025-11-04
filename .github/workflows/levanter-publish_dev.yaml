@@ -1,4 +1,4 @@
-name: Publish Dev Build
+name: Levanter - Publish Dev Build
 
 on:
   workflow_run:
@@ -12,6 +12,9 @@ jobs:
   build-package:
     runs-on: ubuntu-latest
     if: ${{  github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'}}
+    defaults:
+      run:
+        working-directory: lib/levanter
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -54,6 +57,9 @@ jobs:
         - build-package
     permissions:
       id-token: write
+    defaults:
+      run:
+        working-directory: lib/levanter
     steps:
       - name: Retrieve release distributions
         uses: actions/download-artifact@v4

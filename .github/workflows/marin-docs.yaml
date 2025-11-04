@@ -1,4 +1,4 @@
-name: Build documentation
+name: Marin - Build documentation
 
 on:
   push:
