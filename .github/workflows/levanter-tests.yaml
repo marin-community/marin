@@ -147,6 +147,9 @@ jobs:
           DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
           echo "Using Docker image: $DOCKER_IMAGE"
 
+          # Create UV cache directory
+          mkdir -p ${{ github.workspace }}/.uv-cache
+
           # Run Levanter tests with specific JAX version
           docker run --rm \
             --device /dev/vfio:/dev/vfio \
