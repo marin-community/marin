@@ -144,6 +144,7 @@ def main(config: TrainASRConfig):
         if int(state.step) == 0:
             # TODO: I don't love that we init the model twice, but it's not a big deal i think?
             if config.initialize_from_hf:
+                assert converter is not None
                 # initialize from an hf pretrained model
                 logger.info(
                     "No training checkpoint found. Initializing model from HF checkpoint"
@@ -175,6 +176,7 @@ def main(config: TrainASRConfig):
 
         trainer.add_hook(callbacks.log_performance_stats(Pos.size, trainer.config.train_batch_size), every=1)
         if config.hf_save_path is not None:
+            assert converter is not None, "converter must be set when saving HF checkpoints"
             full_save_path = os.path.join(config.hf_save_path, trainer.run_id)
 
             trainer.add_hook(
