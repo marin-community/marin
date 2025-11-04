@@ -441,6 +441,24 @@ def run_cleanup(ctx, dry_run):
                 for error in stats.errors[:5]:  # Show first 5 errors
                     print(f"    - {error}")
 
+            # Display disk usage results
+            if results.disk_usage_check:
+                disk_stats = results.disk_usage_check
+                print(f"\nDisk Usage Check:")
+                print(f"  Workers checked: {disk_stats.workers_checked}")
+                print(f"  Workers with low disk: {disk_stats.workers_with_low_disk}")
+                if disk_stats.low_disk_workers:
+                    print(f"  Low disk workers:")
+                    for worker in disk_stats.low_disk_workers[:5]:  # Show first 5
+                        print(f"    - {worker.node_ip}: {worker.disk_free_pct:.2f}% free")
+                if disk_stats.errors:
+                    print(f"  Errors: {len(disk_stats.errors)}")
+
+            # Display terminated workers
+            if results.low_disk_terminated:
+                print(f"\nTerminated Workers (low disk):")
+                print(f"  {len(results.low_disk_terminated)} TPUs terminated: {results.low_disk_terminated}")
+
 
 # Top-level commands
 @cli.command("add-worker")
