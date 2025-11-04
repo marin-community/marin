@@ -7,7 +7,7 @@ on:
   # Do not trigger too often because it can cause images that are still in use
   # to get evicted due to the "last N most recent images" retention policy.
   schedule:
-    - cron: '0 2 * * 0'  # Weekly: Sundays at 2 AM UTC for cluster images
+    - cron: '0 2 * * 0'  # Weekly: Sundays at 2 AM UTC for cluster images and Levanter
     - cron: '0 3 * * *'  # Daily: 3 AM UTC for TPU CI images
   # Trigger on Docker file changes to main
   push:
@@ -24,8 +24,10 @@ permissions:
 jobs:
   # Marin Cluster Images - Multi-region deployment images
   marin-cluster-images:
-    # Only run weekly (schedule) or manually (workflow_dispatch)
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 0'
+    # Run on: manual trigger OR weekly schedule (02:00 UTC on Sundays)
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -115,19 +117,17 @@ jobs:
             us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
             us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
-          python-version: '3.11'
-
-      - name: Install Python dependencies
-        run: pip install pyyaml jinja2
+          version: "0.7.20"
+          enable-cache: true
 
       - name: Update Docker image tag in cluster config script
         run: sed -i -E 's/LATEST = "[a-z0-9]+"/LATEST = "${{ steps.set-tags.outputs.HASH_TAG }}"/' lib/marin/src/marin/cluster/config.py
 
       - name: Generate cluster configs
-        run: python infra/update-cluster-configs.py
+        run: uv run scripts/ray/cluster.py update-configs
 
       - name: Create pull request
         uses: peter-evans/create-pull-request@v6
@@ -139,8 +139,11 @@ jobs:
 
   # Marin TPU CI Images - For self-hosted TPU CI runners
   marin-tpu-ci-images:
-    # Run daily (schedule), manually (workflow_dispatch), or on push
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 3 * * *' || github.event_name == 'push'
+    # Run on: manual trigger OR daily schedule (03:00 UTC) OR push to docker files
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 3 * * *')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -174,6 +177,10 @@ jobs:
 
   # Levanter TPU Base Image - Foundation for TPU deployments
   levanter-base-image:
+    # Run on: manual trigger OR weekly schedule (02:00 UTC on Sundays)
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -181,13 +188,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
       - name: Cache Docker layers
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
           key: ${{ runner.os }}-buildx-${{ github.sha }}
@@ -199,7 +206,7 @@ jobs:
         run: echo "DATE=$(date +'%Y%m%d')" >> $GITHUB_ENV
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -211,6 +218,10 @@ jobs:
 
   # Levanter TPU Incremental Image - Optimized TPU runtime
   levanter-tpu-image:
+    # Run on: manual trigger OR weekly schedule (02:00 UTC on Sundays)
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
     needs: levanter-base-image
     defaults:
@@ -219,13 +230,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
       - name: Cache Docker layers
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
           key: ${{ runner.os }}-buildx-${{ github.sha }}
@@ -237,7 +248,7 @@ jobs:
         run: echo "DATE=$(date +'%Y%m%d')" >> $GITHUB_ENV
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -249,6 +260,10 @@ jobs:
 
   # Levanter Cluster Image - For cluster deployments
   levanter-cluster-image:
+    # Run on: manual trigger OR weekly schedule (02:00 UTC on Sundays)
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
     needs: levanter-tpu-image
     defaults:
@@ -257,13 +272,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
       - name: Cache Docker layers
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
           key: ${{ runner.os }}-buildx-${{ github.sha }}
@@ -275,7 +290,7 @@ jobs:
         run: echo "DATE=$(date +'%Y%m%d')" >> $GITHUB_ENV
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

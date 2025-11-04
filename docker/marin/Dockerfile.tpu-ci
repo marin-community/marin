@@ -49,7 +49,6 @@ COPY --chown=${RUNNER_USER}:${RUNNER_USER} pyproject.toml uv.lock LICENSE README
 COPY --chown=${RUNNER_USER}:${RUNNER_USER} lib /opt/marin/lib
 WORKDIR /opt/marin
 
-# Install both Marin and Levanter with TPU dependencies for comprehensive testing
-RUN uv sync --frozen --extra tpu --extra gcp
+RUN uv sync --frozen --all-packages --extra tpu --extra gcp
 
 # The entrypoint will be set by the Github runner
