@@ -1,0 +1,13 @@
+{
+    "name": "Levanter on NVIDIA",
+    "image": "nvcr.io/nvidia/jax:25.01-py3",
+    "runArgs": [
+        "--gpus",
+        "all",
+        "--network",
+        "host",
+        "--shm-size",
+        "16G"
+    ],
+    "postCreateCommand": ".devcontainer/nvidia/post-create.sh"
+}

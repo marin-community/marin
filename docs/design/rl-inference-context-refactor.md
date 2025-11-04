@@ -58,7 +58,7 @@ rollout = inference_ctx.create_rollout_from_choice(
 
 ### Core Methods
 
-Add to `InferenceContext` class in `src/marin/rl/inference_ctx.py`:
+Add to `InferenceContext` class in `lib/marin/src/marin/rl/inference_ctx.py`:
 
 ```python
 def tokenize_prompt(self, prompt: str) -> np.ndarray:
@@ -128,7 +128,7 @@ def create_rollout_from_choice(
 
 ### Module Consolidation
 
-Rename `src/marin/rl/types.py` → split into:
+Rename `lib/marin/src/marin/rl/types.py` → split into:
 - `inference_ctx.py` - `InferenceContext`, `InferenceChoice`, `InferenceResponse`, utility functions
 - `types.py` - `Rollout`, `RolloutGroup`, `RolloutBatch`, `TrainingBatch` (training-focused types)
 
@@ -165,6 +165,6 @@ No breaking changes. All modifications are additions to `InferenceContext` class
 ## See Also
 
 - GitHub Issue: https://github.com/marin-community/marin/issues/1744
-- `src/marin/rl/inference_ctx.py` - Consolidated inference utilities (lines 38-192)
-- `src/marin/rl/types.py` - Training-focused types (Rollout, RolloutBatch)
-- `src/marin/rl/environments/prime_intellect_env.py` - Fixed at line 141
+- `lib/marin/src/marin/rl/inference_ctx.py` - Consolidated inference utilities (lines 38-192)
+- `lib/marin/src/marin/rl/types.py` - Training-focused types (Rollout, RolloutBatch)
+- `lib/marin/src/marin/rl/environments/prime_intellect_env.py` - Fixed at line 141
