@@ -299,6 +299,7 @@ class RolloutWorker:
 
         logger.info("Initializing policy model from initial checkpoint")
         self._policy_model = initial_model
+        self._policy_ctx.reload_model(self._policy_model)
 
     def stop(self):
         """Stop the inference worker loop and server."""
