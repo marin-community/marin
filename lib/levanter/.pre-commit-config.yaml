@@ -43,6 +43,6 @@ repos:
     hooks:
       - id: mypy
         files: ^lib/levanter/
-        args: [--ignore-missing-imports]
+        args: [--ignore-missing-imports, --python-version=3.11]
         exclude: ^tests/
         additional_dependencies: [wandb==0.17.8, types-PyYAML]
