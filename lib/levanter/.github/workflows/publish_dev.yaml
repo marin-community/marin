@@ -1,0 +1,67 @@
+name: Publish Dev Build
+
+on:
+  workflow_run:
+    workflows: ["Run Tests"]
+    types:
+      - completed
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-package:
+    runs-on: ubuntu-latest
+    if: ${{  github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'}}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.x'
+
+      - name: Calculate Version and Build Number
+        run: |
+          PROJECT_VERSION=$(sed -n 's/__version__ = "\(.*\)"/\1/p' src/levanter/__init__.py)
+          BUILD_NUMBER=$(git rev-list --count HEAD)
+          FULL_VERSION="${PROJECT_VERSION}.dev${BUILD_NUMBER}"
+          echo "FULL_VERSION=${FULL_VERSION}" >> $GITHUB_ENV
+          echo "Calculated version with build number: $FULL_VERSION"
+      - name: Update pyproject.toml version
+        run: |
+          # replace the version in pyproject.toml
+           sed -i "s/version = \".*\"/version = \"$FULL_VERSION\"/g" pyproject.toml
+
+      - name: Build package
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+          python -m build
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: dist/
+
+
+  # cf https://test.pypi.org/manage/project/levanter/settings/publishing/
+  publish-dev:
+    runs-on: ubuntu-latest
+    needs:
+        - build-package
+    permissions:
+      id-token: write
+    steps:
+      - name: Retrieve release distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: package
+          path: dist/
+
+      - name: Publish release distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+

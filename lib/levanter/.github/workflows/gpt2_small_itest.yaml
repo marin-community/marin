@@ -1,0 +1,83 @@
+name: GPT-2 Small Integration Test
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Docker TPU Images"]
+    types:
+      - completed
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  integration_test:
+    runs-on: ubuntu-latest
+    env:
+      TPU_ZONE: "us-central2-b" # Matching the launch script
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3 # Use a more recent version
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Google Cloud
+        run: |
+          gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          python-version-file: "pyproject.toml"
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install
+      - name: Create virtual environment
+        run: uv venv
+      - name: Install dependencies
+        run: uv pip install -e .
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.DOCKER_PUSH_TOKEN }}
+
+      - name: Run GPT-2 Small Integration Test
+        run: |
+          # The launch script handles TPU creation and deletion
+          uv run python infra/launch.py --foreground --tpu_name levanter-itest-${{ github.run_id }} \
+              --zone us-central2-b --tpu_type v4-32 --preemptible \
+              --run_id ${{ github.run_id }} \
+              --docker_registry ghcr --github_user ${{ github.actor }} \
+              python -m levanter.main.train_lm \
+              --config_path config/llama_small_fast_itest.yaml \
+              --trainer.checkpointer.base_path gs://levanter-checkpoints/gpt-itest/ --trainer.checkpointer.save_interval 30m $*
+        env:
+          USER: ci-runner-${{ github.run_id }} # Set a unique user for TPU naming in the script
+          GITHUB_DOCKER_TOKEN: ${{ secrets.DOCKER_PUSH_TOKEN }} # Required for the script to access GitHub resources
+          # Ensure other necessary env vars for the script are set if any
+
+      # infra/launch.py with --foreground should handle cleanup.
+      # If not, a manual cleanup step would be needed here similar to tpu_unit_tests.yaml,
+      # but it would need to know the TPU_NAME used by launch.py.
+      # For now, relying on launch.py for cleanup.
+      # - name: Cleanup TPU
+      #   if: ${{ always() }}
+      #   run: |
+      #     # This would require launch.py to output the TPU name or use a predictable one
+      #     # For example, if TPU_NAME was consistently $(whoami)-levanter-itest-32 as in the script
+      #     TPU_NAME_IN_SCRIPT="ci-runner-${{ github.run_id }}-levanter-itest-32"
+      #     echo "Attempting to delete TPU: $TPU_NAME_IN_SCRIPT in zone ${TPU_ZONE}"
+      #     gcloud compute tpus tpu-vm delete $TPU_NAME_IN_SCRIPT --zone ${TPU_ZONE} --quiet || echo "TPU deletion failed or TPU did not exist."
+
