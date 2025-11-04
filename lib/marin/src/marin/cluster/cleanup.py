@@ -492,7 +492,16 @@ def submit_cleanup_cron_job(
             check=True,
         )
 
-    entrypoint = f"PYTHONPATH=src/ python ./scripts/ray/cleanup_tpus.py --project {project} --zone {zone} --interval {interval} --disk-threshold {disk_threshold_pct}"
+    entrypoint = " ".join(
+        [
+            "PYTHONPATH=src/",
+            "python",
+            "./scripts/ray/cleanup_tpus.py",
+            f"--project {project}" f"--zone {zone}",
+            f"--interval {interval}",
+            f"--disk-threshold {disk_threshold_pct}",
+        ]
+    )
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     submission_id = f"{CLEANUP_JOB_PREFIX}-{timestamp}"
