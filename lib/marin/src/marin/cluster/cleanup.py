@@ -39,6 +39,16 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class WorkerTaskResult:
+    """Result from running tasks across workers."""
+
+    workers_targeted: int
+    workers_completed: int
+    results: list[tuple[str, Any]] = field(default_factory=list)  # (resource_name, return_value) pairs
+    errors: list[str] = field(default_factory=list)
+
+
+@dataclass
 class TpuCleanupResult:
     """Result of cleaning TPU processes on workers."""
 
@@ -112,6 +122,55 @@ def get_tpu_worker_resources() -> dict[str, int]:
         logger.error(f"Failed to get TPU worker resources: {e}")
 
     return worker_resources
+
+
+def run_task_on_workers(task_fn: Callable, timeout: int = 60) -> WorkerTaskResult:
+    """Run a Ray remote task on all TPU workers and collect results.
+
+    Args:
+        task_fn: Ray remote function to run on each worker
+        timeout: Timeout in seconds for waiting on tasks
+
+    Returns:
+        WorkerTaskResult with results from completed tasks
+    """
+    worker_resources = get_tpu_worker_resources()
+
+    if not worker_resources:
+        logger.info("No TPU workers found")
+        return WorkerTaskResult(workers_targeted=0, workers_completed=0)
+
+    # Schedule task on each worker using its specific resource
+    futures = {}
+    for resource_name, count in worker_resources.items():
+        for i in range(int(count)):
+            task = task_fn.options(
+                resources={resource_name: 1},
+                enable_task_events=False,
+                retry_exceptions=False,
+            ).remote()
+            futures[f"{resource_name}:{i}"] = task
+
+    result = WorkerTaskResult(workers_targeted=len(worker_resources), workers_completed=0)
+    ready, not_ready = ray.wait(list(futures.values()), num_returns=len(futures), timeout=timeout)
+
+    # Collect results from completed tasks
+    for resource_name, future in futures.items():
+        if future in ready:
+            try:
+                value = ray.get(future)
+                result.results.append((resource_name, value))
+                result.workers_completed += 1
+            except Exception as e:
+                result.errors.append(f"{resource_name}: {e}")
+        elif future in not_ready:
+            result.errors.append(f"{resource_name}: Timed out after {timeout} seconds")
+
+    # Cancel incomplete tasks
+    for task in not_ready:
+        ray.cancel(task, force=True)
+
+    return result
 
 
 def cleanup_tpu_processes() -> TpuCleanupResult:
@@ -230,46 +289,22 @@ def check_worker_disk_usage(disk_threshold_pct: float = 1.0) -> DiskUsageResult:
         DiskUsageResult with workers that have low disk space
     """
     logger.info("Checking disk usage on workers")
-    worker_resources = get_tpu_worker_resources()
+    task_result = run_task_on_workers(_check_worker_disk_usage)
 
-    if not worker_resources:
-        logger.info("No TPU workers found for disk check")
-        return DiskUsageResult(workers_checked=0, workers_with_low_disk=0)
-
-    # Schedule disk check task on each worker
-    futures = {}
-    for resource_name, count in worker_resources.items():
-        for i in range(int(count)):
-            task = _check_worker_disk_usage.options(
-                resources={resource_name: 1},
-                enable_task_events=False,
-                retry_exceptions=False,
-            ).remote()
-            futures[f"{resource_name}:{i}"] = task
-
-    result = DiskUsageResult(workers_checked=len(worker_resources), workers_with_low_disk=0)
-    ready, not_ready = ray.wait(list(futures.values()), num_returns=len(futures), timeout=60)
+    result = DiskUsageResult(
+        workers_checked=task_result.workers_targeted, workers_with_low_disk=0, errors=task_result.errors
+    )
 
     # Process disk usage results
-    for resource_name, future in futures.items():
-        if future in ready:
-            try:
-                disk_info_dict = ray.get(future)
-                # Convert dict to DiskUsageInfo
-                disk_info_dict["resource_name"] = resource_name.split(":")[0]
-                disk_info = DiskUsageInfo(**disk_info_dict)
+    for resource_name, disk_info_dict in task_result.results:
+        # Convert dict to DiskUsageInfo
+        disk_info_dict["resource_name"] = resource_name.split(":")[0]
+        disk_info = DiskUsageInfo(**disk_info_dict)
 
-                if disk_info.disk_free_pct < disk_threshold_pct:
-                    result.low_disk_workers.append(disk_info)
-                    result.workers_with_low_disk += 1
-                    logger.warning(f"Worker {resource_name} has low disk space: {disk_info.disk_free_pct:.2f}% free")
-            except Exception as e:
-                result.errors.append(f"{resource_name}: {e}")
-        elif future in not_ready:
-            result.errors.append(f"{resource_name}: Timed out after 60 seconds")
-
-    for task in not_ready:
-        ray.cancel(task, force=True)
+        if disk_info.disk_free_pct < disk_threshold_pct:
+            result.low_disk_workers.append(disk_info)
+            result.workers_with_low_disk += 1
+            logger.warning(f"Worker {resource_name} has low disk space: {disk_info.disk_free_pct:.2f}% free")
 
     logger.info(f"Disk usage check: {result.workers_with_low_disk}/{result.workers_checked} workers with low disk")
     if result.errors:
