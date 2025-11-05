@@ -3,6 +3,14 @@ set -e
 
 echo "Cleaning up TPU resources..."
 
+# Stop and remove any leftover test containers
+if command -v docker &> /dev/null; then
+  echo "Cleaning up Docker containers..."
+  # Kill any running tpu-ci test containers
+  docker ps -q --filter "ancestor=ghcr.io/marin-community/marin/tpu-ci:latest" | xargs -r docker kill || true
+  docker ps -aq --filter "ancestor=ghcr.io/marin-community/marin/tpu-ci:latest" | xargs -r docker rm -f || true
+fi
+
 # Remove TPU lockfile and logs directory
 rm -f /tmp/libtpu_lockfile || true
 rm -rf /tmp/tpu_logs || true
