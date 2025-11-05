@@ -120,7 +120,7 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --frozen --extra torch_test_cpu --extra cpu
+        run: uv sync --package levanter --dev --frozen --extra torch_test
 
       - name: Force CPU torch wheel
         run: |
