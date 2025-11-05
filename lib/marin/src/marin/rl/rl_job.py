@@ -20,6 +20,8 @@ and infrastructure concerns, letting users focus on the RL algorithm and hyperpa
 """
 
 import dataclasses
+import hashlib
+import json
 import logging
 import os
 import uuid
@@ -271,6 +273,17 @@ class RLJob:
         max_tokens = self.config.curriculum.max_tokens
         assert max_tokens > 0, "Max tokens must be positive across curriculum lessons."
 
+        # create a unique name for the weight-transfer coordinator based on our config hash
+        # this ensures we get the same name across multiple calls
+        config_json = json.dumps(dataclasses.asdict(self.config.weight_transfer), sort_keys=True)
+        config_hash = hashlib.md5(config_json.encode("utf-8")).hexdigest()[:8]
+
+        weight_transfer_coordinator_name = f"wt-coord-{config_hash}"
+        weight_transfer_config = dataclasses.replace(
+            self.config.weight_transfer,
+            coordinator_name=weight_transfer_coordinator_name,
+        )
+
         # Create inference server config if not provided
         if self.config.inference_server_config is None:
             inference_server_config = InferenceServerConfig(
@@ -297,7 +310,7 @@ class RLJob:
         # Create train worker config
         train_worker_config = TrainWorkerConfig(
             rollout_storage=self.config.rollout_storage,
-            weight_transfer=self.config.weight_transfer,
+            weight_transfer=weight_transfer_config,
             model=self.config.model,
             trainer=self.config.trainer,
             optimizer=self.config.train_params.optimizer,
@@ -320,7 +333,7 @@ class RLJob:
             log_freq=self.config.log_freq,
             max_rollouts=None,  # Run indefinitely by default
             initial_checkpoint=self.config.initial_checkpoint,
-            weight_transfer=self.config.weight_transfer,
+            weight_transfer=weight_transfer_config,
             rollout_storage=self.config.rollout_storage,
             run_id=self.config.run_id,
             seed=self.config.seed + 1000,

@@ -43,8 +43,6 @@ import jax
 import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
-import ray
-import ray.actor
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree
@@ -373,6 +371,7 @@ class ArrowFlightServer(WeightTransferServer):
 
         self.metrics = WeightTransferServerMetrics()
         self._coordinator = RobustActor.create(ArrowFlightCoordinator, actor_name=self.config.coordinator_name)
+        logger.info("Started Arrow Flight weight transfer with config: %s", self.config)
 
     def serve_weights(self, weight_id: int, model: PyTree) -> None:
         """Serve weights via Arrow Flight using Haliax state_dict serialization.
@@ -449,7 +448,7 @@ class ArrowFlightClient(WeightTransferClient):
     _flight_clients: list[flight.FlightClient]
     _server_locations: list[str]
     metrics: WeightTransferClientMetrics
-    _coordinator: ray.actor.ActorHandle
+    _coordinator: RobustActor
     _receive_pool: ThreadPoolExecutor
 
     def __init__(
