@@ -1,5 +1,5 @@
 # TPU CI Docker Image
-# Sets up the initial dependencies in UV and all required packages to run Marin TPU tests.
+# Provides a clean environment with Python and uv for running Marin and Levanter tests.
 
 FROM ubuntu:22.04
 
@@ -24,30 +24,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 
-ENV JAX_PLATFORMS=tpu
+ENV JAX_PLATFORMS=tpu,cpu
 ENV PJRT_DEVICE=TPU
 
-ARG RUNNER_VERSION=2.321.0
-WORKDIR /actions-runner
-
-RUN curl -o actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
-    -L https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
-    && tar xzf actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
-    && rm actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
-    && chown -R ${RUNNER_USER}:${RUNNER_USER} /actions-runner
-
-RUN /actions-runner/bin/installdependencies.sh
-
-RUN mkdir -p /opt/marin && chown -R ${RUNNER_USER}:${RUNNER_USER} /opt/marin
-
 USER ${RUNNER_USER}
-ENV PATH="/home/${RUNNER_USER}/.local/bin:${PATH}"
 
+# Install uv to /usr/local/bin so it's available for all users
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
-COPY --chown=${RUNNER_USER}:${RUNNER_USER} pyproject.toml uv.lock LICENSE README.md /opt/marin/
-WORKDIR /opt/marin
+ENV PATH="/home/${RUNNER_USER}/.uv/bin:/home/${RUNNER_USER}/.local/bin/:${PATH}"
 
-RUN uv sync --frozen --extra tpu --extra gcp
+WORKDIR /workspace
 
-# The entrypoint will be set by the Github runner
+# Pre-create directories for tmpfs mounts (needed when workspace is mounted read-only)
+RUN mkdir -p /workspace/.venv /workspace/logs /workspace/.pytest_cache

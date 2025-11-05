@@ -2,7 +2,7 @@ name: Levanter - Launch Llama 2 Small Fast
 
 on:
   workflow_run:
-    workflows: ["Build and Push Docker TPU Images"]
+    workflows: ["Build Docker Images"]
     types:
       - completed
     branches: [main, "experiment/*"]

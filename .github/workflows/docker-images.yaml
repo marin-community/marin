@@ -1,0 +1,294 @@
+name: Build Docker Images
+
+on:
+  # enable manual trigger 
+  workflow_dispatch:
+  # Scheduled builds
+  # Do not trigger too often because it can cause images that are still in use
+  # to get evicted due to the "last N most recent images" retention policy.
+  schedule:
+    - cron: '0 2 * * 0'  # Weekly: Sundays at 2 AM UTC for cluster images and Levanter
+    - cron: '0 3 * * *'  # Daily: 3 AM UTC for TPU CI images
+
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+
+jobs:
+  marin-cluster-images:
+    # Run on: manual trigger OR weekly schedule (02:00 UTC on Sundays)
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: 'actions/checkout@v4'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set tags
+        id: set-tags
+        run: |
+          echo "DATE_TAG=`date -u +"%Y%m%d"`" >> "$GITHUB_OUTPUT"
+          echo "HASH_TAG=`git rev-parse --short HEAD`" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          token_format: access_token
+          credentials_json: ${{ secrets.GCP_ARTIFACT_REPOSITORY_SA_KEY }}
+          service_account: github-artifact-repository@hai-gcp-models.iam.gserviceaccount.com
+
+      - name: Login to Google Artifact Registry in europe-west4
+        uses: docker/login-action@v3
+        with:
+          registry: europe-west4-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Login to Google Artifact Registry in us-central1
+        uses: docker/login-action@v3
+        with:
+          registry: us-central1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Login to Google Artifact Registry in us-central2
+        uses: docker/login-action@v3
+        with:
+          registry: us-central2-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Login to Google Artifact Registry in us-east1
+        uses: docker/login-action@v3
+        with:
+          registry: us-east1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Login to Google Artifact Registry in us-east5
+        uses: docker/login-action@v3
+        with:
+          registry: us-east5-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Login to Google Artifact Registry in us-west4
+        uses: docker/login-action@v3
+        with:
+          registry: us-west4-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Build and push Marin cluster image
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          file: docker/marin/Dockerfile.cluster
+          tags: |
+            europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
+            europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
+            europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
+            us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
+            us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
+            us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
+            us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
+            us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
+            us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
+            us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
+            us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
+            us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
+            us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
+            us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
+            us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
+            us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
+            us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
+            us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          enable-cache: true
+
+      - name: Update Docker image tag in cluster config script
+        run: sed -i -E 's/LATEST = "[a-z0-9]+"/LATEST = "${{ steps.set-tags.outputs.HASH_TAG }}"/' lib/marin/src/marin/cluster/config.py
+
+      - name: Generate cluster configs
+        run: uv run scripts/ray/cluster.py update-configs
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: Update Docker image tag
+          title: Update Docker image tag
+          branch: actions/update-docker-image-tag
+          body: Auto-generated from GitHub Actions.
+
+  # Marin TPU CI Images - For self-hosted TPU CI runners
+  marin-tpu-ci-images:
+    # Run on: manual trigger OR daily schedule (03:00 UTC) OR push to docker files
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 3 * * *')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: 'actions/checkout@v4'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set tags
+        id: set-tags
+        run: |
+          echo "DATE_TAG=`date -u +"%Y%m%d"`" >> "$GITHUB_OUTPUT"
+          echo "HASH_TAG=`git rev-parse --short HEAD`" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push TPU CI image
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          file: docker/marin/Dockerfile.tpu-ci
+          tags: |
+            ghcr.io/marin-community/marin/tpu-ci:latest
+            ghcr.io/marin-community/marin/tpu-ci:${{ steps.set-tags.outputs.DATE_TAG }}
+            ghcr.io/marin-community/marin/tpu-ci:${{ steps.set-tags.outputs.HASH_TAG }}
+
+  # Levanter TPU Base Image - Foundation for TPU deployments
+  levanter-base-image:
+    # Run on: manual trigger OR weekly schedule (02:00 UTC on Sundays)
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lib/levanter
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Get current date
+        id: date
+        run: echo "DATE=$(date +'%Y%m%d')" >> $GITHUB_ENV
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Levanter base image
+        run: |
+          docker buildx build --file docker/tpu/Dockerfile.base --tag ghcr.io/${{ github.repository }}-base:latest --tag ghcr.io/${{ github.repository }}-base:${{ env.DATE }} --push .
+
+  # Levanter TPU Incremental Image - Optimized TPU runtime
+  levanter-tpu-image:
+    # Run on: manual trigger OR weekly schedule (02:00 UTC on Sundays)
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
+    runs-on: ubuntu-latest
+    needs: levanter-base-image
+    defaults:
+      run:
+        working-directory: lib/levanter
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Get current date
+        id: date
+        run: echo "DATE=$(date +'%Y%m%d')" >> $GITHUB_ENV
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Levanter TPU image
+        run: |
+          docker buildx build --file docker/tpu/Dockerfile.incremental --tag ghcr.io/${{ github.repository }}-tpu:latest --tag ghcr.io/${{ github.repository }}-tpu:${{ env.DATE }} --push .
+
+  # Levanter Cluster Image - For cluster deployments
+  levanter-cluster-image:
+    # Run on: manual trigger OR weekly schedule (02:00 UTC on Sundays)
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
+    runs-on: ubuntu-latest
+    needs: levanter-tpu-image
+    defaults:
+      run:
+        working-directory: lib/levanter
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Get current date
+        id: date
+        run: echo "DATE=$(date +'%Y%m%d')" >> $GITHUB_ENV
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Levanter cluster image
+        run: |
+          docker buildx build --file docker/tpu/Dockerfile.cluster --tag ghcr.io/${{ github.repository }}-cluster:latest --tag ghcr.io/${{ github.repository }}-cluster:${{ env.DATE }} --push .

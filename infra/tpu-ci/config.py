@@ -43,11 +43,11 @@ GITHUB_URL = "https://github.com/marin-community/marin.git"
 RUNNER_LABELS = ["tpu", "self-hosted", "tpu-ci"]
 
 # Docker image configuration
-# Images are pushed to the Artifact Registry in each region
-ARTIFACT_REGISTRY_REPO_NAME = "marin-ci"
-DOCKER_REPOSITORY = f"{GCP_PROJECT_ID}/{ARTIFACT_REGISTRY_REPO_NAME}"
+# Images are pushed to GitHub Container Registry
+GITHUB_REPOSITORY = "marin-community/marin"
 DOCKER_IMAGE_NAME = "tpu-ci"
 DOCKER_IMAGE_TAG = "latest"
+DOCKER_IMAGE = f"ghcr.io/{GITHUB_REPOSITORY}/{DOCKER_IMAGE_NAME}:{DOCKER_IMAGE_TAG}"
 
 
 def get_all_regions() -> list[str]:
@@ -58,16 +58,6 @@ def get_all_regions() -> list[str]:
         region = zone.rsplit("-", 1)[0]
         regions.add(region)
     return sorted(regions)
-
-
-def get_docker_image_for_zone(zone: str) -> str:
-    """
-    Get the regional Docker image URL for a specific zone,
-    e.g. "us-west4-docker.pkg.dev/hai-gcp-models/marin-ci/tpu-ci:latest"
-    """
-    region = zone.rsplit("-", 1)[0]
-    registry = f"{region}-docker.pkg.dev"
-    return f"{registry}/{DOCKER_REPOSITORY}/{DOCKER_IMAGE_NAME}:{DOCKER_IMAGE_TAG}"
 
 
 INFRA_DIR = "infra/tpu-ci"
